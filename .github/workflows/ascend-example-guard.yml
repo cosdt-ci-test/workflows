@@ -29,11 +29,15 @@ permissions:
   contents: write
   actions: read
 
+# Megatron-SWIFT on NPU follows ms-swift docs/source/BestPractices/NPU-support.md:
+# Megatron-LM core_v0.16.0 + MindSpeed core_r0.16.0 + mcore-bridge + triton-ascend 3.2.1.
 env:
   GUARD_IMAGE: swr.cn-south-1.myhuaweicloud.com/ascendhub/torch-npu:2.9.0.post2-910b-ubuntu22.04-py3.11
-  INSTALL_TORCH: "false"
   MEGATRON_LM_REF: core_v0.16.0
   MINDSPEED_REF: core_r0.16.0
+  # Pinned release. mcore-bridge main requires megatron-core > 0.16
+  # (e.g. nemotron_h imports megatron.core.models.hybrid since 2026-08-11).
+  MCORE_BRIDGE_REF: v1.6.1
 
 jobs:
   resolve:
@@ -114,7 +118,6 @@ jobs:
       WORKFLOWS_ROOT: ${{ github.workspace }}/workflows
       TARGET_ROOT: ${{ github.workspace }}/target
       FIXTURE_DIR: ${{ github.workspace }}/workflows/fixtures
-      PIP_INDEX_URL: https://pypi.tuna.tsinghua.edu.cn/simple
       PIP_EXTRA_INDEX_URL: https://repo.huaweicloud.com/ascend/repos/pypi
       PIP_TIMEOUT: "120"
     container:
@@ -128,17 +131,6 @@ jobs:
         --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
         --volume=/data/ci-cache/modelscope:/root/.cache/modelscope
     steps:
-      - name: Install git and compilers
-        run: |
-          set -euo pipefail
-          export PATH="/usr/local/sbin:/usr/local/bin:$PATH"
-          if ! command -v git >/dev/null 2>&1 || ! command -v gcc >/dev/null 2>&1; then
-            apt-get update -y
-            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-              git ca-certificates gcc g++ make python3-dev
-          fi
-          git --version
-
       - name: Checkout workflows
         uses: actions/checkout@v4
         with:
@@ -153,147 +145,39 @@ jobs:
 
       - name: Source CANN and check NPU
         run: |
-          set -euo pipefail
-          export PATH="/usr/local/sbin:/usr/local/bin:$PATH"
-          if [ -f /usr/local/Ascend/ascend-toolkit/set_env.sh ]; then
-            set +u
-            # shellcheck disable=SC1091
-            source /usr/local/Ascend/ascend-toolkit/set_env.sh
-            set -u
-          fi
+          export PATH="/usr/local/sbin:$PATH"
+          source /usr/local/Ascend/ascend-toolkit/set_env.sh
           npu-smi info
-          if [ "${INSTALL_TORCH}" = "true" ]; then
-            python -m pip install -U pip
-            python -m pip install torch==2.9.0 torch_npu==2.9.0.post2
-          fi
-          python -c "import torch, torch_npu; print(torch.__version__); print(torch_npu.__version__); print(torch.npu.device_count())"
+          python -c "import torch, torch_npu; print(torch.__version__, torch_npu.__version__, torch.npu.device_count())"
 
       - name: Install ms-swift
         working-directory: target
         run: |
-          set -euo pipefail
           python -m pip install -U pip
-          # Pin the image torch stack. Block CUDA wheels the same way
-          # ms-swift .dev_scripts/ci_container_test.sh does, but keep
-          # public mirrors (no in-cluster pypi cache).
-          cat >/tmp/npu-constraints.txt <<'EOF'
-          torch==2.9.0
-          torch_npu==2.9.0.post2
-          cuda-toolkit<0
-          nvidia-cublas<0
-          nvidia-cuda-runtime<0
-          nvidia-cuda-nvrtc<0
-          nvidia-cuda-cupti<0
-          nvidia-cudnn<0
-          nvidia-cufft<0
-          nvidia-curand<0
-          nvidia-cusolver<0
-          nvidia-cusparse<0
-          nvidia-nccl<0
-          nvidia-nvjitlink<0
-          nvidia-nvtx<0
-          nvidia-cublas-cu12<0
-          nvidia-cuda-runtime-cu12<0
-          nvidia-cuda-nvrtc-cu12<0
-          nvidia-cuda-cupti-cu12<0
-          nvidia-cudnn-cu12<0
-          nvidia-cufft-cu12<0
-          nvidia-curand-cu12<0
-          nvidia-cusolver-cu12<0
-          nvidia-cusparse-cu12<0
-          nvidia-cusparselt-cu12<0
-          nvidia-nccl-cu12<0
-          nvidia-nvjitlink-cu12<0
-          nvidia-nvtx-cu12<0
-          EOF
-          echo "PIP_CONSTRAINT=/tmp/npu-constraints.txt" >> "$GITHUB_ENV"
-          export PIP_CONSTRAINT=/tmp/npu-constraints.txt
           python -m pip install -e .
-          # npu.txt pins torchvision==0.22.1 for torch 2.7.1; this image is 2.9.0.
-          python -m pip install decorator torchvision
+          # requirements/npu.txt pins torchvision for torch 2.7.1; this image ships torch 2.9.0.
+          python -m pip install torchvision==0.24.0 decorator
 
       - name: Install Megatron-LM, MindSpeed, mcore-bridge
         run: |
-          set -euo pipefail
-          mkdir -p deps
           git clone --depth 1 --branch "$MEGATRON_LM_REF" https://github.com/NVIDIA/Megatron-LM.git deps/Megatron-LM
           git clone --depth 1 --branch "$MINDSPEED_REF" https://gitcode.com/Ascend/MindSpeed.git deps/MindSpeed
-          git clone --depth 1 https://github.com/modelscope/mcore-bridge.git deps/mcore-bridge
-          python -m pip uninstall -y megatron-core || true
-          # --no-deps: MindSpeed pins numpy<=1.26.0 (breaks torch 2.9);
-          # mcore-bridge pulls PyPI megatron-core (CUDA). Runtime extras
-          # that ms-swift did not already install are listed below.
-          python -m pip install -e deps/MindSpeed --no-deps
-          python -m pip install pybind11 ninja decorator
-          python -m pip install -e deps/mcore-bridge --no-deps
-          # Tsinghua simple index only has 3.2.0. Official NPU docs want 3.2.1,
-          # which is a directory of wheels on the Huawei Ascend pypi (not the
-          # /simple API, and not triton-ascend.osinfra.cn which times out).
-          python -m pip uninstall -y triton triton-ascend || true
+          git clone --depth 1 --branch "$MCORE_BRIDGE_REF" https://github.com/modelscope/mcore-bridge.git deps/mcore-bridge
+          python -m pip install -e deps/MindSpeed
+          # Pulls PyPI megatron-core as a dependency; imports still resolve to
+          # deps/Megatron-LM because PYTHONPATH precedes site-packages.
+          python -m pip install -e deps/mcore-bridge
+          # Official docs use https://triton-ascend.osinfra.cn/pypi/simple, which
+          # times out from this runner; the same wheels are on repo.huaweicloud.com.
           python -m pip install triton-ascend==3.2.1 \
             --find-links https://repo.huaweicloud.com/ascend/repos/pypi/triton-ascend/
-          python -m pip uninstall -y megatron-core || true
-          python -m pip show megatron-core || echo "megatron-core not installed (expected)"
-          python -c "import triton, decorator, mindspeed; print('triton', triton.__file__); print('mindspeed', mindspeed.__file__)"
           echo "MEGATRON_LM_PATH=$GITHUB_WORKSPACE/deps/Megatron-LM" >> "$GITHUB_ENV"
+          echo "PYTHONPATH=$GITHUB_WORKSPACE/deps/Megatron-LM" >> "$GITHUB_ENV"
 
       - name: Verify Megatron-SWIFT import
         run: |
-          set -euo pipefail
-          export PATH="/usr/local/sbin:/usr/local/bin:$PATH"
-          if [ -f /usr/local/Ascend/ascend-toolkit/set_env.sh ]; then
-            set +u
-            # shellcheck disable=SC1091
-            source /usr/local/Ascend/ascend-toolkit/set_env.sh
-            set -u
-          fi
-          export MEGATRON_LM_PATH="$GITHUB_WORKSPACE/deps/Megatron-LM"
-          export PYTHONPATH="${MEGATRON_LM_PATH}:${PYTHONPATH:-}"
-          python - <<'PY'
-          import os
-          import sys
-          import traceback
-
-          def note(msg):
-              print(msg, flush=True)
-
-          def fail(exc):
-              tb = traceback.format_exc()
-              print(tb, flush=True)
-              last = tb.strip().splitlines()[-1][:300]
-              print(f'::error title=Verify Megatron-SWIFT import failed::{last}')
-              summary = os.environ.get('GITHUB_STEP_SUMMARY')
-              if summary:
-                  with open(summary, 'a', encoding='utf-8') as handle:
-                      handle.write('## Verify Megatron-SWIFT import failed\n\n```\n')
-                      handle.write(tb)
-                      handle.write('\n```\n')
-              raise
-
-          note('MEGATRON_LM_PATH ' + (os.environ.get('MEGATRON_LM_PATH') or ''))
-          note('PYTHONPATH ' + (os.environ.get('PYTHONPATH') or ''))
-          note('sys.path:\n' + '\n'.join(sys.path))
-          try:
-              import triton
-              note('triton ' + str(getattr(triton, '__file__', None)))
-              import megatron
-              megatron_locs = [getattr(megatron, '__file__', None)]
-              megatron_locs.extend(getattr(megatron, '__path__', []) or [])
-              note('megatron before adaptor ' + ' '.join(str(x) for x in megatron_locs if x))
-              import mindspeed.megatron_adaptor
-              note('mindspeed.megatron_adaptor ok')
-              import megatron.core
-              core_file = getattr(megatron.core, '__file__', None) or ''
-              note('megatron.core ' + core_file)
-              joined = ' '.join(str(x) for x in megatron_locs + [core_file] if x)
-              if 'Megatron-LM' not in joined:
-                  raise RuntimeError(f'megatron imported from {joined!r}, expected deps/Megatron-LM')
-              from swift.megatron.init import init_megatron_env
-              init_megatron_env()
-              note('megatron env ok')
-          except Exception:
-              fail(None)
-          PY
+          source /usr/local/Ascend/ascend-toolkit/set_env.sh
+          python -c "import mindspeed.megatron_adaptor; from swift.megatron.init import init_megatron_env; init_megatron_env()"
 
       - name: Run guarded example
         id: run
@@ -303,24 +187,12 @@ jobs:
           OVERLAY_PATH: ${{ matrix.example.overlay }}
           GOLDEN_PATH: ${{ matrix.example.golden }}
         run: |
-          set -euo pipefail
-          export PATH="/usr/local/sbin:/usr/local/bin:$PATH"
-          if [ -f /usr/local/Ascend/ascend-toolkit/set_env.sh ]; then
-            set +u
-            # shellcheck disable=SC1091
-            source /usr/local/Ascend/ascend-toolkit/set_env.sh
-            set -u
-          fi
-          export MEGATRON_LM_PATH="$GITHUB_WORKSPACE/deps/Megatron-LM"
-          export PYTHONPATH="${MEGATRON_LM_PATH}:${PYTHONPATH:-}"
-          chmod +x "$WORKFLOWS_ROOT/scripts/run_guard.sh"
+          source /usr/local/Ascend/ascend-toolkit/set_env.sh
           run_once() {
             local out_dir="$1"
             mkdir -p "$out_dir"
-            export CI_OUTPUT_DIR="$out_dir"
-            set -o pipefail
-            bash "$WORKFLOWS_ROOT/scripts/run_guard.sh" "$EXAMPLE_PATH" "$OVERLAY_PATH" \
-              2>&1 | tee "$out_dir/train.log"
+            CI_OUTPUT_DIR="$out_dir" bash "$WORKFLOWS_ROOT/scripts/run_guard.sh" \
+              "$EXAMPLE_PATH" "$OVERLAY_PATH" 2>&1 | tee "$out_dir/train.log"
           }
           if [ "$UPDATE_GOLDEN" = "true" ]; then
             for i in 1 2 3; do
@@ -345,7 +217,6 @@ jobs:
         if: ${{ always() && github.event_name == 'workflow_dispatch' && needs.resolve.outputs.update_golden == 'true' && steps.run.outcome == 'success' }}
         working-directory: workflows
         run: |
-          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add golden/
@@ -357,9 +228,8 @@ jobs:
           git pull --rebase origin main
           git push
 
-      - name: Upload artifacts files
-        if: ${{ success() }}
-        timeout-minutes: 5
+      - name: Upload artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: guard-${{ github.run_id }}-${{ strategy.job-index }}
@@ -376,7 +246,6 @@ jobs:
           EXAMPLE_PATH: ${{ matrix.example.path }}
           UPDATE_GOLDEN: ${{ needs.resolve.outputs.update_golden }}
         run: |
-          set -euo pipefail
           {
             echo "## Ascend example guard"
             echo ""

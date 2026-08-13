@@ -1,0 +1,70 @@
+name: probe-ascend-image
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: [linux-aarch64-a2-2]
+    timeout-minutes: 60
+    outputs:
+      image: ${{ steps.pull.outputs.image }}
+      install_torch: ${{ steps.pull.outputs.install_torch }}
+    steps:
+      - name: Check npu-smi and cache dir
+        run: |
+          set -euo pipefail
+          echo "runner labels / hostname"
+          hostname
+          uname -a
+          if ! command -v npu-smi >/dev/null 2>&1; then
+            if [ -x /usr/local/sbin/npu-smi ]; then
+              export PATH="/usr/local/sbin:$PATH"
+            elif [ -x /usr/local/bin/npu-smi ]; then
+              export PATH="/usr/local/bin:$PATH"
+            else
+              echo "npu-smi not found on host"
+              exit 1
+            fi
+          fi
+          npu-smi info
+          mkdir -p /data/ci-cache/modelscope
+          probe_file="/data/ci-cache/modelscope/.write-probe-$$"
+          echo probe > "$probe_file"
+          test -s "$probe_file"
+          rm -f "$probe_file"
+          echo "cache dir writable: /data/ci-cache/modelscope"
+
+      - name: Pull SWR image
+        id: pull
+        run: |
+          set -euo pipefail
+          TORCH_NPU_TAG="2.9.0.post2-910b-ubuntu22.04-py3.11"
+          CANN_IMAGE="swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11"
+          CANDIDATES=(
+            "swr.cn-south-1.myhuaweicloud.com/ascendhub/torch-npu:${TORCH_NPU_TAG}"
+            "swr.cn-south-1.myhuaweicloud.com/ascendhub/pytorch:${TORCH_NPU_TAG}"
+            "swr.cn-south-1.myhuaweicloud.com/ascendhub/ascend-pytorch:${TORCH_NPU_TAG}"
+          )
+          picked=""
+          for img in "${CANDIDATES[@]}"; do
+            echo "trying docker pull $img"
+            if docker pull "$img"; then
+              picked="$img"
+              echo "image=$picked" >> "$GITHUB_OUTPUT"
+              echo "install_torch=false" >> "$GITHUB_OUTPUT"
+              echo "locked TorchNPU image: $picked"
+              break
+            fi
+          done
+          if [ -z "$picked" ]; then
+            echo "TorchNPU candidates failed; trying CANN fallback $CANN_IMAGE"
+            if docker pull "$CANN_IMAGE"; then
+              echo "image=$CANN_IMAGE" >> "$GITHUB_OUTPUT"
+              echo "install_torch=true" >> "$GITHUB_OUTPUT"
+              echo "locked CANN image: $CANN_IMAGE (will install torch 2.9.0 + torch_npu 2.9.0.post2)"
+            else
+              echo "CANN image pull also failed; stopping"
+              exit 1
+            fi
+          fi

@@ -114,6 +114,9 @@ jobs:
       WORKFLOWS_ROOT: ${{ github.workspace }}/workflows
       TARGET_ROOT: ${{ github.workspace }}/target
       FIXTURE_DIR: ${{ github.workspace }}/workflows/fixtures
+      PIP_INDEX_URL: https://pypi.tuna.tsinghua.edu.cn/simple
+      PIP_EXTRA_INDEX_URL: https://repo.huaweicloud.com/ascend/repos/pypi
+      PIP_TIMEOUT: "120"
     container:
       image: swr.cn-south-1.myhuaweicloud.com/ascendhub/torch-npu:2.9.0.post2-910b-ubuntu22.04-py3.11
       options: >-
@@ -173,9 +176,7 @@ jobs:
           npu-smi info
           if [ "${INSTALL_TORCH}" = "true" ]; then
             python -m pip install -U pip
-            python -m pip install torch==2.9.0 torch_npu==2.9.0.post2 \
-              --index-url https://pypi.org/simple \
-              --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi
+            python -m pip install torch==2.9.0 torch_npu==2.9.0.post2
           fi
           python -c "import torch, torch_npu; print(torch.__version__); print(torch_npu.__version__); print(torch.npu.device_count())"
 
@@ -190,9 +191,7 @@ jobs:
           EOF
           echo "PIP_CONSTRAINT=/tmp/npu-constraints.txt" >> "$GITHUB_ENV"
           export PIP_CONSTRAINT=/tmp/npu-constraints.txt
-          python -m pip install -e . \
-            --index-url https://pypi.org/simple \
-            --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi
+          python -m pip install -e .
 
       - name: Install Megatron-LM, MindSpeed, mcore-bridge
         run: |
@@ -201,12 +200,8 @@ jobs:
           git clone --depth 1 --branch "$MEGATRON_LM_REF" https://github.com/NVIDIA/Megatron-LM.git deps/Megatron-LM
           git clone --depth 1 --branch "$MINDSPEED_REF" https://gitcode.com/Ascend/MindSpeed.git deps/MindSpeed
           git clone --depth 1 https://github.com/modelscope/mcore-bridge.git deps/mcore-bridge
-          python -m pip install -e deps/MindSpeed \
-            --index-url https://pypi.org/simple \
-            --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi
-          python -m pip install -e deps/mcore-bridge \
-            --index-url https://pypi.org/simple \
-            --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi
+          python -m pip install -e deps/MindSpeed
+          python -m pip install -e deps/mcore-bridge
           megatron_lm_path="$GITHUB_WORKSPACE/deps/Megatron-LM"
           echo "MEGATRON_LM_PATH=$megatron_lm_path" >> "$GITHUB_ENV"
           echo "PYTHONPATH=${megatron_lm_path}:${PYTHONPATH:-}" >> "$GITHUB_ENV"

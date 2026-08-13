@@ -7,6 +7,9 @@ jobs:
   probe-torch-npu:
     runs-on: [linux-aarch64-a2-2]
     timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
     container:
       image: swr.cn-south-1.myhuaweicloud.com/ascendhub/torch-npu:2.9.0.post2-910b-ubuntu22.04-py3.11
       options: >-
@@ -44,6 +47,9 @@ jobs:
     if: ${{ failure() }}
     runs-on: [linux-aarch64-a2-2]
     timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
     container:
       image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
       options: >-

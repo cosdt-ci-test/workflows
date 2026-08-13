@@ -173,13 +173,43 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install -U pip
+          # Pin the image torch stack. Block CUDA wheels the same way
+          # ms-swift .dev_scripts/ci_container_test.sh does, but keep
+          # public mirrors (no in-cluster pypi cache).
           cat >/tmp/npu-constraints.txt <<'EOF'
           torch==2.9.0
           torch_npu==2.9.0.post2
+          cuda-toolkit<0
+          nvidia-cublas<0
+          nvidia-cuda-runtime<0
+          nvidia-cuda-nvrtc<0
+          nvidia-cuda-cupti<0
+          nvidia-cudnn<0
+          nvidia-cufft<0
+          nvidia-curand<0
+          nvidia-cusolver<0
+          nvidia-cusparse<0
+          nvidia-nccl<0
+          nvidia-nvjitlink<0
+          nvidia-nvtx<0
+          nvidia-cublas-cu12<0
+          nvidia-cuda-runtime-cu12<0
+          nvidia-cuda-nvrtc-cu12<0
+          nvidia-cuda-cupti-cu12<0
+          nvidia-cudnn-cu12<0
+          nvidia-cufft-cu12<0
+          nvidia-curand-cu12<0
+          nvidia-cusolver-cu12<0
+          nvidia-cusparse-cu12<0
+          nvidia-cusparselt-cu12<0
+          nvidia-nccl-cu12<0
+          nvidia-nvjitlink-cu12<0
+          nvidia-nvtx-cu12<0
           EOF
           echo "PIP_CONSTRAINT=/tmp/npu-constraints.txt" >> "$GITHUB_ENV"
           export PIP_CONSTRAINT=/tmp/npu-constraints.txt
           python -m pip install -e .
+          python -m pip install decorator
 
       - name: Install Megatron-LM, MindSpeed, mcore-bridge
         run: |
@@ -189,8 +219,18 @@ jobs:
           git clone --depth 1 --branch "$MINDSPEED_REF" https://gitcode.com/Ascend/MindSpeed.git deps/MindSpeed
           git clone --depth 1 https://github.com/modelscope/mcore-bridge.git deps/mcore-bridge
           python -m pip uninstall -y megatron-core || true
-          python -m pip install -e deps/MindSpeed
+          # --no-deps: MindSpeed pins numpy<=1.26.0 (breaks torch 2.9);
+          # mcore-bridge pulls PyPI megatron-core (CUDA). Runtime extras
+          # that ms-swift did not already install are listed below.
+          python -m pip install -e deps/MindSpeed --no-deps
+          python -m pip install pybind11 ninja decorator
           python -m pip install -e deps/mcore-bridge --no-deps
+          python -m pip install triton-ascend==3.2.1 \
+            --extra-index-url=https://triton-ascend.osinfra.cn/pypi/simple
+          python -m pip uninstall -y megatron-core || true
+          python -m pip show megatron-core || echo "megatron-core not installed (expected)"
+          python -c "import triton, decorator, mindspeed; print('triton', triton.__file__); print('mindspeed', mindspeed.__file__)"
+          echo "MEGATRON_LM_PATH=$GITHUB_WORKSPACE/deps/Megatron-LM" >> "$GITHUB_ENV"
 
       - name: Verify Megatron-SWIFT import
         run: |
@@ -209,6 +249,7 @@ jobs:
           import traceback
 
           print('MEGATRON_LM_PATH', os.environ.get('MEGATRON_LM_PATH'))
+          print('PYTHONPATH', os.environ.get('PYTHONPATH'))
           try:
               import mindspeed.megatron_adaptor
               import megatron
@@ -219,7 +260,14 @@ jobs:
               init_megatron_env()
               print('megatron env ok')
           except Exception:
-              traceback.print_exc()
+              tb = traceback.format_exc()
+              print(tb)
+              summary = os.environ.get('GITHUB_STEP_SUMMARY')
+              if summary:
+                  with open(summary, 'a', encoding='utf-8') as handle:
+                      handle.write('## Verify Megatron-SWIFT import failed\n\n```\n')
+                      handle.write(tb)
+                      handle.write('\n```\n')
               raise
           PY
 
@@ -285,13 +333,9 @@ jobs:
           git pull --rebase origin main
           git push
 
-      - name: Ensure artifact dirs
-        if: always()
-        run: mkdir -p output
-        continue-on-error: true
-
       - name: Upload artifacts files
-        if: always()
+        if: ${{ success() }}
+        timeout-minutes: 5
         uses: actions/upload-artifact@v4
         with:
           name: guard-${{ github.run_id }}-${{ strategy.job-index }}

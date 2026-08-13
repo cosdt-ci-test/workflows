@@ -225,8 +225,10 @@ jobs:
           python -m pip install -e deps/MindSpeed --no-deps
           python -m pip install pybind11 ninja decorator
           python -m pip install -e deps/mcore-bridge --no-deps
-          python -m pip install triton-ascend==3.2.1 \
-            --extra-index-url=https://triton-ascend.osinfra.cn/pypi/simple
+          # Tsinghua currently has 3.2.0 (cp311 aarch64), not 3.2.1.
+          # Do not use triton-ascend.osinfra.cn: the a2-2 runner times out on it.
+          python -m pip uninstall -y triton triton-ascend || true
+          python -m pip install triton-ascend==3.2.0
           python -m pip uninstall -y megatron-core || true
           python -m pip show megatron-core || echo "megatron-core not installed (expected)"
           python -c "import triton, decorator, mindspeed; print('triton', triton.__file__); print('mindspeed', mindspeed.__file__)"

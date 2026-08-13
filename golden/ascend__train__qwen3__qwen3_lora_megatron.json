@@ -1,0 +1,9 @@
+{
+  "calibrated": false,
+  "image": "swr.cn-south-1.myhuaweicloud.com/ascendhub/torch-npu:2.9.0.post2-910b-ubuntu22.04-py3.11",
+  "megatron_lm": "core_v0.16.0",
+  "mindspeed": "core_r0.16.0",
+  "expected_iterations": 4,
+  "rtol": 0.0,
+  "steps": []
+}

@@ -1,0 +1,301 @@
+name: ascend-example-guard
+
+on:
+  repository_dispatch:
+    types: [ms-swift-ci-completed]
+  workflow_dispatch:
+    inputs:
+      target_repo:
+        description: Target ms-swift repository to checkout and run
+        required: true
+        default: cosdt-ci-test/ms-swift
+        type: string
+      target_ref:
+        description: Branch, tag, or SHA in the target repository
+        required: true
+        default: main
+        type: string
+      update_golden:
+        description: Recalibrate golden from 3 consecutive runs (workflow_dispatch only)
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: ascend-example-guard
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  actions: read
+
+env:
+  GUARD_IMAGE: swr.cn-south-1.myhuaweicloud.com/ascendhub/torch-npu:2.9.0.post2-910b-ubuntu22.04-py3.11
+  INSTALL_TORCH: "false"
+  MEGATRON_LM_REF: core_v0.16.0
+  MINDSPEED_REF: core_r0.16.0
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      target_repo: ${{ steps.resolve.outputs.target_repo }}
+      target_ref: ${{ steps.resolve.outputs.target_ref }}
+      update_golden: ${{ steps.resolve.outputs.update_golden }}
+    steps:
+      - name: Resolve target
+        id: resolve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_REPO: ${{ github.event.inputs.target_repo }}
+          INPUT_REF: ${{ github.event.inputs.target_ref }}
+          INPUT_UPDATE_GOLDEN: ${{ github.event.inputs.update_golden }}
+          PAYLOAD_REPO: ${{ github.event.client_payload.repo }}
+          PAYLOAD_SHA: ${{ github.event.client_payload.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            target_repo="${INPUT_REPO:-cosdt-ci-test/ms-swift}"
+            target_ref="${INPUT_REF:-main}"
+            update_golden="${INPUT_UPDATE_GOLDEN:-false}"
+          else
+            target_repo="${PAYLOAD_REPO:-}"
+            target_ref="${PAYLOAD_SHA:-}"
+            update_golden="false"
+            if [ -z "$target_repo" ] || [ -z "$target_ref" ]; then
+              echo "repository_dispatch payload missing repo or sha"
+              exit 1
+            fi
+          fi
+          echo "target_repo=$target_repo" >> "$GITHUB_OUTPUT"
+          echo "target_ref=$target_ref" >> "$GITHUB_OUTPUT"
+          echo "update_golden=$update_golden" >> "$GITHUB_OUTPUT"
+          echo "resolved repo=$target_repo ref=$target_ref update_golden=$update_golden"
+
+  manifest-check:
+    needs: resolve
+    runs-on: ubuntu-latest
+    outputs:
+      supported_matrix: ${{ steps.check.outputs.supported_matrix }}
+    steps:
+      - name: Checkout workflows
+        uses: actions/checkout@v4
+        with:
+          path: workflows
+
+      - name: Checkout target
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ needs.resolve.outputs.target_repo }}
+          ref: ${{ needs.resolve.outputs.target_ref }}
+          path: target
+
+      - name: Check examples manifest
+        id: check
+        run: |
+          python3 workflows/scripts/check_examples_manifest.py \
+            --target-root target \
+            --manifest workflows/examples_manifest.yaml
+
+  guard-example:
+    needs: [resolve, manifest-check]
+    runs-on: [linux-aarch64-a2-2]
+    timeout-minutes: 180
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        example: ${{ fromJSON(needs.manifest-check.outputs.supported_matrix) }}
+    env:
+      ASCEND_RT_VISIBLE_DEVICES: "0,1"
+      MODELSCOPE_CACHE: /root/.cache/modelscope
+      WORKFLOWS_ROOT: ${{ github.workspace }}/workflows
+      TARGET_ROOT: ${{ github.workspace }}/target
+      FIXTURE_DIR: ${{ github.workspace }}/workflows/fixtures
+    container:
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/torch-npu:2.9.0.post2-910b-ubuntu22.04-py3.11
+      options: >-
+        --privileged --shm-size=64g
+        --device=/dev/davinci0 --device=/dev/davinci1
+        --device=/dev/davinci_manager --device=/dev/devmm_svm --device=/dev/hisi_hdc
+        --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
+        --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
+        --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
+        --volume=/data/ci-cache/modelscope:/root/.cache/modelscope
+    steps:
+      - name: Install git and compilers
+        run: |
+          set -euo pipefail
+          export PATH="/usr/local/sbin:/usr/local/bin:$PATH"
+          if ! command -v git >/dev/null 2>&1 || ! command -v gcc >/dev/null 2>&1; then
+            apt-get update -y
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+              git ca-certificates gcc g++ make python3-dev
+          fi
+          git --version
+
+      - name: Checkout workflows
+        uses: actions/checkout@v4
+        with:
+          path: workflows
+
+      - name: Checkout target
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ needs.resolve.outputs.target_repo }}
+          ref: ${{ needs.resolve.outputs.target_ref }}
+          path: target
+
+      - name: Source CANN and check NPU
+        run: |
+          set -euo pipefail
+          export PATH="/usr/local/sbin:/usr/local/bin:$PATH"
+          if [ -f /usr/local/Ascend/ascend-toolkit/set_env.sh ]; then
+            set +u
+            # shellcheck disable=SC1091
+            source /usr/local/Ascend/ascend-toolkit/set_env.sh
+            set -u
+          fi
+          python - <<'PY'
+          import os
+          path = os.environ['GITHUB_ENV']
+          skip_prefixes = ('GITHUB_', 'ACTIONS_', 'INPUT_', 'RUNNER_')
+          with open(path, 'a', encoding='utf-8') as handle:
+              for key, value in os.environ.items():
+                  if key.startswith(skip_prefixes):
+                      continue
+                  if '\n' in value or '\r' in value:
+                      continue
+                  handle.write(f'{key}={value}\n')
+          PY
+          npu-smi info
+          if [ "${INSTALL_TORCH}" = "true" ]; then
+            python -m pip install -U pip
+            python -m pip install torch==2.9.0 torch_npu==2.9.0.post2 \
+              --index-url https://pypi.org/simple \
+              --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi
+          fi
+          python -c "import torch, torch_npu; print(torch.__version__); print(torch_npu.__version__); print(torch.npu.device_count())"
+
+      - name: Install ms-swift
+        working-directory: target
+        run: |
+          set -euo pipefail
+          python -m pip install -U pip
+          cat >/tmp/npu-constraints.txt <<'EOF'
+          torch==2.9.0
+          torch_npu==2.9.0.post2
+          EOF
+          echo "PIP_CONSTRAINT=/tmp/npu-constraints.txt" >> "$GITHUB_ENV"
+          export PIP_CONSTRAINT=/tmp/npu-constraints.txt
+          python -m pip install -e . \
+            --index-url https://pypi.org/simple \
+            --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi
+
+      - name: Install Megatron-LM, MindSpeed, mcore-bridge
+        run: |
+          set -euo pipefail
+          mkdir -p deps
+          git clone --depth 1 --branch "$MEGATRON_LM_REF" https://github.com/NVIDIA/Megatron-LM.git deps/Megatron-LM
+          git clone --depth 1 --branch "$MINDSPEED_REF" https://gitcode.com/Ascend/MindSpeed.git deps/MindSpeed
+          git clone --depth 1 https://github.com/modelscope/mcore-bridge.git deps/mcore-bridge
+          python -m pip install -e deps/MindSpeed \
+            --index-url https://pypi.org/simple \
+            --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi
+          python -m pip install -e deps/mcore-bridge \
+            --index-url https://pypi.org/simple \
+            --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi
+          megatron_lm_path="$GITHUB_WORKSPACE/deps/Megatron-LM"
+          echo "MEGATRON_LM_PATH=$megatron_lm_path" >> "$GITHUB_ENV"
+          echo "PYTHONPATH=${megatron_lm_path}:${PYTHONPATH:-}" >> "$GITHUB_ENV"
+
+      - name: Verify Megatron-SWIFT import
+        run: |
+          set -euo pipefail
+          python -c "import mindspeed.megatron_adaptor; from swift.megatron.init import init_megatron_env; init_megatron_env(); print('megatron env ok')"
+
+      - name: Run guarded example
+        id: run
+        env:
+          UPDATE_GOLDEN: ${{ needs.resolve.outputs.update_golden }}
+          EXAMPLE_PATH: ${{ matrix.example.path }}
+          OVERLAY_PATH: ${{ matrix.example.overlay }}
+          GOLDEN_PATH: ${{ matrix.example.golden }}
+        run: |
+          set -euo pipefail
+          chmod +x "$WORKFLOWS_ROOT/scripts/run_guard.sh"
+          run_once() {
+            local out_dir="$1"
+            mkdir -p "$out_dir"
+            export CI_OUTPUT_DIR="$out_dir"
+            set -o pipefail
+            bash "$WORKFLOWS_ROOT/scripts/run_guard.sh" "$EXAMPLE_PATH" "$OVERLAY_PATH" \
+              2>&1 | tee "$out_dir/train.log"
+          }
+          if [ "$UPDATE_GOLDEN" = "true" ]; then
+            for i in 1 2 3; do
+              run_once "$GITHUB_WORKSPACE/output/run$i"
+            done
+            python "$WORKFLOWS_ROOT/scripts/assert_golden.py" \
+              --calibrate \
+              --logging \
+                "$GITHUB_WORKSPACE/output/run1/logging.jsonl" \
+                "$GITHUB_WORKSPACE/output/run2/logging.jsonl" \
+                "$GITHUB_WORKSPACE/output/run3/logging.jsonl" \
+              --golden "$WORKFLOWS_ROOT/$GOLDEN_PATH" \
+              --image "$GUARD_IMAGE"
+          else
+            run_once "$GITHUB_WORKSPACE/output/run1"
+            python "$WORKFLOWS_ROOT/scripts/assert_golden.py" \
+              --logging "$GITHUB_WORKSPACE/output/run1/logging.jsonl" \
+              --golden "$WORKFLOWS_ROOT/$GOLDEN_PATH"
+          fi
+
+      - name: Commit calibrated golden
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && needs.resolve.outputs.update_golden == 'true' && steps.run.outcome == 'success' }}
+        working-directory: workflows
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add golden/
+          if git diff --cached --quiet; then
+            echo "no golden changes"
+            exit 0
+          fi
+          git commit -m "Calibrate golden for ${{ matrix.example.path }}"
+          git pull --rebase origin main
+          git push
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: guard-${{ github.run_id }}-${{ strategy.job-index }}
+          if-no-files-found: warn
+          path: |
+            output/
+            workflows/golden/
+
+      - name: Write job summary
+        if: always()
+        env:
+          TARGET_REPO: ${{ needs.resolve.outputs.target_repo }}
+          TARGET_REF: ${{ needs.resolve.outputs.target_ref }}
+          EXAMPLE_PATH: ${{ matrix.example.path }}
+          UPDATE_GOLDEN: ${{ needs.resolve.outputs.update_golden }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Ascend example guard"
+            echo ""
+            echo "- target_repo: \`$TARGET_REPO\`"
+            echo "- target_ref: \`$TARGET_REF\`"
+            echo "- path: \`$EXAMPLE_PATH\`"
+            echo "- image: \`$GUARD_IMAGE\`"
+            echo "- update_golden: \`$UPDATE_GOLDEN\`"
+            echo "- conclusion: \`${{ job.status }}\`"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"

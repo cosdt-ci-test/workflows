@@ -161,18 +161,6 @@ jobs:
             source /usr/local/Ascend/ascend-toolkit/set_env.sh
             set -u
           fi
-          python - <<'PY'
-          import os
-          path = os.environ['GITHUB_ENV']
-          skip_prefixes = ('GITHUB_', 'ACTIONS_', 'INPUT_', 'RUNNER_')
-          with open(path, 'a', encoding='utf-8') as handle:
-              for key, value in os.environ.items():
-                  if key.startswith(skip_prefixes):
-                      continue
-                  if '\n' in value or '\r' in value:
-                      continue
-                  handle.write(f'{key}={value}\n')
-          PY
           npu-smi info
           if [ "${INSTALL_TORCH}" = "true" ]; then
             python -m pip install -U pip
@@ -200,16 +188,40 @@ jobs:
           git clone --depth 1 --branch "$MEGATRON_LM_REF" https://github.com/NVIDIA/Megatron-LM.git deps/Megatron-LM
           git clone --depth 1 --branch "$MINDSPEED_REF" https://gitcode.com/Ascend/MindSpeed.git deps/MindSpeed
           git clone --depth 1 https://github.com/modelscope/mcore-bridge.git deps/mcore-bridge
+          python -m pip uninstall -y megatron-core || true
           python -m pip install -e deps/MindSpeed
-          python -m pip install -e deps/mcore-bridge
-          megatron_lm_path="$GITHUB_WORKSPACE/deps/Megatron-LM"
-          echo "MEGATRON_LM_PATH=$megatron_lm_path" >> "$GITHUB_ENV"
-          echo "PYTHONPATH=${megatron_lm_path}:${PYTHONPATH:-}" >> "$GITHUB_ENV"
+          python -m pip install -e deps/mcore-bridge --no-deps
 
       - name: Verify Megatron-SWIFT import
         run: |
           set -euo pipefail
-          python -c "import mindspeed.megatron_adaptor; from swift.megatron.init import init_megatron_env; init_megatron_env(); print('megatron env ok')"
+          export PATH="/usr/local/sbin:/usr/local/bin:$PATH"
+          if [ -f /usr/local/Ascend/ascend-toolkit/set_env.sh ]; then
+            set +u
+            # shellcheck disable=SC1091
+            source /usr/local/Ascend/ascend-toolkit/set_env.sh
+            set -u
+          fi
+          export MEGATRON_LM_PATH="$GITHUB_WORKSPACE/deps/Megatron-LM"
+          export PYTHONPATH="${MEGATRON_LM_PATH}:${PYTHONPATH:-}"
+          python - <<'PY'
+          import os
+          import traceback
+
+          print('MEGATRON_LM_PATH', os.environ.get('MEGATRON_LM_PATH'))
+          try:
+              import mindspeed.megatron_adaptor
+              import megatron
+              print('megatron', megatron.__file__)
+              if 'Megatron-LM' not in (megatron.__file__ or ''):
+                  raise RuntimeError(f'megatron imported from {megatron.__file__}, expected deps/Megatron-LM')
+              from swift.megatron.init import init_megatron_env
+              init_megatron_env()
+              print('megatron env ok')
+          except Exception:
+              traceback.print_exc()
+              raise
+          PY
 
       - name: Run guarded example
         id: run
@@ -220,6 +232,15 @@ jobs:
           GOLDEN_PATH: ${{ matrix.example.golden }}
         run: |
           set -euo pipefail
+          export PATH="/usr/local/sbin:/usr/local/bin:$PATH"
+          if [ -f /usr/local/Ascend/ascend-toolkit/set_env.sh ]; then
+            set +u
+            # shellcheck disable=SC1091
+            source /usr/local/Ascend/ascend-toolkit/set_env.sh
+            set -u
+          fi
+          export MEGATRON_LM_PATH="$GITHUB_WORKSPACE/deps/Megatron-LM"
+          export PYTHONPATH="${MEGATRON_LM_PATH}:${PYTHONPATH:-}"
           chmod +x "$WORKFLOWS_ROOT/scripts/run_guard.sh"
           run_once() {
             local out_dir="$1"
@@ -264,12 +285,17 @@ jobs:
           git pull --rebase origin main
           git push
 
-      - name: Upload artifacts
+      - name: Ensure artifact dirs
+        if: always()
+        run: mkdir -p output
+        continue-on-error: true
+
+      - name: Upload artifacts files
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: guard-${{ github.run_id }}-${{ strategy.job-index }}
-          if-no-files-found: warn
+          if-no-files-found: ignore
           path: |
             output/
             workflows/golden/

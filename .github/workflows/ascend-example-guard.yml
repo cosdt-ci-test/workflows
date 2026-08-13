@@ -209,7 +209,8 @@ jobs:
           echo "PIP_CONSTRAINT=/tmp/npu-constraints.txt" >> "$GITHUB_ENV"
           export PIP_CONSTRAINT=/tmp/npu-constraints.txt
           python -m pip install -e .
-          python -m pip install decorator
+          # npu.txt pins torchvision==0.22.1 for torch 2.7.1; this image is 2.9.0.
+          python -m pip install decorator torchvision
 
       - name: Install Megatron-LM, MindSpeed, mcore-bridge
         run: |
@@ -276,14 +277,17 @@ jobs:
               import triton
               note('triton ' + str(getattr(triton, '__file__', None)))
               import megatron
-              note('megatron before adaptor ' + str(getattr(megatron, '__file__', None)))
+              megatron_locs = [getattr(megatron, '__file__', None)]
+              megatron_locs.extend(getattr(megatron, '__path__', []) or [])
+              note('megatron before adaptor ' + ' '.join(str(x) for x in megatron_locs if x))
               import mindspeed.megatron_adaptor
               note('mindspeed.megatron_adaptor ok')
-              import megatron as megatron_after
-              note('megatron after adaptor ' + str(getattr(megatron_after, '__file__', None)))
-              if 'Megatron-LM' not in (getattr(megatron_after, '__file__', None) or ''):
-                  raise RuntimeError(
-                      f'megatron imported from {getattr(megatron_after, "__file__", None)}, expected deps/Megatron-LM')
+              import megatron.core
+              core_file = getattr(megatron.core, '__file__', None) or ''
+              note('megatron.core ' + core_file)
+              joined = ' '.join(str(x) for x in megatron_locs + [core_file] if x)
+              if 'Megatron-LM' not in joined:
+                  raise RuntimeError(f'megatron imported from {joined!r}, expected deps/Megatron-LM')
               from swift.megatron.init import init_megatron_env
               init_megatron_env()
               note('megatron env ok')

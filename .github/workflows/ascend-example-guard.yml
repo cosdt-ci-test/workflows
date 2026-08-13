@@ -225,10 +225,12 @@ jobs:
           python -m pip install -e deps/MindSpeed --no-deps
           python -m pip install pybind11 ninja decorator
           python -m pip install -e deps/mcore-bridge --no-deps
-          # Tsinghua currently has 3.2.0 (cp311 aarch64), not 3.2.1.
-          # Do not use triton-ascend.osinfra.cn: the a2-2 runner times out on it.
+          # Tsinghua simple index only has 3.2.0. Official NPU docs want 3.2.1,
+          # which is a directory of wheels on the Huawei Ascend pypi (not the
+          # /simple API, and not triton-ascend.osinfra.cn which times out).
           python -m pip uninstall -y triton triton-ascend || true
-          python -m pip install triton-ascend==3.2.0
+          python -m pip install triton-ascend==3.2.1 \
+            --find-links https://repo.huaweicloud.com/ascend/repos/pypi/triton-ascend/
           python -m pip uninstall -y megatron-core || true
           python -m pip show megatron-core || echo "megatron-core not installed (expected)"
           python -c "import triton, decorator, mindspeed; print('triton', triton.__file__); print('mindspeed', mindspeed.__file__)"
@@ -248,22 +250,17 @@ jobs:
           export PYTHONPATH="${MEGATRON_LM_PATH}:${PYTHONPATH:-}"
           python - <<'PY'
           import os
+          import sys
           import traceback
 
-          print('MEGATRON_LM_PATH', os.environ.get('MEGATRON_LM_PATH'))
-          print('PYTHONPATH', os.environ.get('PYTHONPATH'))
-          try:
-              import mindspeed.megatron_adaptor
-              import megatron
-              print('megatron', megatron.__file__)
-              if 'Megatron-LM' not in (megatron.__file__ or ''):
-                  raise RuntimeError(f'megatron imported from {megatron.__file__}, expected deps/Megatron-LM')
-              from swift.megatron.init import init_megatron_env
-              init_megatron_env()
-              print('megatron env ok')
-          except Exception:
+          def note(msg):
+              print(msg, flush=True)
+
+          def fail(exc):
               tb = traceback.format_exc()
-              print(tb)
+              print(tb, flush=True)
+              last = tb.strip().splitlines()[-1][:300]
+              print(f'::error title=Verify Megatron-SWIFT import failed::{last}')
               summary = os.environ.get('GITHUB_STEP_SUMMARY')
               if summary:
                   with open(summary, 'a', encoding='utf-8') as handle:
@@ -271,6 +268,27 @@ jobs:
                       handle.write(tb)
                       handle.write('\n```\n')
               raise
+
+          note('MEGATRON_LM_PATH ' + (os.environ.get('MEGATRON_LM_PATH') or ''))
+          note('PYTHONPATH ' + (os.environ.get('PYTHONPATH') or ''))
+          note('sys.path:\n' + '\n'.join(sys.path))
+          try:
+              import triton
+              note('triton ' + str(getattr(triton, '__file__', None)))
+              import megatron
+              note('megatron before adaptor ' + str(getattr(megatron, '__file__', None)))
+              import mindspeed.megatron_adaptor
+              note('mindspeed.megatron_adaptor ok')
+              import megatron as megatron_after
+              note('megatron after adaptor ' + str(getattr(megatron_after, '__file__', None)))
+              if 'Megatron-LM' not in (getattr(megatron_after, '__file__', None) or ''):
+                  raise RuntimeError(
+                      f'megatron imported from {getattr(megatron_after, "__file__", None)}, expected deps/Megatron-LM')
+              from swift.megatron.init import init_megatron_env
+              init_megatron_env()
+              note('megatron env ok')
+          except Exception:
+              fail(None)
           PY
 
       - name: Run guarded example

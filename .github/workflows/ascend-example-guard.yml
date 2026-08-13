@@ -216,6 +216,11 @@ jobs:
       - name: Commit calibrated golden
         if: ${{ always() && github.event_name == 'workflow_dispatch' && needs.resolve.outputs.update_golden == 'true' && steps.run.outcome == 'success' }}
         working-directory: workflows
+        env:
+          # This runner rewrites https://github.com/ to an unauthenticated
+          # gh-proxy mirror, so `git push origin` gets no credentials. A URL
+          # that carries the token does not match that insteadOf prefix.
+          REMOTE_URL: https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -225,8 +230,8 @@ jobs:
             exit 0
           fi
           git commit -m "Calibrate golden for ${{ matrix.example.path }}"
-          git pull --rebase origin main
-          git push
+          git pull --rebase "$REMOTE_URL" main
+          git push "$REMOTE_URL" HEAD:main
 
       - name: Upload artifacts
         if: always()

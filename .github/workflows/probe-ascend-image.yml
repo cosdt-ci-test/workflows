@@ -4,41 +4,55 @@ on:
   workflow_dispatch:
 
 jobs:
-  probe:
+  host-probe:
     runs-on: [linux-aarch64-a2-2]
     timeout-minutes: 60
     outputs:
       image: ${{ steps.pull.outputs.image }}
       install_torch: ${{ steps.pull.outputs.install_torch }}
+      cache_ok: ${{ steps.cache.outputs.cache_ok }}
     steps:
-      - name: Check npu-smi and cache dir
+      - name: Inspect host
         run: |
           set -euo pipefail
-          echo "runner labels / hostname"
           hostname
           uname -a
-          if ! command -v npu-smi >/dev/null 2>&1; then
-            if [ -x /usr/local/sbin/npu-smi ]; then
-              export PATH="/usr/local/sbin:$PATH"
-            elif [ -x /usr/local/bin/npu-smi ]; then
-              export PATH="/usr/local/bin:$PATH"
-            else
-              echo "npu-smi not found on host"
-              exit 1
-            fi
+          echo "PATH=$PATH"
+          echo "=== devices ==="
+          ls -l /dev/davinci* /dev/davinci_manager /dev/devmm_svm /dev/hisi_hdc 2>/dev/null || true
+          echo "=== npu-smi candidates ==="
+          ls -l /usr/local/sbin/npu-smi /usr/local/bin/npu-smi /usr/local/sbin/npu-smi 2>/dev/null || true
+          find /usr /opt /home -name 'npu-smi' 2>/dev/null | head || true
+          echo "=== docker ==="
+          command -v docker || true
+          docker info 2>/dev/null | head -20 || true
+
+      - name: Check cache dir
+        id: cache
+        run: |
+          set -euo pipefail
+          if mkdir -p /data/ci-cache/modelscope \
+            && probe_file="/data/ci-cache/modelscope/.write-probe-$$" \
+            && echo probe > "$probe_file" \
+            && test -s "$probe_file" \
+            && rm -f "$probe_file"; then
+            echo "cache dir writable on runner filesystem: /data/ci-cache/modelscope"
+            echo "cache_ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "cache dir NOT writable on runner filesystem"
+            echo "cache_ok=false" >> "$GITHUB_OUTPUT"
           fi
-          npu-smi info
-          mkdir -p /data/ci-cache/modelscope
-          probe_file="/data/ci-cache/modelscope/.write-probe-$$"
-          echo probe > "$probe_file"
-          test -s "$probe_file"
-          rm -f "$probe_file"
-          echo "cache dir writable: /data/ci-cache/modelscope"
 
       - name: Pull SWR image
         id: pull
         run: |
           set -euo pipefail
+          if ! command -v docker >/dev/null 2>&1; then
+            echo "docker CLI not on runner; container jobs will pull instead"
+            echo "image=" >> "$GITHUB_OUTPUT"
+            echo "install_torch=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           TORCH_NPU_TAG="2.9.0.post2-910b-ubuntu22.04-py3.11"
           CANN_IMAGE="swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11"
           CANDIDATES=(
@@ -47,24 +61,102 @@ jobs:
             "swr.cn-south-1.myhuaweicloud.com/ascendhub/ascend-pytorch:${TORCH_NPU_TAG}"
           )
           picked=""
+          install_torch="false"
           for img in "${CANDIDATES[@]}"; do
             echo "trying docker pull $img"
             if docker pull "$img"; then
               picked="$img"
-              echo "image=$picked" >> "$GITHUB_OUTPUT"
-              echo "install_torch=false" >> "$GITHUB_OUTPUT"
-              echo "locked TorchNPU image: $picked"
               break
             fi
           done
           if [ -z "$picked" ]; then
             echo "TorchNPU candidates failed; trying CANN fallback $CANN_IMAGE"
             if docker pull "$CANN_IMAGE"; then
-              echo "image=$CANN_IMAGE" >> "$GITHUB_OUTPUT"
-              echo "install_torch=true" >> "$GITHUB_OUTPUT"
-              echo "locked CANN image: $CANN_IMAGE (will install torch 2.9.0 + torch_npu 2.9.0.post2)"
+              picked="$CANN_IMAGE"
+              install_torch="true"
             else
-              echo "CANN image pull also failed; stopping"
+              echo "CANN image pull also failed"
               exit 1
             fi
           fi
+          echo "image=$picked" >> "$GITHUB_OUTPUT"
+          echo "install_torch=$install_torch" >> "$GITHUB_OUTPUT"
+          echo "locked image: $picked install_torch=$install_torch"
+
+  torch-npu-container:
+    needs: host-probe
+    if: ${{ always() && needs.host-probe.result == 'success' }}
+    runs-on: [linux-aarch64-a2-2]
+    timeout-minutes: 60
+    container:
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/torch-npu:2.9.0.post2-910b-ubuntu22.04-py3.11
+      options: >-
+        --privileged --shm-size=64g
+        --device=/dev/davinci0 --device=/dev/davinci1
+        --device=/dev/davinci_manager --device=/dev/devmm_svm --device=/dev/hisi_hdc
+        --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
+        --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
+        --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
+        --volume=/data/ci-cache/modelscope:/root/.cache/modelscope
+    env:
+      MODELSCOPE_CACHE: /root/.cache/modelscope
+      ASCEND_RT_VISIBLE_DEVICES: "0,1"
+    steps:
+      - name: npu-smi and torch_npu
+        run: |
+          set -euo pipefail
+          export PATH="/usr/local/sbin:/usr/local/bin:$PATH"
+          if [ -f /usr/local/Ascend/ascend-toolkit/set_env.sh ]; then
+            set +u
+            # shellcheck disable=SC1091
+            source /usr/local/Ascend/ascend-toolkit/set_env.sh
+            set -u
+          fi
+          npu-smi info
+          python -c "import torch, torch_npu; print('torch', torch.__version__); print('torch_npu', torch_npu.__version__); print('npu_count', torch.npu.device_count())"
+          mkdir -p /root/.cache/modelscope
+          echo probe > /root/.cache/modelscope/.write-probe-container
+          test -s /root/.cache/modelscope/.write-probe-container
+          rm -f /root/.cache/modelscope/.write-probe-container
+          echo "torch-npu container probe ok"
+
+  cann-container:
+    needs: [host-probe, torch-npu-container]
+    if: ${{ always() && needs.host-probe.result == 'success' && needs.torch-npu-container.result != 'success' }}
+    runs-on: [linux-aarch64-a2-2]
+    timeout-minutes: 90
+    container:
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
+      options: >-
+        --privileged --shm-size=64g
+        --device=/dev/davinci0 --device=/dev/davinci1
+        --device=/dev/davinci_manager --device=/dev/devmm_svm --device=/dev/hisi_hdc
+        --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
+        --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
+        --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
+        --volume=/data/ci-cache/modelscope:/root/.cache/modelscope
+    env:
+      MODELSCOPE_CACHE: /root/.cache/modelscope
+      ASCEND_RT_VISIBLE_DEVICES: "0,1"
+    steps:
+      - name: npu-smi and install torch_npu
+        run: |
+          set -euo pipefail
+          export PATH="/usr/local/sbin:/usr/local/bin:$PATH"
+          if [ -f /usr/local/Ascend/ascend-toolkit/set_env.sh ]; then
+            set +u
+            # shellcheck disable=SC1091
+            source /usr/local/Ascend/ascend-toolkit/set_env.sh
+            set -u
+          fi
+          npu-smi info
+          python -m pip install -U pip
+          python -m pip install torch==2.9.0 torch_npu==2.9.0.post2 \
+            --index-url https://pypi.org/simple \
+            --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi
+          python -c "import torch, torch_npu; print('torch', torch.__version__); print('torch_npu', torch_npu.__version__); print('npu_count', torch.npu.device_count())"
+          mkdir -p /root/.cache/modelscope
+          echo probe > /root/.cache/modelscope/.write-probe-container
+          test -s /root/.cache/modelscope/.write-probe-container
+          rm -f /root/.cache/modelscope/.write-probe-container
+          echo "cann container probe ok"

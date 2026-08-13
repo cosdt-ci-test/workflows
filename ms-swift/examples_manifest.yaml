@@ -7,7 +7,6 @@ supported:
     runner: linux-aarch64-a2-2
     npu_devices: '0,1'
     overlay: overlays/qwen3_lora_megatron.args
-    golden: golden/ascend__train__qwen3__qwen3_lora_megatron.json
     timeout_minutes: 180
 unsupported:
   - examples/app/base_url/demo.py

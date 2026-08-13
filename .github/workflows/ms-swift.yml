@@ -1,4 +1,4 @@
-name: ascend-example-guard
+name: ms-swift
 
 on:
   repository_dispatch:
@@ -15,24 +15,18 @@ on:
         required: true
         default: main
         type: string
-      update_golden:
-        description: Recalibrate golden from 3 consecutive runs (workflow_dispatch only)
-        required: false
-        default: false
-        type: boolean
 
 concurrency:
-  group: ascend-example-guard
+  group: ms-swift
   cancel-in-progress: false
 
 permissions:
-  contents: write
-  actions: read
+  contents: read
 
 # Megatron-SWIFT on NPU follows ms-swift docs/source/BestPractices/NPU-support.md:
 # Megatron-LM core_v0.16.0 + MindSpeed core_r0.16.0 + mcore-bridge + triton-ascend 3.2.1.
 env:
-  GUARD_IMAGE: swr.cn-south-1.myhuaweicloud.com/ascendhub/torch-npu:2.9.0.post2-910b-ubuntu22.04-py3.11
+  CI_IMAGE: swr.cn-south-1.myhuaweicloud.com/ascendhub/torch-npu:2.9.0.post2-910b-ubuntu22.04-py3.11
   MEGATRON_LM_REF: core_v0.16.0
   MINDSPEED_REF: core_r0.16.0
   # Pinned release. mcore-bridge main requires megatron-core > 0.16
@@ -45,7 +39,6 @@ jobs:
     outputs:
       target_repo: ${{ steps.resolve.outputs.target_repo }}
       target_ref: ${{ steps.resolve.outputs.target_ref }}
-      update_golden: ${{ steps.resolve.outputs.update_golden }}
     steps:
       - name: Resolve target
         id: resolve
@@ -53,7 +46,6 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           INPUT_REPO: ${{ github.event.inputs.target_repo }}
           INPUT_REF: ${{ github.event.inputs.target_ref }}
-          INPUT_UPDATE_GOLDEN: ${{ github.event.inputs.update_golden }}
           PAYLOAD_REPO: ${{ github.event.client_payload.repo }}
           PAYLOAD_SHA: ${{ github.event.client_payload.sha }}
         run: |
@@ -61,11 +53,9 @@ jobs:
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             target_repo="${INPUT_REPO:-cosdt-ci-test/ms-swift}"
             target_ref="${INPUT_REF:-main}"
-            update_golden="${INPUT_UPDATE_GOLDEN:-false}"
           else
             target_repo="${PAYLOAD_REPO:-}"
             target_ref="${PAYLOAD_SHA:-}"
-            update_golden="false"
             if [ -z "$target_repo" ] || [ -z "$target_ref" ]; then
               echo "repository_dispatch payload missing repo or sha"
               exit 1
@@ -73,8 +63,7 @@ jobs:
           fi
           echo "target_repo=$target_repo" >> "$GITHUB_OUTPUT"
           echo "target_ref=$target_ref" >> "$GITHUB_OUTPUT"
-          echo "update_golden=$update_golden" >> "$GITHUB_OUTPUT"
-          echo "resolved repo=$target_repo ref=$target_ref update_golden=$update_golden"
+          echo "resolved repo=$target_repo ref=$target_ref"
 
   manifest-check:
     needs: resolve
@@ -97,11 +86,11 @@ jobs:
       - name: Check examples manifest
         id: check
         run: |
-          python3 workflows/scripts/check_examples_manifest.py \
+          python3 workflows/ms-swift/scripts/check_examples_manifest.py \
             --target-root target \
-            --manifest workflows/examples_manifest.yaml
+            --manifest workflows/ms-swift/examples_manifest.yaml
 
-  guard-example:
+  run-example:
     needs: [resolve, manifest-check]
     runs-on: [linux-aarch64-a2-2]
     timeout-minutes: 180
@@ -115,9 +104,9 @@ jobs:
     env:
       ASCEND_RT_VISIBLE_DEVICES: "0,1"
       MODELSCOPE_CACHE: /root/.cache/modelscope
-      WORKFLOWS_ROOT: ${{ github.workspace }}/workflows
+      PROJECT_ROOT: ${{ github.workspace }}/workflows/ms-swift
       TARGET_ROOT: ${{ github.workspace }}/target
-      FIXTURE_DIR: ${{ github.workspace }}/workflows/fixtures
+      FIXTURE_DIR: ${{ github.workspace }}/workflows/ms-swift/fixtures
       PIP_EXTRA_INDEX_URL: https://repo.huaweicloud.com/ascend/repos/pypi
       PIP_TIMEOUT: "120"
     container:
@@ -179,69 +168,24 @@ jobs:
           source /usr/local/Ascend/ascend-toolkit/set_env.sh
           python -c "import mindspeed.megatron_adaptor; from swift.megatron.init import init_megatron_env; init_megatron_env()"
 
-      - name: Run guarded example
-        id: run
+      - name: Run example
         env:
-          UPDATE_GOLDEN: ${{ needs.resolve.outputs.update_golden }}
           EXAMPLE_PATH: ${{ matrix.example.path }}
           OVERLAY_PATH: ${{ matrix.example.overlay }}
-          GOLDEN_PATH: ${{ matrix.example.golden }}
         run: |
           source /usr/local/Ascend/ascend-toolkit/set_env.sh
-          run_once() {
-            local out_dir="$1"
-            mkdir -p "$out_dir"
-            CI_OUTPUT_DIR="$out_dir" bash "$WORKFLOWS_ROOT/scripts/run_guard.sh" \
-              "$EXAMPLE_PATH" "$OVERLAY_PATH" 2>&1 | tee "$out_dir/train.log"
-          }
-          if [ "$UPDATE_GOLDEN" = "true" ]; then
-            for i in 1 2 3; do
-              run_once "$GITHUB_WORKSPACE/output/run$i"
-            done
-            python "$WORKFLOWS_ROOT/scripts/assert_golden.py" \
-              --calibrate \
-              --logging \
-                "$GITHUB_WORKSPACE/output/run1/logging.jsonl" \
-                "$GITHUB_WORKSPACE/output/run2/logging.jsonl" \
-                "$GITHUB_WORKSPACE/output/run3/logging.jsonl" \
-              --golden "$WORKFLOWS_ROOT/$GOLDEN_PATH" \
-              --image "$GUARD_IMAGE"
-          else
-            run_once "$GITHUB_WORKSPACE/output/run1"
-            python "$WORKFLOWS_ROOT/scripts/assert_golden.py" \
-              --logging "$GITHUB_WORKSPACE/output/run1/logging.jsonl" \
-              --golden "$WORKFLOWS_ROOT/$GOLDEN_PATH"
-          fi
-
-      - name: Commit calibrated golden
-        if: ${{ always() && github.event_name == 'workflow_dispatch' && needs.resolve.outputs.update_golden == 'true' && steps.run.outcome == 'success' }}
-        working-directory: workflows
-        env:
-          # This runner rewrites https://github.com/ to an unauthenticated
-          # gh-proxy mirror, so `git push origin` gets no credentials. A URL
-          # that carries the token does not match that insteadOf prefix.
-          REMOTE_URL: https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add golden/
-          if git diff --cached --quiet; then
-            echo "no golden changes"
-            exit 0
-          fi
-          git commit -m "Calibrate golden for ${{ matrix.example.path }}"
-          git pull --rebase "$REMOTE_URL" main
-          git push "$REMOTE_URL" HEAD:main
+          mkdir -p "$GITHUB_WORKSPACE/output"
+          CI_OUTPUT_DIR="$GITHUB_WORKSPACE/output" \
+            bash "$PROJECT_ROOT/scripts/run_example.sh" "$EXAMPLE_PATH" "$OVERLAY_PATH" \
+            2>&1 | tee "$GITHUB_WORKSPACE/output/train.log"
 
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: guard-${{ github.run_id }}-${{ strategy.job-index }}
+          name: ms-swift-${{ github.run_id }}-${{ strategy.job-index }}
           if-no-files-found: ignore
-          path: |
-            output/
-            workflows/golden/
+          path: output/
 
       - name: Write job summary
         if: always()
@@ -249,16 +193,14 @@ jobs:
           TARGET_REPO: ${{ needs.resolve.outputs.target_repo }}
           TARGET_REF: ${{ needs.resolve.outputs.target_ref }}
           EXAMPLE_PATH: ${{ matrix.example.path }}
-          UPDATE_GOLDEN: ${{ needs.resolve.outputs.update_golden }}
         run: |
           {
-            echo "## Ascend example guard"
+            echo "## ms-swift example"
             echo ""
             echo "- target_repo: \`$TARGET_REPO\`"
             echo "- target_ref: \`$TARGET_REF\`"
             echo "- path: \`$EXAMPLE_PATH\`"
-            echo "- image: \`$GUARD_IMAGE\`"
-            echo "- update_golden: \`$UPDATE_GOLDEN\`"
+            echo "- image: \`$CI_IMAGE\`"
             echo "- conclusion: \`${{ job.status }}\`"
             echo ""
           } >> "$GITHUB_STEP_SUMMARY"

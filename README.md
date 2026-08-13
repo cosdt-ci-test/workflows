@@ -1,24 +1,23 @@
 # cosdt-ci-test/workflows
 
-本仓库是昇腾 example CI 看护流水线的**唯一部署点**。红绿只出现在本仓的 Actions。
+Example CI 的唯一部署点，红绿只出现在本仓的 Actions。每个被看护的项目在根目录有一个同名目录存放配套清单、脚本与数据；流水线本身放在 `.github/workflows/<项目>.yml`。
 
-## 本阶段范围
+```
+.github/workflows/ms-swift.yml   ms-swift 流水线
+ms-swift/                        ms-swift 的清单、overlay、fixture、脚本
+```
 
-- 被 checkout、被跑 example 的代码只来自测试靶 [`cosdt-ci-test/ms-swift`](https://github.com/cosdt-ci-test/ms-swift)。
-- `target_repo` / `target_ref` 是 workflow 入参，避免把 fork URL 写死进脚本逻辑。本阶段验证只传入 `cosdt-ci-test/ms-swift`。
-- **不** checkout、clone、请求或互动 [`modelscope/ms-swift`](https://github.com/modelscope/ms-swift)（不提 PR、不开 issue、不评论、不要 secret、不 push）。
+## ms-swift
 
-## 清单分类
+在昇腾 NPU 上把清单里 `supported` 的 example 跑通。example 退出码非 0 即判红，不比对 loss 等数值。
 
-`examples_manifest.yaml` 由 `scripts/bootstrap_manifest.py` 扫描目标仓 `examples/` 下的 `.sh` / `.py` / `.yaml` 生成。
+- 目标仓由入参 `target_repo` / `target_ref` 决定，默认 `cosdt-ci-test/ms-swift`。**不** checkout、clone、请求或互动 [`modelscope/ms-swift`](https://github.com/modelscope/ms-swift)（不提 PR、不开 issue、不评论、不要 secret、不 push）。
+- `examples_manifest.yaml` 由 `scripts/bootstrap_manifest.py` 扫描目标仓 `examples/` 下的 `.sh` / `.py` / `.yaml` 生成。除 `examples/ascend/train/qwen3/qwen3_lora_megatron.sh` 外全部标 `unsupported`，这是任务规定的分类，不是社区结论。清单与磁盘的差异只打印路径，不使 job 失败。
+- `overlays/*.args` 把 example 压到 CI 规模（仓内 8 条 fixture、短序列、输出到 CI 目录）。给 example 补 `"$@"` 只发生在 CI 临时工作区，不改任何 ms-swift 仓库。
 
-除 `examples/ascend/train/qwen3/qwen3_lora_megatron.sh` 外，其余全部标 `unsupported`。这是本任务规定的分类，不是社区结论。新增文件只打印路径，不使 job 失败。
+### 触发
 
-## 触发
+- `workflow_dispatch`：手动指定 `target_repo` 与 `target_ref`。
+- `repository_dispatch`（`ms-swift-ci-completed`）：由测试 fork 上的 notifier 在 `citest-npu` 成功后发送，payload 必须带 `repo` 与 `sha`。
 
-- `workflow_dispatch`：手动指定 `target_repo`（默认 `cosdt-ci-test/ms-swift`）和 `target_ref`。
-- `repository_dispatch`（`ms-swift-ci-completed`）：由测试 fork 上的 notifier 在 `citest-npu` 成功后发送。payload 必须带 `repo` 与 `sha`。
-
-无 `schedule`。`repository_dispatch` 不改 golden。标定 golden 只通过 `workflow_dispatch` 且 `update_golden=true`。
-
-对 example 的 `"$@"` 只在 CI 临时工作区 sed，不改任何 ms-swift 仓库。
+无 `schedule`。

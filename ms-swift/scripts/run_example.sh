@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run one guarded example from a CI working copy of the target tree.
+# Run one example from a CI working copy of the target tree.
 # If the example does not already pass "$@" through, append it after
 # `--model_name swift-robot` in this working copy only. Never git add/commit/push.
 set -euo pipefail
@@ -11,13 +11,13 @@ fi
 
 EXAMPLE_REL="$1"
 OVERLAY_REL="$2"
-WORKFLOWS_ROOT="${WORKFLOWS_ROOT:?WORKFLOWS_ROOT is required}"
+PROJECT_ROOT="${PROJECT_ROOT:?PROJECT_ROOT is required}"
 TARGET_ROOT="${TARGET_ROOT:?TARGET_ROOT is required}"
 FIXTURE_DIR="${FIXTURE_DIR:?FIXTURE_DIR is required}"
 CI_OUTPUT_DIR="${CI_OUTPUT_DIR:?CI_OUTPUT_DIR is required}"
 
 EXAMPLE_PATH="$TARGET_ROOT/$EXAMPLE_REL"
-OVERLAY_PATH="$WORKFLOWS_ROOT/$OVERLAY_REL"
+OVERLAY_PATH="$PROJECT_ROOT/$OVERLAY_REL"
 
 if [[ ! -f "$EXAMPLE_PATH" ]]; then
   echo "example not found: $EXAMPLE_PATH" >&2

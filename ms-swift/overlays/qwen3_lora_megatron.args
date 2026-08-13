@@ -1,8 +1,4 @@
 --dataset ${FIXTURE_DIR}/ci_sft_8.jsonl
---dataset_shuffle false
---seed 42
---data_seed 42
---lora_dropout 0
 --logging_steps 1
 --add_version false
 --output_dir ${CI_OUTPUT_DIR}

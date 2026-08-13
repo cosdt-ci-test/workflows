@@ -17,7 +17,6 @@ SUPPORTED_ENTRY = {
     'runner': 'linux-aarch64-a2-2',
     'npu_devices': '0,1',
     'overlay': 'overlays/qwen3_lora_megatron.args',
-    'golden': 'golden/ascend__train__qwen3__qwen3_lora_megatron.json',
     'timeout_minutes': 180,
 }
 
@@ -48,7 +47,6 @@ def render_manifest(paths: list[str]) -> str:
         f"    runner: {SUPPORTED_ENTRY['runner']}",
         f"    npu_devices: '{SUPPORTED_ENTRY['npu_devices']}'",
         f"    overlay: {SUPPORTED_ENTRY['overlay']}",
-        f"    golden: {SUPPORTED_ENTRY['golden']}",
         f"    timeout_minutes: {SUPPORTED_ENTRY['timeout_minutes']}",
         'unsupported:',
     ]

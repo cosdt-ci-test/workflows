@@ -324,6 +324,9 @@ jobs:
           # 3. Force-reinstall torch + torch_npu so we get the real NPU
           #    build, not whatever the CANN image happens to ship.
           python -m pip install --force-reinstall \
+              --index-url http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple \
+              --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
+              --trusted-host cache-service.nginx-pypi-cache.svc.cluster.local \
               torch==2.9.0 torch_npu==2.9.0.post2
           # 4. Pin transformers / peft (matches the doc's <5.0 / <0.19 caps).
           python -m pip install "transformers<5.0" "peft<0.19"

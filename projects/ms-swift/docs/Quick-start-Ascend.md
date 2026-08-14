@@ -83,9 +83,13 @@ uv pip install ms-swift -U --torch-backend=auto
 从源码安装：
 
 ```shell
+# Clone the upstream ms-swift repo into ./ms-swift
 >>> git clone https://github.com/modelscope/ms-swift.git
+# Pin the repo to the exact ref/SHA that triggered this CI run
 >>> cd ms-swift && git checkout <UPSTREAM_REF>
+# Editable install: `swift` CLI is now on PATH, source changes take effect on rerun
 >>> cd ms-swift && uv pip install -e . --torch-backend=auto
+# Sanity check the install: should print the installed ms-swift version
 >>> python -c "import swift; print('ms-swift', swift.__version__)"
 ms-swift xxx
 ```

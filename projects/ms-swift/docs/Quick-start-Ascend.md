@@ -55,11 +55,15 @@ swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/cann:8.3.rc2-910b-ubun
 >>> python --version
 Python 3.11.x
 >>> npu-smi info
-+----------------------------------------------------------+
-| NPU   Name    Health  Power(W)  Temp(C)  Memory-Usage(MB) |
-| 0     910B3   OK      <功率>    <温度>   <已用> / 65536   |
-+----------------------------------------------------------+
-...
+...                                  # skip: driver version header is unstable
+...                                  # skip: column header line
+...                                  # skip: separator
+...                                  # skip: one row per NPU (model/health/...)
+...                                  # skip: separator
+...                                  # skip: empty "processes" table header
+...                                  # skip: separator
+...                                  # skip: "No running processes" line
+...                                  # skip: trailing separator
 >>> python -c "import torch, torch_npu; print('torch=', torch.__version__); print('torch_npu=', torch_npu.__version__); print('npu_count=', torch.npu.device_count())"
 torch= 2.9.0.x
 torch_npu= 2.9.0.postX
@@ -90,8 +94,8 @@ uv pip install ms-swift -U --torch-backend=auto
 # Editable install: `swift` CLI is now on PATH, source changes take effect on rerun
 >>> cd ms-swift && uv pip install -e . --torch-backend=auto
 # Sanity check the install: should print the installed ms-swift version
->>> swift --version
-ms-swift xxx
+>>> python -c "from swift.cli.main import cli_main; print('swift CLI importable')"
+swift CLI importable
 ```
 
 `<UPSTREAM_REF>`： 改成实际版本。

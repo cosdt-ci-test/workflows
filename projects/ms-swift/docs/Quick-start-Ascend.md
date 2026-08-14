@@ -26,9 +26,7 @@ Atlas 900 A2 / A3 训练系列产品或者 Ascend 950 系列产品，并按需�
 
 **配套镜像**：
 
-```
-swr.cn-southwest-1.myhuaweicloud.com/ascendhub/cann:8.3.rc2-910b-ubuntu22.04-py3.11
-```
+swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:8.3.rc2-910b-ubuntu22.04-py3.11
 
 **软件版本**：
 
@@ -56,8 +54,9 @@ Python 3.11.x
 >>> python -c "import torch, torch_npu; print('torch=', torch.__version__); print('torch_npu=', torch_npu.__version__); print('is_available:', torch.npu.is_available()); print('count:', torch.npu.device_count())"
 torch= 2.9.0+cpu
 torch_npu= 2.9.0.post2
-is_available: xxx
+is_available: True
 count: 1
+...                              # skip torch_npu init banner on stderr
 ```
 
 确认能看到 NPU 设备：

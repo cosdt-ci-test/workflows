@@ -411,21 +411,30 @@ class TestQuickStartAscendEndToEnd(unittest.TestCase):
         a_iter: list[str] = list(actual)
         e_iter: list[str] = list(expected)
         mismatches = []
+        # Collect per-line (expected, actual, match) tuples for the
+        # summary log; populate after the loop with leftovers too.
+        line_summary: list[tuple[str, str | None, bool]] = []
         for ei, line in enumerate(e_iter):
             if line == '...':
                 # Wildcard: skip a single actual line. Use consecutive
                 # ``...`` lines (or a trailing ``...``) to drop several.
                 if a_iter:
-                    a_iter.pop(0)
+                    consumed = a_iter.pop(0)
+                    line_summary.append(('...', consumed, True))
+                else:
+                    line_summary.append(('...', None, True))
                 continue
             actual_line = a_iter.pop(0) if a_iter else None
             if actual_line is None:
                 mismatches.append(
                     f'  expected line not produced:\n    {line!r}')
+                line_summary.append((line, None, False))
                 continue
             pat = expected_line_to_regex(line)
             m = pat.match(actual_line)
-            if m is None:
+            ok = m is not None
+            line_summary.append((line, actual_line, ok))
+            if not ok:
                 mismatches.append(
                     f'  line mismatch:\n'
                     f'    expected (regex): {pat.pattern!r}\n'
@@ -435,13 +444,23 @@ class TestQuickStartAscendEndToEnd(unittest.TestCase):
             for k, v in m.groupdict().items():
                 if v is not None:
                     captures[k] = v
+        # Drain leftover actual lines (not part of any expected) into
+        # the summary so the reader sees what was produced past the end.
+        while a_iter:
+            line_summary.append(('', a_iter.pop(0), True))
+        # Always print the per-line summary so the diff is visible in
+        # the CI stream log even when everything matched.
+        _log(f'BLOCK {block_idx} step {step_idx} ({kind}): '
+             f'{len(expected)} expected, {len(actual)} actual')
+        for i, (exp, act, ok) in enumerate(line_summary, 1):
+            mark = 'OK ' if ok else 'BAD'
+            exp_disp = repr(exp) if exp else '<skip>'
+            act_disp = repr(act) if act is not None else '<missing>'
+            _log(f'  {i:>2}. [{mark}] exp={exp_disp}  act={act_disp}')
         # Extra actual lines are a soft warning, not a failure.
         if mismatches:
             msg = (f'block #{block_idx} step #{step_idx} ({kind}) output '
                    f'mismatch:\n' + '\n'.join(mismatches))
-            # Print before fail so the diff shows in the CI stream
-            # log regardless of unittest's assertion formatting.
-            _log(msg)
             self.fail(msg)
 
 

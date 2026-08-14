@@ -66,8 +66,19 @@ jobs:
         --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
         --volume=/data/ci-cache/modelscope:/root/.cache/modelscope
     env:
-      PIP_INDEX_URL: https://repo.huaweicloud.com/ascend/repos/pypi
-      PIP_TRUSTED_HOST: repo.huaweicloud.com
+      # Match upstream citest_npu.yaml: cluster-internal nginx PyPI cache
+      # fronts every package (including setuptools/wheel/torch/torch_npu),
+      # so PEP 517 build deps and NPU wheels all resolve without falling
+      # back to external mirrors.
+      UV_INDEX_URL: "http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple"
+      UV_EXTRA_INDEX_URL: "https://repo.huaweicloud.com/ascend/repos/pypi"
+      UV_INDEX_STRATEGY: "unsafe-best-match"
+      UV_INSECURE_HOST: "cache-service.nginx-pypi-cache.svc.cluster.local"
+      UV_HTTP_TIMEOUT: "120"
+      UV_NO_CACHE: "1"
+      UV_SYSTEM_PYTHON: "1"
+      PIP_INDEX_URL: "http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple"
+      PIP_TRUSTED_HOST: "cache-service.nginx-pypi-cache.svc.cluster.local"
       PIP_TIMEOUT: "120"
     steps:
       # ===== Setup =====
@@ -307,28 +318,20 @@ jobs:
           EOF
           export PIP_CONSTRAINT=/tmp/ms_swift_npu_constraints.txt
           export UV_CONSTRAINT=/tmp/ms_swift_npu_constraints.txt
-          # 2. Pre-install setuptools / wheel from the official PyPI so that
-          #    the test's setUpClass can `pip install git+...ms-swift.git@SHA`
-          #    without the build-deps phase failing (the Huawei mirror does
-          #    not carry setuptools/wheel). uv is installed the same way -
-          #    it handles PEP 517 build deps more reliably than pip.
-          python -m pip install --index-url https://pypi.org/simple \
-              --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
-              -U pip setuptools wheel uv
+          # 2. uv handles PEP 517 build deps more reliably than pip and
+          #    the test's setUpClass invokes `uv pip install ...`. The
+          #    internal nginx cache fronts PyPI so this resolves cleanly.
+          python -m pip install uv
           # 3. Force-reinstall torch + torch_npu so we get the real NPU
-          #    build, not whatever the CANN image happens to ship (the
-          #    `torch-npu` tag bakes a CPU-only torch that swift can't
-          #    actually use on NPU).
+          #    build, not whatever the CANN image happens to ship.
           python -m pip install --force-reinstall \
-              --index-url https://repo.huaweicloud.com/ascend/repos/pypi \
               torch==2.9.0 torch_npu==2.9.0.post2
           # 4. Pin transformers / peft (matches the doc's <5.0 / <0.19 caps).
-          python -m pip install \
-              -i https://repo.huaweicloud.com/ascend/repos/pypi \
-              "transformers<5.0" "peft<0.19"
-          # The test file lives at workflows/projects/ms-swift/tests/test_quick_start_ascend.py
-          # and resolves REPO_ROOT upward from there. ms-swift itself is
-          # installed by setUpClass from the upstream git SHA.
+          python -m pip install "transformers<5.0" "peft<0.19"
+          # The doc owns the source install step (its '## install ms-swift'
+          # block runs git clone + uv pip install -e . for the exact
+          # <UPSTREAM_REF>). After that, run the doc itself as a unittest
+          # - every shell block becomes one or more test cases.
           cd workflows/projects/ms-swift
           python -m unittest tests.test_quick_start_ascend -v 2>&1 | tee /tmp/unittest.log
 

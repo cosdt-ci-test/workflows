@@ -38,7 +38,7 @@ import unittest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DOC = REPO_ROOT / 'ms-swift' / 'docs' / 'Quick-start-Ascend.md'
+DOC = REPO_ROOT / 'projects' / 'ms-swift' / 'docs' / 'Quick-start-Ascend.md'
 
 
 # --------------------------------------------------------------------------- #

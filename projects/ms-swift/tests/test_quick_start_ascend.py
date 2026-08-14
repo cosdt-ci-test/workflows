@@ -35,6 +35,7 @@ import os
 import re
 import subprocess
 import unittest
+import urllib.request
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -45,10 +46,31 @@ DOC = REPO_ROOT / 'projects' / 'ms-swift' / 'docs' / 'Quick-start-Ascend.md'
 # Parsing                                                                     #
 # --------------------------------------------------------------------------- #
 
-def resolve_doc_path() -> Path:
+def fetch_doc_text() -> tuple[str, str]:
+    """Fetch the Quick Start doc from MONITORED_DOC_URL.
+
+    The URL must match what the monitor step hashed, so the doc under
+    test is exactly the doc that triggered this run. Failure to fetch
+    raises - the test fails (this is a CI failure, not a silent skip).
+
+    Returns (text, url). Falls back to the local checkout copy when
+    MONITORED_DOC_URL is not set, so the test can still be exercised
+    by hand without the workflow.
+    """
+    url = os.environ.get('MONITORED_DOC_URL')
+    if url:
+        with urllib.request.urlopen(url) as resp:
+            return resp.read().decode('utf-8'), url
     if DOC.exists():
-        return DOC
-    raise FileNotFoundError(f'Quick Start doc not found at {DOC}')
+        return DOC.read_text(encoding='utf-8'), f'local:{DOC}'
+    raise FileNotFoundError(
+        f'Quick Start doc not found at {DOC} '
+        '(and MONITORED_DOC_URL is unset)')
+
+
+def resolve_doc_path() -> Path:
+    """Backwards-compatible shim for callers that still want a Path."""
+    return DOC
 
 
 def parse_blocks(doc_text: str) -> list[list[dict]]:
@@ -240,13 +262,13 @@ class TestQuickStartAscendEndToEnd(unittest.TestCase):
     other environment.
     """
 
-    doc_path: Path = None
+    doc_path: str = None
     blocks: list[list[dict]] = None
 
     @classmethod
     def setUpClass(cls):
-        cls.doc_path = resolve_doc_path()
-        cls.blocks = parse_blocks(cls.doc_path.read_text(encoding='utf-8'))
+        cls.doc_text, cls.doc_path = fetch_doc_text()
+        cls.blocks = parse_blocks(cls.doc_text)
         # Record the upstream ref / commit being tested. The CI
         # workflow sets these before invoking unittest; when running
         # outside CI both are unset and the test is skipped below.

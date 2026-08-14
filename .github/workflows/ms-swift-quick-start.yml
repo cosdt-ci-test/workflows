@@ -264,6 +264,7 @@ jobs:
           UPSTREAM_REF: ${{ steps.decide.outputs.test_ref }}
           UPSTREAM_COMMIT: ${{ steps.upstream-commit.outputs.sha }}
           REASON: ${{ steps.decide.outputs.reason }}
+          MONITORED_DOC_URL: ${{ env.MONITORED_DOC_URL }}
         run: |
           # CANN env only lives in the shell that sourced it; re-source
           # here so swift sft / swift infer see ASCEND_HOME etc.

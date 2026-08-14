@@ -54,20 +54,16 @@ swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/cann:8.3.rc2-910b-ubun
 ```shell
 >>> python --version
 Python 3.11.x
->>> npu-smi info
-...                                  # skip: driver version header is unstable
-...                                  # skip: column header line
-...                                  # skip: separator
-...                                  # skip: one row per NPU (model/health/...)
-...                                  # skip: separator
-...                                  # skip: empty "processes" table header
-...                                  # skip: separator
-...                                  # skip: "No running processes" line
-...                                  # skip: trailing separator
 >>> python -c "import torch, torch_npu; print('torch=', torch.__version__); print('torch_npu=', torch_npu.__version__); print('npu_count=', torch.npu.device_count())"
 torch= 2.9.0.x
 torch_npu= 2.9.0.postX
 npu_count= 1
+```
+
+确认能看到 NPU 设备：
+
+```shell
+$ npu-smi info
 ```
 
 > 如果 `npu-smi` 不存在，请回到 [Ascend 官方快速安装指南](https://ascend.github.io/docs/sources/ascend/quick_install.html) 补装驱动；如果 `import torch_npu` 失败，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查 torch / torch_npu / CANN 三方兼容矩阵。

@@ -31,33 +31,23 @@ on:
         description: 'force the install + test steps to run (skip the monitor check)'
         type: boolean
         default: false
-      upstream_repo:
-        description: 'override the upstream repo to test'
-        required: false
-        default: ''
       upstream_ref:
         description: 'override the upstream ref to test'
         required: false
         default: 'main'
-      monitored_doc_url:
-        description: 'override the doc URL to monitor'
-        required: false
-        default: ''
 
 permissions:
   contents: read
 
 env:
-  CI_IMAGE: swr.cn-south-1.myhuaweicloud.com/ascendhub/torch-npu:2.9.0.post2-910b-ubuntu22.04-py3.11
-  UPSTREAM_REPO: ${{ vars.UPSTREAM_REPO || inputs.upstream_repo || 'modelscope/ms-swift' }}
-  UPSTREAM_REF_DEFAULT: ${{ inputs.upstream_ref || 'main' }}
-  MONITORED_DOC_URL: ${{ vars.MONITORED_DOC_URL || inputs.monitored_doc_url || 'https://raw.githubusercontent.com/cosdt-ci-test/ms-swift/main/docs/source/GetStarted/Quick-start-Ascend.md' }}
+  UPSTREAM_REPO: modelscope/ms-swift
+  MONITORED_DOC_URL: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/ms-swift/docs/Quick-start-Ascend.md
   GH_API: https://api.github.com
 
 jobs:
   monitor-and-test:
     name: monitor + (test on change)
-    runs-on: [linux-aarch64-a2-2]
+    runs-on: [linux-aarch64-a2-1]
     timeout-minutes: 180
     defaults:
       run:
@@ -83,7 +73,6 @@ jobs:
         run: |
           echo "=========================================="
           echo "Trigger:    ${{ github.event_name }}"
-          echo "Upstream:   ${{ env.UPSTREAM_REPO }}@${{ env.UPSTREAM_REF_DEFAULT }}"
           echo "Force:      ${{ inputs.force_install || 'false' }}"
           echo "Runner:     ${{ runner.name }}"
           echo "=========================================="
@@ -95,21 +84,22 @@ jobs:
           npu-smi info || true
           python -c "import torch, torch_npu; print(torch.__version__, torch_npu.__version__, torch.npu.device_count())" || true
 
-      - name: Checkout workflows (provides the test code)
+      - name: Checkout workflows (provides the test code and doc)
         uses: actions/checkout@v4
         with:
           path: workflows
           fetch-depth: 1
 
-      - name: Checkout target
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ vars.TARGET_REPO || 'cosdt-ci-test/ms-swift' }}
-          ref: ${{ vars.TARGET_REF || 'main' }}
-          path: target
-          fetch-depth: 1
-
       # ----- monitor state (persisted via actions/cache, 30-day retention) -----
+      # Each monitor stores:
+      #   .<reason>_hash  — last seen signal (hash/tag/sha)
+      #   .<reason>_outcome — "success" / "failure" of the most recent test
+      #                        that was triggered for this reason. A "failure"
+      #                        outcome causes the next cycle to re-trigger even
+      #                        if the signal hasn't changed; a "success" clears
+      #                        that flag. A "failure" is reset to "success"
+      #                        the moment the signal itself changes (the new
+      #                        ref deserves a clean run, not a sticky retry).
       - name: Restore monitor state
         id: cache-restore
         if: inputs.force_install != true
@@ -132,17 +122,23 @@ jobs:
           echo "Monitoring: $DOC_URL"
           NEW=$(curl -fsSL --retry 3 "$DOC_URL" | sha256sum | cut -d' ' -f1)
           OLD=$(cat "$STATE_DIR/.doc_hash" 2>/dev/null || echo "")
+          OUTCOME=$(cat "$STATE_DIR/.doc_outcome" 2>/dev/null || echo "")
           if [ "$OLD" != "$NEW" ]; then
             echo "$NEW" > "$STATE_DIR/.doc_hash"
+            echo "success" > "$STATE_DIR/.doc_outcome"  # signal changed: clear retry flag
             echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "ref=main" >> "$GITHUB_OUTPUT"
             echo "reason=doc" >> "$GITHUB_OUTPUT"
+          elif [ "$OUTCOME" = "failure" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "ref=main" >> "$GITHUB_OUTPUT"
+            echo "reason=doc-retry" >> "$GITHUB_OUTPUT"
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
-          echo "doc_hash=$NEW"
+          echo "doc_hash=$NEW outcome=$OUTCOME"
 
-      - name: 监控 upstream latest release SHA
+      - name: 监控 upstream latest release tag
         id: monitor-release
         if: inputs.force_install != true
         run: |
@@ -152,17 +148,22 @@ jobs:
           curl -fsSL --retry 3 \
             "$GH_API/repos/${{ env.UPSTREAM_REPO }}/releases/latest" -o /tmp/release.json
           TAG=$(jq -r '.tag_name // empty' /tmp/release.json)
-          SHA=$(jq -r '.target_commitish // empty' /tmp/release.json)
-          OLD=$(cat "$STATE_DIR/.last_release_sha" 2>/dev/null || echo "")
-          if [ -n "$SHA" ] && [ "$OLD" != "$SHA" ]; then
-            echo "$SHA" > "$STATE_DIR/.last_release_sha"
+          OLD=$(cat "$STATE_DIR/.last_release_tag" 2>/dev/null || echo "")
+          OUTCOME=$(cat "$STATE_DIR/.release_outcome" 2>/dev/null || echo "")
+          if [ -n "$TAG" ] && [ "$OLD" != "$TAG" ]; then
+            echo "$TAG" > "$STATE_DIR/.last_release_tag"
+            echo "success" > "$STATE_DIR/.release_outcome"  # signal changed: clear retry flag
             echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "ref=$TAG" >> "$GITHUB_OUTPUT"
             echo "reason=release" >> "$GITHUB_OUTPUT"
+          elif [ "$OUTCOME" = "failure" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "ref=$TAG" >> "$GITHUB_OUTPUT"
+            echo "reason=release-retry" >> "$GITHUB_OUTPUT"
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
-          echo "release_tag=$TAG release_sha=$SHA"
+          echo "release_tag=$TAG outcome=$OUTCOME"
 
       - name: 监控 upstream main HEAD
         id: monitor-commit
@@ -174,15 +175,21 @@ jobs:
           SHA=$(curl -fsSL --retry 3 \
             "$GH_API/repos/${{ env.UPSTREAM_REPO }}/commits/main" | jq -r '.sha // empty')
           OLD=$(cat "$STATE_DIR/.last_tested_sha" 2>/dev/null || echo "")
+          OUTCOME=$(cat "$STATE_DIR/.commit_outcome" 2>/dev/null || echo "")
           if [ -n "$SHA" ] && [ "$OLD" != "$SHA" ]; then
             echo "$SHA" > "$STATE_DIR/.last_tested_sha"
+            echo "success" > "$STATE_DIR/.commit_outcome"  # signal changed: clear retry flag
             echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "ref=main" >> "$GITHUB_OUTPUT"
             echo "reason=commit" >> "$GITHUB_OUTPUT"
+          elif [ "$OUTCOME" = "failure" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "ref=main" >> "$GITHUB_OUTPUT"
+            echo "reason=commit-retry" >> "$GITHUB_OUTPUT"
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
-          echo "main_sha=$SHA"
+          echo "main_sha=$SHA outcome=$OUTCOME"
 
       - name: Persist monitor state
         if: inputs.force_install != true && always()
@@ -193,65 +200,127 @@ jobs:
           retention-days: 30
 
       # ----- aggregate decision -----
-      - name: 决定是否要跑测试
+      # Single funnel for both trigger paths:
+      #   - Monitor path (default): doc / release / commit picked by
+      #     priority; ref comes from whichever monitor fired.
+      #   - Manual path (force_install=true): no monitor ran; ref comes
+      #     from inputs.upstream_ref (default 'main').
+      # Either way, downstream steps read TEST_REF / CHANGED / REASON
+      # and don't have to know which path produced them.
+      - name: 决定要跑哪个 ref
         id: decide
-        if: inputs.force_install != true
         run: |
-          CHANGED="false"
-          REASON=""
-          REF="${{ env.UPSTREAM_REF_DEFAULT }}"
-          if [ "${{ steps.monitor-doc.outputs.changed }}" = "true" ]; then
-            CHANGED="true"
-            REASON="doc"
-            REF="${{ steps.monitor-doc.outputs.ref }}"
-          elif [ "${{ steps.monitor-release.outputs.changed }}" = "true" ]; then
-            CHANGED="true"
-            REASON="release"
-            REF="${{ steps.monitor-release.outputs.ref }}"
-          elif [ "${{ steps.monitor-commit.outputs.changed }}" = "true" ]; then
-            CHANGED="true"
-            REASON="commit"
-            REF="${{ steps.monitor-commit.outputs.ref }}"
-          fi
-          echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
-          echo "reason=$REASON" >> "$GITHUB_OUTPUT"
-          echo "ref=$REF" >> "$GITHUB_OUTPUT"
-          if [ "$CHANGED" != "true" ]; then
-            echo "No upstream changes — skipping install + test"
+          if [ "${{ inputs.force_install }}" = "true" ]; then
+            # Manual path.
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "reason=manual" >> "$GITHUB_OUTPUT"
+            echo "test_ref=${{ inputs.upstream_ref || 'main' }}" >> "$GITHUB_OUTPUT"
+          else
+            # Monitor path. Priority: doc > release > commit. A retry
+            # reason (e.g. "doc-retry") carries the same priority as
+            # its base reason.
+            CHANGED="false"
+            REASON=""
+            REF=""
+            if [ "${{ steps.monitor-doc.outputs.changed }}" = "true" ]; then
+              CHANGED="true"
+              REASON="${{ steps.monitor-doc.outputs.reason }}"
+              REF="${{ steps.monitor-doc.outputs.ref }}"
+            elif [ "${{ steps.monitor-release.outputs.changed }}" = "true" ]; then
+              CHANGED="true"
+              REASON="${{ steps.monitor-release.outputs.reason }}"
+              REF="${{ steps.monitor-release.outputs.ref }}"
+            elif [ "${{ steps.monitor-commit.outputs.changed }}" = "true" ]; then
+              CHANGED="true"
+              REASON="${{ steps.monitor-commit.outputs.reason }}"
+              REF="${{ steps.monitor-commit.outputs.ref }}"
+            fi
+            echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
+            echo "reason=$REASON" >> "$GITHUB_OUTPUT"
+            echo "test_ref=$REF" >> "$GITHUB_OUTPUT"
+            if [ "$CHANGED" != "true" ]; then
+              echo "No upstream changes — skipping install + test"
+            fi
           fi
 
       # ----- test block (only when something changed) -----
       - name: Resolve upstream commit SHA
         id: upstream-commit
-        if: |
-          inputs.force_install == true ||
-          steps.decide.outputs.changed == 'true'
+        if: steps.decide.outputs.changed == 'true'
         run: |
           set -euo pipefail
-          SHA=$(curl -fsSL "$GH_API/repos/${{ env.UPSTREAM_REPO }}/commits/${{ steps.decide.outputs.ref }}" \
+          SHA=$(curl -fsSL "$GH_API/repos/${{ env.UPSTREAM_REPO }}/commits/${{ steps.decide.outputs.test_ref }}" \
             | jq -r '.sha // empty')
-          [ -z "$SHA" ] && { echo "failed to resolve ${{ steps.decide.outputs.ref }}"; exit 1; }
+          [ -z "$SHA" ] && { echo "failed to resolve ${{ steps.decide.outputs.test_ref }}"; exit 1; }
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           echo "Upstream commit: $SHA"
 
-      - name: 装 ms-swift 并跑 quick start 测试
+      - name: 跑 quick start 测试
         id: test
-        if: |
-          inputs.force_install == true ||
-          steps.decide.outputs.changed == 'true'
+        if: steps.decide.outputs.changed == 'true'
         env:
           SWIFT_NPU_E2E: '1'
           UPSTREAM_REPO: ${{ env.UPSTREAM_REPO }}
-          UPSTREAM_REF: ${{ steps.decide.outputs.ref || env.UPSTREAM_REF_DEFAULT }}
+          UPSTREAM_REF: ${{ steps.decide.outputs.test_ref }}
           UPSTREAM_COMMIT: ${{ steps.upstream-commit.outputs.sha }}
-          REASON: ${{ steps.decide.outputs.reason || 'manual' }}
+          REASON: ${{ steps.decide.outputs.reason }}
         run: |
-          set -euo pipefail
-          cd target
+          # The test file lives at workflows/ms-swift/tests/test_quick_start_ascend.py
+          # and resolves REPO_ROOT upward from there. ms-swift itself is
+          # installed by setUpClass from the upstream git SHA.
           python -m pip install -U pip
-          python -m pip install -e .
           python -m pip install torchvision==0.24.0 decorator || true
-          python -m unittest tests.docs.test_quick_start_ascend -v 2>&1 | tee /tmp/unittest.log
+          cd workflows/ms-swift
+          python -m unittest tests.test_quick_start_ascend -v 2>&1 | tee /tmp/unittest.log
+
+      - name: Record outcome
+        id: record-outcome
+        if: |
+          always() &&
+          inputs.force_install != true &&
+          steps.decide.outputs.changed == 'true'
+        run: |
+          STATE_DIR=".monitor-state"
+          mkdir -p "$STATE_DIR"
+          REASON="${{ steps.decide.outputs.reason }}"
+          # Strip the "-retry" suffix to map back to the base monitor.
+          BASE="${REASON%-retry}"
+          # Map the test step's conclusion to an outcome:
+          #   success   -> success  (test passed)
+          #   failure   -> failure  (test ran and failed)
+          #   skipped/* -> failure  (a prior step broke before test ran;
+          #                          treat as failure so the next cycle
+          #                          retries; record the cause separately)
+          CONCLUSION="${{ steps.test.conclusion }}"
+          case "$CONCLUSION" in
+            success)
+              OUT="success"
+              REASON_TEXT=""
+              ;;
+            failure)
+              OUT="failure"
+              REASON_TEXT="test failed"
+              ;;
+            skipped)
+              OUT="failure"
+              REASON_TEXT="prior step failed before test could run"
+              ;;
+            cancelled)
+              OUT="failure"
+              REASON_TEXT="job cancelled"
+              ;;
+            *)
+              OUT="failure"
+              REASON_TEXT="unknown conclusion: ${CONCLUSION}"
+              ;;
+          esac
+          echo "${OUT}" > "${STATE_DIR}/.${BASE}_outcome"
+          if [ -n "$REASON_TEXT" ]; then
+            echo "${REASON_TEXT}" > "${STATE_DIR}/.${BASE}_failure_reason"
+          else
+            : > "${STATE_DIR}/.${BASE}_failure_reason"
+          fi
+          echo "outcome for ${BASE}: ${OUT} (test conclusion: ${CONCLUSION}, reason: ${REASON_TEXT})"
 
       - name: Write result JSON
         if: always()
@@ -304,18 +373,24 @@ jobs:
         if: always()
         env:
           UPSTREAM_COMMIT: ${{ steps.upstream-commit.outputs.sha }}
-          REASON: ${{ steps.decide.outputs.reason || 'manual' }}
+          REASON: ${{ steps.decide.outputs.reason }}
         run: |
           echo "============================================================"
           echo "QUICK START TEST SUMMARY"
           echo "  Upstream repo:    ${{ env.UPSTREAM_REPO }}"
-          echo "  Upstream ref:     ${{ steps.decide.outputs.ref || env.UPSTREAM_REF_DEFAULT }}"
+          echo "  Upstream ref:     ${{ steps.decide.outputs.test_ref }}"
           echo "  Upstream commit:  ${{ steps.upstream-commit.outputs.sha }}"
-          echo "  Trigger reason:   ${{ steps.decide.outputs.reason || 'manual' }}"
+          echo "  Trigger reason:   ${{ steps.decide.outputs.reason }}"
           echo "------------------------------------------------------------"
           if [ -f /tmp/unittest.log ]; then
             grep -E '^Ran [0-9]+ test' /tmp/unittest.log | tail -n 1 || true
             grep -E '^(OK|FAILED)' /tmp/unittest.log | tail -n 1 || true
+          fi
+          # Surface the last-known failure reason (from the prior run's
+          # outcome record) so a retry run is self-explanatory.
+          REASON_FILE=".monitor-state/${REASON%-retry}_failure_reason"
+          if [ -s "$REASON_FILE" ]; then
+            echo "  Last failure:     $(cat "$REASON_FILE")"
           fi
           echo "============================================================"
 

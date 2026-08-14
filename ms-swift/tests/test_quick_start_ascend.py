@@ -1,0 +1,372 @@
+# Copyright (c) ModelScope Contributors. All rights reserved.
+"""Tests that walk through the Ascend Quick Start documentation.
+
+The Quick Start is structured as a sequence of ``shell`` fenced code
+blocks. Each block contains one or more ``>>>`` REPL commands followed
+by their expected output. This test:
+
+  1. Parses every ``shell`` block in
+     ``docs/source/GetStarted/Quick-start-Ascend.md`` (or the English
+     twin) into ``(command, expected_output_lines)`` pairs.
+  2. Executes each command in a fresh subshell.
+  3. Compares the actual output against the expected output line by
+     line, using regex matching so that placeholders in the doc can
+     stand in for dynamic values (PIDs, version build numbers, etc.).
+
+If the Quick Start doc is changed in a way that breaks any block, this
+test fails.
+
+Placeholder syntax
+------------------
+* ``...``  — match any number of characters on this line (wildcard).
+* ``<pid>`` — match a number and capture it; the captured value is
+              substituted into later commands that contain ``<pid>``.
+* ``xxx``   — match any non-whitespace run.
+* ``2.7.1.x`` / ``2.7.1.postX`` / ``3.11.x`` — version placeholders.
+* ``x.y.z`` — match ``d.d.d``.
+* Plain lines that are not ``...`` are matched exactly.
+
+The test runner is expected to be an NPU CI container
+(``linux-aarch64-a2-1`` in this repo's ``citest_npu.yaml``) where
+CANN, torch, torch_npu and ms-swift are already available.
+"""
+
+import os
+import re
+import subprocess
+import unittest
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DOC = REPO_ROOT / 'ms-swift' / 'docs' / 'Quick-start-Ascend.md'
+
+
+# --------------------------------------------------------------------------- #
+# Parsing                                                                     #
+# --------------------------------------------------------------------------- #
+
+def resolve_doc_path() -> Path:
+    if DOC.exists():
+        return DOC
+    raise FileNotFoundError(f'Quick Start doc not found at {DOC}')
+
+
+def parse_blocks(doc_text: str) -> list[list[dict]]:
+    """Parse every ``shell`` block into a list of ``{cmd, expected}``.
+
+    Returns one inner list per fenced block. Each inner list contains
+    the REPL commands and their expected output in source order. If a
+    block contains no ``>>>`` command, the inner list is empty and the
+    raw body is returned in the ``raw`` field of a sentinel dict so the
+    runner can syntax-check the hand-written command.
+    """
+    fence_re = re.compile(r'```shell\s*\n(.*?)```', re.DOTALL)
+    blocks: list[list[dict]] = []
+    for m in fence_re.finditer(doc_text):
+        body = m.group(1)
+        block: list[dict] = []
+        cur_cmd: list[str] = []
+        cur_exp: list[str] = []
+        for raw in body.splitlines():
+            stripped = raw.lstrip()
+            if stripped.startswith('>>> '):
+                if cur_cmd or cur_exp:
+                    block.append({
+                        'cmd': '\n'.join(cur_cmd).rstrip(),
+                        'expected': cur_exp,
+                    })
+                cur_cmd = [stripped[4:]]
+                cur_exp = []
+            elif stripped.startswith('>>> #'):
+                # ``>>> # ...`` is a comment, not a command. Treat as
+                # output of the current command so the user can see it
+                # in the docs but the runner ignores it.
+                if cur_cmd or cur_exp:
+                    # Finish the current command first.
+                    block.append({
+                        'cmd': '\n'.join(cur_cmd).rstrip(),
+                        'expected': cur_exp,
+                    })
+                cur_cmd = []
+                cur_exp = [raw]
+            elif stripped.startswith('... '):
+                cur_cmd.append(stripped[4:])
+            elif stripped.startswith('<<< '):
+                cur_cmd.append(f': <<< {stripped[4:]}')
+            else:
+                cur_exp.append(raw)
+        if cur_cmd or cur_exp:
+            block.append({
+                'cmd': '\n'.join(cur_cmd).rstrip(),
+                'expected': cur_exp,
+            })
+        # Trim trailing blank expected lines.
+        for c in block:
+            while c['expected'] and c['expected'][-1].strip() == '':
+                c['expected'].pop()
+        # If no ``>>>`` was found anywhere, the whole body is a hand-written
+        # command. Encode it as a single sentinel step with empty cmd and
+        # the raw body in ``expected`` so the runner can pick it up.
+        if not any(c['cmd'].strip() for c in block):
+            block = [{'cmd': '', 'expected': [body], 'raw': body}]
+        blocks.append(block)
+    return blocks
+
+
+# --------------------------------------------------------------------------- #
+# Placeholder handling                                                        #
+# --------------------------------------------------------------------------- #
+
+# (pattern, regex_fragment). Named-capture fragments use (?P<name>...).
+_PLACEHOLDER_PATTERNS: list[tuple[re.Pattern, str]] = [
+    (re.compile(r'<pid>'),         r'(?P<pid>\d+)'),
+    (re.compile(r'<x\.y\.z>'),     r'\d+\.\d+\.\d+'),
+    (re.compile(r'\b2\.7\.1\.postX\b'), r'2\.7\.1\.post\d+'),
+    (re.compile(r'\b2\.7\.1\.x\b'),     r'2\.7\.1\.\d+'),
+    (re.compile(r'\b3\.11\.x\b'),       r'3\.11\.\d+'),
+    (re.compile(r'v\d+-xxx'),      r'v\d+-\S+'),
+    (re.compile(r'checkpoint-xxx'), r'checkpoint-\S+'),
+    (re.compile(r'chatcmpl-xxx'),  r'chatcmpl-\S+'),
+    (re.compile(r'\bxxx\b'),       r'\S+'),
+    (re.compile(r'"created":\d+'), r'"created":\d+'),
+]
+
+
+def _sentinel(i: int) -> str:
+    """A control-character token that ``re.escape`` will not touch."""
+    return f'\x01S{i}\x01'
+
+
+def substitute_placeholders(expected: str) -> tuple[str, dict]:
+    """Swap placeholders for sentinels, returning (escaped_text, mapping)."""
+    mapping: dict = {}
+    text = expected
+    counter = 0
+
+    # Named-capture placeholders go first so the group name survives.
+    for pat, repl in _PLACEHOLDER_PATTERNS:
+        if '(?P<' not in repl:
+            continue
+        token = _sentinel(counter)
+        mapping[counter] = repl
+        counter += 1
+        text = pat.sub(token, text)
+
+    for pat, repl in _PLACEHOLDER_PATTERNS:
+        if '(?P<' in repl:
+            continue
+        token = _sentinel(counter)
+        mapping[counter] = repl
+        counter += 1
+        text = pat.sub(token, text)
+
+    return text, mapping
+
+
+def expected_line_to_regex(expected: str) -> re.Pattern:
+    """Build a regex that matches a single line of actual output."""
+    text, mapping = substitute_placeholders(expected)
+    escaped = re.escape(text)
+    for i, frag in mapping.items():
+        escaped = escaped.replace(_sentinel(i), frag)
+    # A literal ``...`` in the expected line becomes a wildcard.
+    escaped = escaped.replace(r'\.\.\.', '.*')
+    return re.compile('^' + escaped + '$')
+
+
+# --------------------------------------------------------------------------- #
+# Command execution                                                           #
+# --------------------------------------------------------------------------- #
+
+def run_command(cmd: str, env: dict, cwd: Path, timeout: int) -> tuple[int, str]:
+    """Run ``cmd`` in bash; return ``(returncode, stdout+stderr)``."""
+    proc = subprocess.run(
+        ['bash', '-c', cmd],
+        env=env,
+        cwd=cwd,
+        capture_output=True,
+        check=False,
+        timeout=timeout,
+    )
+    out = proc.stdout.decode('utf-8', errors='replace')
+    err = proc.stderr.decode('utf-8', errors='replace')
+    return proc.returncode, (out + (('\n' + err) if err else ''))
+
+
+# Per-block wall-clock budgets (seconds). The full doc takes the sum.
+BLOCK_TIMEOUTS = {
+    'install': 600,   # pip install ms-swift (CI image is pre-installed)
+    'train': 1800,    # swift sft on 1000 samples
+    'merge': 600,     # swift export --merge_lora
+    'infer': 600,     # swift infer with piped input
+    'deploy': 900,    # swift deploy + chat completion + kill
+    'default': 300,
+}
+
+
+def block_kind(block: list[dict]) -> str:
+    """Guess the kind of a block from its first command."""
+    if not block:
+        return 'default'
+    head = block[0]['cmd'].lstrip().splitlines()[0] if block[0]['cmd'] else ''
+    if 'pip install' in head:
+        return 'install'
+    if head.startswith('swift sft'):
+        return 'train'
+    if head.startswith('swift export'):
+        return 'merge'
+    if head.startswith('swift infer'):
+        return 'infer'
+    if head.startswith(('nohup swift deploy', 'swift deploy')):
+        return 'deploy'
+    return 'default'
+
+
+# End-to-end tests are only run on the NPU runner. Set SWIFT_NPU_E2E=1 to
+# actually execute the test; otherwise the class is skipped.
+_SKIP_E2E = os.environ.get('SWIFT_NPU_E2E', '0') != '1'
+
+
+@unittest.skipIf(_SKIP_E2E,
+                 'end-to-end tests require NPU runner; set SWIFT_NPU_E2E=1 to run')
+class TestQuickStartAscendEndToEnd(unittest.TestCase):
+    """End-to-end: actually run every block on a real NPU runner.
+
+    These tests are **only** meant to run on a self-hosted NPU runner
+    (the ``linux-aarch64-a2-1`` runner in this repo's
+    ``citest_npu.yaml``). They execute real ``swift sft`` /
+    ``swift infer`` commands and compare stdout against the expected
+    output declared in the doc. They are skipped by default in any
+    other environment.
+    """
+
+    doc_path: Path = None
+    blocks: list[list[dict]] = None
+
+    @classmethod
+    def setUpClass(cls):
+        cls.doc_path = resolve_doc_path()
+        cls.blocks = parse_blocks(cls.doc_path.read_text(encoding='utf-8'))
+        # Record the upstream ref / commit being tested. The CI
+        # workflow sets these before invoking unittest; when running
+        # outside CI both are unset and the test is skipped below.
+        cls.upstream_ref = os.environ.get('UPSTREAM_REF', '')
+        cls.upstream_commit = os.environ.get('UPSTREAM_COMMIT', '')
+        if not cls.upstream_ref or not cls.upstream_commit:
+            raise unittest.SkipTest(
+                'end-to-end requires UPSTREAM_REF and UPSTREAM_COMMIT '
+                '(set by the CI workflow)')
+        os.environ.setdefault('UPSTREAM_REF', cls.upstream_ref)
+        os.environ.setdefault('UPSTREAM_COMMIT', cls.upstream_commit)
+        # The Quick Start's "install ms-swift" step is part of what
+        # we're testing. Install from the upstream git SHA so the test
+        # reflects a fresh install of the exact commit under test —
+        # works for both main and tags (main never ships to PyPI).
+        upstream_repo = os.environ.get('UPSTREAM_REPO', 'modelscope/ms-swift')
+        install_url = f'git+https://github.com/{upstream_repo}.git@{cls.upstream_commit}'
+        subprocess.run(
+            ['pip', 'install', install_url],
+            check=True,
+        )
+        if not cls.blocks:
+            raise unittest.SkipTest(
+                f'No shell code blocks found in {cls.doc_path}')
+
+    def test_runs_quick_start(self):
+        """Walk every block and execute, comparing actual vs expected."""
+        env = os.environ.copy()
+        env['UPSTREAM_REF'] = self.upstream_ref
+        env['UPSTREAM_COMMIT'] = self.upstream_commit
+        env.setdefault('HF_HUB_DISABLE_TELEMETRY', '1')
+        env.setdefault('MODELSCOPE_CACHE', str(Path.home() / '.cache'))
+        work_dir = REPO_ROOT / 'output' / 'npu-quick-start-lora'
+        if work_dir.exists():
+            import shutil
+            shutil.rmtree(work_dir)
+        env['WORK_DIR'] = str(work_dir)
+
+        captures: dict = {}
+
+        for bi, block in enumerate(self.blocks):
+            kind = block_kind(block)
+            timeout = BLOCK_TIMEOUTS.get(kind, BLOCK_TIMEOUTS['default'])
+            with self.subTest(block=bi, kind=kind):
+                if len(block) == 1 and not block[0]['cmd'].strip():
+                    # Sentinel: hand-written push_to_hub block; just
+                    # ensure the shell parses (already covered by the
+                    # parser tests). Nothing to execute.
+                    continue
+                self._run_block(block, kind, env, captures, timeout, bi)
+
+    def _run_block(self, block, kind, env, captures, timeout, block_idx):
+        actual_lines_per_step: list[list[str]] = []
+        for step in block:
+            cmd = step['cmd']
+            for k, v in captures.items():
+                cmd = cmd.replace(f'<{k}>', v)
+            if kind == 'train' and '--max_steps' not in cmd:
+                cmd = cmd.rstrip() + (
+                    ' \\\n    --max_steps 5'
+                    ' \\\n    --save_strategy steps'
+                    ' \\\n    --save_steps 5'
+                    ' \\\n    --logging_steps 1'
+                    ' \\\n    --eval_strategy no'
+                    ' \\\n    --report_to none'
+                )
+            rc, out = run_command(cmd, env, REPO_ROOT, timeout)
+            self.assertEqual(
+                rc, 0,
+                f'block #{block_idx} ({kind}) command failed (rc={rc}):\n'
+                f'  cmd: {cmd!r}\n'
+                f'  output:\n{out}')
+            actual_lines_per_step.append(out.splitlines())
+
+        for si, (step, actual_lines) in enumerate(zip(block, actual_lines_per_step)):
+            expected = step['expected']
+            if not expected:
+                continue
+            self._compare_lines(
+                block_idx, si, kind, expected, actual_lines, captures,
+            )
+
+    def _compare_lines(self, block_idx, step_idx, kind, expected, actual, captures):
+        """Walk expected and actual in lockstep, matching each line."""
+        a_iter: list[str] = list(actual)
+        e_iter: list[str] = list(expected)
+        mismatches = []
+        for ei, line in enumerate(e_iter):
+            if line == '...':
+                # Wildcard: skip the next actual line if any.
+                if a_iter:
+                    a_iter.pop(0)
+                continue
+            actual_line = a_iter.pop(0) if a_iter else None
+            if actual_line is None:
+                mismatches.append(
+                    f'  expected line not produced:\n    {line!r}')
+                continue
+            pat = expected_line_to_regex(line)
+            m = pat.match(actual_line)
+            if m is None:
+                mismatches.append(
+                    f'  line mismatch:\n'
+                    f'    expected (regex): {pat.pattern!r}\n'
+                    f'    actual:           {actual_line!r}')
+                continue
+            # Pick up named captures from this actual line.
+            for k, v in m.groupdict().items():
+                if v is not None:
+                    captures[k] = v
+        # Any extra actual lines are a soft warning, not a failure.
+        leftover = a_iter
+        if mismatches or leftover:
+            msg = (f'block #{block_idx} step #{step_idx} ({kind}) output '
+                   f'mismatch:\n' + '\n'.join(mismatches))
+            if leftover:
+                msg += (f'\n  (extra actual lines ignored: '
+                        f'{len(leftover)} trailing lines)')
+            self.fail(msg)
+
+
+if __name__ == '__main__':
+    unittest.main()

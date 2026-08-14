@@ -66,8 +66,22 @@ def fetch_doc_text() -> tuple[str, str]:
     """
     url = os.environ.get('MONITORED_DOC_URL')
     if url:
-        with urllib.request.urlopen(url) as resp:
-            return resp.read().decode('utf-8'), url
+        # urllib's default has no timeout - on flaky networks the
+        # call can hang indefinitely. Cap each attempt at 30s and
+        # retry once before giving up.
+        last_err = None
+        for attempt in range(2):
+            try:
+                req = urllib.request.Request(
+                    url, headers={'User-Agent': 'cosdt-ci-test/quick-start'})
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    return resp.read().decode('utf-8'), url
+            except Exception as e:
+                last_err = e
+                _log(f'fetch_doc_text: attempt {attempt+1}/2 failed: {e!r}')
+                time.sleep(2)
+        raise RuntimeError(
+            f'failed to fetch {url} after 2 attempts: {last_err!r}')
     if DOC.exists():
         return DOC.read_text(encoding='utf-8'), f'local:{DOC}'
     raise FileNotFoundError(

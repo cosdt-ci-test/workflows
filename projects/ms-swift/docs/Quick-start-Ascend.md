@@ -72,6 +72,14 @@ npu_count= 1
 
 ## 安装 ms-swift
 
+使用pip进行安装：
+
+```shell
+pip install ms-swift -U
+pip install uv
+uv pip install ms-swift -U --torch-backend=auto
+```
+
 从源码安装：
 
 ```shell

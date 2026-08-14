@@ -96,7 +96,6 @@ jobs:
           export PATH="/usr/local/sbin:$PATH"
           source /usr/local/Ascend/ascend-toolkit/set_env.sh
           npu-smi info || true
-          python -c "import torch, torch_npu; print(f'torch={torch.__version__} torch_npu={torch_npu.__version__} npu_count={torch.npu.device_count()}')" || true
 
       - name: Checkout workflows (provides the test code and doc)
         uses: actions/checkout@v4

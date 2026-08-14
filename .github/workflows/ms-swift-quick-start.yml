@@ -332,7 +332,7 @@ jobs:
           # <UPSTREAM_REF>). After that, run the doc itself as a unittest
           # - every shell block becomes one or more test cases.
           cd workflows/projects/ms-swift
-          python -m unittest tests.test_quick_start_ascend -v 2>&1 | tee /tmp/unittest.log
+          python -m unittest tests.test_quick_start_ascend -v
 
       - name: Record outcome
         id: record-outcome
@@ -418,17 +418,6 @@ jobs:
               handle.write('\n')
           EOF
 
-      - name: Upload logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ms-swift-quick-start-${{ github.run_id }}
-          if-no-files-found: ignore
-          path: |
-            /tmp/unittest.log
-            /tmp/release.json
-            ${{ github.workspace }}/output/result.json
-
       - name: Summarize test result
         if: always()
         env:
@@ -442,10 +431,6 @@ jobs:
           echo "  Upstream commit:  ${{ steps.upstream-commit.outputs.sha }}"
           echo "  Trigger reason:   ${{ steps.decide.outputs.reason }}"
           echo "------------------------------------------------------------"
-          if [ -f /tmp/unittest.log ]; then
-            grep -E '^Ran [0-9]+ test' /tmp/unittest.log | tail -n 1 || true
-            grep -E '^(OK|FAILED)' /tmp/unittest.log | tail -n 1 || true
-          fi
           # Surface the last-known failure reason (from the prior run's
           # outcome record) so a retry run is self-explanatory.
           REASON_FILE=".monitor-state/.${REASON%-retry}_failure_reason"

@@ -252,7 +252,11 @@ def run_command(cmd: str, env: dict, cwd: Path, timeout: int) -> tuple[int, str]
             _log(f'CMD stderr (head):\n{head_err.rstrip()}')
         if tail_err and tail_err != head_err:
             _log(f'CMD stderr (tail):\n{tail_err.rstrip()}')
-    return proc.returncode, (out + (('\n' + err) if err else ''))
+    # Return only stdout - stderr is noise (init banners, warnings)
+    # that would otherwise get folded into 'expected output' and
+    # cause spurious mismatches. Stderr is still logged above for
+    # debugging when the command fails.
+    return proc.returncode, out
 
 
 # Per-block wall-clock budgets (seconds). The full doc takes the sum.

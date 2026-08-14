@@ -1,28 +1,43 @@
 #!/usr/bin/env python3
-"""Scan a target tree's examples/ and write examples_manifest.yaml.
+"""Scan a target tree's examples and write examples_manifest.yaml.
 
 Paths passed with --supported are written to the supported section. Every
 other scanned example is written as unsupported. That classification is a
 task rule, not a community judgment.
 
+--scan-root and --include-extension control what is scanned and are
+recorded in the manifest's scan section, which the CI-side
+check_examples_manifest.py replays. --runner / --npu-devices / --image /
+--overlay / --timeout-minutes apply to every supported entry; entries
+that need different values must be edited by hand afterwards.
+
 CI does not call this script. Use it once when onboarding a project, then
-fill in runner / overlay / timeout on each supported entry.
+fill in the scheduling fields on each supported entry.
 """
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
 
-INCLUDE_EXTENSIONS = ('.sh', '.py', '.yaml')
+DEFAULT_SCAN_ROOT = 'examples'
+DEFAULT_INCLUDE_EXTENSIONS = ('.sh', '.py', '.yaml')
 
 
-def scan_examples(target_root: Path) -> list[str]:
-    examples_root = target_root / 'examples'
+def normalize_extension(ext: str) -> str:
+    ext = ext.strip()
+    if not ext:
+        raise SystemExit('empty value passed to --include-extension')
+    return ext if ext.startswith('.') else f'.{ext}'
+
+
+def scan_examples(target_root: Path, scan_root: str,
+                  include_extensions: tuple[str, ...]) -> list[str]:
+    examples_root = target_root / scan_root
     if not examples_root.is_dir():
-        raise SystemExit(f'examples/ not found under {target_root}')
+        raise SystemExit(f'{scan_root}/ not found under {target_root}')
     found: list[str] = []
     for path in sorted(examples_root.rglob('*')):
-        if path.is_file() and path.suffix in INCLUDE_EXTENSIONS:
+        if path.is_file() and path.suffix in include_extensions:
             rel = path.relative_to(target_root).as_posix()
             found.append(rel)
     return found
@@ -32,6 +47,7 @@ def render_supported_entry(
     path: str,
     runner: str | None,
     npu_devices: str | None,
+    image: str | None,
     overlay: str | None,
     timeout_minutes: int | None,
 ) -> list[str]:
@@ -44,10 +60,14 @@ def render_supported_entry(
         lines.append(f"    npu_devices: '{npu_devices}'")
     else:
         lines.append("    # npu_devices: '0,1'")
+    if image is not None:
+        lines.append(f'    image: {image}')
+    else:
+        lines.append('    # image: <swr-image>')
     if overlay is not None:
         lines.append(f'    overlay: {overlay}')
     else:
-        lines.append('    # overlay: overlays/<name>.args')
+        lines.append('    # overlay: overlays/<name>.args (optional)')
     if timeout_minutes is not None:
         lines.append(f'    timeout_minutes: {timeout_minutes}')
     else:
@@ -58,8 +78,11 @@ def render_supported_entry(
 def render_manifest(
     paths: list[str],
     supported_paths: list[str],
+    scan_root: str,
+    include_extensions: tuple[str, ...],
     runner: str | None,
     npu_devices: str | None,
+    image: str | None,
     overlay: str | None,
     timeout_minutes: int | None,
 ) -> str:
@@ -68,17 +91,18 @@ def render_manifest(
         raise SystemExit(f'supported example missing from scan: {missing[0]}')
     supported_set = set(supported_paths)
     unsupported = [p for p in paths if p not in supported_set]
+    rendered_extensions = ', '.join(f"'{ext}'" for ext in include_extensions)
     lines = [
         'version: 1',
         'scan:',
-        '  root: examples',
-        "  include_extensions: ['.sh', '.py', '.yaml']",
+        f'  root: {scan_root}',
+        f'  include_extensions: [{rendered_extensions}]',
         'supported:',
     ]
     if supported_paths:
         for path in supported_paths:
             lines.extend(render_supported_entry(
-                path, runner, npu_devices, overlay, timeout_minutes,
+                path, runner, npu_devices, image, overlay, timeout_minutes,
             ))
     else:
         lines.append('  []')
@@ -99,18 +123,39 @@ def main() -> None:
         default=[],
         help='Example path (relative to target root) to mark supported. Repeatable.',
     )
+    parser.add_argument(
+        '--scan-root',
+        default=DEFAULT_SCAN_ROOT,
+        help='Directory under the target root to scan (default: examples)',
+    )
+    parser.add_argument(
+        '--include-extension',
+        action='append',
+        default=None,
+        help="File extension to scan, with or without the leading dot "
+             "(default: .sh .py .yaml). Repeatable.",
+    )
     parser.add_argument('--runner', default=None, help='Runner label written on every supported entry')
     parser.add_argument('--npu-devices', default=None, help="Value for npu_devices, e.g. 0,1")
+    parser.add_argument('--image', default=None, help='Container image written on every supported entry')
     parser.add_argument('--overlay', default=None, help='Overlay path written on every supported entry')
     parser.add_argument('--timeout-minutes', type=int, default=None, help='Timeout written on every supported entry')
     args = parser.parse_args()
     target_root = Path(args.target_root).resolve()
     output = Path(args.output)
+    if args.include_extension is None:
+        include_extensions = DEFAULT_INCLUDE_EXTENSIONS
+    else:
+        include_extensions = tuple(
+            normalize_extension(ext) for ext in args.include_extension)
     text = render_manifest(
-        scan_examples(target_root),
+        scan_examples(target_root, args.scan_root, include_extensions),
         args.supported,
+        args.scan_root,
+        include_extensions,
         args.runner,
         args.npu_devices,
+        args.image,
         args.overlay,
         args.timeout_minutes,
     )

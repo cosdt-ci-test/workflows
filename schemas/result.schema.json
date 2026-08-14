@@ -15,7 +15,7 @@
   "properties": {
     "trigger": {
       "type": "string",
-      "description": "How this run was started. Typical values: workflow_dispatch, schedule, <project>-ci-completed, <project>-examples-changed, <project>-release."
+      "description": "How this run was started. Typical values: workflow_dispatch, schedule."
     },
     "target_repo": {
       "type": "string",

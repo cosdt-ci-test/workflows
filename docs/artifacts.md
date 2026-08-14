@@ -8,7 +8,7 @@
 
 | 种类 | 名称 | 上传时机 |
 | --- | --- | --- |
-| example 结果 | `<project>-examples-<run_id>-<job_index>` | 每个 `run-example` matrix job，`if: always()` |
+| example 结果 | `<project>-examples-<run_id>-<job_index>` | 每个 `publish-result` matrix job（对应一个 `run-example`），`if: always()` |
 | manifest 检查 | `<project>-manifest-check` | `manifest-check` job，`if: always()` |
 | quick-start 结果 | `<project>-quick-start-<run_id>` | `monitor-and-test` job，`if: always()` |
 
@@ -20,19 +20,19 @@
 
 单个文件 `result.json`，符合 [schemas/result.schema.json](../schemas/result.schema.json)。
 
-artifact 刻意只装 result.json，不装运行日志和训练产物：上传越小，越不容易被 runner 到 GitHub 之间的网络波动打断（曾出现过 example 跑通、仅因上传 stall 而全线判红的 run）。完整训练输出在 Actions 页面 `Run example` 步骤的控制台日志里。上传失败自动重试一次，两次都失败才判红。清单里还没有 supported 条目时，`run-example` 和 `validate-results` 整体跳过，不产生此 artifact、也不判红。
+artifact 刻意只装 result.json，不装运行日志和训练产物，且不由自托管 NPU runner 上传：NPU runner 到 GitHub artifact 存储的链路不可靠（曾出现过 example 跑通、仅因上传 stall 而全线判红的 run），所以 result.json 由跑在 GitHub 托管 runner 上的 `publish-result` job 生成——它通过 Jobs API 读取对应 `run-example` 的 conclusion 再写文件上传。完整训练输出在 Actions 页面 `Run example` 步骤的控制台日志里。清单里还没有 supported 条目时，`run-example` 和 `publish-result` 整体跳过，不产生此 artifact、也不判红。同样，`schedule` 触发但 monitor 未检测到上游变化时，整个 run 在 monitor job 后结束，本 artifact 和 `<project>-manifest-check` 都不产生。
 
 `result.json` 必填字段：`trigger`、`target_repo`、`target_ref`、`path`、`image`、`job_status`。`job_status` 只能是 `success`、`failure` 或 `cancelled`。允许附加字段。
 
 ### `<project>-manifest-check`
 
-单个文件 `manifest_check_result.json`，符合 [schemas/manifest_check_result.schema.json](../schemas/manifest_check_result.schema.json)。字段：`trigger`、`target_repo`、`target_ref`、`new_paths`、`stale_paths`、`supported`。`new_paths` / `stale_paths` 只记录、不使 job 失败。`supported` 条目的 `path`、`runner`、`npu_devices`、`overlay`、`timeout_minutes` 均为必填——example 流水线按这些字段调度 runner、卡和超时，缺字段会在 manifest-check 被 schema 校验拦下。
+单个文件 `manifest_check_result.json`，符合 [schemas/manifest_check_result.schema.json](../schemas/manifest_check_result.schema.json)。字段：`trigger`、`target_repo`、`target_ref`、`new_paths`、`stale_paths`、`supported`。`new_paths` / `stale_paths` 只记录、不使 job 失败——例外是 supported 条目的 path 已不在磁盘上：manifest-check 会在写完本文件后立即判红，避免 run-example 白占 NPU runner。`supported` 条目的 `path`、`runner`、`npu_devices`、`image`、`timeout_minutes` 均为必填（`overlay` 可选）——example 流水线按这些字段调度 runner、卡、容器镜像和超时，缺字段会在 manifest-check 被 schema 校验拦下。
 
 ### `<project>-quick-start-<run_id>`
 
 至少包含 `result.json`（同一份 [result.schema.json](../schemas/result.schema.json)）。quick-start 额外写 `tests_ran`（布尔）：监控无变化、未跑测试时为 `false`。还可以附带 unittest 日志、release API 响应等调试文件。
 
-流水线里的 `validate-results` job 用 `check-jsonschema --schemafile schemas/result.schema.json` 校验下载到的每一份 `result.json`。缺文件或不合规即红。
+example 流水线里，每个 `publish-result` job 在上传前用 `check-jsonschema --schemafile schemas/result.schema.json` 校验自己生成的 `result.json`；quick-start 流水线同样在上传前校验。缺文件或不合规即红。
 
 ## 外部机器如何读取
 

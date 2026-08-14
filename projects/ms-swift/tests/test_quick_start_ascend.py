@@ -122,18 +122,6 @@ def parse_blocks(doc_text: str) -> list[list[dict]]:
                     })
                 cur_cmd = [stripped[4:]]
                 cur_exp = []
-            elif stripped.startswith('>>> #'):
-                # ``>>> # ...`` is a comment, not a command. Treat as
-                # output of the current command so the user can see it
-                # in the docs but the runner ignores it.
-                if cur_cmd or cur_exp:
-                    # Finish the current command first.
-                    block.append({
-                        'cmd': '\n'.join(cur_cmd).rstrip(),
-                        'expected': cur_exp,
-                    })
-                cur_cmd = []
-                cur_exp = [raw]
             elif stripped.startswith('... '):
                 cur_cmd.append(stripped[4:])
             elif stripped.startswith('<<< '):

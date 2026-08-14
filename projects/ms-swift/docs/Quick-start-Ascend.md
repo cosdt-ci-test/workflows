@@ -21,13 +21,13 @@ Atlas 900 A2 / A3 训练系列产品或者 Ascend 950 系列产品，并按需�
 
 **配套机器**：
 
-- **机器类型**：Atlas 900 A2 PODc（Ascend 910B3，64 GB × 1）
+- **机器类型**：Atlas 900 A2 PODc（Ascend 910B4，64 GB × 1）
 - **操作系统**：Ubuntu 22.04
 
 **配套镜像**：
 
 ```
-swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/cann:8.3.rc2-910b-ubuntu22.04-py3.11
+swr.cn-southwest-1.myhuaweicloud.com/ascendhub/cann:8.3.rc2-910b-ubuntu22.04-py3.11
 ```
 
 **软件版本**：

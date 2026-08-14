@@ -25,14 +25,13 @@ concurrency:
 on:
   schedule:
     - cron: '0 */6 * * *'
+  # Manual run ALWAYS runs the test (no monitor gate). Override
+  # `upstream_ref` to test a specific tag or branch; defaults to
+  # `main`. The two trigger paths converge in the `decide` step.
   workflow_dispatch:
     inputs:
-      force_install:
-        description: 'force the install + test steps to run (skip the monitor check)'
-        type: boolean
-        default: false
       upstream_ref:
-        description: 'override the upstream ref to test'
+        description: 'manual run: ref to test (tag, branch, or main)'
         required: false
         default: 'main'
 
@@ -74,7 +73,6 @@ jobs:
         run: |
           echo "=========================================="
           echo "Trigger:    ${{ github.event_name }}"
-          echo "Force:      ${{ inputs.force_install || 'false' }}"
           echo "Runner:     ${{ runner.name }}"
           echo "=========================================="
 
@@ -103,7 +101,7 @@ jobs:
       #                        ref deserves a clean run, not a sticky retry).
       - name: Restore monitor state
         id: cache-restore
-        if: inputs.force_install != true
+        if: github.event_name == 'schedule'
         uses: actions/cache/restore@v4
         with:
           path: .monitor-state
@@ -115,7 +113,7 @@ jobs:
 
       - name: 监控 doc hash
         id: monitor-doc
-        if: inputs.force_install != true
+        if: github.event_name == 'schedule'
         env:
           DOC_URL: ${{ env.MONITORED_DOC_URL }}
         run: |
@@ -143,7 +141,7 @@ jobs:
 
       - name: 监控 upstream latest release tag
         id: monitor-release
-        if: inputs.force_install != true
+        if: github.event_name == 'schedule'
         run: |
           set -euo pipefail
           STATE_DIR=".monitor-state"
@@ -170,7 +168,7 @@ jobs:
 
       - name: 监控 upstream main HEAD
         id: monitor-commit
-        if: inputs.force_install != true
+        if: github.event_name == 'schedule'
         run: |
           set -euo pipefail
           STATE_DIR=".monitor-state"
@@ -195,7 +193,7 @@ jobs:
           echo "main_sha=$SHA outcome=$OUTCOME"
 
       - name: Persist monitor state
-        if: inputs.force_install != true && always()
+        if: github.event_name == 'schedule' && always()
         uses: actions/cache/save@v4
         with:
           path: .monitor-state
@@ -204,16 +202,16 @@ jobs:
 
       # ----- aggregate decision -----
       # Single funnel for both trigger paths:
-      #   - Monitor path (default): doc / release / commit picked by
-      #     priority; ref comes from whichever monitor fired.
-      #   - Manual path (force_install=true): no monitor ran; ref comes
-      #     from inputs.upstream_ref (default 'main').
+      #   - Schedule: monitors ran; pick the first that fired
+      #     (doc > release > commit) and use its ref.
+      #   - Manual (workflow_dispatch): no monitor; ref comes from
+      #     inputs.upstream_ref (default 'main'). Always changed=true.
       # Either way, downstream steps read TEST_REF / CHANGED / REASON
       # and don't have to know which path produced them.
       - name: 决定要跑哪个 ref
         id: decide
         run: |
-          if [ "${{ inputs.force_install }}" = "true" ]; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             # Manual path.
             echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "reason=manual" >> "$GITHUB_OUTPUT"
@@ -284,7 +282,7 @@ jobs:
         id: record-outcome
         if: |
           always() &&
-          inputs.force_install != true &&
+          github.event_name == 'schedule' &&
           steps.decide.outputs.changed == 'true'
         run: |
           STATE_DIR=".monitor-state"
@@ -336,11 +334,10 @@ jobs:
           TARGET_REPO: ${{ vars.TARGET_REPO || 'cosdt-ci-test/ms-swift' }}
           TARGET_REF: ${{ vars.TARGET_REF || 'main' }}
           JOB_STATUS: ${{ job.status }}
-          FORCE_INSTALL: ${{ inputs.force_install || false }}
           CHANGED: ${{ steps.decide.outputs.changed }}
         run: |
           mkdir -p "$GITHUB_WORKSPACE/output"
-          if [ "$FORCE_INSTALL" = "true" ] || [ "$CHANGED" = "true" ]; then
+          if [ "$TRIGGER" = "workflow_dispatch" ] || [ "$CHANGED" = "true" ]; then
             tests_ran=true
           else
             tests_ran=false

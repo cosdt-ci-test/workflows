@@ -39,7 +39,7 @@
     },
     "job_status": {
       "type": "string",
-      "enum": ["success", "failure"],
+      "enum": ["success", "failure", "cancelled"],
       "description": "GitHub job conclusion for this result."
     }
   }

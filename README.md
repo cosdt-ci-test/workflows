@@ -26,7 +26,7 @@ projects/<project>/                  # 该项目的清单、overlay、fixture、
 2. 参考 [templates/project-examples.yml](templates/project-examples.yml)，完成 `.github/workflows/<project>-examples.yml`、`.github/workflows/<project>-quick-start.yml`。
 3. 需要看护 Quick Start 文档时，请参考 [templates/project-quick-start.yml](templates/project-quick-start.yml)。
 4. 在 `projects.yaml` 注册该项目。
-5. 建 `projects/<project>/` 目录。用 `scripts/bootstrap_manifest.py --target-root <checkout> --output projects/<project>/examples_manifest.yaml --supported <path>` 生成清单，再手工补全 supported 条目的 runner / overlay / timeout。
+5. 建 `projects/<project>/` 目录。用 `scripts/bootstrap_manifest.py --target-root <checkout> --output projects/<project>/examples_manifest.yaml --supported <path>` 生成清单，再手工补全 supported 条目的 runner / npu_devices / overlay / timeout_minutes（必填：example 流水线按这些字段调度 runner、卡和超时）。supported 为空时流水线只做清单比对，不跑 example。
 6. 按 [docs/artifacts.md](docs/artifacts.md) 确认 artifact 名称和 `result.json` 字段。
 
 `scripts/check_examples_manifest.py` 由 example 流水线的 `manifest-check` job 调用：对比目标仓磁盘与清单，差集只打印不失败，并把 supported 列表写成 matrix。`scripts/bootstrap_manifest.py` 只在接入时离线使用，CI 不调用。

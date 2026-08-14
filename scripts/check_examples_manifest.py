@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
-"""Diff a target examples/ tree against examples_manifest.yaml.
+"""Diff a target examples tree against examples_manifest.yaml.
 
-Writes a machine-readable JSON result (new/stale paths, supported entries,
-target repo/ref) to --result-json and stdout.
-Always exits 0. Writes supported_matrix JSON to GITHUB_OUTPUT when set.
+The manifest's scan section (root, include_extensions) decides what to
+scan. Writes a machine-readable JSON result (new/stale paths, supported
+entries, target repo/ref) to --result-json and stdout.
+Always exits 0. Writes supported_matrix and has_supported to
+GITHUB_OUTPUT when set.
+
+Requires PyYAML (preinstalled on ubuntu-latest runners).
 """
 from __future__ import annotations
 
@@ -13,62 +17,33 @@ import os
 import sys
 from pathlib import Path
 
-INCLUDE_EXTENSIONS = ('.sh', '.py', '.yaml')
+import yaml
 
-
-def scan_examples(target_root: Path) -> list[str]:
-    examples_root = target_root / 'examples'
-    if not examples_root.is_dir():
-        raise SystemExit(f'examples/ not found under {target_root}')
-    found: list[str] = []
-    for path in sorted(examples_root.rglob('*')):
-        if path.is_file() and path.suffix in INCLUDE_EXTENSIONS:
-            found.append(path.relative_to(target_root).as_posix())
-    return found
-
-
-def _unquote(value: str) -> str:
-    value = value.strip()
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
-        return value[1:-1]
-    return value
+DEFAULT_SCAN_ROOT = 'examples'
+DEFAULT_INCLUDE_EXTENSIONS = ('.sh', '.py', '.yaml')
 
 
 def load_manifest(path: Path) -> dict:
-    """Parse the bootstrap-generated manifest without a YAML dependency."""
-    supported: list[dict] = []
-    unsupported: list[str] = []
-    current: dict | None = None
-    section: str | None = None
-    for raw in path.read_text(encoding='utf-8').splitlines():
-        if not raw.strip() or raw.lstrip().startswith('#'):
-            continue
-        stripped = raw.strip()
-        indent = len(raw) - len(raw.lstrip(' '))
-        if indent == 0 and stripped.endswith(':') and not stripped.startswith('-'):
-            if current is not None and section == 'supported':
-                supported.append(current)
-                current = None
-            key = stripped[:-1]
-            section = key if key in {'scan', 'supported', 'unsupported'} else None
-            continue
-        if section == 'supported' and stripped.startswith('- path:'):
-            if current is not None:
-                supported.append(current)
-            current = {'path': _unquote(stripped.split(':', 1)[1])}
-            continue
-        if section == 'supported' and current is not None and ':' in stripped and not stripped.startswith('-'):
-            key, value = stripped.split(':', 1)
-            parsed: str | int = _unquote(value)
-            if key == 'timeout_minutes':
-                parsed = int(parsed)
-            current[key] = parsed
-            continue
-        if section == 'unsupported' and stripped.startswith('- '):
-            unsupported.append(_unquote(stripped[2:]))
-    if current is not None:
-        supported.append(current)
-    return {'supported': supported, 'unsupported': unsupported}
+    data = yaml.safe_load(path.read_text(encoding='utf-8')) or {}
+    scan = data.get('scan') or {}
+    return {
+        'scan_root': scan.get('root') or DEFAULT_SCAN_ROOT,
+        'include_extensions': tuple(scan.get('include_extensions') or DEFAULT_INCLUDE_EXTENSIONS),
+        'supported': data.get('supported') or [],
+        'unsupported': data.get('unsupported') or [],
+    }
+
+
+def scan_examples(target_root: Path, scan_root: str,
+                  include_extensions: tuple[str, ...]) -> list[str]:
+    examples_root = target_root / scan_root
+    if not examples_root.is_dir():
+        raise SystemExit(f'{scan_root}/ not found under {target_root}')
+    found: list[str] = []
+    for path in sorted(examples_root.rglob('*')):
+        if path.is_file() and path.suffix in include_extensions:
+            found.append(path.relative_to(target_root).as_posix())
+    return found
 
 
 def write_result(result_json: str, trigger: str, target_repo: str,
@@ -96,6 +71,7 @@ def write_github_output(supported: list[dict]) -> None:
         handle.write('supported_matrix<<EOF\n')
         handle.write(payload)
         handle.write('\nEOF\n')
+        handle.write('has_supported={}\n'.format('true' if supported else 'false'))
 
 
 def main() -> None:
@@ -109,7 +85,8 @@ def main() -> None:
     args = parser.parse_args()
     target_root = Path(args.target_root).resolve()
     manifest = load_manifest(Path(args.manifest))
-    scanned = set(scan_examples(target_root))
+    scanned = set(scan_examples(
+        target_root, manifest['scan_root'], manifest['include_extensions']))
     listed = {item['path'] for item in manifest['supported']} | set(manifest['unsupported'])
     new_paths = sorted(scanned - listed)
     stale_paths = sorted(listed - scanned)

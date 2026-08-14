@@ -4,8 +4,13 @@
 The manifest's scan section (root, include_extensions) decides what to
 scan. Writes a machine-readable JSON result (new/stale paths, supported
 entries, target repo/ref) to --result-json and stdout.
-Always exits 0. Writes supported_matrix and has_supported to
-GITHUB_OUTPUT when set.
+Writes supported_matrix and has_supported to GITHUB_OUTPUT when set.
+
+New/stale paths are recorded but do not fail the check, with one
+exception: a supported entry whose path is missing on disk exits 1
+after writing the result JSON. Failing here, on a free hosted runner,
+beats letting run-example spend ~20 minutes of NPU-runner setup before
+discovering the example is gone.
 
 Requires PyYAML (preinstalled on ubuntu-latest runners).
 """
@@ -87,12 +92,21 @@ def main() -> None:
     manifest = load_manifest(Path(args.manifest))
     scanned = set(scan_examples(
         target_root, manifest['scan_root'], manifest['include_extensions']))
-    listed = {item['path'] for item in manifest['supported']} | set(manifest['unsupported'])
+    supported_paths = {item['path'] for item in manifest['supported']}
+    listed = supported_paths | set(manifest['unsupported'])
     new_paths = sorted(scanned - listed)
     stale_paths = sorted(listed - scanned)
     write_result(args.result_json, args.trigger, args.target_repo,
                  args.target_ref, new_paths, stale_paths, manifest['supported'])
     write_github_output(manifest['supported'])
+    missing_supported = sorted(supported_paths - scanned)
+    if missing_supported:
+        for path in missing_supported:
+            print(f'supported example missing from target tree: {path}',
+                  file=sys.stderr)
+        print('fix the supported section of the manifest before this '
+              'pipeline can schedule examples', file=sys.stderr)
+        raise SystemExit(1)
     raise SystemExit(0)
 
 

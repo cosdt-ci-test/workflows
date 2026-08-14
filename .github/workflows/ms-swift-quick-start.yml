@@ -39,6 +39,7 @@ permissions:
   contents: read
 
 env:
+  CI_IMAGE: swr.cn-south-1.myhuaweicloud.com/ascendhub/torch-npu:2.9.0.post2-910b-ubuntu22.04-py3.11
   UPSTREAM_REPO: modelscope/ms-swift
   MONITORED_DOC_URL: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/ms-swift/docs/Quick-start-Ascend.md
   GH_API: https://api.github.com
@@ -274,7 +275,6 @@ jobs:
           # and resolves REPO_ROOT upward from there. ms-swift itself is
           # installed by setUpClass from the upstream git SHA.
           python -m pip install -U pip
-          python -m pip install torchvision==0.24.0 decorator
           cd workflows/ms-swift
           python -m unittest tests.test_quick_start_ascend -v 2>&1 | tee /tmp/unittest.log
 

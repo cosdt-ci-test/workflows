@@ -39,14 +39,14 @@ permissions:
   contents: read
 
 env:
-  CI_IMAGE: &ci_image swr.cn-south-1.myhuaweicloud.com/ascendhub/torch-npu:2.9.0.post2-910b-ubuntu22.04-py3.11
+  CI_IMAGE: &ci_image swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:8.3.rc2-910b-ubuntu22.04-py3.11
   UPSTREAM_REPO: modelscope/ms-swift
   MONITORED_DOC_URL: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/ms-swift/docs/Quick-start-Ascend.md
   GH_API: https://api.github.com
 
 jobs:
   monitor-and-test:
-    name: monitor + (test on change)
+    name: monitor + test on change
     runs-on: [linux-aarch64-a2-1]
     timeout-minutes: 180
     defaults:
@@ -85,7 +85,7 @@ jobs:
           export PATH="/usr/local/sbin:$PATH"
           source /usr/local/Ascend/ascend-toolkit/set_env.sh
           npu-smi info || true
-          python -c "import torch, torch_npu; print(torch.__version__, torch_npu.__version__, torch.npu.device_count())" || true
+          python -c "import torch, torch_npu; print(f'torch={torch.__version__} torch_npu={torch_npu.__version__} npu_count={torch.npu.device_count()}')" || true
 
       - name: Checkout workflows (provides the test code and doc)
         uses: actions/checkout@v4
@@ -270,10 +270,65 @@ jobs:
           # here so swift sft / swift infer see ASCEND_HOME etc.
           export PATH="/usr/local/sbin:$PATH"
           source /usr/local/Ascend/ascend-toolkit/set_env.sh
+          # ----- NPU runtime setup (matches upstream ci_container_test.sh) -----
+          # 1. Pin torch / torch_npu / modelscope and block CUDA wheels so a
+          #    transitive dep can't silently pull nvidia-* into an NPU run.
+          cat >/tmp/ms_swift_npu_constraints.txt <<'EOF'
+          torch==2.9.0
+          torch_npu==2.9.0.post2
+          modelscope==1.37.0
+          # NPU CI should not resolve CUDA runtime wheels.
+          cuda-toolkit<0
+          nvidia-cublas<0
+          nvidia-cuda-runtime<0
+          nvidia-cuda-nvrtc<0
+          nvidia-cuda-cupti<0
+          nvidia-cudnn<0
+          nvidia-cufft<0
+          nvidia-curand<0
+          nvidia-cusolver<0
+          nvidia-cusparse<0
+          nvidia-nccl<0
+          nvidia-nvjitlink<0
+          nvidia-nvtx<0
+          nvidia-cublas-cu12<0
+          nvidia-cuda-runtime-cu12<0
+          nvidia-cuda-nvrtc-cu12<0
+          nvidia-cuda-cupti-cu12<0
+          nvidia-cudnn-cu12<0
+          nvidia-cufft-cu12<0
+          nvidia-curand-cu12<0
+          nvidia-cusolver-cu12<0
+          nvidia-cusparse-cu12<0
+          nvidia-cusparselt-cu12<0
+          nvidia-nccl-cu12<0
+          nvidia-nvjitlink-cu12<0
+          nvidia-nvtx-cu12<0
+          EOF
+          export PIP_CONSTRAINT=/tmp/ms_swift_npu_constraints.txt
+          export UV_CONSTRAINT=/tmp/ms_swift_npu_constraints.txt
+          # 2. Pre-install setuptools / wheel from the official PyPI so that
+          #    the test's setUpClass can `pip install git+...ms-swift.git@SHA`
+          #    without the build-deps phase failing (the Huawei mirror does
+          #    not carry setuptools/wheel). uv is installed the same way -
+          #    it handles PEP 517 build deps more reliably than pip.
+          python -m pip install --index-url https://pypi.org/simple \
+              --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
+              -U pip setuptools wheel uv
+          # 3. Force-reinstall torch + torch_npu so we get the real NPU
+          #    build, not whatever the CANN image happens to ship (the
+          #    `torch-npu` tag bakes a CPU-only torch that swift can't
+          #    actually use on NPU).
+          python -m pip install --force-reinstall \
+              --index-url https://repo.huaweicloud.com/ascend/repos/pypi \
+              torch==2.9.0 torch_npu==2.9.0.post2
+          # 4. Pin transformers / peft (matches the doc's <5.0 / <0.19 caps).
+          python -m pip install \
+              -i https://repo.huaweicloud.com/ascend/repos/pypi \
+              "transformers<5.0" "peft<0.19"
           # The test file lives at workflows/projects/ms-swift/tests/test_quick_start_ascend.py
           # and resolves REPO_ROOT upward from there. ms-swift itself is
           # installed by setUpClass from the upstream git SHA.
-          python -m pip install -U pip
           cd workflows/projects/ms-swift
           python -m unittest tests.test_quick_start_ascend -v 2>&1 | tee /tmp/unittest.log
 

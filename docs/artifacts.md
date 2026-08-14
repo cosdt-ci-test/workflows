@@ -18,17 +18,15 @@
 
 ### `<project>-examples-<run_id>-<job_index>`
 
-目录 `output/`，至少包含：
+单个文件 `result.json`，符合 [schemas/result.schema.json](../schemas/result.schema.json)。
 
-- `result.json`，符合 [schemas/result.schema.json](../schemas/result.schema.json)
-- 运行日志（ms-swift 当前写 `train.log`）
-- 该 example 自己写出的训练产物（若有）
+artifact 刻意只装 result.json，不装运行日志和训练产物：上传越小，越不容易被 runner 到 GitHub 之间的网络波动打断（曾出现过 example 跑通、仅因上传 stall 而全线判红的 run）。完整训练输出在 Actions 页面 `Run example` 步骤的控制台日志里。上传失败自动重试一次，两次都失败才判红。清单里还没有 supported 条目时，`run-example` 和 `validate-results` 整体跳过，不产生此 artifact、也不判红。
 
-`result.json` 必填字段：`trigger`、`target_repo`、`target_ref`、`path`、`image`、`job_status`。`job_status` 只能是 `success` 或 `failure`。允许附加字段。
+`result.json` 必填字段：`trigger`、`target_repo`、`target_ref`、`path`、`image`、`job_status`。`job_status` 只能是 `success`、`failure` 或 `cancelled`。允许附加字段。
 
 ### `<project>-manifest-check`
 
-单个文件 `manifest_check_result.json`，符合 [schemas/manifest_check_result.schema.json](../schemas/manifest_check_result.schema.json)。字段：`trigger`、`target_repo`、`target_ref`、`new_paths`、`stale_paths`、`supported`。`new_paths` / `stale_paths` 只记录、不使 job 失败。
+单个文件 `manifest_check_result.json`，符合 [schemas/manifest_check_result.schema.json](../schemas/manifest_check_result.schema.json)。字段：`trigger`、`target_repo`、`target_ref`、`new_paths`、`stale_paths`、`supported`。`new_paths` / `stale_paths` 只记录、不使 job 失败。`supported` 条目的 `path`、`runner`、`npu_devices`、`overlay`、`timeout_minutes` 均为必填——example 流水线按这些字段调度 runner、卡和超时，缺字段会在 manifest-check 被 schema 校验拦下。
 
 ### `<project>-quick-start-<run_id>`
 

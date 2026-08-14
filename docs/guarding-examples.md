@@ -40,7 +40,7 @@
 
 ### 要求 1
 
-1. 选择合适的 runner。在 workflows 仓 Settings → Actions → Runners 查看可用 runner。标签形如 linux-aarch64-a2-N，后缀 N 是该机器可用的昇腾卡数。按 example 需要的卡数选：例如 ms-swift 那条 example 用 tensor_model_parallel_size 2（2 卡张量并行），所以选 linux-aarch64-a2-2，并相应设置 ASCEND_RT_VISIBLE_DEVICES: "0,1"。
+1. 选择合适的 runner。在 workflows 仓 Settings → Actions → Runners 查看可用 runner。标签形如 linux-aarch64-a2-N，后缀 N 是该机器可用的昇腾卡数。按 example 需要的卡数选：例如 ms-swift 那条 example 用 tensor_model_parallel_size 2（2 卡张量并行），所以选 linux-aarch64-a2-2、npu_devices 用 "0,1"。选好后写进清单 supported 条目的 runner / npu_devices / timeout_minutes 字段，example 流水线按条目调度，不在 workflow 里硬编码。
 2. 选择合适的镜像。注意，**cosdt-ci-test 下的 runners 全部位于中国大陆**，代理没有配置 docker hub，所以无法从 docker hub 拉取镜像。推荐从 Ascend 官方镜像仓拉取，在 <https://www.hiascend.com/developer/ascendhub> 中，选择合适的镜像版本，点下载时，即可看到 SWR 地址。
 3. 配置安装依赖命令。注意，由于 runners 位于国内，安装时可能存在网络问题，所以需要配置镜像。昇腾包用镜像：<https://repo.huaweicloud.com/ascend/repos/pypi>。
 4. 运行 example。有些 example 很大，例如训练加速的有些项目的 example 会真实训练模型，需要通过参数覆盖的方式控制 steps，减少 CI 资源占用。
@@ -53,7 +53,7 @@ GitHub 的 workflow_run（一个 workflow 完成后触发另一个）不能跨�
 
 机制是「清单 + 差集」：
 
-1. 初始化清单。参考 scripts/，扫描目标仓 examples/ 下的 .sh / .py / .yaml，生成 examples_manifest.yaml。你确认能在 CI 跑通的 example 列入 supported，其余全部自动写入 unsupported。
+1. 初始化清单。参考 scripts/，扫描目标仓 examples/ 下的 .sh / .py / .yaml（扫描根目录和扩展名记录在清单的 scan 段，检查脚本按它执行，可按项目调整），生成 examples_manifest.yaml。你确认能在 CI 跑通的 example 列入 supported——supported 条目必须写全 path、runner、npu_devices、overlay、timeout_minutes；其余全部自动写入 unsupported。
 2. 每次 CI 比对。创建一个跑在免费的 ubuntu-latest 上的 job，这个 job 把目标仓磁盘上实际存在的 example 与清单求差集：新增的路径（磁盘有、清单无）和失效的路径（清单有、磁盘无）打印到日志和 job summary，然后正常退出，不让 job 失败。新 example 出现是「提示有待办」。
 
 ### 要求 4
@@ -69,7 +69,7 @@ GitHub 的 workflow_run（一个 workflow 完成后触发另一个）不能跨�
   "target_ref": "被测的分支 / tag / sha",
   "path": "被测example路径，例如 examples/ascend/train/qwen3/qwen3_lora_megatron.sh",
   "image": "所用容器镜像",
-  "job_status": "success | failure"
+  "job_status": "success | failure | cancelled"
 }
 ```
 

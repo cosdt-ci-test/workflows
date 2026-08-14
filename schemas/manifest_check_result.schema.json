@@ -39,15 +39,15 @@
     },
     "supported": {
       "type": "array",
-      "description": "Manifest entries that CI will run.",
+      "description": "Manifest entries that CI will run. Every field is required: the run-example job schedules runner, devices, and timeout from these entries.",
       "items": {
         "type": "object",
-        "required": ["path"],
+        "required": ["path", "runner", "npu_devices", "overlay", "timeout_minutes"],
         "properties": {
           "path": { "type": "string", "minLength": 1 },
-          "runner": { "type": "string" },
-          "npu_devices": { "type": "string" },
-          "overlay": { "type": "string" },
+          "runner": { "type": "string", "minLength": 1 },
+          "npu_devices": { "type": "string", "minLength": 1 },
+          "overlay": { "type": "string", "minLength": 1 },
           "timeout_minutes": { "type": "integer", "minimum": 1 }
         }
       }

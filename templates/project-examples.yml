@@ -1,5 +1,7 @@
 # Copy to .github/workflows/<project>-examples.yml and replace every
-# <project>, <fork_repo>, <runner-label>, and <swr-image> placeholder.
+# <project>, <fork_repo>, and <swr-image> placeholder. Runner, NPU devices,
+# and timeout are NOT placeholders: they come from each supported entry in
+# projects/<project>/examples_manifest.yaml.
 # Register the project in projects.yaml and create projects/<project>/ for the
 # manifest, overlays, and fixtures. See docs/guarding-examples.md
 # (要求 1–4) for the contract this skeleton implements.
@@ -79,6 +81,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       supported_matrix: ${{ steps.check.outputs.supported_matrix }}
+      has_supported: ${{ steps.check.outputs.has_supported }}
     steps:
       - name: Checkout workflows
         uses: actions/checkout@v4
@@ -99,6 +102,7 @@ jobs:
           TARGET_REF: ${{ needs.resolve.outputs.target_ref }}
           TRIGGER: ${{ needs.resolve.outputs.trigger }}
         run: |
+          python3 -m pip install -q pyyaml
           python3 workflows/scripts/check_examples_manifest.py \
             --target-root target \
             --manifest workflows/projects/<project>/examples_manifest.yaml \
@@ -122,10 +126,14 @@ jobs:
           path: manifest_check_result.json
 
   # 要求 1: run each supported example on the matching Ascend runner.
+  # Runner, devices, and timeout come from each supported manifest entry.
+  # Skipped entirely when the manifest has no supported example yet
+  # (an empty matrix would fail the whole run).
   run-example:
     needs: [resolve, manifest-check]
-    runs-on: [<runner-label>]
-    timeout-minutes: 180
+    if: needs.manifest-check.outputs.has_supported == 'true'
+    runs-on: ${{ matrix.example.runner }}
+    timeout-minutes: ${{ matrix.example.timeout_minutes }}
     defaults:
       run:
         shell: bash
@@ -134,7 +142,7 @@ jobs:
       matrix:
         example: ${{ fromJSON(needs.manifest-check.outputs.supported_matrix) }}
     env:
-      ASCEND_RT_VISIBLE_DEVICES: "0,1"
+      ASCEND_RT_VISIBLE_DEVICES: ${{ matrix.example.npu_devices }}
       PROJECT_ROOT: ${{ github.workspace }}/workflows/projects/<project>
       TARGET_ROOT: ${{ github.workspace }}/target
       FIXTURE_DIR: ${{ github.workspace }}/workflows/projects/<project>/fixtures
@@ -142,6 +150,8 @@ jobs:
       PIP_TIMEOUT: "120"
     container:
       image: <swr-image>
+      # --privileged exposes every NPU on the host; per-job card selection
+      # happens via ASCEND_RT_VISIBLE_DEVICES (the manifest's npu_devices).
       options: >-
         --privileged --shm-size=64g
         --device=/dev/davinci0 --device=/dev/davinci1
@@ -217,17 +227,32 @@ jobs:
               handle.write('\n')
           EOF
 
-      - name: Upload artifacts
+      # Upload only result.json: training output and checkpoints stay on the
+      # runner, keeping the upload tiny and resilient to the flaky network
+      # path between the runner and GitHub. The full run log is in the
+      # "Run example" step's console output. One retry before going red.
+      - name: Upload result JSON
+        id: upload-result
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: <project>-examples-${{ github.run_id }}-${{ strategy.job-index }}
           if-no-files-found: ignore
-          path: output/
+          path: output/result.json
+
+      - name: Upload result JSON (retry)
+        if: always() && steps.upload-result.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: <project>-examples-${{ github.run_id }}-${{ strategy.job-index }}
+          overwrite: true
+          if-no-files-found: ignore
+          path: output/result.json
 
   validate-results:
-    needs: [run-example]
-    if: always()
+    needs: [manifest-check, run-example]
+    if: always() && needs.manifest-check.outputs.has_supported == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout workflows

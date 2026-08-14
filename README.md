@@ -1,6 +1,6 @@
 # cosdt-ci-test/workflows
 
-Example CI 看护的唯一部署点。红绿只出现在本仓的 GitHub Actions。被看护的项目各自有一条 example 流水线和（可选）一条 quick-start 流水线；项目专属的清单、overlay、fixture 放在 `projects/<项目名>/`。
+workflows的开发、测试仓。被看护的项目各自有一条 example 流水线和 一条 quick-start 流水线；项目专属的清单、overlay、fixture 放在 `projects/<项目名>/`。
 
 当前只有 [ms-swift](projects/ms-swift/) 一个已接入项目，作为后续项目的样板。设计说明见 [docs/guarding-examples.md](docs/guarding-examples.md)。
 
@@ -23,8 +23,8 @@ projects/<project>/                  # 该项目的清单、overlay、fixture、
 ## 接入新项目
 
 1. 读 [docs/guarding-examples.md](docs/guarding-examples.md)，判断该项目处于阶段 A 还是阶段 B。
-2. 把 [templates/project-examples.yml](templates/project-examples.yml) 复制为 `.github/workflows/<project>-examples.yml`，替换 `<project>`、`<fork_repo>`、`<runner-label>`、`<swr-image>`，补上该项目的安装命令。
-3. 需要看护 Quick Start 文档时，同样复制 [templates/project-quick-start.yml](templates/project-quick-start.yml)。
+2. 参考 [templates/project-examples.yml](templates/project-examples.yml)，完成 `.github/workflows/<project>-examples.yml`、`.github/workflows/<project>-quick-start.yml`。
+3. 需要看护 Quick Start 文档时，请参考 [templates/project-quick-start.yml](templates/project-quick-start.yml)。
 4. 在 `projects.yaml` 注册该项目。
 5. 建 `projects/<project>/` 目录。用 `scripts/bootstrap_manifest.py --target-root <checkout> --output projects/<project>/examples_manifest.yaml --supported <path>` 生成清单，再手工补全 supported 条目的 runner / overlay / timeout。
 6. 按 [docs/artifacts.md](docs/artifacts.md) 确认 artifact 名称和 `result.json` 字段。

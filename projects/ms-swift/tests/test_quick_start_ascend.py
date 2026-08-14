@@ -428,8 +428,12 @@ class TestQuickStartAscendEndToEnd(unittest.TestCase):
         line_summary: list[tuple[str, str | None, bool]] = []
         for ei, line in enumerate(e_iter):
             if line == '...':
-                # Wildcard: skip a single actual line. Use consecutive
-                # ``...`` lines (or a trailing ``...``) to drop several.
+                # Wildcard: skip ONE actual line. For variable-length
+                # output (progress bars, training loss logs), place a
+                # ``...`` near the END of the expected block instead -
+                # that catches all the variable lines as leftover
+                # (counted, not asserted) and the real expected lines
+                # stay verifiable.
                 if a_iter:
                     consumed = a_iter.pop(0)
                     line_summary.append(('...', consumed, True))

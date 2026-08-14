@@ -56,7 +56,6 @@ torch= 2.9.0+cpu
 torch_npu= 2.9.0.post2
 is_available: True
 count: 1
-...                              # skip torch_npu init banner on stderr
 ```
 
 确认能看到 NPU 设备：
@@ -127,13 +126,11 @@ ms-swift xxx
 ...     --model_name swift-robot
 [INFO:swift] start training ...
 {'loss': ..., 'grad_norm': ..., 'learning_rate': ..., 'epoch': ...}
-...
-{'loss': ..., 'grad_norm': ..., 'learning_rate': ..., 'epoch': ...}
-...
 [INFO:swift] training finished, saving checkpoint ...
 Saving checkpoint to output/vx-xxx/checkpoint-xxx
 >>> echo "train done, checkpoint dir: $(ls -dt output/*/checkpoint-* | head -n 1)"
 train done, checkpoint dir: output/vx-xxx/checkpoint-xxx
+...                              # skip training progress bar / per-step loss logs
 ```
 
 小贴士：

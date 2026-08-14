@@ -2,16 +2,14 @@
 
 ## 总之
 
-一般每个项目都存在 examples。我们的工作是让这些 Examples 被 github workflow 看护。一个项目的 Examples 至少一条能在昇腾上跑通。workflow 理想情况进入上游社区，随 CI 触发，而最不理想情况是在下游定时监听上游社区的改动而触发。核心思路是，在下游仓库准备好 workflow 和 examples 并跑通，然后尽可能地往上游社区推送。
+一般每个项目都存在 examples。我们的工作是让这些 Examples 被 github workflow 看护。一个项目的 Examples 至少一条能在昇腾上跑通。workflow 理想情况进入上游社区，随上游 CI 触发；在此之前，由本仓（workflows 仓）的流水线**定时轮询上游社区的改动**来触发。核心思路是，在下游仓库准备好 workflow 和 examples 并跑通，然后尽可能地往上游社区推送。
 
 ## 阶段划分
 
-1. 阶段 A：fork 上游仓库当靶场，用 fork 仓上的 notifier 模拟「上游 CI 完成」等事件。在 <https://github.com/cosdt-ci-test/workflows/> 仓内，开发看护 example 用的 workflow。
-2. 阶段 B：按上游的接受度递进，一步一步来，每一步都可以停在原地继续用阶段 A 的能力：
+1. 阶段 A：在 <https://github.com/cosdt-ci-test/workflows/> 仓内，开发看护 example 用的 workflow。流水线通过轮询监听上游仓库（schedule 定时 + monitor 步骤对比状态，见「要求 2」），`target_repo` 默认直接对准上游仓库；开发调试时用 `workflow_dispatch` 手动指定任意 `target_repo` / `target_ref`。
+2. 阶段 B：按上游的接受度递进，一步一步来，每一步都可以停在原地继续用阶段 A 的轮询能力：
    1. 先推 example 本身（如果上游还缺昇腾 example）。
-   2. 再争取上游接受 notifier（上游 CI 完成后通知我们）——对上游来说只是一个几十行、不影响他们的小 workflow。
-   3. 最理想是看护 workflow 直接合入上游、随上游 CI 触发，workflow 的成功、失败在上游社区可见。**这一步通常需要我们向上游提供 self-hosted runner 和容器镜像**。为上游社区接入 self-hosted runner 参考：<https://ascend-gha-runners.github.io/docs/user-manual-gha-zh/#github-app-runner_1>。注意这些 runner 全部位于中国大陆、无 docker hub 代理，这点需要和社区沟通。
-   4. 兜底：上游什么都不接受。此时在 workflows 仓给该项目的流水线加 schedule 定时触发，把 target_repo 直接指向上游、target_ref 指向上游最新 main 或最新 release，实现「下游监听上游」。
+   2. 最理想是看护 workflow 直接合入上游、随上游 CI 触发，workflow 的成功、失败在上游社区可见。**这一步通常需要我们向上游提供 self-hosted runner 和容器镜像**。为上游社区接入 self-hosted runner 参考：<https://ascend-gha-runners.github.io/docs/user-manual-gha-zh/#github-app-runner_1>。注意这些 runner 全部位于中国大陆、无 docker hub 代理，这点需要和社区沟通。
 
 ## 零、前提
 
@@ -19,20 +17,16 @@
 
 动手前先判断你负责的项目属于哪种情况：
 
-- 上游已有健康的昇腾 CI（如 LlamaFactory、veRL、VeOmni）：先确认 example 是否已被该 CI 覆盖。若已覆盖，直接进入阶段 B（在上游补 example 看护），fork 靶场只用于开发调试。
-- 上游有昇腾 CI 但停摆或不健康（如 DeepSpeed、ONNXRuntime、llama.cpp、SGLang）：进入阶段 A，先在靶场把 example 跑通。
-- 上游无昇腾 CI（如 transformers、PEFT、diffusers）：按本文完整走。example 若不存在，先在 fork 里新增并调通，作为将来推向上游的内容。未来需要和上游社区沟通接入 self-hosted runner 的事宜。
+- 上游已有健康的昇腾 CI（如 LlamaFactory、veRL、VeOmni）：先确认 example 是否已被该 CI 覆盖。若已覆盖，直接进入阶段 B（在上游补 example 看护）。
+- 上游有昇腾 CI 但停摆或不健康（如 DeepSpeed、ONNXRuntime、llama.cpp、SGLang）：进入阶段 A，先把 example 在本仓流水线跑通。
+- 上游无昇腾 CI（如 transformers、PEFT、diffusers）：按本文完整走。example 若不存在，先写好并用 `workflow_dispatch` 把流水线指向放着草稿的任意仓库分支调通，作为将来推向上游的内容。未来需要和上游社区沟通接入 self-hosted runner 的事宜。
 
-## 一、Fork 上游仓用于 workflow 靶场
-
-推荐将上游仓 fork 到 <https://github.com/organizations/cosdt-ci-test/> 组织下，该组织已接入昇腾 runner。在 workflows 仓 Settings → Actions → Runners 可以看到当前可用的 runner 及其标签。
-
-## 二、workflow 要求
+## 一、workflow 要求
 
 推荐在 <https://github.com/cosdt-ci-test/workflows> 下新增目标软件的 github workflow，workflow 的核心要求是：
 
 - 对用昇腾能跑通的 examples，必须在合适的 runner 机器上跑通。
-- 触发条件：CI 完成、example 变动、Release。
+- 触发条件：轮询发现上游 examples 变动、Release、main 有新 commit；也可手动触发。
 - 能感知新增的 example。
 - Job 的结果能被外部机器通过 job api 或者读 Artifact 文件而获取。
 
@@ -65,9 +59,17 @@ overlay 是把 example 压到 CI 规模的参数覆盖文件，约定放在 `pro
 
 ### 要求 2
 
-GitHub 的 workflow_run（一个 workflow 完成后触发另一个）不能跨仓库，所以「fork/上游发生了事通知 workflows 仓跑看护」的模式，只能用 repository_dispatch，也就是一方调用 GitHub API 向 workflows 仓发消息，消息带 event_type（事件名）和 client_payload（自定义数据）。
+触发靠**轮询**，不要求上游（或任何别的仓库）部署任何东西。参考实现是 `.github/workflows/ms-swift-examples.yml` 的 `monitor` / `record-outcome` job，机制与同仓 quick-start 流水线的 monitor 一致：
 
-发消息的一方是部署在 fork 仓上的 notifier。事件命名、payload 字段契约、PAT 权限和可复制的 workflow 见 [notifier.md](notifier.md)。
+1. `schedule` 定时唤醒 `monitor` job（跑在免费的 ubuntu-latest 上，几秒即完成）。它轮询上游的三个信号，逐个与上次记录的值比较：
+   - **examples**：上游 main 上最后一次触碰 `examples/`（清单 `scan.root`）的 commit SHA；
+   - **release**：上游 latest release 的 tag；
+   - **commit**：上游 main HEAD 的 SHA。
+2. 任一信号变化即触发本次看护。被测 ref 按 examples > release > commit 的优先级取自第一个变化的信号：examples / commit 用对应的 commit SHA，release 用 tag。全部无变化则本次 run 在 monitor 后直接结束，不占 NPU runner。
+3. 看护失败会重试：run 结束后 `record-outcome` job 把本次成败回写进 monitor 状态；上次失败的信号即使没有新变化，下个周期也会以 `<信号>-retry` 为由再跑一次，直到成功。
+4. `workflow_dispatch` 手动触发不经过 monitor 门（changed 恒为 true），`target_repo` / `target_ref` 从输入取，默认上游仓库的 main。
+
+monitor 状态存在 `.monitor-state/` 目录，用 actions/cache 持久化（条目约 7 天未访问会被清除，monitor 每周期的 restore 会保活；状态丢失只会让下次 run 多跑一轮，无害）。注意：同一项目各流水线的 cache key 前缀必须互不为对方的前缀（examples 用 `<project>-examples-monitor-state-`，quick-start 用 `monitor-state-<project>-`），因为 restore-keys 按前缀匹配，前缀重叠会串状态。
 
 ### 要求 3
 
@@ -84,8 +86,8 @@ GitHub 的 workflow_run（一个 workflow 完成后触发另一个）不能跨�
 
 ```json
 {
-  "trigger": "workflow_dispatch | <项目>-ci-completed | <项目>-examples-changed | <项目>-release",
-  "target_repo": "目标仓库（例如 cosdt-ci-test/ms-swift）",
+  "trigger": "workflow_dispatch | schedule",
+  "target_repo": "目标仓库（例如 modelscope/ms-swift）",
   "target_ref": "被测的分支 / tag / sha",
   "path": "被测example路径，例如 examples/ascend/train/qwen3/qwen3_lora_megatron.sh",
   "image": "所用容器镜像",

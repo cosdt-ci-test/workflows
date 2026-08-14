@@ -1,17 +1,20 @@
 name: ms-swift-examples
 
+# Polling-based examples guard: a scheduled monitor polls upstream
+# signals (examples tree / release tag / main HEAD); NPU work runs only
+# when one changed or the previous guarded run failed. Manual runs skip
+# the gate. Spec: docs/guarding-examples.md 要求 2.
+
 on:
-  repository_dispatch:
-    types:
-      - ms-swift-ci-completed
-      - ms-swift-examples-changed
-      - ms-swift-release
+  schedule:
+    # Offset from ms-swift-quick-start's '0 */6 * * *'.
+    - cron: '30 */6 * * *'
   workflow_dispatch:
     inputs:
       target_repo:
         description: Target ms-swift repository to checkout and run
         required: true
-        default: cosdt-ci-test/ms-swift
+        default: modelscope/ms-swift
         type: string
       target_ref:
         description: Branch, tag, or SHA in the target repository
@@ -32,6 +35,8 @@ permissions:
 # The container image lives on each supported manifest entry (image field),
 # not here: GitHub does not allow the env context in container.image.
 env:
+  UPSTREAM_REPO: modelscope/ms-swift
+  GH_API: https://api.github.com
   MEGATRON_LM_REF: core_v0.16.0
   MINDSPEED_REF: core_r0.16.0
   # Pinned release. mcore-bridge main requires megatron-core > 0.16
@@ -39,46 +44,167 @@ env:
   MCORE_BRIDGE_REF: v1.6.1
 
 jobs:
-  resolve:
+  # Each monitor compares its upstream signal against the cached last
+  # seen value; a failure recorded by record-outcome forces a retry on
+  # the next cycle even if the signal has not changed.
+  monitor:
     runs-on: ubuntu-latest
     outputs:
-      target_repo: ${{ steps.resolve.outputs.target_repo }}
-      target_ref: ${{ steps.resolve.outputs.target_ref }}
-      trigger: ${{ steps.resolve.outputs.trigger }}
+      changed: ${{ steps.decide.outputs.changed }}
+      trigger: ${{ steps.decide.outputs.trigger }}
+      reason: ${{ steps.decide.outputs.reason }}
+      target_repo: ${{ steps.decide.outputs.target_repo }}
+      target_ref: ${{ steps.decide.outputs.target_ref }}
     steps:
-      - name: Resolve target
-        id: resolve
+      - name: Restore monitor state
+        id: cache-restore
+        if: github.event_name == 'schedule'
+        uses: actions/cache/restore@v4
+        with:
+          path: .monitor-state
+          # The per-run key always misses; restore-keys picks the latest
+          # save. Must not share a prefix with ms-swift-quick-start's
+          # monitor-state-ms-swift- keys (restore-keys matches prefixes).
+          key: ms-swift-examples-monitor-state-${{ github.run_id }}
+          restore-keys: |
+            ms-swift-examples-monitor-state-
+
+      # path=examples matches scan.root in the manifest.
+      - name: Monitor upstream examples tree
+        id: monitor-examples
+        if: github.event_name == 'schedule'
+        run: |
+          set -euo pipefail
+          STATE_DIR=".monitor-state"
+          mkdir -p "$STATE_DIR"
+          SHA=$(curl -fsSL --retry 3 \
+            "$GH_API/repos/$UPSTREAM_REPO/commits?sha=main&path=examples&per_page=1" \
+            | jq -r '.[0].sha // empty')
+          OLD=$(cat "$STATE_DIR/.examples_head" 2>/dev/null || echo "")
+          OUTCOME=$(cat "$STATE_DIR/.examples_outcome" 2>/dev/null || echo "")
+          if [ -n "$SHA" ] && [ "$OLD" != "$SHA" ]; then
+            echo "$SHA" > "$STATE_DIR/.examples_head"
+            echo "success" > "$STATE_DIR/.examples_outcome"  # signal changed: clear retry flag
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "ref=$SHA" >> "$GITHUB_OUTPUT"
+            echo "reason=examples" >> "$GITHUB_OUTPUT"
+          elif [ "$OUTCOME" = "failure" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "ref=$SHA" >> "$GITHUB_OUTPUT"
+            echo "reason=examples-retry" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "examples_head=$SHA outcome=$OUTCOME"
+
+      - name: Monitor upstream latest release tag
+        id: monitor-release
+        if: github.event_name == 'schedule'
+        run: |
+          set -euo pipefail
+          STATE_DIR=".monitor-state"
+          mkdir -p "$STATE_DIR"
+          TAG=$(curl -fsSL --retry 3 \
+            "$GH_API/repos/$UPSTREAM_REPO/releases/latest" | jq -r '.tag_name // empty')
+          OLD=$(cat "$STATE_DIR/.last_release_tag" 2>/dev/null || echo "")
+          OUTCOME=$(cat "$STATE_DIR/.release_outcome" 2>/dev/null || echo "")
+          if [ -n "$TAG" ] && [ "$OLD" != "$TAG" ]; then
+            echo "$TAG" > "$STATE_DIR/.last_release_tag"
+            echo "success" > "$STATE_DIR/.release_outcome"  # signal changed: clear retry flag
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "ref=$TAG" >> "$GITHUB_OUTPUT"
+            echo "reason=release" >> "$GITHUB_OUTPUT"
+          elif [ "$OUTCOME" = "failure" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "ref=$TAG" >> "$GITHUB_OUTPUT"
+            echo "reason=release-retry" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "release_tag=$TAG outcome=$OUTCOME"
+
+      - name: Monitor upstream main HEAD
+        id: monitor-commit
+        if: github.event_name == 'schedule'
+        run: |
+          set -euo pipefail
+          STATE_DIR=".monitor-state"
+          mkdir -p "$STATE_DIR"
+          SHA=$(curl -fsSL --retry 3 \
+            "$GH_API/repos/$UPSTREAM_REPO/commits/main" | jq -r '.sha // empty')
+          OLD=$(cat "$STATE_DIR/.last_tested_sha" 2>/dev/null || echo "")
+          OUTCOME=$(cat "$STATE_DIR/.commit_outcome" 2>/dev/null || echo "")
+          if [ -n "$SHA" ] && [ "$OLD" != "$SHA" ]; then
+            echo "$SHA" > "$STATE_DIR/.last_tested_sha"
+            echo "success" > "$STATE_DIR/.commit_outcome"  # signal changed: clear retry flag
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "ref=$SHA" >> "$GITHUB_OUTPUT"
+            echo "reason=commit" >> "$GITHUB_OUTPUT"
+          elif [ "$OUTCOME" = "failure" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "ref=$SHA" >> "$GITHUB_OUTPUT"
+            echo "reason=commit-retry" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "main_sha=$SHA outcome=$OUTCOME"
+
+      - name: Persist monitor state
+        if: github.event_name == 'schedule' && always()
+        uses: actions/cache/save@v4
+        with:
+          path: .monitor-state
+          key: ms-swift-examples-monitor-state-${{ github.run_id }}
+
+      # Schedule picks the ref by priority examples > release > commit;
+      # manual runs always proceed with the given inputs.
+      - name: Decide target
+        id: decide
         env:
           EVENT_NAME: ${{ github.event_name }}
-          DISPATCH_TYPE: ${{ github.event.action }}
-          INPUT_REPO: ${{ github.event.inputs.target_repo }}
-          INPUT_REF: ${{ github.event.inputs.target_ref }}
-          PAYLOAD_REPO: ${{ github.event.client_payload.repo }}
-          PAYLOAD_SHA: ${{ github.event.client_payload.sha }}
-          PAYLOAD_REF: ${{ github.event.client_payload.ref }}
+          INPUT_REPO: ${{ inputs.target_repo }}
+          INPUT_REF: ${{ inputs.target_ref }}
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            trigger="workflow_dispatch"
-            target_repo="${INPUT_REPO:-cosdt-ci-test/ms-swift}"
-            target_ref="${INPUT_REF:-main}"
-          else
-            trigger="${DISPATCH_TYPE:-repository_dispatch}"
-            target_repo="${PAYLOAD_REPO:-}"
-            # Release dispatches carry the tag in ref; the others carry a sha.
-            target_ref="${PAYLOAD_REF:-${PAYLOAD_SHA:-}}"
-            if [ -z "$target_repo" ] || [ -z "$target_ref" ]; then
-              echo "repository_dispatch payload missing repo or ref/sha"
-              exit 1
-            fi
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "trigger=workflow_dispatch" >> "$GITHUB_OUTPUT"
+            echo "reason=manual" >> "$GITHUB_OUTPUT"
+            echo "target_repo=${INPUT_REPO:-$UPSTREAM_REPO}" >> "$GITHUB_OUTPUT"
+            echo "target_ref=${INPUT_REF:-main}" >> "$GITHUB_OUTPUT"
+            echo "resolved repo=${INPUT_REPO:-$UPSTREAM_REPO} ref=${INPUT_REF:-main} (manual)"
+            exit 0
           fi
-          echo "target_repo=$target_repo" >> "$GITHUB_OUTPUT"
-          echo "target_ref=$target_ref" >> "$GITHUB_OUTPUT"
-          echo "trigger=$trigger" >> "$GITHUB_OUTPUT"
-          echo "resolved repo=$target_repo ref=$target_ref trigger=$trigger"
+          CHANGED="false"
+          REASON=""
+          REF=""
+          if [ "${{ steps.monitor-examples.outputs.changed }}" = "true" ]; then
+            CHANGED="true"
+            REASON="${{ steps.monitor-examples.outputs.reason }}"
+            REF="${{ steps.monitor-examples.outputs.ref }}"
+          elif [ "${{ steps.monitor-release.outputs.changed }}" = "true" ]; then
+            CHANGED="true"
+            REASON="${{ steps.monitor-release.outputs.reason }}"
+            REF="${{ steps.monitor-release.outputs.ref }}"
+          elif [ "${{ steps.monitor-commit.outputs.changed }}" = "true" ]; then
+            CHANGED="true"
+            REASON="${{ steps.monitor-commit.outputs.reason }}"
+            REF="${{ steps.monitor-commit.outputs.ref }}"
+          fi
+          echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
+          echo "trigger=schedule" >> "$GITHUB_OUTPUT"
+          echo "reason=$REASON" >> "$GITHUB_OUTPUT"
+          echo "target_repo=$UPSTREAM_REPO" >> "$GITHUB_OUTPUT"
+          echo "target_ref=$REF" >> "$GITHUB_OUTPUT"
+          if [ "$CHANGED" = "true" ]; then
+            echo "resolved repo=$UPSTREAM_REPO ref=$REF reason=$REASON"
+          else
+            echo "No upstream changes - skipping manifest check and examples"
+          fi
 
   manifest-check:
-    needs: resolve
+    needs: monitor
+    if: needs.monitor.outputs.changed == 'true'
     runs-on: ubuntu-latest
     outputs:
       supported_matrix: ${{ steps.check.outputs.supported_matrix }}
@@ -92,16 +218,16 @@ jobs:
       - name: Checkout target
         uses: actions/checkout@v4
         with:
-          repository: ${{ needs.resolve.outputs.target_repo }}
-          ref: ${{ needs.resolve.outputs.target_ref }}
+          repository: ${{ needs.monitor.outputs.target_repo }}
+          ref: ${{ needs.monitor.outputs.target_ref }}
           path: target
 
       - name: Check examples manifest
         id: check
         env:
-          TARGET_REPO: ${{ needs.resolve.outputs.target_repo }}
-          TARGET_REF: ${{ needs.resolve.outputs.target_ref }}
-          TRIGGER: ${{ needs.resolve.outputs.trigger }}
+          TARGET_REPO: ${{ needs.monitor.outputs.target_repo }}
+          TARGET_REF: ${{ needs.monitor.outputs.target_ref }}
+          TRIGGER: ${{ needs.monitor.outputs.trigger }}
         run: |
           python3 -m pip install -q pyyaml
           python3 workflows/scripts/check_examples_manifest.py \
@@ -131,7 +257,7 @@ jobs:
   # (an empty matrix would fail the whole run).
   run-example:
     name: run-example (${{ matrix.example.path }})
-    needs: [resolve, manifest-check]
+    needs: [monitor, manifest-check]
     if: needs.manifest-check.outputs.has_supported == 'true'
     runs-on: ${{ matrix.example.runner }}
     timeout-minutes: ${{ matrix.example.timeout_minutes }}
@@ -171,8 +297,8 @@ jobs:
       - name: Checkout target
         uses: actions/checkout@v4
         with:
-          repository: ${{ needs.resolve.outputs.target_repo }}
-          ref: ${{ needs.resolve.outputs.target_ref }}
+          repository: ${{ needs.monitor.outputs.target_repo }}
+          ref: ${{ needs.monitor.outputs.target_ref }}
           path: target
 
       - name: Source CANN and check NPU
@@ -224,7 +350,7 @@ jobs:
 
   validate-results:
     name: publish-result (${{ matrix.example.path }})
-    needs: [resolve, manifest-check, run-example]
+    needs: [monitor, manifest-check, run-example]
     if: always() && needs.manifest-check.outputs.has_supported == 'true'
     runs-on: ubuntu-latest
     strategy:
@@ -239,9 +365,9 @@ jobs:
 
       - name: Write result JSON
         env:
-          TARGET_REPO: ${{ needs.resolve.outputs.target_repo }}
-          TARGET_REF: ${{ needs.resolve.outputs.target_ref }}
-          TRIGGER: ${{ needs.resolve.outputs.trigger }}
+          TARGET_REPO: ${{ needs.monitor.outputs.target_repo }}
+          TARGET_REF: ${{ needs.monitor.outputs.target_ref }}
+          TRIGGER: ${{ needs.monitor.outputs.trigger }}
           EXAMPLE_PATH: ${{ matrix.example.path }}
           IMAGE: ${{ matrix.example.image }}
           EXPECTED_JOB_NAME: run-example (${{ matrix.example.path }})
@@ -302,3 +428,61 @@ jobs:
           name: ms-swift-examples-${{ github.run_id }}-${{ strategy.job-index }}
           if-no-files-found: error
           path: output/result.json
+
+  # Write this run's outcome back into the monitor state so a failed
+  # run is retried on the next cycle.
+  record-outcome:
+    needs: [monitor, manifest-check, run-example]
+    if: |
+      always() &&
+      github.event_name == 'schedule' &&
+      needs.monitor.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Restore monitor state
+        uses: actions/cache/restore@v4
+        with:
+          path: .monitor-state
+          # restore-keys picks the state the monitor job saved this run.
+          key: ms-swift-examples-monitor-state-${{ github.run_id }}-post
+          restore-keys: |
+            ms-swift-examples-monitor-state-
+
+      - name: Record outcome
+        env:
+          REASON: ${{ needs.monitor.outputs.reason }}
+          RUN_RESULT: ${{ needs.run-example.result }}
+          MANIFEST_RESULT: ${{ needs.manifest-check.result }}
+          HAS_SUPPORTED: ${{ needs.manifest-check.outputs.has_supported }}
+        run: |
+          set -euo pipefail
+          STATE_DIR=".monitor-state"
+          mkdir -p "$STATE_DIR"
+          # Strip the "-retry" suffix to map back to the base monitor.
+          BASE="${REASON%-retry}"
+          # A skipped run-example is fine when the manifest has no
+          # supported entry; any other non-success must retry.
+          if [ "$RUN_RESULT" = "success" ]; then
+            OUT="success"
+            REASON_TEXT=""
+          elif [ "$RUN_RESULT" = "skipped" ] && [ "$MANIFEST_RESULT" = "success" ] \
+            && [ "$HAS_SUPPORTED" = "false" ]; then
+            OUT="success"
+            REASON_TEXT=""
+          else
+            OUT="failure"
+            REASON_TEXT="run-example: ${RUN_RESULT}, manifest-check: ${MANIFEST_RESULT}"
+          fi
+          echo "${OUT}" > "${STATE_DIR}/.${BASE}_outcome"
+          if [ -n "$REASON_TEXT" ]; then
+            echo "${REASON_TEXT}" > "${STATE_DIR}/.${BASE}_failure_reason"
+          else
+            : > "${STATE_DIR}/.${BASE}_failure_reason"
+          fi
+          echo "outcome for ${BASE}: ${OUT} (${REASON_TEXT:-ok})"
+
+      - name: Persist monitor state
+        uses: actions/cache/save@v4
+        with:
+          path: .monitor-state
+          key: ms-swift-examples-monitor-state-${{ github.run_id }}-post

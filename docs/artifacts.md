@@ -20,7 +20,7 @@
 
 单个文件 `result.json`，符合 [schemas/result.schema.json](../schemas/result.schema.json)。
 
-artifact 刻意只装 result.json，不装运行日志和训练产物，且不由自托管 NPU runner 上传：NPU runner 到 GitHub artifact 存储的链路不可靠（曾出现过 example 跑通、仅因上传 stall 而全线判红的 run），所以 result.json 由跑在 GitHub 托管 runner 上的 `publish-result` job 生成——它通过 Jobs API 读取对应 `run-example` 的 conclusion 再写文件上传。完整训练输出在 Actions 页面 `Run example` 步骤的控制台日志里。清单里还没有 supported 条目时，`run-example` 和 `publish-result` 整体跳过，不产生此 artifact、也不判红。
+artifact 刻意只装 result.json，不装运行日志和训练产物，且不由自托管 NPU runner 上传：NPU runner 到 GitHub artifact 存储的链路不可靠（曾出现过 example 跑通、仅因上传 stall 而全线判红的 run），所以 result.json 由跑在 GitHub 托管 runner 上的 `publish-result` job 生成——它通过 Jobs API 读取对应 `run-example` 的 conclusion 再写文件上传。完整训练输出在 Actions 页面 `Run example` 步骤的控制台日志里。清单里还没有 supported 条目时，`run-example` 和 `publish-result` 整体跳过，不产生此 artifact、也不判红。同样，`schedule` 触发但 monitor 未检测到上游变化时，整个 run 在 monitor job 后结束，本 artifact 和 `<project>-manifest-check` 都不产生。
 
 `result.json` 必填字段：`trigger`、`target_repo`、`target_ref`、`path`、`image`、`job_status`。`job_status` 只能是 `success`、`failure` 或 `cancelled`。允许附加字段。
 

@@ -36,8 +36,8 @@ swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/cann:8.3.rc2-910b-ubun
 | --- | --- |
 | Python | 3.11 |
 | CANN | 8.3.rc2 |
-| torch | 2.7.1 |
-| torch_npu | 2.7.1.post2 |
+| torch | 2.9.0 |
+| torch_npu | 2.9.0.post2 |
 | transformers | `<5.0` |
 | peft | `<0.19` |
 | modelscope | 1.37.0 |
@@ -72,7 +72,29 @@ npu_count= 1
 
 ## 安装 ms-swift
 
-ms-swift的安装请参考[安装文档](./SWIFT-installation.md)。
+使用pip进行安装：
+
+```shell
+pip install ms-swift -U
+pip install uv
+uv pip install ms-swift -U --torch-backend=auto
+```
+
+从源码安装：
+
+```shell
+# Clone the upstream ms-swift repo into ./ms-swift
+>>> git clone https://github.com/modelscope/ms-swift.git
+# Pin the repo to the exact ref/SHA that triggered this CI run
+>>> cd ms-swift && git checkout <UPSTREAM_REF>
+# Editable install: `swift` CLI is now on PATH, source changes take effect on rerun
+>>> cd ms-swift && uv pip install -e . --torch-backend=auto
+# Sanity check the install: should print the installed ms-swift version
+>>> swift --version
+ms-swift xxx
+```
+
+`<UPSTREAM_REF>`： 改成实际版本。
 
 ## 使用样例
 

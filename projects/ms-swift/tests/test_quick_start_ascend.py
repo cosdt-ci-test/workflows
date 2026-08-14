@@ -445,6 +445,9 @@ class TestQuickStartAscendEndToEnd(unittest.TestCase):
         if mismatches:
             msg = (f'block #{block_idx} step #{step_idx} ({kind}) output '
                    f'mismatch:\n' + '\n'.join(mismatches))
+            # Print BEFORE self.fail so unittest doesn't swallow the
+            # diff in its subTest machinery.
+            _log(msg)
             self.fail(msg)
 
 

@@ -1,0 +1,56 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/cosdt-ci-test/workflows/schemas/manifest_check_result.schema.json",
+  "title": "Examples manifest check result",
+  "description": "Diff of the target tree's examples/ against examples_manifest.yaml. Always produced; never fails the job.",
+  "type": "object",
+  "required": [
+    "trigger",
+    "target_repo",
+    "target_ref",
+    "new_paths",
+    "stale_paths",
+    "supported"
+  ],
+  "properties": {
+    "trigger": {
+      "type": "string",
+      "description": "How this run was started."
+    },
+    "target_repo": {
+      "type": "string",
+      "pattern": "^[^/]+/[^/]+$",
+      "description": "Repository whose examples/ was scanned, owner/name."
+    },
+    "target_ref": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Branch, tag, or SHA that was scanned."
+    },
+    "new_paths": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Example paths present on disk but missing from the manifest."
+    },
+    "stale_paths": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Example paths listed in the manifest but missing on disk."
+    },
+    "supported": {
+      "type": "array",
+      "description": "Manifest entries that CI will run.",
+      "items": {
+        "type": "object",
+        "required": ["path"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "runner": { "type": "string" },
+          "npu_devices": { "type": "string" },
+          "overlay": { "type": "string" },
+          "timeout_minutes": { "type": "integer", "minimum": 1 }
+        }
+      }
+    }
+  }
+}

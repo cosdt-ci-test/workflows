@@ -1,0 +1,18 @@
+# Project registry for this guard repo.
+#
+# name, category, and support_level come from the "项目名称", "分类", and
+# "支持程度" columns of
+# https://docs.google.com/spreadsheets/d/1GtLB4Zvi_rzGqsH6dWShebk3DvRg6b9NNBeNeeDuNUM/edit?gid=753359062#gid=753359062
+# name is lowercase. category and support_level keep the Chinese values from
+# the sheet (e.g. 训练加速, 重点支持, 基础支持).
+projects:
+  - name: ms-swift
+    category: 训练加速
+    support_level: 基础支持
+    upstream_repo: modelscope/ms-swift
+    fork_repo: cosdt-ci-test/ms-swift
+    phase: A
+    runner: linux-aarch64-a2-2
+    workflows:
+      examples: .github/workflows/ms-swift-examples.yml
+      quick_start: .github/workflows/ms-swift-quick-start.yml

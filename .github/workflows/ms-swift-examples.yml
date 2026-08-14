@@ -1,0 +1,277 @@
+name: ms-swift-examples
+
+on:
+  repository_dispatch:
+    types:
+      - ms-swift-ci-completed
+      - ms-swift-examples-changed
+      - ms-swift-release
+  workflow_dispatch:
+    inputs:
+      target_repo:
+        description: Target ms-swift repository to checkout and run
+        required: true
+        default: cosdt-ci-test/ms-swift
+        type: string
+      target_ref:
+        description: Branch, tag, or SHA in the target repository
+        required: true
+        default: main
+        type: string
+
+concurrency:
+  group: ms-swift-examples
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+# Megatron-SWIFT on NPU follows ms-swift docs/source/BestPractices/NPU-support.md:
+# Megatron-LM core_v0.16.0 + MindSpeed core_r0.16.0 + mcore-bridge + triton-ascend 3.2.1.
+env:
+  CI_IMAGE: swr.cn-south-1.myhuaweicloud.com/ascendhub/torch-npu:2.9.0.post2-910b-ubuntu22.04-py3.11
+  MEGATRON_LM_REF: core_v0.16.0
+  MINDSPEED_REF: core_r0.16.0
+  # Pinned release. mcore-bridge main requires megatron-core > 0.16
+  # (e.g. nemotron_h imports megatron.core.models.hybrid since 2026-08-11).
+  MCORE_BRIDGE_REF: v1.6.1
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      target_repo: ${{ steps.resolve.outputs.target_repo }}
+      target_ref: ${{ steps.resolve.outputs.target_ref }}
+      trigger: ${{ steps.resolve.outputs.trigger }}
+    steps:
+      - name: Resolve target
+        id: resolve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_TYPE: ${{ github.event.action }}
+          INPUT_REPO: ${{ github.event.inputs.target_repo }}
+          INPUT_REF: ${{ github.event.inputs.target_ref }}
+          PAYLOAD_REPO: ${{ github.event.client_payload.repo }}
+          PAYLOAD_SHA: ${{ github.event.client_payload.sha }}
+          PAYLOAD_REF: ${{ github.event.client_payload.ref }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            trigger="workflow_dispatch"
+            target_repo="${INPUT_REPO:-cosdt-ci-test/ms-swift}"
+            target_ref="${INPUT_REF:-main}"
+          else
+            trigger="${DISPATCH_TYPE:-repository_dispatch}"
+            target_repo="${PAYLOAD_REPO:-}"
+            # Release dispatches carry the tag in ref; the others carry a sha.
+            target_ref="${PAYLOAD_REF:-${PAYLOAD_SHA:-}}"
+            if [ -z "$target_repo" ] || [ -z "$target_ref" ]; then
+              echo "repository_dispatch payload missing repo or ref/sha"
+              exit 1
+            fi
+          fi
+          echo "target_repo=$target_repo" >> "$GITHUB_OUTPUT"
+          echo "target_ref=$target_ref" >> "$GITHUB_OUTPUT"
+          echo "trigger=$trigger" >> "$GITHUB_OUTPUT"
+          echo "resolved repo=$target_repo ref=$target_ref trigger=$trigger"
+
+  manifest-check:
+    needs: resolve
+    runs-on: ubuntu-latest
+    outputs:
+      supported_matrix: ${{ steps.check.outputs.supported_matrix }}
+    steps:
+      - name: Checkout workflows
+        uses: actions/checkout@v4
+        with:
+          path: workflows
+
+      - name: Checkout target
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ needs.resolve.outputs.target_repo }}
+          ref: ${{ needs.resolve.outputs.target_ref }}
+          path: target
+
+      - name: Check examples manifest
+        id: check
+        env:
+          TARGET_REPO: ${{ needs.resolve.outputs.target_repo }}
+          TARGET_REF: ${{ needs.resolve.outputs.target_ref }}
+          TRIGGER: ${{ needs.resolve.outputs.trigger }}
+        run: |
+          python3 workflows/scripts/check_examples_manifest.py \
+            --target-root target \
+            --manifest workflows/ms-swift/examples_manifest.yaml \
+            --result-json manifest_check_result.json \
+            --target-repo "$TARGET_REPO" \
+            --target-ref "$TARGET_REF" \
+            --trigger "$TRIGGER"
+
+      - name: Validate manifest check result
+        run: |
+          python3 -m pip install -q check-jsonschema
+          check-jsonschema --schemafile workflows/schemas/manifest_check_result.schema.json \
+            manifest_check_result.json
+
+      - name: Upload manifest check result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ms-swift-manifest-check
+          if-no-files-found: ignore
+          path: manifest_check_result.json
+
+  run-example:
+    needs: [resolve, manifest-check]
+    runs-on: [linux-aarch64-a2-2]
+    timeout-minutes: 180
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        example: ${{ fromJSON(needs.manifest-check.outputs.supported_matrix) }}
+    env:
+      ASCEND_RT_VISIBLE_DEVICES: "0,1"
+      MODELSCOPE_CACHE: /root/.cache/modelscope
+      PROJECT_ROOT: ${{ github.workspace }}/workflows/ms-swift
+      TARGET_ROOT: ${{ github.workspace }}/target
+      FIXTURE_DIR: ${{ github.workspace }}/workflows/ms-swift/fixtures
+      PIP_EXTRA_INDEX_URL: https://repo.huaweicloud.com/ascend/repos/pypi
+      PIP_TIMEOUT: "120"
+    container:
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/torch-npu:2.9.0.post2-910b-ubuntu22.04-py3.11
+      options: >-
+        --privileged --shm-size=64g
+        --device=/dev/davinci0 --device=/dev/davinci1
+        --device=/dev/davinci_manager --device=/dev/devmm_svm --device=/dev/hisi_hdc
+        --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
+        --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
+        --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
+        --volume=/data/ci-cache/modelscope:/root/.cache/modelscope
+    steps:
+      - name: Checkout workflows
+        uses: actions/checkout@v4
+        with:
+          path: workflows
+
+      - name: Checkout target
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ needs.resolve.outputs.target_repo }}
+          ref: ${{ needs.resolve.outputs.target_ref }}
+          path: target
+
+      - name: Source CANN and check NPU
+        run: |
+          export PATH="/usr/local/sbin:$PATH"
+          source /usr/local/Ascend/ascend-toolkit/set_env.sh
+          npu-smi info
+          python -c "import torch, torch_npu; print(torch.__version__, torch_npu.__version__, torch.npu.device_count())"
+
+      - name: Install ms-swift
+        working-directory: target
+        run: |
+          python -m pip install -U pip
+          python -m pip install -e .
+          # requirements/npu.txt pins torchvision for torch 2.7.1; this image ships torch 2.9.0.
+          python -m pip install torchvision==0.24.0 decorator
+
+      - name: Install Megatron-LM, MindSpeed, mcore-bridge
+        run: |
+          git clone --depth 1 --branch "$MEGATRON_LM_REF" https://github.com/NVIDIA/Megatron-LM.git deps/Megatron-LM
+          git clone --depth 1 --branch "$MINDSPEED_REF" https://gitcode.com/Ascend/MindSpeed.git deps/MindSpeed
+          git clone --depth 1 --branch "$MCORE_BRIDGE_REF" https://github.com/modelscope/mcore-bridge.git deps/mcore-bridge
+          python -m pip install -e deps/MindSpeed
+          # Pulls PyPI megatron-core as a dependency; imports still resolve to
+          # deps/Megatron-LM because PYTHONPATH precedes site-packages.
+          python -m pip install -e deps/mcore-bridge
+          # Official docs use https://triton-ascend.osinfra.cn/pypi/simple, which
+          # times out from this runner; the same wheels are on repo.huaweicloud.com.
+          python -m pip install triton-ascend==3.2.1 \
+            --find-links https://repo.huaweicloud.com/ascend/repos/pypi/triton-ascend/
+          echo "MEGATRON_LM_PATH=$GITHUB_WORKSPACE/deps/Megatron-LM" >> "$GITHUB_ENV"
+          echo "PYTHONPATH=$GITHUB_WORKSPACE/deps/Megatron-LM" >> "$GITHUB_ENV"
+
+      - name: Verify Megatron-SWIFT import
+        run: |
+          source /usr/local/Ascend/ascend-toolkit/set_env.sh
+          python -c "import mindspeed.megatron_adaptor; from swift.megatron.init import init_megatron_env; init_megatron_env()"
+
+      - name: Run example
+        env:
+          EXAMPLE_PATH: ${{ matrix.example.path }}
+          OVERLAY_PATH: ${{ matrix.example.overlay }}
+        run: |
+          source /usr/local/Ascend/ascend-toolkit/set_env.sh
+          mkdir -p "$GITHUB_WORKSPACE/output"
+          CI_OUTPUT_DIR="$GITHUB_WORKSPACE/output" \
+            bash "$PROJECT_ROOT/scripts/run_example.sh" "$EXAMPLE_PATH" "$OVERLAY_PATH" \
+            2>&1 | tee "$GITHUB_WORKSPACE/output/train.log"
+
+      - name: Write result JSON
+        if: always()
+        env:
+          TARGET_REPO: ${{ needs.resolve.outputs.target_repo }}
+          TARGET_REF: ${{ needs.resolve.outputs.target_ref }}
+          TRIGGER: ${{ needs.resolve.outputs.trigger }}
+          EXAMPLE_PATH: ${{ matrix.example.path }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/output"
+          python3 - <<'EOF'
+          import json
+          import os
+
+          result = {
+              'trigger': os.environ['TRIGGER'],
+              'target_repo': os.environ['TARGET_REPO'],
+              'target_ref': os.environ['TARGET_REF'],
+              'path': os.environ['EXAMPLE_PATH'],
+              'image': os.environ['CI_IMAGE'],
+              'job_status': os.environ['JOB_STATUS'],
+          }
+          out = os.path.join(os.environ['GITHUB_WORKSPACE'], 'output', 'result.json')
+          with open(out, 'w', encoding='utf-8') as handle:
+              json.dump(result, handle, ensure_ascii=False, indent=2)
+              handle.write('\n')
+          EOF
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ms-swift-examples-${{ github.run_id }}-${{ strategy.job-index }}
+          if-no-files-found: ignore
+          path: output/
+
+  validate-results:
+    needs: [run-example]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout workflows
+        uses: actions/checkout@v4
+        with:
+          path: workflows
+
+      - name: Download example results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ms-swift-examples-*
+          path: downloaded
+          merge-multiple: false
+
+      - name: Validate result.json files
+        run: |
+          set -euo pipefail
+          python3 -m pip install -q check-jsonschema
+          shopt -s nullglob
+          files=(downloaded/*/result.json)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "no result.json found in ms-swift-examples-* artifacts"
+            exit 1
+          fi
+          check-jsonschema --schemafile workflows/schemas/result.schema.json "${files[@]}"

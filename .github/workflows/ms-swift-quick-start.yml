@@ -1,0 +1,349 @@
+name: ms-swift-quick-start
+
+# Quick Start doc test (Ascend / NPU):
+#   1. Every 6 hours: lightweight monitor — hash the doc on the
+#      TARGET repo, the latest upstream release, and the upstream
+#      main HEAD SHA. State persists in actions/cache for 30 days.
+#   2. If any of those signals changed, install ms-swift from the
+#      new commit and run the e2e doc test on the NPU runner.
+#   3. If nothing changed, exit after the monitor (no NPU work).
+#
+# This workflow is the NPU counterpart to ms-swift-examples.yml on this repo:
+# ms-swift-examples.yml runs curated example scripts; this one verifies the
+# "Quick Start" doc on the Ascend track. The doc URL is read from
+# MONITORED_DOC_URL (defaults to the Quick-start-Ascend.md on the
+# TARGET repo's default branch).
+#
+# NB: monitoring upstream ms-swift release/commit is an intentional
+# exception to the repo's "no interaction with modelscope/ms-swift"
+# rule — this workflow's whole purpose is to detect upstream changes.
+
+concurrency:
+  group: ms-swift-quick-start
+  cancel-in-progress: true
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      force_install:
+        description: 'force the install + test steps to run (skip the monitor check)'
+        type: boolean
+        default: false
+      upstream_repo:
+        description: 'override the upstream repo to test'
+        required: false
+        default: ''
+      upstream_ref:
+        description: 'override the upstream ref to test'
+        required: false
+        default: 'main'
+      monitored_doc_url:
+        description: 'override the doc URL to monitor'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+env:
+  CI_IMAGE: swr.cn-south-1.myhuaweicloud.com/ascendhub/torch-npu:2.9.0.post2-910b-ubuntu22.04-py3.11
+  UPSTREAM_REPO: ${{ vars.UPSTREAM_REPO || inputs.upstream_repo || 'modelscope/ms-swift' }}
+  UPSTREAM_REF_DEFAULT: ${{ inputs.upstream_ref || 'main' }}
+  MONITORED_DOC_URL: ${{ vars.MONITORED_DOC_URL || inputs.monitored_doc_url || 'https://raw.githubusercontent.com/cosdt-ci-test/ms-swift/main/docs/source/GetStarted/Quick-start-Ascend.md' }}
+  GH_API: https://api.github.com
+
+jobs:
+  monitor-and-test:
+    name: monitor + (test on change)
+    runs-on: [linux-aarch64-a2-2]
+    timeout-minutes: 180
+    defaults:
+      run:
+        shell: bash
+    container:
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/torch-npu:2.9.0.post2-910b-ubuntu22.04-py3.11
+      options: >-
+        --privileged --shm-size=64g
+        --device=/dev/davinci0
+        --device=/dev/davinci1
+        --device=/dev/davinci_manager
+        --device=/dev/devmm_svm
+        --device=/dev/hisi_hdc
+        --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
+        --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
+        --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
+    env:
+      PIP_INDEX_URL: https://repo.huaweicloud.com/ascend/repos/pypi
+      PIP_TRUSTED_HOST: repo.huaweicloud.com
+      PIP_TIMEOUT: "120"
+    steps:
+      - name: 打印上下文
+        run: |
+          echo "=========================================="
+          echo "Trigger:    ${{ github.event_name }}"
+          echo "Upstream:   ${{ env.UPSTREAM_REPO }}@${{ env.UPSTREAM_REF_DEFAULT }}"
+          echo "Force:      ${{ inputs.force_install || 'false' }}"
+          echo "Runner:     ${{ runner.name }}"
+          echo "=========================================="
+
+      - name: Source CANN and check NPU
+        run: |
+          export PATH="/usr/local/sbin:$PATH"
+          source /usr/local/Ascend/ascend-toolkit/set_env.sh
+          npu-smi info || true
+          python -c "import torch, torch_npu; print(torch.__version__, torch_npu.__version__, torch.npu.device_count())" || true
+
+      - name: Checkout workflows (provides the test code)
+        uses: actions/checkout@v4
+        with:
+          path: workflows
+          fetch-depth: 1
+
+      - name: Checkout target
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.TARGET_REPO || 'cosdt-ci-test/ms-swift' }}
+          ref: ${{ vars.TARGET_REF || 'main' }}
+          path: target
+          fetch-depth: 1
+
+      # ----- monitor state (persisted via actions/cache, 30-day retention) -----
+      - name: Restore monitor state
+        id: cache-restore
+        if: inputs.force_install != true
+        uses: actions/cache@v4
+        with:
+          path: .monitor-state
+          key: monitor-state-ms-swift
+          restore-keys: |
+            monitor-state-ms-swift-
+
+      - name: 监控 doc hash
+        id: monitor-doc
+        if: inputs.force_install != true
+        env:
+          DOC_URL: ${{ env.MONITORED_DOC_URL }}
+        run: |
+          set -euo pipefail
+          STATE_DIR=".monitor-state"
+          mkdir -p "$STATE_DIR"
+          echo "Monitoring: $DOC_URL"
+          NEW=$(curl -fsSL --retry 3 "$DOC_URL" | sha256sum | cut -d' ' -f1)
+          OLD=$(cat "$STATE_DIR/.doc_hash" 2>/dev/null || echo "")
+          if [ "$OLD" != "$NEW" ]; then
+            echo "$NEW" > "$STATE_DIR/.doc_hash"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "ref=main" >> "$GITHUB_OUTPUT"
+            echo "reason=doc" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "doc_hash=$NEW"
+
+      - name: 监控 upstream latest release SHA
+        id: monitor-release
+        if: inputs.force_install != true
+        run: |
+          set -euo pipefail
+          STATE_DIR=".monitor-state"
+          mkdir -p "$STATE_DIR"
+          curl -fsSL --retry 3 \
+            "$GH_API/repos/${{ env.UPSTREAM_REPO }}/releases/latest" -o /tmp/release.json
+          TAG=$(jq -r '.tag_name // empty' /tmp/release.json)
+          SHA=$(jq -r '.target_commitish // empty' /tmp/release.json)
+          OLD=$(cat "$STATE_DIR/.last_release_sha" 2>/dev/null || echo "")
+          if [ -n "$SHA" ] && [ "$OLD" != "$SHA" ]; then
+            echo "$SHA" > "$STATE_DIR/.last_release_sha"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "ref=$TAG" >> "$GITHUB_OUTPUT"
+            echo "reason=release" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "release_tag=$TAG release_sha=$SHA"
+
+      - name: 监控 upstream main HEAD
+        id: monitor-commit
+        if: inputs.force_install != true
+        run: |
+          set -euo pipefail
+          STATE_DIR=".monitor-state"
+          mkdir -p "$STATE_DIR"
+          SHA=$(curl -fsSL --retry 3 \
+            "$GH_API/repos/${{ env.UPSTREAM_REPO }}/commits/main" | jq -r '.sha // empty')
+          OLD=$(cat "$STATE_DIR/.last_tested_sha" 2>/dev/null || echo "")
+          if [ -n "$SHA" ] && [ "$OLD" != "$SHA" ]; then
+            echo "$SHA" > "$STATE_DIR/.last_tested_sha"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "ref=main" >> "$GITHUB_OUTPUT"
+            echo "reason=commit" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "main_sha=$SHA"
+
+      - name: Persist monitor state
+        if: inputs.force_install != true && always()
+        uses: actions/cache@v4
+        with:
+          path: .monitor-state
+          key: monitor-state-ms-swift-${{ github.run_id }}
+          retention-days: 30
+
+      # ----- aggregate decision -----
+      - name: 决定是否要跑测试
+        id: decide
+        if: inputs.force_install != true
+        run: |
+          CHANGED="false"
+          REASON=""
+          REF="${{ env.UPSTREAM_REF_DEFAULT }}"
+          if [ "${{ steps.monitor-doc.outputs.changed }}" = "true" ]; then
+            CHANGED="true"
+            REASON="doc"
+            REF="${{ steps.monitor-doc.outputs.ref }}"
+          elif [ "${{ steps.monitor-release.outputs.changed }}" = "true" ]; then
+            CHANGED="true"
+            REASON="release"
+            REF="${{ steps.monitor-release.outputs.ref }}"
+          elif [ "${{ steps.monitor-commit.outputs.changed }}" = "true" ]; then
+            CHANGED="true"
+            REASON="commit"
+            REF="${{ steps.monitor-commit.outputs.ref }}"
+          fi
+          echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
+          echo "reason=$REASON" >> "$GITHUB_OUTPUT"
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          if [ "$CHANGED" != "true" ]; then
+            echo "No upstream changes — skipping install + test"
+          fi
+
+      # ----- test block (only when something changed) -----
+      - name: Resolve upstream commit SHA
+        id: upstream-commit
+        if: |
+          inputs.force_install == true ||
+          steps.decide.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          SHA=$(curl -fsSL "$GH_API/repos/${{ env.UPSTREAM_REPO }}/commits/${{ steps.decide.outputs.ref }}" \
+            | jq -r '.sha // empty')
+          [ -z "$SHA" ] && { echo "failed to resolve ${{ steps.decide.outputs.ref }}"; exit 1; }
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "Upstream commit: $SHA"
+
+      - name: 装 ms-swift 并跑 quick start 测试
+        id: test
+        if: |
+          inputs.force_install == true ||
+          steps.decide.outputs.changed == 'true'
+        env:
+          SWIFT_NPU_E2E: '1'
+          UPSTREAM_REPO: ${{ env.UPSTREAM_REPO }}
+          UPSTREAM_REF: ${{ steps.decide.outputs.ref || env.UPSTREAM_REF_DEFAULT }}
+          UPSTREAM_COMMIT: ${{ steps.upstream-commit.outputs.sha }}
+          REASON: ${{ steps.decide.outputs.reason || 'manual' }}
+        run: |
+          set -euo pipefail
+          cd target
+          python -m pip install -U pip
+          python -m pip install -e .
+          python -m pip install torchvision==0.24.0 decorator || true
+          python -m unittest tests.docs.test_quick_start_ascend -v 2>&1 | tee /tmp/unittest.log
+
+      - name: Write result JSON
+        if: always()
+        env:
+          TRIGGER: ${{ github.event_name }}
+          TARGET_REPO: ${{ vars.TARGET_REPO || 'cosdt-ci-test/ms-swift' }}
+          TARGET_REF: ${{ vars.TARGET_REF || 'main' }}
+          JOB_STATUS: ${{ job.status }}
+          FORCE_INSTALL: ${{ inputs.force_install || false }}
+          CHANGED: ${{ steps.decide.outputs.changed }}
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/output"
+          if [ "$FORCE_INSTALL" = "true" ] || [ "$CHANGED" = "true" ]; then
+            tests_ran=true
+          else
+            tests_ran=false
+          fi
+          python3 - "$tests_ran" <<'EOF'
+          import json
+          import os
+          import sys
+
+          result = {
+              'trigger': os.environ['TRIGGER'],
+              'target_repo': os.environ['TARGET_REPO'],
+              'target_ref': os.environ['TARGET_REF'],
+              'path': 'docs/source/GetStarted/Quick-start-Ascend.md',
+              'image': os.environ['CI_IMAGE'],
+              'job_status': os.environ['JOB_STATUS'],
+              'tests_ran': sys.argv[1] == 'true',
+          }
+          out = os.path.join(os.environ['GITHUB_WORKSPACE'], 'output', 'result.json')
+          with open(out, 'w', encoding='utf-8') as handle:
+              json.dump(result, handle, ensure_ascii=False, indent=2)
+              handle.write('\n')
+          EOF
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ms-swift-quick-start-${{ github.run_id }}
+          if-no-files-found: ignore
+          path: |
+            /tmp/unittest.log
+            /tmp/release.json
+            ${{ github.workspace }}/output/result.json
+
+      - name: 汇总测试结果
+        if: always()
+        env:
+          UPSTREAM_COMMIT: ${{ steps.upstream-commit.outputs.sha }}
+          REASON: ${{ steps.decide.outputs.reason || 'manual' }}
+        run: |
+          echo "============================================================"
+          echo "QUICK START TEST SUMMARY"
+          echo "  Upstream repo:    ${{ env.UPSTREAM_REPO }}"
+          echo "  Upstream ref:     ${{ steps.decide.outputs.ref || env.UPSTREAM_REF_DEFAULT }}"
+          echo "  Upstream commit:  ${{ steps.upstream-commit.outputs.sha }}"
+          echo "  Trigger reason:   ${{ steps.decide.outputs.reason || 'manual' }}"
+          echo "------------------------------------------------------------"
+          if [ -f /tmp/unittest.log ]; then
+            grep -E '^Ran [0-9]+ test' /tmp/unittest.log | tail -n 1 || true
+            grep -E '^(OK|FAILED)' /tmp/unittest.log | tail -n 1 || true
+          fi
+          echo "============================================================"
+
+  validate-results:
+    needs: [monitor-and-test]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout workflows
+        uses: actions/checkout@v4
+        with:
+          path: workflows
+
+      - name: Download quick-start results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ms-swift-quick-start-*
+          path: downloaded
+          merge-multiple: false
+
+      - name: Validate result.json
+        run: |
+          set -euo pipefail
+          python3 -m pip install -q check-jsonschema
+          shopt -s nullglob
+          files=(downloaded/*/result.json)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "no result.json found in ms-swift-quick-start-* artifacts"
+            exit 1
+          fi
+          check-jsonschema --schemafile workflows/schemas/result.schema.json "${files[@]}"

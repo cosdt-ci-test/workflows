@@ -267,10 +267,18 @@ BLOCK_TIMEOUTS = {
 
 
 def block_kind(block: list[dict]) -> str:
-    """Guess the kind of a block from its first command."""
+    """Guess the kind of a block from its first command.
+
+    Strips a leading ``VAR=...`` prefix (e.g. ``ASCEND_RT_VISIBLE_DEVICES=0``)
+    before matching so the timeout bucket reflects what the command
+    actually does, not how it was prefixed.
+    """
     if not block:
         return 'default'
     head = block[0]['cmd'].lstrip().splitlines()[0] if block[0]['cmd'] else ''
+    # Strip `KEY=VALUE ` prefix(es) that often precede the real command.
+    while '=' in head.split(' ', 1)[0]:
+        head = head.split(' ', 1)[1] if ' ' in head else ''
     if 'pip install' in head:
         return 'install'
     if head.startswith('swift sft'):

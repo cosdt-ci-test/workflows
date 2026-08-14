@@ -53,10 +53,11 @@ swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/cann:8.3.rc2-910b-ubun
 ```shell
 >>> python --version
 Python 3.11.x
->>> python -c "import torch, torch_npu; print('torch=', torch.__version__); print('torch_npu=', torch_npu.__version__); print('npu_count=', torch.npu.device_count())"
-torch= 2.9.0.x
-torch_npu= 2.9.0.postX
-npu_count= 1
+>>> python -c "import torch, torch_npu; print('torch=', torch.__version__); print('torch_npu=', torch_npu.__version__); print('is_available:', torch.npu.is_available()); print('count:', torch.npu.device_count())"
+torch= 2.9.0+cpu
+torch_npu= 2.9.0.post2
+is_available: xxx
+count: xxx
 ```
 
 确认能看到 NPU 设备：
@@ -89,8 +90,8 @@ uv pip install ms-swift -U --torch-backend=auto
 # Editable install: `swift` CLI is now on PATH, source changes take effect on rerun
 >>> cd ms-swift && uv pip install -e . --torch-backend=auto
 # Sanity check the install: should print the installed ms-swift version
->>> python -c "import swift; print('ms-swift loaded')"
-ms-swift loaded
+>>> python -c "import swift; print('ms-swift', swift.__version__)"
+ms-swift xxx
 ```
 
 `<UPSTREAM_REF>`： 改成实际版本。

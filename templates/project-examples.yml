@@ -1,6 +1,6 @@
 # Copy to .github/workflows/<project>-examples.yml and replace every
 # <project>, <fork_repo>, <runner-label>, and <swr-image> placeholder.
-# Register the project in projects.yaml and create <project>/ for the
+# Register the project in projects.yaml and create projects/<project>/ for the
 # manifest, overlays, and fixtures. See docs/guarding-examples.md
 # (要求 1–4) for the contract this skeleton implements.
 name: <project>-examples
@@ -101,7 +101,7 @@ jobs:
         run: |
           python3 workflows/scripts/check_examples_manifest.py \
             --target-root target \
-            --manifest workflows/<project>/examples_manifest.yaml \
+            --manifest workflows/projects/<project>/examples_manifest.yaml \
             --result-json manifest_check_result.json \
             --target-repo "$TARGET_REPO" \
             --target-ref "$TARGET_REF" \
@@ -135,9 +135,9 @@ jobs:
         example: ${{ fromJSON(needs.manifest-check.outputs.supported_matrix) }}
     env:
       ASCEND_RT_VISIBLE_DEVICES: "0,1"
-      PROJECT_ROOT: ${{ github.workspace }}/workflows/<project>
+      PROJECT_ROOT: ${{ github.workspace }}/workflows/projects/<project>
       TARGET_ROOT: ${{ github.workspace }}/target
-      FIXTURE_DIR: ${{ github.workspace }}/workflows/<project>/fixtures
+      FIXTURE_DIR: ${{ github.workspace }}/workflows/projects/<project>/fixtures
       PIP_EXTRA_INDEX_URL: https://repo.huaweicloud.com/ascend/repos/pypi
       PIP_TIMEOUT: "120"
     container:

@@ -1,8 +1,8 @@
 # cosdt-ci-test/workflows
 
-Example CI 看护的唯一部署点。红绿只出现在本仓的 GitHub Actions。被看护的项目各自有一条 example 流水线和（可选）一条 quick-start 流水线；项目专属的清单、overlay、fixture 放在根目录同名目录里。
+Example CI 看护的唯一部署点。红绿只出现在本仓的 GitHub Actions。被看护的项目各自有一条 example 流水线和（可选）一条 quick-start 流水线；项目专属的清单、overlay、fixture 放在 `projects/<项目名>/`。
 
-当前只有 [ms-swift](ms-swift/) 一个已接入项目，作为后续项目的样板。设计说明见 [docs/guarding-examples.md](docs/guarding-examples.md)。
+当前只有 [ms-swift](projects/ms-swift/) 一个已接入项目，作为后续项目的样板。设计说明见 [docs/guarding-examples.md](docs/guarding-examples.md)。
 
 ## 目录
 
@@ -15,7 +15,7 @@ docs/guarding-examples.md            # 看护 Examples 设计文档
 docs/artifacts.md                    # artifact 命名与读取约定
 .github/workflows/<project>-examples.yml
 .github/workflows/<project>-quick-start.yml
-<project>/                           # 该项目的清单、overlay、fixture、专用脚本
+projects/<project>/                  # 该项目的清单、overlay、fixture、专用脚本
 ```
 
 `projects.yaml` 里的 `name`、`category`（分类）、`support_level`（支持程度）取自[项目表](https://docs.google.com/spreadsheets/d/1GtLB4Zvi_rzGqsH6dWShebk3DvRg6b9NNBeNeeDuNUM/edit?gid=753359062#gid=753359062)的「项目名称」「分类」「支持程度」列。`name` 全小写；`category` 和 `support_level` 保留表里的中文值。
@@ -26,7 +26,7 @@ docs/artifacts.md                    # artifact 命名与读取约定
 2. 把 [templates/project-examples.yml](templates/project-examples.yml) 复制为 `.github/workflows/<project>-examples.yml`，替换 `<project>`、`<fork_repo>`、`<runner-label>`、`<swr-image>`，补上该项目的安装命令。
 3. 需要看护 Quick Start 文档时，同样复制 [templates/project-quick-start.yml](templates/project-quick-start.yml)。
 4. 在 `projects.yaml` 注册该项目。
-5. 建 `<project>/` 目录。用 `scripts/bootstrap_manifest.py --target-root <checkout> --output <project>/examples_manifest.yaml --supported <path>` 生成清单，再手工补全 supported 条目的 runner / overlay / timeout。
+5. 建 `projects/<project>/` 目录。用 `scripts/bootstrap_manifest.py --target-root <checkout> --output projects/<project>/examples_manifest.yaml --supported <path>` 生成清单，再手工补全 supported 条目的 runner / overlay / timeout。
 6. 按 [docs/artifacts.md](docs/artifacts.md) 确认 artifact 名称和 `result.json` 字段。
 
 `scripts/check_examples_manifest.py` 由 example 流水线的 `manifest-check` job 调用：对比目标仓磁盘与清单，差集只打印不失败，并把 supported 列表写成 matrix。`scripts/bootstrap_manifest.py` 只在接入时离线使用，CI 不调用。

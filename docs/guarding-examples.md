@@ -89,5 +89,6 @@ workflows/
 ├── .github/workflows/
 │   ├── <project>-examples.yml        # example 看护流水线
 │   └── <project>-quick-start.yml     # quick start 看护流水线
-└── <project>/                        # 项目专属数据
+└── projects/
+    └── <project>/                    # 项目专属数据
 ```

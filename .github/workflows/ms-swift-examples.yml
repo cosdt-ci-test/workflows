@@ -102,7 +102,7 @@ jobs:
         run: |
           python3 workflows/scripts/check_examples_manifest.py \
             --target-root target \
-            --manifest workflows/ms-swift/examples_manifest.yaml \
+            --manifest workflows/projects/ms-swift/examples_manifest.yaml \
             --result-json manifest_check_result.json \
             --target-repo "$TARGET_REPO" \
             --target-ref "$TARGET_REF" \
@@ -136,9 +136,9 @@ jobs:
     env:
       ASCEND_RT_VISIBLE_DEVICES: "0,1"
       MODELSCOPE_CACHE: /root/.cache/modelscope
-      PROJECT_ROOT: ${{ github.workspace }}/workflows/ms-swift
+      PROJECT_ROOT: ${{ github.workspace }}/workflows/projects/ms-swift
       TARGET_ROOT: ${{ github.workspace }}/target
-      FIXTURE_DIR: ${{ github.workspace }}/workflows/ms-swift/fixtures
+      FIXTURE_DIR: ${{ github.workspace }}/workflows/projects/ms-swift/fixtures
       PIP_EXTRA_INDEX_URL: https://repo.huaweicloud.com/ascend/repos/pypi
       PIP_TIMEOUT: "120"
     container:

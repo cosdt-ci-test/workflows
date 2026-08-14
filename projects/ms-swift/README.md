@@ -1,6 +1,6 @@
 # ms-swift
 
-本目录是 [ms-swift](https://github.com/modelscope/ms-swift) 的看护配套数据，不是 ms-swift 源码。流水线在 [`.github/workflows/ms-swift-examples.yml`](../.github/workflows/ms-swift-examples.yml) 和 [`.github/workflows/ms-swift-quick-start.yml`](../.github/workflows/ms-swift-quick-start.yml)。注册信息见根目录 [projects.yaml](../projects.yaml)（分类：训练加速；支持程度：基础支持；阶段 A）。
+本目录是 [ms-swift](https://github.com/modelscope/ms-swift) 的看护配套数据，不是 ms-swift 源码。流水线在 [`.github/workflows/ms-swift-examples.yml`](../../.github/workflows/ms-swift-examples.yml) 和 [`.github/workflows/ms-swift-quick-start.yml`](../../.github/workflows/ms-swift-quick-start.yml)。注册信息见根目录 [projects.yaml](../../projects.yaml)（分类：训练加速；支持程度：基础支持；阶段 A）。
 
 在昇腾 NPU 上把清单里 `supported` 的 example 跑通。example 退出码非 0 即判红，不比对 loss 等数值。
 
@@ -21,7 +21,7 @@
 ```bash
 python3 scripts/bootstrap_manifest.py \
   --target-root /path/to/ms-swift \
-  --output ms-swift/examples_manifest.yaml \
+  --output projects/ms-swift/examples_manifest.yaml \
   --supported examples/ascend/train/qwen3/qwen3_lora_megatron.sh \
   --runner linux-aarch64-a2-2 \
   --npu-devices 0,1 \
@@ -39,6 +39,6 @@ python3 scripts/bootstrap_manifest.py \
   - `ms-swift-examples-changed`：`examples/**` 被 push 到 fork 的 main。payload 必须带 `repo` 与 `sha`。
   - `ms-swift-release`：fork 上推了 `v**` 标签。payload 必须带 `repo` 与 `ref`（tag 名）。
 
-这条流水线没有 `schedule`。阶段 B 兜底（定时指向上游）见 [docs/guarding-examples.md](../docs/guarding-examples.md)。
+这条流水线没有 `schedule`。阶段 B 兜底（定时指向上游）见 [docs/guarding-examples.md](../../docs/guarding-examples.md)。
 
 `ms-swift-quick-start.yml` 每 6 小时跑一次监控；文档、上游 release 或 main HEAD 有变化才在 NPU 上跑 `tests.docs.test_quick_start_ascend`。也可以 `workflow_dispatch` 并勾选 `force_install`。

@@ -39,7 +39,7 @@ permissions:
   contents: read
 
 env:
-  CI_IMAGE: swr.cn-south-1.myhuaweicloud.com/ascendhub/torch-npu:2.9.0.post2-910b-ubuntu22.04-py3.11
+  CI_IMAGE: &ci_image swr.cn-south-1.myhuaweicloud.com/ascendhub/torch-npu:2.9.0.post2-910b-ubuntu22.04-py3.11
   UPSTREAM_REPO: modelscope/ms-swift
   MONITORED_DOC_URL: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/ms-swift/docs/Quick-start-Ascend.md
   GH_API: https://api.github.com
@@ -53,7 +53,7 @@ jobs:
       run:
         shell: bash
     container:
-      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/torch-npu:2.9.0.post2-910b-ubuntu22.04-py3.11
+      image: *ci_image
       options: >-
         --privileged --shm-size=64g
         --device=/dev/davinci0

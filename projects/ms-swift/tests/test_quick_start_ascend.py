@@ -226,8 +226,9 @@ def expected_line_to_regex(expected: str) -> re.Pattern:
 def run_command(cmd: str, env: dict, cwd: Path, timeout: int) -> tuple[int, str]:
     """Run ``cmd`` in bash; return ``(returncode, stdout+stderr)``."""
     t0 = time.time()
-    # Truncate so giant swift sft commands don't blow up the CI log.
-    _log(f'CMD start (timeout={timeout}s): {cmd[:300]}')
+    # Truncate to 2000 chars so a multi-line swift sft invocation
+    # stays visible in the log without flooding it.
+    _log(f'CMD start (timeout={timeout}s): {cmd[:2000]}')
     proc = subprocess.run(
         ['bash', '-c', cmd],
         env=env,

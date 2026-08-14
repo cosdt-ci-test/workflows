@@ -270,10 +270,16 @@ jobs:
           # here so swift sft / swift infer see ASCEND_HOME etc.
           export PATH="/usr/local/sbin:$PATH"
           source /usr/local/Ascend/ascend-toolkit/set_env.sh
+          # Pre-install setuptools/wheel from the official PyPI so that
+          # the test's setUpClass can `pip install git+...ms-swift.git@SHA`
+          # without the build-deps phase failing (the Huawei mirror does
+          # not carry setuptools/wheel).
+          python -m pip install --index-url https://pypi.org/simple \
+              --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
+              -U pip setuptools wheel
           # The test file lives at workflows/projects/ms-swift/tests/test_quick_start_ascend.py
           # and resolves REPO_ROOT upward from there. ms-swift itself is
           # installed by setUpClass from the upstream git SHA.
-          python -m pip install -U pip
           cd workflows/projects/ms-swift
           python -m unittest tests.test_quick_start_ascend -v 2>&1 | tee /tmp/unittest.log
 

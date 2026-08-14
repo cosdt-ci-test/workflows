@@ -2,7 +2,10 @@ name: ms-swift
 
 on:
   repository_dispatch:
-    types: [ms-swift-ci-completed]
+    types:
+      - ms-swift-ci-completed
+      - ms-swift-examples-changed
+      - ms-swift-release
   workflow_dispatch:
     inputs:
       target_repo:
@@ -39,31 +42,38 @@ jobs:
     outputs:
       target_repo: ${{ steps.resolve.outputs.target_repo }}
       target_ref: ${{ steps.resolve.outputs.target_ref }}
+      trigger: ${{ steps.resolve.outputs.trigger }}
     steps:
       - name: Resolve target
         id: resolve
         env:
           EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_TYPE: ${{ github.event.action }}
           INPUT_REPO: ${{ github.event.inputs.target_repo }}
           INPUT_REF: ${{ github.event.inputs.target_ref }}
           PAYLOAD_REPO: ${{ github.event.client_payload.repo }}
           PAYLOAD_SHA: ${{ github.event.client_payload.sha }}
+          PAYLOAD_REF: ${{ github.event.client_payload.ref }}
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            trigger="workflow_dispatch"
             target_repo="${INPUT_REPO:-cosdt-ci-test/ms-swift}"
             target_ref="${INPUT_REF:-main}"
           else
+            trigger="${DISPATCH_TYPE:-repository_dispatch}"
             target_repo="${PAYLOAD_REPO:-}"
-            target_ref="${PAYLOAD_SHA:-}"
+            # Release dispatches carry the tag in ref; the others carry a sha.
+            target_ref="${PAYLOAD_REF:-${PAYLOAD_SHA:-}}"
             if [ -z "$target_repo" ] || [ -z "$target_ref" ]; then
-              echo "repository_dispatch payload missing repo or sha"
+              echo "repository_dispatch payload missing repo or ref/sha"
               exit 1
             fi
           fi
           echo "target_repo=$target_repo" >> "$GITHUB_OUTPUT"
           echo "target_ref=$target_ref" >> "$GITHUB_OUTPUT"
-          echo "resolved repo=$target_repo ref=$target_ref"
+          echo "trigger=$trigger" >> "$GITHUB_OUTPUT"
+          echo "resolved repo=$target_repo ref=$target_ref trigger=$trigger"
 
   manifest-check:
     needs: resolve
@@ -85,10 +95,26 @@ jobs:
 
       - name: Check examples manifest
         id: check
+        env:
+          TARGET_REPO: ${{ needs.resolve.outputs.target_repo }}
+          TARGET_REF: ${{ needs.resolve.outputs.target_ref }}
+          TRIGGER: ${{ needs.resolve.outputs.trigger }}
         run: |
           python3 workflows/ms-swift/scripts/check_examples_manifest.py \
             --target-root target \
-            --manifest workflows/ms-swift/examples_manifest.yaml
+            --manifest workflows/ms-swift/examples_manifest.yaml \
+            --result-json manifest_check_result.json \
+            --target-repo "$TARGET_REPO" \
+            --target-ref "$TARGET_REF" \
+            --trigger "$TRIGGER"
+
+      - name: Upload manifest check result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: manifest-check-result
+          if-no-files-found: ignore
+          path: manifest_check_result.json
 
   run-example:
     needs: [resolve, manifest-check]
@@ -179,6 +205,34 @@ jobs:
             bash "$PROJECT_ROOT/scripts/run_example.sh" "$EXAMPLE_PATH" "$OVERLAY_PATH" \
             2>&1 | tee "$GITHUB_WORKSPACE/output/train.log"
 
+      - name: Write result JSON
+        if: always()
+        env:
+          TARGET_REPO: ${{ needs.resolve.outputs.target_repo }}
+          TARGET_REF: ${{ needs.resolve.outputs.target_ref }}
+          TRIGGER: ${{ needs.resolve.outputs.trigger }}
+          EXAMPLE_PATH: ${{ matrix.example.path }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/output"
+          python3 - <<'EOF'
+          import json
+          import os
+
+          result = {
+              'trigger': os.environ['TRIGGER'],
+              'target_repo': os.environ['TARGET_REPO'],
+              'target_ref': os.environ['TARGET_REF'],
+              'path': os.environ['EXAMPLE_PATH'],
+              'image': os.environ['CI_IMAGE'],
+              'job_status': os.environ['JOB_STATUS'],
+          }
+          out = os.path.join(os.environ['GITHUB_WORKSPACE'], 'output', 'result.json')
+          with open(out, 'w', encoding='utf-8') as handle:
+              json.dump(result, handle, ensure_ascii=False, indent=2)
+              handle.write('\n')
+          EOF
+
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -186,21 +240,3 @@ jobs:
           name: ms-swift-${{ github.run_id }}-${{ strategy.job-index }}
           if-no-files-found: ignore
           path: output/
-
-      - name: Write job summary
-        if: always()
-        env:
-          TARGET_REPO: ${{ needs.resolve.outputs.target_repo }}
-          TARGET_REF: ${{ needs.resolve.outputs.target_ref }}
-          EXAMPLE_PATH: ${{ matrix.example.path }}
-        run: |
-          {
-            echo "## ms-swift example"
-            echo ""
-            echo "- target_repo: \`$TARGET_REPO\`"
-            echo "- target_ref: \`$TARGET_REF\`"
-            echo "- path: \`$EXAMPLE_PATH\`"
-            echo "- image: \`$CI_IMAGE\`"
-            echo "- conclusion: \`${{ job.status }}\`"
-            echo ""
-          } >> "$GITHUB_STEP_SUMMARY"

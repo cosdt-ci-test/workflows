@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Diff a target examples/ tree against examples_manifest.yaml.
 
-Prints newly added and stale paths to stdout and GITHUB_STEP_SUMMARY.
+Writes a machine-readable JSON result (new/stale paths, supported entries,
+target repo/ref) to --result-json and stdout.
 Always exits 0. Writes supported_matrix JSON to GITHUB_OUTPUT when set.
 """
 from __future__ import annotations
@@ -70,30 +71,19 @@ def load_manifest(path: Path) -> dict:
     return {'supported': supported, 'unsupported': unsupported}
 
 
-def write_summary(new_paths: list[str], stale_paths: list[str]) -> None:
-    lines = [
-        '## examples manifest check',
-        '',
-        f'- new paths not in manifest: {len(new_paths)}',
-        f'- stale paths in manifest but missing on disk: {len(stale_paths)}',
-        '',
-    ]
-    if new_paths:
-        lines.append('### new')
-        lines.extend(f'- `{p}`' for p in new_paths)
-        lines.append('')
-    if stale_paths:
-        lines.append('### stale')
-        lines.extend(f'- `{p}`' for p in stale_paths)
-        lines.append('')
-    if not new_paths and not stale_paths:
-        lines.append('Manifest matches the scanned examples/ tree.')
-        lines.append('')
-    text = '\n'.join(lines)
-    summary = os.environ.get('GITHUB_STEP_SUMMARY')
-    if summary:
-        with open(summary, 'a', encoding='utf-8') as handle:
-            handle.write(text)
+def write_result(result_json: str, trigger: str, target_repo: str,
+                 target_ref: str, new_paths: list[str], stale_paths: list[str],
+                 supported: list[dict]) -> None:
+    result = {
+        'trigger': trigger,
+        'target_repo': target_repo,
+        'target_ref': target_ref,
+        'new_paths': new_paths,
+        'stale_paths': stale_paths,
+        'supported': supported,
+    }
+    text = json.dumps(result, ensure_ascii=False, indent=2) + '\n'
+    Path(result_json).write_text(text, encoding='utf-8')
     sys.stdout.write(text)
 
 
@@ -112,6 +102,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--target-root', required=True)
     parser.add_argument('--manifest', required=True)
+    parser.add_argument('--result-json', required=True)
+    parser.add_argument('--trigger', default='')
+    parser.add_argument('--target-repo', default='')
+    parser.add_argument('--target-ref', default='')
     args = parser.parse_args()
     target_root = Path(args.target_root).resolve()
     manifest = load_manifest(Path(args.manifest))
@@ -119,7 +113,8 @@ def main() -> None:
     listed = {item['path'] for item in manifest['supported']} | set(manifest['unsupported'])
     new_paths = sorted(scanned - listed)
     stale_paths = sorted(listed - scanned)
-    write_summary(new_paths, stale_paths)
+    write_result(args.result_json, args.trigger, args.target_repo,
+                 args.target_ref, new_paths, stale_paths, manifest['supported'])
     write_github_output(manifest['supported'])
     raise SystemExit(0)
 

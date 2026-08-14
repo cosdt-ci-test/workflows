@@ -35,6 +35,7 @@ import os
 import re
 import subprocess
 import time
+import traceback
 import unittest
 import urllib.request
 from pathlib import Path
@@ -78,7 +79,8 @@ def fetch_doc_text() -> tuple[str, str]:
                     return resp.read().decode('utf-8'), url
             except Exception as e:
                 last_err = e
-                _log(f'fetch_doc_text: attempt {attempt+1}/2 failed: {e!r}')
+                _log(f'fetch_doc_text: attempt {attempt+1}/2 failed for {url}')
+                _log(traceback.format_exc())
                 time.sleep(2)
         raise RuntimeError(
             f'failed to fetch {url} after 2 attempts: {last_err!r}')

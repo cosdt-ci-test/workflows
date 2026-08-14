@@ -1,10 +1,13 @@
 # Copy to .github/workflows/<project>-examples.yml and replace every
-# <project>, <fork_repo>, and <swr-image> placeholder. Runner, NPU devices,
-# and timeout are NOT placeholders: they come from each supported entry in
-# projects/<project>/examples_manifest.yaml.
+# <project> and <fork_repo> placeholder. Runner, NPU devices, container
+# image, and timeout are NOT placeholders: they come from each supported
+# entry in projects/<project>/examples_manifest.yaml.
 # Register the project in projects.yaml and create projects/<project>/ for the
-# manifest, overlays, and fixtures. See docs/guarding-examples.md
-# (要求 1–4) for the contract this skeleton implements.
+# manifest, overlays, fixtures, and the project run script
+# (see docs/guarding-examples.md「项目运行脚本契约」).
+# See docs/guarding-examples.md (要求 1–4) for the contract this skeleton
+# implements, and docs/notifier.md for the fork-side notifier that sends
+# the repository_dispatch events below.
 name: <project>-examples
 
 on:
@@ -33,9 +36,6 @@ concurrency:
 permissions:
   actions: read
   contents: read
-
-env:
-  CI_IMAGE: <swr-image>
 
 jobs:
   # 要求 2: resolve the repo/ref from workflow_dispatch or repository_dispatch.
@@ -151,7 +151,10 @@ jobs:
       PIP_EXTRA_INDEX_URL: https://repo.huaweicloud.com/ascend/repos/pypi
       PIP_TIMEOUT: "120"
     container:
-      image: <swr-image>
+      # The image comes from the manifest entry. matrix is the only context
+      # GitHub allows here (env is not); keep the image in the manifest so
+      # result.json reports the same string that actually ran.
+      image: ${{ matrix.example.image }}
       # --privileged exposes every NPU on the host; per-job card selection
       # happens via ASCEND_RT_VISIBLE_DEVICES (the manifest's npu_devices).
       options: >-
@@ -189,6 +192,10 @@ jobs:
           # https://repo.huaweicloud.com/ascend/repos/pypi for Ascend packages.
           python -m pip install -e .
 
+      # The project provides its own run script under
+      # projects/<project>/scripts/; the arguments and environment it must
+      # accept are specified in docs/guarding-examples.md「项目运行脚本契约」.
+      # OVERLAY_PATH is empty when the manifest entry has no overlay.
       - name: Run example
         env:
           EXAMPLE_PATH: ${{ matrix.example.path }}
@@ -221,6 +228,7 @@ jobs:
           TARGET_REF: ${{ needs.resolve.outputs.target_ref }}
           TRIGGER: ${{ needs.resolve.outputs.trigger }}
           EXAMPLE_PATH: ${{ matrix.example.path }}
+          IMAGE: ${{ matrix.example.image }}
           EXPECTED_JOB_NAME: run-example (${{ matrix.example.path }})
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -254,7 +262,7 @@ jobs:
               'target_repo': os.environ['TARGET_REPO'],
               'target_ref': os.environ['TARGET_REF'],
               'path': os.environ['EXAMPLE_PATH'],
-              'image': os.environ['CI_IMAGE'],
+              'image': os.environ['IMAGE'],
               'job_status': os.environ['JOB_STATUS'],
           }
           out = os.path.join(os.environ['GITHUB_WORKSPACE'], 'output', 'result.json')

@@ -6,6 +6,7 @@ supported:
   - path: examples/ascend/train/qwen3/qwen3_lora_megatron.sh
     runner: linux-aarch64-a2-2
     npu_devices: '0,1'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/torch-npu:2.9.0.post2-910b-ubuntu22.04-py3.11
     overlay: overlays/qwen3_lora_megatron.args
     timeout_minutes: 180
 unsupported:

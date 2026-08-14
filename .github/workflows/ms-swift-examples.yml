@@ -29,8 +29,9 @@ permissions:
 
 # Megatron-SWIFT on NPU follows ms-swift docs/source/BestPractices/NPU-support.md:
 # Megatron-LM core_v0.16.0 + MindSpeed core_r0.16.0 + mcore-bridge + triton-ascend 3.2.1.
+# The container image lives on each supported manifest entry (image field),
+# not here: GitHub does not allow the env context in container.image.
 env:
-  CI_IMAGE: swr.cn-south-1.myhuaweicloud.com/ascendhub/torch-npu:2.9.0.post2-910b-ubuntu22.04-py3.11
   MEGATRON_LM_REF: core_v0.16.0
   MINDSPEED_REF: core_r0.16.0
   # Pinned release. mcore-bridge main requires megatron-core > 0.16
@@ -150,7 +151,7 @@ jobs:
       PIP_EXTRA_INDEX_URL: https://repo.huaweicloud.com/ascend/repos/pypi
       PIP_TIMEOUT: "120"
     container:
-      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/torch-npu:2.9.0.post2-910b-ubuntu22.04-py3.11
+      image: ${{ matrix.example.image }}
       # --privileged exposes every NPU on the host; per-job card selection
       # happens via ASCEND_RT_VISIBLE_DEVICES (the manifest's npu_devices).
       options: >-
@@ -242,6 +243,7 @@ jobs:
           TARGET_REF: ${{ needs.resolve.outputs.target_ref }}
           TRIGGER: ${{ needs.resolve.outputs.trigger }}
           EXAMPLE_PATH: ${{ matrix.example.path }}
+          IMAGE: ${{ matrix.example.image }}
           EXPECTED_JOB_NAME: run-example (${{ matrix.example.path }})
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -275,7 +277,7 @@ jobs:
               'target_repo': os.environ['TARGET_REPO'],
               'target_ref': os.environ['TARGET_REF'],
               'path': os.environ['EXAMPLE_PATH'],
-              'image': os.environ['CI_IMAGE'],
+              'image': os.environ['IMAGE'],
               'job_status': os.environ['JOB_STATUS'],
           }
           out = os.path.join(os.environ['GITHUB_WORKSPACE'], 'output', 'result.json')

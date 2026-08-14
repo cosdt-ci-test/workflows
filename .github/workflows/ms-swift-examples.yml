@@ -24,6 +24,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
+  actions: read
   contents: read
 
 # Megatron-SWIFT on NPU follows ms-swift docs/source/BestPractices/NPU-support.md:
@@ -128,6 +129,7 @@ jobs:
   # Skipped entirely when the manifest has no supported example yet
   # (an empty matrix would fail the whole run).
   run-example:
+    name: run-example (${{ matrix.example.path }})
     needs: [resolve, manifest-check]
     if: needs.manifest-check.outputs.has_supported == 'true'
     runs-on: ${{ matrix.example.runner }}
@@ -219,16 +221,51 @@ jobs:
             bash "$PROJECT_ROOT/scripts/run_example.sh" "$EXAMPLE_PATH" "$OVERLAY_PATH" \
             2>&1 | tee "$GITHUB_WORKSPACE/output/train.log"
 
+  validate-results:
+    name: publish-result (${{ matrix.example.path }})
+    needs: [resolve, manifest-check, run-example]
+    if: always() && needs.manifest-check.outputs.has_supported == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        example: ${{ fromJSON(needs.manifest-check.outputs.supported_matrix) }}
+    steps:
+      - name: Checkout workflows
+        uses: actions/checkout@v4
+        with:
+          path: workflows
+
       - name: Write result JSON
-        if: always()
         env:
           TARGET_REPO: ${{ needs.resolve.outputs.target_repo }}
           TARGET_REF: ${{ needs.resolve.outputs.target_ref }}
           TRIGGER: ${{ needs.resolve.outputs.trigger }}
           EXAMPLE_PATH: ${{ matrix.example.path }}
-          JOB_STATUS: ${{ job.status }}
+          EXPECTED_JOB_NAME: run-example (${{ matrix.example.path }})
+          GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
+          conclusion="$(
+            gh api --paginate \
+              "/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" |
+              jq -r --arg name "$EXPECTED_JOB_NAME" \
+                '.jobs[] | select(.name == $name) | .conclusion'
+          )"
+          if [ -z "$conclusion" ]; then
+            echo "could not find completed job: $EXPECTED_JOB_NAME"
+            exit 1
+          fi
+          case "$conclusion" in
+            success|cancelled)
+              job_status="$conclusion"
+              ;;
+            *)
+              job_status="failure"
+              ;;
+          esac
           mkdir -p "$GITHUB_WORKSPACE/output"
+          export JOB_STATUS="$job_status"
           python3 - <<'EOF'
           import json
           import os
@@ -247,54 +284,19 @@ jobs:
               handle.write('\n')
           EOF
 
-      # Upload only result.json: training output and checkpoints stay on the
-      # runner, keeping the upload tiny and resilient to the flaky network
-      # path between the runner and GitHub. The full run log is in the
-      # "Run example" step's console output. One retry before going red.
-      - name: Upload result JSON
-        id: upload-result
-        if: always()
-        continue-on-error: true
-        uses: actions/upload-artifact@v4
-        with:
-          name: ms-swift-examples-${{ github.run_id }}-${{ strategy.job-index }}
-          if-no-files-found: ignore
-          path: output/result.json
-
-      - name: Upload result JSON (retry)
-        if: always() && steps.upload-result.outcome == 'failure'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ms-swift-examples-${{ github.run_id }}-${{ strategy.job-index }}
-          overwrite: true
-          if-no-files-found: ignore
-          path: output/result.json
-
-  validate-results:
-    needs: [manifest-check, run-example]
-    if: always() && needs.manifest-check.outputs.has_supported == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout workflows
-        uses: actions/checkout@v4
-        with:
-          path: workflows
-
-      - name: Download example results
-        uses: actions/download-artifact@v4
-        with:
-          pattern: ms-swift-examples-*
-          path: downloaded
-          merge-multiple: false
-
-      - name: Validate result.json files
+      - name: Validate result.json
         run: |
           set -euo pipefail
           python3 -m pip install -q check-jsonschema
-          shopt -s nullglob
-          files=(downloaded/*/result.json)
-          if [ ${#files[@]} -eq 0 ]; then
-            echo "no result.json found in ms-swift-examples-* artifacts"
-            exit 1
-          fi
-          check-jsonschema --schemafile workflows/schemas/result.schema.json "${files[@]}"
+          check-jsonschema --schemafile workflows/schemas/result.schema.json \
+            output/result.json
+
+      # Artifact upload runs on GitHub-hosted infrastructure. The self-hosted
+      # NPU runner only executes the example and reports its normal job status.
+      - name: Upload result JSON
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ms-swift-examples-${{ github.run_id }}-${{ strategy.job-index }}
+          if-no-files-found: error
+          path: output/result.json

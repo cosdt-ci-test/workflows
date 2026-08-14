@@ -70,6 +70,9 @@ jobs:
       PIP_TRUSTED_HOST: repo.huaweicloud.com
       PIP_TIMEOUT: "120"
     steps:
+      # ===== Setup =====
+      # Always runs. Loads CANN, checks NPU, brings this repo's test
+      # code + doc into ./workflows so the test step can use them.
       - name: 打印上下文
         run: |
           echo "=========================================="
@@ -90,16 +93,13 @@ jobs:
           path: workflows
           fetch-depth: 1
 
-      # ----- monitor state (persisted via actions/cache, 30-day retention) -----
-      # Each monitor stores:
-      #   .<reason>_hash  — last seen signal (hash/tag/sha)
-      #   .<reason>_outcome — "success" / "failure" of the most recent test
-      #                        that was triggered for this reason. A "failure"
-      #                        outcome causes the next cycle to re-trigger even
-      #                        if the signal hasn't changed; a "success" clears
-      #                        that flag. A "failure" is reset to "success"
-      #                        the moment the signal itself changes (the new
-      #                        ref deserves a clean run, not a sticky retry).
+      # ===== Monitor =====
+      # Schedule-only. Three monitors (doc hash / release tag / main
+      # HEAD) each compare the current signal against the cached last
+      # seen value, and emit changed/ref/reason. A failure outcome
+      # forces a retry on the next cycle even if the signal hasn't
+      # changed; success clears that flag. State lives in
+      # .monitor-state/ (actions/cache, 30-day retention).
       - name: Restore monitor state
         id: cache-restore
         if: github.event_name == 'schedule'
@@ -201,14 +201,13 @@ jobs:
           key: monitor-state-ms-swift-${{ github.run_id }}
           retention-days: 30
 
-      # ----- aggregate decision -----
-      # Single funnel for both trigger paths:
-      #   - Schedule: monitors ran; pick the first that fired
-      #     (doc > release > commit) and use its ref.
-      #   - Manual (workflow_dispatch): no monitor; ref comes from
-      #     inputs.upstream_ref (default 'main'). Always changed=true.
-      # Either way, downstream steps read TEST_REF / CHANGED / REASON
-      # and don't have to know which path produced them.
+      # ===== Test =====
+      # Runs only when decide.outputs.changed == true. The decide step
+      # is the single funnel: schedule picks doc/release/commit by
+      # priority, manual always uses inputs.upstream_ref. The test step
+      # itself installs ms-swift from the upstream git SHA and walks
+      # every shell block in the doc. Record outcome persists the
+      # success/failure back into .monitor-state for the next cycle.
       - name: 决定要跑哪个 ref
         id: decide
         run: |
@@ -245,7 +244,6 @@ jobs:
             fi
           fi
 
-      # ----- test block (only when something changed) -----
       - name: Resolve upstream commit SHA
         id: upstream-commit
         if: steps.decide.outputs.changed == 'true'

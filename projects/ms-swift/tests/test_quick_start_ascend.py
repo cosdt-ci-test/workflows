@@ -286,8 +286,11 @@ class TestQuickStartAscendEndToEnd(unittest.TestCase):
         # works for both main and tags (main never ships to PyPI).
         upstream_repo = os.environ.get('UPSTREAM_REPO', 'modelscope/ms-swift')
         install_url = f'git+https://github.com/{upstream_repo}.git@{cls.upstream_commit}'
+        # uv handles PEP 517 build deps more reliably than pip and respects
+        # UV_CONSTRAINT (set by the workflow) so torch/torch_npu are not
+        # downgraded by transitive deps.
         subprocess.run(
-            ['pip', 'install', install_url],
+            ['uv', 'pip', 'install', '--system', install_url],
             check=True,
         )
         if not cls.blocks:

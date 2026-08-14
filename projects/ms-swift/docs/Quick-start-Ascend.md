@@ -89,8 +89,8 @@ uv pip install ms-swift -U --torch-backend=auto
 # Editable install: `swift` CLI is now on PATH, source changes take effect on rerun
 >>> cd ms-swift && uv pip install -e . --torch-backend=auto
 # Sanity check the install: should print the installed ms-swift version
->>> python -c "import swift; print('ms-swift loaded')"
-ms-swift loaded
+>>> python -c "import swift; print('ms-swift', swift.__version__)"
+ms-swift xxx
 ```
 
 `<UPSTREAM_REF>`： 改成实际版本。

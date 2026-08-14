@@ -34,12 +34,19 @@ CANN, torch, torch_npu and ms-swift are already available.
 import os
 import re
 import subprocess
+import time
 import unittest
 import urllib.request
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DOC = REPO_ROOT / 'projects' / 'ms-swift' / 'docs' / 'Quick-start-Ascend.md'
+
+
+def _log(msg: str) -> None:
+    """Print a timestamped, flushed log line so CI output shows progress
+    even when subprocess buffers haven't been flushed yet."""
+    print(f'[{time.strftime("%H:%M:%S")}] {msg}', flush=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -202,6 +209,9 @@ def expected_line_to_regex(expected: str) -> re.Pattern:
 
 def run_command(cmd: str, env: dict, cwd: Path, timeout: int) -> tuple[int, str]:
     """Run ``cmd`` in bash; return ``(returncode, stdout+stderr)``."""
+    t0 = time.time()
+    # Truncate so giant swift sft commands don't blow up the CI log.
+    _log(f'CMD start (timeout={timeout}s): {cmd[:300]}')
     proc = subprocess.run(
         ['bash', '-c', cmd],
         env=env,
@@ -212,6 +222,9 @@ def run_command(cmd: str, env: dict, cwd: Path, timeout: int) -> tuple[int, str]
     )
     out = proc.stdout.decode('utf-8', errors='replace')
     err = proc.stderr.decode('utf-8', errors='replace')
+    elapsed = time.time() - t0
+    _log(f'CMD done in {elapsed:.1f}s rc={proc.returncode} '
+         f'(stdout={len(out)}B stderr={len(err)}B)')
     return proc.returncode, (out + (('\n' + err) if err else ''))
 
 
@@ -267,7 +280,9 @@ class TestQuickStartAscendEndToEnd(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        _log(f'setUpClass: fetching doc from {os.environ.get("MONITORED_DOC_URL", "<unset>")}')
         cls.doc_text, cls.doc_path = fetch_doc_text()
+        _log(f'setUpClass: fetched doc ({len(cls.doc_text)} bytes)')
         # Record the upstream ref / commit being tested. The CI
         # workflow sets these before invoking unittest; when running
         # outside CI both are unset and the test is skipped below.
@@ -279,6 +294,7 @@ class TestQuickStartAscendEndToEnd(unittest.TestCase):
                 '(set by the CI workflow)')
         os.environ.setdefault('UPSTREAM_REF', cls.upstream_ref)
         os.environ.setdefault('UPSTREAM_COMMIT', cls.upstream_commit)
+        _log(f'setUpClass: upstream ref={cls.upstream_ref} commit={cls.upstream_commit[:12]}')
         # Substitute <UPSTREAM_REF> in the doc with the exact ref/SHA
         # the monitor triggered on, then parse. The doc's
         # `## install ms-swift` block uses this placeholder to do the
@@ -286,6 +302,9 @@ class TestQuickStartAscendEndToEnd(unittest.TestCase):
         cls.doc_text = cls.doc_text.replace(
             '<UPSTREAM_REF>', cls.upstream_commit)
         cls.blocks = parse_blocks(cls.doc_text)
+        total_steps = sum(len(b) for b in cls.blocks)
+        _log(f'setUpClass: parsed {total_steps} steps across '
+             f'{len(cls.blocks)} blocks')
         if not cls.blocks:
             raise unittest.SkipTest(
                 f'No shell code blocks found in {cls.doc_path}')
@@ -305,16 +324,21 @@ class TestQuickStartAscendEndToEnd(unittest.TestCase):
 
         captures: dict = {}
 
+        _log(f'test_runs_quick_start: starting {len(self.blocks)} blocks')
         for bi, block in enumerate(self.blocks):
             kind = block_kind(block)
             timeout = BLOCK_TIMEOUTS.get(kind, BLOCK_TIMEOUTS['default'])
+            _log(f'BLOCK {bi}/{len(self.blocks)-1} kind={kind} timeout={timeout}s '
+                 f'steps={len(block)}')
             with self.subTest(block=bi, kind=kind):
                 if len(block) == 1 and not block[0]['cmd'].strip():
                     # Sentinel: hand-written push_to_hub block; just
                     # ensure the shell parses (already covered by the
                     # parser tests). Nothing to execute.
+                    _log(f'BLOCK {bi}: sentinel, skip')
                     continue
                 self._run_block(block, kind, env, captures, timeout, bi)
+        _log('test_runs_quick_start: all blocks done')
 
     def _run_block(self, block, kind, env, captures, timeout, block_idx):
         actual_lines_per_step: list[list[str]] = []

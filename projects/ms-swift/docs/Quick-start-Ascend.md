@@ -53,10 +53,11 @@ swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/cann:8.3.rc2-910b-ubun
 ```shell
 >>> python --version
 Python 3.11.x
->>> python -c "import torch, torch_npu; print('torch=', torch.__version__); print('torch_npu=', torch_npu.__version__); print('npu_count=', torch.npu.device_count())"
-torch= 2.9.0.x
+>>> python -c "import torch, torch_npu; print('torch=', torch.__version__); print('torch_npu=', torch_npu.__version__); print('is_available:', torch.npu.is_available()); print('count:', torch.npu.device_count())"
+torch= 2.9.0.xxx
 torch_npu= 2.9.0.postX
-npu_count= 1
+is_available: True
+count: 1
 ```
 
 确认能看到 NPU 设备：

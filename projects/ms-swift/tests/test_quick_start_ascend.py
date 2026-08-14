@@ -452,10 +452,10 @@ class TestQuickStartAscendEndToEnd(unittest.TestCase):
             for k, v in m.groupdict().items():
                 if v is not None:
                     captures[k] = v
-        # Drain leftover actual lines (not part of any expected) into
-        # the summary so the reader sees what was produced past the end.
-        while a_iter:
-            line_summary.append(('', a_iter.pop(0), True))
+        # Count leftover actual lines (not part of any expected) for
+        # the summary footer; we don't expand them inline because
+        # they tend to be noise (torch_npu init banner, etc).
+        leftover_count = sum(1 for _ in a_iter)
         # Always print the per-line summary so the diff is visible in
         # the CI stream log even when everything matched.
         _log(f'BLOCK {block_idx} step {step_idx} ({kind}): '
@@ -465,6 +465,8 @@ class TestQuickStartAscendEndToEnd(unittest.TestCase):
             exp_disp = repr(exp) if exp else '<skip>'
             act_disp = repr(act) if act is not None else '<missing>'
             _log(f'  {i:>2}. [{mark}] exp={exp_disp}  act={act_disp}')
+        if leftover_count:
+            _log(f'  ... {leftover_count} extra actual line(s) ignored')
         # Extra actual lines are a soft warning, not a failure.
         if mismatches:
             msg = (f'block #{block_idx} step #{step_idx} ({kind}) output '

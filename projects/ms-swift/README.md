@@ -12,7 +12,7 @@
 
 ## 清单、overlay、fixture
 
-- `examples_manifest.yaml` 由仓库根目录 `scripts/bootstrap_manifest.py` 扫描目标仓 `examples/` 下的 `.sh` / `.py` / `.yaml` 生成。除 `examples/ascend/train/qwen3/qwen3_lora_megatron.sh` 外全部标 `unsupported`，这是任务规定的分类，不是社区结论。清单与磁盘的差异只打印路径，不使 job 失败。
+- `examples_manifest.yaml` 由仓库根目录 `scripts/bootstrap_manifest.py` 扫描目标仓 `examples/` 下的 `.sh` / `.py` / `.yaml` 生成。除 `examples/ascend/train/qwen3/qwen3_lora_megatron.sh` 外全部标 `unsupported`，这是任务规定的分类，不是社区结论。清单与磁盘的差异只打印路径，不使 job 失败；例外：`supported` 条目的 path 已不在磁盘上时 manifest-check 立即判红。
 - `overlays/*.args` 把 example 压到 CI 规模（仓内 8 条 fixture、短序列、输出到 CI 目录）。
 - `scripts/run_example.sh` 是 ms-swift 专用：在 CI 临时工作区给 example 补 `"$@"` 并展开 overlay。不改任何 ms-swift 仓库。
 
@@ -25,6 +25,7 @@ python3 scripts/bootstrap_manifest.py \
   --supported examples/ascend/train/qwen3/qwen3_lora_megatron.sh \
   --runner linux-aarch64-a2-2 \
   --npu-devices 0,1 \
+  --image swr.cn-south-1.myhuaweicloud.com/ascendhub/torch-npu:2.9.0.post2-910b-ubuntu22.04-py3.11 \
   --overlay overlays/qwen3_lora_megatron.args \
   --timeout-minutes 180
 ```
@@ -34,7 +35,7 @@ python3 scripts/bootstrap_manifest.py \
 `ms-swift-examples.yml` 接受：
 
 - `workflow_dispatch`：手动指定 `target_repo` 与 `target_ref`。
-- `repository_dispatch`，三种 `event_type`，均由测试 fork `cosdt-ci-test/ms-swift` 上的 notifier 发送：
+- `repository_dispatch`，三种 `event_type`，均由测试 fork `cosdt-ci-test/ms-swift` 上的 notifier 发送（notifier 的搭建与契约见 [docs/notifier.md](../../docs/notifier.md)）：
   - `ms-swift-ci-completed`：payload 必须带 `repo` 与 `sha`。
   - `ms-swift-examples-changed`：`examples/**` 被 push 到 fork 的 main。payload 必须带 `repo` 与 `sha`。
   - `ms-swift-release`：fork 上推了 `v**` 标签。payload 必须带 `repo` 与 `ref`（tag 名）。

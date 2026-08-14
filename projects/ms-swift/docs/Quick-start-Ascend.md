@@ -81,13 +81,12 @@ npu_count= 1
 >>> cd ms-swift && git checkout <UPSTREAM_REF>
 # Editable install: `swift` CLI is now on PATH, source changes take effect on rerun
 >>> cd ms-swift && uv pip install -e . --torch-backend=auto
+# Sanity check the install: should print the installed ms-swift version
 >>> swift --version
 ms-swift xxx
 ```
 
 `<UPSTREAM_REF>`： 改成实际版本。
-
-> 装完 `swift --version` 应当输出当前装上的 ms-swift 版本号。版本号格式不固定（v3.x / 4.x 都可能），用 `xxx` 占位符宽松匹配。
 
 ## 使用样例
 

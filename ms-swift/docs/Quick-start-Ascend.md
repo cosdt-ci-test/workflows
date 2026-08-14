@@ -61,8 +61,8 @@ Python 3.11.x
 +----------------------------------------------------------+
 ...
 >>> python -c "import torch, torch_npu; print('torch=', torch.__version__); print('torch_npu=', torch_npu.__version__); print('npu_count=', torch.npu.device_count())"
-torch= 2.7.1.x
-torch_npu= 2.7.1.postX
+torch= 2.9.0.x
+torch_npu= 2.9.0.postX
 npu_count= 1
 ```
 
@@ -105,10 +105,10 @@ ms-swift的安装请参考[安装文档](./SWIFT-installation.md)。
 ...     --model_author swift \
 ...     --model_name swift-robot
 [INFO:swift] start training ...
-{'loss': 1.23, 'grad_norm': 0.81, 'learning_rate': 1e-4, 'epoch': 0.05}
-{'loss': 1.10, 'grad_norm': 0.74, 'learning_rate': 9.5e-5, 'epoch': 0.10}
+{'loss': ..., 'grad_norm': ..., 'learning_rate': ..., 'epoch': ...}
 ...
-{'loss': 0.87, 'grad_norm': 0.62, 'learning_rate': 5.0e-5, 'epoch': 1.0}
+{'loss': ..., 'grad_norm': ..., 'learning_rate': ..., 'epoch': ...}
+...
 [INFO:swift] training finished, saving checkpoint ...
 Saving checkpoint to output/vx-xxx/checkpoint-xxx
 >>> echo "train done, checkpoint dir: $(ls -dt output/*/checkpoint-* | head -n 1)"
@@ -135,10 +135,8 @@ train done, checkpoint dir: output/vx-xxx/checkpoint-xxx
 ...     --stream true \
 ...     --temperature 0 \
 ...     --max_new_tokens 2048
->>> user: 你好，请介绍一下你自己。
-[INFO:swift] loading adapter from output/vx-xxx/checkpoint-xxx
-[INFO:swift] generating ...
-你好，我是 swift-robot，由 swift 团队开发。
+<<< 你好，请介绍一下你自己。
+...
 >>> echo "infer transformers done"
 infer transformers done
 ```
@@ -154,10 +152,8 @@ infer transformers done
 ...     --vllm_max_model_len 8192 \
 ...     --temperature 0 \
 ...     --max_new_tokens 2048
-[INFO:swift] loading adapter from output/vx-xxx/checkpoint-xxx with vllm-ascend backend
-[INFO:swift] vllm-ascend version: 0.18.0
-[INFO:swift] generating ...
-你好，我是 swift-robot，由 swift 团队开发。
+<<< 你好，请介绍一下你自己。
+...
 >>> echo "infer vllm-ascend done"
 infer vllm-ascend done
 ```

@@ -64,6 +64,7 @@ jobs:
         --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
         --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
         --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
+        --volume=/data/ci-cache/modelscope:/root/.cache/modelscope
     env:
       PIP_INDEX_URL: https://repo.huaweicloud.com/ascend/repos/pypi
       PIP_TRUSTED_HOST: repo.huaweicloud.com
@@ -267,11 +268,15 @@ jobs:
           UPSTREAM_COMMIT: ${{ steps.upstream-commit.outputs.sha }}
           REASON: ${{ steps.decide.outputs.reason }}
         run: |
+          # CANN env only lives in the shell that sourced it; re-source
+          # here so swift sft / swift infer see ASCEND_HOME etc.
+          export PATH="/usr/local/sbin:$PATH"
+          source /usr/local/Ascend/ascend-toolkit/set_env.sh
           # The test file lives at workflows/ms-swift/tests/test_quick_start_ascend.py
           # and resolves REPO_ROOT upward from there. ms-swift itself is
           # installed by setUpClass from the upstream git SHA.
           python -m pip install -U pip
-          python -m pip install torchvision==0.24.0 decorator || true
+          python -m pip install torchvision==0.24.0 decorator
           cd workflows/ms-swift
           python -m unittest tests.test_quick_start_ascend -v 2>&1 | tee /tmp/unittest.log
 

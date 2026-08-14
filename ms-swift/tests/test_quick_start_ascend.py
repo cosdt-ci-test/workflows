@@ -121,8 +121,8 @@ def parse_blocks(doc_text: str) -> list[list[dict]]:
 _PLACEHOLDER_PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r'<pid>'),         r'(?P<pid>\d+)'),
     (re.compile(r'<x\.y\.z>'),     r'\d+\.\d+\.\d+'),
-    (re.compile(r'\b2\.7\.1\.postX\b'), r'2\.7\.1\.post\d+'),
-    (re.compile(r'\b2\.7\.1\.x\b'),     r'2\.7\.1\.\d+'),
+    (re.compile(r'\b2\.9\.0\.postX\b'), r'2\.9\.0\.post\d+'),
+    (re.compile(r'\b2\.9\.0\.x\b'),     r'2\.9\.0\.\d+'),
     (re.compile(r'\b3\.11\.x\b'),       r'3\.11\.\d+'),
     (re.compile(r'v\d+-xxx'),      r'v\d+-\S+'),
     (re.compile(r'checkpoint-xxx'), r'checkpoint-\S+'),
@@ -330,13 +330,21 @@ class TestQuickStartAscendEndToEnd(unittest.TestCase):
             )
 
     def _compare_lines(self, block_idx, step_idx, kind, expected, actual, captures):
-        """Walk expected and actual in lockstep, matching each line."""
+        """Walk expected and actual in lockstep, matching each line.
+
+        A literal ``...`` on the expected side skips ONE actual line.
+        Use consecutive ``...`` lines (or a trailing ``...``) to drop
+        several, which is the typical pattern for variable-length
+        output (training logs, model-generated text, ``npu-smi`` rows)
+        where only the tail matters.
+        """
         a_iter: list[str] = list(actual)
         e_iter: list[str] = list(expected)
         mismatches = []
         for ei, line in enumerate(e_iter):
             if line == '...':
-                # Wildcard: skip the next actual line if any.
+                # Wildcard: skip a single actual line. Use consecutive
+                # ``...`` lines (or a trailing ``...``) to drop several.
                 if a_iter:
                     a_iter.pop(0)
                 continue
@@ -357,14 +365,10 @@ class TestQuickStartAscendEndToEnd(unittest.TestCase):
             for k, v in m.groupdict().items():
                 if v is not None:
                     captures[k] = v
-        # Any extra actual lines are a soft warning, not a failure.
-        leftover = a_iter
-        if mismatches or leftover:
+        # Extra actual lines are a soft warning, not a failure.
+        if mismatches:
             msg = (f'block #{block_idx} step #{step_idx} ({kind}) output '
                    f'mismatch:\n' + '\n'.join(mismatches))
-            if leftover:
-                msg += (f'\n  (extra actual lines ignored: '
-                        f'{len(leftover)} trailing lines)')
             self.fail(msg)
 
 

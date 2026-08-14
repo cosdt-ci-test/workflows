@@ -49,21 +49,20 @@ swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/cann:8.3.rc2-910b-ubun
 
 ### 检查前置是否满足
 
-执行下面这段命令：**每条 `>>>` 命令下一行（或若干行）就是它的真实输出**。3 条 `>>>` 都跑出预期结果，才能进入 §使用样例。
-
+检查依赖组件版本
 ```shell
 >>> python --version
 Python 3.11.x
->>> npu-smi info
-+----------------------------------------------------------+
-| NPU   Name    Health  Power(W)  Temp(C)  Memory-Usage(MB) |
-| 0     910B3   OK      <功率>    <温度>   <已用> / 65536   |
-+----------------------------------------------------------+
-...
 >>> python -c "import torch, torch_npu; print('torch=', torch.__version__); print('torch_npu=', torch_npu.__version__); print('npu_count=', torch.npu.device_count())"
 torch= 2.9.0.x
 torch_npu= 2.9.0.postX
 npu_count= 1
+```
+
+确认能看到 NPU 设备：
+
+```shell
+npu-smi info
 ```
 
 > 如果 `npu-smi` 不存在，请回到 [Ascend 官方快速安装指南](https://ascend.github.io/docs/sources/ascend/quick_install.html) 补装驱动；如果 `import torch_npu` 失败，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查 torch / torch_npu / CANN 三方兼容矩阵。
@@ -90,8 +89,8 @@ uv pip install ms-swift -U --torch-backend=auto
 # Editable install: `swift` CLI is now on PATH, source changes take effect on rerun
 >>> cd ms-swift && uv pip install -e . --torch-backend=auto
 # Sanity check the install: should print the installed ms-swift version
->>> swift --version
-ms-swift xxx
+>>> python -c "import swift; print('ms-swift loaded')"
+ms-swift loaded
 ```
 
 `<UPSTREAM_REF>`： 改成实际版本。

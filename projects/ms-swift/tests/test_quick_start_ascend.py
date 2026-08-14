@@ -122,18 +122,6 @@ def parse_blocks(doc_text: str) -> list[list[dict]]:
                     })
                 cur_cmd = [stripped[4:]]
                 cur_exp = []
-            elif stripped.startswith('>>> #'):
-                # ``>>> # ...`` is a comment, not a command. Treat as
-                # output of the current command so the user can see it
-                # in the docs but the runner ignores it.
-                if cur_cmd or cur_exp:
-                    # Finish the current command first.
-                    block.append({
-                        'cmd': '\n'.join(cur_cmd).rstrip(),
-                        'expected': cur_exp,
-                    })
-                cur_cmd = []
-                cur_exp = [raw]
             elif stripped.startswith('... '):
                 cur_cmd.append(stripped[4:])
             elif stripped.startswith('<<< '):
@@ -226,8 +214,9 @@ def expected_line_to_regex(expected: str) -> re.Pattern:
 def run_command(cmd: str, env: dict, cwd: Path, timeout: int) -> tuple[int, str]:
     """Run ``cmd`` in bash; return ``(returncode, stdout+stderr)``."""
     t0 = time.time()
-    # Truncate so giant swift sft commands don't blow up the CI log.
-    _log(f'CMD start (timeout={timeout}s): {cmd[:300]}')
+    # Truncate to 2000 chars so a multi-line swift sft invocation
+    # stays visible in the log without flooding it.
+    _log(f'CMD start (timeout={timeout}s): {cmd[:2000]}')
     proc = subprocess.run(
         ['bash', '-c', cmd],
         env=env,
@@ -343,7 +332,12 @@ class TestQuickStartAscendEndToEnd(unittest.TestCase):
                 f'No shell code blocks found in {cls.doc_path}')
 
     def test_runs_quick_start(self):
-        """Walk every block and execute, comparing actual vs expected."""
+        """Walk every block and execute, comparing actual vs expected.
+
+        Fail fast on the first mismatch - subsequent blocks likely
+        depend on previous ones (e.g. swift sft needs swift CLI from
+        the install block).
+        """
         env = os.environ.copy()
         env['UPSTREAM_REF'] = self.upstream_ref
         env['UPSTREAM_COMMIT'] = self.upstream_commit
@@ -363,19 +357,15 @@ class TestQuickStartAscendEndToEnd(unittest.TestCase):
             timeout = BLOCK_TIMEOUTS.get(kind, BLOCK_TIMEOUTS['default'])
             _log(f'BLOCK {bi}/{len(self.blocks)-1} kind={kind} timeout={timeout}s '
                  f'steps={len(block)}')
-            with self.subTest(block=bi, kind=kind):
-                if len(block) == 1 and not block[0]['cmd'].strip():
-                    # Sentinel: hand-written push_to_hub block; just
-                    # ensure the shell parses (already covered by the
-                    # parser tests). Nothing to execute.
-                    _log(f'BLOCK {bi}: sentinel, skip')
-                    continue
-                self._run_block(block, kind, env, captures, timeout, bi)
+            if len(block) == 1 and not block[0]['cmd'].strip():
+                _log(f'BLOCK {bi}: sentinel, skip')
+                continue
+            self._run_block(block, kind, env, captures, timeout, bi)
         _log('test_runs_quick_start: all blocks done')
 
     def _run_block(self, block, kind, env, captures, timeout, block_idx):
         actual_lines_per_step: list[list[str]] = []
-        for step in block:
+        for si, step in enumerate(block):
             cmd = step['cmd']
             for k, v in captures.items():
                 cmd = cmd.replace(f'<{k}>', v)
@@ -444,6 +434,9 @@ class TestQuickStartAscendEndToEnd(unittest.TestCase):
         if mismatches:
             msg = (f'block #{block_idx} step #{step_idx} ({kind}) output '
                    f'mismatch:\n' + '\n'.join(mismatches))
+            # Print before fail so the diff shows in the CI stream
+            # log regardless of unittest's assertion formatting.
+            _log(msg)
             self.fail(msg)
 
 

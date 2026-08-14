@@ -241,6 +241,23 @@ def run_command(cmd: str, env: dict, cwd: Path, timeout: int) -> tuple[int, str]
     elapsed = time.time() - t0
     _log(f'CMD done in {elapsed:.1f}s rc={proc.returncode} '
          f'(stdout={len(out)}B stderr={len(err)}B)')
+    # Surface the actual output when the command didn't return what we
+    # expected, so the GitHub step log shows the failure mode without
+    # having to download an artifact. Truncate to keep the log sane
+    # (swift sft training can easily produce hundreds of MB of stdout).
+    if proc.returncode != 0 or (out.strip() == '' and err.strip() != ''):
+        head_out = out[:2000]
+        tail_out = out[-2000:] if len(out) > 2000 else ''
+        head_err = err[:2000]
+        tail_err = err[-2000:] if len(err) > 2000 else ''
+        if head_out:
+            _log(f'CMD stdout (head):\n{head_out.rstrip()}')
+        if tail_out and tail_out != head_out:
+            _log(f'CMD stdout (tail):\n{tail_out.rstrip()}')
+        if head_err:
+            _log(f'CMD stderr (head):\n{head_err.rstrip()}')
+        if tail_err and tail_err != head_err:
+            _log(f'CMD stderr (tail):\n{tail_err.rstrip()}')
     return proc.returncode, (out + (('\n' + err) if err else ''))
 
 

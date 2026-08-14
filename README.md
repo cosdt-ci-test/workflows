@@ -21,3 +21,7 @@ ms-swift/                        ms-swift 的清单、overlay、fixture、脚本
 - `repository_dispatch`（`ms-swift-ci-completed`）：由测试 fork 上的 notifier 在 `citest-npu` 成功后发送，payload 必须带 `repo` 与 `sha`。
 
 无 `schedule`。
+
+## 附：新增 workflow（与 `ms-swift.yml` 解耦，独立维护）
+
+- `.github/workflows/quick-start-ascend-ci.yml` — Ascend Quick Start 文档的监控 + e2e 测试，从 ms-swift 仓的 `.github/workflows/quick-start-ascend-ci.yml` 迁来，是 README 顶部"不互动 `modelscope/ms-swift`"规则的**显式例外**：它会主动读 `modelscope/ms-swift` 的 release 与 main HEAD（监控目的），但仍然不写、不提 PR、不评论、不要 secret、不 push。具体触发与判定逻辑见该 workflow 文件自身的注释。

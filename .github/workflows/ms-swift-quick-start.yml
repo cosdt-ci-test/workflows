@@ -103,10 +103,12 @@ jobs:
       - name: Restore monitor state
         id: cache-restore
         if: inputs.force_install != true
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: .monitor-state
-          key: monitor-state-ms-swift
+          # Per-run key: always miss, so we fall through to restore-keys
+          # (prefix match against the most recent successful save).
+          key: monitor-state-ms-swift-${{ github.run_id }}
           restore-keys: |
             monitor-state-ms-swift-
 
@@ -193,7 +195,7 @@ jobs:
 
       - name: Persist monitor state
         if: inputs.force_install != true && always()
-        uses: actions/cache@v4
+        uses: actions/cache/save@v4
         with:
           path: .monitor-state
           key: monitor-state-ms-swift-${{ github.run_id }}
@@ -388,7 +390,7 @@ jobs:
           fi
           # Surface the last-known failure reason (from the prior run's
           # outcome record) so a retry run is self-explanatory.
-          REASON_FILE=".monitor-state/${REASON%-retry}_failure_reason"
+          REASON_FILE=".monitor-state/.${REASON%-retry}_failure_reason"
           if [ -s "$REASON_FILE" ]; then
             echo "  Last failure:     $(cat "$REASON_FILE")"
           fi

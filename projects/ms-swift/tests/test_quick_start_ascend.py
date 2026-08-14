@@ -268,7 +268,6 @@ class TestQuickStartAscendEndToEnd(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.doc_text, cls.doc_path = fetch_doc_text()
-        cls.blocks = parse_blocks(cls.doc_text)
         # Record the upstream ref / commit being tested. The CI
         # workflow sets these before invoking unittest; when running
         # outside CI both are unset and the test is skipped below.
@@ -280,19 +279,13 @@ class TestQuickStartAscendEndToEnd(unittest.TestCase):
                 '(set by the CI workflow)')
         os.environ.setdefault('UPSTREAM_REF', cls.upstream_ref)
         os.environ.setdefault('UPSTREAM_COMMIT', cls.upstream_commit)
-        # The Quick Start's "install ms-swift" step is part of what
-        # we're testing. Install from the upstream git SHA so the test
-        # reflects a fresh install of the exact commit under test -
-        # works for both main and tags (main never ships to PyPI).
-        upstream_repo = os.environ.get('UPSTREAM_REPO', 'modelscope/ms-swift')
-        install_url = f'git+https://github.com/{upstream_repo}.git@{cls.upstream_commit}'
-        # uv handles PEP 517 build deps more reliably than pip and respects
-        # UV_CONSTRAINT (set by the workflow) so torch/torch_npu are not
-        # downgraded by transitive deps.
-        subprocess.run(
-            ['uv', 'pip', 'install', '--system', install_url],
-            check=True,
-        )
+        # Substitute <UPSTREAM_REF> in the doc with the exact ref/SHA
+        # the monitor triggered on, then parse. The doc's
+        # `## install ms-swift` block uses this placeholder to do the
+        # source install in-band; we no longer install ms-swift here.
+        cls.doc_text = cls.doc_text.replace(
+            '<UPSTREAM_REF>', cls.upstream_commit)
+        cls.blocks = parse_blocks(cls.doc_text)
         if not cls.blocks:
             raise unittest.SkipTest(
                 f'No shell code blocks found in {cls.doc_path}')

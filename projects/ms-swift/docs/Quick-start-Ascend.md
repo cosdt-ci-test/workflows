@@ -72,7 +72,15 @@ npu_count= 1
 
 ## 安装 ms-swift
 
-ms-swift的安装请参考[安装文档](./SWIFT-installation.md)。
+从上游源码安装（本 Quick Start 测的就是这一节）：
+
+```shell
+>>> git clone https://github.com/modelscope/ms-swift.git
+>>> cd ms-swift && git checkout <UPSTREAM_REF>
+>>> cd ms-swift && uv pip install -e . --torch-backend=auto
+```
+
+`<UPSTREAM_REF>` 在 CI 里由监控触发时的 ref（tag 或 commit SHA）替换；本地手测时手动改成实际版本。
 
 ## 使用样例
 

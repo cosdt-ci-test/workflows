@@ -49,8 +49,7 @@ swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/cann:8.3.rc2-910b-ubun
 
 ### 检查前置是否满足
 
-执行下面这段命令：**每条 `>>>` 命令下一行（或若干行）就是它的真实输出**。3 条 `>>>` 都跑出预期结果，才能进入 §使用样例。
-
+检查依赖组件版本
 ```shell
 >>> python --version
 Python 3.11.x
@@ -63,7 +62,7 @@ npu_count= 1
 确认能看到 NPU 设备：
 
 ```shell
-$ npu-smi info
+npu-smi info
 ```
 
 > 如果 `npu-smi` 不存在，请回到 [Ascend 官方快速安装指南](https://ascend.github.io/docs/sources/ascend/quick_install.html) 补装驱动；如果 `import torch_npu` 失败，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查 torch / torch_npu / CANN 三方兼容矩阵。

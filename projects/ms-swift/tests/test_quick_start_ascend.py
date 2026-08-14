@@ -126,6 +126,11 @@ def parse_blocks(doc_text: str) -> list[list[dict]]:
                 cur_cmd.append(stripped[4:])
             elif stripped.startswith('<<< '):
                 cur_cmd.append(f': <<< {stripped[4:]}')
+            elif stripped.startswith('#'):
+                # Drop comment lines entirely (neither a command nor
+                # expected output). Lets the doc author sprinkle plain
+                # `# ...` explanations inside a shell block.
+                continue
             else:
                 cur_exp.append(raw)
         if cur_cmd or cur_exp:

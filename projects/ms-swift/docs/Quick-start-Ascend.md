@@ -57,7 +57,7 @@ Python 3.11.x
 torch= 2.9.0+cpu
 torch_npu= 2.9.0.post2
 is_available: xxx
-count: xxx
+count: 1
 ```
 
 确认能看到 NPU 设备：

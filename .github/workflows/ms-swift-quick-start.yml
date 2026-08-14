@@ -1,7 +1,7 @@
 name: ms-swift-quick-start
 
 # Quick Start doc test (Ascend / NPU):
-#   1. Every 6 hours: lightweight monitor — hash the doc on the
+#   1. Every 6 hours: lightweight monitor - hash the doc on the
 #      TARGET repo, the latest upstream release, and the upstream
 #      main HEAD SHA. State persists in actions/cache for 30 days.
 #   2. If any of those signals changed, install ms-swift from the
@@ -16,7 +16,7 @@ name: ms-swift-quick-start
 #
 # NB: monitoring upstream ms-swift release/commit is an intentional
 # exception to the repo's "no interaction with modelscope/ms-swift"
-# rule — this workflow's whole purpose is to detect upstream changes.
+# rule - this workflow's whole purpose is to detect upstream changes.
 
 concurrency:
   group: ms-swift-quick-start
@@ -73,7 +73,7 @@ jobs:
       # ===== Setup =====
       # Always runs. Loads CANN, checks NPU, brings this repo's test
       # code + doc into ./workflows so the test step can use them.
-      - name: 打印上下文
+      - name: Print context
         run: |
           echo "=========================================="
           echo "Trigger:    ${{ github.event_name }}"
@@ -112,7 +112,7 @@ jobs:
           restore-keys: |
             monitor-state-ms-swift-
 
-      - name: 监控 doc hash
+      - name: Monitor doc hash
         id: monitor-doc
         if: github.event_name == 'schedule'
         env:
@@ -140,7 +140,7 @@ jobs:
           fi
           echo "doc_hash=$NEW outcome=$OUTCOME"
 
-      - name: 监控 upstream latest release tag
+      - name: Monitor upstream latest release tag
         id: monitor-release
         if: github.event_name == 'schedule'
         run: |
@@ -167,7 +167,7 @@ jobs:
           fi
           echo "release_tag=$TAG outcome=$OUTCOME"
 
-      - name: 监控 upstream main HEAD
+      - name: Monitor upstream main HEAD
         id: monitor-commit
         if: github.event_name == 'schedule'
         run: |
@@ -208,7 +208,7 @@ jobs:
       # itself installs ms-swift from the upstream git SHA and walks
       # every shell block in the doc. Record outcome persists the
       # success/failure back into .monitor-state for the next cycle.
-      - name: 决定要跑哪个 ref
+      - name: Decide which ref to test
         id: decide
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
@@ -240,7 +240,7 @@ jobs:
             echo "reason=$REASON" >> "$GITHUB_OUTPUT"
             echo "test_ref=$REF" >> "$GITHUB_OUTPUT"
             if [ "$CHANGED" != "true" ]; then
-              echo "No upstream changes — skipping install + test"
+              echo "No upstream changes - skipping install + test"
             fi
           fi
 
@@ -255,7 +255,7 @@ jobs:
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           echo "Upstream commit: $SHA"
 
-      - name: 跑 quick start 测试
+      - name: Run quick start test
         id: test
         if: steps.decide.outputs.changed == 'true'
         env:
@@ -371,7 +371,7 @@ jobs:
             /tmp/release.json
             ${{ github.workspace }}/output/result.json
 
-      - name: 汇总测试结果
+      - name: Summarize test result
         if: always()
         env:
           UPSTREAM_COMMIT: ${{ steps.upstream-commit.outputs.sha }}

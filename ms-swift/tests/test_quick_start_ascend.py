@@ -18,12 +18,12 @@ test fails.
 
 Placeholder syntax
 ------------------
-* ``...``  — match any number of characters on this line (wildcard).
-* ``<pid>`` — match a number and capture it; the captured value is
+* ``...``  - match any number of characters on this line (wildcard).
+* ``<pid>`` - match a number and capture it; the captured value is
               substituted into later commands that contain ``<pid>``.
-* ``xxx``   — match any non-whitespace run.
-* ``2.7.1.x`` / ``2.7.1.postX`` / ``3.11.x`` — version placeholders.
-* ``x.y.z`` — match ``d.d.d``.
+* ``xxx``   - match any non-whitespace run.
+* ``2.9.0.x`` / ``2.9.0.postX`` / ``3.11.x`` - version placeholders.
+* ``x.y.z`` - match ``d.d.d``.
 * Plain lines that are not ``...`` are matched exactly.
 
 The test runner is expected to be an NPU CI container
@@ -260,7 +260,7 @@ class TestQuickStartAscendEndToEnd(unittest.TestCase):
         os.environ.setdefault('UPSTREAM_COMMIT', cls.upstream_commit)
         # The Quick Start's "install ms-swift" step is part of what
         # we're testing. Install from the upstream git SHA so the test
-        # reflects a fresh install of the exact commit under test —
+        # reflects a fresh install of the exact commit under test -
         # works for both main and tags (main never ships to PyPI).
         upstream_repo = os.environ.get('UPSTREAM_REPO', 'modelscope/ms-swift')
         install_url = f'git+https://github.com/{upstream_repo}.git@{cls.upstream_commit}'

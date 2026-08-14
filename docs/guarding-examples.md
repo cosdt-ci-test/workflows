@@ -2,16 +2,14 @@
 
 ## 总之
 
-一般每个项目都存在 examples。我们的工作是让这些 Examples 被 github workflow 看护。一个项目的 Examples 至少一条能在昇腾上跑通。workflow 理想情况进入上游社区，随 CI 触发，而最不理想情况是在下游定时监听上游社区的改动而触发。核心思路是，在下游仓库准备好 workflow 和 examples 并跑通，然后尽可能地往上游社区推送。
+一般每个项目都存在 examples。我们的工作是让这些 Examples 被 github workflow 看护。一个项目的 Examples 至少一条能在昇腾上跑通。workflow 理想情况进入上游社区，随上游 CI 触发；在此之前，由本仓（workflows 仓）的流水线**定时轮询上游社区的改动**来触发。核心思路是，在下游仓库准备好 workflow 和 examples 并跑通，然后尽可能地往上游社区推送。
 
 ## 阶段划分
 
-1. 阶段 A：fork 上游仓库当靶场，用 fork 仓上的 notifier 模拟「上游 CI 完成」等事件。在 <https://github.com/cosdt-ci-test/workflows/> 仓内，开发看护 example 用的 workflow。
-2. 阶段 B：按上游的接受度递进，一步一步来，每一步都可以停在原地继续用阶段 A 的能力：
+1. 阶段 A：在 <https://github.com/cosdt-ci-test/workflows/> 仓内，开发看护 example 用的 workflow。流水线通过轮询监听上游仓库（schedule 定时 + monitor 步骤对比状态，见「要求 2」），`target_repo` 默认直接对准上游仓库；开发调试时用 `workflow_dispatch` 手动指定任意 `target_repo` / `target_ref`。
+2. 阶段 B：按上游的接受度递进，一步一步来，每一步都可以停在原地继续用阶段 A 的轮询能力：
    1. 先推 example 本身（如果上游还缺昇腾 example）。
-   2. 再争取上游接受 notifier（上游 CI 完成后通知我们）——对上游来说只是一个几十行、不影响他们的小 workflow。
-   3. 最理想是看护 workflow 直接合入上游、随上游 CI 触发，workflow 的成功、失败在上游社区可见。**这一步通常需要我们向上游提供 self-hosted runner 和容器镜像**。为上游社区接入 self-hosted runner 参考：<https://ascend-gha-runners.github.io/docs/user-manual-gha-zh/#github-app-runner_1>。注意这些 runner 全部位于中国大陆、无 docker hub 代理，这点需要和社区沟通。
-   4. 兜底：上游什么都不接受。此时在 workflows 仓给该项目的流水线加 schedule 定时触发，把 target_repo 直接指向上游、target_ref 指向上游最新 main 或最新 release，实现「下游监听上游」。
+   2. 最理想是看护 workflow 直接合入上游、随上游 CI 触发，workflow 的成功、失败在上游社区可见。**这一步通常需要我们向上游提供 self-hosted runner 和容器镜像**。为上游社区接入 self-hosted runner 参考：<https://ascend-gha-runners.github.io/docs/user-manual-gha-zh/#github-app-runner_1>。注意这些 runner 全部位于中国大陆、无 docker hub 代理，这点需要和社区沟通。
 
 ## 零、前提
 
@@ -19,20 +17,16 @@
 
 动手前先判断你负责的项目属于哪种情况：
 
-- 上游已有健康的昇腾 CI（如 LlamaFactory、veRL、VeOmni）：先确认 example 是否已被该 CI 覆盖。若已覆盖，直接进入阶段 B（在上游补 example 看护），fork 靶场只用于开发调试。
-- 上游有昇腾 CI 但停摆或不健康（如 DeepSpeed、ONNXRuntime、llama.cpp、SGLang）：进入阶段 A，先在靶场把 example 跑通。
-- 上游无昇腾 CI（如 transformers、PEFT、diffusers）：按本文完整走。example 若不存在，先在 fork 里新增并调通，作为将来推向上游的内容。未来需要和上游社区沟通接入 self-hosted runner 的事宜。
+- 上游已有健康的昇腾 CI（如 LlamaFactory、veRL、VeOmni）：先确认 example 是否已被该 CI 覆盖。若已覆盖，直接进入阶段 B（在上游补 example 看护）。
+- 上游有昇腾 CI 但停摆或不健康（如 DeepSpeed、ONNXRuntime、llama.cpp、SGLang）：进入阶段 A，先把 example 在本仓流水线跑通。
+- 上游无昇腾 CI（如 transformers、PEFT、diffusers）：按本文完整走。example 若不存在，先写好并用 `workflow_dispatch` 把流水线指向放着草稿的任意仓库分支调通，作为将来推向上游的内容。未来需要和上游社区沟通接入 self-hosted runner 的事宜。
 
-## 一、Fork 上游仓用于 workflow 靶场
-
-推荐将上游仓 fork 到 <https://github.com/organizations/cosdt-ci-test/> 组织下，该组织已接入昇腾 runner。在 workflows 仓 Settings → Actions → Runners 可以看到当前可用的 runner 及其标签。
-
-## 二、workflow 要求
+## 一、workflow 要求
 
 推荐在 <https://github.com/cosdt-ci-test/workflows> 下新增目标软件的 github workflow，workflow 的核心要求是：
 
 - 对用昇腾能跑通的 examples，必须在合适的 runner 机器上跑通。
-- 触发条件：CI 完成、example 变动、Release。
+- 触发条件：轮询发现上游 examples 变动、Release、main 有新 commit；也可手动触发。
 - 能感知新增的 example。
 - Job 的结果能被外部机器通过 job api 或者读 Artifact 文件而获取。
 
@@ -41,20 +35,48 @@
 ### 要求 1
 
 1. 选择合适的 runner。在 workflows 仓 Settings → Actions → Runners 查看可用 runner。标签形如 linux-aarch64-a2-N，后缀 N 是该机器可用的昇腾卡数。按 example 需要的卡数选：例如 ms-swift 那条 example 用 tensor_model_parallel_size 2（2 卡张量并行），所以选 linux-aarch64-a2-2、npu_devices 用 "0,1"。选好后写进清单 supported 条目的 runner / npu_devices / timeout_minutes 字段，example 流水线按条目调度，不在 workflow 里硬编码。
-2. 选择合适的镜像。注意，**cosdt-ci-test 下的 runners 全部位于中国大陆**，代理没有配置 docker hub，所以无法从 docker hub 拉取镜像。推荐从 Ascend 官方镜像仓拉取，在 <https://www.hiascend.com/developer/ascendhub> 中，选择合适的镜像版本，点下载时，即可看到 SWR 地址。
+2. 选择合适的镜像。注意，**cosdt-ci-test 下的 runners 全部位于中国大陆**，代理没有配置 docker hub，所以无法从 docker hub 拉取镜像。推荐从 Ascend 官方镜像仓拉取，在 <https://www.hiascend.com/developer/ascendhub> 中，选择合适的镜像版本，点下载时，即可看到 SWR 地址。选好后写进清单 supported 条目的 image 字段（GitHub 不允许 container.image 引用 env，workflow 从 matrix 取镜像，result.json 同源，两处不会漂移）。
 3. 配置安装依赖命令。注意，由于 runners 位于国内，安装时可能存在网络问题，所以需要配置镜像。昇腾包用镜像：<https://repo.huaweicloud.com/ascend/repos/pypi>。
 4. 运行 example。有些 example 很大，例如训练加速的有些项目的 example 会真实训练模型，需要通过参数覆盖的方式控制 steps，减少 CI 资源占用。
 
+#### 项目运行脚本契约
+
+每个项目在 `projects/<project>/scripts/` 下提供自己的运行脚本（ms-swift 是 `run_example.sh`），由 example 流水线的 `run-example` job 调用。仓库不提供通用实现——每个项目的 example 形态不同——但调用契约固定，新项目的脚本必须满足：
+
+- 位置参数：`$1` 是 example 相对目标仓根的路径（即清单 supported 条目的 `path`）；`$2` 是 overlay 相对 `projects/<project>/` 的路径（即条目的 `overlay`；条目没写 overlay 时传入空字符串，脚本必须能处理）。
+- 环境变量（workflow 已设好，脚本直接用）：
+  - `PROJECT_ROOT`：`projects/<project>/` 的绝对路径；
+  - `TARGET_ROOT`：目标仓 checkout 的绝对路径；
+  - `FIXTURE_DIR`：`projects/<project>/fixtures/` 的绝对路径；
+  - `CI_OUTPUT_DIR`：训练/运行输出必须写到这个目录；
+  - `ASCEND_RT_VISIBLE_DEVICES`：清单条目的 `npu_devices`。
+- 退出码即结果：非 0 判红。不比对 loss 等数值。
+- 红线：只允许修改 CI 工作区里的目标仓副本（例如给 example 追加 `"$@"` 透传参数），绝不 `git add` / `commit` / `push`，绝不向目标仓远端发起任何写操作。
+
+overlay 是把 example 压到 CI 规模的参数覆盖文件，约定放在 `projects/<project>/overlays/`、用 `.args` 后缀：每行写一个或多个命令行参数，支持 shell 引号、`$VAR` / `${VAR}` 环境变量展开（常用 `${FIXTURE_DIR}`、`${CI_OUTPUT_DIR}`）、`#` 注释与空行。参考 `projects/ms-swift/overlays/qwen3_lora_megatron.args`。
+
+注意：example 脚本内部命令级内联的环境变量（如 ms-swift 那条 example 里的 `ASCEND_RT_VISIBLE_DEVICES=0,1`）优先级高于 workflow 导出的值，overlay 也覆盖不了它。清单 `npu_devices` 必须与 example 内联值一致，改卡时要连 example 一起改。
+
 ### 要求 2
 
-GitHub 的 workflow_run（一个 workflow 完成后触发另一个）不能跨仓库，所以「fork/上游发生了事通知 workflows 仓跑看护」的模式，只能用 repository_dispatch，也就是一方调用 GitHub API 向 workflows 仓发消息，消息带 event_type（事件名）和 client_payload（自定义数据）。
+触发靠**轮询**，不要求上游（或任何别的仓库）部署任何东西。参考实现是 `.github/workflows/ms-swift-examples.yml` 的 `monitor` / `record-outcome` job，机制与同仓 quick-start 流水线的 monitor 一致：
+
+1. `schedule` 定时唤醒 `monitor` job（跑在免费的 ubuntu-latest 上，几秒即完成）。它轮询上游的三个信号，逐个与上次记录的值比较：
+   - **examples**：上游 main 上最后一次触碰 `examples/`（清单 `scan.root`）的 commit SHA；
+   - **release**：上游 latest release 的 tag；
+   - **commit**：上游 main HEAD 的 SHA。
+2. 任一信号变化即触发本次看护。被测 ref 按 examples > release > commit 的优先级取自第一个变化的信号：examples / commit 用对应的 commit SHA，release 用 tag。全部无变化则本次 run 在 monitor 后直接结束，不占 NPU runner。
+3. 看护失败会重试：run 结束后 `record-outcome` job 把本次成败回写进 monitor 状态；上次失败的信号即使没有新变化，下个周期也会以 `<信号>-retry` 为由再跑一次，直到成功。
+4. `workflow_dispatch` 手动触发不经过 monitor 门（changed 恒为 true），`target_repo` / `target_ref` 从输入取，默认上游仓库的 main。
+
+monitor 状态存在 `.monitor-state/` 目录，用 actions/cache 持久化（条目约 7 天未访问会被清除，monitor 每周期的 restore 会保活；状态丢失只会让下次 run 多跑一轮，无害）。注意：同一项目各流水线的 cache key 前缀必须互不为对方的前缀（examples 用 `<project>-examples-monitor-state-`，quick-start 用 `monitor-state-<project>-`），因为 restore-keys 按前缀匹配，前缀重叠会串状态。
 
 ### 要求 3
 
 机制是「清单 + 差集」：
 
-1. 初始化清单。参考 scripts/，扫描目标仓 examples/ 下的 .sh / .py / .yaml（扫描根目录和扩展名记录在清单的 scan 段，检查脚本按它执行，可按项目调整），生成 examples_manifest.yaml。你确认能在 CI 跑通的 example 列入 supported——supported 条目必须写全 path、runner、npu_devices、overlay、timeout_minutes；其余全部自动写入 unsupported。
-2. 每次 CI 比对。创建一个跑在免费的 ubuntu-latest 上的 job，这个 job 把目标仓磁盘上实际存在的 example 与清单求差集：新增的路径（磁盘有、清单无）和失效的路径（清单有、磁盘无）打印到日志和 job summary，然后正常退出，不让 job 失败。新 example 出现是「提示有待办」。
+1. 初始化清单。用 `scripts/bootstrap_manifest.py` 扫描目标仓 examples/ 下的 .sh / .py / .yaml（扫描根目录和扩展名可用 `--scan-root` / `--include-extension` 调整，记录在清单的 scan 段，检查脚本按它执行），生成 examples_manifest.yaml。你确认能在 CI 跑通的 example 列入 supported——supported 条目必须写全 path、runner、npu_devices、image、timeout_minutes（overlay 可选，需要参数覆盖时才写）；其余全部自动写入 unsupported。
+2. 每次 CI 比对。创建一个跑在免费的 ubuntu-latest 上的 job，这个 job 把目标仓磁盘上实际存在的 example 与清单求差集：新增的路径（磁盘有、清单无）和失效的路径（清单有、磁盘无）打印到日志，并写进 manifest_check_result.json 随 artifact 上传（外部机器读 `new_paths` / `stale_paths` 字段），一般不使 job 失败——新 example 出现是「提示有待办」。唯一例外：supported 条目的 path 在磁盘上已不存在时立即判红，避免 run-example 在 NPU runner 上装完依赖才发现 example 没了。
 
 ### 要求 4
 
@@ -64,8 +86,8 @@ GitHub 的 workflow_run（一个 workflow 完成后触发另一个）不能跨�
 
 ```json
 {
-  "trigger": "workflow_dispatch | <项目>-ci-completed | <项目>-examples-changed | <项目>-release",
-  "target_repo": "目标仓库（例如 cosdt-ci-test/ms-swift）",
+  "trigger": "workflow_dispatch | schedule",
+  "target_repo": "目标仓库（例如 modelscope/ms-swift）",
   "target_ref": "被测的分支 / tag / sha",
   "path": "被测example路径，例如 examples/ascend/train/qwen3/qwen3_lora_megatron.sh",
   "image": "所用容器镜像",

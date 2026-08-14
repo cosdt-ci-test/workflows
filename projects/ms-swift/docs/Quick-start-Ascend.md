@@ -72,15 +72,22 @@ npu_count= 1
 
 ## 安装 ms-swift
 
-从上游源码安装（本 Quick Start 测的就是这一节）：
+从源码安装：
 
 ```shell
 >>> git clone https://github.com/modelscope/ms-swift.git
+>>> # Clone the upstream ms-swift repo into ./ms-swift
 >>> cd ms-swift && git checkout <UPSTREAM_REF>
+>>> # Pin the repo to the exact ref/SHA that triggered this CI run
 >>> cd ms-swift && uv pip install -e . --torch-backend=auto
+>>> # Editable install: `swift` CLI is now on PATH, source changes take effect on rerun
+>>> cd .. && mkdir -p projects && mv ms-swift projects/ms-swift
+>>> # Move the cloned repo into projects/ms-swift so the doc/test layout matches this CI repo
+>>> cd projects/ms-swift && python -m unittest tests.test_quick_start_ascend -v
+>>> # Walk every shell block in the doc and compare actual vs expected output; this block IS the test driver
 ```
 
-`<UPSTREAM_REF>` 在 CI 里由监控触发时的 ref（tag 或 commit SHA）替换；本地手测时手动改成实际版本。
+`<UPSTREAM_REF>`： 改成实际版本。
 
 ## 使用样例
 

@@ -372,10 +372,10 @@ class TestQuickStartAscendEndToEnd(unittest.TestCase):
         for bi, block in enumerate(self.blocks):
             kind = block_kind(block)
             timeout = BLOCK_TIMEOUTS.get(kind, BLOCK_TIMEOUTS['default'])
-            _log(f'BLOCK {bi}/{len(self.blocks)-1} kind={kind} timeout={timeout}s '
+            _log(f'[Test block {bi}/{len(self.blocks)-1}] kind={kind} timeout={timeout}s '
                  f'steps={len(block)}')
             if len(block) == 1 and not block[0]['cmd'].strip():
-                _log(f'BLOCK {bi}: sentinel, skip')
+                _log(f'[Test block {bi}]: sentinel, skip')
                 continue
             self._run_block(block, kind, env, captures, timeout, bi)
         _log('test_runs_quick_start: all blocks done')
@@ -464,7 +464,7 @@ class TestQuickStartAscendEndToEnd(unittest.TestCase):
             # Compact success: one line, plus leftover count if any.
             suffix = (f', {leftover_count} leftover line(s) ignored'
                       if leftover_count else '')
-            _log(f'BLOCK {block_idx} step {step_idx} ({kind}): OK '
+            _log(f'[Test block {block_idx}] step {step_idx} ({kind}): OK '
                  f'({len(expected)} expected, {len(actual)} actual{suffix})')
             # When there are leftovers (even on OK), dump the actual
             # content of each one - so the next person who wonders
@@ -478,7 +478,7 @@ class TestQuickStartAscendEndToEnd(unittest.TestCase):
 
         # Mismatch path: dump the full expected and actual blocks once,
         # then highlight which lines failed.
-        _log(f'BLOCK {block_idx} step {step_idx} ({kind}): MISMATCH '
+        _log(f'[Test block {block_idx}] step {step_idx} ({kind}): MISMATCH '
              f'({len(expected)} expected, {len(actual)} actual, '
              f'{leftover_count} leftover)')
         _log('  --- expected ---')

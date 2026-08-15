@@ -428,92 +428,63 @@ class TestQuickStartAscendEndToEnd(unittest.TestCase):
             )
 
     def _compare_lines(self, block_idx, step_idx, kind, expected, actual, captures):
-        """Walk expected and actual in lockstep, matching each line.
+        """Match the whole expected block against the whole actual block.
 
-        A literal ``...`` on the expected side skips ONE actual line.
-        Use consecutive ``...`` lines (or a trailing ``...``) to drop
-        several, which is the typical pattern for variable-length
-        output (training logs, model-generated text, ``npu-smi`` rows)
-        where only the tail matters.
+        Join both into one string per side and build a single regex
+        over the expected text. `...` becomes non-greedy `.*?` under
+        `re.DOTALL` so it can swallow variable-length noise runs
+        (loss logs, init banners). `xxx` becomes `\S+` for single-token
+        placeholders. One `re.search` over both sides replaces the old
+        per-line lockstep walk - simpler state machine, same coverage.
 
         Log policy:
           - When everything matches, log a single 'OK' line.
           - When something mismatches, dump the full expected and
-            actual blocks once (so the reader sees them side by side)
-            and mark each line OK/BAD.
+            actual blocks once (so the reader sees them side by side).
         """
-        a_iter: list[str] = list(actual)
-        e_iter: list[str] = list(expected)
-        mismatches: list[tuple[int, str, str | None]] = []  # (ei, exp, act)
-        line_summary: list[tuple[str, str | None, bool]] = []
-        for ei, line in enumerate(e_iter):
-            if line == '...':
-                # Wildcard: skip ALL remaining actual lines (and
-                # mark this expected line as consumed). Use as a
-                # trailing '...' to swallow variable-length tail
-                # output (progress bars, init banners). Subsequent
-                # expected entries are ignored - so place '...' only
-                # AFTER all the lines you actually want to verify.
-                while a_iter:
-                    consumed = a_iter.pop(0)
-                    line_summary.append(('...', consumed, True))
-                continue
-            actual_line = a_iter.pop(0) if a_iter else None
-            if actual_line is None:
-                mismatches.append((ei, line, None))
-                line_summary.append((line, None, False))
-                continue
-            pat = expected_line_to_regex(line)
-            m = pat.match(actual_line)
-            ok = m is not None
-            line_summary.append((line, actual_line, ok))
-            if not ok:
-                mismatches.append((ei, line, actual_line))
-                continue
-            # Pick up named captures from this actual line.
+        expected_text = '\n'.join(expected)
+        actual_text = '\n'.join(actual)
+
+        text, mapping = substitute_placeholders(expected_text)
+        escaped = re.escape(text)
+        for i, frag in mapping.items():
+            escaped = escaped.replace(_sentinel(i), frag)
+        # `...` becomes non-greedy `.*?` with DOTALL so it can span
+        # multiple actual lines (loss dicts, init banners).
+        escaped = escaped.replace(r'\.\.\.', r'.*?')
+        pattern = re.compile(escaped, re.DOTALL)
+        m = pattern.search(actual_text)
+
+        # Pick up named captures whether or not we matched.
+        if m:
             for k, v in m.groupdict().items():
                 if v is not None:
                     captures[k] = v
-        leftover_count = sum(1 for _ in a_iter)
 
-        if not mismatches:
-            # Compact success: one line, plus leftover count if any.
-            suffix = (f', {leftover_count} leftover line(s) ignored'
-                      if leftover_count else '')
+        if m:
             _log(f'[Test block {block_idx}] step {step_idx} ({kind}): OK '
-                 f'({len(expected)} expected, {len(actual)} actual{suffix})')
-            # When there are leftovers (even on OK), dump the actual
-            # content of each one - so the next person who wonders
-            # 'why is actual bigger than expected' can see exactly
-            # what got swallowed.
-            if leftover_count:
-                start_idx = len(expected)
-                for i, ln in enumerate(actual[start_idx:], 1):
-                    _log(f'    leftover {i}: {ln!r}')
+                 f'({len(expected)} expected, {len(actual)} actual)')
             return
 
-        # Mismatch path: dump the full expected and actual blocks once,
-        # then highlight which lines failed.
+        # Mismatch - dump both blocks.
         _log(f'[Test block {block_idx}] step {step_idx} ({kind}): MISMATCH '
-             f'({len(expected)} expected, {len(actual)} actual, '
-             f'{leftover_count} leftover)')
+             f'({len(expected)} expected, {len(actual)} actual)')
         _log('  --- expected ---')
-        for i, ln in enumerate(e_iter, 1):
+        for i, ln in enumerate(expected, 1):
             _log(f'  {i:>3}. {ln}')
         _log('  --- actual (head + tail if huge) ---')
         if len(actual) <= 20:
             for i, ln in enumerate(actual, 1):
                 _log(f'  {i:>3}. {ln}')
         else:
-            # Truncate huge actual blocks (e.g. swift sft training
-            # emits hundreds of progress lines).
             for i, ln in enumerate(actual[:10], 1):
                 _log(f'  {i:>3}. {ln}')
             _log(f'  ... [{len(actual) - 20} line(s) elided] ...')
             for i, ln in enumerate(actual[-10:], len(actual) - 9):
                 _log(f'  {i:>3}. {ln}')
-        _log('  --- per-line status ---')
-        for i, (exp, act, ok) in enumerate(line_summary, 1):
+        self.fail(
+            f'block #{block_idx} step #{step_idx} ({kind}) output '
+            'mismatch; see summary above')
             mark = 'OK ' if ok else 'BAD'
             exp_disp = repr(exp) if exp else '<skip>'
             act_disp = repr(act) if act is not None else '<missing>'

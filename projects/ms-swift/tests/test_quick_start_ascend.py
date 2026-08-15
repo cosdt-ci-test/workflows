@@ -432,11 +432,15 @@ class TestQuickStartAscendEndToEnd(unittest.TestCase):
         line_summary: list[tuple[str, str | None, bool]] = []
         for ei, line in enumerate(e_iter):
             if line == '...':
-                if a_iter:
+                # Wildcard: skip ALL remaining actual lines (and
+                # mark this expected line as consumed). Use as a
+                # trailing '...' to swallow variable-length tail
+                # output (progress bars, init banners). Subsequent
+                # expected entries are ignored - so place '...' only
+                # AFTER all the lines you actually want to verify.
+                while a_iter:
                     consumed = a_iter.pop(0)
                     line_summary.append(('...', consumed, True))
-                else:
-                    line_summary.append(('...', None, True))
                 continue
             actual_line = a_iter.pop(0) if a_iter else None
             if actual_line is None:

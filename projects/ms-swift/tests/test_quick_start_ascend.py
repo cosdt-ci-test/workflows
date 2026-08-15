@@ -112,6 +112,9 @@ def parse_blocks(doc_text: str) -> list[list[dict]]:
         block: list[dict] = []
         cur_cmd: list[str] = []
         cur_exp: list[str] = []
+        in_cmd = False   # True right after a '>>>' line - `...` then
+                        # continues the command; False once any
+                        # non-`...` line (expected output) is seen.
         for raw in body.splitlines():
             stripped = raw.lstrip()
             if stripped.startswith('>>> '):
@@ -122,23 +125,30 @@ def parse_blocks(doc_text: str) -> list[list[dict]]:
                     })
                 cur_cmd = [stripped[4:]]
                 cur_exp = []
+                # Right after `>>>`, `...` lines are bash
+                # continuations of the command, not wildcards.
+                in_cmd = True
+            elif in_cmd and stripped.startswith('... '):
+                # `...` continuation of the current `>>>` command.
+                cur_cmd.append(stripped[4:])
             elif stripped.startswith('...'):
-                # Either a standalone wildcard '...' on its own line,
-                # or '...' with an inline comment like
-                # `...                              # skip noise`. We
-                # only need the wildcard itself in expected;
-                # the comment is a doc annotation, not part of the
-                # assertion contract.
+                # Standalone wildcard (with optional inline comment)
+                # - swallow every remaining actual line as leftover.
                 cur_exp.append('...')
-            elif stripped.startswith('<<< '):
+                in_cmd = False
+            elif stripped.startswith('<<<'):
                 cur_cmd.append(f': <<< {stripped[4:]}')
+                in_cmd = True
             elif stripped.startswith('#'):
                 # Drop comment lines entirely (neither a command nor
                 # expected output). Lets the doc author sprinkle plain
                 # `# ...` explanations inside a shell block.
                 continue
             else:
+                # Any non-`...` non-comment line ends the command-
+                # continuation phase; subsequent `...` are wildcards.
                 cur_exp.append(raw)
+                in_cmd = False
         if cur_cmd or cur_exp:
             block.append({
                 'cmd': '\n'.join(cur_cmd).rstrip(),

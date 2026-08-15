@@ -57,6 +57,7 @@ torch_npu= 2.9.0.post2
 is_available: True
 count: 1
 ...                              # skip torch_npu init banner ('path string is NULL...')
+```
 
 确认能看到 NPU 设备：
 
@@ -65,8 +66,6 @@ npu-smi info
 ```
 
 > 如果 `npu-smi` 不存在，请回到 [Ascend 官方快速安装指南](https://ascend.github.io/docs/sources/ascend/quick_install.html) 补装驱动；如果 `import torch_npu` 失败，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查 torch / torch_npu / CANN 三方兼容矩阵。
-
----
 
 ## 安装 ms-swift
 

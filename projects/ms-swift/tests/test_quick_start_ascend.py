@@ -448,13 +448,14 @@ class TestQuickStartAscendEndToEnd(unittest.TestCase):
         line_summary: list[tuple[str, str | None, bool]] = []
         for ei, line in enumerate(e_iter):
             if line == '...':
-                # Wildcard: skip ALL remaining actual lines (and
-                # mark this expected line as consumed). Use as a
-                # trailing '...' to swallow variable-length tail
-                # output (progress bars, init banners). Subsequent
-                # expected entries are ignored - so place '...' only
-                # AFTER all the lines you actually want to verify.
+                # Wildcard: skip actual lines only up to (but not
+                # past) the next non-'...' expected entry. So '...'
+                # only consumes leftover noise; subsequent real
+                # expected lines stay verifiable. Use multiple '...'
+                # lines to skip several separate noise runs.
                 while a_iter:
+                    if ei + 1 < len(e_iter) and e_iter[ei + 1] != '...':
+                        break
                     consumed = a_iter.pop(0)
                     line_summary.append(('...', consumed, True))
                 continue

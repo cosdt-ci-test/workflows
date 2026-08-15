@@ -462,6 +462,14 @@ class TestQuickStartAscendEndToEnd(unittest.TestCase):
                       if leftover_count else '')
             _log(f'BLOCK {block_idx} step {step_idx} ({kind}): OK '
                  f'({len(expected)} expected, {len(actual)} actual{suffix})')
+            # When there are leftovers (even on OK), dump the actual
+            # content of each one - so the next person who wonders
+            # 'why is actual bigger than expected' can see exactly
+            # what got swallowed.
+            if leftover_count:
+                start_idx = len(expected)
+                for i, ln in enumerate(actual[start_idx:], 1):
+                    _log(f'    leftover {i}: {ln!r}')
             return
 
         # Mismatch path: dump the full expected and actual blocks once,

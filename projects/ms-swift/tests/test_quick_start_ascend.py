@@ -419,17 +419,19 @@ class TestQuickStartAscendEndToEnd(unittest.TestCase):
         several, which is the typical pattern for variable-length
         output (training logs, model-generated text, ``npu-smi`` rows)
         where only the tail matters.
+
+        Log policy:
+          - When everything matches, log a single 'OK' line.
+          - When something mismatches, dump the full expected and
+            actual blocks once (so the reader sees them side by side)
+            and mark each line OK/BAD.
         """
         a_iter: list[str] = list(actual)
         e_iter: list[str] = list(expected)
-        mismatches = []
-        # Collect per-line (expected, actual, match) tuples for the
-        # summary log; populate after the loop with leftovers too.
+        mismatches: list[tuple[int, str, str | None]] = []  # (ei, exp, act)
         line_summary: list[tuple[str, str | None, bool]] = []
         for ei, line in enumerate(e_iter):
             if line == '...':
-                # Wildcard: skip a single actual line. Use consecutive
-                # ``...`` lines (or a trailing ``...``) to drop several.
                 if a_iter:
                     consumed = a_iter.pop(0)
                     line_summary.append(('...', consumed, True))
@@ -438,8 +440,7 @@ class TestQuickStartAscendEndToEnd(unittest.TestCase):
                 continue
             actual_line = a_iter.pop(0) if a_iter else None
             if actual_line is None:
-                mismatches.append(
-                    f'  expected line not produced:\n    {line!r}')
+                mismatches.append((ei, line, None))
                 line_summary.append((line, None, False))
                 continue
             pat = expected_line_to_regex(line)
@@ -447,35 +448,59 @@ class TestQuickStartAscendEndToEnd(unittest.TestCase):
             ok = m is not None
             line_summary.append((line, actual_line, ok))
             if not ok:
-                mismatches.append(
-                    f'  line mismatch:\n'
-                    f'    expected (regex): {pat.pattern!r}\n'
-                    f'    actual:           {actual_line!r}')
+                mismatches.append((ei, line, actual_line))
                 continue
             # Pick up named captures from this actual line.
             for k, v in m.groupdict().items():
                 if v is not None:
                     captures[k] = v
-        # Count leftover actual lines (not part of any expected) for
-        # the summary footer; we don't expand them inline because
-        # they tend to be noise (torch_npu init banner, etc).
         leftover_count = sum(1 for _ in a_iter)
-        # Always print the per-line summary so the diff is visible in
-        # the CI stream log even when everything matched.
-        _log(f'BLOCK {block_idx} step {step_idx} ({kind}): '
-             f'{len(expected)} expected, {len(actual)} actual')
+
+        if not mismatches:
+            # Compact success: one line, plus leftover count if any.
+            suffix = (f', {leftover_count} leftover line(s) ignored'
+                      if leftover_count else '')
+            _log(f'BLOCK {block_idx} step {step_idx} ({kind}): OK '
+                 f'({len(expected)} expected, {len(actual)} actual{suffix})')
+            # When there are leftovers (even on OK), dump the actual
+            # content of each one - so the next person who wonders
+            # 'why is actual bigger than expected' can see exactly
+            # what got swallowed.
+            if leftover_count:
+                start_idx = len(expected)
+                for i, ln in enumerate(actual[start_idx:], 1):
+                    _log(f'    leftover {i}: {ln!r}')
+            return
+
+        # Mismatch path: dump the full expected and actual blocks once,
+        # then highlight which lines failed.
+        _log(f'BLOCK {block_idx} step {step_idx} ({kind}): MISMATCH '
+             f'({len(expected)} expected, {len(actual)} actual, '
+             f'{leftover_count} leftover)')
+        _log('  --- expected ---')
+        for i, ln in enumerate(e_iter, 1):
+            _log(f'  {i:>3}. {ln}')
+        _log('  --- actual (head + tail if huge) ---')
+        if len(actual) <= 20:
+            for i, ln in enumerate(actual, 1):
+                _log(f'  {i:>3}. {ln}')
+        else:
+            # Truncate huge actual blocks (e.g. swift sft training
+            # emits hundreds of progress lines).
+            for i, ln in enumerate(actual[:10], 1):
+                _log(f'  {i:>3}. {ln}')
+            _log(f'  ... [{len(actual) - 20} line(s) elided] ...')
+            for i, ln in enumerate(actual[-10:], len(actual) - 9):
+                _log(f'  {i:>3}. {ln}')
+        _log('  --- per-line status ---')
         for i, (exp, act, ok) in enumerate(line_summary, 1):
             mark = 'OK ' if ok else 'BAD'
             exp_disp = repr(exp) if exp else '<skip>'
             act_disp = repr(act) if act is not None else '<missing>'
-            _log(f'  {i:>2}. [{mark}] exp={exp_disp}  act={act_disp}')
-        if leftover_count:
-            _log(f'  ... {leftover_count} extra actual line(s) ignored')
-        # Extra actual lines are a soft warning, not a failure.
-        if mismatches:
-            msg = (f'block #{block_idx} step #{step_idx} ({kind}) output '
-                   f'mismatch:\n' + '\n'.join(mismatches))
-            self.fail(msg)
+            _log(f'  {i:>3}. [{mark}] exp={exp_disp}  act={act_disp}')
+        msg = (f'block #{block_idx} step #{step_idx} ({kind}) output '
+               'mismatch; see summary above')
+        self.fail(msg)
 
 
 if __name__ == '__main__':

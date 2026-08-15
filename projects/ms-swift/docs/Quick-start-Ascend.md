@@ -56,7 +56,6 @@ torch= 2.9.0+cpu
 torch_npu= 2.9.0.post2
 is_available: True
 count: 1
-...                              # skip torch_npu init banner on stderr
 ```
 
 确认能看到 NPU 设备：
@@ -125,10 +124,9 @@ ms-swift xxx
 ...     --dataloader_num_workers 4 \
 ...     --model_author swift \
 ...     --model_name swift-robot
-[INFO:swift] start training ...
-{'loss': ..., 'grad_norm': ..., 'learning_rate': ..., 'epoch': ...}
+run sh: swift sft ...          # subprocess launching the swift CLI
 ...
-{'loss': ..., 'grad_norm': ..., 'learning_rate': ..., 'epoch': ...}
+[INFO:swift] start training ...
 ...
 [INFO:swift] training finished, saving checkpoint ...
 Saving checkpoint to output/vx-xxx/checkpoint-xxx

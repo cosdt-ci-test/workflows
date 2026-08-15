@@ -122,8 +122,14 @@ def parse_blocks(doc_text: str) -> list[list[dict]]:
                     })
                 cur_cmd = [stripped[4:]]
                 cur_exp = []
-            elif stripped.startswith('... '):
-                cur_cmd.append(stripped[4:])
+            elif stripped.startswith('...'):
+                # Either a standalone wildcard '...' on its own line,
+                # or '...' with an inline comment like
+                # `...                              # skip noise`. We
+                # only need the wildcard itself in expected;
+                # the comment is a doc annotation, not part of the
+                # assertion contract.
+                cur_exp.append('...')
             elif stripped.startswith('<<< '):
                 cur_cmd.append(f': <<< {stripped[4:]}')
             elif stripped.startswith('#'):

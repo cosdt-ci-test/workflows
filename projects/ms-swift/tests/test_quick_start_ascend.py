@@ -485,13 +485,6 @@ class TestQuickStartAscendEndToEnd(unittest.TestCase):
         self.fail(
             f'block #{block_idx} step #{step_idx} ({kind}) output '
             'mismatch; see summary above')
-            mark = 'OK ' if ok else 'BAD'
-            exp_disp = repr(exp) if exp else '<skip>'
-            act_disp = repr(act) if act is not None else '<missing>'
-            _log(f'  {i:>3}. [{mark}] exp={exp_disp}  act={act_disp}')
-        msg = (f'block #{block_idx} step #{step_idx} ({kind}) output '
-               'mismatch; see summary above')
-        self.fail(msg)
 
 
 if __name__ == '__main__':

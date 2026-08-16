@@ -442,6 +442,18 @@ jobs:
           fi
           echo "============================================================"
 
+      # Upload the result.json artifact so the validate-results job can
+      # pick it up. Always runs (``if: always()``) so a test failure still
+      # leaves an artifact for downstream validation.
+      - name: Upload quick-start result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ms-swift-quick-start-${{ github.run_id }}
+          path: output/result.json
+          if-no-files-found: warn
+          retention-days: 30
+
   validate-results:
     needs: [monitor-and-test]
     if: always()

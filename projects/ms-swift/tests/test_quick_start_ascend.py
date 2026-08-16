@@ -464,27 +464,45 @@ class TestQuickStartAscendEndToEnd(unittest.TestCase):
         if m:
             _log(f'[Test block {block_idx}] step {step_idx} ({kind}): OK '
                  f'({len(expected)} expected, {len(actual)} actual)')
+            # Always print the full actual block (capped at 30 lines) so a
+            # reader can spot-check what was matched without rerunning.
+            self._log_block('actual', actual, cap=30)
             return
 
         # Mismatch - dump both blocks.
         _log(f'[Test block {block_idx}] step {step_idx} ({kind}): MISMATCH '
              f'({len(expected)} expected, {len(actual)} actual)')
-        _log('  --- expected ---')
-        for i, ln in enumerate(expected, 1):
-            _log(f'  {i:>3}. {ln}')
-        _log('  --- actual (head + tail if huge) ---')
-        if len(actual) <= 20:
-            for i, ln in enumerate(actual, 1):
-                _log(f'  {i:>3}. {ln}')
-        else:
-            for i, ln in enumerate(actual[:10], 1):
-                _log(f'  {i:>3}. {ln}')
-            _log(f'  ... [{len(actual) - 20} line(s) elided] ...')
-            for i, ln in enumerate(actual[-10:], len(actual) - 9):
-                _log(f'  {i:>3}. {ln}')
+        self._log_block('expected', expected)
+        self._log_block('actual', actual)
         self.fail(
             f'block #{block_idx} step #{step_idx} ({kind}) output '
             'mismatch; see summary above')
+
+    @staticmethod
+    def _log_block(label: str, lines, cap: int = 30) -> None:
+        """Pretty-print a block (or head+tail if it exceeds ``cap``).
+
+        Always emits a consistent header so the OK and MISMATCH code paths
+        show the same shape; an explicit ``cap`` keeps CI logs from
+        flooding when the swift sft output runs into hundreds of lines.
+        Output budget is exactly ``cap`` lines (default 30) for the head
+        half of those plus the tail half of those, never exceeding it.
+        """
+        _log(f'  --- {label} (head + tail if huge) ---')
+        if len(lines) <= cap:
+            for i, ln in enumerate(lines, 1):
+                _log(f'  {i:>3}. {ln}')
+            return
+        half = cap // 2
+        head = lines[:half]
+        tail = lines[-half:]
+        for i, ln in enumerate(head, 1):
+            _log(f'  {i:>3}. {ln}')
+        elided = len(lines) - 2 * half
+        _log(f'  ... [{elided} line(s) elided] ...')
+        tail_start = len(lines) - half + 1
+        for offset, ln in enumerate(tail):
+            _log(f'  {tail_start + offset:>3}. {ln}')
 
 
 if __name__ == '__main__':

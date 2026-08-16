@@ -386,6 +386,77 @@ jobs:
           fi
           echo "outcome for ${BASE}: ${OUT} (test conclusion: ${CONCLUSION}, reason: ${REASON_TEXT})"
 
+      # Write a small machine-readable summary so external monitors can pull
+      # per-run outcomes via /actions/runs/{run_id}/artifacts. Captures the
+      # metadata that's already on the GH Actions graph (trigger, reason,
+      # upstream ref/commit, runner image) plus the GitHub job conclusion;
+      # we deliberately do NOT mine the log here because log shape changes
+      # would force every consumer to follow along.
+      - name: Write result.json
+        if: always()
+        env:
+          TRIGGER:         ${{ github.event_name }}
+          REASON:          ${{ steps.decide.outputs.reason }}
+          UPSTREAM_REPO:   ${{ env.UPSTREAM_REPO }}
+          UPSTREAM_REF:    ${{ steps.decide.outputs.test_ref }}
+          UPSTREAM_COMMIT: ${{ steps.upstream-commit.outputs.sha }}
+          TARGET_REPO:     ${{ vars.TARGET_REPO || 'cosdt-ci-test/ms-swift' }}
+          TARGET_REF:      ${{ vars.TARGET_REF || 'main' }}
+          IMAGE:           ${{ env.CI_IMAGE }}
+          JOB_STATUS:      ${{ job.status }}
+          CHANGED:         ${{ steps.decide.outputs.changed }}
+        run: |
+          mkdir -p output
+          if [ "$TRIGGER" = "workflow_dispatch" ] || [ "$CHANGED" = "true" ]; then
+            tests_ran=true
+          else
+            tests_ran=false
+          fi
+          jq -n \
+            --arg workflow         "ms-swift-quick-start" \
+            --arg trigger          "$TRIGGER" \
+            --arg reason           "$REASON" \
+            --arg upstream_repo    "$UPSTREAM_REPO" \
+            --arg upstream_ref     "$UPSTREAM_REF" \
+            --arg upstream_commit  "$UPSTREAM_COMMIT" \
+            --arg target_repo      "$TARGET_REPO" \
+            --arg target_ref       "$TARGET_REF" \
+            --arg image            "$IMAGE" \
+            --arg job_status       "$JOB_STATUS" \
+            --argjson tests_ran    "$tests_ran" \
+            --arg created_at       "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{
+              workflow:        $workflow,
+              trigger:         $trigger,
+              reason:          $reason,
+              upstream_repo:   $upstream_repo,
+              upstream_ref:    $upstream_ref,
+              upstream_commit: $upstream_commit,
+              target_repo:     $target_repo,
+              target_ref:      $target_ref,
+              image:           $image,
+              tests_ran:       $tests_ran,
+              job_status:      $job_status,
+              created_at:      $created_at
+            }' > output/result.json
+          echo "wrote $(wc -c < output/result.json) bytes:"
+          cat output/result.json
+
+      # Upload so the artifact survives the job workspace (which is wiped
+      # the moment the runner releases). Retention rides on GitHub's
+      # artifact storage policy: 90 days for public repos (we go with
+      # that ceiling), 365 for private/org repos if we ever cross over.
+      # Skipped when no result.json was produced (changed=false on a
+      # quiet schedule tick) so we don't churn empty artifacts.
+      - name: Upload result.json
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ms-swift-quick-start-${{ github.run_id }}
+          path: output/result.json
+          if-no-files-found: warn
+          retention-days: 90
+
       - name: Summarize test result
         if: always()
         env:

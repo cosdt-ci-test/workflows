@@ -130,7 +130,7 @@ run sh: ...
 {'train_runtime': xxx, ... 'train_loss': xxx, ...}
 ...                              # torch_npu init banner
 >>> echo "train done, checkpoint dir: $(ls -dt output/*/checkpoint-* | head -n 1)"
-train done, checkpoint dir: output/vx-xxx/checkpoint-xxx
+train done, checkpoint dir: output/v0-xxx/checkpoint-xxx ...
 ```
 
 小贴士：
@@ -149,7 +149,7 @@ train done, checkpoint dir: output/vx-xxx/checkpoint-xxx
 
 ```shell
 >>> ASCEND_RT_VISIBLE_DEVICES=0 swift infer \
-...     --adapters output/vx-xxx/checkpoint-xxx \
+...     --adapters output/v0-xxx/checkpoint-xxx \
 ...     --stream true \
 ...     --temperature 0 \
 ...     --max_new_tokens 2048
@@ -163,7 +163,7 @@ infer transformers done
 
 ```shell
 >>> ASCEND_RT_VISIBLE_DEVICES=0 swift infer \
-...     --adapters output/vx-xxx/checkpoint-xxx \
+...     --adapters output/v0-xxx/checkpoint-xxx \
 ...     --stream true \
 ...     --merge_lora true \
 ...     --infer_backend vllm \
@@ -181,7 +181,7 @@ infer vllm-ascend done
 ```shell
 ASCEND_RT_VISIBLE_DEVICES=0 \
 swift export \
-    --adapters output/vx-xxx/checkpoint-xxx \
+    --adapters output/v0-xxx/checkpoint-xxx \
     --push_to_hub true \
     --hub_model_id '<your-model-id>' \
     --hub_token '<your-sdk-token>' \

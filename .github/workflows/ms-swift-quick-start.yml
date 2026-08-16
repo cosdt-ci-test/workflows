@@ -450,18 +450,20 @@ jobs:
       # quiet schedule tick) so we don't churn empty artifacts.
       - name: Upload result.json
         if: always()
-        # Pinned to upload-artifact v4.4.0 (the SHA here) because the
-        # floating @v4 tag drifted onto a build that races the
-        # ``progress stalled`` retry loop on the node-24 / self-hosted
-        # runner. If the action later releases a fix on the major
-        # version, drop the SHA pin.
-        # continue-on-error: belt-and-suspenders - if a stall still
-        # sneaks past the pin, the run conclusion stays driven by the
-        # test step. External monitors can fall back to
-        # /actions/runs/{id} + /jobs for success/failure even if the
-        # artifact never lands.
+        # Tracking upload-artifact @v7. v5 (2025-10) bumped to Node 24,
+        # v6 (2025-12) made Node 24 the default (runner >= 2.327.1;
+        # we run 2.336.0 so this is satisfied), v7 (2026-02) rewrote
+        # the action to ESM and added a ``direct upload`` mode that
+        # we do not opt into. The ``name`` / ``path`` /
+        # ``if-no-files-found`` / ``retention-days`` inputs we use
+        # are unchanged across v5/v6/v7, so this bump is yaml-only.
+        # continue-on-error: belt-and-suspenders - if a stall (or any
+        # other upload failure) recurs on v7, the run conclusion
+        # stays driven by the test step. External monitors can fall
+        # back to /actions/runs/{id} + /jobs for success/failure
+        # even if the artifact never lands.
         continue-on-error: true
-        uses: actions/upload-artifact@de90cc6fb38b09665ad73b38c60c8ff845c92cc4 # v4.4.0
+        uses: actions/upload-artifact@v7
         with:
           name: ms-swift-quick-start-${{ github.run_id }}
           path: output/result.json

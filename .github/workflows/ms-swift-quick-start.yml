@@ -335,7 +335,7 @@ jobs:
           # <UPSTREAM_REF>). After that, run the doc itself as a unittest
           # - every shell block becomes one or more test cases.
           cd workflows/projects/ms-swift
-          python -m unittest tests.test_quick_start_ascend -v
+          python -m unittest tests.test_quick_start_ascend -v 2>&1
 
       - name: Record outcome
         id: record-outcome

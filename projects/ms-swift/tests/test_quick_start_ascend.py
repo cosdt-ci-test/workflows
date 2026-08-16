@@ -181,7 +181,7 @@ _PLACEHOLDER_PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r'v\d+-xxx'),      r'v\d+-\S+'),
     (re.compile(r'checkpoint-xxx'), r'checkpoint-\S+'),
     (re.compile(r'chatcmpl-xxx'),  r'chatcmpl-\S+'),
-    (re.compile(r'\bxxx\b'),       r'\S+'),
+    (re.compile(r'\bxxx\b'),       r'[^,\s]+?'),
     (re.compile(r'"created":\d+'), r'"created":\d+'),
 ]
 

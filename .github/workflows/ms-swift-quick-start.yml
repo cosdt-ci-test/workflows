@@ -450,17 +450,17 @@ jobs:
       # quiet schedule tick) so we don't churn empty artifacts.
       - name: Upload result.json
         if: always()
-        # Pinned to upload-artifact v4.6.2. Earlier floating @v4
-        # builds have been seen to surface ``Error: Upload progress
-        # stalled.`` on the node-24 self-hosted runner that backs
-        # this workflow's NPU jobs.
+        # Pinned to upload-artifact v4.6.2 (rather than the floating
+        # @v4 tag) because earlier @v4 builds have been observed to
+        # surface ``Error: Upload progress stalled.`` on the node-24
+        # self-hosted runner that backs this workflow's NPU jobs.
         # continue-on-error: belt-and-suspenders - if a stall still
-        # sneaks past the pin, the run conclusion stays driven by
-        # the test step. External monitors can fall back to
-        # /actions/runs/{id} + /jobs for success/failure even if
-        # the artifact never lands.
+        # sneaks past v4.6.2 (e.g. v4.6.3 regresses), the run
+        # conclusion stays driven by the test step. External
+        # monitors can fall back to /actions/runs/{id} + /jobs for
+        # success/failure even if the artifact never lands.
         continue-on-error: true
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@v4.6.2
         with:
           name: ms-swift-quick-start-${{ github.run_id }}
           path: output/result.json

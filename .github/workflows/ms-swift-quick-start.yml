@@ -450,15 +450,18 @@ jobs:
       # quiet schedule tick) so we don't churn empty artifacts.
       - name: Upload result.json
         if: always()
-        # continue-on-error: a stalled upload on the NPU runner should
-        # not turn the run red - the test result is already captured
-        # elsewhere (job status, GH Actions dashboard). We've seen
-        # ``Error: Upload progress stalled.`` transiently on this
-        # runner when node 24 + upload-artifact@v4 retry loop
-        # collides; consumers can still poll ``/actions/runs/{id}`` /
-        # ``/jobs`` for the conclusion without the artifact.
+        # Pinned to upload-artifact v4.4.0 (the SHA here) because the
+        # floating @v4 tag drifted onto a build that races the
+        # ``progress stalled`` retry loop on the node-24 / self-hosted
+        # runner. If the action later releases a fix on the major
+        # version, drop the SHA pin.
+        # continue-on-error: belt-and-suspenders - if a stall still
+        # sneaks past the pin, the run conclusion stays driven by the
+        # test step. External monitors can fall back to
+        # /actions/runs/{id} + /jobs for success/failure even if the
+        # artifact never lands.
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@de90cc6fb38b09665ad73b38c60c8ff845c92cc4 # v4.4.0
         with:
           name: ms-swift-quick-start-${{ github.run_id }}
           path: output/result.json

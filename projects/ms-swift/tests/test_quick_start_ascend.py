@@ -261,7 +261,17 @@ def run_command(cmd: str, env: dict, cwd: Path, timeout: int) -> tuple[int, str]
     # expected, so the GitHub step log shows the failure mode without
     # having to download an artifact. Truncate to keep the log sane
     # (swift sft training can easily produce hundreds of MB of stdout).
-    if proc.returncode != 0 or (out.strip() == '' and err.strip() != ''):
+    #
+    # We also dump stderr when the process looks "healthy" (rc=0) but
+    # the canonical error markers are present. swift infer on the
+    # NPU runner has been seen to swallow [ERROR] / Exception lines
+    # into stderr while exiting cleanly, masking a real failure
+    # behind a successful run-conclusion.
+    error_markers = ('[ERROR]', 'Traceback (most recent call last)',
+                     'applicaiton exception', 'ERR99999')
+    stderr_has_error = any(m in err for m in error_markers)
+    if proc.returncode != 0 or stderr_has_error \
+            or (out.strip() == '' and err.strip() != ''):
         head_out = out[:2000]
         tail_out = out[-2000:] if len(out) > 2000 else ''
         head_err = err[:2000]

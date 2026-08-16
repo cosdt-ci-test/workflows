@@ -182,6 +182,12 @@ _PLACEHOLDER_PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r'checkpoint-xxx'), r'checkpoint-\S+'),
     (re.compile(r'chatcmpl-xxx'),  r'chatcmpl-\S+'),
     (re.compile(r'\bxxx\b'),       r'[^,\s]+?'),
+    # <ckpt> - captures the Swift-SFT checkpoint path emitted by
+    # `ls -dt output/*/checkpoint-* | head -n 1` so a later
+    # `swift infer --adapters <ckpt>` substitutes the actual
+    # checkpoint directory instead of relying on a placeholder that
+    # would never exist on disk.
+    (re.compile(r'<ckpt>'),       r'(?P<ckpt>output/[^/\s]+/checkpoint-\S+)'),
     (re.compile(r'"created":\d+'), r'"created":\d+'),
 ]
 

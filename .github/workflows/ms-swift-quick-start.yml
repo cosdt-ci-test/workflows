@@ -386,41 +386,6 @@ jobs:
           fi
           echo "outcome for ${BASE}: ${OUT} (test conclusion: ${CONCLUSION}, reason: ${REASON_TEXT})"
 
-      - name: Write result JSON
-        if: always()
-        env:
-          TRIGGER: ${{ github.event_name }}
-          TARGET_REPO: ${{ vars.TARGET_REPO || 'cosdt-ci-test/ms-swift' }}
-          TARGET_REF: ${{ vars.TARGET_REF || 'main' }}
-          JOB_STATUS: ${{ job.status }}
-          CHANGED: ${{ steps.decide.outputs.changed }}
-        run: |
-          mkdir -p "$GITHUB_WORKSPACE/output"
-          if [ "$TRIGGER" = "workflow_dispatch" ] || [ "$CHANGED" = "true" ]; then
-            tests_ran=true
-          else
-            tests_ran=false
-          fi
-          python3 - "$tests_ran" <<'EOF'
-          import json
-          import os
-          import sys
-
-          result = {
-              'trigger': os.environ['TRIGGER'],
-              'target_repo': os.environ['TARGET_REPO'],
-              'target_ref': os.environ['TARGET_REF'],
-              'path': 'projects/ms-swift/docs/Quick-start-Ascend.md',
-              'image': os.environ['CI_IMAGE'],
-              'job_status': os.environ['JOB_STATUS'],
-              'tests_ran': sys.argv[1] == 'true',
-          }
-          out = os.path.join(os.environ['GITHUB_WORKSPACE'], 'output', 'result.json')
-          with open(out, 'w', encoding='utf-8') as handle:
-              json.dump(result, handle, ensure_ascii=False, indent=2)
-              handle.write('\n')
-          EOF
-
       - name: Summarize test result
         if: always()
         env:
@@ -441,44 +406,3 @@ jobs:
             echo "  Last failure:     $(cat "$REASON_FILE")"
           fi
           echo "============================================================"
-
-      # Upload the result.json artifact so the validate-results job can
-      # pick it up. Always runs (``if: always()``) so a test failure still
-      # leaves an artifact for downstream validation.
-      - name: Upload quick-start result
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ms-swift-quick-start-${{ github.run_id }}
-          path: output/result.json
-          if-no-files-found: warn
-          retention-days: 30
-
-  validate-results:
-    needs: [monitor-and-test]
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout workflows
-        uses: actions/checkout@v4
-        with:
-          path: workflows
-
-      - name: Download quick-start results
-        uses: actions/download-artifact@v4
-        with:
-          pattern: ms-swift-quick-start-*
-          path: downloaded
-          merge-multiple: false
-
-      - name: Validate result.json
-        run: |
-          set -euo pipefail
-          python3 -m pip install -q check-jsonschema
-          shopt -s nullglob
-          files=(downloaded/*/result.json)
-          if [ ${#files[@]} -eq 0 ]; then
-            echo "no result.json found in ms-swift-quick-start-* artifacts"
-            exit 1
-          fi
-          check-jsonschema --schemafile workflows/schemas/result.schema.json "${files[@]}"

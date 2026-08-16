@@ -123,11 +123,11 @@ ms-swift xxx
 ...     --dataloader_num_workers 4 \
 ...     --model_author swift \
 ...     --model_name swift-robot
-run sh: swift sft ...          # subprocess launching the swift CLI
+run sh: ...
 ...                              # downloading model + 5 step loss dicts
-{'loss': xxx, 'global_step/max_steps': '1/5', ...}
-{'loss': xxx, 'global_step/max_steps': '5/5', ...}
-{'train_runtime': xxx, 'train_loss': xxx, ...}
+{'loss': xxx, ... 'global_step/max_steps': '1/5', ...}
+{'loss': xxx, ... 'global_step/max_steps': '5/5', ...}
+{'train_runtime': xxx, ... 'train_loss': xxx, ...}
 ...                              # torch_npu init banner
 >>> echo "train done, checkpoint dir: $(ls -dt output/*/checkpoint-* | head -n 1)"
 train done, checkpoint dir: output/vx-xxx/checkpoint-xxx

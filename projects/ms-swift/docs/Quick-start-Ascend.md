@@ -34,15 +34,17 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | --- | --- |
 | Python | 3.12 |
 | CANN | 9.1.0 |
-| torch | 2.9.0 |
-| torch_npu | 2.9.0.post2 |
+| torch | 2.10.0 |
+| torch_npu | 2.10.0.post4 |
 | transformers | `<5.0` |
 | peft | `<0.19` |
 | modelscope | 1.37.0 |
+| vllm | 0.22.1 |
+| vllm-ascend | 0.22.1rc1 |
 | ms-swift | 本仓库当前 main 分支源码（`pip install -e .`） |
 | 模型 | [Qwen/Qwen3-4B-Instruct-2507](https://www.modelscope.cn/Qwen/Qwen3-4B-Instruct-2507) |
 | 数据集 | `AI-ModelScope/alpaca-gpt4-data-zh#500` + `AI-ModelScope/alpaca-gpt4-data-en#500` + `swift/self-cognition#500` |
-| 推理后端 | 本文 doc 默认 transformers / torch_npu（`--infer_backend transformers`）。CI 流程在 setup 阶段通过 `pip install` 装 `vllm==0.18.0` + `vllm-ascend==0.18.0`（镜像本身**不**预装），需要 vLLM 加速推理时改 `--infer_backend vllm` 即可。本机对应环境请参考 [NPU-support.md#vllm-ascend](https://github.com/modelscope/ms-swift/blob/master/docs/source/BestPractices/NPU-support.md)。 |
+| 推理后端 | 本文 doc 默认 transformers / torch_npu（`--infer_backend transformers`）。CI 流程在 setup 阶段通过 `pip install` 装 `vllm==0.22.1` + `vllm-ascend==0.22.1rc1`（镜像本身**不**预装），需要 vLLM 加速推理时改 `--infer_backend vllm` 即可。本机对应环境请参考 [NPU-support.md#vllm-ascend](https://github.com/modelscope/ms-swift/blob/master/docs/source/BestPractices/NPU-support.md)。 |
 | 部署 | `swift deploy`（OpenAI 兼容接口，**由 NPU 最佳实践文档负责**，本文档不演示） |
 
 ### 检查前置是否满足
@@ -164,7 +166,7 @@ run sh: ...
 
 ### merge-lora 并使用 vLLM-Ascend 加速推理
 
-CI 流程会在 setup 阶段通过 `pip install` 装 `vllm==0.18.0` + `vllm-ascend==0.18.0`（镜像本身**不**预装）。要在本机对应环境上跑通，可参考 [NPU-support.md#vllm-ascend](https://github.com/modelscope/ms-swift/blob/master/docs/source/BestPractices/NPU-support.md)。
+CI 流程会在 setup 阶段通过 `pip install` 装 `vllm==0.22.1` + `vllm-ascend==0.22.1rc1`。要在本机对应环境上跑通，可参考 [NPU-support.md#vllm-ascend](https://github.com/modelscope/ms-swift/blob/master/docs/source/BestPractices/NPU-support.md)。
 
 ```shell
 >>> ASCEND_RT_VISIBLE_DEVICES=0 swift infer \

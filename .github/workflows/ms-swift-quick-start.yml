@@ -298,7 +298,16 @@ jobs:
           torch_npu==2.11.0
           modelscope==1.37.0
           # NPU CI should not resolve CUDA runtime wheels.
-          cuda-toolkit<0
+          #
+          # NB: do NOT add `cuda-toolkit<0` here. `cuda-toolkit` is a
+          # version-coordination meta-package on PyPI, not the CUDA
+          # runtime itself, and torch 2.11.0 declares a conditional
+          # `cuda-toolkit==13.0.2; platform_system == "Linux"` dep. On
+          # the NPU runner (Linux) this fires, and pinning cuda-toolkit
+          # to <0 collides with torch's own requirement. The full
+          # nvidia-*cu12<0 list below is what actually keeps the GPU
+          # toolchain out of the resolver - dropping cuda-toolkit from
+          # this list doesn't pull any NVIDIA runtime into the image.
           nvidia-cublas<0
           nvidia-cuda-runtime<0
           nvidia-cuda-nvrtc<0

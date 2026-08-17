@@ -42,7 +42,7 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:8.3.rc2-910b-ubuntu22.04-py3.11
 | ms-swift | 本仓库当前 main 分支源码（`pip install -e .`） |
 | 模型 | [Qwen/Qwen3-4B-Instruct-2507](https://www.modelscope.cn/Qwen/Qwen3-4B-Instruct-2507) |
 | 数据集 | `AI-ModelScope/alpaca-gpt4-data-zh#500` + `AI-ModelScope/alpaca-gpt4-data-en#500` + `swift/self-cognition#500` |
-| 推理后端 | vLLM-Ascend（参数 `--infer_backend vllm`，在 NPU 上自动走 vllm-ascend） |
+| 推理后端 | 本文档示例使用 transformers / torch_npu 后端（参数 `--infer_backend transformers`，默认）；如需在 NPU 上使用 vLLM 加速推理，可选装 `vllm-ascend` 后改 `--infer_backend vllm`，详细步骤参见 [NPU-support.md#vllm-ascend](https://github.com/modelscope/ms-swift/blob/master/docs/source/BestPractices/NPU-support.md)。 |
 | 部署 | `swift deploy`（OpenAI 兼容接口，**由 NPU 最佳实践文档负责**，本文档不演示） |
 
 ### 检查前置是否满足
@@ -162,30 +162,6 @@ run sh: ...
 ...
 ```
 
-### merge-lora 并使用 vLLM-Ascend 加速推理
-
-本节示例依赖 `vllm-ascend`,该轮子在 CANN 9.0.0 + Atlas A3/A5 系统上由 vLLM-Ascend 官方发布;本仓库 CI 镜像（`cann:8.3.rc2` + A2）不预装该轮子，因此该 block 在 CI 上以 ModuleNotFoundError 失败告终，文档示例本身与 ms-swift 上游 [citest_npu](https://github.com/modelscope/ms-swift/blob/master/.github/workflows/citest_npu.yaml) 保持一致（其同样不在 CI 中跑 vllm-ascend 路径）。若需要在 A2 / CANN 8.3 系统上跑通该 block，请参考 [NPU-support.md#vllm-ascend](https://github.com/modelscope/ms-swift/blob/master/docs/source/BestPractices/NPU-support.md) 安装与当前硬件/CANN 兼容的 `vllm-ascend` 版本。
-
-```shell
->>> ASCEND_RT_VISIBLE_DEVICES=0 swift infer \
-...     --adapters <ckpt> \
-...     --stream true \
-...     --merge_lora true \
-...     --infer_backend vllm \
-...     --vllm_max_model_len 8192 \
-...     --temperature 0 \
-...     --max_new_tokens 2048 <<'PROMPT'
-... 你好，请介绍一下自己。
-... exit
-... PROMPT
-run sh: ...
-...
-...你好...
-...
->>> echo "infer vllm-ascend done"
-infer vllm-ascend done
-```
-
 ## 推送 ModelScope
 
 ```shell
@@ -197,7 +173,6 @@ swift export \
     --hub_token '<your-sdk-token>' \
     --use_hf false
 ```
-
 
 ## 了解更多
 

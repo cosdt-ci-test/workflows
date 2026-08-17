@@ -293,36 +293,40 @@ jobs:
           # ----- NPU runtime setup (matches upstream ci_container_test.sh) -----
           # 1. Pin torch / torch_npu / modelscope and block CUDA wheels so a
           #    transitive dep can't silently pull nvidia-* into an NPU run.
+          #    Keep this in lockstep with projects/ms-swift/constraints-npu.txt
+          #    on main (torch 2.9 / torch_npu 2.9.0.post6 / vllm 0.18 /
+          #    vllm-ascend 0.18 - vllm 0.18 declares torch==2.10 + nvidia-*
+          #    wheels, hence the cuda-* / nvidia-* <0 backstop).
           cat >/tmp/ms_swift_npu_constraints.txt <<'EOF'
-          # torch +cpu variant: ships the libtorch CPU build with no
-          # CUDA / nvidia-* in its wheel metadata. Without the +cpu
-          # suffix, torch 2.11.0's PyPI metadata declares a Linux
-          # conditional ``cuda-toolkit==13.0.2`` dep, which in turn
-          # requires nvidia-cublas==13.1.0.3.*, nvidia-cudnn==13.*,
-          # etc. - none of which exist on any mirror the runner can
-          # reach. The +cpu build sidesteps that whole graph.
-          torch==2.11.0+cpu
-          torch_npu==2.11.0
+          torch==2.9.0
+          torch_npu==2.9.0.post6
           modelscope==1.37.0
-          # NPU CI should not resolve CUDA runtime wheels. vllm 0.22.1
-          # is installed below with ``VLLM_TARGET_DEVICE=empty`` so vllm
-          # itself does not declare cuda-toolkit either, but the
-          # constraint file is still useful as a backstop in case a
-          # transitive dep tries to drag in a CUDA wheel later.
           cuda-toolkit<0
+          cuda-python<0
+          cuda-bindings<0
+          cuda-core<0
+          cuda-pathfinder<0
+          flashinfer-python<0
           nvidia-cublas<0
           nvidia-cuda-runtime<0
           nvidia-cuda-nvrtc<0
           nvidia-cuda-cupti<0
           nvidia-cudnn<0
+          nvidia-cudnn-frontend<0
           nvidia-cufft<0
           nvidia-curand<0
           nvidia-cusolver<0
           nvidia-cusparse<0
+          nvidia-cutlass-dsl<0
+          nvidia-cutlass-dsl-libs-base<0
+          nvidia-cutlass-dsl-libs-core<0
+          nvidia-cutlass-dsl-libs-cu12<0
+          nvidia-ml-py<0
           nvidia-nccl<0
           nvidia-nvjitlink<0
           nvidia-nvtx<0
           nvidia-cublas-cu12<0
+          nvidia-cuda-nvdisasm<0
           nvidia-cuda-runtime-cu12<0
           nvidia-cuda-nvrtc-cu12<0
           nvidia-cuda-cupti-cu12<0
@@ -344,86 +348,51 @@ jobs:
           python -m pip install uv
           # 3. Force-reinstall torch + torch_npu so we get the real NPU
           #    build, not whatever the CANN image happens to ship. Pinned
-          #    against the CANN 9.x / py3.12 line so torch_npu's wheel
-          #    matches the new runtime. torch uses the +cpu variant
-          #    so the wheel metadata has no cuda-toolkit / nvidia-*
-          #    conditional deps; torch_npu replaces torch.cuda on the
-          #    runner and CANN replaces the CUDA runtime, so the CPU
-          #    libtorch build is the right thing to install on an NPU
-          #    host.
-          python -m pip install --force-reinstall \
+          #    to the CANN 9.x / py3.12 line so torch_npu's wheel matches
+          #    the new runtime; mirrors main's setup_example.sh so the
+          #    quick-start and examples tracks run the same torch stack.
+          python -m pip install --force-reinstall --no-deps \
               --index-url http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple \
               --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
-              --extra-index-url https://mirrors.aliyun.com/pytorch-wheels/cpu/ \
               --trusted-host cache-service.nginx-pypi-cache.svc.cluster.local \
-              --trusted-host mirrors.aliyun.com \
-              torch==2.11.0+cpu torch_npu==2.11.0
+              torch==2.9.0 torch_npu==2.9.0.post6
           # 4. Pin transformers / peft (matches the doc's <5.0 / <0.19 caps).
           python -m pip install "transformers<5.0" "peft<0.19"
           # 5. Install vllm + vllm-ascend so block 6's `--infer_backend vllm`
-          #    path resolves. The version pin follows the vllm-ascend
-          #    install guide that the user provided:
+          #    path resolves. Versions mirror main's setup_example.sh on
+          #    the CANN 9.1 / torch 2.9 stack:
           #
           #      Ascend HDK    9.1.0
           #      CANN          9.1.0
-          #      TorchNPU       2.11.0
-          #      torch         2.11.0
-          #      vllm          0.22.1
-          #      vllm-ascend   0.22.1rc1
+          #      torch         2.9.0
+          #      torch_npu     2.9.0.post6
+          #      vllm          0.18.0
+          #      vllm-ascend   0.18.0
           #
-          #    Note: vllm-ascend 0.22.1rc1's wheel metadata requires
-          #    torch==2.11.0, so even though the user-supplied version
-          #    table above listed torch 2.10.0 / torch_npu 2.10.0.post4,
-          #    we must pin 2.11.0 here or pip's resolver fails with
-          #    "Cannot install vllm==0.22.1 ... torch==2.11.0 vs the
-          #    user requested torch==2.10.0". The huaweicloud ascend
-          #    mirror carries both torch 2.11.0 and torch_npu 2.11.0 for
-          #    cp312 + aarch64.
-          #
-          #    vllm-ascend 0.22.1rc1 ships a cp312 + manylinux_2_34
-          #    aarch64 wheel on PyPI, so unlike the earlier 0.18.0
-          #    pin we do not need a source build (and therefore do not
-          #    need the setuptools_scm + wheel pre-install that
-          #    commit 774d86f added). The same triton-ascend==3.2.1
-          #    preflight still applies - vllm-ascend 0.22.1rc1's
-          #    build deps also pin triton-ascend==3.2.0, which is
-          #    unavailable on the mirror we can reach. The huaweicloud
-          #    ascend index carries triton-ascend 3.2.1 for cp312 +
-          #    aarch64.
+          #    vllm-ascend 0.18 only ships a cp310/cp311 manylinux_2_24
+          #    aarch64 wheel + a sdist, so install setuptools_scm + wheel
+          #    up front and use --no-build-isolation so the sdist can build
+          #    under py3.12. The constraints file pins every nvidia-*<0 +
+          #    cuda-toolkit<0 so vllm 0.18's transitive nvidia-* deps are
+          #    blocked. triton-ascend 3.2.0 is vllm-ascend 0.18's pinned
+          #    build dep and lives on the huaweicloud ascend index.
+          python -m pip install setuptools_scm wheel
           python -m pip install --no-build-isolation \
               --index-url http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple \
               --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
+              --find-links https://repo.huaweicloud.com/ascend/repos/pypi/triton-ascend/ \
               --trusted-host cache-service.nginx-pypi-cache.svc.cluster.local \
-              triton-ascend==3.2.1
-          # vllm 0.22.1 PyPI metadata declares a Linux conditional
-          # ``cuda-toolkit[cublas,cudart,cufft,cufile,cupti,curand,
-          #  cusolver,cusparse,nvjitlink,nvrtc,nvtx]==13.0.2`` dep
-          # which in turn requires nvidia-cublas==13.1.0.3.*, etc. The
-          # NPU constraints file in step 1 pins every nvidia-*<0 to
-          # block the NVIDIA runtime from being pulled in. vLLM itself
-          # honours the env var ``VLLM_TARGET_DEVICE=empty`` (see
-          # vllm-project/vllm#7403) - setting it skips vLLM's
-          # Linux-CUDA conditional dep and stops it from declaring
-          # cuda-toolkit==13.0.2 in the first place, so pip's resolver
-          # doesn't try to chase the unavailable nvidia-cublas
-          # 13.1.0.3.* / nvidia-cudnn 13.* wheels. vllm-ascend 0.22.1rc1
-          # still works because vllm-ascend's own wheel metadata
-          # only depends on torch 2.11.0 - not on the underlying
-          # NVIDIA runtime.
-          VLLM_TARGET_DEVICE=empty python -m pip install --no-build-isolation \
+              triton-ascend==3.2.0
+          python -m pip install --no-deps \
               --index-url http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple \
               --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
-              --extra-index-url https://mirrors.aliyun.com/pytorch-wheels/cpu/ \
               --trusted-host cache-service.nginx-pypi-cache.svc.cluster.local \
-              --trusted-host mirrors.aliyun.com \
-              vllm==0.22.1
-          python -m pip install --no-build-isolation \
+              vllm==0.18.0
+          python -m pip install --no-deps \
               --index-url http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple \
               --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
-              --extra-index-url https://mirrors.aliyun.com/pytorch-wheels/cpu/ \
               --trusted-host cache-service.nginx-pypi-cache.svc.cluster.local \
-              --trusted-host mirrors.aliyun.com \
-              vllm-ascend==0.22.1rc1
+              vllm-ascend==0.18.0
           # The doc owns the source install step (its '## install ms-swift'
           # block runs git clone + uv pip install -e . for the exact
           # <UPSTREAM_REF>). After that, run the doc itself as a unittest

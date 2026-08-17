@@ -497,17 +497,6 @@ class TestQuickStartAscendEndToEnd(unittest.TestCase):
         expected_text = '\n'.join(expected)
         actual_text = '\n'.join(actual)
 
-        # Strip CANN / torch_npu noise that gets misrouted onto stdout
-        # by the NPU runner. The string ``path string is NULL`` is a
-        # known artefact of the ASCEND ACL lib (logged when its
-        # initial buffer path query returns NULL); it has zero
-        # diagnostic value for the doc test and obscures real Qwen
-        # output. We strip it before regex matching so the doc
-        # expected can stay anchored on actual content like
-        # ``xxx 你好``.
-        _cann_noise = re.compile(r'path string is NULL')
-        actual_text = _cann_noise.sub('', actual_text)
-
         text, mapping = substitute_placeholders(expected_text)
         escaped = re.escape(text)
         for i, frag in mapping.items():

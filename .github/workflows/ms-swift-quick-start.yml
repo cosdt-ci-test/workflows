@@ -298,16 +298,7 @@ jobs:
           torch_npu==2.11.0
           modelscope==1.37.0
           # NPU CI should not resolve CUDA runtime wheels.
-          #
-          # NB: do NOT add `cuda-toolkit<0` here. `cuda-toolkit` is a
-          # version-coordination meta-package on PyPI, not the CUDA
-          # runtime itself, and torch 2.11.0 declares a conditional
-          # `cuda-toolkit==13.0.2; platform_system == "Linux"` dep. On
-          # the NPU runner (Linux) this fires, and pinning cuda-toolkit
-          # to <0 collides with torch's own requirement. The full
-          # nvidia-*cu12<0 list below is what actually keeps the GPU
-          # toolchain out of the resolver - dropping cuda-toolkit from
-          # this list doesn't pull any NVIDIA runtime into the image.
+          cuda-toolkit<0
           nvidia-cublas<0
           nvidia-cuda-runtime<0
           nvidia-cuda-nvrtc<0
@@ -386,11 +377,31 @@ jobs:
               --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
               --trusted-host cache-service.nginx-pypi-cache.svc.cluster.local \
               triton-ascend==3.2.1
+          # vllm 0.22.1 PyPI metadata declares a Linux conditional
+          # ``cuda-toolkit[cublas,cudart,cufft,cufile,cupti,curand,
+          #  cusolver,cusparse,nvjitlink,nvrtc,nvtx]==13.0.2`` dep
+          # which in turn requires nvidia-cublas==13.1.0.3.*, etc. The
+          # NPU constraints file in step 1 pins every nvidia-*<0 to
+          # block the NVIDIA runtime from being pulled in. vLLM itself
+          # honours the env var ``VLLM_TARGET_DEVICE=empty`` (see
+          # vllm-project/vllm#7403) - setting it skips vLLM's
+          # Linux-CUDA conditional dep and stops it from declaring
+          # cuda-toolkit==13.0.2 in the first place, so pip's resolver
+          # doesn't try to chase the unavailable nvidia-cublas
+          # 13.1.0.3.* / nvidia-cudnn 13.* wheels. vllm-ascend 0.22.1rc1
+          # still works because vllm-ascend's own wheel metadata
+          # only depends on torch 2.11.0 - not on the underlying
+          # NVIDIA runtime.
+          VLLM_TARGET_DEVICE=empty python -m pip install --no-build-isolation \
+              --index-url http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple \
+              --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
+              --trusted-host cache-service.nginx-pypi-cache.svc.cluster.local \
+              vllm==0.22.1
           python -m pip install --no-build-isolation \
               --index-url http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple \
               --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
               --trusted-host cache-service.nginx-pypi-cache.svc.cluster.local \
-              vllm==0.22.1 vllm-ascend==0.22.1rc1
+              vllm-ascend==0.22.1rc1
           # The doc owns the source install step (its '## install ms-swift'
           # block runs git clone + uv pip install -e . for the exact
           # <UPSTREAM_REF>). After that, run the doc itself as a unittest

@@ -14,8 +14,29 @@ MEGATRON_LM_REF=core_v0.16.0
 MINDSPEED_REF=core_r0.16.0
 MCORE_BRIDGE_REF=v1.6.1
 
-# Base ms-swift + torchvision is installed for every profile before
-# setup_${PROFILE} runs. Each function below only adds that profile's extras.
+# Huawei/Ascend wheels for the current CANN line. Keep both indexes:
+# repo.huaweicloud.com is what this runner already resolves; mirrors +
+# variant are what current vllm-ascend install docs use.
+ASCEND_PIP_INDEX=https://repo.huaweicloud.com/ascend/repos/pypi
+ASCEND_PIP_MIRROR=https://mirrors.huaweicloud.com/ascend/repos/pypi
+ASCEND_PIP_VARIANT=https://mirrors.huaweicloud.com/ascend/repos/pypi/variant
+
+# CANN base image has no torch. Pin the same 2.9 stack as
+# ms-swift-quick-start.yml, then install ms-swift + torchvision
+# before setup_${PROFILE}. Each function below only adds extras.
+
+pip_ascend() {
+  python -m pip install \
+    --extra-index-url "$ASCEND_PIP_INDEX" \
+    --extra-index-url "$ASCEND_PIP_MIRROR" \
+    --extra-index-url "$ASCEND_PIP_VARIANT" \
+    "$@"
+}
+
+install_qwen_extras() {
+  # ms-swift Qwen3.5 / Omni processor check requires these extras.
+  python -m pip install "qwen_vl_utils>=0.0.14" decord
+}
 
 setup_swift() {
   :
@@ -26,9 +47,15 @@ setup_deepspeed() {
 }
 
 setup_vllm() {
-  # Versions match the NPU-support.md pin for this image's torch 2.9 stack.
+  # ms-swift NPU-support.md pin for torch 2.9 / A2. Do not jump to
+  # vllm-ascend 0.23: that line wants torch 2.10.
   python -m pip install vllm==0.18.0
-  python -m pip install vllm-ascend==0.18.0
+  pip_ascend vllm-ascend==0.18.0
+  # vllm 0.18 requires transformers<5 and downgrades it. Qwen3.5 needs
+  # transformers>=5.2. vllm-ascend 0.18 only requires >=4.57.4, so put
+  # 5.2 back without letting pip uninstall vllm to satisfy the <5 cap.
+  python -m pip install --no-deps "transformers>=5.2.0"
+  install_qwen_extras
 }
 
 setup_megatron() {
@@ -41,7 +68,7 @@ setup_megatron() {
     https://github.com/modelscope/mcore-bridge.git "$GITHUB_WORKSPACE/deps/mcore-bridge"
   python -m pip install -e "$GITHUB_WORKSPACE/deps/MindSpeed"
   python -m pip install -e "$GITHUB_WORKSPACE/deps/mcore-bridge"
-  python -m pip install triton-ascend==3.2.1 \
+  pip_ascend triton-ascend==3.2.1 \
     --find-links https://repo.huaweicloud.com/ascend/repos/pypi/triton-ascend/
   echo "MEGATRON_LM_PATH=$GITHUB_WORKSPACE/deps/Megatron-LM" >> "$GITHUB_ENV"
   echo "PYTHONPATH=$GITHUB_WORKSPACE/deps/Megatron-LM" >> "$GITHUB_ENV"
@@ -68,8 +95,11 @@ GITHUB_WORKSPACE="${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is required}"
 GITHUB_ENV="${GITHUB_ENV:?GITHUB_ENV is required}"
 
 python -m pip install -U pip
+python -m pip install torch==2.9.0
+pip_ascend torch_npu==2.9.0.post2
 python -m pip install -e "$TARGET_ROOT"
-# requirements/npu.txt pins torchvision for torch 2.7.1; this image ships torch 2.9.0.
+# requirements/npu.txt pins torchvision for torch 2.7.1; we use 0.24.0 for torch 2.9.0.
 python -m pip install torchvision==0.24.0 decorator
+install_qwen_extras
 
 "setup_${PROFILE}"

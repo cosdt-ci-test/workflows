@@ -39,7 +39,7 @@ permissions:
   contents: read
 
 env:
-  CI_IMAGE: &ci_image swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:8.3.rc2-910b-ubuntu22.04-py3.11
+  CI_IMAGE: &ci_image swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
   UPSTREAM_REPO: modelscope/ms-swift
   MONITORED_DOC_URL: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/ms-swift/docs/Quick-start-Ascend.md
   GH_API: https://api.github.com
@@ -322,7 +322,9 @@ jobs:
           #    internal nginx cache fronts PyPI so this resolves cleanly.
           python -m pip install uv
           # 3. Force-reinstall torch + torch_npu so we get the real NPU
-          #    build, not whatever the CANN image happens to ship.
+          #    build, not whatever the CANN image happens to ship. Pinned
+          #    against the CANN 9.x / py3.12 line so torch_npu's wheel
+          #    matches the new runtime.
           python -m pip install --force-reinstall \
               --index-url http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple \
               --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
@@ -330,6 +332,13 @@ jobs:
               torch==2.9.0 torch_npu==2.9.0.post2
           # 4. Pin transformers / peft (matches the doc's <5.0 / <0.19 caps).
           python -m pip install "transformers<5.0" "peft<0.19"
+          # 5. Install vllm + vllm-ascend so block 6's `--infer_backend vllm`
+          #    path resolves (the CANN 9.1.0 image does not bundle them).
+          #    Pinned to the swift project's NPU-support.md compatibility
+          #    matrix line for CANN 9.
+          python -m pip install vllm==0.18.0 vllm-ascend==0.18.0 \
+              --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
+              --trusted-host cache-service.nginx-pypi-cache.svc.cluster.local
           # The doc owns the source install step (its '## install ms-swift'
           # block runs git clone + uv pip install -e . for the exact
           # <UPSTREAM_REF>). After that, run the doc itself as a unittest

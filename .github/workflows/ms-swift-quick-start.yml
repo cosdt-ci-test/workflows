@@ -333,12 +333,30 @@ jobs:
           # 4. Pin transformers / peft (matches the doc's <5.0 / <0.19 caps).
           python -m pip install "transformers<5.0" "peft<0.19"
           # 5. Install vllm + vllm-ascend so block 6's `--infer_backend vllm`
-          #    path resolves (the CANN 9.1.0 image does not bundle them).
-          #    Pinned to the swift project's NPU-support.md compatibility
-          #    matrix line for CANN 9.
-          python -m pip install vllm==0.18.0 vllm-ascend==0.18.0 \
+          #    path resolves. Two non-obvious catches with vllm-ascend
+          #    0.18.0 on a fresh image:
+          #    (a) triton-ascend ships ONLY from the OS-Infrastructure
+          #        mirror (triton-ascend.osinfra.cn), not from
+          #        huaweicloud's ascend repo. The NPU-support doc
+          #        explicitly says to install it from there first.
+          #    (b) vllm-ascend 0.18.0's build deps pin
+          #        triton-ascend==3.2.0, but only 3.2.1/3.2.2 ship
+          #        today. With --no-build-isolation and a pre-installed
+          #        triton-ascend==3.2.1, pip sees the dep as already
+          #        satisfied and stops looking for 3.2.0.
+          python -m pip install --no-build-isolation \
+              --index-url http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple \
+              --extra-index-url https://triton-ascend.osinfra.cn/pypi/simple \
+              --trusted-host cache-service.nginx-pypi-cache.svc.cluster.local \
+              --trusted-host triton-ascend.osinfra.cn \
+              triton-ascend==3.2.1
+          python -m pip install --no-build-isolation \
+              --index-url http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple \
               --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
-              --trusted-host cache-service.nginx-pypi-cache.svc.cluster.local
+              --extra-index-url https://triton-ascend.osinfra.cn/pypi/simple \
+              --trusted-host cache-service.nginx-pypi-cache.svc.cluster.local \
+              --trusted-host triton-ascend.osinfra.cn \
+              vllm==0.18.0 vllm-ascend==0.18.0
           # The doc owns the source install step (its '## install ms-swift'
           # block runs git clone + uv pip install -e . for the exact
           # <UPSTREAM_REF>). After that, run the doc itself as a unittest

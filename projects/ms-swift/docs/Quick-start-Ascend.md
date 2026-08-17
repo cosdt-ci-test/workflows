@@ -39,12 +39,10 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | transformers | `<5.0` |
 | peft | `<0.19` |
 | modelscope | 1.37.0 |
-| vllm | 0.18.0 |
-| vllm-ascend | 0.18.0 |
 | ms-swift | 本仓库当前 main 分支源码（`pip install -e .`） |
 | 模型 | [Qwen/Qwen3-4B-Instruct-2507](https://www.modelscope.cn/Qwen/Qwen3-4B-Instruct-2507) |
 | 数据集 | `AI-ModelScope/alpaca-gpt4-data-zh#500` + `AI-ModelScope/alpaca-gpt4-data-en#500` + `swift/self-cognition#500` |
-| 推理后端 | 本文 doc 默认 transformers / torch_npu（`--infer_backend transformers`）。CI 流程在 setup 阶段通过 `pip install` 装 `vllm==0.18.0` + `vllm-ascend==0.18.0`（镜像本身**不**预装），需要 vLLM 加速推理时改 `--infer_backend vllm` 即可。本机对应环境请参考 [NPU-support.md#vllm-ascend](https://github.com/modelscope/ms-swift/blob/master/docs/source/BestPractices/NPU-support.md)。 |
+| 推理后端 | 本文 doc 默认 transformers / torch_npu（`--infer_backend transformers`）。vLLM-Ascend 加速推理不在本文档范围内，请参考 [NPU 最佳实践文档](../BestPractices/NPU-support.md#vllm-ascend)。 |
 | 部署 | `swift deploy`（OpenAI 兼容接口，**由 NPU 最佳实践文档负责**，本文档不演示） |
 
 ### 检查前置是否满足
@@ -164,28 +162,6 @@ run sh: ...
 ...
 ```
 
-### merge-lora 并使用 vLLM-Ascend 加速推理
-
-CI 流程会在 setup 阶段通过 `pip install` 装 `vllm==0.18.0` + `vllm-ascend==0.18.0`。要在本机对应环境上跑通，可参考 [NPU-support.md#vllm-ascend](https://github.com/modelscope/ms-swift/blob/master/docs/source/BestPractices/NPU-support.md)。
-
-```shell
->>> ASCEND_RT_VISIBLE_DEVICES=0 swift infer \
-...     --adapters <ckpt> \
-...     --stream true \
-...     --merge_lora true \
-...     --infer_backend vllm \
-...     --vllm_max_model_len 8192 \
-...     --temperature 0 \
-...     --max_new_tokens 2048 <<'PROMPT'
-... 你好，请介绍一下自己。
-... exit
-... PROMPT
-run sh: ...
-...
-...你好...
-...
-```
-
 ## 推送 ModelScope
 
 ```shell
@@ -198,9 +174,3 @@ swift export \
     --use_hf false
 ```
 
-## 了解更多
-
-- 完整 NPU 适配说明、兼容性表、DDP/DeepSpeed/MindSpeed、`vllm-ascend` 部署：[NPU 最佳实践](../BestPractices/NPU-support.md)
-- 推理与部署完整指南（含 vLLM-Ascend、`swift deploy`、多卡 serving）：[推理与部署](../Instruction/Inference-and-deployment.md)
-- 训练参数详解：[命令行参数](../Instruction/Command-line-parameters.md)
-- 更多 Shell 脚本：<https://github.com/modelscope/ms-swift/tree/main/examples/ascend>

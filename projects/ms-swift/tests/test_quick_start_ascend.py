@@ -131,10 +131,35 @@ def parse_blocks(doc_text: str) -> list[list[dict]]:
             elif in_cmd and stripped.startswith('... '):
                 # `...` continuation of the current `>>>` command.
                 cur_cmd.append(stripped[4:])
-            elif stripped.startswith('...'):
-                # Standalone wildcard (with optional inline comment)
-                # - swallow every remaining actual line as leftover.
+            elif stripped == '...':
+                # Bare ``...`` line - swallow whatever the actual
+                # line ends up being (true wildcard).
                 cur_exp.append('...')
+                in_cmd = False
+            elif stripped.startswith('... ') and stripped.lstrip('...').strip().startswith('#'):
+                # ``...`` followed by an inline comment only (the
+                # whole line is annotation + wildcard, no content
+                # anchor past it). Strip the comment so the regex
+                # framework sees a single ``...``.
+                cur_exp.append('...')
+                in_cmd = False
+            elif stripped.startswith('...#'):
+                # ``...#...`` (no leading space before the comment).
+                # Same handling as ``... # ...`` above.
+                cur_exp.append('...')
+                in_cmd = False
+            elif stripped.startswith('...'):
+                # ``...`` followed by literal content - we keep the
+                # whole line so the literal content survives as a
+                # regex anchor instead of being silently dropped.
+                # The downstream framework already turns every
+                # ``...`` sequence into ``.*?`` (non-overlapping
+                # ``\\.\\.\\.`` -> ``.*?`` replacement in
+                # ``_compare_lines``), so ``...你好...`` becomes the
+                # regex ``.*?你好.*?`` - the leading / trailing
+                # ``...`` swallow variable noise; ``你好`` literal
+                # anchors swift infer actually emitting that token.
+                cur_exp.append(stripped)
                 in_cmd = False
             elif stripped.startswith('<<<'):
                 cur_cmd.append(f': <<< {stripped[4:]}')

@@ -152,8 +152,10 @@ train done, checkpoint dir: <ckpt> ...
 ...     --adapters <ckpt> \
 ...     --stream true \
 ...     --temperature 0 \
-...     --max_new_tokens 2048
-<<< 你好，请介绍一下你自己。
+...     --max_new_tokens 2048 <<'PROMPT'
+... 你好，请介绍一下自己。
+... exit
+... PROMPT
 ...
 >>> echo "infer transformers done"
 infer transformers done

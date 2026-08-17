@@ -4,10 +4,19 @@ scan:
   include_extensions: ['.sh', '.py', '.yaml']
 supported:
   - path: examples/ascend/train/qwen3/qwen3_lora_megatron.sh
+    profile: megatron
     runner: linux-aarch64-a2-2
     npu_devices: '0,1'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/torch-npu:2.9.0.post2-910b-ubuntu22.04-py3.11
-    overlay: overlays/qwen3_lora_megatron.args
+    overlay_args:
+      - --dataset ${FIXTURE_DIR}/ci_sft_8.jsonl
+      - --logging_steps 1
+      - --add_version false
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --save_safetensors false
+      - --dataloader_num_workers 0
+      - --dataset_num_proc 1
+      - --max_length 512
     timeout_minutes: 180
 unsupported:
   - examples/app/base_url/demo.py

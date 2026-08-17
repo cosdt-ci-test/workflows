@@ -1,8 +1,0 @@
---dataset ${FIXTURE_DIR}/ci_sft_8.jsonl
---logging_steps 1
---add_version false
---output_dir ${CI_OUTPUT_DIR}
---save_safetensors false
---dataloader_num_workers 0
---dataset_num_proc 1
---max_length 512

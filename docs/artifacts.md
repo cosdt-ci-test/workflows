@@ -26,7 +26,7 @@ artifact 刻意只装 result.json，不装运行日志和训练产物，且不�
 
 ### `<project>-manifest-check`
 
-单个文件 `manifest_check_result.json`，符合 [schemas/manifest_check_result.schema.json](../schemas/manifest_check_result.schema.json)。字段：`trigger`、`target_repo`、`target_ref`、`new_paths`、`stale_paths`、`supported`。`new_paths` / `stale_paths` 只记录、不使 job 失败——例外是 supported 条目的 path 已不在磁盘上：manifest-check 会在写完本文件后立即判红，避免 run-example 白占 NPU runner。`supported` 条目的 `path`、`runner`、`npu_devices`、`image`、`timeout_minutes` 均为必填（`overlay` 可选）——example 流水线按这些字段调度 runner、卡、容器镜像和超时，缺字段会在 manifest-check 被 schema 校验拦下。
+单个文件 `manifest_check_result.json`，符合 [schemas/manifest_check_result.schema.json](../schemas/manifest_check_result.schema.json)。字段：`trigger`、`target_repo`、`target_ref`、`new_paths`、`stale_paths`、`supported`。`new_paths` / `stale_paths` 只记录、不使 job 失败——例外是 supported 条目的 path 已不在磁盘上：manifest-check 会在写完本文件后立即判红，避免 run-example 白占 NPU runner。`supported` 条目的 `path`、`profile`、`runner`、`npu_devices`、`image`、`timeout_minutes` 均为必填（`overlay_args` 可选）——example 流水线按这些字段调度 runner、卡、容器镜像、超时和 setup 例程，缺字段会在 manifest-check 被 schema 校验拦下。
 
 ### `<project>-quick-start-<run_id>`
 

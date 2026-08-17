@@ -39,16 +39,21 @@
     },
     "supported": {
       "type": "array",
-      "description": "Manifest entries that CI will run. The run-example job schedules runner, devices, container image, and timeout from these entries, so those fields are required. overlay is optional: only entries that need argument overrides set it.",
+      "description": "Manifest entries that CI will run. The run-example job schedules runner, devices, container image, timeout, and setup profile from these entries, so those fields are required. overlay_args is optional: only entries that need argument overrides set it.",
       "items": {
         "type": "object",
-        "required": ["path", "runner", "npu_devices", "image", "timeout_minutes"],
+        "required": ["path", "profile", "runner", "npu_devices", "image", "timeout_minutes"],
         "properties": {
           "path": { "type": "string", "minLength": 1 },
+          "profile": { "type": "string", "minLength": 1 },
           "runner": { "type": "string", "minLength": 1 },
           "npu_devices": { "type": "string", "minLength": 1 },
           "image": { "type": "string", "minLength": 1 },
-          "overlay": { "type": "string", "minLength": 1 },
+          "overlay_args": {
+            "type": "array",
+            "description": "CLI argument overrides appended to the example. Each item is one or more shell tokens; $VAR / ${VAR} expand at run time.",
+            "items": { "type": "string", "minLength": 1 }
+          },
           "timeout_minutes": { "type": "integer", "minimum": 1 }
         }
       }

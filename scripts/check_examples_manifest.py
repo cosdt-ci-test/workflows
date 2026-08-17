@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -26,6 +27,7 @@ import yaml
 
 DEFAULT_SCAN_ROOT = 'examples'
 DEFAULT_INCLUDE_EXTENSIONS = ('.sh', '.py', '.yaml')
+NPU_DEVICES_RE = re.compile(r'^\d+(,\d+)*$')
 
 
 def load_manifest(path: Path) -> dict:
@@ -49,6 +51,56 @@ def scan_examples(target_root: Path, scan_root: str,
         if path.is_file() and path.suffix in include_extensions:
             found.append(path.relative_to(target_root).as_posix())
     return found
+
+
+def device_options_from_npu_devices(npu_devices: str) -> str:
+    if not NPU_DEVICES_RE.fullmatch(npu_devices):
+        raise ValueError(
+            f"npu_devices must match '^\\d+(,\\d+)*$', got {npu_devices!r}")
+    return ' '.join(
+        f'--device=/dev/davinci{index}' for index in npu_devices.split(','))
+
+
+def matrix_entries(supported: list[dict]) -> list[dict]:
+    entries: list[dict] = []
+    errors: list[str] = []
+    for item in supported:
+        path = item.get('path', '<missing path>')
+        npu_devices = item.get('npu_devices')
+        if not isinstance(npu_devices, str):
+            errors.append(
+                f'{path}: npu_devices must be a string matching '
+                f"'^\\d+(,\\d+)*$', got {npu_devices!r}")
+            continue
+        try:
+            options = device_options_from_npu_devices(npu_devices)
+        except ValueError as exc:
+            errors.append(f'{path}: {exc}')
+            continue
+        if 'overlay' in item:
+            errors.append(
+                f'{path}: use overlay_args (list of CLI strings), '
+                'not overlay (file path)')
+            continue
+        overlay_args = item.get('overlay_args')
+        if overlay_args is None:
+            overlay_args = []
+        elif not isinstance(overlay_args, list) or not all(
+                isinstance(arg, str) and arg.strip() for arg in overlay_args):
+            errors.append(
+                f'{path}: overlay_args must be a list of non-empty strings')
+            continue
+        entry = dict(item)
+        entry['device_options'] = options
+        entry['overlay_args'] = overlay_args
+        entries.append(entry)
+    if errors:
+        for message in errors:
+            print(message, file=sys.stderr)
+        print('fix the supported entries before this '
+              'pipeline can schedule examples', file=sys.stderr)
+        raise SystemExit(1)
+    return entries
 
 
 def write_result(result_json: str, trigger: str, target_repo: str,
@@ -98,7 +150,7 @@ def main() -> None:
     stale_paths = sorted(listed - scanned)
     write_result(args.result_json, args.trigger, args.target_repo,
                  args.target_ref, new_paths, stale_paths, manifest['supported'])
-    write_github_output(manifest['supported'])
+    write_github_output(matrix_entries(manifest['supported']))
     missing_supported = sorted(supported_paths - scanned)
     if missing_supported:
         for path in missing_supported:

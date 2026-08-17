@@ -8,8 +8,10 @@ task rule, not a community judgment.
 --scan-root and --include-extension control what is scanned and are
 recorded in the manifest's scan section, which the CI-side
 check_examples_manifest.py replays. --runner / --npu-devices / --image /
---overlay / --timeout-minutes apply to every supported entry; entries
-that need different values must be edited by hand afterwards.
+--timeout-minutes / --profile apply to every supported
+entry; entries that need different values must be edited by hand
+afterwards. overlay_args is optional and always left as a comment
+for hand editing.
 
 CI does not call this script. Use it once when onboarding a project, then
 fill in the scheduling fields on each supported entry.
@@ -48,10 +50,14 @@ def render_supported_entry(
     runner: str | None,
     npu_devices: str | None,
     image: str | None,
-    overlay: str | None,
     timeout_minutes: int | None,
+    profile: str | None,
 ) -> list[str]:
     lines = [f'  - path: {path}']
+    if profile is not None:
+        lines.append(f'    profile: {profile}')
+    else:
+        lines.append('    # profile: <setup-profile>')
     if runner is not None:
         lines.append(f'    runner: {runner}')
     else:
@@ -64,10 +70,7 @@ def render_supported_entry(
         lines.append(f'    image: {image}')
     else:
         lines.append('    # image: <swr-image>')
-    if overlay is not None:
-        lines.append(f'    overlay: {overlay}')
-    else:
-        lines.append('    # overlay: overlays/<name>.args (optional)')
+    lines.append('    # overlay_args: []')
     if timeout_minutes is not None:
         lines.append(f'    timeout_minutes: {timeout_minutes}')
     else:
@@ -83,8 +86,8 @@ def render_manifest(
     runner: str | None,
     npu_devices: str | None,
     image: str | None,
-    overlay: str | None,
     timeout_minutes: int | None,
+    profile: str | None,
 ) -> str:
     missing = [p for p in supported_paths if p not in paths]
     if missing:
@@ -102,7 +105,8 @@ def render_manifest(
     if supported_paths:
         for path in supported_paths:
             lines.extend(render_supported_entry(
-                path, runner, npu_devices, image, overlay, timeout_minutes,
+                path, runner, npu_devices, image, timeout_minutes,
+                profile,
             ))
     else:
         lines.append('  []')
@@ -138,8 +142,8 @@ def main() -> None:
     parser.add_argument('--runner', default=None, help='Runner label written on every supported entry')
     parser.add_argument('--npu-devices', default=None, help="Value for npu_devices, e.g. 0,1")
     parser.add_argument('--image', default=None, help='Container image written on every supported entry')
-    parser.add_argument('--overlay', default=None, help='Overlay path written on every supported entry')
     parser.add_argument('--timeout-minutes', type=int, default=None, help='Timeout written on every supported entry')
+    parser.add_argument('--profile', default=None, help='Setup profile written on every supported entry')
     args = parser.parse_args()
     target_root = Path(args.target_root).resolve()
     output = Path(args.output)
@@ -156,8 +160,8 @@ def main() -> None:
         args.runner,
         args.npu_devices,
         args.image,
-        args.overlay,
         args.timeout_minutes,
+        args.profile,
     )
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(text, encoding='utf-8')

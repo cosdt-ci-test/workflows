@@ -361,7 +361,25 @@ jobs:
               --index-url http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple \
               --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
               --trusted-host cache-service.nginx-pypi-cache.svc.cluster.local \
-              vllm==0.18.0 vllm-ascend==0.18.0
+              vllm==0.18.0
+          # vllm-ascend 0.18.0 only ships a cp310/cp311 manylinux_2_24
+          # aarch64 wheel + a sdist; no cp312 wheel exists on PyPI
+          # (web-search 2026-08-17). The sdist's setup.py imports
+          # setuptools_scm at build time, and our --no-build-isolation
+          # build env doesn't carry it. Pre-install setuptools_scm
+          # + wheel so pip can build vllm-ascend 0.18.0 from source
+          # without bailing out with
+          # ``ModuleNotFoundError: No module named 'setuptools_scm'``.
+          python -m pip install --no-build-isolation \
+              --index-url http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple \
+              --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
+              --trusted-host cache-service.nginx-pypi-cache.svc.cluster.local \
+              setuptools_scm wheel
+          python -m pip install --no-build-isolation \
+              --index-url http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple \
+              --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
+              --trusted-host cache-service.nginx-pypi-cache.svc.cluster.local \
+              vllm-ascend==0.18.0
           # The doc owns the source install step (its '## install ms-swift'
           # block runs git clone + uv pip install -e . for the exact
           # <UPSTREAM_REF>). After that, run the doc itself as a unittest

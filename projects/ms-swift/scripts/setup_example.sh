@@ -14,6 +14,23 @@ MEGATRON_LM_REF=core_v0.16.0
 MINDSPEED_REF=core_r0.16.0
 MCORE_BRIDGE_REF=v1.6.1
 
+# Base ms-swift + torchvision is installed for every profile before
+# setup_${PROFILE} runs. Each function below only adds that profile's extras.
+
+setup_swift() {
+  :
+}
+
+setup_deepspeed() {
+  python -m pip install deepspeed
+}
+
+setup_vllm() {
+  # Versions match the NPU-support.md pin for this image's torch 2.9 stack.
+  python -m pip install vllm==0.18.0
+  python -m pip install vllm-ascend==0.18.0
+}
+
 setup_megatron() {
   mkdir -p "$GITHUB_WORKSPACE/deps"
   git clone --depth 1 --branch "$MEGATRON_LM_REF" \
@@ -32,8 +49,17 @@ setup_megatron() {
   python -c "import mindspeed.megatron_adaptor; from swift.megatron.init import init_megatron_env; init_megatron_env()"
 }
 
+setup_megatron_vllm() {
+  setup_megatron
+  setup_vllm
+}
+
+supported_profiles() {
+  declare -F | awk '/^declare -f setup_/ { sub(/^declare -f setup_/, ""); print }' | paste -sd' ' -
+}
+
 if ! declare -F "setup_${PROFILE}" >/dev/null 2>&1; then
-  echo "unknown profile: ${PROFILE} (supported: megatron)" >&2
+  echo "unknown profile: ${PROFILE} (supported: $(supported_profiles))" >&2
   exit 1
 fi
 

@@ -1,8 +1,9 @@
 name: ms-swift-examples
 
 on:
-  schedule:
-    - cron: '30 */6 * * *'
+  # Temporarily disabled to save NPU runner time. Re-enable when ready.
+  # schedule:
+  #   - cron: '30 */6 * * *'
   workflow_dispatch:
     inputs:
       target_repo:

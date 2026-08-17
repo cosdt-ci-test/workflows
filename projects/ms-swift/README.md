@@ -6,7 +6,7 @@
 
 ## 清单、fixture
 
-- `examples_manifest.yaml` 由仓库根目录 `scripts/bootstrap_manifest.py` 扫描目标仓 `examples/` 下的 `.sh` / `.py` / `.yaml` 生成。除 `examples/ascend/train/qwen3/qwen3_lora_megatron.sh` 外全部标 `unsupported`，这是任务规定的分类，不是社区结论。清单与磁盘的差异只打印路径，不使 job 失败；例外：`supported` 条目的 path 已不在磁盘上时 manifest-check 立即判红。
+- `examples_manifest.yaml` 由仓库根目录 `scripts/bootstrap_manifest.py` 扫描目标仓 `examples/` 下的 `.sh` / `.py` / `.yaml` 生成。`supported` 是本仓实际调度的条目：目前包括 2 卡 `qwen3_lora_megatron.sh`，以及一批能在 `linux-aarch64-a2-8`（最多 8 张昇腾卡）上启动的 ascend 训练 example。需要 16 卡 / A3 SuperPoD 的仍标 `unsupported`。这是任务规定的分类，不是社区结论。清单与磁盘的差异只打印路径，不使 job 失败；例外：`supported` 条目的 path 已不在磁盘上时 manifest-check 立即判红。看护目标是诚实地暴露 example 退出码，不修上游 example。
 - 该 supported 条目的 `overlay_args` 把 example 压到 CI 规模（仓内 8 条 fixture、短序列、输出到 CI 目录）。bootstrap 只写占位注释，参数要手写进清单。
 - `scripts/run_example.sh` 是 ms-swift 专用：在 CI 临时工作区给 example 补 `"$@"` 并展开 `OVERLAY_ARGS`。不改任何 ms-swift 仓库。
 
@@ -29,7 +29,7 @@ python3 scripts/bootstrap_manifest.py \
 
 `ms-swift-examples.yml` 接受：
 
-- `schedule`：每 6 小时轮询上游一次。`monitor` job（免费的 ubuntu-latest）对比三个信号与上次记录（状态存 actions/cache）：`examples/` 最新 commit、latest release tag、main HEAD SHA。任一变化才 checkout 上游、在 NPU runner 上跑 example，被测 ref 按 examples > release > commit 优先级取自变化的信号；全部无变化则 monitor 后直接结束。上次看护失败时，下个周期即使无变化也会自动重试（`record-outcome` job 回写成败）。机制详见 [docs/guarding-examples.md](../../docs/guarding-examples.md)「要求 2」。
+- `schedule`：每 6 小时轮询上游一次。`monitor` job（免费的 ubuntu-latest）对比三个信号与上次记录（状态存 actions/cache）：`examples/` 最新 commit、latest release tag、main HEAD SHA。任一变化才 checkout 上游、在 NPU runner 上跑 example，被测 ref 按 examples > release > commit 优先级取自变化的信号；全部无变化则 monitor 后直接结束。上次看护失败时，下个周期即使无变化也会自动重试（`record-outcome` job 回写成败）。机制详见 [docs/guarding-examples.md](../../docs/guarding-examples.md)「要求 2」。**当前为节约 NPU 资源，`ms-swift-examples.yml` 里的 `schedule` 已注释，只保留手动 `workflow_dispatch`。**
 - `workflow_dispatch`：手动指定 `target_repo` 与 `target_ref`（默认 `modelscope/ms-swift` 的 `main`），不经过 monitor 门。
 
 `ms-swift-quick-start.yml` 每 6 小时跑一次监控；文档、上游 release 或 main HEAD 有变化才在 NPU 上跑 `tests.test_quick_start_ascend`。也可以 `workflow_dispatch` 手动触发（手动一律直接跑测试）。

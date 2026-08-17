@@ -297,42 +297,24 @@ jobs:
           torch==2.11.0
           torch_npu==2.11.0
           modelscope==1.37.0
-          # NPU CI should not resolve CUDA runtime wheels.
+          # NB: there is intentionally no nvidia-*-cu12<0 / cuda-toolkit<0
+          # block here. torch 2.11.0 declares on Linux:
+          #   cuda-toolkit[cublas,cudart,cufft,cufile,cupti,curand,
+          #     cusolver,cusparse,nvjitlink,nvrtc,nvtx]==13.0.2
+          # which in turn requires nvidia-cublas==13.1.0.3.*,
+          # nvidia-cuda-runtime==13.*, nvidia-cudnn==13.*, etc. Pinning
+          # any of those to <0 makes pip's resolver fail with
+          # ResolutionImpossible, even on a non-NVIDIA runner.
           #
-          # NB: do NOT add `cuda-toolkit<0` here. `cuda-toolkit` is a
-          # version-coordination meta-package on PyPI, not the CUDA
-          # runtime itself, and torch 2.11.0 declares a conditional
-          # `cuda-toolkit==13.0.2; platform_system == "Linux"` dep. On
-          # the NPU runner (Linux) this fires, and pinning cuda-toolkit
-          # to <0 collides with torch's own requirement. The full
-          # nvidia-*cu12<0 list below is what actually keeps the GPU
-          # toolchain out of the resolver - dropping cuda-toolkit from
-          # this list doesn't pull any NVIDIA runtime into the image.
-          nvidia-cublas<0
-          nvidia-cuda-runtime<0
-          nvidia-cuda-nvrtc<0
-          nvidia-cuda-cupti<0
-          nvidia-cudnn<0
-          nvidia-cufft<0
-          nvidia-curand<0
-          nvidia-cusolver<0
-          nvidia-cusparse<0
-          nvidia-nccl<0
-          nvidia-nvjitlink<0
-          nvidia-nvtx<0
-          nvidia-cublas-cu12<0
-          nvidia-cuda-runtime-cu12<0
-          nvidia-cuda-nvrtc-cu12<0
-          nvidia-cuda-cupti-cu12<0
-          nvidia-cudnn-cu12<0
-          nvidia-cufft-cu12<0
-          nvidia-curand-cu12<0
-          nvidia-cusolver-cu12<0
-          nvidia-cusparse-cu12<0
-          nvidia-cusparselt-cu12<0
-          nvidia-nccl-cu12<0
-          nvidia-nvjitlink-cu12<0
-          nvidia-nvtx-cu12<0
+          # On the NPU runner those wheels are inert: torch_npu replaces
+          # torch.cuda, CANN replaces the CUDA runtime, swift sft/infer
+          # only touches torch.npu.* paths. So letting them install is
+          # the same situation as the macOS / CPU-only torch wheels,
+          # which also ship with co-installed but-unused nvidia-* shims.
+          # What actually keeps the GPU toolchain out of the test path is
+          # the huaweicloud ascend index being the source of torch /
+          # torch_npu / vllm-ascend / triton-ascend - not a constraints
+          # block on nvidia-*.
           EOF
           export PIP_CONSTRAINT=/tmp/ms_swift_npu_constraints.txt
           export UV_CONSTRAINT=/tmp/ms_swift_npu_constraints.txt

@@ -259,7 +259,6 @@ jobs:
       PROJECT_ROOT: ${{ github.workspace }}/workflows/projects/ms-swift
       TARGET_ROOT: ${{ github.workspace }}/target
       FIXTURE_DIR: ${{ github.workspace }}/workflows/projects/ms-swift/fixtures
-      PIP_EXTRA_INDEX_URL: https://repo.huaweicloud.com/ascend/repos/pypi
       PIP_TIMEOUT: "120"
     container:
       image: ${{ matrix.example.image }}
@@ -270,6 +269,7 @@ jobs:
         --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
         --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
         --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
+        --volume=/data/ci-cache/pip:/root/.cache/pip
         --volume=/data/ci-cache/modelscope:/root/.cache/modelscope
     steps:
       - name: Checkout workflows

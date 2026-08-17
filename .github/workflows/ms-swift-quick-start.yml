@@ -294,13 +294,13 @@ jobs:
           # 1. Pin torch / torch_npu / modelscope and block CUDA wheels so a
           #    transitive dep can't silently pull nvidia-* into an NPU run.
           #    Keep this in lockstep with projects/ms-swift/constraints-npu.txt
-          #    on main (torch 2.9 / torch_npu 2.9.0.post6 - the cuda-* /
+          #    on main (torch 2.9.0+cpu / torch_npu 2.9.0.post2 - the cuda-* /
           #    nvidia-* <0 backstop stops ms-swift's own requirements/npu.txt
           #    or a transitive dep from dragging in a CUDA runtime that the
           #    runner can't reach).
           cat >/tmp/ms_swift_npu_constraints.txt <<'EOF'
-          torch==2.9.0
-          torch_npu==2.9.0.post6
+          torch==2.9.0+cpu
+          torch_npu==2.9.0.post2
           modelscope==1.37.0
           cuda-toolkit<0
           cuda-python<0
@@ -356,7 +356,7 @@ jobs:
               --index-url http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple \
               --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
               --trusted-host cache-service.nginx-pypi-cache.svc.cluster.local \
-              torch==2.9.0 torch_npu==2.9.0.post6
+              torch==2.9.0+cpu torch_npu==2.9.0.post2
           # 4. Pin transformers / peft (matches the doc's <5.0 / <0.19 caps).
           python -m pip install "transformers<5.0" "peft<0.19"
           # 5. vLLM-Ascend setup removed - vllm-ascend 0.18.0 (and the

@@ -294,10 +294,21 @@ jobs:
           # 1. Pin torch / torch_npu / modelscope and block CUDA wheels so a
           #    transitive dep can't silently pull nvidia-* into an NPU run.
           cat >/tmp/ms_swift_npu_constraints.txt <<'EOF'
-          torch==2.11.0
+          # torch +cpu variant: ships the libtorch CPU build with no
+          # CUDA / nvidia-* in its wheel metadata. Without the +cpu
+          # suffix, torch 2.11.0's PyPI metadata declares a Linux
+          # conditional ``cuda-toolkit==13.0.2`` dep, which in turn
+          # requires nvidia-cublas==13.1.0.3.*, nvidia-cudnn==13.*,
+          # etc. - none of which exist on any mirror the runner can
+          # reach. The +cpu build sidesteps that whole graph.
+          torch==2.11.0+cpu
           torch_npu==2.11.0
           modelscope==1.37.0
-          # NPU CI should not resolve CUDA runtime wheels.
+          # NPU CI should not resolve CUDA runtime wheels. vllm 0.22.1
+          # is installed below with ``VLLM_TARGET_DEVICE=empty`` so vllm
+          # itself does not declare cuda-toolkit either, but the
+          # constraint file is still useful as a backstop in case a
+          # transitive dep tries to drag in a CUDA wheel later.
           cuda-toolkit<0
           nvidia-cublas<0
           nvidia-cuda-runtime<0
@@ -334,12 +345,19 @@ jobs:
           # 3. Force-reinstall torch + torch_npu so we get the real NPU
           #    build, not whatever the CANN image happens to ship. Pinned
           #    against the CANN 9.x / py3.12 line so torch_npu's wheel
-          #    matches the new runtime.
+          #    matches the new runtime. torch uses the +cpu variant
+          #    so the wheel metadata has no cuda-toolkit / nvidia-*
+          #    conditional deps; torch_npu replaces torch.cuda on the
+          #    runner and CANN replaces the CUDA runtime, so the CPU
+          #    libtorch build is the right thing to install on an NPU
+          #    host.
           python -m pip install --force-reinstall \
               --index-url http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple \
               --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
+              --extra-index-url https://mirrors.aliyun.com/pytorch-wheels/cpu/ \
               --trusted-host cache-service.nginx-pypi-cache.svc.cluster.local \
-              torch==2.11.0 torch_npu==2.11.0
+              --trusted-host mirrors.aliyun.com \
+              torch==2.11.0+cpu torch_npu==2.11.0
           # 4. Pin transformers / peft (matches the doc's <5.0 / <0.19 caps).
           python -m pip install "transformers<5.0" "peft<0.19"
           # 5. Install vllm + vllm-ascend so block 6's `--infer_backend vllm`
@@ -395,12 +413,16 @@ jobs:
           VLLM_TARGET_DEVICE=empty python -m pip install --no-build-isolation \
               --index-url http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple \
               --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
+              --extra-index-url https://mirrors.aliyun.com/pytorch-wheels/cpu/ \
               --trusted-host cache-service.nginx-pypi-cache.svc.cluster.local \
+              --trusted-host mirrors.aliyun.com \
               vllm==0.22.1
           python -m pip install --no-build-isolation \
               --index-url http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple \
               --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
+              --extra-index-url https://mirrors.aliyun.com/pytorch-wheels/cpu/ \
               --trusted-host cache-service.nginx-pypi-cache.svc.cluster.local \
+              --trusted-host mirrors.aliyun.com \
               vllm-ascend==0.22.1rc1
           # The doc owns the source install step (its '## install ms-swift'
           # block runs git clone + uv pip install -e . for the exact

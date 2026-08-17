@@ -34,7 +34,7 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | --- | --- |
 | Python | 3.12 |
 | CANN | 9.1.0 |
-| torch | 2.11.0 |
+| torch | 2.11.0+cpu |
 | torch_npu | 2.11.0 |
 | transformers | `<5.0` |
 | peft | `<0.19` |
@@ -54,7 +54,7 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 >>> python --version
 Python 3.12.x
 >>> python -c "import torch, torch_npu; print('torch=', torch.__version__); print('torch_npu=', torch_npu.__version__); print('is_available:', torch.npu.is_available()); print('count:', torch.npu.device_count())"
-torch= 2.11.0
+torch= 2.11.0+cpu
 torch_npu= 2.11.0
 is_available: True
 count: 1

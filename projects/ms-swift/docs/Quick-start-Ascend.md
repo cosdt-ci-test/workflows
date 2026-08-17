@@ -26,14 +26,14 @@ Atlas 900 A2 / A3 训练系列产品或者 Ascend 950 系列产品，并按需�
 
 **配套镜像**：
 
-swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:8.3.rc2-910b-ubuntu22.04-py3.11
+swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 
 **软件版本**：
 
 | 组件 | 版本 |
 | --- | --- |
-| Python | 3.11 |
-| CANN | 8.3.rc2 |
+| Python | 3.12 |
+| CANN | 9.1.0 |
 | torch | 2.9.0 |
 | torch_npu | 2.9.0.post2 |
 | transformers | `<5.0` |
@@ -42,7 +42,7 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:8.3.rc2-910b-ubuntu22.04-py3.11
 | ms-swift | 本仓库当前 main 分支源码（`pip install -e .`） |
 | 模型 | [Qwen/Qwen3-4B-Instruct-2507](https://www.modelscope.cn/Qwen/Qwen3-4B-Instruct-2507) |
 | 数据集 | `AI-ModelScope/alpaca-gpt4-data-zh#500` + `AI-ModelScope/alpaca-gpt4-data-en#500` + `swift/self-cognition#500` |
-| 推理后端 | 本文档示例使用 transformers / torch_npu 后端（参数 `--infer_backend transformers`，默认）；如需在 NPU 上使用 vLLM 加速推理，可选装 `vllm-ascend` 后改 `--infer_backend vllm`，详细步骤参见 [NPU-support.md#vllm-ascend](https://github.com/modelscope/ms-swift/blob/master/docs/source/BestPractices/NPU-support.md)。 |
+| 推理后端 | 本文 doc 默认 transformers / torch_npu（`--infer_backend transformers`）。如需 vLLM 加速推理，CI 镜像已预装 `vllm==0.18.0` + `vllm-ascend==0.18.0`，改 `--infer_backend vllm` 即可。 |
 | 部署 | `swift deploy`（OpenAI 兼容接口，**由 NPU 最佳实践文档负责**，本文档不演示） |
 
 ### 检查前置是否满足
@@ -151,6 +151,28 @@ train done, checkpoint dir: <ckpt> ...
 >>> ASCEND_RT_VISIBLE_DEVICES=0 swift infer \
 ...     --adapters <ckpt> \
 ...     --stream true \
+...     --temperature 0 \
+...     --max_new_tokens 2048 <<'PROMPT'
+... 你好，请介绍一下自己。
+... exit
+... PROMPT
+run sh: ...
+...
+...你好...
+...
+```
+
+### merge-lora 并使用 vLLM-Ascend 加速推理
+
+CI 镜像（`cann:9.1.0-910b-ubuntu22.04-py3.12`）已预装 `vllm==0.18.0` + `vllm-ascend==0.18.0`。要在本机对应版本上跑通，可参考 [NPU-support.md#vllm-ascend](https://github.com/modelscope/ms-swift/blob/master/docs/source/BestPractices/NPU-support.md)。
+
+```shell
+>>> ASCEND_RT_VISIBLE_DEVICES=0 swift infer \
+...     --adapters <ckpt> \
+...     --stream true \
+...     --merge_lora true \
+...     --infer_backend vllm \
+...     --vllm_max_model_len 8192 \
 ...     --temperature 0 \
 ...     --max_new_tokens 2048 <<'PROMPT'
 ... 你好，请介绍一下自己。

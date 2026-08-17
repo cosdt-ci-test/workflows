@@ -156,9 +156,9 @@ train done, checkpoint dir: <ckpt> ...
 ... 你好，请介绍一下自己。
 ... exit
 ... PROMPT
+run sh: ...
 ...
->>> echo "infer transformers done"
-infer transformers done
+xxx 你好
 ```
 
 ### merge-lora 并使用 vLLM-Ascend 加速推理

@@ -448,6 +448,58 @@ jobs:
       # that ceiling), 365 for private/org repos if we ever cross over.
       # Skipped when no result.json was produced (changed=false on a
       # quiet schedule tick) so we don't churn empty artifacts.
+
+      # Probe phase: tell us *why* the upload stalls when it does.
+      # The v4/v7 stall traces showed the upload client timing out
+      # waiting for an ack from the artifact blob storage, which on
+      # this self-hosted NPU runner turned into a hung step. The
+      # probe measures the runner -> github side-channel and prints
+      # timing + status so the next stall has data attached.
+      - name: Diagnose upload prerequisites
+        if: always()
+        continue-on-error: true
+        env:
+          ACTIONS_RUNTIME_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "--- DNS ---"
+          for host in api.github.com actions.githubusercontent.com github-production-release-asset-2e65be.s3.amazonaws.com storage.googleapis.com; do
+            t0=$(date +%s%3N)
+            getent hosts "$host" >/dev/null 2>&1 || echo "  $host: getent failed"
+            t1=$(date +%s%3N)
+            echo "  $host resolved in $((t1 - t0))ms"
+          done
+
+          echo "--- TCP / TLS to actions.githubusercontent.com ---"
+          t0=$(date +%s%3N)
+          timeout 30 bash -c 'cat </dev/tcp/actions.githubusercontent.com/443 >/dev/null' \
+            && echo "  TCP connect OK in $(($(date +%s%3N) - t0))ms" \
+            || echo "  TCP connect failed in $(($(date +%s%3N) - t0))ms"
+
+          echo "--- HTTPS HEAD probe (small request) ---"
+          for url in \
+              https://api.github.com/zen \
+              https://actions.githubusercontent.com/_health \
+              ; do
+            t0=$(date +%s%3N)
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$url" 2>&1 || echo "ERR")
+            t1=$(date +%s%3N)
+            echo "  $url -> $code in $((t1 - t0))ms"
+          done
+
+          echo "--- existing result.json ---"
+          if [ -f output/result.json ]; then
+            sz=$(wc -c < output/result.json)
+            echo "  output/result.json: $sz bytes"
+          else
+            echo "  output/result.json: MISSING"
+          fi
+
+          echo "--- egress proxy env ---"
+          env | grep -iE 'proxy|http' | sort || echo "  (no proxy env)"
+
+          echo "--- DNS resolver ---"
+          cat /etc/resolv.conf 2>/dev/null || echo "  (no /etc/resolv.conf)"
+
       - name: Upload result.json
         if: always()
         # Tracking upload-artifact @v7. v5 (2025-10) bumped to Node 24,

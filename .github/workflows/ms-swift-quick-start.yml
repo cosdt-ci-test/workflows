@@ -284,8 +284,8 @@ jobs:
           # 1. Pin torch / torch_npu / modelscope and block CUDA wheels so a
           #    transitive dep can't silently pull nvidia-* into an NPU run.
           cat >/tmp/ms_swift_npu_constraints.txt <<'EOF'
-          torch==2.9.0
-          torch_npu==2.9.0.post2
+          torch==2.10.0
+          torch_npu==2.10.0.post4
           modelscope==1.37.0
           # NPU CI should not resolve CUDA runtime wheels.
           cuda-toolkit<0
@@ -329,29 +329,30 @@ jobs:
               --index-url http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple \
               --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
               --trusted-host cache-service.nginx-pypi-cache.svc.cluster.local \
-              torch==2.9.0 torch_npu==2.9.0.post2
+              torch==2.10.0 torch_npu==2.10.0.post4
           # 4. Pin transformers / peft (matches the doc's <5.0 / <0.19 caps).
           python -m pip install "transformers<5.0" "peft<0.19"
           # 5. Install vllm + vllm-ascend so block 6's `--infer_backend vllm`
-          #    path resolves. Two non-obvious catches with vllm-ascend
-          #    0.18.0 on a fresh image:
-          #    (a) vllm-ascend 0.18.0's build deps pin
-          #        triton-ascend==3.2.0, but only 3.2.1/3.2.2 ship
-          #        today. With --no-build-isolation and a pre-installed
-          #        triton-ascend==3.2.1, pip sees the dep as already
-          #        satisfied and stops looking for 3.2.0.
-          #    (b) The NPU-support doc tells you to install
-          #        triton-ascend from the dedicated mirror at
-          #        https://triton-ascend.osinfra.cn/pypi/simple, but
-          #        that mirror is unreachable from the NPU K8s pod
-          #        (cluster egress NetworkPolicy only allows huaweicloud
-          #        and the cluster-local cache). The huaweicloud ascend
-          #        repo (repo.huaweicloud.com/ascend/repos/pypi) actually
-          #        also mirrors triton-ascend 3.2.1 / 3.2.2 for cp312
-          #        aarch64, which is what the new CANN 9.1.0 + py3.12
-          #        image needs - so the triton-ascend install reuses
-          #        the same ascend index that vllm-ascend was already
-          #        pulling from. We do not need a second index URL.
+          #    path resolves. The version pin follows the vllm-ascend
+          #    install guide that the user provided:
+          #
+          #      Ascend HDK    9.1.0
+          #      CANN          9.1.0
+          #      TorchNPU       2.10.0.post4
+          #      torch         2.10.0
+          #      vllm          0.22.1
+          #      vllm-ascend   0.22.1rc1
+          #
+          #    vllm-ascend 0.22.1rc1 ships a cp312 + manylinux_2_34
+          #    aarch64 wheel on PyPI, so unlike the earlier 0.18.0
+          #    pin we do not need a source build (and therefore do not
+          #    need the setuptools_scm + wheel pre-install that
+          #    commit 774d86f added). The same triton-ascend==3.2.1
+          #    preflight still applies - vllm-ascend 0.22.1rc1's
+          #    build deps also pin triton-ascend==3.2.0, which is
+          #    unavailable on the mirror we can reach. The huaweicloud
+          #    ascend index carries triton-ascend 3.2.1 for cp312 +
+          #    aarch64.
           python -m pip install --no-build-isolation \
               --index-url http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple \
               --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
@@ -361,25 +362,7 @@ jobs:
               --index-url http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple \
               --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
               --trusted-host cache-service.nginx-pypi-cache.svc.cluster.local \
-              vllm==0.18.0
-          # vllm-ascend 0.18.0 only ships a cp310/cp311 manylinux_2_24
-          # aarch64 wheel + a sdist; no cp312 wheel exists on PyPI
-          # (web-search 2026-08-17). The sdist's setup.py imports
-          # setuptools_scm at build time, and our --no-build-isolation
-          # build env doesn't carry it. Pre-install setuptools_scm
-          # + wheel so pip can build vllm-ascend 0.18.0 from source
-          # without bailing out with
-          # ``ModuleNotFoundError: No module named 'setuptools_scm'``.
-          python -m pip install --no-build-isolation \
-              --index-url http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple \
-              --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
-              --trusted-host cache-service.nginx-pypi-cache.svc.cluster.local \
-              setuptools_scm wheel
-          python -m pip install --no-build-isolation \
-              --index-url http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple \
-              --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
-              --trusted-host cache-service.nginx-pypi-cache.svc.cluster.local \
-              vllm-ascend==0.18.0
+              vllm==0.22.1 vllm-ascend==0.22.1rc1
           # The doc owns the source install step (its '## install ms-swift'
           # block runs git clone + uv pip install -e . for the exact
           # <UPSTREAM_REF>). After that, run the doc itself as a unittest

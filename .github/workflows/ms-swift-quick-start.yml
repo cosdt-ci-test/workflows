@@ -294,8 +294,8 @@ jobs:
           # 1. Pin torch / torch_npu / modelscope and block CUDA wheels so a
           #    transitive dep can't silently pull nvidia-* into an NPU run.
           cat >/tmp/ms_swift_npu_constraints.txt <<'EOF'
-          torch==2.10.0
-          torch_npu==2.10.0.post4
+          torch==2.11.0
+          torch_npu==2.11.0
           modelscope==1.37.0
           # NPU CI should not resolve CUDA runtime wheels.
           cuda-toolkit<0
@@ -339,7 +339,7 @@ jobs:
               --index-url http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple \
               --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
               --trusted-host cache-service.nginx-pypi-cache.svc.cluster.local \
-              torch==2.10.0 torch_npu==2.10.0.post4
+              torch==2.11.0 torch_npu==2.11.0
           # 4. Pin transformers / peft (matches the doc's <5.0 / <0.19 caps).
           python -m pip install "transformers<5.0" "peft<0.19"
           # 5. Install vllm + vllm-ascend so block 6's `--infer_backend vllm`
@@ -348,10 +348,19 @@ jobs:
           #
           #      Ascend HDK    9.1.0
           #      CANN          9.1.0
-          #      TorchNPU       2.10.0.post4
-          #      torch         2.10.0
+          #      TorchNPU       2.11.0
+          #      torch         2.11.0
           #      vllm          0.22.1
           #      vllm-ascend   0.22.1rc1
+          #
+          #    Note: vllm-ascend 0.22.1rc1's wheel metadata requires
+          #    torch==2.11.0, so even though the user-supplied version
+          #    table above listed torch 2.10.0 / torch_npu 2.10.0.post4,
+          #    we must pin 2.11.0 here or pip's resolver fails with
+          #    "Cannot install vllm==0.22.1 ... torch==2.11.0 vs the
+          #    user requested torch==2.10.0". The huaweicloud ascend
+          #    mirror carries both torch 2.11.0 and torch_npu 2.11.0 for
+          #    cp312 + aarch64.
           #
           #    vllm-ascend 0.22.1rc1 ships a cp312 + manylinux_2_34
           #    aarch64 wheel on PyPI, so unlike the earlier 0.18.0

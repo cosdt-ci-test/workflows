@@ -40,3 +40,6 @@ nvidia-cusparselt-cu12<0
 nvidia-nccl-cu12<0
 nvidia-nvjitlink-cu12<0
 nvidia-nvtx-cu12<0
+# MindSpeed core_r0.16.0 patches megatron.core.transformer.moe.grouped_gemm_util,
+# removed in megatron-core 0.17. mcore-bridge floats >=0.16,<0.20; pin the pair.
+megatron-core==0.16.1

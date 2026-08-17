@@ -276,14 +276,25 @@ def run_command(cmd: str, env: dict, cwd: Path, timeout: int) -> tuple[int, str]
         tail_out = out[-2000:] if len(out) > 2000 else ''
         head_err = err[:2000]
         tail_err = err[-2000:] if len(err) > 2000 else ''
+        # When the stderr carries an error marker we dump it FULL
+        # (capped at a generous ~256 KB) instead of head/tail-only.
+        # ERR99999 on the NPU runner often points at a Python
+        # traceback nested deep in stderr; if we only show the first
+        # and last 2 KB the actual offending file/line is silently
+        # truncated and the next CI round reproduces the same red.
+        full_err = err if stderr_has_error and len(err) <= 256_000 else ''
+        if full_err:
+            _log(f'CMD stderr (full, {len(full_err)}B):\n'
+                 f'{full_err.rstrip()}')
+        else:
+            if head_err:
+                _log(f'CMD stderr (head):\n{head_err.rstrip()}')
+            if tail_err and tail_err != head_err:
+                _log(f'CMD stderr (tail):\n{tail_err.rstrip()}')
         if head_out:
             _log(f'CMD stdout (head):\n{head_out.rstrip()}')
         if tail_out and tail_out != head_out:
             _log(f'CMD stdout (tail):\n{tail_out.rstrip()}')
-        if head_err:
-            _log(f'CMD stderr (head):\n{head_err.rstrip()}')
-        if tail_err and tail_err != head_err:
-            _log(f'CMD stderr (tail):\n{tail_err.rstrip()}')
     # Return only stdout - stderr is noise (init banners, warnings)
     # that would otherwise get folded into 'expected output' and
     # cause spurious mismatches. Stderr is still logged above for

@@ -1,13 +1,7 @@
 name: ms-swift-examples
 
-# Polling-based examples guard: a scheduled monitor polls upstream
-# signals (examples tree / release tag / main HEAD); NPU work runs only
-# when one changed or the previous guarded run failed. Manual runs skip
-# the gate. Spec: docs/guarding-examples.md 要求 2.
-
 on:
   schedule:
-    # Offset from ms-swift-quick-start's '0 */6 * * *'.
     - cron: '30 */6 * * *'
   workflow_dispatch:
     inputs:
@@ -30,23 +24,12 @@ permissions:
   actions: read
   contents: read
 
-# Megatron-SWIFT on NPU follows ms-swift docs/source/BestPractices/NPU-support.md:
-# Megatron-LM core_v0.16.0 + MindSpeed core_r0.16.0 + mcore-bridge + triton-ascend 3.2.1.
-# The container image lives on each supported manifest entry (image field),
-# not here: GitHub does not allow the env context in container.image.
+
 env:
   UPSTREAM_REPO: modelscope/ms-swift
   GH_API: https://api.github.com
-  MEGATRON_LM_REF: core_v0.16.0
-  MINDSPEED_REF: core_r0.16.0
-  # Pinned release. mcore-bridge main requires megatron-core > 0.16
-  # (e.g. nemotron_h imports megatron.core.models.hybrid since 2026-08-11).
-  MCORE_BRIDGE_REF: v1.6.1
 
 jobs:
-  # Each monitor compares its upstream signal against the cached last
-  # seen value; a failure recorded by record-outcome forces a retry on
-  # the next cycle even if the signal has not changed.
   monitor:
     runs-on: ubuntu-latest
     outputs:
@@ -252,7 +235,8 @@ jobs:
           if-no-files-found: ignore
           path: manifest_check_result.json
 
-  # Runner, devices, and timeout come from each supported manifest entry.
+  # Runner, devices, image, timeout, and profile come from each supported
+  # manifest entry. Card mounts are derived from npu_devices.
   # Skipped entirely when the manifest has no supported example yet
   # (an empty matrix would fail the whole run).
   run-example:
@@ -278,11 +262,9 @@ jobs:
       PIP_TIMEOUT: "120"
     container:
       image: ${{ matrix.example.image }}
-      # --privileged exposes every NPU on the host; per-job card selection
-      # happens via ASCEND_RT_VISIBLE_DEVICES (the manifest's npu_devices).
       options: >-
-        --privileged --shm-size=64g
-        --device=/dev/davinci0 --device=/dev/davinci1
+        --shm-size=64g
+        ${{ matrix.example.device_options }}
         --device=/dev/davinci_manager --device=/dev/devmm_svm --device=/dev/hisi_hdc
         --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
         --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
@@ -308,44 +290,20 @@ jobs:
           npu-smi info
           python -c "import torch, torch_npu; print(torch.__version__, torch_npu.__version__, torch.npu.device_count())"
 
-      - name: Install ms-swift
-        working-directory: target
-        run: |
-          python -m pip install -U pip
-          python -m pip install -e .
-          # requirements/npu.txt pins torchvision for torch 2.7.1; this image ships torch 2.9.0.
-          python -m pip install torchvision==0.24.0 decorator
-
-      - name: Install Megatron-LM, MindSpeed, mcore-bridge
-        run: |
-          git clone --depth 1 --branch "$MEGATRON_LM_REF" https://github.com/NVIDIA/Megatron-LM.git deps/Megatron-LM
-          git clone --depth 1 --branch "$MINDSPEED_REF" https://gitcode.com/Ascend/MindSpeed.git deps/MindSpeed
-          git clone --depth 1 --branch "$MCORE_BRIDGE_REF" https://github.com/modelscope/mcore-bridge.git deps/mcore-bridge
-          python -m pip install -e deps/MindSpeed
-          # Pulls PyPI megatron-core as a dependency; imports still resolve to
-          # deps/Megatron-LM because PYTHONPATH precedes site-packages.
-          python -m pip install -e deps/mcore-bridge
-          # Official docs use https://triton-ascend.osinfra.cn/pypi/simple, which
-          # times out from this runner; the same wheels are on repo.huaweicloud.com.
-          python -m pip install triton-ascend==3.2.1 \
-            --find-links https://repo.huaweicloud.com/ascend/repos/pypi/triton-ascend/
-          echo "MEGATRON_LM_PATH=$GITHUB_WORKSPACE/deps/Megatron-LM" >> "$GITHUB_ENV"
-          echo "PYTHONPATH=$GITHUB_WORKSPACE/deps/Megatron-LM" >> "$GITHUB_ENV"
-
-      - name: Verify Megatron-SWIFT import
-        run: |
-          source /usr/local/Ascend/ascend-toolkit/set_env.sh
-          python -c "import mindspeed.megatron_adaptor; from swift.megatron.init import init_megatron_env; init_megatron_env()"
+      - name: Setup example environment
+        env:
+          PROFILE: ${{ matrix.example.profile }}
+        run: bash "$PROJECT_ROOT/scripts/setup_example.sh" "$PROFILE"
 
       - name: Run example
         env:
           EXAMPLE_PATH: ${{ matrix.example.path }}
-          OVERLAY_PATH: ${{ matrix.example.overlay }}
+          OVERLAY_ARGS: ${{ toJSON(matrix.example.overlay_args) }}
         run: |
           source /usr/local/Ascend/ascend-toolkit/set_env.sh
           mkdir -p "$GITHUB_WORKSPACE/output"
           CI_OUTPUT_DIR="$GITHUB_WORKSPACE/output" \
-            bash "$PROJECT_ROOT/scripts/run_example.sh" "$EXAMPLE_PATH" "$OVERLAY_PATH" \
+            bash "$PROJECT_ROOT/scripts/run_example.sh" "$EXAMPLE_PATH" \
             2>&1 | tee "$GITHUB_WORKSPACE/output/train.log"
 
   validate-results:

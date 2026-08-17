@@ -4,13 +4,13 @@
 
 在昇腾 NPU 上把清单里 `supported` 的 example 跑通。example 退出码非 0 即判红，不比对 loss 等数值。
 
-## 清单、overlay、fixture
+## 清单、fixture
 
 - `examples_manifest.yaml` 由仓库根目录 `scripts/bootstrap_manifest.py` 扫描目标仓 `examples/` 下的 `.sh` / `.py` / `.yaml` 生成。除 `examples/ascend/train/qwen3/qwen3_lora_megatron.sh` 外全部标 `unsupported`，这是任务规定的分类，不是社区结论。清单与磁盘的差异只打印路径，不使 job 失败；例外：`supported` 条目的 path 已不在磁盘上时 manifest-check 立即判红。
-- `overlays/*.args` 把 example 压到 CI 规模（仓内 8 条 fixture、短序列、输出到 CI 目录）。
-- `scripts/run_example.sh` 是 ms-swift 专用：在 CI 临时工作区给 example 补 `"$@"` 并展开 overlay。不改任何 ms-swift 仓库。
+- 该 supported 条目的 `overlay_args` 把 example 压到 CI 规模（仓内 8 条 fixture、短序列、输出到 CI 目录）。bootstrap 只写占位注释，参数要手写进清单。
+- `scripts/run_example.sh` 是 ms-swift 专用：在 CI 临时工作区给 example 补 `"$@"` 并展开 `OVERLAY_ARGS`。不改任何 ms-swift 仓库。
 
-重新生成清单（会覆盖本目录的 yaml，先确认 supported 段）：
+重新生成清单（会覆盖本目录的 yaml，先确认 supported 段，并重新写上 `overlay_args`）：
 
 ```bash
 python3 scripts/bootstrap_manifest.py \
@@ -20,7 +20,6 @@ python3 scripts/bootstrap_manifest.py \
   --runner linux-aarch64-a2-2 \
   --npu-devices 0,1 \
   --image swr.cn-south-1.myhuaweicloud.com/ascendhub/torch-npu:2.9.0.post2-910b-ubuntu22.04-py3.11 \
-  --overlay overlays/qwen3_lora_megatron.args \
   --timeout-minutes 180
 ```
 

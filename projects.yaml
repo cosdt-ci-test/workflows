@@ -5,7 +5,7 @@
 # https://docs.google.com/spreadsheets/d/1GtLB4Zvi_rzGqsH6dWShebk3DvRg6b9NNBeNeeDuNUM/edit?gid=753359062#gid=753359062
 # name is lowercase. category and support_level keep the Chinese values from
 # the sheet (e.g. 训练加速, 重点支持, 基础支持).
-# dir is the project data directory under this repo (manifest, overlays, fixtures).
+# dir is the project data directory under this repo (manifest, fixtures).
 projects:
   - name: ms-swift
     category: 训练加速

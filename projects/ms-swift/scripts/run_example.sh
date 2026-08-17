@@ -1,30 +1,24 @@
 #!/usr/bin/env bash
 # Run one example from a CI working copy of the target tree.
-# If the example does not already pass "$@" through, append it after
-# `--model_name swift-robot` in this working copy only. Never git add/commit/push.
+# Overlay CLI args come from OVERLAY_ARGS (JSON array). If the example does
+# not already pass "$@", append it after `--model_name swift-robot` in this
+# working copy only. Never git add/commit/push.
 set -euo pipefail
 
-if [[ $# -lt 2 ]]; then
-  echo "usage: $0 <example-relpath> <overlay-relpath>" >&2
+if [[ $# -lt 1 ]]; then
+  echo "usage: $0 <example-relpath>" >&2
   exit 2
 fi
 
 EXAMPLE_REL="$1"
-OVERLAY_REL="$2"
-PROJECT_ROOT="${PROJECT_ROOT:?PROJECT_ROOT is required}"
 TARGET_ROOT="${TARGET_ROOT:?TARGET_ROOT is required}"
 FIXTURE_DIR="${FIXTURE_DIR:?FIXTURE_DIR is required}"
 CI_OUTPUT_DIR="${CI_OUTPUT_DIR:?CI_OUTPUT_DIR is required}"
 
 EXAMPLE_PATH="$TARGET_ROOT/$EXAMPLE_REL"
-OVERLAY_PATH="$PROJECT_ROOT/$OVERLAY_REL"
 
 if [[ ! -f "$EXAMPLE_PATH" ]]; then
   echo "example not found: $EXAMPLE_PATH" >&2
-  exit 1
-fi
-if [[ ! -f "$OVERLAY_PATH" ]]; then
-  echo "overlay not found: $OVERLAY_PATH" >&2
   exit 1
 fi
 
@@ -61,29 +55,40 @@ PY
 }
 
 expand_overlay() {
-  "$PYTHON" - "$OVERLAY_PATH" <<'PY'
+  "$PYTHON" - <<'PY'
+import json
 import os
 import shlex
-import sys
-from pathlib import Path
 
-text = os.path.expandvars(Path(sys.argv[1]).read_text(encoding='utf-8'))
+raw = os.environ.get('OVERLAY_ARGS', '').strip()
+if not raw or raw in ('null', '""'):
+    raise SystemExit(0)
+try:
+    items = json.loads(raw)
+except json.JSONDecodeError as exc:
+    raise SystemExit(f'OVERLAY_ARGS is not valid JSON: {exc}') from exc
+if items in (None, ''):
+    raise SystemExit(0)
+if not isinstance(items, list):
+    raise SystemExit(
+        f'OVERLAY_ARGS must be a JSON array, got {type(items).__name__}')
 tokens = []
-for raw in text.splitlines():
-    line = raw.strip()
-    if not line or line.startswith('#'):
-        continue
-    tokens.extend(shlex.split(line, posix=True))
+for item in items:
+    if not isinstance(item, str):
+        raise SystemExit(
+            f'OVERLAY_ARGS items must be strings, got {type(item).__name__}')
+    tokens.extend(shlex.split(os.path.expandvars(item), posix=True))
 print(' '.join(shlex.quote(token) for token in tokens))
 PY
 }
 
-ensure_passthrough "$EXAMPLE_PATH"
-
 eval "EXTRA_ARGS=( $(expand_overlay) )"
 
 echo "running $EXAMPLE_PATH with ${#EXTRA_ARGS[@]} overlay args"
-printf 'overlay arg: %q\n' "${EXTRA_ARGS[@]}"
+if ((${#EXTRA_ARGS[@]})); then
+  printf 'overlay arg: %q\n' "${EXTRA_ARGS[@]}"
+  ensure_passthrough "$EXAMPLE_PATH"
+fi
 
 cd "$TARGET_ROOT"
 # Export so the example script and megatron see the same cache/output contract.

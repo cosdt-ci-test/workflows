@@ -164,6 +164,8 @@ run sh: ...
 
 ### merge-lora 并使用 vLLM-Ascend 加速推理
 
+本节示例依赖 `vllm-ascend`,该轮子在 CANN 9.0.0 + Atlas A3/A5 系统上由 vLLM-Ascend 官方发布;本仓库 CI 镜像（`cann:8.3.rc2` + A2）不预装该轮子，因此该 block 在 CI 上以 ModuleNotFoundError 失败告终，文档示例本身与 ms-swift 上游 [citest_npu](https://github.com/modelscope/ms-swift/blob/master/.github/workflows/citest_npu.yaml) 保持一致（其同样不在 CI 中跑 vllm-ascend 路径）。若需要在 A2 / CANN 8.3 系统上跑通该 block，请参考 [NPU-support.md#vllm-ascend](https://github.com/modelscope/ms-swift/blob/master/docs/source/BestPractices/NPU-support.md) 安装与当前硬件/CANN 兼容的 `vllm-ascend` 版本。
+
 ```shell
 >>> ASCEND_RT_VISIBLE_DEVICES=0 swift infer \
 ...     --adapters <ckpt> \

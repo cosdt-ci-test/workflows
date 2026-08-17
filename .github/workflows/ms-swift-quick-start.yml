@@ -49,6 +49,16 @@ jobs:
     name: monitor + test on change
     runs-on: [linux-aarch64-a2-1]
     timeout-minutes: 180
+    # Cross-job channel: ship result.json + a few scalars up to the
+    # publish-results job via needs.<job>.outputs. The NPU runner's
+    # artifact blob storage channel is unreachable (see write-result
+    # step), so we use job outputs instead of upload-artifact.
+    outputs:
+      result_json: ${{ steps.write-result.outputs.result_json }}
+      trigger:     ${{ steps.write-result.outputs.trigger }}
+      reason:      ${{ steps.write-result.outputs.reason }}
+      job_status:  ${{ steps.write-result.outputs.job_status }}
+      tests_ran:   ${{ steps.write-result.outputs.tests_ran }}
     defaults:
       run:
         shell: bash
@@ -425,7 +435,15 @@ jobs:
       # upstream ref/commit, runner image) plus the GitHub job conclusion;
       # we deliberately do NOT mine the log here because log shape changes
       # would force every consumer to follow along.
+      #
+      # Why this step also emits job-level outputs (and the file is NOT
+      # uploaded here): the linux-aarch64-a2-1 self-hosted NPU runner
+      # cannot reach GitHub's artifact blob storage, regardless of file
+      # size - upload-artifact stalls waiting for an ack that never comes.
+      # So we serialize result.json into a job output and let the
+      # publish-results job (ubuntu-latest, downstream) do the upload.
       - name: Write result.json
+        id: write-result
         if: always()
         env:
           TRIGGER:         ${{ github.event_name }}
@@ -474,86 +492,19 @@ jobs:
             }' > output/result.json
           echo "wrote $(wc -c < output/result.json) bytes:"
           cat output/result.json
-
-      # Upload so the artifact survives the job workspace (which is wiped
-      # the moment the runner releases). Retention rides on GitHub's
-      # artifact storage policy: 90 days for public repos (we go with
-      # that ceiling), 365 for private/org repos if we ever cross over.
-      # Skipped when no result.json was produced (changed=false on a
-      # quiet schedule tick) so we don't churn empty artifacts.
-
-      # Probe phase: tell us *why* the upload stalls when it does.
-      # The v4/v7 stall traces showed the upload client timing out
-      # waiting for an ack from the artifact blob storage, which on
-      # this self-hosted NPU runner turned into a hung step. The
-      # probe measures the runner -> github side-channel and prints
-      # timing + status so the next stall has data attached.
-      - name: Diagnose upload prerequisites
-        if: always()
-        continue-on-error: true
-        env:
-          ACTIONS_RUNTIME_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          echo "--- DNS ---"
-          for host in api.github.com actions.githubusercontent.com github-production-release-asset-2e65be.s3.amazonaws.com storage.googleapis.com; do
-            t0=$(date +%s%3N)
-            getent hosts "$host" >/dev/null 2>&1 || echo "  $host: getent failed"
-            t1=$(date +%s%3N)
-            echo "  $host resolved in $((t1 - t0))ms"
-          done
-
-          echo "--- TCP / TLS to actions.githubusercontent.com ---"
-          t0=$(date +%s%3N)
-          timeout 30 bash -c 'cat </dev/tcp/actions.githubusercontent.com/443 >/dev/null' \
-            && echo "  TCP connect OK in $(($(date +%s%3N) - t0))ms" \
-            || echo "  TCP connect failed in $(($(date +%s%3N) - t0))ms"
-
-          echo "--- HTTPS HEAD probe (small request) ---"
-          for url in \
-              https://api.github.com/zen \
-              https://actions.githubusercontent.com/_health \
-              ; do
-            t0=$(date +%s%3N)
-            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$url" 2>&1 || echo "ERR")
-            t1=$(date +%s%3N)
-            echo "  $url -> $code in $((t1 - t0))ms"
-          done
-
-          echo "--- existing result.json ---"
-          if [ -f output/result.json ]; then
-            sz=$(wc -c < output/result.json)
-            echo "  output/result.json: $sz bytes"
-          else
-            echo "  output/result.json: MISSING"
-          fi
-
-          echo "--- egress proxy env ---"
-          env | grep -iE 'proxy|http' | sort || echo "  (no proxy env)"
-
-          echo "--- DNS resolver ---"
-          cat /etc/resolv.conf 2>/dev/null || echo "  (no /etc/resolv.conf)"
-
-      - name: Upload result.json
-        if: always()
-        # Tracking upload-artifact @v7. v5 (2025-10) bumped to Node 24,
-        # v6 (2025-12) made Node 24 the default (runner >= 2.327.1;
-        # we run 2.336.0 so this is satisfied), v7 (2026-02) rewrote
-        # the action to ESM and added a ``direct upload`` mode that
-        # we do not opt into. The ``name`` / ``path`` /
-        # ``if-no-files-found`` / ``retention-days`` inputs we use
-        # are unchanged across v5/v6/v7, so this bump is yaml-only.
-        # continue-on-error: belt-and-suspenders - if a stall (or any
-        # other upload failure) recurs on v7, the run conclusion
-        # stays driven by the test step. External monitors can fall
-        # back to /actions/runs/{id} + /jobs for success/failure
-        # even if the artifact never lands.
-        continue-on-error: true
-        uses: actions/upload-artifact@v7
-        with:
-          name: ms-swift-quick-start-${{ github.run_id }}
-          path: output/result.json
-          if-no-files-found: warn
-          retention-days: 90
+          # Ship result.json across jobs via job-level outputs (channel 2).
+          # We do NOT call upload-artifact on this runner - its artifact
+          # blob storage channel is unreachable. The result_json output is
+          # read in the publish-results job below and uploaded there.
+          # jq -c . gives a one-line, expression-safe JSON string.
+          printf 'result_json=%s\n' "$(jq -c . output/result.json)" \
+            >> "$GITHUB_OUTPUT"
+          {
+            printf 'trigger=%s\n'    "$TRIGGER"
+            printf 'reason=%s\n'     "$REASON"
+            printf 'job_status=%s\n' "$JOB_STATUS"
+            printf 'tests_ran=%s\n'  "$tests_ran"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Summarize test result
         if: always()
@@ -575,3 +526,52 @@ jobs:
             echo "  Last failure:     $(cat "$REASON_FILE")"
           fi
           echo "============================================================"
+
+  # Result.json is produced on the NPU runner (where upload-artifact is
+  # unreachable) and shipped via monitor-and-test.outputs.result_json.
+  # This job runs on ubuntu-latest and does the actual upload + schema
+  # validation, which are the only steps that need network egress to
+  # GitHub's artifact blob storage.
+  publish-results:
+    name: publish result.json
+    needs: monitor-and-test
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Materialize result.json
+        env:
+          RESULT_JSON: ${{ needs.monitor-and-test.outputs.result_json }}
+        run: |
+          mkdir -p output
+          # Defensive: if result_json came back empty (e.g. all upstream
+          # monitor steps skipped, decide.outputs.changed was false, AND
+          # write-result did not run for some reason) we still want the
+          # publish job to exit cleanly so the workflow conclusion is
+          # driven by monitor-and-test alone.
+          if [ -z "$RESULT_JSON" ]; then
+            echo "no result_json from monitor-and-test; nothing to publish"
+            exit 0
+          fi
+          printf '%s\n' "$RESULT_JSON" > output/result.json
+          echo "materialized $(wc -c < output/result.json) bytes:"
+          cat output/result.json
+
+      - name: Validate result.json against schema
+        if: always()
+        run: |
+          if [ ! -s output/result.json ]; then
+            echo "result.json is empty; skipping schema validation"
+            exit 0
+          fi
+          python3 -m pip install -q check-jsonschema
+          check-jsonschema \
+            --schemafile schemas/result.schema.json output/result.json
+
+      - name: Upload result.json
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ms-swift-quick-start-${{ github.run_id }}
+          path: output/result.json
+          if-no-files-found: warn
+          retention-days: 90

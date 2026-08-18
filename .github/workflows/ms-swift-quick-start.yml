@@ -151,7 +151,7 @@ jobs:
             echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "ref=main" >> "$GITHUB_OUTPUT"
             echo "reason=doc" >> "$GITHUB_OUTPUT"
-          elif [ "$OUTCOME" = "failure" ]; then
+          elif [[ "$OUTCOME" == failure* ]]; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "ref=main" >> "$GITHUB_OUTPUT"
             echo "reason=doc-retry" >> "$GITHUB_OUTPUT"
@@ -179,7 +179,7 @@ jobs:
             echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "ref=$TAG" >> "$GITHUB_OUTPUT"
             echo "reason=release" >> "$GITHUB_OUTPUT"
-          elif [ "$OUTCOME" = "failure" ]; then
+          elif [[ "$OUTCOME" == failure* ]]; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "ref=$TAG" >> "$GITHUB_OUTPUT"
             echo "reason=release-retry" >> "$GITHUB_OUTPUT"
@@ -382,42 +382,32 @@ jobs:
           REASON="${{ steps.decide.outputs.reason }}"
           # Strip the "-retry" suffix to map back to the base monitor.
           BASE="${REASON%-retry}"
-          # Map the test step's conclusion to an outcome:
-          #   success   -> success  (test passed)
-          #   failure   -> failure  (test ran and failed)
-          #   skipped/* -> failure  (a prior step broke before test ran;
-          #                          treat as failure so the next cycle
-          #                          retries; record the cause separately)
+          # Map the test step's conclusion to an outcome.
+          # Success is just "success". Failure carries the cause as
+          # "failure: <reason>" so consumers can both:
+          #   - check `[[ "$OUT" == failure* ]]` for retry decisions
+          #   - strip the "failure: " prefix to surface the cause
+          # without needing a second .failure_reason file.
           CONCLUSION="${{ steps.test.conclusion }}"
           case "$CONCLUSION" in
             success)
               OUT="success"
-              REASON_TEXT=""
               ;;
             failure)
-              OUT="failure"
-              REASON_TEXT="test failed"
+              OUT="failure: test failed"
               ;;
             skipped)
-              OUT="failure"
-              REASON_TEXT="prior step failed before test could run"
+              OUT="failure: prior step failed before test could run"
               ;;
             cancelled)
-              OUT="failure"
-              REASON_TEXT="job cancelled"
+              OUT="failure: job cancelled"
               ;;
             *)
-              OUT="failure"
-              REASON_TEXT="unknown conclusion: ${CONCLUSION}"
+              OUT="failure: unknown conclusion (${CONCLUSION})"
               ;;
           esac
           echo "${OUT}" > "${STATE_DIR}/.${BASE}_outcome"
-          if [ -n "$REASON_TEXT" ]; then
-            echo "${REASON_TEXT}" > "${STATE_DIR}/.${BASE}_failure_reason"
-          else
-            : > "${STATE_DIR}/.${BASE}_failure_reason"
-          fi
-          echo "outcome for ${BASE}: ${OUT} (test conclusion: ${CONCLUSION}, reason: ${REASON_TEXT})"
+          echo "outcome for ${BASE}: ${OUT}"
 
       # Write a small machine-readable summary so external monitors can pull
       # per-run outcomes via /actions/runs/{run_id}/artifacts. Captures the
@@ -512,10 +502,13 @@ jobs:
           echo "  Trigger reason:   ${{ steps.decide.outputs.reason }}"
           echo "------------------------------------------------------------"
           # Surface the last-known failure reason (from the prior run's
-          # outcome record) so a retry run is self-explanatory.
-          REASON_FILE=".monitor-state/.${REASON%-retry}_failure_reason"
-          if [ -s "$REASON_FILE" ]; then
-            echo "  Last failure:     $(cat "$REASON_FILE")"
+          # outcome record, encoded in the same file as the outcome value
+          # itself) so a retry run is self-explanatory. The outcome file
+          # holds either "success" or "failure: <reason>" - the prefix
+          # tells us whether to print.
+          OUTCOME_FILE=".monitor-state/.${REASON%-retry}_outcome"
+          if [ -s "$OUTCOME_FILE" ] && [[ "$(cat "$OUTCOME_FILE")" == failure:* ]]; then
+            echo "  Last failure:     $(cat "$OUTCOME_FILE" | sed 's/^failure: //')"
           fi
           echo "============================================================"
 

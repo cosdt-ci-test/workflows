@@ -164,7 +164,18 @@ jobs:
             "$GH_API/repos/${{ env.UPSTREAM_REPO }}/releases/latest" -o /tmp/release.json
           ID=$(jq -r '.id // empty' /tmp/release.json)
           TAG=$(jq -r '.tag_name // empty' /tmp/release.json)
-          OLD_ID=$(cat "$STATE_DIR/.last_release_id" 2>/dev/null || echo "")
+          # Explicit file-existence check rather than 'cat || echo ""':
+          # on cache miss (first deploy, or 30-day retention expiry)
+          # actions/cache/restore@v4 does NOT create the .monitor-state/
+          # directory, and 'cat' on a missing file under set -euo
+          # pipefail would silently exit before the echo runs in some
+          # bash versions. The [ -f ] form is unambiguous about the
+          # fall-through-to-empty-string contract.
+          if [ -f "$STATE_DIR/.last_release_id" ]; then
+            OLD_ID=$(cat "$STATE_DIR/.last_release_id")
+          else
+            OLD_ID=""
+          fi
           # The outcome file is a two-line key=value blob (result / error);
           # source it so we can use $result for the retry decision.
           if [ -f "$STATE_DIR/.release_outcome" ]; then
@@ -204,7 +215,11 @@ jobs:
           mkdir -p "$STATE_DIR"
           echo "Monitoring: $DOC_URL"
           NEW=$(curl -fsSL --retry 3 "$DOC_URL" | sha256sum | cut -d' ' -f1)
-          OLD=$(cat "$STATE_DIR/.doc_hash" 2>/dev/null || echo "")
+          if [ -f "$STATE_DIR/.doc_hash" ]; then
+            OLD=$(cat "$STATE_DIR/.doc_hash")
+          else
+            OLD=""
+          fi
           # The outcome file is a two-line key=value blob (result / error);
           # source it so we can use $result for the retry decision.
           if [ -f "$STATE_DIR/.doc_outcome" ]; then

@@ -291,24 +291,19 @@ jobs:
           export PATH="/usr/local/sbin:$PATH"
           source /usr/local/Ascend/ascend-toolkit/set_env.sh
           # ----- NPU runtime setup (matches upstream ci_container_test.sh) -----
-          # 1. Pin torch / torch_npu / modelscope and block CUDA wheels so a
-          #    transitive dep can't silently pull nvidia-* into an NPU run.
-          #    Keep this in lockstep with projects/ms-swift/constraints-npu.txt
-          #    on main (torch 2.9.0+cpu / torch_npu 2.9.0.post2 - the cuda-* /
-          #    nvidia-* <0 backstop stops ms-swift's own requirements/npu.txt
-          #    or a transitive dep from dragging in a CUDA runtime that the
-          #    runner can't reach).
+          # 1. Block CUDA wheels so a transitive dep can't silently pull
+          #    nvidia-* into an NPU run. The cuda-* / nvidia-* <0 backstop
+          #    stops ms-swift's own requirements/npu.txt or a transitive
+          #    dep from dragging in a CUDA runtime the runner can't reach.
+          #    torch / torch_npu are NOT constrained here: ensure_torch_stack
+          #    below mirrors projects/ms-swift/scripts/setup_example.sh and
+          #    decides whether to reuse the image's pre-installed torch or
+          #    install torch==2.9.0 from the cluster cache. Pinning torch
+          #    to a specific version in this file would force pip to redo
+          #    the wheel lookup the same way 064a5d7 / 7136ed1 tried and
+          #    failed when aliyun's pytorch-wheels/cpu/ mirror was reachable
+          #    but the cluster cache was not authoritative.
           cat >/tmp/ms_swift_npu_constraints.txt <<'EOF'
-          # torch 2.9.0 (no +cpu suffix) is a GPU-only wheel on PyPI
-          # and the aarch64 cp312 variant is only published under the
-          # ``+cpu`` local version label. Without ``+cpu`` pip raises
-          # ``Could not find a version that satisfies the requirement
-          # torch==2.9.0`` on the mirrors the runner can reach. The
-          # ``+cpu`` libtorch build has no cuda-toolkit / nvidia-*
-          # in its wheel metadata, so the cuda-* / nvidia-* <0
-          # backstop below still does its job once pip has the wheel.
-          torch==2.9.0+cpu
-          torch_npu==2.9.0.post2
           modelscope==1.37.0
           cuda-toolkit<0
           cuda-python<0
@@ -355,18 +350,38 @@ jobs:
           #    the test's setUpClass invokes `uv pip install ...`. The
           #    internal nginx cache fronts PyPI so this resolves cleanly.
           python -m pip install uv
-          # 3. Force-reinstall torch + torch_npu so we get the real NPU
-          #    build, not whatever the CANN image happens to ship. Pinned
-          #    to the CANN 9.x / py3.12 line so torch_npu's wheel matches
-          #    the new runtime; mirrors main's setup_example.sh so the
-          #    quick-start and examples tracks run the same torch stack.
-          python -m pip install --force-reinstall --no-deps \
-              --index-url http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple \
-              --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
-              --extra-index-url https://mirrors.aliyun.com/pytorch-wheels/cpu/ \
-              --trusted-host cache-service.nginx-pypi-cache.svc.cluster.local \
-              --trusted-host mirrors.aliyun.com \
-              torch==2.9.0+cpu torch_npu==2.9.0.post2
+          # 3. ensure_torch_stack (same probe-then-install pattern as
+          #    projects/ms-swift/scripts/setup_example.sh:93-104): the
+          #    CANN 9.1.0 / py3.12 image already ships torch 2.9.0.x
+          #    with torch_npu 2.9.0 built in, and torch.__version__
+          #    surfaces that as ``2.9.0+cpu`` via the PEP 440 local
+          #    version label. The cluster cache only publishes the
+          #    wheel under the bare ``2.9.0`` filename (PyPI does not
+          #    encode ``+cpu`` into the wheel name), so a pip reinstall
+          #    from cache-service will fail with ``no matching
+          #    distributions`` whenever the simple page lookup uses
+          #    the ``+cpu`` label. Reusing the image's torch when it
+          #    already matches avoids that lookup entirely. The torch
+          #    install path is only taken when the image's stack does
+          #    NOT match (rare; the official CANN 9.x image always
+          #    does), and in that case we install the bare ``2.9.0``
+          #    wheel that cache-service does carry. Aliyun's
+          #    pytorch-wheels/cpu/ mirror and the ``+cpu`` PEP 440
+          #    label are no longer needed here.
+          if python -c "
+          import torch, torch_npu
+          raise SystemExit(0 if torch.__version__.startswith('2.9.0') \
+              and torch_npu.__version__.startswith('2.9.0') else 1)
+          " 2>/dev/null; then
+            echo "reusing image torch stack (torch $(python -c 'import torch; print(torch.__version__)'), torch_npu $(python -c 'import torch_npu; print(torch_npu.__version__)'))"
+          else
+            echo "installing torch==2.9.0 torch_npu==2.9.0.post2"
+            python -m pip install \
+                --index-url http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple \
+                --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
+                --trusted-host cache-service.nginx-pypi-cache.svc.cluster.local \
+                torch==2.9.0 torch_npu==2.9.0.post2
+          fi
           # 4. Pin transformers / peft (matches the doc's <5.0 / <0.19 caps).
           python -m pip install "transformers<5.0" "peft<0.19"
           # 5. vLLM-Ascend setup removed - vllm-ascend 0.18.0 (and the

@@ -203,6 +203,7 @@ _PLACEHOLDER_PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r'\b2\.9\.0\.postX\b'), r'2\.9\.0\.post\d+'),
     (re.compile(r'\b2\.9\.0\.x\b'),     r'2\.9\.0\.\d+'),
     (re.compile(r'\b3\.11\.x\b'),       r'3\.11\.\d+'),
+    (re.compile(r'\b3\.12\.x\b'),       r'3\.12\.\d+'),
     (re.compile(r'v\d+-xxx'),      r'v\d+-\S+'),
     (re.compile(r'checkpoint-xxx'), r'checkpoint-\S+'),
     (re.compile(r'chatcmpl-xxx'),  r'chatcmpl-\S+'),

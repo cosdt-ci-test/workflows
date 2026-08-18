@@ -120,59 +120,40 @@ jobs:
       # forces a retry on the next cycle even if the signal hasn't
       # changed; success clears that flag. State lives in
       # .monitor-state/ (actions/cache, 30-day retention).
-      - name: Restore monitor state
-        id: cache-restore
+      # The doc and release monitors each get their own cache entry
+      # so a release-triggered run can skip the doc monitor entirely
+      # without invalidating its cached state - that way the next
+      # schedule run picks up doc changes that were deferred this
+      # time around.
+      - name: Restore release state
+        id: cache-restore-release
         if: github.event_name == 'schedule'
         uses: actions/cache/restore@v4
         with:
-          path: .monitor-state
-          # Single fixed key. Only the schedule trigger writes this
-          # cache (record-outcome step is gated on
-          # github.event_name == 'schedule' too), and schedule
-          # runs are spaced 6h apart by cron, so concurrent saves
-          # are not a concern. Manual workflow_dispatch runs do
-          # not touch this cache at all.
-          key: monitor-state-ms-swift
+          path: |
+            .monitor-state/.last_release_id
+            .monitor-state/.release_outcome
+          key: monitor-state-release
 
-      - name: Monitor doc hash
-        id: monitor-doc
+      - name: Restore doc state
+        id: cache-restore-doc
+        # Always runs in schedule mode - this step is positioned
+        # before monitor-release, so it cannot consult that step's
+        # output yet. The doc state files will simply not be touched
+        # in a release-only cycle (monitor-doc skips itself, persist
+        # doc skips too), so restoring them here is harmless.
         if: github.event_name == 'schedule'
-        env:
-          DOC_URL: ${{ env.MONITORED_DOC_URL }}
-        run: |
-          set -euo pipefail
-          STATE_DIR=".monitor-state"
-          mkdir -p "$STATE_DIR"
-          echo "Monitoring: $DOC_URL"
-          NEW=$(curl -fsSL --retry 3 "$DOC_URL" | sha256sum | cut -d' ' -f1)
-          OLD=$(cat "$STATE_DIR/.doc_hash" 2>/dev/null || echo "")
-          # The outcome file is a two-line key=value blob (result / error);
-          # source it so we can use $result for the retry decision.
-          if [ -f "$STATE_DIR/.doc_outcome" ]; then
-            . "$STATE_DIR/.doc_outcome"
-          else
-            result=""
-          fi
-          if [ "$OLD" != "$NEW" ]; then
-            echo "$NEW" > "$STATE_DIR/.doc_hash"
-            cat > "$STATE_DIR/.doc_outcome" <<-OUTCOME_EOF
-              result=success
-              error=none
-            OUTCOME_EOF
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "ref=main" >> "$GITHUB_OUTPUT"
-            echo "reason=doc" >> "$GITHUB_OUTPUT"
-          elif [ "$result" = "failure" ]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "ref=main" >> "$GITHUB_OUTPUT"
-            echo "reason=doc-retry" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          fi
-          echo "doc_hash=$NEW result=$result"
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            .monitor-state/.doc_hash
+            .monitor-state/.doc_outcome
+          key: monitor-state-doc
 
       - name: Monitor upstream latest release id
         id: monitor-release
+        # Runs first so monitor-doc (below) can read its `changed`
+        # output to decide whether to skip itself this cycle.
         if: github.event_name == 'schedule'
         run: |
           set -euo pipefail
@@ -208,12 +189,73 @@ jobs:
           fi
           echo "release_id=$ID tag=$TAG result=$result"
 
-      - name: Persist monitor state
+      - name: Monitor doc hash
+        id: monitor-doc
+        # Skip when release also fired this cycle - release takes
+        # priority, doc state must stay untouched so the next schedule
+        # run picks it up cleanly.
+        if: github.event_name == 'schedule' && steps.monitor-release.outputs.changed != 'true'
+        env:
+          DOC_URL: ${{ env.MONITORED_DOC_URL }}
+        run: |
+          set -euo pipefail
+          STATE_DIR=".monitor-state"
+          mkdir -p "$STATE_DIR"
+          echo "Monitoring: $DOC_URL"
+          NEW=$(curl -fsSL --retry 3 "$DOC_URL" | sha256sum | cut -d' ' -f1)
+          OLD=$(cat "$STATE_DIR/.doc_hash" 2>/dev/null || echo "")
+          # The outcome file is a two-line key=value blob (result / error);
+          # source it so we can use $result for the retry decision.
+          if [ -f "$STATE_DIR/.doc_outcome" ]; then
+            . "$STATE_DIR/.doc_outcome"
+          else
+            result=""
+          fi
+          if [ "$OLD" != "$NEW" ]; then
+            echo "$NEW" > "$STATE_DIR/.doc_hash"
+            cat > "$STATE_DIR/.doc_outcome" <<-OUTCOME_EOF
+              result=success
+              error=none
+            OUTCOME_EOF
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "ref=main" >> "$GITHUB_OUTPUT"
+            echo "reason=doc" >> "$GITHUB_OUTPUT"
+          elif [ "$result" = "failure" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "ref=main" >> "$GITHUB_OUTPUT"
+            echo "reason=doc-retry" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "doc_hash=$NEW result=$result"
+
+      - name: Persist release state
+        # Persist on every schedule run that touched release state
+        # (i.e. monitor-release ran - either it changed something or
+        # it read the cache and the 'always()' guard covers a test
+        # failure that didn't update the outcome). We persist
+        # unconditionally here (no if-changed gate) so a release
+        # retry that succeeds still uploads the new outcome.
         if: github.event_name == 'schedule' && always()
         uses: actions/cache/save@v4
         with:
-          path: .monitor-state
-          key: monitor-state-ms-swift
+          path: |
+            .monitor-state/.last_release_id
+            .monitor-state/.release_outcome
+          key: monitor-state-release
+          retention-days: 30
+
+      - name: Persist doc state
+        # Skip when release also triggered this cycle - release took
+        # priority, doc state must stay exactly as it was in cache so
+        # the next schedule run picks it up.
+        if: github.event_name == 'schedule' && always() && steps.monitor-release.outputs.changed != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .monitor-state/.doc_hash
+            .monitor-state/.doc_outcome
+          key: monitor-state-doc
           retention-days: 30
 
       # ===== Test =====
@@ -232,20 +274,21 @@ jobs:
             echo "reason=manual" >> "$GITHUB_OUTPUT"
             echo "test_ref=${{ inputs.upstream_ref || 'main' }}" >> "$GITHUB_OUTPUT"
           else
-            # Monitor path. Priority: doc > release > commit. A retry
-            # reason (e.g. "doc-retry") carries the same priority as
-            # its base reason.
+            # Monitor path. Priority: release > doc. When both signals
+            # changed this cycle, only the release test runs (and the
+            # monitor-doc step skipped itself, leaving doc state
+            # untouched for the next schedule run to pick up).
             CHANGED="false"
             REASON=""
             REF=""
-            if [ "${{ steps.monitor-doc.outputs.changed }}" = "true" ]; then
-              CHANGED="true"
-              REASON="${{ steps.monitor-doc.outputs.reason }}"
-              REF="${{ steps.monitor-doc.outputs.ref }}"
-            elif [ "${{ steps.monitor-release.outputs.changed }}" = "true" ]; then
+            if [ "${{ steps.monitor-release.outputs.changed }}" = "true" ]; then
               CHANGED="true"
               REASON="${{ steps.monitor-release.outputs.reason }}"
               REF="${{ steps.monitor-release.outputs.ref }}"
+            elif [ "${{ steps.monitor-doc.outputs.changed }}" = "true" ]; then
+              CHANGED="true"
+              REASON="${{ steps.monitor-doc.outputs.reason }}"
+              REF="${{ steps.monitor-doc.outputs.ref }}"
             fi
             echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
             echo "reason=$REASON" >> "$GITHUB_OUTPUT"

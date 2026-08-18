@@ -344,10 +344,9 @@ jobs:
           #    nvidia-* into an NPU run. The cuda-* / nvidia-* <0 backstop
           #    stops ms-swift's own requirements/npu.txt or a transitive
           #    dep from dragging in a CUDA runtime the runner can't reach.
-          #    torch / torch_npu are NOT constrained here: ensure_torch_stack
-          #    below mirrors projects/ms-swift/scripts/setup_example.sh and
-          #    decides whether to reuse the image's pre-installed torch or
-          #    install torch==2.9.0 from the cluster cache. Pinning torch
+          #    torch / torch_npu are NOT constrained here: torch_stack_probe
+          #    below decides whether to reuse the image's pre-installed torch
+          #    or install torch==2.9.0 from the cluster cache. Pinning torch
           #    to a specific version in this file would force pip to redo
           #    the wheel lookup the same way 064a5d7 / 7136ed1 tried and
           #    failed when aliyun's pytorch-wheels/cpu/ mirror was reachable
@@ -399,24 +398,29 @@ jobs:
           #    the test's setUpClass invokes `uv pip install ...`. The
           #    internal nginx cache fronts PyPI so this resolves cleanly.
           python -m pip install uv
-          # 3. ensure_torch_stack (same probe-then-install pattern as
-          #    projects/ms-swift/scripts/setup_example.sh:93-104): the
-          #    CANN 9.1.0 / py3.12 image already ships torch 2.9.0.x
-          #    with torch_npu 2.9.0 built in, and torch.__version__
-          #    surfaces that as ``2.9.0+cpu`` via the PEP 440 local
-          #    version label. The cluster cache only publishes the
-          #    wheel under the bare ``2.9.0`` filename (PyPI does not
-          #    encode ``+cpu`` into the wheel name), so a pip reinstall
-          #    from cache-service will fail with ``no matching
-          #    distributions`` whenever the simple page lookup uses
-          #    the ``+cpu`` label. Reusing the image's torch when it
-          #    already matches avoids that lookup entirely. The torch
-          #    install path is only taken when the image's stack does
-          #    NOT match (rare; the official CANN 9.x image always
-          #    does), and in that case we install the bare ``2.9.0``
-          #    wheel that cache-service does carry. Aliyun's
-          #    pytorch-wheels/cpu/ mirror and the ``+cpu`` PEP 440
-          #    label are no longer needed here.
+          # 3. ensure_torch_stack: the pinned CANN 9.1.0 / py3.12 image
+          #    used here (swr.cn-south-1.myhuaweicloud.com/ascendhub/
+          #    cann:9.1.0-910b-ubuntu22.04-py3.12) ships torch 2.9.0
+          #    with torch_npu 2.9.0.post2 pre-installed, so we probe
+          #    first and skip the install when the image's torch stack
+          #    already matches. The fall-through install path is hit
+          #    only if the image is rebuilt without a torch stack or
+          #    someone bumps the CI image to a different torch line -
+          #    in either case we install torch==2.9.0 +
+          #    torch_npu==2.9.0.post2 from the cluster cache and fall
+          #    back to the ascend huaweicloud mirror. We don't pin
+          #    torch here by default (only when the image lacks it)
+          #    because hard-pinning torch==2.9.0+cpu on a workflow
+          #    that doesn't need to reinstall torch tends to trigger
+          #    PyPI simple-page lookups under the +cpu local version
+          #    label, which the cluster cache does not serve.
+          #
+          #    Note: torch.__version__ surfaces as '2.9.0+cpu' via
+          #    the PEP 440 local version label regardless of the
+          #    underlying device - the '+cpu' here names the libtorch
+          #    build variant, not the runtime compute device. Actual
+          #    NPU compute goes through torch_npu (CANN backend);
+          #    ms-swift moves the model with .to('npu:0').
           if python -c "
           import torch, torch_npu
           raise SystemExit(0 if torch.__version__.startswith('2.9.0') \

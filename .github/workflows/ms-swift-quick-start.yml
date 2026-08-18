@@ -491,6 +491,7 @@ jobs:
             --arg upstream_commit  "$UPSTREAM_COMMIT" \
             --arg target_repo      "$TARGET_REPO" \
             --arg target_ref       "$TARGET_REF" \
+            --arg path             "projects/ms-swift/docs/Quick-start-Ascend.md" \
             --arg image            "$IMAGE" \
             --arg job_status       "$JOB_STATUS" \
             --argjson tests_ran    "$tests_ran" \
@@ -504,6 +505,7 @@ jobs:
               upstream_commit: $upstream_commit,
               target_repo:     $target_repo,
               target_ref:      $target_ref,
+              path:            $path,
               image:           $image,
               tests_ran:       $tests_ran,
               job_status:      $job_status,

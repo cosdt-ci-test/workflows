@@ -134,7 +134,7 @@ jobs:
       - name: Restore monitor state
         id: cache-restore
         if: github.event_name == 'schedule'
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: .monitor-state
           # Run-id suffix because actions/cache refuses to overwrite an
@@ -164,7 +164,7 @@ jobs:
           TAG=$(jq -r '.tag_name // empty' /tmp/release.json)
           # Explicit file-existence check rather than 'cat || echo ""':
           # on cache miss (first deploy, or 30-day retention expiry)
-          # actions/cache/restore@v5 does NOT create the .monitor-state/
+          # actions/cache/restore@v6 does NOT create the .monitor-state/
           # directory, and 'cat' on a missing file under set -euo
           # pipefail would silently exit before the echo runs in some
           # bash versions. The [ -f ] form is unambiguous about the
@@ -533,7 +533,7 @@ jobs:
         # make every Persist after the first a silent no-op (see
         # Restore monitor state for the matching suffix + restore-keys).
         if: github.event_name == 'schedule' && always()
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@v6
         with:
           path: .monitor-state
           key: monitor-state-ms-swift-${{ github.run_id }}

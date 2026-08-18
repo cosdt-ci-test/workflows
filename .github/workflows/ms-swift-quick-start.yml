@@ -214,29 +214,6 @@ jobs:
           fi
           echo "doc_hash=$NEW result=$result"
 
-      - name: Persist monitor state
-        # Always run on schedule (even when nothing changed - the
-        # cache entry has a 30-day TTL, and we want a fresh write to
-        # reset that clock on every cycle). 'always()' guards against
-        # a test failure that left .monitor-state/ in a half-written
-        # state; even in that case, uploading the half-written state
-        # is better than letting the cache expire and losing the
-        # failure flag we just set.
-        #
-        # Why upload the whole directory in one go, including files
-        # that this run didn't touch: the files that didn't get
-        # updated are still byte-for-byte the same as what cache had,
-        # so re-uploading them is a no-op. The alternative (two
-        # separate persist steps gated on which monitor fired)
-        # would let us skip the doc upload on a release-only cycle,
-        # but the upload is ~200 bytes - not worth a second step.
-        if: github.event_name == 'schedule' && always()
-        uses: actions/cache/save@v4
-        with:
-          path: .monitor-state
-          key: monitor-state-ms-swift
-          retention-days: 30
-
       # ===== Test =====
       # Runs only when decide.outputs.changed == true. The decide step
       # is the single funnel: schedule picks doc/release/commit by
@@ -461,6 +438,22 @@ jobs:
             error=${ERROR}
           OUTCOME_EOF
           echo "outcome for ${BASE}: result=${RESULT} error=${ERROR}"
+
+      - name: Persist monitor state
+        # Runs after record-outcome so the cache entry contains the
+        # truthful outcome of THIS cycle's test. 'always()' guarantees
+        # we still upload even when the test step itself failed (so a
+        # failure flag persists for retry on the next schedule run).
+        # 'schedule' gating keeps manual dispatch from touching the
+        # cache. The whole directory is uploaded in one shot - the
+        # files record-outcome didn't touch are byte-identical to
+        # what cache had, so the upload is a no-op for them.
+        if: github.event_name == 'schedule' && always()
+        uses: actions/cache/save@v4
+        with:
+          path: .monitor-state
+          key: monitor-state-ms-swift
+          retention-days: 30
 
       # Write a small machine-readable summary so external monitors can pull
       # per-run outcomes via /actions/runs/{run_id}/artifacts. Captures the

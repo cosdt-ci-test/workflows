@@ -604,9 +604,6 @@ jobs:
 
       - name: Summarize test result
         if: always()
-        # No env block - both REASON and UPSTREAM_COMMIT are read
-        # directly from ${{ steps.<id>.outputs.<name> }} in the run
-        # below, no env indirection needed.
         env:
           # Plumb step outputs through env so echo expansion never
           # command-substitutes a crafted value.

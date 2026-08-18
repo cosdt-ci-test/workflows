@@ -178,17 +178,21 @@ jobs:
           fi
           # The outcome file is a two-line key=value blob (result / error);
           # source it so we can use $result for the retry decision.
+          # Default $result / $error to '' before the source so a
+          # half-written file (e.g. container killed mid-write) leaves
+          # both variables defined - without this, set -u trips on any
+          # later read of $error after the source assigns only $result.
+          result=""
+          error=""
           if [ -f "$STATE_DIR/.release_outcome" ]; then
             . "$STATE_DIR/.release_outcome"
-          else
-            result=""
           fi
           if [ -n "$ID" ] && [ "$OLD_ID" != "$ID" ]; then
             echo "$ID" > "$STATE_DIR/.last_release_id"
-            cat > "$STATE_DIR/.release_outcome" <<-OUTCOME_EOF
-              result=success
-              error=none
-            OUTCOME_EOF
+            {
+              echo "result=success"
+              echo "error=none"
+            } > "$STATE_DIR/.release_outcome"
             echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "ref=$TAG" >> "$GITHUB_OUTPUT"
             echo "reason=release" >> "$GITHUB_OUTPUT"
@@ -222,17 +226,21 @@ jobs:
           fi
           # The outcome file is a two-line key=value blob (result / error);
           # source it so we can use $result for the retry decision.
+          # Default $result / $error to '' before the source so a
+          # half-written file (e.g. container killed mid-write) leaves
+          # both variables defined - without this, set -u trips on any
+          # later read of $error after the source assigns only $result.
+          result=""
+          error=""
           if [ -f "$STATE_DIR/.doc_outcome" ]; then
             . "$STATE_DIR/.doc_outcome"
-          else
-            result=""
           fi
           if [ "$OLD" != "$NEW" ]; then
             echo "$NEW" > "$STATE_DIR/.doc_hash"
-            cat > "$STATE_DIR/.doc_outcome" <<-OUTCOME_EOF
-              result=success
-              error=none
-            OUTCOME_EOF
+            {
+              echo "result=success"
+              echo "error=none"
+            } > "$STATE_DIR/.doc_outcome"
             echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "ref=main" >> "$GITHUB_OUTPUT"
             echo "reason=doc" >> "$GITHUB_OUTPUT"
@@ -464,10 +472,10 @@ jobs:
               ERROR="unknown conclusion (${CONCLUSION})"
               ;;
           esac
-          cat > "${STATE_DIR}/.${BASE}_outcome" <<-OUTCOME_EOF
-            result=${RESULT}
-            error=${ERROR}
-          OUTCOME_EOF
+          {
+            echo "result=${RESULT}"
+            echo "error=${ERROR}"
+          } > "${STATE_DIR}/.${BASE}_outcome"
           echo "outcome for ${BASE}: result=${RESULT} error=${ERROR}"
 
       - name: Persist monitor state
@@ -569,7 +577,12 @@ jobs:
           # Surface the last-known failure reason (from the prior run's
           # outcome record) so a retry run is self-explanatory. The
           # outcome file is a two-line key=value blob (result / error).
+          # Default before source for set -u safety: a half-written file
+          # from a container-killed record-outcome might leave $error
+          # unset, and this step reads both $result and $error.
           OUTCOME_FILE=".monitor-state/.${REASON%-retry}_outcome"
+          result=""
+          error=""
           if [ -f "$OUTCOME_FILE" ]; then
             . "$OUTCOME_FILE"
             if [ "$result" = "failure" ] && [ "$error" != "none" ]; then

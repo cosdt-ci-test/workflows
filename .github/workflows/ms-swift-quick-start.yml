@@ -621,7 +621,15 @@ jobs:
           # Default before source for set -u safety: a half-written file
           # from a container-killed record-outcome might leave $error
           # unset, and this step reads both $result and $error.
-          OUTCOME_FILE=".monitor-state/.${REASON%-retry}_outcome"
+          #
+          # $TRIGGER_RSN arrives via env from steps.decide.outputs.reason
+          # (set in this step's env: block). The earlier $REASON
+          # reference was a straggler from dbde29e's env rename and
+          # silently expanded to '' under bash's default unset-variable
+          # handling - making OUTCOME_FILE resolve to a never-existing
+          # path and the 'Last failure:' line never print. Using the
+          # env name keeps the diagnostic working on every retry.
+          OUTCOME_FILE=".monitor-state/.${TRIGGER_RSN%-retry}_outcome"
           result=""
           error=""
           if [ -f "$OUTCOME_FILE" ]; then

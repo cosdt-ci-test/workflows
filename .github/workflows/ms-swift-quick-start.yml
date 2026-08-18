@@ -20,7 +20,14 @@ name: ms-swift-quick-start
 
 concurrency:
   group: ms-swift-quick-start
-  cancel-in-progress: true
+  # Don't cancel an in-progress run when a new one arrives. cancel:
+  # true would silently kill a long manual dispatch (up to 3 hours)
+  # the moment a scheduled cron run fired, and a killed run's
+  # 'if: always()' guards still leave the Persist step without
+  # a chance to run - we'd lose the cycle's outcome writeback.
+  # Letting runs queue (up to whatever the runner pool can hold)
+  # is the right call for a doc-test gate; matches examples.yml.
+  cancel-in-progress: false
 
 on:
   schedule:
@@ -132,7 +139,17 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: .monitor-state
-          key: monitor-state-ms-swift
+          # Run-id suffix because actions/cache refuses to overwrite an
+          # existing entry with the same key - a static key would
+          # make every Persist after the first a silent no-op, so
+          # a real outcome change (failure -> success on retry)
+          # would never propagate. The exact-match key always misses
+          # on this run (we never saved under it yet), so restore
+          # falls through to restore-keys, which returns the most
+          # recent 'monitor-state-ms-swift-*' entry.
+          key: monitor-state-ms-swift-${{ github.run_id }}
+          restore-keys: |
+            monitor-state-ms-swift-
 
       - name: Monitor upstream latest release id
         id: monitor-release
@@ -447,11 +464,16 @@ jobs:
         # cache. The whole directory is uploaded in one shot - the
         # files record-outcome didn't touch are byte-identical to
         # what cache had, so the upload is a no-op for them.
+        #
+        # Run-id suffix is required: actions/cache refuses to overwrite
+        # an existing entry with the same key, so a static key would
+        # make every Persist after the first a silent no-op (see
+        # Restore monitor state for the matching suffix + restore-keys).
         if: github.event_name == 'schedule' && always()
         uses: actions/cache/save@v4
         with:
           path: .monitor-state
-          key: monitor-state-ms-swift
+          key: monitor-state-ms-swift-${{ github.run_id }}
           retention-days: 30
 
       # Write a small machine-readable summary so external monitors can pull

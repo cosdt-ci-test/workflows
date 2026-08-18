@@ -126,11 +126,13 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: .monitor-state
-          # Per-run key: always miss, so we fall through to restore-keys
-          # (prefix match against the most recent successful save).
-          key: monitor-state-ms-swift-${{ github.run_id }}
-          restore-keys: |
-            monitor-state-ms-swift-
+          # Single fixed key. Only the schedule trigger writes this
+          # cache (record-outcome step is gated on
+          # github.event_name == 'schedule' too), and schedule
+          # runs are spaced 6h apart by cron, so concurrent saves
+          # are not a concern. Manual workflow_dispatch runs do
+          # not touch this cache at all.
+          key: monitor-state-ms-swift
 
       - name: Monitor doc hash
         id: monitor-doc
@@ -211,7 +213,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: .monitor-state
-          key: monitor-state-ms-swift-${{ github.run_id }}
+          key: monitor-state-ms-swift
           retention-days: 30
 
       # ===== Test =====

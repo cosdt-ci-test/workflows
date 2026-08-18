@@ -19,24 +19,14 @@ name: ms-swift-quick-start
 # whole purpose is to detect upstream changes.
 
 concurrency:
-  # Manual dispatch runs get a unique-per-run group (manual-<run_id>),
-  # so each dispatch is its own concurrency group and parallel
-  # dispatches never queue or cancel each other. Schedule runs
-  # share a single group and queue behind each other (cron 6h
-  # means this is rare but possible if a previous run overshoots).
-  #
-  # cancel-in-progress: false unconditionally. Two reasons:
-  #   1. Schedule run getting cancelled mid-way: if a previous
-  #      schedule run is still running when the next cron tick
-  #      fires, cancelling it loses its outcome writeback (the
-  #      'if: always()' guard isn't enough when the container
-  #      itself is being torn down) - and that outcome is what
-  #      makes the retry mechanism work.
-  #   2. Dispatch runs are already in unique groups above, so
-  #      cancel-in-progress never had a job to do for them.
-  # Letting the (extremely unlikely) overlap run is the safer
-  # default; the schedule run queue still serialises them.
-  group: ${{ github.event_name == 'schedule' && 'ms-swift-quick-start-schedule' || 'manual-' || github.run_id }}
+  group: ms-swift-quick-start
+  # Don't cancel an in-progress run when a new one arrives. cancel:
+  # true would silently kill a long manual dispatch (up to 3 hours)
+  # the moment a scheduled cron run fired, and a killed run's
+  # 'if: always()' guards still leave the Persist step without
+  # a chance to run - we'd lose the cycle's outcome writeback.
+  # Letting runs queue (up to whatever the runner pool can hold)
+  # is the right call for a doc-test gate; matches examples.yml.
   cancel-in-progress: false
 
 on:
@@ -92,15 +82,12 @@ jobs:
         --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
         --volume=/data/ci-cache/modelscope:/root/.cache/modelscope
     env:
-      # Cluster-internal nginx PyPI cache fronts every package
-      # (setuptools, wheel, torch, torch_npu, ms-swift, all PEP 517
-      # build deps). The huaweicloud ascend mirror we used to list
-      # as an extra-index-url fallback is no longer reachable from
-      # this runner (sealed test environment) and never held torch
-      # itself anyway - only the Ascend-only wheel family.
-      # Drop both the extra-index-url and the trusted-host hint;
-      # nginx cache is the sole source.
+      # Match upstream citest_npu.yaml: cluster-internal nginx PyPI cache
+      # fronts every package (including setuptools/wheel/torch/torch_npu),
+      # so PEP 517 build deps and NPU wheels all resolve without falling
+      # back to external mirrors.
       UV_INDEX_URL: "http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple"
+      UV_EXTRA_INDEX_URL: "https://repo.huaweicloud.com/ascend/repos/pypi"
       UV_INDEX_STRATEGY: "unsafe-best-match"
       UV_INSECURE_HOST: "cache-service.nginx-pypi-cache.svc.cluster.local"
       UV_HTTP_TIMEOUT: "120"
@@ -127,7 +114,7 @@ jobs:
           npu-smi info || true
 
       - name: Checkout workflows (provides the test code and doc)
-        uses: actions/checkout@v6
+        uses: actions/checkout@v5
         with:
           path: workflows
           fetch-depth: 1
@@ -147,7 +134,7 @@ jobs:
       - name: Restore monitor state
         id: cache-restore
         if: github.event_name == 'schedule'
-        uses: actions/cache/restore@v6
+        uses: actions/cache/restore@v4
         with:
           path: .monitor-state
           # Run-id suffix because actions/cache refuses to overwrite an
@@ -177,7 +164,7 @@ jobs:
           TAG=$(jq -r '.tag_name // empty' /tmp/release.json)
           # Explicit file-existence check rather than 'cat || echo ""':
           # on cache miss (first deploy, or 30-day retention expiry)
-          # actions/cache/restore@v6 does NOT create the .monitor-state/
+          # actions/cache/restore@v4 does NOT create the .monitor-state/
           # directory, and 'cat' on a missing file under set -euo
           # pipefail would silently exit before the echo runs in some
           # bash versions. The [ -f ] form is unambiguous about the
@@ -285,8 +272,16 @@ jobs:
           DOC_CHANGED:      ${{ steps.monitor-doc.outputs.changed }}
           DOC_REASON:       ${{ steps.monitor-doc.outputs.reason }}
           DOC_REF:          ${{ steps.monitor-doc.outputs.ref }}
+          # github.event_name is GitHub-internal (schedule /
+          # workflow_dispatch), not user-controlled, but env the
+          # value here for consistency with the other branches of
+          # this step - all step inputs and outputs now arrive via
+          # env so bash sees them as parameter expansions, never
+          # as inline literal text.
+          EVENT_NAME:       ${{ github.event_name }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             # Manual path.
             echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "reason=manual" >> "$GITHUB_OUTPUT"
@@ -335,40 +330,6 @@ jobs:
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           echo "Upstream commit: $SHA"
 
-      - name: "DEBUG: list torch 2.9 / torch_npu wheels in internal cache"
-        if: steps.decide.outputs.changed == 'true'
-        run: |
-          echo "=== internal nginx cache: torch all aarch64 wheels (cp312) ==="
-          curl -sSL --max-time 10 \
-            "http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple/torch/" \
-            | grep -oE 'torch-[0-9]+\.[0-9]+\.[0-9]+-cp312-cp312-manylinux_2_28_aarch64\.whl' \
-            | sort -u
-          echo "=== internal nginx cache: torch_npu all aarch64 wheels ==="
-          curl -sSL --max-time 10 \
-            "http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple/torch_npu/" \
-            2>/dev/null \
-            | grep -oE 'torch_npu-[0-9]+\.[^"]+manylinux_2_28_aarch64\.whl' \
-            | sort -u
-          # huaweicloud ascend mirror is configured as our
-          # UV_EXTRA_INDEX_URL fallback - it serves the Ascend-only
-          # wheel family (torch-npu / triton-ascend / variant) and
-          # does NOT host torch itself, so don't try /torch/. The
-          # path uses a hyphen 'torch-npu', not an underscore -
-          # huaweicloud's index is not a PyPI simple repo and
-          # doesn't PEP 503 normalise underscores to hyphens.
-          # Each request is best-effort; the NPU runner may not
-          # have outbound internet at all in sealed test envs.
-          echo "=== huaweicloud ascend mirror: torch-npu 2.9.* aarch64 (best-effort) ==="
-          if curl -sSL --max-time 10 \
-              "https://repo.huaweicloud.com/ascend/repos/pypi/torch-npu/" \
-              2>/dev/null | grep -oE 'torch_npu-2\.9\.[^"]+manylinux_2_28_aarch64\.whl' | sort -u; then
-            : # success
-          else
-            echo "(unreachable from NPU runner)"
-          fi
-          echo "=== END DEBUG ==="
-          echo "=== END DEBUG ==="
-
       - name: Run quick start test
         id: test
         if: steps.decide.outputs.changed == 'true'
@@ -382,6 +343,7 @@ jobs:
           UPSTREAM_REF:    ${{ steps.decide.outputs.test_ref }}
           UPSTREAM_COMMIT: ${{ steps.upstream-commit.outputs.sha }}
         run: |
+          set -euo pipefail
           # CANN env only lives in the shell that sourced it; re-source
           # here so swift sft / swift infer see ASCEND_HOME etc.
           export PATH="/usr/local/sbin:$PATH"
@@ -454,13 +416,13 @@ jobs:
           #    only if the image is rebuilt without a torch stack or
           #    someone bumps the CI image to a different torch line -
           #    in either case we install torch==2.9.0 +
-          #    torch_npu==2.9.0.post2 from the cluster cache. We
-          #    don't pin torch here by default (only when the image
-          #    lacks it) because hard-pinning torch==2.9.0+cpu on a
-          #    workflow that doesn't need to reinstall torch tends
-          #    to trigger PyPI simple-page lookups under the +cpu
-          #    local version label, which the cluster cache does
-          #    not serve.
+          #    torch_npu==2.9.0.post2 from the cluster cache and fall
+          #    back to the ascend huaweicloud mirror. We don't pin
+          #    torch here by default (only when the image lacks it)
+          #    because hard-pinning torch==2.9.0+cpu on a workflow
+          #    that doesn't need to reinstall torch tends to trigger
+          #    PyPI simple-page lookups under the +cpu local version
+          #    label, which the cluster cache does not serve.
           #
           #    Note: torch.__version__ surfaces as '2.9.0+cpu' via
           #    the PEP 440 local version label regardless of the
@@ -478,12 +440,20 @@ jobs:
             echo "installing torch==2.9.0 torch_npu==2.9.0.post2"
             python -m pip install \
                 --index-url http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple \
+                --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
                 --trusted-host cache-service.nginx-pypi-cache.svc.cluster.local \
                 torch==2.9.0 torch_npu==2.9.0.post2
           fi
           # 4. Pin transformers / peft (matches the doc's <5.0 / <0.19 caps).
           python -m pip install "transformers<5.0" "peft<0.19"
-
+          # 5. vLLM-Ascend setup removed - vllm-ascend 0.18.0 (and the
+          #    matching 0.22.1rc1 line) both have unresolved dependency
+          #    conflicts in this runner's reachable mirror set (the
+          #    0.18 wheel Requires-Dist pins triton-ascend==3.2.0, but
+          #    the huaweicloud ascend mirror only publishes 3.2.1 /
+          #    3.2.2). Quick-start therefore tests the transformers /
+          #    torch_npu infer backend only; vLLM-Ascend setup is
+          #    covered by NPU-support.md.
           # The doc owns the source install step (its '## install ms-swift'
           # block runs git clone + uv pip install -e . for the exact
           # <UPSTREAM_REF>). After that, run the doc itself as a unittest
@@ -497,10 +467,20 @@ jobs:
           always() &&
           github.event_name == 'schedule' &&
           steps.decide.outputs.changed == 'true'
+        env:
+          # Both values are GitHub-controlled (decide step writes
+          # reason itself; test.conclusion is the GitHub job
+          # conclusion). Neither is user-controlled, so there's
+          # no injection risk - but env keeps the whole workflow
+          # consistent: every step input/output arrives as a
+          # quoted parameter expansion, never as inline literal
+          # text.
+          REASON:     ${{ steps.decide.outputs.reason }}
+          CONCLUSION: ${{ steps.test.conclusion }}
         run: |
+          set -euo pipefail
           STATE_DIR=".monitor-state"
           mkdir -p "$STATE_DIR"
-          REASON="${{ steps.decide.outputs.reason }}"
           # Strip the "-retry" suffix to map back to the base monitor.
           BASE="${REASON%-retry}"
           # Map the test step's conclusion to an outcome, written as a
@@ -512,7 +492,6 @@ jobs:
           # Consumers `source` the file to get $result / $error as shell
           # variables, then check `$result` for retry decisions and
           # surface `$error` for the "Last failure:" log line.
-          CONCLUSION="${{ steps.test.conclusion }}"
           case "$CONCLUSION" in
             success)
               RESULT="success"
@@ -556,7 +535,7 @@ jobs:
         # make every Persist after the first a silent no-op (see
         # Restore monitor state for the matching suffix + restore-keys).
         if: github.event_name == 'schedule' && always()
-        uses: actions/cache/save@v6
+        uses: actions/cache/save@v4
         with:
           path: .monitor-state
           key: monitor-state-ms-swift-${{ github.run_id }}
@@ -577,6 +556,7 @@ jobs:
           IMAGE:           ${{ env.CI_IMAGE }}
           JOB_STATUS:      ${{ job.status }}
         run: |
+          set -euo pipefail
           mkdir -p output
           # 7 fields: 6 required by schemas/result.schema.json + 'reason'
           # (which monitor signal fired; derivable from decide.outputs.reason).
@@ -617,6 +597,9 @@ jobs:
 
       - name: Summarize test result
         if: always()
+        # No env block - both REASON and UPSTREAM_COMMIT are read
+        # directly from ${{ steps.<id>.outputs.<name> }} in the run
+        # below, no env indirection needed.
         env:
           # Plumb step outputs through env so echo expansion never
           # command-substitutes a crafted value.
@@ -624,6 +607,7 @@ jobs:
           UPSTREAM_SHA:  ${{ steps.upstream-commit.outputs.sha }}
           TRIGGER_RSN:   ${{ steps.decide.outputs.reason }}
         run: |
+          set -euo pipefail
           echo "============================================================"
           echo "QUICK START TEST SUMMARY"
           echo "  Upstream repo:    ${{ env.UPSTREAM_REPO }}"
@@ -631,21 +615,20 @@ jobs:
           echo "  Upstream commit:  $UPSTREAM_SHA"
           echo "  Trigger reason:   $TRIGGER_RSN"
           echo "------------------------------------------------------------"
-          # Surface the last-known failure reason (from the prior run's
-          # outcome record) so a retry run is self-explanatory. The
-          # outcome file is a two-line key=value blob (result / error).
-          # Default before source for set -u safety: a half-written file
-          # from a container-killed record-outcome might leave $error
-          # unset, and this step reads both $result and $error.
+          # Surface the failure reason for this run's test, which the
+          # record-outcome step (run earlier in this job) just wrote
+          # to the same outcome file. Reading here means the printed
+          # 'Last failure:' line is for the run the reader is
+          # looking at, not the cycle before it - so a retry reader
+          # sees why *this* run's test failed without having to
+          # cross-reference the previous workflow run.
           #
-          # $TRIGGER_RSN arrives via env from steps.decide.outputs.reason
-          # (set in this step's env: block). The earlier $REASON
-          # reference was a straggler from dbde29e's env rename and
-          # silently expanded to '' under bash's default unset-variable
-          # handling - making OUTCOME_FILE resolve to a never-existing
-          # path and the 'Last failure:' line never print. Using the
-          # env name keeps the diagnostic working on every retry.
-          OUTCOME_FILE=".monitor-state/.${TRIGGER_RSN%-retry}_outcome"
+          # The outcome file is a two-line key=value blob
+          # (result / error). Default both before source for
+          # set -u safety: a half-written file from a
+          # container-killed record-outcome might leave $error
+          # unset, and this step reads both $result and $error.
+          OUTCOME_FILE=".monitor-state/.${REASON%-retry}_outcome"
           result=""
           error=""
           if [ -f "$OUTCOME_FILE" ]; then
@@ -674,7 +657,7 @@ jobs:
       # outputs, so it doesn't get the workflows checkout that
       # comes with monitor-and-test's checkout step.
       - name: Checkout workflows (provides schemas/result.schema.json)
-        uses: actions/checkout@v6
+        uses: actions/checkout@v5
         with:
           path: workflows
           fetch-depth: 1
@@ -683,6 +666,7 @@ jobs:
         env:
           RESULT_JSON: ${{ needs.monitor-and-test.outputs.result_json }}
         run: |
+          set -euo pipefail
           mkdir -p output
           # Defensive: if result_json came back empty (e.g. all upstream
           # monitor steps skipped, decide.outputs.changed was false, AND
@@ -710,7 +694,7 @@ jobs:
 
       - name: Upload result.json
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v5
         with:
           name: ms-swift-quick-start-${{ github.run_id }}
           path: output/result.json

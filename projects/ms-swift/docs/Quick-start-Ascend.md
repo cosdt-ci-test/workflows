@@ -130,7 +130,7 @@ run sh: ...
 {'loss': xxx, 'grad_norm': xxx, 'learning_rate': xxx, 'token_acc': xxx, ... 'global_step/max_steps': '5/5', ...}
 {'train_runtime': xxx, ... 'train_loss': xxx, ... 'global_step/max_steps': '5/5', ...}
 >>> echo "train done, checkpoint dir: $(ls -dt output/*/checkpoint-* | head -n 1)"
-train done, checkpoint dir: <checkpoint> ...
+train done, checkpoint dir: <checkpoint>
 ```
 
 小贴士：

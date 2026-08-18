@@ -260,12 +260,26 @@ jobs:
       # into .monitor-state for the next cycle.
       - name: Decide which ref to test
         id: decide
+        env:
+          # Plumb inputs.* and step outputs through env so bash sees them
+          # as parameter expansions, not as inline literal text - a
+          # crafted ref like 'main $(curl evil)' would otherwise be
+          # command-substituted by bash when used inside double quotes.
+          INPUT_REF:        ${{ inputs.upstream_ref }}
+          RELEASE_CHANGED:  ${{ steps.monitor-release.outputs.changed }}
+          RELEASE_REASON:   ${{ steps.monitor-release.outputs.reason }}
+          RELEASE_REF:      ${{ steps.monitor-release.outputs.ref }}
+          DOC_CHANGED:      ${{ steps.monitor-doc.outputs.changed }}
+          DOC_REASON:       ${{ steps.monitor-doc.outputs.reason }}
+          DOC_REF:          ${{ steps.monitor-doc.outputs.ref }}
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             # Manual path.
             echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "reason=manual" >> "$GITHUB_OUTPUT"
-            echo "test_ref=${{ inputs.upstream_ref || 'main' }}" >> "$GITHUB_OUTPUT"
+            # Quoted env-var expansion - $INPUT_REF is treated as a
+            # single value, not re-parsed by bash.
+            echo "test_ref=${INPUT_REF:-main}" >> "$GITHUB_OUTPUT"
           else
             # Monitor path. Priority: release > doc. When both signals
             # changed this cycle, only the release test runs (and the
@@ -274,14 +288,14 @@ jobs:
             CHANGED="false"
             REASON=""
             REF=""
-            if [ "${{ steps.monitor-release.outputs.changed }}" = "true" ]; then
+            if [ "$RELEASE_CHANGED" = "true" ]; then
               CHANGED="true"
-              REASON="${{ steps.monitor-release.outputs.reason }}"
-              REF="${{ steps.monitor-release.outputs.ref }}"
-            elif [ "${{ steps.monitor-doc.outputs.changed }}" = "true" ]; then
+              REASON="$RELEASE_REASON"
+              REF="$RELEASE_REF"
+            elif [ "$DOC_CHANGED" = "true" ]; then
               CHANGED="true"
-              REASON="${{ steps.monitor-doc.outputs.reason }}"
-              REF="${{ steps.monitor-doc.outputs.ref }}"
+              REASON="$DOC_REASON"
+              REF="$DOC_REF"
             fi
             echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
             echo "reason=$REASON" >> "$GITHUB_OUTPUT"
@@ -294,11 +308,17 @@ jobs:
       - name: Resolve upstream commit SHA
         id: upstream-commit
         if: steps.decide.outputs.changed == 'true'
+        env:
+          # test_ref comes from inputs.upstream_ref via decide step;
+          # plumb through env so a malicious ref like
+          # 'main $(curl evil)' is parameter-expanded, not command-
+          # substituted by bash when interpolated into the curl URL.
+          TEST_REF: ${{ steps.decide.outputs.test_ref }}
         run: |
           set -euo pipefail
-          SHA=$(curl -fsSL "$GH_API/repos/${{ env.UPSTREAM_REPO }}/commits/${{ steps.decide.outputs.test_ref }}" \
+          SHA=$(curl -fsSL "$GH_API/repos/${{ env.UPSTREAM_REPO }}/commits/$TEST_REF" \
             | jq -r '.sha // empty')
-          [ -z "$SHA" ] && { echo "failed to resolve ${{ steps.decide.outputs.test_ref }}"; exit 1; }
+          [ -z "$SHA" ] && { echo "failed to resolve $TEST_REF"; exit 1; }
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           echo "Upstream commit: $SHA"
 
@@ -557,13 +577,19 @@ jobs:
         # No env block - both REASON and UPSTREAM_COMMIT are read
         # directly from ${{ steps.<id>.outputs.<name> }} in the run
         # below, no env indirection needed.
+        env:
+          # Plumb step outputs through env so echo expansion never
+          # command-substitutes a crafted value.
+          TEST_REF:      ${{ steps.decide.outputs.test_ref }}
+          UPSTREAM_SHA:  ${{ steps.upstream-commit.outputs.sha }}
+          TRIGGER_RSN:   ${{ steps.decide.outputs.reason }}
         run: |
           echo "============================================================"
           echo "QUICK START TEST SUMMARY"
           echo "  Upstream repo:    ${{ env.UPSTREAM_REPO }}"
-          echo "  Upstream ref:     ${{ steps.decide.outputs.test_ref }}"
-          echo "  Upstream commit:  ${{ steps.upstream-commit.outputs.sha }}"
-          echo "  Trigger reason:   ${{ steps.decide.outputs.reason }}"
+          echo "  Upstream ref:     $TEST_REF"
+          echo "  Upstream commit:  $UPSTREAM_SHA"
+          echo "  Trigger reason:   $TRIGGER_RSN"
           echo "------------------------------------------------------------"
           # Surface the last-known failure reason (from the prior run's
           # outcome record) so a retry run is self-explanatory. The

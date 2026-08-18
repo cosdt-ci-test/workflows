@@ -272,9 +272,16 @@ jobs:
           DOC_CHANGED:      ${{ steps.monitor-doc.outputs.changed }}
           DOC_REASON:       ${{ steps.monitor-doc.outputs.reason }}
           DOC_REF:          ${{ steps.monitor-doc.outputs.ref }}
+          # github.event_name is GitHub-internal (schedule /
+          # workflow_dispatch), not user-controlled, but env the
+          # value here for consistency with the other branches of
+          # this step - all step inputs and outputs now arrive via
+          # env so bash sees them as parameter expansions, never
+          # as inline literal text.
+          EVENT_NAME:       ${{ github.event_name }}
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             # Manual path.
             echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "reason=manual" >> "$GITHUB_OUTPUT"
@@ -460,11 +467,20 @@ jobs:
           always() &&
           github.event_name == 'schedule' &&
           steps.decide.outputs.changed == 'true'
+        env:
+          # Both values are GitHub-controlled (decide step writes
+          # reason itself; test.conclusion is the GitHub job
+          # conclusion). Neither is user-controlled, so there's
+          # no injection risk - but env keeps the whole workflow
+          # consistent: every step input/output arrives as a
+          # quoted parameter expansion, never as inline literal
+          # text.
+          REASON:     ${{ steps.decide.outputs.reason }}
+          CONCLUSION: ${{ steps.test.conclusion }}
         run: |
           set -euo pipefail
           STATE_DIR=".monitor-state"
           mkdir -p "$STATE_DIR"
-          REASON="${{ steps.decide.outputs.reason }}"
           # Strip the "-retry" suffix to map back to the base monitor.
           BASE="${REASON%-retry}"
           # Map the test step's conclusion to an outcome, written as a
@@ -476,7 +492,6 @@ jobs:
           # Consumers `source` the file to get $result / $error as shell
           # variables, then check `$result` for retry decisions and
           # surface `$error` for the "Last failure:" log line.
-          CONCLUSION="${{ steps.test.conclusion }}"
           case "$CONCLUSION" in
             success)
               RESULT="success"
@@ -600,11 +615,18 @@ jobs:
           echo "  Upstream commit:  $UPSTREAM_SHA"
           echo "  Trigger reason:   $TRIGGER_RSN"
           echo "------------------------------------------------------------"
-          # Surface the last-known failure reason (from the prior run's
-          # outcome record) so a retry run is self-explanatory. The
-          # outcome file is a two-line key=value blob (result / error).
-          # Default before source for set -u safety: a half-written file
-          # from a container-killed record-outcome might leave $error
+          # Surface the failure reason for this run's test, which the
+          # record-outcome step (run earlier in this job) just wrote
+          # to the same outcome file. Reading here means the printed
+          # 'Last failure:' line is for the run the reader is
+          # looking at, not the cycle before it - so a retry reader
+          # sees why *this* run's test failed without having to
+          # cross-reference the previous workflow run.
+          #
+          # The outcome file is a two-line key=value blob
+          # (result / error). Default both before source for
+          # set -u safety: a half-written file from a
+          # container-killed record-outcome might leave $error
           # unset, and this step reads both $result and $error.
           OUTCOME_FILE=".monitor-state/.${REASON%-retry}_outcome"
           result=""

@@ -120,21 +120,66 @@ jobs:
       # forces a retry on the next cycle even if the signal hasn't
       # changed; success clears that flag. State lives in
       # .monitor-state/ (actions/cache, 30-day retention).
+      # Single cache entry covering all four monitor-state files.
+      # Only the schedule trigger writes this cache. monitor-doc
+      # is gated on 'monitor-release.changed != true' below, so in
+      # a release-only cycle doc files simply aren't touched - the
+      # next persist just re-uploads their unchanged content, which
+      # is exactly what we want (no stale-state reset, no extra
+      # restore step needed).
       - name: Restore monitor state
         id: cache-restore
         if: github.event_name == 'schedule'
         uses: actions/cache/restore@v4
         with:
           path: .monitor-state
-          # Per-run key: always miss, so we fall through to restore-keys
-          # (prefix match against the most recent successful save).
-          key: monitor-state-ms-swift-${{ github.run_id }}
-          restore-keys: |
-            monitor-state-ms-swift-
+          key: monitor-state-ms-swift
+
+      - name: Monitor upstream latest release id
+        id: monitor-release
+        # Runs first so monitor-doc (below) can read its `changed`
+        # output to decide whether to skip itself this cycle.
+        if: github.event_name == 'schedule'
+        run: |
+          set -euo pipefail
+          STATE_DIR=".monitor-state"
+          mkdir -p "$STATE_DIR"
+          curl -fsSL --retry 3 \
+            "$GH_API/repos/${{ env.UPSTREAM_REPO }}/releases/latest" -o /tmp/release.json
+          ID=$(jq -r '.id // empty' /tmp/release.json)
+          TAG=$(jq -r '.tag_name // empty' /tmp/release.json)
+          OLD_ID=$(cat "$STATE_DIR/.last_release_id" 2>/dev/null || echo "")
+          # The outcome file is a two-line key=value blob (result / error);
+          # source it so we can use $result for the retry decision.
+          if [ -f "$STATE_DIR/.release_outcome" ]; then
+            . "$STATE_DIR/.release_outcome"
+          else
+            result=""
+          fi
+          if [ -n "$ID" ] && [ "$OLD_ID" != "$ID" ]; then
+            echo "$ID" > "$STATE_DIR/.last_release_id"
+            cat > "$STATE_DIR/.release_outcome" <<-OUTCOME_EOF
+              result=success
+              error=none
+            OUTCOME_EOF
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "ref=$TAG" >> "$GITHUB_OUTPUT"
+            echo "reason=release" >> "$GITHUB_OUTPUT"
+          elif [ "$result" = "failure" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "ref=$TAG" >> "$GITHUB_OUTPUT"
+            echo "reason=release-retry" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "release_id=$ID tag=$TAG result=$result"
 
       - name: Monitor doc hash
         id: monitor-doc
-        if: github.event_name == 'schedule'
+        # Skip when release also fired this cycle - release takes
+        # priority, doc state must stay untouched so the next schedule
+        # run picks it up cleanly.
+        if: github.event_name == 'schedule' && steps.monitor-release.outputs.changed != 'true'
         env:
           DOC_URL: ${{ env.MONITORED_DOC_URL }}
         run: |
@@ -144,82 +189,30 @@ jobs:
           echo "Monitoring: $DOC_URL"
           NEW=$(curl -fsSL --retry 3 "$DOC_URL" | sha256sum | cut -d' ' -f1)
           OLD=$(cat "$STATE_DIR/.doc_hash" 2>/dev/null || echo "")
-          OUTCOME=$(cat "$STATE_DIR/.doc_outcome" 2>/dev/null || echo "")
+          # The outcome file is a two-line key=value blob (result / error);
+          # source it so we can use $result for the retry decision.
+          if [ -f "$STATE_DIR/.doc_outcome" ]; then
+            . "$STATE_DIR/.doc_outcome"
+          else
+            result=""
+          fi
           if [ "$OLD" != "$NEW" ]; then
             echo "$NEW" > "$STATE_DIR/.doc_hash"
-            echo "success" > "$STATE_DIR/.doc_outcome"  # signal changed: clear retry flag
+            cat > "$STATE_DIR/.doc_outcome" <<-OUTCOME_EOF
+              result=success
+              error=none
+            OUTCOME_EOF
             echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "ref=main" >> "$GITHUB_OUTPUT"
             echo "reason=doc" >> "$GITHUB_OUTPUT"
-          elif [ "$OUTCOME" = "failure" ]; then
+          elif [ "$result" = "failure" ]; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "ref=main" >> "$GITHUB_OUTPUT"
             echo "reason=doc-retry" >> "$GITHUB_OUTPUT"
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
-          echo "doc_hash=$NEW outcome=$OUTCOME"
-
-      - name: Monitor upstream latest release tag
-        id: monitor-release
-        if: github.event_name == 'schedule'
-        run: |
-          set -euo pipefail
-          STATE_DIR=".monitor-state"
-          mkdir -p "$STATE_DIR"
-          curl -fsSL --retry 3 \
-            "$GH_API/repos/${{ env.UPSTREAM_REPO }}/releases/latest" -o /tmp/release.json
-          TAG=$(jq -r '.tag_name // empty' /tmp/release.json)
-          OLD=$(cat "$STATE_DIR/.last_release_tag" 2>/dev/null || echo "")
-          OUTCOME=$(cat "$STATE_DIR/.release_outcome" 2>/dev/null || echo "")
-          if [ -n "$TAG" ] && [ "$OLD" != "$TAG" ]; then
-            echo "$TAG" > "$STATE_DIR/.last_release_tag"
-            echo "success" > "$STATE_DIR/.release_outcome"  # signal changed: clear retry flag
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "ref=$TAG" >> "$GITHUB_OUTPUT"
-            echo "reason=release" >> "$GITHUB_OUTPUT"
-          elif [ "$OUTCOME" = "failure" ]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "ref=$TAG" >> "$GITHUB_OUTPUT"
-            echo "reason=release-retry" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          fi
-          echo "release_tag=$TAG outcome=$OUTCOME"
-
-      - name: Monitor upstream main HEAD
-        id: monitor-commit
-        if: github.event_name == 'schedule'
-        run: |
-          set -euo pipefail
-          STATE_DIR=".monitor-state"
-          mkdir -p "$STATE_DIR"
-          SHA=$(curl -fsSL --retry 3 \
-            "$GH_API/repos/${{ env.UPSTREAM_REPO }}/commits/main" | jq -r '.sha // empty')
-          OLD=$(cat "$STATE_DIR/.last_tested_sha" 2>/dev/null || echo "")
-          OUTCOME=$(cat "$STATE_DIR/.commit_outcome" 2>/dev/null || echo "")
-          if [ -n "$SHA" ] && [ "$OLD" != "$SHA" ]; then
-            echo "$SHA" > "$STATE_DIR/.last_tested_sha"
-            echo "success" > "$STATE_DIR/.commit_outcome"  # signal changed: clear retry flag
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "ref=main" >> "$GITHUB_OUTPUT"
-            echo "reason=commit" >> "$GITHUB_OUTPUT"
-          elif [ "$OUTCOME" = "failure" ]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "ref=main" >> "$GITHUB_OUTPUT"
-            echo "reason=commit-retry" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          fi
-          echo "main_sha=$SHA outcome=$OUTCOME"
-
-      - name: Persist monitor state
-        if: github.event_name == 'schedule' && always()
-        uses: actions/cache/save@v4
-        with:
-          path: .monitor-state
-          key: monitor-state-ms-swift-${{ github.run_id }}
-          retention-days: 30
+          echo "doc_hash=$NEW result=$result"
 
       # ===== Test =====
       # Runs only when decide.outputs.changed == true. The decide step
@@ -237,24 +230,21 @@ jobs:
             echo "reason=manual" >> "$GITHUB_OUTPUT"
             echo "test_ref=${{ inputs.upstream_ref || 'main' }}" >> "$GITHUB_OUTPUT"
           else
-            # Monitor path. Priority: doc > release > commit. A retry
-            # reason (e.g. "doc-retry") carries the same priority as
-            # its base reason.
+            # Monitor path. Priority: release > doc. When both signals
+            # changed this cycle, only the release test runs (and the
+            # monitor-doc step skipped itself, leaving doc state
+            # untouched for the next schedule run to pick up).
             CHANGED="false"
             REASON=""
             REF=""
-            if [ "${{ steps.monitor-doc.outputs.changed }}" = "true" ]; then
-              CHANGED="true"
-              REASON="${{ steps.monitor-doc.outputs.reason }}"
-              REF="${{ steps.monitor-doc.outputs.ref }}"
-            elif [ "${{ steps.monitor-release.outputs.changed }}" = "true" ]; then
+            if [ "${{ steps.monitor-release.outputs.changed }}" = "true" ]; then
               CHANGED="true"
               REASON="${{ steps.monitor-release.outputs.reason }}"
               REF="${{ steps.monitor-release.outputs.ref }}"
-            elif [ "${{ steps.monitor-commit.outputs.changed }}" = "true" ]; then
+            elif [ "${{ steps.monitor-doc.outputs.changed }}" = "true" ]; then
               CHANGED="true"
-              REASON="${{ steps.monitor-commit.outputs.reason }}"
-              REF="${{ steps.monitor-commit.outputs.ref }}"
+              REASON="${{ steps.monitor-doc.outputs.reason }}"
+              REF="${{ steps.monitor-doc.outputs.ref }}"
             fi
             echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
             echo "reason=$REASON" >> "$GITHUB_OUTPUT"
@@ -411,42 +401,59 @@ jobs:
           REASON="${{ steps.decide.outputs.reason }}"
           # Strip the "-retry" suffix to map back to the base monitor.
           BASE="${REASON%-retry}"
-          # Map the test step's conclusion to an outcome:
-          #   success   -> success  (test passed)
-          #   failure   -> failure  (test ran and failed)
-          #   skipped/* -> failure  (a prior step broke before test ran;
-          #                          treat as failure so the next cycle
-          #                          retries; record the cause separately)
+          # Map the test step's conclusion to an outcome, written as a
+          # two-line key=value file:
+          #
+          #   result=<success|failure>
+          #   error=<message|none>
+          #
+          # Consumers `source` the file to get $result / $error as shell
+          # variables, then check `$result` for retry decisions and
+          # surface `$error` for the "Last failure:" log line.
           CONCLUSION="${{ steps.test.conclusion }}"
           case "$CONCLUSION" in
             success)
-              OUT="success"
-              REASON_TEXT=""
+              RESULT="success"
+              ERROR="none"
               ;;
             failure)
-              OUT="failure"
-              REASON_TEXT="test failed"
+              RESULT="failure"
+              ERROR="test failed"
               ;;
             skipped)
-              OUT="failure"
-              REASON_TEXT="prior step failed before test could run"
+              RESULT="failure"
+              ERROR="prior step failed before test could run"
               ;;
             cancelled)
-              OUT="failure"
-              REASON_TEXT="job cancelled"
+              RESULT="failure"
+              ERROR="job cancelled"
               ;;
             *)
-              OUT="failure"
-              REASON_TEXT="unknown conclusion: ${CONCLUSION}"
+              RESULT="failure"
+              ERROR="unknown conclusion (${CONCLUSION})"
               ;;
           esac
-          echo "${OUT}" > "${STATE_DIR}/.${BASE}_outcome"
-          if [ -n "$REASON_TEXT" ]; then
-            echo "${REASON_TEXT}" > "${STATE_DIR}/.${BASE}_failure_reason"
-          else
-            : > "${STATE_DIR}/.${BASE}_failure_reason"
-          fi
-          echo "outcome for ${BASE}: ${OUT} (test conclusion: ${CONCLUSION}, reason: ${REASON_TEXT})"
+          cat > "${STATE_DIR}/.${BASE}_outcome" <<-OUTCOME_EOF
+            result=${RESULT}
+            error=${ERROR}
+          OUTCOME_EOF
+          echo "outcome for ${BASE}: result=${RESULT} error=${ERROR}"
+
+      - name: Persist monitor state
+        # Runs after record-outcome so the cache entry contains the
+        # truthful outcome of THIS cycle's test. 'always()' guarantees
+        # we still upload even when the test step itself failed (so a
+        # failure flag persists for retry on the next schedule run).
+        # 'schedule' gating keeps manual dispatch from touching the
+        # cache. The whole directory is uploaded in one shot - the
+        # files record-outcome didn't touch are byte-identical to
+        # what cache had, so the upload is a no-op for them.
+        if: github.event_name == 'schedule' && always()
+        uses: actions/cache/save@v4
+        with:
+          path: .monitor-state
+          key: monitor-state-ms-swift
+          retention-days: 30
 
       # Write a small machine-readable summary so external monitors can pull
       # per-run outcomes via /actions/runs/{run_id}/artifacts. Captures the
@@ -541,10 +548,14 @@ jobs:
           echo "  Trigger reason:   ${{ steps.decide.outputs.reason }}"
           echo "------------------------------------------------------------"
           # Surface the last-known failure reason (from the prior run's
-          # outcome record) so a retry run is self-explanatory.
-          REASON_FILE=".monitor-state/.${REASON%-retry}_failure_reason"
-          if [ -s "$REASON_FILE" ]; then
-            echo "  Last failure:     $(cat "$REASON_FILE")"
+          # outcome record) so a retry run is self-explanatory. The
+          # outcome file is a two-line key=value blob (result / error).
+          OUTCOME_FILE=".monitor-state/.${REASON%-retry}_outcome"
+          if [ -f "$OUTCOME_FILE" ]; then
+            . "$OUTCOME_FILE"
+            if [ "$result" = "failure" ] && [ "$error" != "none" ]; then
+              echo "  Last failure:     $error"
+            fi
           fi
           echo "============================================================"
 

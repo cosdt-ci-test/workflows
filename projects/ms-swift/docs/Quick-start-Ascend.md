@@ -143,7 +143,7 @@ train done, checkpoint dir: <checkpoint>
 
 ## 训练完成后推理
 
-- 这里的 `--adapters` 需要替换成训练生成的 last checkpoint 文件夹。由于 adapters 文件夹中包含了训练的参数文件 `args.json`，因此不需要额外指定 `--model`、`--system`，swift 会自动读取这些参数。如果要关闭此行为，可以设置 `--load_args false`。
+- 这里的 `<checkpoint>` 占位符跟上面 `>>> echo "train done, checkpoint dir: <checkpoint>"` 实际捕获到的是同一个值：训练阶段生成的 last checkpoint 文件夹（如 `output/v0-20260101_120000-1234/checkpoint-5`）。`swift infer` 在执行时会用 `<checkpoint>` 替换为该路径去加载 adapter。由于 adapter 目录里包含训练的参数文件 `args.json`，所以不需要额外指定 `--model`、`--system`，swift 会自动读取。如果要关闭这个 `args.json` 自动加载的行为，可以设置 `--load_args false`。
 
 ### 交互式命令行推理（transformers / torch_npu 后端）
 

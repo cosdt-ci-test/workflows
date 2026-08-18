@@ -92,12 +92,15 @@ jobs:
         --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
         --volume=/data/ci-cache/modelscope:/root/.cache/modelscope
     env:
-      # Match upstream citest_npu.yaml: cluster-internal nginx PyPI cache
-      # fronts every package (including setuptools/wheel/torch/torch_npu),
-      # so PEP 517 build deps and NPU wheels all resolve without falling
-      # back to external mirrors.
+      # Cluster-internal nginx PyPI cache fronts every package
+      # (setuptools, wheel, torch, torch_npu, ms-swift, all PEP 517
+      # build deps). The huaweicloud ascend mirror we used to list
+      # as an extra-index-url fallback is no longer reachable from
+      # this runner (sealed test environment) and never held torch
+      # itself anyway - only the Ascend-only wheel family.
+      # Drop both the extra-index-url and the trusted-host hint;
+      # nginx cache is the sole source.
       UV_INDEX_URL: "http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple"
-      UV_EXTRA_INDEX_URL: "https://repo.huaweicloud.com/ascend/repos/pypi"
       UV_INDEX_STRATEGY: "unsafe-best-match"
       UV_INSECURE_HOST: "cache-service.nginx-pypi-cache.svc.cluster.local"
       UV_HTTP_TIMEOUT: "120"
@@ -451,13 +454,13 @@ jobs:
           #    only if the image is rebuilt without a torch stack or
           #    someone bumps the CI image to a different torch line -
           #    in either case we install torch==2.9.0 +
-          #    torch_npu==2.9.0.post2 from the cluster cache and fall
-          #    back to the ascend huaweicloud mirror. We don't pin
-          #    torch here by default (only when the image lacks it)
-          #    because hard-pinning torch==2.9.0+cpu on a workflow
-          #    that doesn't need to reinstall torch tends to trigger
-          #    PyPI simple-page lookups under the +cpu local version
-          #    label, which the cluster cache does not serve.
+          #    torch_npu==2.9.0.post2 from the cluster cache. We
+          #    don't pin torch here by default (only when the image
+          #    lacks it) because hard-pinning torch==2.9.0+cpu on a
+          #    workflow that doesn't need to reinstall torch tends
+          #    to trigger PyPI simple-page lookups under the +cpu
+          #    local version label, which the cluster cache does
+          #    not serve.
           #
           #    Note: torch.__version__ surfaces as '2.9.0+cpu' via
           #    the PEP 440 local version label regardless of the
@@ -475,7 +478,6 @@ jobs:
             echo "installing torch==2.9.0 torch_npu==2.9.0.post2"
             python -m pip install \
                 --index-url http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple \
-                --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
                 --trusted-host cache-service.nginx-pypi-cache.svc.cluster.local \
                 torch==2.9.0 torch_npu==2.9.0.post2
           fi

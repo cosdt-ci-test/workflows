@@ -56,7 +56,6 @@ torch= 2.9.0+cpu
 torch_npu= 2.9.0.post2
 is_available: True
 count: 1
-...                              # skip torch_npu init banner ('path string is NULL...')
 ```
 
 确认能看到 NPU 设备：

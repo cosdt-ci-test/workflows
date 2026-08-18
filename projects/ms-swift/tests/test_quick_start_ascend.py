@@ -207,12 +207,12 @@ def parse_blocks(doc_text: str) -> list[list[dict]]:
 # test today (the ms-swift-examples.yml doc is a separate suite
 # and does not import from this file).
 _PLACEHOLDER_PATTERNS: list[tuple[re.Pattern, str]] = [
-    # ``<ckpt>`` captures the Swift-SFT checkpoint path emitted by
+    # ``<checkpoint>`` captures the Swift-SFT checkpoint path emitted by
     # ``ls -dt output/*/checkpoint-* | head -n 1`` so a later
-    # ``swift infer --adapters <ckpt>`` substitutes the actual
+    # ``swift infer --adapters <checkpoint>`` substitutes the actual
     # checkpoint directory instead of relying on a placeholder that
     # would never exist on disk.
-    (re.compile(r'<ckpt>'),       r'(?P<ckpt>output/[^/\s]+/checkpoint-\S+)'),
+    (re.compile(r'<checkpoint>'), r'(?P<checkpoint>output/[^/\s]+/checkpoint-\S+)'),
     # Generic ``MAJOR.MINOR.x`` version placeholder: matches any
     # ``d.d.<patch>`` so 3.12.x, 3.11.x, 2.7.x etc. all work without
     # us having to add a pattern line per minor. The ``\b`` rejects

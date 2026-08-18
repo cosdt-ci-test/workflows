@@ -124,12 +124,13 @@ ms-swift xxx
 ...     --model_name swift-robot
 run sh: ...
 ...                              # downloading model + 5 step loss dicts
-{'loss': xxx, ... 'global_step/max_steps': '1/5', ...}
-{'loss': xxx, ... 'global_step/max_steps': '5/5', ...}
-{'train_runtime': xxx, ... 'train_loss': xxx, ...}
-...                              # torch_npu init banner
+{'loss': xxx, 'grad_norm': xxx, 'learning_rate': xxx, 'token_acc': xxx, ... 'global_step/max_steps': '1/5', ...}
+...
+{'loss': xxx, 'grad_norm': xxx, 'learning_rate': xxx, 'token_acc': xxx, ... 'global_step/max_steps': '5/5', ...}
+{'train_runtime': xxx, ... 'train_loss': xxx, ... 'global_step/max_steps': '5/5', ...}
+...
 >>> echo "train done, checkpoint dir: $(ls -dt output/*/checkpoint-* | head -n 1)"
-train done, checkpoint dir: <ckpt> ...
+train done, checkpoint dir: <checkpoint> ...
 ```
 
 小贴士：
@@ -142,13 +143,16 @@ train done, checkpoint dir: <ckpt> ...
 
 ## 训练完成后推理
 
-- 这里的 `--adapters` 需要替换成训练生成的 last checkpoint 文件夹。由于 adapters 文件夹中包含了训练的参数文件 `args.json`，因此不需要额外指定 `--model`、`--system`，swift 会自动读取这些参数。如果要关闭此行为，可以设置 `--load_args false`。
+- 这里的 `--adapters` 需要替换成训练生成的 last checkpoint 文件夹。
+由于 adapters 文件夹中包含了训练的参数文件 `args.json`，因此不需要额外指定 `--model`、`--system`，swift 会自动读取这些参数。
+如果要关闭此行为，可以设置 `--load_args false`。
 
 ### 交互式命令行推理（transformers / torch_npu 后端）
 
 ```shell
->>> ASCEND_RT_VISIBLE_DEVICES=0 swift infer \
-...     --adapters <ckpt> \
+>>> ASCEND_RT_VISIBLE_DEVICES=0 \ 
+... swift infer \
+...     --adapters <checkpoint> \
 ...     --stream true \
 ...     --temperature 0 \
 ...     --max_new_tokens 2048 <<'PROMPT'
@@ -166,7 +170,7 @@ run sh: ...
 ```shell
 ASCEND_RT_VISIBLE_DEVICES=0 \
 swift export \
-    --adapters <ckpt> \
+    --adapters <checkpoint> \
     --push_to_hub true \
     --hub_model_id '<your-model-id>' \
     --hub_token '<your-sdk-token>' \

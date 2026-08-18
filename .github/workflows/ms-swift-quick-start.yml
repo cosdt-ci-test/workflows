@@ -338,16 +338,16 @@ jobs:
       - name: "DEBUG: list torch 2.9 / torch_npu wheels in internal cache"
         if: steps.decide.outputs.changed == 'true'
         run: |
-          echo "=== internal nginx cache: torch 2.9.* aarch64 wheels ==="
+          echo "=== internal nginx cache: torch all aarch64 wheels (cp312) ==="
           curl -sSL --max-time 10 \
             "http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple/torch/" \
-            | grep -oE 'torch-2\.9\.[0-9]+-cp312-cp312-manylinux_2_28_aarch64\.whl' \
+            | grep -oE 'torch-[0-9]+\.[0-9]+\.[0-9]+-cp312-cp312-manylinux_2_28_aarch64\.whl' \
             | sort -u
-          echo "=== internal nginx cache: torch_npu 2.9.* aarch64 wheels ==="
+          echo "=== internal nginx cache: torch_npu all aarch64 wheels ==="
           curl -sSL --max-time 10 \
             "http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple/torch_npu/" \
             2>/dev/null \
-            | grep -oE 'torch_npu-2\.9\.[^"]+manylinux_2_28_aarch64\.whl' \
+            | grep -oE 'torch_npu-[0-9]+\.[^"]+manylinux_2_28_aarch64\.whl' \
             | sort -u
           # huaweicloud ascend mirror is configured as our
           # UV_EXTRA_INDEX_URL fallback - it serves the Ascend-only

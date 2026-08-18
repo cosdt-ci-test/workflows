@@ -36,7 +36,18 @@ concurrency:
   #      cancel-in-progress never had a job to do for them.
   # Letting the (extremely unlikely) overlap run is the safer
   # default; the schedule run queue still serialises them.
-  group: ${{ github.event_name == 'schedule' && 'ms-swift-quick-start-schedule' || 'manual-' || github.run_id }}
+  # The format() call is load-bearing: a '||' between the
+  # 'manual-' literal and github.run_id would short-circuit on
+  # the truthy literal and never concatenate the run_id, so
+  # every dispatch would share the same 'manual-' group and
+  # queue. Use a proper string-format call so dispatch groups
+  # are actually unique.
+  group: >-
+    ${{
+      github.event_name == 'schedule'
+        ? 'ms-swift-quick-start-schedule'
+        : format('manual-{0}', github.run_id)
+    }}
   cancel-in-progress: false
 
 on:

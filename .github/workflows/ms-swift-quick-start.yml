@@ -355,7 +355,9 @@ jobs:
           python -m pip install --force-reinstall --no-deps \
               --index-url http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple \
               --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
+              --extra-index-url https://mirrors.aliyun.com/pytorch-wheels/cpu/ \
               --trusted-host cache-service.nginx-pypi-cache.svc.cluster.local \
+              --trusted-host mirrors.aliyun.com \
               torch==2.9.0+cpu torch_npu==2.9.0.post2
           # 4. Pin transformers / peft (matches the doc's <5.0 / <0.19 caps).
           python -m pip install "transformers<5.0" "peft<0.19"

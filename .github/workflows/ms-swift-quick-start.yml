@@ -332,27 +332,33 @@ jobs:
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           echo "Upstream commit: $SHA"
 
-      - name: "DEBUG: list torch wheels in internal cache"
+      - name: "DEBUG: list torch 2.9 / torch_npu wheels in internal cache"
         if: steps.decide.outputs.changed == 'true'
         run: |
-          echo "=== torch wheels in internal nginx cache ==="
+          echo "=== internal nginx cache: torch 2.9.* aarch64 wheels ==="
           curl -sSL --max-time 10 \
             "http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple/torch/" \
-            | grep -oE 'torch-[^"]+\.whl' \
-            | sort -u \
-            | head -50
-          echo "=== torch wheels in huaweicloud ascend mirror ==="
+            | grep -oE 'torch-2\.9\.[0-9]+-cp312-cp312-manylinux_2_28_aarch64\.whl' \
+            | sort -u
+          echo "=== internal nginx cache: torch_npu 2.9.* aarch64 wheels ==="
+          curl -sSL --max-time 10 \
+            "http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple/torch_npu/" \
+            2>/dev/null \
+            | grep -oE 'torch_npu-2\.9\.[^"]+manylinux_2_28_aarch64\.whl' \
+            | sort -u
+          echo "=== huaweicloud ascend mirror: torch 2.9.* ==="
           curl -sSL --max-time 10 \
             "https://repo.huaweicloud.com/ascend/repos/pypi/torch/" \
             2>/dev/null \
-            | grep -oE 'torch[^"]*\.whl' \
-            | sort -u \
-            | head -20
-          echo "=== pip index versions torch (internal) ==="
-          pip index versions torch \
-            --index-url http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple \
-            --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
-            2>&1 | head -10
+            | grep -oE 'torch-2\.9\.[^"]+\.whl' \
+            | sort -u
+          echo "=== huaweicloud ascend mirror: torch_npu 2.9.* ==="
+          curl -sSL --max-time 10 \
+            "https://repo.huaweicloud.com/ascend/repos/pypi/torch_npu/" \
+            2>/dev/null \
+            | grep -oE 'torch_npu-2\.9\.[^"]+\.whl' \
+            | sort -u
+          echo "=== END DEBUG ==="
           echo "=== END DEBUG ==="
 
       - name: Run quick start test

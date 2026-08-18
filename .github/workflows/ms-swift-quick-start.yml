@@ -557,6 +557,18 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
+      # Validate result.json against the schema in this repo, so
+      # the publish-results job needs the schemas/ tree to be on
+      # disk. The job runs on ubuntu-latest (not the NPU runner
+      # where the doc test ran) and ships result.json via job
+      # outputs, so it doesn't get the workflows checkout that
+      # comes with monitor-and-test's checkout step.
+      - name: Checkout workflows (provides schemas/result.schema.json)
+        uses: actions/checkout@v4
+        with:
+          path: workflows
+          fetch-depth: 1
+
       - name: Materialize result.json
         env:
           RESULT_JSON: ${{ needs.monitor-and-test.outputs.result_json }}
@@ -584,7 +596,7 @@ jobs:
           fi
           python3 -m pip install -q check-jsonschema
           check-jsonschema \
-            --schemafile schemas/result.schema.json output/result.json
+            --schemafile workflows/schemas/result.schema.json output/result.json
 
       - name: Upload result.json
         if: always()

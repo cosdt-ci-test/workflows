@@ -160,7 +160,7 @@ jobs:
           fi
           echo "doc_hash=$NEW outcome=$OUTCOME"
 
-      - name: Monitor upstream latest release tag
+      - name: Monitor upstream latest release id
         id: monitor-release
         if: github.event_name == 'schedule'
         run: |
@@ -169,11 +169,12 @@ jobs:
           mkdir -p "$STATE_DIR"
           curl -fsSL --retry 3 \
             "$GH_API/repos/${{ env.UPSTREAM_REPO }}/releases/latest" -o /tmp/release.json
+          ID=$(jq -r '.id // empty' /tmp/release.json)
           TAG=$(jq -r '.tag_name // empty' /tmp/release.json)
-          OLD=$(cat "$STATE_DIR/.last_release_tag" 2>/dev/null || echo "")
+          OLD_ID=$(cat "$STATE_DIR/.last_release_id" 2>/dev/null || echo "")
           OUTCOME=$(cat "$STATE_DIR/.release_outcome" 2>/dev/null || echo "")
-          if [ -n "$TAG" ] && [ "$OLD" != "$TAG" ]; then
-            echo "$TAG" > "$STATE_DIR/.last_release_tag"
+          if [ -n "$ID" ] && [ "$OLD_ID" != "$ID" ]; then
+            echo "$ID" > "$STATE_DIR/.last_release_id"
             echo "success" > "$STATE_DIR/.release_outcome"  # signal changed: clear retry flag
             echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "ref=$TAG" >> "$GITHUB_OUTPUT"
@@ -185,33 +186,7 @@ jobs:
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
-          echo "release_tag=$TAG outcome=$OUTCOME"
-
-      - name: Monitor upstream main HEAD
-        id: monitor-commit
-        if: github.event_name == 'schedule'
-        run: |
-          set -euo pipefail
-          STATE_DIR=".monitor-state"
-          mkdir -p "$STATE_DIR"
-          SHA=$(curl -fsSL --retry 3 \
-            "$GH_API/repos/${{ env.UPSTREAM_REPO }}/commits/main" | jq -r '.sha // empty')
-          OLD=$(cat "$STATE_DIR/.last_tested_sha" 2>/dev/null || echo "")
-          OUTCOME=$(cat "$STATE_DIR/.commit_outcome" 2>/dev/null || echo "")
-          if [ -n "$SHA" ] && [ "$OLD" != "$SHA" ]; then
-            echo "$SHA" > "$STATE_DIR/.last_tested_sha"
-            echo "success" > "$STATE_DIR/.commit_outcome"  # signal changed: clear retry flag
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "ref=main" >> "$GITHUB_OUTPUT"
-            echo "reason=commit" >> "$GITHUB_OUTPUT"
-          elif [ "$OUTCOME" = "failure" ]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "ref=main" >> "$GITHUB_OUTPUT"
-            echo "reason=commit-retry" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          fi
-          echo "main_sha=$SHA outcome=$OUTCOME"
+          echo "release_id=$ID tag=$TAG outcome=$OUTCOME"
 
       - name: Persist monitor state
         if: github.event_name == 'schedule' && always()
@@ -251,10 +226,6 @@ jobs:
               CHANGED="true"
               REASON="${{ steps.monitor-release.outputs.reason }}"
               REF="${{ steps.monitor-release.outputs.ref }}"
-            elif [ "${{ steps.monitor-commit.outputs.changed }}" = "true" ]; then
-              CHANGED="true"
-              REASON="${{ steps.monitor-commit.outputs.reason }}"
-              REF="${{ steps.monitor-commit.outputs.ref }}"
             fi
             echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
             echo "reason=$REASON" >> "$GITHUB_OUTPUT"

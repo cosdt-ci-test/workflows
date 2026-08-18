@@ -19,18 +19,14 @@ name: ms-swift-quick-start
 # whole purpose is to detect upstream changes.
 
 concurrency:
-  # Manual dispatch runs do not participate in the queue at all
-  # (group is empty -> no concurrency group), so a user can fire
-  # several dispatches in parallel without them cancelling each
-  # other or waiting in line behind the schedule.
-  #
-  # Schedule runs share one queue. cancel-in-progress: false
-  # keeps a long-running schedule run alive when a new schedule
-  # tick fires (6h cron means this is rare but possible if a
-  # previous run overshoots). The schedule trigger never interacts
-  # with dispatch concurrency either way.
-  group: >-
-    ${{ github.event_name == 'schedule' && 'ms-swift-quick-start-schedule' || '' }}
+  # Manual dispatch runs get a unique-per-run group (manual-<run_id>),
+  # so each dispatch is its own concurrency group and parallel
+  # dispatches never queue or cancel each other. Schedule runs
+  # share a single group and queue behind each other (cron 6h
+  # means this is rare but possible if a previous run overshoots).
+  # cancel-in-progress is true only on the schedule path so a
+  # long manual dispatch is never killed by a schedule tick.
+  group: ${{ github.event_name == 'schedule' && 'ms-swift-quick-start-schedule' || 'manual-' || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'schedule' }}
 
 on:

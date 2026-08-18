@@ -2,21 +2,21 @@ name: ms-swift-quick-start
 
 # Quick Start doc test (Ascend / NPU):
 #   1. Every 6 hours: lightweight monitor - hash the doc on the
-#      TARGET repo, the latest upstream release, and the upstream
-#      main HEAD SHA. State persists in actions/cache for 30 days.
-#   2. If any of those signals changed, install ms-swift from the
-#      new commit and run the e2e doc test on the NPU runner.
+#      TARGET repo and the latest upstream release id. State persists
+#      in actions/cache for 30 days.
+#   2. If either signal changed (release > doc priority), install
+#      ms-swift at that commit and run the e2e doc test on the NPU
+#      runner.
 #   3. If nothing changed, exit after the monitor (no NPU work).
 #
-# This workflow is the NPU counterpart to ms-swift-examples.yml on this repo:
-# ms-swift-examples.yml runs curated example scripts; this one verifies the
-# "Quick Start" doc on the Ascend track. The doc URL is read from
-# MONITORED_DOC_URL (defaults to the Quick-start-Ascend.md on the
-# TARGET repo's default branch).
+# This workflow is the NPU counterpart to ms-swift-examples.yml on this
+# repo: ms-swift-examples.yml runs curated example scripts; this one
+# verifies the "Quick Start" doc on the Ascend track. The doc URL is
+# read from MONITORED_DOC_URL.
 #
-# NB: monitoring upstream ms-swift release/commit is an intentional
-# exception to the repo's "no interaction with modelscope/ms-swift"
-# rule - this workflow's whole purpose is to detect upstream changes.
+# NB: monitoring upstream ms-swift is an intentional exception to the
+# repo's "no interaction with modelscope/ms-swift" rule - this workflow's
+# whole purpose is to detect upstream changes.
 
 concurrency:
   group: ms-swift-quick-start
@@ -120,19 +120,17 @@ jobs:
           fetch-depth: 1
 
       # ===== Monitor =====
-      # Schedule-only. Three monitors (doc hash / release tag / main
-      # HEAD) each compare the current signal against the cached last
-      # seen value, and emit changed/ref/reason. A failure outcome
+      # Schedule-only. Two monitors (release id, doc hash) compare
+      # the current signal against the cached last seen value and
+      # emit changed/ref/reason. monitor-release runs first; if it
+      # fires, monitor-doc skips itself so doc state stays untouched
+      # until the next schedule run picks it up. A failure outcome
       # forces a retry on the next cycle even if the signal hasn't
-      # changed; success clears that flag. State lives in
-      # .monitor-state/ (actions/cache, 30-day retention).
-      # Single cache entry covering all four monitor-state files.
-      # Only the schedule trigger writes this cache. monitor-doc
-      # is gated on 'monitor-release.changed != true' below, so in
-      # a release-only cycle doc files simply aren't touched - the
-      # next persist just re-uploads their unchanged content, which
-      # is exactly what we want (no stale-state reset, no extra
-      # restore step needed).
+      # changed; success clears that flag.
+      #
+      # State lives in .monitor-state/ (actions/cache, 30-day
+      # retention, run-id suffix on the key so a real outcome
+      # change persists across persists).
       - name: Restore monitor state
         id: cache-restore
         if: github.event_name == 'schedule'
@@ -255,11 +253,11 @@ jobs:
 
       # ===== Test =====
       # Runs only when decide.outputs.changed == true. The decide step
-      # is the single funnel: schedule picks doc/release/commit by
-      # priority, manual always uses inputs.upstream_ref. The test step
-      # itself installs ms-swift from the upstream git SHA and walks
-      # every shell block in the doc. Record outcome persists the
-      # success/failure back into .monitor-state for the next cycle.
+      # is the single funnel: schedule picks release > doc by priority,
+      # manual always uses inputs.upstream_ref. The test step itself
+      # installs ms-swift at the resolved commit and walks every shell
+      # block in the doc. Record outcome persists success/failure back
+      # into .monitor-state for the next cycle.
       - name: Decide which ref to test
         id: decide
         run: |
@@ -308,12 +306,14 @@ jobs:
         id: test
         if: steps.decide.outputs.changed == 'true'
         env:
-          SWIFT_NPU_E2E: '1'
-          UPSTREAM_REPO: ${{ env.UPSTREAM_REPO }}
-          UPSTREAM_REF: ${{ steps.decide.outputs.test_ref }}
+          # Only the three env vars test_quick_start_ascend.py reads
+          # via os.environ. UPSTREAM_REPO, REASON, MONITORED_DOC_URL
+          # were previously declared here too but the test never
+          # touched them - UPSTREAM_REPO and MONITORED_DOC_URL
+          # propagate from jobs.env; REASON is purely diagnostic.
+          SWIFT_NPU_E2E:   '1'
+          UPSTREAM_REF:    ${{ steps.decide.outputs.test_ref }}
           UPSTREAM_COMMIT: ${{ steps.upstream-commit.outputs.sha }}
-          REASON: ${{ steps.decide.outputs.reason }}
-          MONITORED_DOC_URL: ${{ env.MONITORED_DOC_URL }}
         run: |
           # CANN env only lives in the shell that sourced it; re-source
           # here so swift sft / swift infer see ASCEND_HOME etc.
@@ -499,19 +499,10 @@ jobs:
           key: monitor-state-ms-swift-${{ github.run_id }}
           retention-days: 30
 
-      # Write a small machine-readable summary so external monitors can pull
-      # per-run outcomes via /actions/runs/{run_id}/artifacts. Captures the
-      # metadata that's already on the GH Actions graph (trigger, reason,
-      # upstream ref/commit, runner image) plus the GitHub job conclusion;
-      # we deliberately do NOT mine the log here because log shape changes
-      # would force every consumer to follow along.
-      #
-      # Why this step also emits job-level outputs (and the file is NOT
-      # uploaded here): the linux-aarch64-a2-1 self-hosted NPU runner
-      # cannot reach GitHub's artifact blob storage, regardless of file
-      # size - upload-artifact stalls waiting for an ack that never comes.
-      # So we serialize result.json into a job output and let the
-      # publish-results job (ubuntu-latest, downstream) do the upload.
+      # Write result.json. The NPU runner can't reach GitHub's artifact
+      # blob storage (upload-artifact stalls indefinitely), so we
+      # serialize the file into a job output and let publish-results
+      # (ubuntu-latest) do the actual upload.
       - name: Write result.json
         id: write-result
         if: always()
@@ -563,9 +554,9 @@ jobs:
 
       - name: Summarize test result
         if: always()
-        env:
-          UPSTREAM_COMMIT: ${{ steps.upstream-commit.outputs.sha }}
-          REASON: ${{ steps.decide.outputs.reason }}
+        # No env block - both REASON and UPSTREAM_COMMIT are read
+        # directly from ${{ steps.<id>.outputs.<name> }} in the run
+        # below, no env indirection needed.
         run: |
           echo "============================================================"
           echo "QUICK START TEST SUMMARY"

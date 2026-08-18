@@ -24,10 +24,20 @@ concurrency:
   # dispatches never queue or cancel each other. Schedule runs
   # share a single group and queue behind each other (cron 6h
   # means this is rare but possible if a previous run overshoots).
-  # cancel-in-progress is true only on the schedule path so a
-  # long manual dispatch is never killed by a schedule tick.
+  #
+  # cancel-in-progress: false unconditionally. Two reasons:
+  #   1. Schedule run getting cancelled mid-way: if a previous
+  #      schedule run is still running when the next cron tick
+  #      fires, cancelling it loses its outcome writeback (the
+  #      'if: always()' guard isn't enough when the container
+  #      itself is being torn down) - and that outcome is what
+  #      makes the retry mechanism work.
+  #   2. Dispatch runs are already in unique groups above, so
+  #      cancel-in-progress never had a job to do for them.
+  # Letting the (extremely unlikely) overlap run is the safer
+  # default; the schedule run queue still serialises them.
   group: ${{ github.event_name == 'schedule' && 'ms-swift-quick-start-schedule' || 'manual-' || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'schedule' }}
+  cancel-in-progress: false
 
 on:
   schedule:

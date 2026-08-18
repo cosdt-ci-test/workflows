@@ -143,9 +143,7 @@ train done, checkpoint dir: <checkpoint> ...
 
 ## 训练完成后推理
 
-- 这里的 `--adapters` 需要替换成训练生成的 last checkpoint 文件夹。
-由于 adapters 文件夹中包含了训练的参数文件 `args.json`，因此不需要额外指定 `--model`、`--system`，swift 会自动读取这些参数。
-如果要关闭此行为，可以设置 `--load_args false`。
+- 这里的 `--adapters` 需要替换成训练生成的 last checkpoint 文件夹。由于 adapters 文件夹中包含了训练的参数文件 `args.json`，因此不需要额外指定 `--model`、`--system`，swift 会自动读取这些参数。如果要关闭此行为，可以设置 `--load_args false`。
 
 ### 交互式命令行推理（transformers / torch_npu 后端）
 

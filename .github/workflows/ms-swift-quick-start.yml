@@ -19,14 +19,31 @@ name: ms-swift-quick-start
 # whole purpose is to detect upstream changes.
 
 concurrency:
-  group: ms-swift-quick-start
-  # Don't cancel an in-progress run when a new one arrives. cancel:
-  # true would silently kill a long manual dispatch (up to 3 hours)
-  # the moment a scheduled cron run fired, and a killed run's
-  # 'if: always()' guards still leave the Persist step without
-  # a chance to run - we'd lose the cycle's outcome writeback.
-  # Letting runs queue (up to whatever the runner pool can hold)
-  # is the right call for a doc-test gate; matches examples.yml.
+  # Manual dispatch runs get a unique-per-run group
+  # ('manual-<run_id>') so each dispatch is its own concurrency
+  # group and parallel dispatches never queue or cancel each
+  # other. Schedule runs share a single group and queue behind
+  # each other (cron 6h means this is rare but possible if a
+  # previous run overshoots).
+  #
+  # The format() call is load-bearing: a '||' between the
+  # 'manual-' literal and github.run_id would short-circuit on
+  # the truthy literal and never concatenate the run_id, so
+  # every dispatch would share the same 'manual-' group and
+  # queue. Use a proper string-format call so dispatch groups
+  # are actually unique.
+  group: ${{ github.event_name == 'schedule' && 'ms-swift-quick-start-schedule' || format('manual-{0}', github.run_id) }}
+  # cancel-in-progress: false unconditionally. Two reasons:
+  #   1. Schedule run getting cancelled mid-way: if a previous
+  #      schedule run is still running when the next cron tick
+  #      fires, cancelling it loses its outcome writeback (the
+  #      'if: always()' guard isn't enough when the container
+  #      itself is being torn down) - and that outcome is what
+  #      makes the retry mechanism work.
+  #   2. Dispatch runs are already in unique groups above, so
+  #      cancel-in-progress never had a job to do for them.
+  # Letting the (extremely unlikely) overlap run is the safer
+  # default; the schedule run queue still serialises them.
   cancel-in-progress: false
 
 on:

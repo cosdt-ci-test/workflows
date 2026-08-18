@@ -22,7 +22,11 @@ Placeholder syntax
 * ``<pid>`` - match a number and capture it; the captured value is
               substituted into later commands that contain ``<pid>``.
 * ``xxx``   - match any non-whitespace run.
-* ``2.9.0.x`` / ``2.9.0.postX`` / ``3.11.x`` - version placeholders.
+* ``MAJOR.MINOR.x`` - match any ``d.d.<patch>`` triple (e.g. ``3.12.x``,
+              ``3.11.x``, ``2.7.x`` - one placeholder line covers all
+              minor versions without per-minor entries).
+* ``2.9.0.postX`` - match ``2.9.0.post<patch>`` (legacy pre-MINOR.x
+              placeholder for Ascend NPU plugin releases).
 * ``x.y.z`` - match ``d.d.d``.
 * Plain lines that are not ``...`` are matched exactly.
 
@@ -197,23 +201,29 @@ def parse_blocks(doc_text: str) -> list[list[dict]]:
 # --------------------------------------------------------------------------- #
 
 # (pattern, regex_fragment). Named-capture fragments use (?P<name>...).
+#
+# Only placeholders that the doc actually emits are kept. The
+# Quick-start-Ascend.md is the only doc that runs through this
+# test today (the ms-swift-examples.yml doc is a separate suite
+# and does not import from this file).
 _PLACEHOLDER_PATTERNS: list[tuple[re.Pattern, str]] = [
-    (re.compile(r'<pid>'),         r'(?P<pid>\d+)'),
-    (re.compile(r'<x\.y\.z>'),     r'\d+\.\d+\.\d+'),
-    (re.compile(r'\b2\.9\.0\.postX\b'), r'2\.9\.0\.post\d+'),
-    (re.compile(r'\b2\.9\.0\.x\b'),     r'2\.9\.0\.\d+'),
-    (re.compile(r'\b3\.11\.x\b'),       r'3\.11\.\d+'),
-    (re.compile(r'v\d+-xxx'),      r'v\d+-\S+'),
-    (re.compile(r'checkpoint-xxx'), r'checkpoint-\S+'),
-    (re.compile(r'chatcmpl-xxx'),  r'chatcmpl-\S+'),
-    (re.compile(r'\bxxx\b'),       r'[^,\s]+?'),
-    # <ckpt> - captures the Swift-SFT checkpoint path emitted by
-    # `ls -dt output/*/checkpoint-* | head -n 1` so a later
-    # `swift infer --adapters <ckpt>` substitutes the actual
+    # ``<ckpt>`` captures the Swift-SFT checkpoint path emitted by
+    # ``ls -dt output/*/checkpoint-* | head -n 1`` so a later
+    # ``swift infer --adapters <ckpt>`` substitutes the actual
     # checkpoint directory instead of relying on a placeholder that
     # would never exist on disk.
     (re.compile(r'<ckpt>'),       r'(?P<ckpt>output/[^/\s]+/checkpoint-\S+)'),
-    (re.compile(r'"created":\d+'), r'"created":\d+'),
+    # Generic ``MAJOR.MINOR.x`` version placeholder: matches any
+    # ``d.d.<patch>`` so 3.12.x, 3.11.x, 2.7.x etc. all work without
+    # us having to add a pattern line per minor. The ``\b`` rejects
+    # ``3.12.x.y`` (extra dot) and ``3.12x`` (no dot before x) by
+    # virtue of the ``\.`` between the digit groups.
+    (re.compile(r'\b\d+\.\d+\.x\b'), r'\d+\.\d+\.\d+'),
+    # ``xxx`` is a one-or-more non-whitespace, non-comma run. Used
+    # to match the loss dict's ``2.27966142``, the train_runtime's
+    # ``2.4083461``, and so on - any place the doc wants to flag a
+    # specific number that the test should not pin.
+    (re.compile(r'\bxxx\b'),       r'[^,\s]+?'),
 ]
 
 

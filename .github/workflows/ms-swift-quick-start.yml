@@ -346,18 +346,30 @@ jobs:
             2>/dev/null \
             | grep -oE 'torch_npu-2\.9\.[^"]+manylinux_2_28_aarch64\.whl' \
             | sort -u
-          echo "=== huaweicloud ascend mirror: torch 2.9.* ==="
-          curl -sSL --max-time 10 \
-            "https://repo.huaweicloud.com/ascend/repos/pypi/torch/" \
-            2>/dev/null \
-            | grep -oE 'torch-2\.9\.[^"]+\.whl' \
-            | sort -u
-          echo "=== huaweicloud ascend mirror: torch_npu 2.9.* ==="
-          curl -sSL --max-time 10 \
-            "https://repo.huaweicloud.com/ascend/repos/pypi/torch_npu/" \
-            2>/dev/null \
-            | grep -oE 'torch_npu-2\.9\.[^"]+\.whl' \
-            | sort -u
+          # The huaweicloud ascend mirror is reachable as an
+          # extra-index-url fallback only when the NPU runner has
+          # outbound internet. In a sealed test environment that
+          # isn't always true - if the curl below fails (timeout,
+          # DNS, connection refused), this debug step must not
+          # propagate that failure to the test step that follows.
+          # '|| true' on each network call makes the section
+          # best-effort.
+          echo "=== huaweicloud ascend mirror: torch 2.9.* (best-effort) ==="
+          if curl -sSL --max-time 10 \
+              "https://repo.huaweicloud.com/ascend/repos/pypi/torch/" \
+              2>/dev/null | grep -oE 'torch-2\.9\.[^"]+\.whl' | sort -u; then
+            : # success, output already streamed
+          else
+            echo "(unreachable from NPU runner)"
+          fi
+          echo "=== huaweicloud ascend mirror: torch_npu 2.9.* (best-effort) ==="
+          if curl -sSL --max-time 10 \
+              "https://repo.huaweicloud.com/ascend/repos/pypi/torch_npu/" \
+              2>/dev/null | grep -oE 'torch_npu-2\.9\.[^"]+\.whl' | sort -u; then
+            : # success
+          else
+            echo "(unreachable from NPU runner)"
+          fi
           echo "=== END DEBUG ==="
           echo "=== END DEBUG ==="
 

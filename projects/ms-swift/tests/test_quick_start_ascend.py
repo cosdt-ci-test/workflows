@@ -22,7 +22,11 @@ Placeholder syntax
 * ``<pid>`` - match a number and capture it; the captured value is
               substituted into later commands that contain ``<pid>``.
 * ``xxx``   - match any non-whitespace run.
-* ``2.9.0.x`` / ``2.9.0.postX`` / ``3.11.x`` - version placeholders.
+* ``MAJOR.MINOR.x`` - match any ``d.d.<patch>`` triple (e.g. ``3.12.x``,
+              ``3.11.x``, ``2.7.x`` - one placeholder line covers all
+              minor versions without per-minor entries).
+* ``2.9.0.postX`` - match ``2.9.0.post<patch>`` (legacy pre-MINOR.x
+              placeholder for Ascend NPU plugin releases).
 * ``x.y.z`` - match ``d.d.d``.
 * Plain lines that are not ``...`` are matched exactly.
 
@@ -201,9 +205,12 @@ _PLACEHOLDER_PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r'<pid>'),         r'(?P<pid>\d+)'),
     (re.compile(r'<x\.y\.z>'),     r'\d+\.\d+\.\d+'),
     (re.compile(r'\b2\.9\.0\.postX\b'), r'2\.9\.0\.post\d+'),
-    (re.compile(r'\b2\.9\.0\.x\b'),     r'2\.9\.0\.\d+'),
-    (re.compile(r'\b3\.11\.x\b'),       r'3\.11\.\d+'),
-    (re.compile(r'\b3\.12\.x\b'),       r'3\.12\.\d+'),
+    # Generic ``MAJOR.MINOR.x`` version placeholder: matches any
+    # ``d.d.<patch>`` so 3.12.x, 3.11.x, 2.7.x etc. all work without
+    # us having to add a pattern line per minor. The ``\b`` rejects
+    # ``3.12.x.y`` (extra dot) and ``3.12x`` (no dot before x) by
+    # virtue of the ``\.`` between the digit groups.
+    (re.compile(r'\b\d+\.\d+\.x\b'), r'\d+\.\d+\.\d+'),
     (re.compile(r'v\d+-xxx'),      r'v\d+-\S+'),
     (re.compile(r'checkpoint-xxx'), r'checkpoint-\S+'),
     (re.compile(r'chatcmpl-xxx'),  r'chatcmpl-\S+'),

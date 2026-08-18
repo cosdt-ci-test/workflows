@@ -94,7 +94,7 @@ ms-swift xxx
 
 ## 使用样例
 
-10 分钟在单卡昇腾 NPU 上对 Qwen3-4B-Instruct-2507 进行自我认知微调：
+~2 分钟在单卡昇腾 NPU 上对 Qwen3-4B-Instruct-2507 做 5 步自我认知微调（够快来验证整条链路；想跑完整 1 epoch 预算 ~19 分钟，把下面 `\` 续行的 6 个 `max_steps/save_steps/logging_steps/eval_strategy/report_to` 参数去掉即可，doc 末尾的 `5/5` 预期输出也会对应变成 `94/94` 左右，需要相应调整 expected）：
 
 ```shell
 >>> ASCEND_RT_VISIBLE_DEVICES=0 swift sft \
@@ -104,7 +104,6 @@ ms-swift xxx
 ...               'AI-ModelScope/alpaca-gpt4-data-en#500' \
 ...               'swift/self-cognition#500' \
 ...     --torch_dtype bfloat16 \
-...     --num_train_epochs 1 \
 ...     --per_device_train_batch_size 1 \
 ...     --per_device_eval_batch_size 1 \
 ...     --learning_rate 1e-4 \
@@ -112,16 +111,18 @@ ms-swift xxx
 ...     --lora_alpha 32 \
 ...     --target_modules all-linear \
 ...     --gradient_accumulation_steps 16 \
-...     --eval_steps 50 \
-...     --save_steps 50 \
-...     --save_total_limit 2 \
-...     --logging_steps 5 \
 ...     --max_length 2048 \
 ...     --output_dir output \
 ...     --warmup_ratio 0.05 \
 ...     --dataloader_num_workers 4 \
 ...     --model_author swift \
-...     --model_name swift-robot
+...     --model_name swift-robot \
+...     --max_steps 5 \
+...     --save_strategy steps \
+...     --save_steps 5 \
+...     --logging_steps 1 \
+...     --eval_strategy no \
+...     --report_to none
 run sh: ...
 ...                              # downloading model + 5 step loss dicts
 {'loss': xxx, 'grad_norm': xxx, 'learning_rate': xxx, 'token_acc': xxx, ... 'global_step/max_steps': '1/5', ...}

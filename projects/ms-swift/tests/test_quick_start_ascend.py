@@ -464,54 +464,6 @@ class TestQuickStartAscendEndToEnd(unittest.TestCase):
             cmd = step['cmd']
             for k, v in captures.items():
                 cmd = cmd.replace(f'<{k}>', v)
-            if kind == 'train' and '--max_steps' not in cmd:
-                # The doc's train block is user-facing: it shows the
-                # full 1-epoch training command on 1500 samples
-                # (alpaca-gpt4-data-zh#500 + alpaca-gpt4-data-en#500 +
-                # swift/self-cognition#500). Running that verbatim in
-                # CI would take ~30-45 min on the NPU runner
-                # (model download ~1 min, dataset cache ~1 min,
-                #  ~94 steps × ~12 s/step ≈ 20 min, plus eval + save),
-                # which is too slow for a doc-test gate that runs every
-                # 6h and on every doc change. So we append a 5-step
-                # cap plus the bookkeeping flags that make the 5-step
-                # run deterministic and log-shaped like the full run:
-                #
-                #   --max_steps 5         hard cap, exit after 5 steps
-                #   --save_strategy steps save every N steps (vs epoch)
-                #   --save_steps 5        save at step 5 so infer has a
-                #                         checkpoint to load
-                #   --logging_steps 1     log a loss dict every step so
-                #                         the doc's `...` wildcard has
-                #                         5 entries to swallow (matches
-                #                         the 5/5 anchors in the
-                #                         expected output)
-                #   --eval_strategy no    skip eval set (no validation
-                #                         split in CI; saves another
-                #                         full pass)
-                #   --report_to none      disable wandb/tensorboard
-                #                         so CI doesn't try to talk to
-                #                         external services
-                #
-                # End-to-end the 5-step run takes ~80-120 s on the
-                # NPU runner (model download dominates). The doc's
-                # `loss: 1/5` ... `loss: 5/5` expected output lines
-                # are still produced, so the test exercises the
-                # actual ms-swift sft path end to end - only the
-                # training duration is shortened.
-                #
-                # Anyone wanting to reproduce the full training
-                # locally should remove these overrides (or just
-                # copy the doc's command verbatim) and budget
-                # ~30-45 min on the same A2 PODc hardware.
-                cmd = cmd.rstrip() + (
-                    ' \\\n    --max_steps 5'
-                    ' \\\n    --save_strategy steps'
-                    ' \\\n    --save_steps 5'
-                    ' \\\n    --logging_steps 1'
-                    ' \\\n    --eval_strategy no'
-                    ' \\\n    --report_to none'
-                )
             rc, out = run_command(cmd, env, REPO_ROOT, timeout)
             self.assertEqual(
                 rc, 0,

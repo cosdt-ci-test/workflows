@@ -20,7 +20,14 @@ name: ms-swift-quick-start
 
 concurrency:
   group: ms-swift-quick-start
-  cancel-in-progress: true
+  # Don't cancel an in-progress run when a new one arrives. cancel:
+  # true would silently kill a long manual dispatch (up to 3 hours)
+  # the moment a scheduled cron run fired, and a killed run's
+  # 'if: always()' guards still leave the Persist step without
+  # a chance to run - we'd lose the cycle's outcome writeback.
+  # Letting runs queue (up to whatever the runner pool can hold)
+  # is the right call for a doc-test gate; matches examples.yml.
+  cancel-in-progress: false
 
 on:
   schedule:
@@ -58,7 +65,6 @@ jobs:
       trigger:     ${{ steps.write-result.outputs.trigger }}
       reason:      ${{ steps.write-result.outputs.reason }}
       job_status:  ${{ steps.write-result.outputs.job_status }}
-      tests_ran:   ${{ steps.write-result.outputs.tests_ran }}
     defaults:
       run:
         shell: bash
@@ -133,7 +139,17 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: .monitor-state
-          key: monitor-state-ms-swift
+          # Run-id suffix because actions/cache refuses to overwrite an
+          # existing entry with the same key - a static key would
+          # make every Persist after the first a silent no-op, so
+          # a real outcome change (failure -> success on retry)
+          # would never propagate. The exact-match key always misses
+          # on this run (we never saved under it yet), so restore
+          # falls through to restore-keys, which returns the most
+          # recent 'monitor-state-ms-swift-*' entry.
+          key: monitor-state-ms-swift-${{ github.run_id }}
+          restore-keys: |
+            monitor-state-ms-swift-
 
       - name: Monitor upstream latest release id
         id: monitor-release
@@ -148,20 +164,35 @@ jobs:
             "$GH_API/repos/${{ env.UPSTREAM_REPO }}/releases/latest" -o /tmp/release.json
           ID=$(jq -r '.id // empty' /tmp/release.json)
           TAG=$(jq -r '.tag_name // empty' /tmp/release.json)
-          OLD_ID=$(cat "$STATE_DIR/.last_release_id" 2>/dev/null || echo "")
+          # Explicit file-existence check rather than 'cat || echo ""':
+          # on cache miss (first deploy, or 30-day retention expiry)
+          # actions/cache/restore@v4 does NOT create the .monitor-state/
+          # directory, and 'cat' on a missing file under set -euo
+          # pipefail would silently exit before the echo runs in some
+          # bash versions. The [ -f ] form is unambiguous about the
+          # fall-through-to-empty-string contract.
+          if [ -f "$STATE_DIR/.last_release_id" ]; then
+            OLD_ID=$(cat "$STATE_DIR/.last_release_id")
+          else
+            OLD_ID=""
+          fi
           # The outcome file is a two-line key=value blob (result / error);
           # source it so we can use $result for the retry decision.
+          # Default $result / $error to '' before the source so a
+          # half-written file (e.g. container killed mid-write) leaves
+          # both variables defined - without this, set -u trips on any
+          # later read of $error after the source assigns only $result.
+          result=""
+          error=""
           if [ -f "$STATE_DIR/.release_outcome" ]; then
             . "$STATE_DIR/.release_outcome"
-          else
-            result=""
           fi
           if [ -n "$ID" ] && [ "$OLD_ID" != "$ID" ]; then
             echo "$ID" > "$STATE_DIR/.last_release_id"
-            cat > "$STATE_DIR/.release_outcome" <<-OUTCOME_EOF
-              result=success
-              error=none
-            OUTCOME_EOF
+            {
+              echo "result=success"
+              echo "error=none"
+            } > "$STATE_DIR/.release_outcome"
             echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "ref=$TAG" >> "$GITHUB_OUTPUT"
             echo "reason=release" >> "$GITHUB_OUTPUT"
@@ -188,20 +219,28 @@ jobs:
           mkdir -p "$STATE_DIR"
           echo "Monitoring: $DOC_URL"
           NEW=$(curl -fsSL --retry 3 "$DOC_URL" | sha256sum | cut -d' ' -f1)
-          OLD=$(cat "$STATE_DIR/.doc_hash" 2>/dev/null || echo "")
+          if [ -f "$STATE_DIR/.doc_hash" ]; then
+            OLD=$(cat "$STATE_DIR/.doc_hash")
+          else
+            OLD=""
+          fi
           # The outcome file is a two-line key=value blob (result / error);
           # source it so we can use $result for the retry decision.
+          # Default $result / $error to '' before the source so a
+          # half-written file (e.g. container killed mid-write) leaves
+          # both variables defined - without this, set -u trips on any
+          # later read of $error after the source assigns only $result.
+          result=""
+          error=""
           if [ -f "$STATE_DIR/.doc_outcome" ]; then
             . "$STATE_DIR/.doc_outcome"
-          else
-            result=""
           fi
           if [ "$OLD" != "$NEW" ]; then
             echo "$NEW" > "$STATE_DIR/.doc_hash"
-            cat > "$STATE_DIR/.doc_outcome" <<-OUTCOME_EOF
-              result=success
-              error=none
-            OUTCOME_EOF
+            {
+              echo "result=success"
+              echo "error=none"
+            } > "$STATE_DIR/.doc_outcome"
             echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "ref=main" >> "$GITHUB_OUTPUT"
             echo "reason=doc" >> "$GITHUB_OUTPUT"
@@ -433,10 +472,10 @@ jobs:
               ERROR="unknown conclusion (${CONCLUSION})"
               ;;
           esac
-          cat > "${STATE_DIR}/.${BASE}_outcome" <<-OUTCOME_EOF
-            result=${RESULT}
-            error=${ERROR}
-          OUTCOME_EOF
+          {
+            echo "result=${RESULT}"
+            echo "error=${ERROR}"
+          } > "${STATE_DIR}/.${BASE}_outcome"
           echo "outcome for ${BASE}: result=${RESULT} error=${ERROR}"
 
       - name: Persist monitor state
@@ -448,11 +487,16 @@ jobs:
         # cache. The whole directory is uploaded in one shot - the
         # files record-outcome didn't touch are byte-identical to
         # what cache had, so the upload is a no-op for them.
+        #
+        # Run-id suffix is required: actions/cache refuses to overwrite
+        # an existing entry with the same key, so a static key would
+        # make every Persist after the first a silent no-op (see
+        # Restore monitor state for the matching suffix + restore-keys).
         if: github.event_name == 'schedule' && always()
         uses: actions/cache/save@v4
         with:
           path: .monitor-state
-          key: monitor-state-ms-swift
+          key: monitor-state-ms-swift-${{ github.run_id }}
           retention-days: 30
 
       # Write a small machine-readable summary so external monitors can pull
@@ -474,49 +518,33 @@ jobs:
         env:
           TRIGGER:         ${{ github.event_name }}
           REASON:          ${{ steps.decide.outputs.reason }}
-          UPSTREAM_REPO:   ${{ env.UPSTREAM_REPO }}
-          UPSTREAM_REF:    ${{ steps.decide.outputs.test_ref }}
-          UPSTREAM_COMMIT: ${{ steps.upstream-commit.outputs.sha }}
           TARGET_REPO:     ${{ vars.TARGET_REPO || 'cosdt-ci-test/ms-swift' }}
           TARGET_REF:      ${{ vars.TARGET_REF || 'main' }}
           IMAGE:           ${{ env.CI_IMAGE }}
           JOB_STATUS:      ${{ job.status }}
-          CHANGED:         ${{ steps.decide.outputs.changed }}
         run: |
           mkdir -p output
-          if [ "$TRIGGER" = "workflow_dispatch" ] || [ "$CHANGED" = "true" ]; then
-            tests_ran=true
-          else
-            tests_ran=false
-          fi
+          # 7 fields: 6 required by schemas/result.schema.json + 'reason'
+          # (which monitor signal fired; derivable from decide.outputs.reason).
+          # Tests-ran is implied by reason non-empty (changed=true); the
+          # exact upstream ref/commit are derivable via the GitHub API
+          # from reason + path; created_at is on the Actions run object.
           jq -n \
-            --arg workflow         "ms-swift-quick-start" \
             --arg trigger          "$TRIGGER" \
             --arg reason           "$REASON" \
-            --arg upstream_repo    "$UPSTREAM_REPO" \
-            --arg upstream_ref     "$UPSTREAM_REF" \
-            --arg upstream_commit  "$UPSTREAM_COMMIT" \
             --arg target_repo      "$TARGET_REPO" \
             --arg target_ref       "$TARGET_REF" \
             --arg path             "projects/ms-swift/docs/Quick-start-Ascend.md" \
             --arg image            "$IMAGE" \
             --arg job_status       "$JOB_STATUS" \
-            --argjson tests_ran    "$tests_ran" \
-            --arg created_at       "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             '{
-              workflow:        $workflow,
-              trigger:         $trigger,
-              reason:          $reason,
-              upstream_repo:   $upstream_repo,
-              upstream_ref:    $upstream_ref,
-              upstream_commit: $upstream_commit,
-              target_repo:     $target_repo,
-              target_ref:      $target_ref,
-              path:            $path,
-              image:           $image,
-              tests_ran:       $tests_ran,
-              job_status:      $job_status,
-              created_at:      $created_at
+              trigger:     $trigger,
+              reason:      $reason,
+              target_repo: $target_repo,
+              target_ref:  $target_ref,
+              path:        $path,
+              image:       $image,
+              job_status:  $job_status
             }' > output/result.json
           echo "wrote $(wc -c < output/result.json) bytes:"
           cat output/result.json
@@ -531,7 +559,6 @@ jobs:
             printf 'trigger=%s\n'    "$TRIGGER"
             printf 'reason=%s\n'     "$REASON"
             printf 'job_status=%s\n' "$JOB_STATUS"
-            printf 'tests_ran=%s\n'  "$tests_ran"
           } >> "$GITHUB_OUTPUT"
 
       - name: Summarize test result
@@ -550,7 +577,12 @@ jobs:
           # Surface the last-known failure reason (from the prior run's
           # outcome record) so a retry run is self-explanatory. The
           # outcome file is a two-line key=value blob (result / error).
+          # Default before source for set -u safety: a half-written file
+          # from a container-killed record-outcome might leave $error
+          # unset, and this step reads both $result and $error.
           OUTCOME_FILE=".monitor-state/.${REASON%-retry}_outcome"
+          result=""
+          error=""
           if [ -f "$OUTCOME_FILE" ]; then
             . "$OUTCOME_FILE"
             if [ "$result" = "failure" ] && [ "$error" != "none" ]; then

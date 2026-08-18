@@ -120,35 +120,20 @@ jobs:
       # forces a retry on the next cycle even if the signal hasn't
       # changed; success clears that flag. State lives in
       # .monitor-state/ (actions/cache, 30-day retention).
-      # The doc and release monitors each get their own cache entry
-      # so a release-triggered run can skip the doc monitor entirely
-      # without invalidating its cached state - that way the next
-      # schedule run picks up doc changes that were deferred this
-      # time around.
-      - name: Restore release state
-        id: cache-restore-release
+      # Single cache entry covering all four monitor-state files.
+      # Only the schedule trigger writes this cache. monitor-doc
+      # is gated on 'monitor-release.changed != true' below, so in
+      # a release-only cycle doc files simply aren't touched - the
+      # next persist just re-uploads their unchanged content, which
+      # is exactly what we want (no stale-state reset, no extra
+      # restore step needed).
+      - name: Restore monitor state
+        id: cache-restore
         if: github.event_name == 'schedule'
         uses: actions/cache/restore@v4
         with:
-          path: |
-            .monitor-state/.last_release_id
-            .monitor-state/.release_outcome
-          key: monitor-state-release
-
-      - name: Restore doc state
-        id: cache-restore-doc
-        # Always runs in schedule mode - this step is positioned
-        # before monitor-release, so it cannot consult that step's
-        # output yet. The doc state files will simply not be touched
-        # in a release-only cycle (monitor-doc skips itself, persist
-        # doc skips too), so restoring them here is harmless.
-        if: github.event_name == 'schedule'
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            .monitor-state/.doc_hash
-            .monitor-state/.doc_outcome
-          key: monitor-state-doc
+          path: .monitor-state
+          key: monitor-state-ms-swift
 
       - name: Monitor upstream latest release id
         id: monitor-release
@@ -229,33 +214,27 @@ jobs:
           fi
           echo "doc_hash=$NEW result=$result"
 
-      - name: Persist release state
-        # Persist on every schedule run that touched release state
-        # (i.e. monitor-release ran - either it changed something or
-        # it read the cache and the 'always()' guard covers a test
-        # failure that didn't update the outcome). We persist
-        # unconditionally here (no if-changed gate) so a release
-        # retry that succeeds still uploads the new outcome.
+      - name: Persist monitor state
+        # Always run on schedule (even when nothing changed - the
+        # cache entry has a 30-day TTL, and we want a fresh write to
+        # reset that clock on every cycle). 'always()' guards against
+        # a test failure that left .monitor-state/ in a half-written
+        # state; even in that case, uploading the half-written state
+        # is better than letting the cache expire and losing the
+        # failure flag we just set.
+        #
+        # Why upload the whole directory in one go, including files
+        # that this run didn't touch: the files that didn't get
+        # updated are still byte-for-byte the same as what cache had,
+        # so re-uploading them is a no-op. The alternative (two
+        # separate persist steps gated on which monitor fired)
+        # would let us skip the doc upload on a release-only cycle,
+        # but the upload is ~200 bytes - not worth a second step.
         if: github.event_name == 'schedule' && always()
         uses: actions/cache/save@v4
         with:
-          path: |
-            .monitor-state/.last_release_id
-            .monitor-state/.release_outcome
-          key: monitor-state-release
-          retention-days: 30
-
-      - name: Persist doc state
-        # Skip when release also triggered this cycle - release took
-        # priority, doc state must stay exactly as it was in cache so
-        # the next schedule run picks it up.
-        if: github.event_name == 'schedule' && always() && steps.monitor-release.outputs.changed != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            .monitor-state/.doc_hash
-            .monitor-state/.doc_outcome
-          key: monitor-state-doc
+          path: .monitor-state
+          key: monitor-state-ms-swift
           retention-days: 30
 
       # ===== Test =====

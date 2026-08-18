@@ -19,15 +19,19 @@ name: ms-swift-quick-start
 # whole purpose is to detect upstream changes.
 
 concurrency:
-  group: ms-swift-quick-start
-  # Don't cancel an in-progress run when a new one arrives. cancel:
-  # true would silently kill a long manual dispatch (up to 3 hours)
-  # the moment a scheduled cron run fired, and a killed run's
-  # 'if: always()' guards still leave the Persist step without
-  # a chance to run - we'd lose the cycle's outcome writeback.
-  # Letting runs queue (up to whatever the runner pool can hold)
-  # is the right call for a doc-test gate; matches examples.yml.
-  cancel-in-progress: false
+  # Manual dispatch runs do not participate in the queue at all
+  # (group is empty -> no concurrency group), so a user can fire
+  # several dispatches in parallel without them cancelling each
+  # other or waiting in line behind the schedule.
+  #
+  # Schedule runs share one queue. cancel-in-progress: false
+  # keeps a long-running schedule run alive when a new schedule
+  # tick fires (6h cron means this is rare but possible if a
+  # previous run overshoots). The schedule trigger never interacts
+  # with dispatch concurrency either way.
+  group: >-
+    ${{ github.event_name == 'schedule' && 'ms-swift-quick-start-schedule' || '' }}
+  cancel-in-progress: ${{ github.event_name == 'schedule' }}
 
 on:
   schedule:

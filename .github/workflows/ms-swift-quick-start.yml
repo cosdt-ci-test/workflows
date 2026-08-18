@@ -299,6 +299,14 @@ jobs:
           #    or a transitive dep from dragging in a CUDA runtime that the
           #    runner can't reach).
           cat >/tmp/ms_swift_npu_constraints.txt <<'EOF'
+          # torch 2.9.0 (no +cpu suffix) is a GPU-only wheel on PyPI
+          # and the aarch64 cp312 variant is only published under the
+          # ``+cpu`` local version label. Without ``+cpu`` pip raises
+          # ``Could not find a version that satisfies the requirement
+          # torch==2.9.0`` on the mirrors the runner can reach. The
+          # ``+cpu`` libtorch build has no cuda-toolkit / nvidia-*
+          # in its wheel metadata, so the cuda-* / nvidia-* <0
+          # backstop below still does its job once pip has the wheel.
           torch==2.9.0+cpu
           torch_npu==2.9.0.post2
           modelscope==1.37.0

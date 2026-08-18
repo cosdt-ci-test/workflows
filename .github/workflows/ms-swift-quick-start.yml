@@ -346,26 +346,19 @@ jobs:
             2>/dev/null \
             | grep -oE 'torch_npu-2\.9\.[^"]+manylinux_2_28_aarch64\.whl' \
             | sort -u
-          # The huaweicloud ascend mirror is reachable as an
-          # extra-index-url fallback only when the NPU runner has
-          # outbound internet. In a sealed test environment that
-          # isn't always true - if the curl below fails (timeout,
-          # DNS, connection refused), this debug step must not
-          # propagate that failure to the test step that follows.
-          # '|| true' on each network call makes the section
-          # best-effort.
-          echo "=== huaweicloud ascend mirror: torch 2.9.* (best-effort) ==="
+          # huaweicloud ascend mirror is configured as our
+          # UV_EXTRA_INDEX_URL fallback - it serves the Ascend-only
+          # wheel family (torch-npu / triton-ascend / variant) and
+          # does NOT host torch itself, so don't try /torch/. The
+          # path uses a hyphen 'torch-npu', not an underscore -
+          # huaweicloud's index is not a PyPI simple repo and
+          # doesn't PEP 503 normalise underscores to hyphens.
+          # Each request is best-effort; the NPU runner may not
+          # have outbound internet at all in sealed test envs.
+          echo "=== huaweicloud ascend mirror: torch-npu 2.9.* aarch64 (best-effort) ==="
           if curl -sSL --max-time 10 \
-              "https://repo.huaweicloud.com/ascend/repos/pypi/torch/" \
-              2>/dev/null | grep -oE 'torch-2\.9\.[^"]+\.whl' | sort -u; then
-            : # success, output already streamed
-          else
-            echo "(unreachable from NPU runner)"
-          fi
-          echo "=== huaweicloud ascend mirror: torch_npu 2.9.* (best-effort) ==="
-          if curl -sSL --max-time 10 \
-              "https://repo.huaweicloud.com/ascend/repos/pypi/torch_npu/" \
-              2>/dev/null | grep -oE 'torch_npu-2\.9\.[^"]+\.whl' | sort -u; then
+              "https://repo.huaweicloud.com/ascend/repos/pypi/torch-npu/" \
+              2>/dev/null | grep -oE 'torch_npu-2\.9\.[^"]+manylinux_2_28_aarch64\.whl' | sort -u; then
             : # success
           else
             echo "(unreachable from NPU runner)"

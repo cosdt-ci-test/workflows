@@ -270,6 +270,10 @@ jobs:
           set -euo pipefail
           DECISION_FILE="/tmp/.decision"
 
+          # Default all three decision keys before either branch so
+          # `set -u` is safe: dispatch overwrites; schedule sources
+          # /tmp/.decision when present, else falls through with the
+          # defaults (no monitor fired -> need_to_test stays "false").
           NEED_TO_TEST="false"
           REASON=""
           REF=""
@@ -283,14 +287,8 @@ jobs:
               echo "ref='$REF'"
               echo "reason='$REASON'"
             } > "$DECISION_FILE"
-          else
-            # Default all expected keys before the source so a
-            # missing or partial file (one monitor step didn't run)
-            # leaves every variable defined; otherwise set -u trips
-            # on the later `if` reads.
-            if [ -f $DECISION_FILE ]; then
-              . $DECISION_FILE
-            fi
+          elif [ -f $DECISION_FILE ]; then
+            . $DECISION_FILE
           fi
 
           if [ "$need_to_test" = "true" ]; then

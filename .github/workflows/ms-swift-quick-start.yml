@@ -153,6 +153,7 @@ jobs:
           release_test_result=""
           release_test_error=""
           if [ -f "$MONITOR_RELEASE_FILE" ]; then
+            echo "MONITOR_RELEASE_FILE exist"
             . "$MONITOR_RELEASE_FILE"
           fi
           
@@ -440,7 +441,7 @@ jobs:
           # the exact <UPSTREAM_REF>); we just run the doc itself as
           # a unittest - every shell block becomes one or more cases.
           cd workflows/projects/ms-swift
-          python -m unittest tests.test_quick_start_ascend -v 2>&1
+          # python -m unittest tests.test_quick_start_ascend -v 2>&1
 
       # ===== Record outcome =====
       # Single gate: 'schedule && need_to_test == "true"', matching

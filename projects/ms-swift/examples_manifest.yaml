@@ -102,41 +102,7 @@ supported:
       - --vllm_max_model_len 1024
       - --num_train_epochs 1
     timeout_minutes: 180
-  # Written for 8x96GiB A5; may OOM on A2 64GiB. Guarded to expose that status.
-  - path: examples/ascend/train/qwen3_5/qwen3_lora_megatron_npu_a5.sh
-    profile: megatron
-    runner: linux-aarch64-a2-8
-    npu_devices: '0,1,2,3,4,5,6,7'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --dataset ${FIXTURE_DIR}/ci_sft_8.jsonl
-      - --logging_steps 1
-      - --add_version false
-      - --output_dir ${CI_OUTPUT_DIR}
-      - --save_safetensors false
-      - --dataloader_num_workers 0
-      - --dataset_num_proc 1
-      - --max_length 512
-      - --num_train_epochs 1
-    timeout_minutes: 180
   - path: examples/ascend/train/qwen3_next/qwen3_next_megatron.sh
-    profile: megatron
-    runner: linux-aarch64-a2-8
-    npu_devices: '0,1,2,3,4,5,6,7'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --dataset ${FIXTURE_DIR}/ci_sft_8.jsonl
-      - --logging_steps 1
-      - --add_version false
-      - --output_dir ${CI_OUTPUT_DIR}
-      - --save_safetensors false
-      - --dataloader_num_workers 0
-      - --dataset_num_proc 1
-      - --max_length 512
-      - --num_train_epochs 1
-    timeout_minutes: 180
-  # Written for 8x96GiB A5; may OOM on A2 64GiB. Guarded to expose that status.
-  - path: examples/ascend/train/qwen3_omni/qwen3_omni_lora_megatron_A5.sh
     profile: megatron
     runner: linux-aarch64-a2-8
     npu_devices: '0,1,2,3,4,5,6,7'
@@ -210,6 +176,8 @@ supported:
     npu_devices: '0,1,2,3'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
+      # Script hardcodes --use_hf true; runners cannot reach HuggingFace.
+      - --use_hf false
       - --dataset ${FIXTURE_DIR}/ci_sft_8.jsonl
       - --logging_steps 1
       - --add_version false
@@ -235,8 +203,12 @@ unsupported:
   - examples/ascend/train/qwen3_5/qwen3_5_full_grpo_megatron.sh
   - examples/ascend/train/qwen3_5/qwen3_lora_megatron_npu.sh
   - examples/ascend/train/qwen3_5/qwen3_lora_megatron_npu_a3.sh
+  # 8x96GiB A5 — no A5 runner
+  - examples/ascend/train/qwen3_5/qwen3_lora_megatron_npu_a5.sh
   - examples/ascend/train/qwen3_omni/qwen3_omni_full_mindspeed.sh
   - examples/ascend/train/qwen3_omni/qwen3_omni_lora_megatron_A3.sh
+  # 8x96GiB A5 — no A5 runner
+  - examples/ascend/train/qwen3_omni/qwen3_omni_lora_megatron_A5.sh
   - examples/ascend/train/qwen3_vl/moe_full_mindspeed.sh
   - examples/custom/dataset.py
   - examples/custom/infer.sh

@@ -6,7 +6,7 @@
 
 ## 清单、fixture
 
-- `examples_manifest.yaml` 由仓库根目录 `scripts/bootstrap_manifest.py` 扫描目标仓 `examples/` 下的 `.sh` / `.py` / `.yaml` 生成。`supported` 是本仓实际调度的条目：runner 按 example 脚本写明的卡数选 `linux-aarch64-a2-1` / `-2` / `-4` / `-8`，不把小任务挂到更大的机器上。多机 2×8 卡、16 卡 / A3 SuperPoD，以及 `swift deploy` 这种不会退出的常驻服务，仍标 `unsupported`。这是任务规定的分类，不是社区结论。清单与磁盘的差异只打印路径，不使 job 失败；例外：`supported` 条目的 path 已不在磁盘上时 manifest-check 立即判红。看护目标是诚实地暴露 example 退出码，不修上游 example。
+- `examples_manifest.yaml` 由仓库根目录 `scripts/bootstrap_manifest.py` 扫描目标仓 `examples/` 下的 `.sh` / `.py` / `.yaml` 生成。`supported` 是本仓实际调度的条目：runner 按 example 脚本写明的卡数选 `linux-aarch64-a2-1` / `-2` / `-4` / `-8`，不把小任务挂到更大的机器上。多机 2×8 卡、16 卡 / A3 SuperPoD、8×96GiB A5，以及 `swift deploy` 这种不会退出的常驻服务，仍标 `unsupported`。这是任务规定的分类，不是社区结论。清单与磁盘的差异只打印路径，不使 job 失败；例外：`supported` 条目的 path 已不在磁盘上时 manifest-check 立即判红。看护目标是诚实地暴露 example 退出码，不修上游 example。
 - 该 supported 条目的 `overlay_args` 把 example 压到 CI 规模（仓内 8 条 fixture、短序列、输出到 CI 目录）。bootstrap 只写占位注释，参数要手写进清单。
 - `scripts/run_example.sh` 是 ms-swift 专用：在 CI 临时工作区给 example 补 `"$@"` 并展开 `OVERLAY_ARGS`。不改任何 ms-swift 仓库。
 

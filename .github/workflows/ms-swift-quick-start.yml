@@ -1,57 +1,20 @@
 name: ms-swift-quick-start
 
-# Quick Start doc test (Ascend / NPU):
-#   1. Every 6 hours: lightweight monitor - hash the doc on the
-#      TARGET repo and the latest upstream release id. State persists
-#      in actions/cache for 30 days.
-#   2. If either signal changed (release > doc priority), install
-#      ms-swift at that commit and run the e2e doc test on the NPU
-#      runner.
-#   3. If nothing changed, exit after the monitor (no NPU work).
-#
-# This workflow is the NPU counterpart to ms-swift-examples.yml on this
-# repo: ms-swift-examples.yml runs curated example scripts; this one
-# verifies the "Quick Start" doc on the Ascend track. The doc URL is
-# read from MONITORED_DOC_URL.
-#
-# NB: monitoring upstream ms-swift is an intentional exception to the
-# repo's "no interaction with modelscope/ms-swift" rule - this workflow's
-# whole purpose is to detect upstream changes.
-
 concurrency:
-  # Manual dispatch runs get a unique-per-run group
-  # ('manual-<run_id>') so each dispatch is its own concurrency
-  # group and parallel dispatches never queue or cancel each
-  # other. Schedule runs share a single group and queue behind
-  # each other (cron 6h means this is rare but possible if a
-  # previous run overshoots).
-  #
-  # The format() call is load-bearing: a '||' between the
-  # 'manual-' literal and github.run_id would short-circuit on
-  # the truthy literal and never concatenate the run_id, so
-  # every dispatch would share the same 'manual-' group and
-  # queue. Use a proper string-format call so dispatch groups
-  # are actually unique.
+  # format() is load-bearing: a '||' between 'manual-' and
+  # github.run_id would short-circuit on the truthy literal and
+  # every dispatch would share one 'manual-' group.
   group: ${{ github.event_name == 'schedule' && 'ms-swift-quick-start-schedule' || format('manual-{0}', github.run_id) }}
-  # cancel-in-progress: false unconditionally. Two reasons:
-  #   1. Schedule run getting cancelled mid-way: if a previous
-  #      schedule run is still running when the next cron tick
-  #      fires, cancelling it loses its outcome writeback (the
-  #      'if: always()' guard isn't enough when the container
-  #      itself is being torn down) - and that outcome is what
-  #      makes the retry mechanism work.
-  #   2. Dispatch runs are already in unique groups above, so
-  #      cancel-in-progress never had a job to do for them.
-  # Letting the (extremely unlikely) overlap run is the safer
-  # default; the schedule run queue still serialises them.
+  # cancel-in-progress: false because (1) a schedule run cancelled
+  # mid-way loses its outcome writeback - the outcome is what makes
+  # the retry mechanism work, and the 'if: always()' guard isn't
+  # enough when the container is being torn down; (2) dispatch runs
+  # already live in unique groups so there's nothing to cancel.
   cancel-in-progress: false
 
 on:
   schedule:
     - cron: '0 */6 * * *'
-  # Manual run ALWAYS runs the test (no monitor gate). Override
-  # `upstream_ref` to test a specific tag or branch; defaults to
-  # `main`. The two trigger paths converge in the `decide` step.
   workflow_dispatch:
     inputs:
       upstream_ref:
@@ -73,15 +36,23 @@ jobs:
     name: monitor + test on change
     runs-on: [linux-aarch64-a2-1]
     timeout-minutes: 180
-    # Cross-job channel: ship result.json + a few scalars up to the
-    # publish-results job via needs.<job>.outputs. The NPU runner's
-    # artifact blob storage channel is unreachable (see write-result
-    # step), so we use job outputs instead of upload-artifact.
+    # Each monitor field ships as its own job output; record-monitor-
+    # outcome is the single writer, publish-and-persist reconstructs
+    # .monitor-state/ + calls actions/cache/save. The NPU runner
+    # cannot reach GitHub's cache blob storage (firewalled), so we
+    # route persistence through job outputs to the ubuntu-latest job.
     outputs:
-      result_json: ${{ steps.write-result.outputs.result_json }}
-      trigger:     ${{ steps.write-result.outputs.trigger }}
-      reason:      ${{ steps.write-result.outputs.reason }}
-      job_status:  ${{ steps.write-result.outputs.job_status }}
+      result_json:             ${{ steps.write-result.outputs.result_json }}
+      trigger:                 ${{ steps.write-result.outputs.trigger }}
+      reason:                   ${{ steps.record-monitor-outcome.outputs.reason }}
+      job_status:              ${{ steps.write-result.outputs.job_status }}
+      need_to_test:            ${{ steps.decide.outputs.need_to_test }}
+      monitor_last_release_id:     ${{ steps.record-monitor-outcome.outputs.monitor_last_release_id }}
+      monitor_release_test_result: ${{ steps.record-monitor-outcome.outputs.monitor_release_test_result }}
+      monitor_release_test_error:  ${{ steps.record-monitor-outcome.outputs.monitor_release_test_error }}
+      monitor_doc_hash:            ${{ steps.record-monitor-outcome.outputs.monitor_doc_hash }}
+      monitor_doc_test_result:     ${{ steps.record-monitor-outcome.outputs.monitor_doc_test_result }}
+      monitor_doc_test_error:      ${{ steps.record-monitor-outcome.outputs.monitor_doc_test_error }}
     defaults:
       run:
         shell: bash
@@ -99,10 +70,9 @@ jobs:
         --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
         --volume=/data/ci-cache/modelscope:/root/.cache/modelscope
     env:
-      # Match upstream citest_npu.yaml: cluster-internal nginx PyPI cache
-      # fronts every package (including setuptools/wheel/torch/torch_npu),
-      # so PEP 517 build deps and NPU wheels all resolve without falling
-      # back to external mirrors.
+      # Cluster-internal nginx PyPI cache fronts every package
+      # (PEP 517 build deps + NPU wheels), so installs don't fall
+      # back to external mirrors the runner can't reach.
       UV_INDEX_URL: "http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple"
       UV_EXTRA_INDEX_URL: "https://repo.huaweicloud.com/ascend/repos/pypi"
       UV_INDEX_STRATEGY: "unsafe-best-match"
@@ -114,269 +84,253 @@ jobs:
       PIP_TRUSTED_HOST: "cache-service.nginx-pypi-cache.svc.cluster.local"
       PIP_TIMEOUT: "120"
     steps:
-      # ===== Setup =====
-      # Always runs. Loads CANN, checks NPU, brings this repo's test
-      # code + doc into ./workflows so the test step can use them.
-      - name: Print context
+      - name: Print context and source CANN
         run: |
           echo "=========================================="
           echo "Trigger:    ${{ github.event_name }}"
           echo "Runner:     ${{ runner.name }}"
           echo "=========================================="
-
-      - name: Source CANN and check NPU
-        run: |
           export PATH="/usr/local/sbin:$PATH"
           source /usr/local/Ascend/ascend-toolkit/set_env.sh
           npu-smi info || true
 
       - name: Checkout workflows (provides the test code and doc)
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           path: workflows
           fetch-depth: 1
 
-      # ===== Monitor =====
-      # Schedule-only. Two monitors (release id, doc hash) compare
-      # the current signal against the cached last seen value and
-      # emit changed/ref/reason. monitor-release runs first; if it
-      # fires, monitor-doc skips itself so doc state stays untouched
-      # until the next schedule run picks it up. A failure outcome
-      # forces a retry on the next cycle even if the signal hasn't
-      # changed; success clears that flag.
-      #
-      # State lives in .monitor-state/ (actions/cache, 30-day
-      # retention, run-id suffix on the key so a real outcome
-      # change persists across persists).
+      # ===== Restore =====
+      # Run-id suffix on the key because actions/cache refuses to
+      # overwrite an existing entry with the same key - a static key
+      # would make every save after the first a silent no-op, so a
+      # real outcome change (failure -> success on retry) would
+      # never propagate. The exact-match key always misses on this
+      # run (we never saved under it yet), so restore falls through
+      # to restore-keys.
       - name: Restore monitor state
         id: cache-restore
         if: github.event_name == 'schedule'
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: .monitor-state
-          # Run-id suffix because actions/cache refuses to overwrite an
-          # existing entry with the same key - a static key would
-          # make every Persist after the first a silent no-op, so
-          # a real outcome change (failure -> success on retry)
-          # would never propagate. The exact-match key always misses
-          # on this run (we never saved under it yet), so restore
-          # falls through to restore-keys, which returns the most
-          # recent 'monitor-state-ms-swift-*' entry.
           key: monitor-state-ms-swift-${{ github.run_id }}
           restore-keys: |
             monitor-state-ms-swift-
 
+      # Two monitors feed the decide step (release > doc by priority).
+      # Each step sources its cache file, decides in-memory against
+      # local vars only, then writes its decision to /tmp/.decision
+      # (read by decide). A failure outcome from a previous cycle
+      # forces a retry even if the signal hasn't changed; a success
+      # from record-monitor-outcome clears that flag.
       - name: Monitor upstream latest release id
         id: monitor-release
-        # Runs first so monitor-doc (below) can read its `changed`
-        # output to decide whether to skip itself this cycle.
         if: github.event_name == 'schedule'
         run: |
           set -euo pipefail
           STATE_DIR=".monitor-state"
           mkdir -p "$STATE_DIR"
+          DECISION_FILE="/tmp/.decision"
+          LOCAL_RELEASE_MONITOR="/tmp/.release_monitor"
+          # Defined once and reused below so this step never hard-
+          # codes the basename alongside $STATE_DIR (a typo that's
+          # silent because both sides would still match).
+          MONITOR_RELEASE_FILE="$STATE_DIR/.monitor_release"
+
+          LAST_RELEASE_ID=""
+          RELEASE_TEST_RESULT=""
+          RELEASE_TEST_ERROR=""
+          if [ -f "$MONITOR_RELEASE_FILE" ]; then
+            . "$MONITOR_RELEASE_FILE"
+          fi
+          LAST_RELEASE_ID="$last_release_id"
+          RELEASE_TEST_RESULT="$release_test_result"
+          RELEASE_TEST_ERROR="$release_test_error"
+
           curl -fsSL --retry 3 \
             "$GH_API/repos/${{ env.UPSTREAM_REPO }}/releases/latest" -o /tmp/release.json
-          ID=$(jq -r '.id // empty' /tmp/release.json)
-          TAG=$(jq -r '.tag_name // empty' /tmp/release.json)
-          # Explicit file-existence check rather than 'cat || echo ""':
-          # on cache miss (first deploy, or 30-day retention expiry)
-          # actions/cache/restore@v4 does NOT create the .monitor-state/
-          # directory, and 'cat' on a missing file under set -euo
-          # pipefail would silently exit before the echo runs in some
-          # bash versions. The [ -f ] form is unambiguous about the
-          # fall-through-to-empty-string contract.
-          if [ -f "$STATE_DIR/.last_release_id" ]; then
-            OLD_ID=$(cat "$STATE_DIR/.last_release_id")
-          else
-            OLD_ID=""
+          CURRENT_RELEASE_ID=$(jq -r '.id // empty' /tmp/release.json)
+          CURRENT_RELEASE_TAG=$(jq -r '.tag_name // empty' /tmp/release.json)
+
+          NEED_TO_TEST="false"
+          REF=""
+          REASON=""
+          SKIP_MONITOR_DOC="false"
+          if [ -n "$CURRENT_RELEASE_ID" ] && [ "$LAST_RELEASE_ID" != "$CURRENT_RELEASE_ID" ]; then
+            LAST_RELEASE_ID="$CURRENT_RELEASE_ID"
+            NEED_TO_TEST="true"
+            REF="$CURRENT_RELEASE_TAG"
+            REASON="release"
+            SKIP_MONITOR_DOC="true"
+          elif [ "$RELEASE_TEST_RESULT" = "failure" ]; then
+            NEED_TO_TEST="true"
+            REF="$CURRENT_RELEASE_TAG"
+            REASON="release-retry"
+            SKIP_MONITOR_DOC="true"
           fi
-          # The outcome file is a two-line key=value blob (result / error);
-          # source it so we can use $result for the retry decision.
-          # Default $result / $error to '' before the source so a
-          # half-written file (e.g. container killed mid-write) leaves
-          # both variables defined - without this, set -u trips on any
-          # later read of $error after the source assigns only $result.
-          result=""
-          error=""
-          if [ -f "$STATE_DIR/.release_outcome" ]; then
-            . "$STATE_DIR/.release_outcome"
-          fi
-          if [ -n "$ID" ] && [ "$OLD_ID" != "$ID" ]; then
-            echo "$ID" > "$STATE_DIR/.last_release_id"
-            {
-              echo "result=success"
-              echo "error=none"
-            } > "$STATE_DIR/.release_outcome"
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "ref=$TAG" >> "$GITHUB_OUTPUT"
-            echo "reason=release" >> "$GITHUB_OUTPUT"
-          elif [ "$result" = "failure" ]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "ref=$TAG" >> "$GITHUB_OUTPUT"
-            echo "reason=release-retry" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          fi
-          echo "release_id=$ID tag=$TAG result=$result"
+
+          echo "skip_monitor_doc=$SKIP_MONITOR_DOC" >> "$GITHUB_OUTPUT"
+          echo "monitor_release work and skip_monitor_doc = true"
+
+          # Values are single-quoted so literals like 'none' and any
+          # shell-meta chars round-trip safely when record-monitor-
+          # outcome sources this file via `.`.
+          {
+            echo "release_test_result='$RELEASE_TEST_RESULT'"
+            echo "release_test_error='$RELEASE_TEST_ERROR'"
+            echo "last_release_id='$LAST_RELEASE_ID'"
+          } > "$LOCAL_RELEASE_MONITOR"
+          echo "release monitor: last_release_id=${LAST_RELEASE_ID} result=${RELEASE_TEST_RESULT} error=${RELEASE_TEST_ERROR}"
+
+          {
+            echo "need_to_test='$NEED_TO_TEST'"
+            echo "ref='$REF'"
+            echo "reason='$REASON'"
+          } > "$DECISION_FILE"
+          echo "release: id=$CURRENT_RELEASE_ID tag=$CURRENT_RELEASE_TAG result=$RELEASE_TEST_RESULT need_to_test=$NEED_TO_TEST reason=$REASON"
 
       - name: Monitor doc hash
         id: monitor-doc
-        # Skip when release also fired this cycle - release takes
-        # priority, doc state must stay untouched so the next schedule
-        # run picks it up cleanly.
-        if: github.event_name == 'schedule' && steps.monitor-release.outputs.changed != 'true'
+        if: github.event_name == 'schedule' && steps.monitor-release.outputs.skip_monitor_doc == 'false'
         env:
           DOC_URL: ${{ env.MONITORED_DOC_URL }}
         run: |
           set -euo pipefail
           STATE_DIR=".monitor-state"
-          mkdir -p "$STATE_DIR"
-          echo "Monitoring: $DOC_URL"
-          NEW=$(curl -fsSL --retry 3 "$DOC_URL" | sha256sum | cut -d' ' -f1)
-          if [ -f "$STATE_DIR/.doc_hash" ]; then
-            OLD=$(cat "$STATE_DIR/.doc_hash")
-          else
-            OLD=""
-          fi
-          # The outcome file is a two-line key=value blob (result / error);
-          # source it so we can use $result for the retry decision.
-          # Default $result / $error to '' before the source so a
-          # half-written file (e.g. container killed mid-write) leaves
-          # both variables defined - without this, set -u trips on any
-          # later read of $error after the source assigns only $result.
-          result=""
-          error=""
-          if [ -f "$STATE_DIR/.doc_outcome" ]; then
-            . "$STATE_DIR/.doc_outcome"
-          fi
-          if [ "$OLD" != "$NEW" ]; then
-            echo "$NEW" > "$STATE_DIR/.doc_hash"
-            {
-              echo "result=success"
-              echo "error=none"
-            } > "$STATE_DIR/.doc_outcome"
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "ref=main" >> "$GITHUB_OUTPUT"
-            echo "reason=doc" >> "$GITHUB_OUTPUT"
-          elif [ "$result" = "failure" ]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "ref=main" >> "$GITHUB_OUTPUT"
-            echo "reason=doc-retry" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          fi
-          echo "doc_hash=$NEW result=$result"
+          DECISION_FILE="/tmp/.decision"
+          LOCAL_DOC_MONITOR="/tmp/.doc_monitor"
+          MONITOR_DOC_FILE="$STATE_DIR/.monitor_doc"
 
-      # ===== Test =====
-      # Runs only when decide.outputs.changed == true. The decide step
-      # is the single funnel: schedule picks release > doc by priority,
-      # manual always uses inputs.upstream_ref. The test step itself
-      # installs ms-swift at the resolved commit and walks every shell
-      # block in the doc. Record outcome persists success/failure back
-      # into .monitor-state for the next cycle.
+          DOC_HASH=""
+          DOC_TEST_RESULT=""
+          DOC_TEST_ERROR=""
+          if [ -f "$MONITOR_DOC_FILE" ]; then
+            . "$MONITOR_DOC_FILE"
+          fi
+          DOC_HASH="$doc_hash"
+          DOC_TEST_RESULT="$doc_test_result"
+          DOC_TEST_ERROR="$doc_test_error"
+
+          CURRENT_DOC_HASH=$(curl -fsSL --retry 3 "$DOC_URL" | sha256sum | cut -d' ' -f1)
+
+          # Doc-triggered runs also pull the LATEST upstream release
+          # (not main). A change to this repo's doc is expected to
+          # track an upstream release of ms-swift; pinning to main
+          # would test stale code on most cycles. We use the same
+          # /releases/latest endpoint as monitor-release so decide's
+          # SHA resolution against UPSTREAM_REPO works uniformly.
+          curl -fsSL --retry 3 \
+            "$GH_API/repos/${{ env.UPSTREAM_REPO }}/releases/latest" -o /tmp/release.json
+          LATEST_RELEASE_TAG=$(jq -r '.tag_name // empty' /tmp/release.json)
+
+          NEED_TO_TEST="false"
+          REF="$LATEST_RELEASE_TAG"
+          REASON=""
+          if [ "$DOC_HASH" != "$CURRENT_DOC_HASH" ]; then
+            DOC_HASH="$CURRENT_DOC_HASH"
+            NEED_TO_TEST="true"
+            REF="$LATEST_RELEASE_TAG"
+            REASON="doc"
+          elif [ "$DOC_TEST_RESULT" = "failure" ]; then
+            NEED_TO_TEST="true"
+            REF="$LATEST_RELEASE_TAG"
+            REASON="doc-retry"
+          fi
+
+          {
+            echo "doc_test_result='$DOC_TEST_RESULT'"
+            echo "doc_test_error='$DOC_TEST_ERROR'"
+            echo "doc_hash='$DOC_HASH'"
+          } > "$LOCAL_DOC_MONITOR"
+          echo "doc monitor: hash=${DOC_HASH} result=${DOC_TEST_RESULT} error=${DOC_TEST_ERROR}"
+
+          {
+            echo "need_to_test='$NEED_TO_TEST'"
+            echo "ref='$REF'"
+            echo "reason='$REASON'"
+          } > "$DECISION_FILE"
+          echo "doc: hash=$CURRENT_DOC_HASH result=$DOC_TEST_RESULT need_to_test=$NEED_TO_TEST reason=$REASON"
+
+      # Picks the higher-priority monitor (release > doc), or for
+      # manual dispatch uses inputs.upstream_ref directly. Only
+      # test_ref crosses the $GITHUB_OUTPUT boundary here - every
+      # other monitor output stays in /tmp/.decision until record-
+      # monitor-outcome sources it.
       - name: Decide which ref to test
         id: decide
         env:
-          # Plumb inputs.* and step outputs through env so bash sees them
-          # as parameter expansions, not as inline literal text - a
-          # crafted ref like 'main $(curl evil)' would otherwise be
-          # command-substituted by bash when used inside double quotes.
-          INPUT_REF:        ${{ inputs.upstream_ref }}
-          RELEASE_CHANGED:  ${{ steps.monitor-release.outputs.changed }}
-          RELEASE_REASON:   ${{ steps.monitor-release.outputs.reason }}
-          RELEASE_REF:      ${{ steps.monitor-release.outputs.ref }}
-          DOC_CHANGED:      ${{ steps.monitor-doc.outputs.changed }}
-          DOC_REASON:       ${{ steps.monitor-doc.outputs.reason }}
-          DOC_REF:          ${{ steps.monitor-doc.outputs.ref }}
-          # github.event_name is GitHub-internal (schedule /
-          # workflow_dispatch), not user-controlled, but env the
-          # value here for consistency with the other branches of
-          # this step - all step inputs and outputs now arrive via
-          # env so bash sees them as parameter expansions, never
-          # as inline literal text.
-          EVENT_NAME:       ${{ github.event_name }}
+          # Route user-controlled values (inputs.*) through env so
+          # bash treats them as parameter expansions, never command
+          # substitutions: a crafted ref like 'main $(curl evil)' is
+          # expanded as a single value, not re-parsed.
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_REF:  ${{ inputs.upstream_ref }}
         run: |
           set -euo pipefail
+          DECISION_FILE="/tmp/.decision"
+
+          NEED_TO_TEST="false"
+          REASON=""
+          REF=""
+
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            # Manual path.
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "reason=manual" >> "$GITHUB_OUTPUT"
-            # Quoted env-var expansion - $INPUT_REF is treated as a
-            # single value, not re-parsed by bash.
-            echo "test_ref=${INPUT_REF:-main}" >> "$GITHUB_OUTPUT"
+            NEED_TO_TEST="true"
+            REASON="manual"
+            REF="${INPUT_REF:-main}"
+            {
+              echo "need_to_test='$NEED_TO_TEST'"
+              echo "ref='$REF'"
+              echo "reason='$REASON'"
+            } > "$DECISION_FILE"
           else
-            # Monitor path. Priority: release > doc. When both signals
-            # changed this cycle, only the release test runs (and the
-            # monitor-doc step skipped itself, leaving doc state
-            # untouched for the next schedule run to pick up).
-            CHANGED="false"
-            REASON=""
-            REF=""
-            if [ "$RELEASE_CHANGED" = "true" ]; then
-              CHANGED="true"
-              REASON="$RELEASE_REASON"
-              REF="$RELEASE_REF"
-            elif [ "$DOC_CHANGED" = "true" ]; then
-              CHANGED="true"
-              REASON="$DOC_REASON"
-              REF="$DOC_REF"
-            fi
-            echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
-            echo "reason=$REASON" >> "$GITHUB_OUTPUT"
-            echo "test_ref=$REF" >> "$GITHUB_OUTPUT"
-            if [ "$CHANGED" != "true" ]; then
-              echo "No upstream changes - skipping install + test"
+            # Default all expected keys before the source so a
+            # missing or partial file (one monitor step didn't run)
+            # leaves every variable defined; otherwise set -u trips
+            # on the later `if` reads.
+            if [ -f $DECISION_FILE ]; then
+              . $DECISION_FILE
             fi
           fi
 
-      - name: Resolve upstream commit SHA
-        id: upstream-commit
-        if: steps.decide.outputs.changed == 'true'
-        env:
-          # test_ref comes from inputs.upstream_ref via decide step;
-          # plumb through env so a malicious ref like
-          # 'main $(curl evil)' is parameter-expanded, not command-
-          # substituted by bash when interpolated into the curl URL.
-          TEST_REF: ${{ steps.decide.outputs.test_ref }}
-        run: |
-          set -euo pipefail
-          SHA=$(curl -fsSL "$GH_API/repos/${{ env.UPSTREAM_REPO }}/commits/$TEST_REF" \
-            | jq -r '.sha // empty')
-          [ -z "$SHA" ] && { echo "failed to resolve $TEST_REF"; exit 1; }
-          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
-          echo "Upstream commit: $SHA"
+          if [ "$need_to_test" = "true" ]; then
+            echo "need_to_test=true" >> "$GITHUB_OUTPUT"
+            echo "test_ref=$ref" >> "$GITHUB_OUTPUT"
+            echo "Monitor fired: reason=$REASON ref=$ref"
+
+            SHA=$(curl -fsSL "$GH_API/repos/${{ env.UPSTREAM_REPO }}/commits/$ref" \
+              | jq -r '.sha // empty')
+            [ -z "$SHA" ] && { echo "failed to resolve $ref"; exit 1; }
+            echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+            echo "Upstream commit: $SHA"
+          else
+            echo "No upstream changes - skipping install + test"
+          fi
 
       - name: Run quick start test
         id: test
-        if: steps.decide.outputs.changed == 'true'
+        if: steps.decide.outputs.need_to_test == 'true'
         env:
-          # Only the three env vars test_quick_start_ascend.py reads
-          # via os.environ. UPSTREAM_REPO, REASON, MONITORED_DOC_URL
-          # were previously declared here too but the test never
-          # touched them - UPSTREAM_REPO and MONITORED_DOC_URL
-          # propagate from jobs.env; REASON is purely diagnostic.
+          # Only the three vars test_quick_start_ascend.py actually
+          # reads; UPSTREAM_REPO / MONITORED_DOC_URL propagate from
+          # jobs.env and REASON is purely diagnostic.
           SWIFT_NPU_E2E:   '1'
           UPSTREAM_REF:    ${{ steps.decide.outputs.test_ref }}
-          UPSTREAM_COMMIT: ${{ steps.upstream-commit.outputs.sha }}
+          UPSTREAM_COMMIT: ${{ steps.decide.outputs.sha }}
         run: |
           set -euo pipefail
           # CANN env only lives in the shell that sourced it; re-source
           # here so swift sft / swift infer see ASCEND_HOME etc.
           export PATH="/usr/local/sbin:$PATH"
           source /usr/local/Ascend/ascend-toolkit/set_env.sh
-          # ----- NPU runtime setup (matches upstream ci_container_test.sh) -----
-          # 1. Block CUDA wheels so a transitive dep can't silently pull
-          #    nvidia-* into an NPU run. The cuda-* / nvidia-* <0 backstop
-          #    stops ms-swift's own requirements/npu.txt or a transitive
-          #    dep from dragging in a CUDA runtime the runner can't reach.
-          #    torch / torch_npu are NOT constrained here: torch_stack_probe
-          #    below decides whether to reuse the image's pre-installed torch
-          #    or install torch==2.9.0 from the cluster cache. Pinning torch
-          #    to a specific version in this file would force pip to redo
-          #    the wheel lookup the same way 064a5d7 / 7136ed1 tried and
-          #    failed when aliyun's pytorch-wheels/cpu/ mirror was reachable
-          #    but the cluster cache was not authoritative.
+          # Block CUDA wheels so a transitive dep can't silently pull
+          # nvidia-* into an NPU run. torch / torch_npu are NOT
+          # constrained here: the torch_stack_probe below decides
+          # whether to reuse the image's pre-installed torch or
+          # install from the cluster cache. Pinning torch here would
+          # force pip to redo the wheel lookup, which 064a5d7 / 7136ed1
+          # tried and failed when aliyun's mirror was reachable but
+          # the cluster cache was not authoritative.
           cat >/tmp/ms_swift_npu_constraints.txt <<'EOF'
           modelscope==1.37.0
           cuda-toolkit<0
@@ -420,33 +374,25 @@ jobs:
           EOF
           export PIP_CONSTRAINT=/tmp/ms_swift_npu_constraints.txt
           export UV_CONSTRAINT=/tmp/ms_swift_npu_constraints.txt
-          # 2. uv handles PEP 517 build deps more reliably than pip and
-          #    the test's setUpClass invokes `uv pip install ...`. The
-          #    internal nginx cache fronts PyPI so this resolves cleanly.
+          # uv handles PEP 517 build deps more reliably than pip and
+          # the test's setUpClass invokes `uv pip install ...`.
           python -m pip install uv
-          # 3. ensure_torch_stack: the pinned CANN 9.1.0 / py3.12 image
-          #    used here (swr.cn-south-1.myhuaweicloud.com/ascendhub/
-          #    cann:9.1.0-910b-ubuntu22.04-py3.12) ships torch 2.9.0
-          #    with torch_npu 2.9.0.post2 pre-installed, so we probe
-          #    first and skip the install when the image's torch stack
-          #    already matches. The fall-through install path is hit
-          #    only if the image is rebuilt without a torch stack or
-          #    someone bumps the CI image to a different torch line -
-          #    in either case we install torch==2.9.0 +
-          #    torch_npu==2.9.0.post2 from the cluster cache and fall
-          #    back to the ascend huaweicloud mirror. We don't pin
-          #    torch here by default (only when the image lacks it)
-          #    because hard-pinning torch==2.9.0+cpu on a workflow
-          #    that doesn't need to reinstall torch tends to trigger
-          #    PyPI simple-page lookups under the +cpu local version
-          #    label, which the cluster cache does not serve.
+          # The pinned CANN 9.1.0 / py3.12 image ships torch 2.9.0 +
+          # torch_npu 2.9.0.post2 pre-installed, so probe first and
+          # skip the install when the image's torch stack matches.
+          # The fall-through path is hit only when the image is rebuilt
+          # without a torch stack or bumped to a different torch line.
+          # We don't pin torch here by default because hard-pinning
+          # torch==2.9.0+cpu on a workflow that doesn't need to
+          # reinstall torch tends to trigger PyPI simple-page lookups
+          # under the +cpu local version label, which the cluster
+          # cache does not serve.
           #
-          #    Note: torch.__version__ surfaces as '2.9.0+cpu' via
-          #    the PEP 440 local version label regardless of the
-          #    underlying device - the '+cpu' here names the libtorch
-          #    build variant, not the runtime compute device. Actual
-          #    NPU compute goes through torch_npu (CANN backend);
-          #    ms-swift moves the model with .to('npu:0').
+          # Note: torch.__version__ surfaces as '2.9.0+cpu' via the
+          # PEP 440 local version label regardless of device - the
+          # '+cpu' names the libtorch build variant, not the runtime.
+          # Actual compute goes through torch_npu (CANN backend);
+          # ms-swift moves the model with .to('npu:0').
           if python -c "
           import torch, torch_npu
           raise SystemExit(0 if torch.__version__.startswith('2.9.0') \
@@ -461,54 +407,68 @@ jobs:
                 --trusted-host cache-service.nginx-pypi-cache.svc.cluster.local \
                 torch==2.9.0 torch_npu==2.9.0.post2
           fi
-          # 4. Pin transformers / peft (matches the doc's <5.0 / <0.19 caps).
           python -m pip install "transformers<5.0" "peft<0.19"
-          # 5. vLLM-Ascend setup removed - vllm-ascend 0.18.0 (and the
-          #    matching 0.22.1rc1 line) both have unresolved dependency
-          #    conflicts in this runner's reachable mirror set (the
-          #    0.18 wheel Requires-Dist pins triton-ascend==3.2.0, but
-          #    the huaweicloud ascend mirror only publishes 3.2.1 /
-          #    3.2.2). Quick-start therefore tests the transformers /
-          #    torch_npu infer backend only; vLLM-Ascend setup is
-          #    covered by NPU-support.md.
-          # The doc owns the source install step (its '## install ms-swift'
-          # block runs git clone + uv pip install -e . for the exact
-          # <UPSTREAM_REF>). After that, run the doc itself as a unittest
-          # - every shell block becomes one or more test cases.
+          # vLLM-Ascend setup removed: vllm-ascend 0.18.0 (and the
+          # matching 0.22.1rc1 line) both have unresolved dep conflicts
+          # in this runner's reachable mirror set - the 0.18 wheel
+          # Requires-Dist pins triton-ascend==3.2.0, but the
+          # huaweicloud ascend mirror only publishes 3.2.1 / 3.2.2.
+          # Quick-start therefore tests the transformers / torch_npu
+          # infer backend only; vLLM-Ascend setup is in NPU-support.md.
+          # The doc owns the source install step (its '## install
+          # ms-swift' block runs git clone + uv pip install -e . for
+          # the exact <UPSTREAM_REF>); we just run the doc itself as
+          # a unittest - every shell block becomes one or more cases.
           cd workflows/projects/ms-swift
           python -m unittest tests.test_quick_start_ascend -v 2>&1
 
+      # ===== Record outcome =====
+      # 'always()' is load-bearing: when the test step itself failed,
+      # this step stamps release_test_result=failure / release_test_error=...
+      # (or the doc_* equivalents) into the merged file under
+      # .monitor-state/. That field is what makes the next schedule run
+      # know to retry - drop it and the retry mechanism silently breaks.
+      # 'schedule' / 'workflow_dispatch' gating keeps manual-dispatch
+      # runs (which lack a "next cycle") from touching the cache.
       - name: Record outcome
-        id: record-outcome
+        id: record-monitor-outcome
         if: |
           always() &&
-          github.event_name == 'schedule' &&
-          steps.decide.outputs.changed == 'true'
+          (
+            github.event_name == 'schedule' ||
+            github.event_name == 'workflow_dispatch'
+          )
         env:
-          # Both values are GitHub-controlled (decide step writes
-          # reason itself; test.conclusion is the GitHub job
-          # conclusion). Neither is user-controlled, so there's
-          # no injection risk - but env keeps the whole workflow
-          # consistent: every step input/output arrives as a
-          # quoted parameter expansion, never as inline literal
-          # text.
-          REASON:     ${{ steps.decide.outputs.reason }}
+          # REASON / REF / TEST_REF come from /tmp/.decision (written
+          # by decide), not from any step's $GITHUB_OUTPUT - that's the
+          # point of the split: monitor outputs only surface here.
           CONCLUSION: ${{ steps.test.conclusion }}
         run: |
           set -euo pipefail
+          DECISION_FILE="/tmp/.decision"
+          LOCAL_RELEASE_MONITOR="/tmp/.release_monitor"
+          LOCAL_DOC_MONITOR="/tmp/.doc_monitor"
+
           STATE_DIR=".monitor-state"
           mkdir -p "$STATE_DIR"
-          # Strip the "-retry" suffix to map back to the base monitor.
-          BASE="${REASON%-retry}"
-          # Map the test step's conclusion to an outcome, written as a
-          # two-line key=value file:
-          #
-          #   result=<success|failure>
-          #   error=<message|none>
-          #
-          # Consumers `source` the file to get $result / $error as shell
-          # variables, then check `$result` for retry decisions and
-          # surface `$error` for the "Last failure:" log line.
+          MONITOR_RELEASE_FILE="$STATE_DIR/.monitor_release"
+          MONITOR_DOC_FILE="$STATE_DIR/.monitor_doc"
+
+          # Default all expected keys before sourcing so a missing /
+          # partial decision file leaves every variable defined;
+          # otherwise set -u trips on the later reads.
+          changed="false"
+          reason=""
+          ref=""
+
+          if [ -f $DECISION_FILE ]; then
+            . $DECISION_FILE
+          fi
+          CHANGED="$changed"
+          REASON="$reason"
+          REF="$ref"
+
+          # ----- Map test conclusion to outcome -----
           case "$CONCLUSION" in
             success)
               RESULT="success"
@@ -531,55 +491,111 @@ jobs:
               ERROR="unknown conclusion (${CONCLUSION})"
               ;;
           esac
+
+          # Source each monitor's runner-local state, basic-update only
+          # the test_* fields on the side that fired (strip "-retry" to
+          # map back to the monitor), then write the merged file back.
+          # If REASON is empty (no monitor fired this cycle) we just
+          # persist the upstream-state vars unchanged.
+
+          release_test_result=""
+          release_test_error=""
+          last_release_id=""
+          if [ -f "$MONITOR_RELEASE_FILE" ]; then
+            . "$MONITOR_RELEASE_FILE"
+          fi
+          if [ -f $LOCAL_RELEASE_MONITOR ]; then
+            . $LOCAL_RELEASE_MONITOR
+          fi
+
+          doc_test_result=""
+          doc_test_error=""
+          doc_hash=""
+          if [ -f "$MONITOR_DOC_FILE" ]; then
+            . "$MONITOR_DOC_FILE"
+          fi
+          if [ -f $LOCAL_DOC_MONITOR ]; then
+            . $LOCAL_DOC_MONITOR
+          fi
+
+          BASE=""
+          if [ -n "$REASON" ]; then
+            BASE="${REASON%-retry}"
+            echo "outcome for ${BASE}: result=${RESULT} error=${ERROR}"
+            if [ "$BASE" = "release" ]; then
+              release_test_result="$RESULT"
+              release_test_error="$ERROR"
+            elif [ "$BASE" = "doc" ]; then
+              doc_test_result="$RESULT"
+              doc_test_error="$ERROR"
+            fi
+          fi
+
+          # ----- Write the merged cache files -----
           {
-            echo "result=${RESULT}"
-            echo "error=${ERROR}"
-          } > "${STATE_DIR}/.${BASE}_outcome"
-          echo "outcome for ${BASE}: result=${RESULT} error=${ERROR}"
+            echo "last_release_id='$last_release_id'"
+            echo "release_test_result='$release_test_result'"
+            echo "release_test_error='$release_test_error'"
+          } > "$MONITOR_RELEASE_FILE"
 
-      - name: Persist monitor state
-        # Runs after record-outcome so the cache entry contains the
-        # truthful outcome of THIS cycle's test. 'always()' guarantees
-        # we still upload even when the test step itself failed (so a
-        # failure flag persists for retry on the next schedule run).
-        # 'schedule' gating keeps manual dispatch from touching the
-        # cache. The whole directory is uploaded in one shot - the
-        # files record-outcome didn't touch are byte-identical to
-        # what cache had, so the upload is a no-op for them.
-        #
-        # Run-id suffix is required: actions/cache refuses to overwrite
-        # an existing entry with the same key, so a static key would
-        # make every Persist after the first a silent no-op (see
-        # Restore monitor state for the matching suffix + restore-keys).
-        if: github.event_name == 'schedule' && always()
-        uses: actions/cache/save@v4
-        with:
-          path: .monitor-state
-          key: monitor-state-ms-swift-${{ github.run_id }}
-          retention-days: 30
+          {
+            echo "doc_hash='$doc_hash'"
+            echo "doc_test_result='$doc_test_result'"
+            echo "doc_test_error='$doc_test_error'"
+          } > "$MONITOR_DOC_FILE"
 
-      # Write result.json. The NPU runner can't reach GitHub's artifact
-      # blob storage (upload-artifact stalls indefinitely), so we
-      # serialize the file into a job output and let publish-results
-      # (ubuntu-latest) do the actual upload.
-      - name: Write result.json
+          # Unified $GITHUB_OUTPUT writes - single source of truth for both
+          # downstream steps in this job and the next job. The 6 monitor
+          # fields ship one-per-line so publish-and-persist can read each
+          # entry independently and rebuild the merged cache file verbatim.
+          if [ -n "$REASON" ]; then
+            echo "reason=$REASON" >> "$GITHUB_OUTPUT"
+          fi
+
+          if [ -f "$MONITOR_RELEASE_FILE" ]; then
+            . "$MONITOR_RELEASE_FILE"
+            {
+              echo "monitor_last_release_id=$last_release_id"
+              echo "monitor_release_test_result=$release_test_result"
+              echo "monitor_release_test_error=$release_test_error"
+            } >> "$GITHUB_OUTPUT"
+          fi
+          if [ -f "$MONITOR_DOC_FILE" ]; then
+            . "$MONITOR_DOC_FILE"
+            {
+              echo "monitor_doc_hash=$doc_hash"
+              echo "monitor_doc_test_result=$doc_test_result"
+              echo "monitor_doc_test_error=$doc_test_error"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      # Write result.json + summarize. Both halves run from the same
+      # `if: always()` guard and read the same upstream step outputs,
+      # so they share one env block. The summary reads back the merged
+      # monitor cache file record-monitor-outcome just wrote so the
+      # 'Last failure' line surfaces for THIS run, not the cycle before.
+      - name: Write result.json + summarize
         id: write-result
         if: always()
         env:
+          # Route upstream step outputs through env so jq / printf
+          # parameter-expand them; values containing shell-meta chars
+          # never get re-parsed by bash.
           TRIGGER:         ${{ github.event_name }}
-          REASON:          ${{ steps.decide.outputs.reason }}
-          TARGET_REPO:     ${{ vars.TARGET_REPO || 'cosdt-ci-test/ms-swift' }}
-          TARGET_REF:      ${{ vars.TARGET_REF || 'main' }}
+          REASON:          ${{ steps.record-monitor-outcome.outputs.reason }}
+          TARGET_REPO:     'modelscope/ms-swift'
+          TARGET_REF:      ${{ steps.decide.outputs.test_ref }}
           IMAGE:           ${{ env.CI_IMAGE }}
           JOB_STATUS:      ${{ job.status }}
+          UPSTREAM_SHA:    ${{ steps.decide.outputs.sha }}
         run: |
           set -euo pipefail
           mkdir -p output
-          # 7 fields: 6 required by schemas/result.schema.json + 'reason'
-          # (which monitor signal fired; derivable from decide.outputs.reason).
-          # Tests-ran is implied by reason non-empty (changed=true); the
-          # exact upstream ref/commit are derivable via the GitHub API
-          # from reason + path; created_at is on the Actions run object.
+
+          # 7 fields: 6 required by schemas/result.schema.json + 'reason'.
+          # Tests-ran is implied by reason non-empty; upstream ref/commit
+          # are derivable from reason + the API; Actions run object
+          # carries created_at.
           jq -n \
             --arg trigger          "$TRIGGER" \
             --arg reason           "$REASON" \
@@ -600,78 +616,63 @@ jobs:
           echo "wrote $(wc -c < output/result.json) bytes:"
           cat output/result.json
           # Ship result.json across jobs via job-level outputs (channel 2).
-          # We do NOT call upload-artifact on this runner - its artifact
-          # blob storage channel is unreachable. The result_json output is
-          # read in the publish-results job below and uploaded there.
-          # jq -c . gives a one-line, expression-safe JSON string.
+          # The NPU runner can't reach GitHub's artifact blob storage,
+          # so upload-artifact lives in publish-and-persist on ubuntu-latest.
           printf 'result_json=%s\n' "$(jq -c . output/result.json)" \
             >> "$GITHUB_OUTPUT"
           {
             printf 'trigger=%s\n'    "$TRIGGER"
-            printf 'reason=%s\n'     "$REASON"
             printf 'job_status=%s\n' "$JOB_STATUS"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Summarize test result
-        if: always()
-        env:
-          # Plumb step outputs through env so echo expansion never
-          # command-substitutes a crafted value.
-          TEST_REF:      ${{ steps.decide.outputs.test_ref }}
-          UPSTREAM_SHA:  ${{ steps.upstream-commit.outputs.sha }}
-          TRIGGER_RSN:   ${{ steps.decide.outputs.reason }}
-        run: |
-          set -euo pipefail
+          # ----- Summarize -----
           echo "============================================================"
           echo "QUICK START TEST SUMMARY"
           echo "  Upstream repo:    ${{ env.UPSTREAM_REPO }}"
-          echo "  Upstream ref:     $TEST_REF"
+          echo "  Upstream ref:     $TARGET_REF"
           echo "  Upstream commit:  $UPSTREAM_SHA"
-          echo "  Trigger reason:   $TRIGGER_RSN"
+          echo "  Trigger reason:   $REASON"
           echo "------------------------------------------------------------"
-          # Surface the failure reason for this run's test, which the
-          # record-outcome step (run earlier in this job) just wrote
-          # to the same outcome file. Reading here means the printed
-          # 'Last failure:' line is for the run the reader is
-          # looking at, not the cycle before it - so a retry reader
-          # sees why *this* run's test failed without having to
-          # cross-reference the previous workflow run.
-          #
-          # The outcome file is a two-line key=value blob
-          # (result / error). Default both before source for
-          # set -u safety: a half-written file from a
-          # container-killed record-outcome might leave $error
-          # unset, and this step reads both $result and $error.
-          OUTCOME_FILE=".monitor-state/.${TRIGGER_RSN%-retry}_outcome"
-          result=""
-          error=""
-          if [ -f "$OUTCOME_FILE" ]; then
+          # Default _r/_e empty so set -u stays safe when the monitor's
+          # outcome file is missing or half-written.
+          STATE_DIR=".monitor-state"
+          MONITOR_RELEASE_FILE="$STATE_DIR/.monitor_release"
+          MONITOR_DOC_FILE="$STATE_DIR/.monitor_doc"
+          case "${REASON%-retry}" in
+            release) OUTCOME_FILE="$MONITOR_RELEASE_FILE" ;;
+            doc)     OUTCOME_FILE="$MONITOR_DOC_FILE" ;;
+            *)       OUTCOME_FILE="" ;;
+          esac
+          _r=""
+          _e=""
+          if [ -n "$OUTCOME_FILE" ] && [ -f "$OUTCOME_FILE" ]; then
             . "$OUTCOME_FILE"
-            if [ "$result" = "failure" ] && [ "$error" != "none" ]; then
-              echo "  Last failure:     $error"
+            if [ "${REASON%-retry}" = "release" ]; then
+              _r="$release_test_result"; _e="$release_test_error"
+            else
+              _r="$doc_test_result"; _e="$doc_test_error"
+            fi
+            echo "reading cache: $OUTCOME_FILE => result=${_r} error=${_e}"
+            if [ "$_r" = "failure" ] && [ "$_e" != "none" ]; then
+              echo "  Last failure:     $_e"
             fi
           fi
           echo "============================================================"
 
-  # Result.json is produced on the NPU runner (where upload-artifact is
-  # unreachable) and shipped via monitor-and-test.outputs.result_json.
-  # This job runs on ubuntu-latest and does the actual upload + schema
-  # validation, which are the only steps that need network egress to
-  # GitHub's artifact blob storage.
-  publish-results:
-    name: publish result.json
+  # The NPU runner can't reach GitHub's blob / cache storage, so
+  # result.json + .monitor-state/ ship as job outputs and this job
+  # does the actual upload + cache save + schema validation here.
+  publish-and-persist:
+    name: publish result.json + persist monitor state
     needs: monitor-and-test
     if: always()
     runs-on: ubuntu-latest
     steps:
-      # Validate result.json against the schema in this repo, so
-      # the publish-results job needs the schemas/ tree to be on
-      # disk. The job runs on ubuntu-latest (not the NPU runner
-      # where the doc test ran) and ships result.json via job
-      # outputs, so it doesn't get the workflows checkout that
-      # comes with monitor-and-test's checkout step.
+      # schemas/result.schema.json lives in this repo, and this job
+      # runs on a fresh ubuntu-latest runner - no workflows checkout
+      # of its own.
       - name: Checkout workflows (provides schemas/result.schema.json)
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           path: workflows
           fetch-depth: 1
@@ -682,11 +683,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p output
-          # Defensive: if result_json came back empty (e.g. all upstream
-          # monitor steps skipped, decide.outputs.changed was false, AND
-          # write-result did not run for some reason) we still want the
-          # publish job to exit cleanly so the workflow conclusion is
-          # driven by monitor-and-test alone.
+          # Empty result_json means upstream skipped - exit cleanly so
+          # the workflow conclusion is driven by monitor-and-test alone.
           if [ -z "$RESULT_JSON" ]; then
             echo "no result_json from monitor-and-test; nothing to publish"
             exit 0
@@ -708,9 +706,74 @@ jobs:
 
       - name: Upload result.json
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: ms-swift-quick-start-${{ github.run_id }}
           path: output/result.json
           if-no-files-found: warn
-          retention-days: 90
+
+      # Persist monitor state. The 6 cache fields arrive as one job output
+      # each (set by record-monitor-outcome); reconstruct the merged files
+      # here on ubuntu-latest, which CAN reach cache blob storage (the
+      # NPU runner could not - hence this split).
+      #
+      # 'always()' is load-bearing: when monitor-and-test failed, the
+      # failure flag written here is what makes the next schedule run
+      # retry; dropping it would break the retry chain.
+      # 'need_to_test == "true"' is the cycle gate: no monitor fired this
+      # cycle means no test ran and nothing new to persist (rewriting
+      # would just re-save the previous cycle's state byte-for-byte
+      # under a new run-id key). The retry chain survives because
+      # failure-flag writes only happen on the test-ran path, which
+      # the gate does NOT exclude.
+      #
+      # Run-id suffix on the cache key: actions/cache refuses to
+      # overwrite an existing entry with the same key, so a static
+      # key would make every save after the first a silent no-op.
+      - name: Restore monitor state to disk
+        if: github.event_name == 'schedule' && needs.monitor-and-test.outputs.need_to_test == 'true'
+        env:
+          monitor_last_release_id:        ${{ needs.monitor-and-test.outputs.monitor_last_release_id }}
+          monitor_release_test_result:    ${{ needs.monitor-and-test.outputs.monitor_release_test_result }}
+          monitor_release_test_error:     ${{ needs.monitor-and-test.outputs.monitor_release_test_error }}
+          monitor_doc_hash:               ${{ needs.monitor-and-test.outputs.monitor_doc_hash }}
+          monitor_doc_test_result:        ${{ needs.monitor-and-test.outputs.monitor_doc_test_result }}
+          monitor_doc_test_error:         ${{ needs.monitor-and-test.outputs.monitor_doc_test_error }}
+        run: |
+          set -euo pipefail
+          STATE_DIR=".monitor-state"
+          mkdir -p "$STATE_DIR"
+          MONITOR_RELEASE_FILE="$STATE_DIR/.monitor_release"
+          MONITOR_DOC_FILE="$STATE_DIR/.monitor_doc"
+          wrote=0
+          # Skip detection: write only when the signal field is non-empty;
+          # test outcome fields default to '' on the producer side, so a
+          # missing output means "absent" not "empty".
+          if [ -n "$monitor_last_release_id" ]; then
+            {
+              echo "last_release_id='$monitor_last_release_id'"
+              echo "release_test_result='$monitor_release_test_result'"
+              echo "release_test_error='$monitor_release_test_error'"
+            } > "$MONITOR_RELEASE_FILE"
+            echo "  wrote $MONITOR_RELEASE_FILE ($(wc -c < "$MONITOR_RELEASE_FILE") bytes)"
+            wrote=$((wrote + 1))
+          fi
+          if [ -n "$monitor_doc_hash" ]; then
+            {
+              echo "doc_hash='$monitor_doc_hash'"
+              echo "doc_test_result='$monitor_doc_test_result'"
+              echo "doc_test_error='$monitor_doc_test_error'"
+            } > "$MONITOR_DOC_FILE"
+            echo "  wrote $MONITOR_DOC_FILE ($(wc -c < "$MONITOR_DOC_FILE") bytes)"
+            wrote=$((wrote + 1))
+          fi
+          if [ "$wrote" -eq 0 ]; then
+            echo "no monitor state from monitor-and-test; nothing to restore"
+          fi
+
+      - name: Persist monitor state to cache
+        if: github.event_name == 'schedule' && needs.monitor-and-test.outputs.need_to_test == 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: .monitor-state
+          key: monitor-state-ms-swift-${{ github.run_id }}

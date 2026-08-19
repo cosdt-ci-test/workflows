@@ -115,10 +115,14 @@ jobs:
         # workflow_dispatch. Re-enable before merging - dispatch
         # touching the cache would clobber the schedule retry chain.
         # if: github.event_name == 'schedule'
+        # No `key:` on purpose - a per-run-id exact key would always
+        # miss, fall through to restore-keys, and waste a lookup.
+        # restore-keys alone is enough: the Persist step below always
+        # writes under the same stable name, so prefix-match there
+        # returns the previous run's state.
         uses: actions/cache/restore@v6
         with:
           path: .monitor-state
-          key: monitor-state-ms-swift-${{ github.run_id }}
           restore-keys: monitor-state-ms-swift-
 
       # Two monitors feed the decide step (release > doc by priority).
@@ -692,6 +696,10 @@ jobs:
         # overwrite cache entries the schedule retry chain depends on.
         # if: github.event_name == 'schedule' && needs.monitor-and-test.outputs.need_to_test == 'true'
         if: needs.monitor-and-test.outputs.need_to_test == 'true'
+        # run-id suffix because actions/cache/save refuses to overwrite
+        # an existing entry with the same key (it errors with
+        # 'Cache already exists'). The next Restore's restore-keys
+        # prefix-match picks this run's entry as the most recent one.
         uses: actions/cache/save@v6
         with:
           path: .monitor-state

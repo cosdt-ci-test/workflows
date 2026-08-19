@@ -580,14 +580,16 @@ jobs:
             } >> "$GITHUB_OUTPUT"
           fi
 
-      # Write result.json + summarize. Both halves run from the same
-      # `if: always()` guard and read the same upstream step outputs,
-      # so they share one env block. The summary reads back the merged
+      # Write result.json + summarize. Gate matches record-monitor-outcome:
+      # dispatch always writes (manual run produces a result); schedule
+      # writes only when need_to_test=true, so a no-signal schedule
+      # cycle never emits target_ref="" (which the schema's
+      # minLength: 1 rejects). The summary reads back the merged
       # monitor cache file record-monitor-outcome just wrote so the
       # 'Last failure' line surfaces for THIS run, not the cycle before.
       - name: Write result and summarize
         id: write-result
-        if: always()
+        if: steps.decide.outputs.need_to_test == 'true'
         env:
           # Route upstream step outputs through env so jq / printf
           # parameter-expand them; values containing shell-meta chars

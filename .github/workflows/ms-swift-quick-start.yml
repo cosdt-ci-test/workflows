@@ -50,12 +50,10 @@ jobs:
       reason:                   ${{ steps.record-monitor-outcome.outputs.reason }}
       job_status:              ${{ steps.write-result.outputs.job_status }}
       need_to_test:            ${{ steps.decide.outputs.need_to_test }}
-      monitor_last_release_id:     ${{ steps.record-monitor-outcome.outputs.monitor_last_release_id }}
-      monitor_release_test_result: ${{ steps.record-monitor-outcome.outputs.monitor_release_test_result }}
-      monitor_release_test_error:  ${{ steps.record-monitor-outcome.outputs.monitor_release_test_error }}
-      monitor_doc_hash:            ${{ steps.record-monitor-outcome.outputs.monitor_doc_hash }}
-      monitor_doc_test_result:     ${{ steps.record-monitor-outcome.outputs.monitor_doc_test_result }}
-      monitor_doc_test_error:      ${{ steps.record-monitor-outcome.outputs.monitor_doc_test_error }}
+      monitor_last_release_id: ${{ steps.record-monitor-outcome.outputs.monitor_last_release_id }}
+      monitor_doc_hash:        ${{ steps.record-monitor-outcome.outputs.monitor_doc_hash }}
+      monitor_test_result:     ${{ steps.record-monitor-outcome.outputs.monitor_test_result }}
+      monitor_test_error:      ${{ steps.record-monitor-outcome.outputs.monitor_test_error }}
     defaults:
       run:
         shell: bash
@@ -113,7 +111,7 @@ jobs:
       # to restore-keys.
       - name: Restore monitor state
         id: cache-restore
-        # DEBUG: gate disabled to simulate the schedule-only path via
+        # DEBUG: gate disabled to simulate schedule-only path via
         # workflow_dispatch. Re-enable before merging - dispatch
         # touching the cache would clobber the schedule retry chain.
         # if: github.event_name == 'schedule'
@@ -130,38 +128,46 @@ jobs:
       # (read by decide). A failure outcome from a previous cycle
       # forces a retry even if the signal hasn't changed; a success
       # from record-monitor-outcome clears that flag.
-      - name: Monitor upstream latest release id
-        id: monitor-release
+      - name: Monitor upstream release and doc
+        id: monitor
         # DEBUG: gate disabled to simulate schedule-only path. Re-enable before merging.
         # if: github.event_name == 'schedule'
+        env:
+          DOC_URL: ${{ env.MONITORED_DOC_URL }}
         run: |
           set -euo pipefail
           STATE_DIR=".monitor-state"
           mkdir -p "$STATE_DIR"
           DECISION_FILE="/tmp/.decision"
-          LOCAL_RELEASE_MONITOR="/tmp/.release_monitor"
-          # Defined once and reused below so this step never hard-
-          # codes the basename alongside $STATE_DIR (a typo that's
-          # silent because both sides would still match).
-          MONITOR_RELEASE_FILE="$STATE_DIR/.monitor_release"
+          LOCAL_MONITOR="/tmp/.monitor"
+          # Single merged cache file. Release and doc signals travel
+          # together: they're sourced / written as one unit and the
+          # decide step sees whichever side fired via REASON.
+          MONITOR_FILE="$STATE_DIR/.monitor"
 
-          # Default the lowercase vars (matching /tmp/.release_monitor's
-          # file contents and the `if` reads below) before the source
-          # so set -u is safe when the cache is cold (first-ever run)
-          # and MONITOR_RELEASE_FILE doesn't exist yet.
+          # Default all four lowercase vars (matching the file's vars
+          # and the `if` reads below) before sourcing so set -u is
+          # safe when the cache is cold and MONITOR_FILE doesn't
+          # exist yet. test_result / test_error cover both release
+          # and doc signals - we don't need to track which side
+          # failed because a retry re-runs the same upstream commit
+          # either way, and the side that triggered the next cycle
+          # is in REASON.
           last_release_id=""
-          release_test_result=""
-          release_test_error=""
-          if [ -f "$MONITOR_RELEASE_FILE" ]; then
-            echo "MONITOR_RELEASE_FILE exist"
-            . "$MONITOR_RELEASE_FILE"
+          doc_hash=""
+          test_result=""
+          test_error=""
+          if [ -f "$MONITOR_FILE" ]; then
+            echo "MONITOR_FILE exist"
+            . "$MONITOR_FILE"
           fi
-          
           LAST_RELEASE_ID="$last_release_id"
-          RELEASE_TEST_RESULT="$release_test_result"
-          RELEASE_TEST_ERROR="$release_test_error"
-          echo "release monitor: cache: last_release_id=${LAST_RELEASE_ID} result=${RELEASE_TEST_RESULT} error=${RELEASE_TEST_ERROR}"
+          DOC_HASH="$doc_hash"
+          TEST_RESULT="$test_result"
+          TEST_ERROR="$test_error"
+          echo "monitor cache: release(id=$LAST_RELEASE_ID) doc(hash=$DOC_HASH) test(result=$TEST_RESULT error=$TEST_ERROR)"
 
+          # ----- release signal -----
           curl -fsSL --retry 3 \
             "$GH_API/repos/${{ env.UPSTREAM_REPO }}/releases/latest" -o /tmp/release.json
           CURRENT_RELEASE_ID=$(jq -r '.id // empty' /tmp/release.json)
@@ -170,109 +176,53 @@ jobs:
           NEED_TO_TEST="false"
           REF=""
           REASON=""
-          SKIP_MONITOR_DOC="false"
+          SKIP_DOC="false"
           if [ -n "$CURRENT_RELEASE_ID" ] && [ "$LAST_RELEASE_ID" != "$CURRENT_RELEASE_ID" ]; then
             LAST_RELEASE_ID="$CURRENT_RELEASE_ID"
             NEED_TO_TEST="true"
             REF="$CURRENT_RELEASE_TAG"
             REASON="release"
-            SKIP_MONITOR_DOC="true"
-          elif [ "$RELEASE_TEST_RESULT" = "failure" ]; then
-            NEED_TO_TEST="true"
-            REF="$CURRENT_RELEASE_TAG"
-            REASON="release-retry"
-            SKIP_MONITOR_DOC="true"
+            SKIP_DOC="true"
           fi
 
-          echo "skip_monitor_doc=$SKIP_MONITOR_DOC" >> "$GITHUB_OUTPUT"
-          echo "monitor_release work and skip_monitor_doc=true"
+          # ----- doc signal (only if release didn't fire) -----
+          if [ "$SKIP_DOC" = "false" ]; then
+            CURRENT_DOC_HASH=$(curl -fsSL --retry 3 "$DOC_URL" | sha256sum | cut -d' ' -f1)
+            if [ "$DOC_HASH" != "$CURRENT_DOC_HASH" ]; then
+              DOC_HASH="$CURRENT_DOC_HASH"
+              NEED_TO_TEST="true"
+              REF="$CURRENT_RELEASE_TAG"
+              REASON="doc"
+            fi
+          fi
+
+          # ----- retry signal (lowest priority) -----
+          # Triggered when neither release nor doc signal changed but
+          # the previous cycle's outcome was failure. REASON stays
+          # 'release' / 'doc' / empty above; this only sets 'retry'.
+          if [ "$NEED_TO_TEST" = "false" ] && [ "$TEST_RESULT" = "failure" ]; then
+            NEED_TO_TEST="true"
+            REF="$CURRENT_RELEASE_TAG"
+            REASON="retry"
+          fi
 
           # Values are single-quoted so literals like 'none' and any
           # shell-meta chars round-trip safely when record-monitor-
           # outcome sources this file via `.`.
           {
-            echo "release_test_result='$RELEASE_TEST_RESULT'"
-            echo "release_test_error='$RELEASE_TEST_ERROR'"
             echo "last_release_id='$LAST_RELEASE_ID'"
-          } > "$LOCAL_RELEASE_MONITOR"
-          echo "release monitor: last_release_id=${LAST_RELEASE_ID} result=${RELEASE_TEST_RESULT} error=${RELEASE_TEST_ERROR}"
-
-          {
-            echo "need_to_test='$NEED_TO_TEST'"
-            echo "ref='$REF'"
-            echo "reason='$REASON'"
-          } > "$DECISION_FILE"
-          echo "release monitor: id=$CURRENT_RELEASE_ID tag=$CURRENT_RELEASE_TAG result=$RELEASE_TEST_RESULT need_to_test=$NEED_TO_TEST reason=$REASON"
-
-      - name: Monitor doc hash
-        id: monitor-doc
-        # DEBUG: schedule half of gate disabled to simulate schedule-only path.
-        # Re-enable both before merging.
-        # if: github.event_name == 'schedule' && steps.monitor-release.outputs.skip_monitor_doc == 'false'
-        if: steps.monitor-release.outputs.skip_monitor_doc == 'false'
-        env:
-          DOC_URL: ${{ env.MONITORED_DOC_URL }}
-        run: |
-          set -euo pipefail
-          STATE_DIR=".monitor-state"
-          DECISION_FILE="/tmp/.decision"
-          LOCAL_DOC_MONITOR="/tmp/.doc_monitor"
-          MONITOR_DOC_FILE="$STATE_DIR/.monitor_doc"
-
-          # Default the lowercase vars (matching /tmp/.doc_monitor's
-          # file contents and the `if` reads below) before the source
-          # so set -u is safe when the cache is cold.
-          doc_hash=""
-          doc_test_result=""
-          doc_test_error=""
-          if [ -f "$MONITOR_DOC_FILE" ]; then
-            echo "MONITOR_DOC_FILE exist"
-            . "$MONITOR_DOC_FILE"
-          fi
-          DOC_HASH="$doc_hash"
-          DOC_TEST_RESULT="$doc_test_result"
-          DOC_TEST_ERROR="$doc_test_error"
-          echo "doc monitor: cache: hash=${DOC_HASH} result=${DOC_TEST_RESULT} error=${DOC_TEST_ERROR}"
-
-          CURRENT_DOC_HASH=$(curl -fsSL --retry 3 "$DOC_URL" | sha256sum | cut -d' ' -f1)
-
-          # Doc-triggered runs also pull the LATEST upstream release
-          # (not main). A change to this repo's doc is expected to
-          # track an upstream release of ms-swift; pinning to main
-          # would test stale code on most cycles. We use the same
-          # /releases/latest endpoint as monitor-release so decide's
-          # SHA resolution against UPSTREAM_REPO works uniformly.
-          curl -fsSL --retry 3 \
-            "$GH_API/repos/${{ env.UPSTREAM_REPO }}/releases/latest" -o /tmp/release.json
-          LATEST_RELEASE_TAG=$(jq -r '.tag_name // empty' /tmp/release.json)
-
-          NEED_TO_TEST="false"
-          REF="$LATEST_RELEASE_TAG"
-          REASON=""
-          if [ "$DOC_HASH" != "$CURRENT_DOC_HASH" ]; then
-            DOC_HASH="$CURRENT_DOC_HASH"
-            NEED_TO_TEST="true"
-            REF="$LATEST_RELEASE_TAG"
-            REASON="doc"
-          elif [ "$DOC_TEST_RESULT" = "failure" ]; then
-            NEED_TO_TEST="true"
-            REF="$LATEST_RELEASE_TAG"
-            REASON="doc-retry"
-          fi
-
-          {
-            echo "doc_test_result='$DOC_TEST_RESULT'"
-            echo "doc_test_error='$DOC_TEST_ERROR'"
             echo "doc_hash='$DOC_HASH'"
-          } > "$LOCAL_DOC_MONITOR"
-          echo "doc monitor: hash=${DOC_HASH} result=${DOC_TEST_RESULT} error=${DOC_TEST_ERROR}"
+            echo "test_result='$TEST_RESULT'"
+            echo "test_error='$TEST_ERROR'"
+          } > "$LOCAL_MONITOR"
+          echo "monitor state: release(id=$LAST_RELEASE_ID) doc(hash=$DOC_HASH) test(result=$TEST_RESULT error=$TEST_ERROR)"
 
           {
             echo "need_to_test='$NEED_TO_TEST'"
             echo "ref='$REF'"
             echo "reason='$REASON'"
           } > "$DECISION_FILE"
-          echo "doc: hash=$CURRENT_DOC_HASH result=$DOC_TEST_RESULT need_to_test=$NEED_TO_TEST reason=$REASON"
+          echo "monitor decision: release_tag=$REF need_to_test=$NEED_TO_TEST reason=$REASON"
 
       # Picks the higher-priority monitor (release > doc), or for
       # manual dispatch uses inputs.upstream_ref directly. Only
@@ -471,13 +421,11 @@ jobs:
         run: |
           set -euo pipefail
           DECISION_FILE="/tmp/.decision"
-          LOCAL_RELEASE_MONITOR="/tmp/.release_monitor"
-          LOCAL_DOC_MONITOR="/tmp/.doc_monitor"
+          LOCAL_MONITOR="/tmp/.monitor"
 
           STATE_DIR=".monitor-state"
           mkdir -p "$STATE_DIR"
-          MONITOR_RELEASE_FILE="$STATE_DIR/.monitor_release"
-          MONITOR_DOC_FILE="$STATE_DIR/.monitor_doc"
+          MONITOR_FILE="$STATE_DIR/.monitor"
 
           # Default all expected keys before sourcing so a missing /
           # partial decision file leaves every variable defined;
@@ -494,7 +442,6 @@ jobs:
           REF="$ref"
 
           # ----- Map test conclusion to outcome -----
-          echo "CONCLUSIONL: $CONCLUSION"
           case "$CONCLUSION" in
             success)
               RESULT="success"
@@ -518,79 +465,48 @@ jobs:
               ;;
           esac
 
-          # Source each monitor's runner-local state, basic-update only
-          # the test_* fields on the side that fired (strip "-retry" to
-          # map back to the monitor), then write the merged file back.
-          # If REASON is empty (no monitor fired this cycle) we just
-          # persist the upstream-state vars unchanged.
+          # Source the merged monitor file (cache + /tmp/.monitor), then
+          # update test_result / test_error for any cycle that fired
+          # (REASON non-empty - 'release' / 'doc' / 'retry'). A retry
+          # doesn't need to know which side previously failed because
+          # the next cycle re-tests the same upstream commit either
+          # way; the new RESULT/ERROR overwrites the failure flag.
+          # If REASON is empty we leave test_result / test_error
+          # unchanged so a still-pending failure keeps triggering a
+          # retry next cycle.
 
-          release_test_result=""
-          release_test_error=""
           last_release_id=""
-          if [ -f "$MONITOR_RELEASE_FILE" ]; then
-            . "$MONITOR_RELEASE_FILE"
-          fi
-          if [ -f $LOCAL_RELEASE_MONITOR ]; then
-            . $LOCAL_RELEASE_MONITOR
-          fi
-
-          doc_test_result=""
-          doc_test_error=""
           doc_hash=""
-          if [ -f "$MONITOR_DOC_FILE" ]; then
-            . "$MONITOR_DOC_FILE"
+          test_result=""
+          test_error=""
+          if [ -f "$MONITOR_FILE" ]; then
+            . "$MONITOR_FILE"
           fi
-          if [ -f $LOCAL_DOC_MONITOR ]; then
-            . $LOCAL_DOC_MONITOR
-          fi
-
-          BASE=""
-          if [ -n "$REASON" ]; then
-            BASE="${REASON%-retry}"
-            echo "outcome for ${BASE}: result=${RESULT} error=${ERROR}"
-            if [ "$BASE" = "release" ]; then
-              release_test_result="$RESULT"
-              release_test_error="$ERROR"
-            elif [ "$BASE" = "doc" ]; then
-              doc_test_result="$RESULT"
-              doc_test_error="$ERROR"
-            fi
+          if [ -f $LOCAL_MONITOR ]; then
+            . $LOCAL_MONITOR
           fi
 
-          # ----- Write the merged cache files -----
+          echo "outcome for ${REASON}: result=${RESULT} error=${ERROR}"
+          test_result="$RESULT"
+          test_error="$ERROR"
+
+          # ----- Write the merged cache file -----
           {
             echo "last_release_id='$last_release_id'"
-            echo "release_test_result='$release_test_result'"
-            echo "release_test_error='$release_test_error'"
-          } > "$MONITOR_RELEASE_FILE"
-
-          {
             echo "doc_hash='$doc_hash'"
-            echo "doc_test_result='$doc_test_result'"
-            echo "doc_test_error='$doc_test_error'"
-          } > "$MONITOR_DOC_FILE"
+            echo "test_result='$test_result'"
+            echo "test_error='$test_error'"
+          } > "$MONITOR_FILE"
 
-          # Unified $GITHUB_OUTPUT writes - single source of truth for both
-          # downstream steps in this job and the next job. The 6 monitor
-          # fields ship one-per-line so publish-and-persist can read each
-          # entry independently and rebuild the merged cache file verbatim.
-          if [ -n "$REASON" ]; then
-            echo "reason=$REASON" >> "$GITHUB_OUTPUT"
-          fi
+          echo "reason=$REASON" >> "$GITHUB_OUTPUT"
 
           {
             echo "monitor_last_release_id=$last_release_id"
-            echo "monitor_release_test_result=$release_test_result"
-            echo "monitor_release_test_error=$release_test_error"
-          } >> "$GITHUB_OUTPUT"
-          echo "shipped release monitor state: id=$last_release_id result=$release_test_result error=$release_test_error"
-
-          {
             echo "monitor_doc_hash=$doc_hash"
-            echo "monitor_doc_test_result=$doc_test_result"
-            echo "monitor_doc_test_error=$doc_test_error"
+            echo "monitor_test_result=$test_result"
+            echo "monitor_test_error=$test_error"
           } >> "$GITHUB_OUTPUT"
-          echo "shipped doc monitor state: hash=$doc_hash result=$doc_test_result error=$doc_test_error"
+          echo "shipped monitor state: release(id=$last_release_id) doc(hash=$doc_hash) test(result=$test_result error=$test_error)"
 
       # Write result.json + summarize. Gate matches record-monitor-outcome:
       # dispatch always writes (manual run produces a result); schedule
@@ -658,26 +574,18 @@ jobs:
           echo "  Upstream commit:  $UPSTREAM_SHA"
           echo "  Trigger reason:   $REASON"
           echo "------------------------------------------------------------"
-          # Default _r/_e empty so set -u stays safe when the monitor's
-          # outcome file is missing or half-written.
+          # Default _r/_e empty so set -u stays safe when the monitor
+          # file is missing or half-written. test_result / test_error
+          # cover both release and doc (single shared flag), so we
+          # read them directly - no REASON-based dispatch needed.
           STATE_DIR=".monitor-state"
-          MONITOR_RELEASE_FILE="$STATE_DIR/.monitor_release"
-          MONITOR_DOC_FILE="$STATE_DIR/.monitor_doc"
-          case "${REASON%-retry}" in
-            release) OUTCOME_FILE="$MONITOR_RELEASE_FILE" ;;
-            doc)     OUTCOME_FILE="$MONITOR_DOC_FILE" ;;
-            *)       OUTCOME_FILE="" ;;
-          esac
+          MONITOR_FILE="$STATE_DIR/.monitor"
           _r=""
           _e=""
-          if [ -n "$OUTCOME_FILE" ] && [ -f "$OUTCOME_FILE" ]; then
-            . "$OUTCOME_FILE"
-            if [ "${REASON%-retry}" = "release" ]; then
-              _r="$release_test_result"; _e="$release_test_error"
-            else
-              _r="$doc_test_result"; _e="$doc_test_error"
-            fi
-            echo "reading cache: $OUTCOME_FILE => result=${_r} error=${_e}"
+          if [ -f "$MONITOR_FILE" ]; then
+            . "$MONITOR_FILE"
+            _r="$test_result"; _e="$test_error"
+            echo "reading cache: $MONITOR_FILE => result=${_r} error=${_e}"
             if [ "$_r" = "failure" ] && [ "$_e" != "none" ]; then
               echo "  Last failure:     $_e"
             fi
@@ -761,45 +669,23 @@ jobs:
         # if: github.event_name == 'schedule' && needs.monitor-and-test.outputs.need_to_test == 'true'
         if: needs.monitor-and-test.outputs.need_to_test == 'true'
         env:
-          monitor_last_release_id:        ${{ needs.monitor-and-test.outputs.monitor_last_release_id }}
-          monitor_release_test_result:    ${{ needs.monitor-and-test.outputs.monitor_release_test_result }}
-          monitor_release_test_error:     ${{ needs.monitor-and-test.outputs.monitor_release_test_error }}
-          monitor_doc_hash:               ${{ needs.monitor-and-test.outputs.monitor_doc_hash }}
-          monitor_doc_test_result:        ${{ needs.monitor-and-test.outputs.monitor_doc_test_result }}
-          monitor_doc_test_error:         ${{ needs.monitor-and-test.outputs.monitor_doc_test_error }}
+          monitor_last_release_id: ${{ needs.monitor-and-test.outputs.monitor_last_release_id }}
+          monitor_doc_hash:        ${{ needs.monitor-and-test.outputs.monitor_doc_hash }}
+          monitor_test_result:     ${{ needs.monitor-and-test.outputs.monitor_test_result }}
+          monitor_test_error:      ${{ needs.monitor-and-test.outputs.monitor_test_error }}
         run: |
           set -euo pipefail
           STATE_DIR=".monitor-state"
           mkdir -p "$STATE_DIR"
-          MONITOR_RELEASE_FILE="$STATE_DIR/.monitor_release"
-          MONITOR_DOC_FILE="$STATE_DIR/.monitor_doc"
-          wrote=0
-          # Skip detection: write only when the signal field is non-empty;
-          # test outcome fields default to '' on the producer side, so a
-          # missing output means "absent" not "empty".
-          if [ -n "$monitor_last_release_id" ]; then
-            {
-              echo "last_release_id='$monitor_last_release_id'"
-              echo "release_test_result='$monitor_release_test_result'"
-              echo "release_test_error='$monitor_release_test_error'"
-            } > "$MONITOR_RELEASE_FILE"
-            echo "  wrote $MONITOR_RELEASE_FILE (from monitor-and-test outputs):"
-            cat "$MONITOR_RELEASE_FILE"
-            wrote=$((wrote + 1))
-          fi
-          if [ -n "$monitor_doc_hash" ]; then
-            {
-              echo "doc_hash='$monitor_doc_hash'"
-              echo "doc_test_result='$monitor_doc_test_result'"
-              echo "doc_test_error='$monitor_doc_test_error'"
-            } > "$MONITOR_DOC_FILE"
-            echo "  wrote $MONITOR_DOC_FILE (from monitor-and-test outputs):"
-            cat "$MONITOR_DOC_FILE"
-            wrote=$((wrote + 1))
-          fi
-          if [ "$wrote" -eq 0 ]; then
-            echo "no monitor state from monitor-and-test; nothing to restore"
-          fi
+          MONITOR_FILE="$STATE_DIR/.monitor"
+          {
+            echo "last_release_id='$monitor_last_release_id'"
+            echo "doc_hash='$monitor_doc_hash'"
+            echo "test_result='$monitor_test_result'"
+            echo "test_error='$monitor_test_error'"
+          } > "$MONITOR_FILE"
+          echo "  wrote $MONITOR_FILE (from monitor-and-test outputs):"
+          cat "$MONITOR_FILE"
 
       - name: Persist monitor state to cache
         # DEBUG: schedule half of gate disabled to simulate schedule-only

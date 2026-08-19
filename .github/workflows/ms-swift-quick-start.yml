@@ -117,7 +117,7 @@ jobs:
         # if: github.event_name == 'schedule'
         uses: actions/cache/restore@v6
         with:
-          path: .monitor-state
+          path: ${{ github.workspace }}/.monitor-state
           key: monitor-state-ms-swift-${{ github.run_id }}
           restore-keys: |
             monitor-state-ms-swift-
@@ -136,7 +136,7 @@ jobs:
           DOC_URL: ${{ env.MONITORED_DOC_URL }}
         run: |
           set -euo pipefail
-          STATE_DIR=".monitor-state"
+          STATE_DIR="$GITHUB_WORKSPACE/.monitor-state"
           mkdir -p "$STATE_DIR"
           DECISION_FILE="/tmp/.decision"
           LOCAL_MONITOR="/tmp/.monitor"
@@ -423,7 +423,7 @@ jobs:
           DECISION_FILE="/tmp/.decision"
           LOCAL_MONITOR="/tmp/.monitor"
 
-          STATE_DIR=".monitor-state"
+          STATE_DIR="$GITHUB_WORKSPACE/.monitor-state"
           mkdir -p "$STATE_DIR"
           MONITOR_FILE="$STATE_DIR/.monitor"
 
@@ -578,7 +578,7 @@ jobs:
           # file is missing or half-written. test_result / test_error
           # cover both release and doc (single shared flag), so we
           # read them directly - no REASON-based dispatch needed.
-          STATE_DIR=".monitor-state"
+          STATE_DIR="$GITHUB_WORKSPACE/.monitor-state"
           MONITOR_FILE="$STATE_DIR/.monitor"
           _r=""
           _e=""
@@ -675,7 +675,7 @@ jobs:
           monitor_test_error:      ${{ needs.monitor-and-test.outputs.monitor_test_error }}
         run: |
           set -euo pipefail
-          STATE_DIR=".monitor-state"
+          STATE_DIR="$GITHUB_WORKSPACE/.monitor-state"
           mkdir -p "$STATE_DIR"
           MONITOR_FILE="$STATE_DIR/.monitor"
           {
@@ -695,5 +695,5 @@ jobs:
         if: needs.monitor-and-test.outputs.need_to_test == 'true'
         uses: actions/cache/save@v6
         with:
-          path: .monitor-state
+          path: ${{ github.workspace }}/.monitor-state
           key: monitor-state-ms-swift-${{ github.run_id }}

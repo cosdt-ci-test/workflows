@@ -1,0 +1,40 @@
+version: 1
+scan:
+  root: examples
+  unit: directories
+  marker: CMakeLists.txt
+  max_depth: 1
+supported:
+  - path: examples/simple
+    profile: cann
+    runner: linux-aarch64-a2-1
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    exec: build/bin/llama-simple
+    overlay_args:
+      - -m ${LLAMA_CI_MODEL}
+      - -n 16
+      - -ngl 99
+    timeout_minutes: 60
+unsupported:
+  - examples/batched
+  - examples/convert-llama2c-to-ggml
+  - examples/debug
+  - examples/diffusion
+  - examples/embedding
+  - examples/eval-callback
+  - examples/gen-docs
+  - examples/gguf
+  - examples/gguf-hash
+  - examples/idle
+  - examples/lookahead
+  - examples/lookup
+  - examples/parallel
+  - examples/passkey
+  - examples/retrieval
+  - examples/simple-chat
+  - examples/simple-cmake-pkg
+  - examples/speculative
+  - examples/speculative-simple
+  - examples/sycl
+  - examples/training

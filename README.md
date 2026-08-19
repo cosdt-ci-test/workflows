@@ -2,7 +2,7 @@
 
 workflows的开发、测试仓。被看护的项目各自有一条 example 流水线和 一条 quick-start 流水线；项目专属的清单、fixture 放在 `projects/<项目名>/`。
 
-当前只有 [ms-swift](projects/ms-swift/) 一个已接入项目，作为后续项目的样板。设计说明见 [docs/guarding-examples.md](docs/guarding-examples.md)。
+已接入 [ms-swift](projects/ms-swift/)（样板）和 [llama.cpp](projects/llama.cpp/)（`examples/simple`，轮询未开）。设计说明见 [docs/guarding-examples.md](docs/guarding-examples.md)。
 
 ## 目录
 
@@ -26,7 +26,7 @@ projects/<project>/                  # 该项目的清单、fixture、专用脚�
 2. 参考 [templates/project-examples.yml](templates/project-examples.yml)，完成 `.github/workflows/<project>-examples.yml`、`.github/workflows/<project>-quick-start.yml`。触发靠流水线里的 monitor job 定时轮询上游（见设计文档「要求 2」），不需要在上游或其他仓库部署任何东西。
 3. 需要看护 Quick Start 文档时，请参考 [templates/project-quick-start.yml](templates/project-quick-start.yml)。
 4. 在 `projects.yaml` 注册该项目。
-5. 建 `projects/<project>/` 目录。用 `scripts/bootstrap_manifest.py --target-root <checkout> --output projects/<project>/examples_manifest.yaml --supported <path>` 生成清单（扫描目录、扩展名可用 `--scan-root` / `--include-extension` 调整），再手工补全 supported 条目的 profile / runner / npu_devices / image / timeout_minutes（必填：example 流水线按这些字段调度 setup 例程、runner、卡、容器镜像和超时；overlay_args 可选，需要参数覆盖时才写）。supported 为空时流水线只做清单比对，不跑 example。
+5. 建 `projects/<project>/` 目录。用 `scripts/bootstrap_manifest.py --target-root <checkout> --output projects/<project>/examples_manifest.yaml --supported <path>` 生成清单（扫描目录、扩展名可用 `--scan-root` / `--include-extension` 调整；C++ 目录型 example 加 `--unit directories`），再手工补全 supported 条目的 profile / runner / npu_devices / image / timeout_minutes（必填：example 流水线按这些字段调度 setup 例程、runner、卡、容器镜像和超时；overlay_args 可选；path 不是启动文件时再写 exec）。supported 为空时流水线只做清单比对，不跑 example。
 6. 按 [docs/guarding-examples.md](docs/guarding-examples.md)「项目运行脚本契约」提供 `projects/<project>/scripts/` 下的 `setup_example.sh` 和 `run_example.sh`。
 7. 按 [docs/artifacts.md](docs/artifacts.md) 确认 artifact 名称和 `result.json` 字段。
 

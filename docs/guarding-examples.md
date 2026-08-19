@@ -66,10 +66,11 @@
   - `CI_OUTPUT_DIR`：训练/运行输出必须写到这个目录；
   - `ASCEND_RT_VISIBLE_DEVICES`：清单条目的 `npu_devices`；
   - `OVERLAY_ARGS`：清单条目 `overlay_args` 的 JSON 数组（条目没写时为 `[]`）。脚本必须能处理空数组。
+  - `EXEC`：清单条目的 `exec`（条目没写时为空）。写了就启动这个相对目标仓根的文件，再拼 `overlay_args`；没写就把 `path` 当脚本跑。
 - 退出码即结果：非 0 判红。不比对 loss 等数值。
 - 红线：只允许修改 CI 工作区里的目标仓副本（例如给 example 追加 `"$@"` 透传参数），绝不 `git add` / `commit` / `push`，绝不向目标仓远端发起任何写操作。
 
-`overlay_args` 是把 example 压到 CI 规模的参数覆盖，写在清单 supported 条目上，可选。每一项是一个或多个命令行参数，支持 shell 引号、`$VAR` / `${VAR}` 环境变量展开（常用 `${FIXTURE_DIR}`、`${CI_OUTPUT_DIR}`）。把 flag 和值写在同一项里（例如 `--max_length 512`），不要把裸数字单独成项，否则 YAML 会收成整数、schema 校验会失败。参考 `projects/ms-swift/examples_manifest.yaml` 里那条 supported。
+`overlay_args` 是把 example 压到 CI 规模的参数覆盖，写在清单 supported 条目上，可选。每一项是一个或多个命令行参数，支持 shell 引号、`$VAR` / `${VAR}` 环境变量展开（常用 `${FIXTURE_DIR}`、`${CI_OUTPUT_DIR}`）。把 flag 和值写在同一项里（例如 `--max_length 512`），不要把裸数字单独成项，否则 YAML 会收成整数、schema 校验会失败。参考 `projects/ms-swift/examples_manifest.yaml` 里那条 supported。`path` 可以是文件或目录；目录本身通常不能执行，这时用可选字段 `exec` 写出编译产物（例如 `build/bin/llama-simple`），`overlay_args` 拼在这次启动后面。
 
 注意：example 脚本内部命令级内联的环境变量（如 ms-swift 那条 example 里的 `ASCEND_RT_VISIBLE_DEVICES=0,1`）优先级高于 workflow 导出的值，`overlay_args` 也覆盖不了它。清单 `npu_devices` 必须与 example 内联值一致，改卡时要连 example 一起改。
 
@@ -91,7 +92,7 @@ monitor 状态存在 `.monitor-state/` 目录，用 actions/cache 持久化（�
 
 机制是「清单 + 差集」：
 
-1. 初始化清单。用 `scripts/bootstrap_manifest.py` 扫描目标仓 examples/ 下的 .sh / .py / .yaml（扫描根目录和扩展名可用 `--scan-root` / `--include-extension` 调整，记录在清单的 scan 段，检查脚本按它执行），生成 examples_manifest.yaml。你确认能在 CI 跑通的 example 列入 supported——supported 条目必须写全 path、profile、runner、npu_devices、image、timeout_minutes（overlay_args 可选，需要参数覆盖时才写）；其余全部自动写入 unsupported。`profile` 命名该 example 的环境准备例程，由项目的 `setup_example.sh` 解释；容器卡挂载由 `npu_devices` 派生，加一条 supported 只改清单（和必要时的 overlay_args / setup 分支），不改 workflow。
+1. 初始化清单。用 `scripts/bootstrap_manifest.py` 扫描目标仓 examples/。默认按文件扫 `.sh` / `.py` / `.yaml`（`--scan-root` / `--include-extension` 可调）。C++ 这类「一条 example 是一个子目录」的项目用 `--unit directories`（可再加 `--marker` / `--max-depth`，默认只要目录里有 `CMakeLists.txt`、只认一层子目录）。扫描规则记在清单的 scan 段，检查脚本按它执行。你确认能在 CI 跑通的 example 列入 supported——supported 条目必须写全 path、profile、runner、npu_devices、image、timeout_minutes（overlay_args 可选；path 不是启动文件时再写 exec）；其余全部自动写入 unsupported。`profile` 命名该 example 的环境准备例程，由项目的 `setup_example.sh` 解释；容器卡挂载由 `npu_devices` 派生，加一条 supported 只改清单（和必要时的 overlay_args / exec / setup 分支），不改 workflow。
 2. 每次 CI 比对。创建一个跑在免费的 ubuntu-latest 上的 job，这个 job 把目标仓磁盘上实际存在的 example 与清单求差集：新增的路径（磁盘有、清单无）和失效的路径（清单有、磁盘无）打印到日志，并写进 manifest_check_result.json 随 artifact 上传（外部机器读 `new_paths` / `stale_paths` 字段），一般不使 job 失败——新 example 出现是「提示有待办」。唯一例外：supported 条目的 path 在磁盘上已不存在时立即判红，避免 run-example 在 NPU runner 上装完依赖才发现 example 没了。
 
 

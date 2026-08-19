@@ -446,7 +446,9 @@ jobs:
       # makes the next schedule cycle know to retry.
       - name: Record monitor outcome
         id: record-monitor-outcome
-        if: steps.decide.outputs.need_to_test == 'true'
+        if: |
+          github.event_name == 'schedule' &&
+          steps.decide.outputs.need_to_test == 'true'
         env:
           # REASON / REF / TEST_REF come from /tmp/.decision (written
           # by decide), not from any step's $GITHUB_OUTPUT - that's the
@@ -587,9 +589,7 @@ jobs:
       # 'Last failure' line surfaces for THIS run, not the cycle before.
       - name: Write result and summarize
         id: write-result
-        if: |
-          github.event_name == 'workflow_dispatch' ||
-          steps.decide.outputs.need_to_test == 'true'
+        if: steps.decide.outputs.need_to_test == 'true'
         env:
           # Route upstream step outputs through env so jq / printf
           # parameter-expand them; values containing shell-meta chars

@@ -603,6 +603,20 @@ jobs:
           set -euo pipefail
           mkdir -p output
 
+          # Skip result.json entirely when no monitor fired this cycle
+          # (REASON empty -> need_to_test was false -> test_ref was
+          # never set, so target_ref would be an empty string and the
+          # schema's minLength: 1 would reject it). publish-and-persist's
+          # Materialize step treats an empty RESULT_JSON output as
+          # "nothing to publish" and exits 0; Validate and Upload skip
+          # on missing file. The summary block also relies on REASON
+          # to pick the outcome file, so there's nothing useful to
+          # print here - bail out cleanly instead.
+          if [ -z "$REASON" ]; then
+            echo "no monitor fired this cycle; skipping result.json + summary"
+            exit 0
+          fi
+
           # 7 fields: 6 required by schemas/result.schema.json + 'reason'.
           # Tests-ran is implied by reason non-empty; upstream ref/commit
           # are derivable from reason + the API; Actions run object

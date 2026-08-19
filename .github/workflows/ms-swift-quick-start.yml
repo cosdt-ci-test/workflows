@@ -226,6 +226,7 @@ jobs:
           doc_test_result=""
           doc_test_error=""
           if [ -f "$MONITOR_DOC_FILE" ]; then
+            echo "MONITOR_DOC_FILE exist"
             . "$MONITOR_DOC_FILE"
           fi
           DOC_HASH="$doc_hash"
@@ -493,6 +494,7 @@ jobs:
           REF="$ref"
 
           # ----- Map test conclusion to outcome -----
+          echo "CONCLUSIONL: $CONCLUSION"
           case "$CONCLUSION" in
             success)
               RESULT="success"

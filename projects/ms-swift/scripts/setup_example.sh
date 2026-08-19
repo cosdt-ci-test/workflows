@@ -13,13 +13,27 @@ PROFILE="$1"
 MEGATRON_LM_REF=core_v0.16.0
 MINDSPEED_REF=core_r0.16.0
 MCORE_BRIDGE_REF=v1.6.1
+VLLM_REF=v0.23.0
 ASCEND_PIP_INDEX=https://repo.huaweicloud.com/ascend/repos/pypi
+ASCEND_MIRROR_PIP_INDEX=https://mirrors.huaweicloud.com/ascend/repos/pypi
+ASCEND_VARIANT_PIP_INDEX=https://mirrors.huaweicloud.com/ascend/repos/pypi/variant
 CLUSTER_PIP_HOST=cache-service.nginx-pypi-cache.svc.cluster.local
 export CLUSTER_PIP_INDEX="http://${CLUSTER_PIP_HOST}/pypi/simple"
 FALLBACK_PIP_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
 
+is_vllm_family() {
+  [[ "$PROFILE" == "vllm" || "$PROFILE" == "megatron_vllm" ]]
+}
+
 pip_ascend() {
   python -m pip install --extra-index-url "$ASCEND_PIP_INDEX" "$@"
+}
+
+pip_ascend_variant() {
+  python -m pip install \
+    --extra-index-url "$ASCEND_VARIANT_PIP_INDEX" \
+    --extra-index-url "$ASCEND_MIRROR_PIP_INDEX" \
+    "$@"
 }
 
 select_pip_index() {
@@ -41,56 +55,30 @@ except urllib.error.HTTPError:
   echo "pip index: $PIP_INDEX_URL"
 }
 
-# Install the wheel, then its deps except torch / CUDA / transformers.
-# vllm 0.18 declares torch==2.10 and nvidia-* wheels.
-install_dist_filtered() {
-  local spec="$1"
-  python -m pip install --no-deps --extra-index-url "$ASCEND_PIP_INDEX" "$spec"
-  python - "$spec" <<'PY'
-import re
-import subprocess
-import sys
-from importlib.metadata import PackageNotFoundError, requires
-
-spec = sys.argv[1]
-dist_name = re.split(r"[<>=!~]", spec, maxsplit=1)[0].strip()
-banned_exact = {
-    "torch",
-    "torchvision",
-    "torchaudio",
-    "torch-npu",
-    "transformers",
-}
-banned_prefixes = ("nvidia-", "cuda-", "flashinfer")
-
-def dist_requires(name):
-    for candidate in (name, name.replace("-", "_"), name.replace("_", "-")):
-        try:
-            return requires(candidate) or []
-        except PackageNotFoundError:
-            continue
-    raise SystemExit(f"installed dist not found: {name}")
-
-def req_name(spec_line):
-    return re.split(r"[<>=!~\[\s]", spec_line.strip(), maxsplit=1)[0].strip().lower().replace("_", "-")
-
-kept = []
-for req in dist_requires(dist_name):
-    body, _, marker = req.partition(";")
-    if "extra" in marker and "==" in marker:
-        continue
-    name = req_name(body)
-    if name in banned_exact or any(name.startswith(prefix) for prefix in banned_prefixes):
-        print(f"skip dep {req}", flush=True)
-        continue
-    kept.append(req)
-
-if kept:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", *kept])
-PY
-}
-
 ensure_torch_stack() {
+  if is_vllm_family; then
+    if python -c "
+import importlib
+wanted = {
+    'torch': '2.10.0',
+    'torch_npu': '2.10.0.post4',
+    'torchvision': '0.25.0',
+    'torchaudio': '2.10.0',
+}
+for name, prefix in wanted.items():
+    ver = importlib.import_module(name).__version__
+    print('found', name, ver)
+    if not ver.startswith(prefix):
+        raise SystemExit(1)
+"; then
+      echo "reusing image torch 2.10 stack"
+      return
+    fi
+    echo "installing torch==2.10.0 torch-npu==2.10.0.post4 torchvision==0.25.0 torchaudio==2.10.0"
+    pip_ascend_variant torch==2.10.0 torch-npu==2.10.0.post4 \
+      torchvision==0.25.0 torchaudio==2.10.0
+    return
+  fi
   if python -c "
 import torch, torch_npu
 print('found torch', torch.__version__, 'torch_npu', torch_npu.__version__)
@@ -106,13 +94,14 @@ raise SystemExit(0 if torch.__version__.startswith('2.9.0') and torch_npu.__vers
 # framework.txt includes gradio / fastapi / uvicorn for web-ui and deploy.
 install_ms_swift() {
   python -m pip install -e "$TARGET_ROOT" --no-deps
-  python - "$TARGET_ROOT" <<'PY'
+  python - "$TARGET_ROOT" "$PROFILE" <<'PY'
 import re
 import subprocess
 import sys
 from pathlib import Path
 
 root = Path(sys.argv[1])
+profile = sys.argv[2]
 skip = {"gradio", "fastapi", "uvicorn"}
 deps = []
 for raw in (root / "requirements" / "framework.txt").read_text(encoding="utf-8").splitlines():
@@ -124,11 +113,21 @@ for raw in (root / "requirements" / "framework.txt").read_text(encoding="utf-8")
         print(f"skip {line}", flush=True)
         continue
     deps.append(line)
-# requirements/npu.txt pins torchvision for torch 2.7.1; we use 0.24.0 for torch 2.9.0.
-# decord has no aarch64 wheel or sdist.
-deps.extend(["torchvision==0.24.0", "decorator", "qwen_vl_utils>=0.0.14"])
+# requirements/npu.txt pins torchvision for torch 2.7.1; non-vLLM uses 0.24.0
+# for torch 2.9.0. vLLM family already has torchvision 0.25.0.
+# decord has no aarch64 wheel or sdist. Omni still needs the other three.
+deps.extend([
+    "decorator",
+    "qwen_vl_utils>=0.0.14",
+    "qwen_omni_utils>=0.0.9",
+    "soundfile",
+    "audioread",
+])
+if profile not in {"vllm", "megatron_vllm"}:
+    deps.append("torchvision==0.24.0")
 subprocess.check_call([sys.executable, "-m", "pip", "install", *deps])
 PY
+  python -c "import soundfile, audioread; from qwen_omni_utils.v2_5 import vision_process"
 }
 
 setup_swift() {
@@ -140,14 +139,16 @@ setup_deepspeed() {
 }
 
 setup_vllm() {
-  # ms-swift NPU-support.md pin for torch 2.9 / A2. Do not jump to
-  # vllm-ascend 0.23: that line wants torch 2.10.
-  install_dist_filtered vllm==0.18.0
-  install_dist_filtered vllm-ascend==0.18.0
-  # vllm 0.18 requires transformers<5 and downgrades it. Qwen3.5 needs
-  # transformers>=5.2. vllm-ascend 0.18 only requires >=4.57.4, so put
-  # 5.2 back without letting pip uninstall vllm to satisfy the <5 cap.
-  python -m pip install --no-deps "transformers>=5.2.0"
+  python -m pip install \
+    "cmake>=3.26" pyyaml nanobind ninja setuptools-rust wheel \
+    "setuptools-scm>=8" "setuptools>=77,<81"
+  python -m pip install math_verify
+  mkdir -p "$GITHUB_WORKSPACE/deps"
+  git clone --depth 1 --branch "$VLLM_REF" \
+    https://github.com/vllm-project/vllm.git "$GITHUB_WORKSPACE/deps/vllm"
+  VLLM_TARGET_DEVICE=empty python -m pip install --no-build-isolation \
+    -e "$GITHUB_WORKSPACE/deps/vllm"
+  pip_ascend_variant --no-build-isolation vllm-ascend==0.23.0
 }
 
 setup_megatron() {
@@ -160,8 +161,13 @@ setup_megatron() {
     https://github.com/modelscope/mcore-bridge.git "$GITHUB_WORKSPACE/deps/mcore-bridge"
   python -m pip install -e "$GITHUB_WORKSPACE/deps/MindSpeed"
   python -m pip install -e "$GITHUB_WORKSPACE/deps/mcore-bridge"
-  pip_ascend triton-ascend==3.2.1 \
-    --find-links https://repo.huaweicloud.com/ascend/repos/pypi/triton-ascend/
+  if [[ "$PROFILE" == "megatron_vllm" ]]; then
+    pip_ascend_variant triton-ascend==3.2.2 \
+      --find-links https://repo.huaweicloud.com/ascend/repos/pypi/triton-ascend/
+  else
+    pip_ascend triton-ascend==3.2.1 \
+      --find-links https://repo.huaweicloud.com/ascend/repos/pypi/triton-ascend/
+  fi
   echo "MEGATRON_LM_PATH=$GITHUB_WORKSPACE/deps/Megatron-LM" >> "$GITHUB_ENV"
   echo "PYTHONPATH=$GITHUB_WORKSPACE/deps/Megatron-LM" >> "$GITHUB_ENV"
   source /usr/local/Ascend/ascend-toolkit/set_env.sh
@@ -187,7 +193,14 @@ GITHUB_WORKSPACE="${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is required}"
 GITHUB_ENV="${GITHUB_ENV:?GITHUB_ENV is required}"
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-export PIP_CONSTRAINT="$(cd "$HERE/.." && pwd)/constraints-npu.txt"
+if is_vllm_family; then
+  export PIP_CONSTRAINT="$(cd "$HERE/.." && pwd)/constraints-npu-vllm.txt"
+else
+  export PIP_CONSTRAINT="$(cd "$HERE/.." && pwd)/constraints-npu.txt"
+fi
+
+# Later steps are a new shell; do not rely on a previous workflow step.
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
 
 select_pip_index
 python -m pip install -U pip

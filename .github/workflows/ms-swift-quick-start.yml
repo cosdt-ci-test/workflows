@@ -45,7 +45,6 @@ jobs:
     # cannot reach GitHub's cache blob storage (firewalled), so we
     # route persistence through job outputs to the ubuntu-latest job.
     outputs:
-      skip:                    ${{ steps.skip.outputs.skip }}
       result_json:             ${{ steps.write-result.outputs.result_json }}
       trigger:                 ${{ steps.write-result.outputs.trigger }}
       reason:                   ${{ steps.record-monitor-outcome.outputs.reason }}
@@ -88,47 +87,7 @@ jobs:
       PIP_TRUSTED_HOST: "cache-service.nginx-pypi-cache.svc.cluster.local"
       PIP_TIMEOUT: "120"
     steps:
-      # Schedule-only: if a previous schedule run of THIS workflow
-      # on the same branch is still in_progress, skip silently. The
-      # concurrency group already serialises them, but the
-      # `*/5 * * * *` cadence means the queued run waits minutes
-      # before its turn - skipping keeps the queue empty for the
-      # next tick. dispatch always runs (no check).
-      - name: Skip if previous schedule run still in progress
-        id: skip
-        if: github.event_name == 'schedule'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          WORKFLOW_FILE: ms-swift-quick-start.yml
-        run: |
-          set -euo pipefail
-          # Query the workflow's own runs filtered to in_progress
-          # + schedule event + same branch. We only flag `skip` when
-          # the list is non-empty AND none of the listed run_ids is
-          # our own (`github.run_id` is excluded by the URL filter
-          # below to avoid matching ourselves while we're still
-          # setting up).
-          resp=$(curl -fsSL \
-            -H "Authorization: token $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            "$GH_API/repos/${{ github.repository }}/actions/workflows/$WORKFLOW_FILE/runs?status=in_progress&event=schedule&branch=${{ github.ref_name }}&per_page=10")
-          in_progress_ids=$(echo "$resp" | jq -r '.workflow_runs[].id' || true)
-          our_id=${{ github.run_id }}
-          others=""
-          for rid in $in_progress_ids; do
-            [ "$rid" = "$our_id" ] && continue
-            others="$others $rid"
-          done
-          if [ -n "$(echo "$others" | tr -d ' ')" ]; then
-            echo "skip=true: previous schedule run still in_progress: $others"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "skip=false: no other in_progress schedule run"
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Print context and source CANN
-        if: steps.skip.outputs.skip != 'true'
         run: |
           echo "=========================================="
           echo "Trigger:    ${{ github.event_name }}"
@@ -139,7 +98,6 @@ jobs:
           npu-smi info || true
 
       - name: Checkout workflows (provides the test code and doc)
-        if: steps.skip.outputs.skip != 'true'
         uses: actions/checkout@v6
         with:
           path: workflows
@@ -155,7 +113,7 @@ jobs:
       # to restore-keys.
       - name: Restore monitor state
         id: cache-restore
-        if: github.event_name == 'schedule' && steps.skip.outputs.skip != 'true'
+        if: github.event_name == 'schedule'
         uses: actions/cache/restore@v6
         with:
           path: .monitor-state
@@ -171,7 +129,7 @@ jobs:
       # from record-monitor-outcome clears that flag.
       - name: Monitor upstream latest release id
         id: monitor-release
-        if: github.event_name == 'schedule' && steps.skip.outputs.skip != 'true'
+        if: github.event_name == 'schedule'
         run: |
           set -euo pipefail
           STATE_DIR=".monitor-state"
@@ -237,7 +195,7 @@ jobs:
 
       - name: Monitor doc hash
         id: monitor-doc
-        if: github.event_name == 'schedule' && steps.monitor-release.outputs.skip_monitor_doc == 'false' && steps.skip.outputs.skip != 'true'
+        if: github.event_name == 'schedule' && steps.monitor-release.outputs.skip_monitor_doc == 'false'
         env:
           DOC_URL: ${{ env.MONITORED_DOC_URL }}
         run: |
@@ -304,7 +262,6 @@ jobs:
       # monitor-outcome sources it.
       - name: Decide which ref to test
         id: decide
-        if: steps.skip.outputs.skip != 'true'
         env:
           # Route user-controlled values (inputs.*) through env so
           # bash treats them as parameter expansions, never command
@@ -355,7 +312,7 @@ jobs:
 
       - name: Run quick start test
         id: test
-        if: steps.decide.outputs.need_to_test == 'true' && steps.skip.outputs.skip != 'true'
+        if: steps.decide.outputs.need_to_test == 'true'
         env:
           # Only the three vars test_quick_start_ascend.py actually
           # reads; UPSTREAM_REPO / MONITORED_DOC_URL propagate from
@@ -482,9 +439,8 @@ jobs:
       - name: Record monitor outcome
         id: record-monitor-outcome
         if: |
-          (github.event_name == 'workflow_dispatch' ||
-           steps.decide.outputs.need_to_test == 'true') &&
-          steps.skip.outputs.skip != 'true'
+          github.event_name == 'workflow_dispatch' ||
+          steps.decide.outputs.need_to_test == 'true'
         env:
           # REASON / REF / TEST_REF come from /tmp/.decision (written
           # by decide), not from any step's $GITHUB_OUTPUT - that's the
@@ -623,7 +579,7 @@ jobs:
       # 'Last failure' line surfaces for THIS run, not the cycle before.
       - name: Write result and summarize
         id: write-result
-        if: always() && steps.skip.outputs.skip != 'true'
+        if: always()
         env:
           # Route upstream step outputs through env so jq / printf
           # parameter-expand them; values containing shell-meta chars
@@ -712,7 +668,7 @@ jobs:
   publish-and-persist:
     name: publish result.json + persist monitor state
     needs: monitor-and-test
-    if: always() && needs.monitor-and-test.outputs.skip != 'true'
+    if: always()
     runs-on: ubuntu-latest
     steps:
       # schemas/result.schema.json lives in this repo, and this job

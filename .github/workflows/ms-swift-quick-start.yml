@@ -56,12 +56,6 @@ jobs:
       monitor_test_error:      ${{ steps.record-monitor-outcome.outputs.monitor_test_error }}
     defaults:
       run:
-        # Pin every step's cwd to $GITHUB_WORKSPACE so the relative
-        # STATE_DIR='.monitor-state' below resolves to the same
-        # directory actions/cache uses (Cache service writes under
-        # /home/runner/_work/... on self-hosted runners and would
-        # otherwise mismatch the bash-side /__w/... resolution).
-        working-directory: ${{ github.workspace }}
         shell: bash
     container:
       image: *ci_image
@@ -120,22 +114,12 @@ jobs:
         # DEBUG: gate disabled to simulate schedule-only path via
         # workflow_dispatch. Re-enable before merging - dispatch
         # touching the cache would clobber the schedule retry chain.
-        # actions/cache resolves `path` against the step's
-        # working-directory, which it derives from $GITHUB_WORKSPACE
-        # on its own - on self-hosted runners that derivation can
-        # differ from the value bash sees inside the step (Cache
-        # service wrote the entry under /home/runner/_work/... while
-        # $GITHUB_WORKSPACE inside the step resolves to /__w/...).
-        # Pinning the explicit working-directory here forces the
-        # resolution path on both sides to match.
-        working-directory: ${{ github.workspace }}
         # if: github.event_name == 'schedule'
         uses: actions/cache/restore@v6
         with:
           path: .monitor-state
           key: monitor-state-ms-swift-${{ github.run_id }}
-          restore-keys: |
-            monitor-state-ms-swift-
+          restore-keys: monitor-state-ms-swift-
 
       # Two monitors feed the decide step (release > doc by priority).
       # Each step sources its cache file, decides in-memory against
@@ -706,13 +690,9 @@ jobs:
         # DEBUG: schedule half of gate disabled to simulate schedule-only
         # path. Re-enable both before merging - dispatch persisting would
         # overwrite cache entries the schedule retry chain depends on.
-        # Same $GITHUB_WORKSPACE fix as the Restore step above - on
-        # self-hosted runners actions/cache's path resolution needs an
-        # explicit working-directory to match the bash-side value.
-        working-directory: ${{ github.workspace }}
         # if: github.event_name == 'schedule' && needs.monitor-and-test.outputs.need_to_test == 'true'
         if: needs.monitor-and-test.outputs.need_to_test == 'true'
         uses: actions/cache/save@v6
         with:
-          path: ${{ github.workspace }}/.monitor-state
+          path: .monitor-state
           key: monitor-state-ms-swift-${{ github.run_id }}

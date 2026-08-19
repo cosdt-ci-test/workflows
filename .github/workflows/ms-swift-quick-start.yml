@@ -178,7 +178,7 @@ jobs:
           fi
 
           echo "skip_monitor_doc=$SKIP_MONITOR_DOC" >> "$GITHUB_OUTPUT"
-          echo "monitor_release work and skip_monitor_doc = true"
+          echo "monitor_release work and skip_monitor_doc=true"
 
           # Values are single-quoted so literals like 'none' and any
           # shell-meta chars round-trip safely when record-monitor-
@@ -195,7 +195,7 @@ jobs:
             echo "ref='$REF'"
             echo "reason='$REASON'"
           } > "$DECISION_FILE"
-          echo "release: id=$CURRENT_RELEASE_ID tag=$CURRENT_RELEASE_TAG result=$RELEASE_TEST_RESULT need_to_test=$NEED_TO_TEST reason=$REASON"
+          echo "release monitor: id=$CURRENT_RELEASE_ID tag=$CURRENT_RELEASE_TAG result=$RELEASE_TEST_RESULT need_to_test=$NEED_TO_TEST reason=$REASON"
 
       - name: Monitor doc hash
         id: monitor-doc
@@ -563,22 +563,19 @@ jobs:
             echo "reason=$REASON" >> "$GITHUB_OUTPUT"
           fi
 
-          if [ -f "$MONITOR_RELEASE_FILE" ]; then
-            . "$MONITOR_RELEASE_FILE"
-            {
-              echo "monitor_last_release_id=$last_release_id"
-              echo "monitor_release_test_result=$release_test_result"
-              echo "monitor_release_test_error=$release_test_error"
-            } >> "$GITHUB_OUTPUT"
-          fi
-          if [ -f "$MONITOR_DOC_FILE" ]; then
-            . "$MONITOR_DOC_FILE"
-            {
-              echo "monitor_doc_hash=$doc_hash"
-              echo "monitor_doc_test_result=$doc_test_result"
-              echo "monitor_doc_test_error=$doc_test_error"
-            } >> "$GITHUB_OUTPUT"
-          fi
+          {
+            echo "monitor_last_release_id=$last_release_id"
+            echo "monitor_release_test_result=$release_test_result"
+            echo "monitor_release_test_error=$release_test_error"
+          } >> "$GITHUB_OUTPUT"
+          echo "shipped release monitor state: id=$last_release_id result=$release_test_result error=$release_test_error"
+
+          {
+            echo "monitor_doc_hash=$doc_hash"
+            echo "monitor_doc_test_result=$doc_test_result"
+            echo "monitor_doc_test_error=$doc_test_error"
+          } >> "$GITHUB_OUTPUT"
+          echo "shipped doc monitor state: hash=$doc_hash result=$doc_test_result error=$doc_test_error"
 
       # Write result.json + summarize. Gate matches record-monitor-outcome:
       # dispatch always writes (manual run produces a result); schedule

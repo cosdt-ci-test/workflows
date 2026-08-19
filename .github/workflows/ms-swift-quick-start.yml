@@ -426,20 +426,21 @@ jobs:
           python -m unittest tests.test_quick_start_ascend -v 2>&1
 
       # ===== Record outcome =====
-      # 'need_to_test == "true"' gates on "this cycle actually ran the
-      # test". decide only emits the output when one of the monitors
-      # fired (or manual dispatch forced it on), so a missing output
-      # means "no monitor fired" -> nothing new to record and we skip.
-      # 'workflow_dispatch' is the manual-trigger path; decide emits
-      # need_to_test=true unconditionally for it. The failure path
-      # still runs through this gate (need_to_test is set before
-      # test.conclusion is known), so the failure flag this step
-      # writes into .monitor-state/ is what makes the next schedule
-      # cycle know to retry.
+      # Single gate: 'schedule && need_to_test == "true"', matching
+      # the Persist step downstream. decide only emits need_to_test
+      # when a monitor fired (release/doc change) or a previous-cycle
+      # failure flag forces a retry, so a missing output means "no
+      # monitor fired this cycle" -> nothing new to record. dispatch
+      # is excluded: it's a one-shot read-only path and must not
+      # touch the cache or its failure-flag state. The failure path
+      # (test failed) still runs through this gate because
+      # need_to_test is set before test.conclusion is known, so the
+      # failure flag this step writes into .monitor-state/ is what
+      # makes the next schedule cycle know to retry.
       - name: Record monitor outcome
         id: record-monitor-outcome
         if: |
-          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule' &&
           steps.decide.outputs.need_to_test == 'true'
         env:
           # REASON / REF / TEST_REF come from /tmp/.decision (written

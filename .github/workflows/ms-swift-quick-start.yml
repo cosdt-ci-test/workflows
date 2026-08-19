@@ -121,6 +121,40 @@ jobs:
           restore-keys: |
             monitor-state-ms-swift-
 
+      # Echo the cache-restore outputs + actual files on disk so we
+      # can see whether the prefix fallback matched an entry (and what
+      # was in it) vs. the restore was a cold miss entirely. cache-hit
+      # alone is ambiguous: false means neither exact nor prefix matched.
+      - name: Inspect restored monitor state
+        if: github.event_name == 'schedule'
+        env:
+          CACHE_HIT:          ${{ steps.cache-restore.outputs.cache-hit }}
+          CACHE_PRIMARY_KEY:  ${{ steps.cache-restore.outputs.cache-primary-key }}
+          CACHE_KEY:          ${{ steps.cache-restore.outputs.cache-key }}
+          CACHE_MATCHED_KEY:  ${{ steps.cache-restore.outputs.cache-matched-key }}
+        run: |
+          set -euo pipefail
+          echo "===== cache-restore outputs ====="
+          echo "cache_hit=$CACHE_HIT"
+          echo "cache_primary_key=$CACHE_PRIMARY_KEY"
+          echo "cache_key=$CACHE_KEY"
+          echo "cache_matched_key=$CACHE_MATCHED_KEY"
+          echo "===== restored .monitor-state/ ====="
+          if [ -d .monitor-state ]; then
+            ls -la .monitor-state/
+            for f in .monitor-state/.monitor_release .monitor-state/.monitor_doc; do
+              if [ -f "$f" ]; then
+                echo "----- $f ($(wc -c < "$f") bytes) -----"
+                cat "$f"
+              else
+                echo "----- $f: MISSING -----"
+              fi
+            done
+          else
+            echo ".monitor-state/ directory MISSING (cold restore)"
+          fi
+          echo "===== end ====="
+
       # Two monitors feed the decide step (release > doc by priority).
       # Each step sources its cache file, decides in-memory against
       # local vars only, then writes its decision to /tmp/.decision
@@ -779,6 +813,30 @@ jobs:
           if [ "$wrote" -eq 0 ]; then
             echo "no monitor state from monitor-and-test; nothing to restore"
           fi
+
+      - name: Inspect monitor state before persist
+        if: github.event_name == 'schedule' && needs.monitor-and-test.outputs.need_to_test == 'true'
+        # Echo what's about to be uploaded so a future reader can
+        # confirm the post-cycle cache contents match what record-
+        # monitor-outcome claimed it shipped (and so a Restore miss
+        # next cycle has a paper trail of what should have been there).
+        run: |
+          set -euo pipefail
+          echo "===== persisting .monitor-state/ ====="
+          if [ -d .monitor-state ]; then
+            ls -la .monitor-state/
+            for f in .monitor-state/.monitor_release .monitor-state/.monitor_doc; do
+              if [ -f "$f" ]; then
+                echo "----- $f ($(wc -c < "$f") bytes) -----"
+                cat "$f"
+              else
+                echo "----- $f: MISSING -----"
+              fi
+            done
+          else
+            echo ".monitor-state/ directory MISSING (nothing to persist)"
+          fi
+          echo "===== end ====="
 
       - name: Persist monitor state to cache
         if: github.event_name == 'schedule' && needs.monitor-and-test.outputs.need_to_test == 'true'

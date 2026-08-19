@@ -121,6 +121,19 @@ jobs:
           restore-keys: |
             monitor-state-ms-swift-
 
+      # Surface cache-hit + matched-key so we can tell whether the
+      # restore hit exact / prefix / nothing. The two monitor steps
+      # below already cat the actual files - this is the match-status
+      # half those reads can't answer on their own.
+      - name: Log cache-restore outcome
+        if: github.event_name == 'schedule'
+        env:
+          CACHE_HIT:         ${{ steps.cache-restore.outputs.cache-hit }}
+          CACHE_KEY:        ${{ steps.cache-restore.outputs.cache-key }}
+          CACHE_MATCHED_KEY: ${{ steps.cache-restore.outputs.cache-matched-key }}
+        run: |
+          echo "cache-restore: hit=$CACHE_HIT key=$CACHE_KEY matched=$CACHE_MATCHED_KEY"
+
       # Two monitors feed the decide step (release > doc by priority).
       # Each step sources its cache file, decides in-memory against
       # local vars only, then writes its decision to /tmp/.decision

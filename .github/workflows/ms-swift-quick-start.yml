@@ -14,7 +14,10 @@ concurrency:
 
 on:
   schedule:
-    - cron: '0 */6 * * *'
+    # Tight 5-minute cadence for local testing only - GitHub caps
+    # schedule at 5 min minimum. Production is '0 */6 * * *'
+    # (every 6 hours); switch back before merging.
+    - cron: '*/5 * * * *'
   workflow_dispatch:
     inputs:
       upstream_ref:
@@ -717,21 +720,25 @@ jobs:
       # here on ubuntu-latest, which CAN reach cache blob storage (the
       # NPU runner could not - hence this split).
       #
-      # 'always()' is load-bearing: when monitor-and-test failed, the
-      # failure flag written here is what makes the next schedule run
-      # retry; dropping it would break the retry chain.
-      # 'need_to_test == "true"' is the cycle gate: no monitor fired this
-      # cycle means no test ran and nothing new to persist (rewriting
-      # would just re-save the previous cycle's state byte-for-byte
-      # under a new run-id key). The retry chain survives because
-      # failure-flag writes only happen on the test-ran path, which
-      # the gate does NOT exclude.
+      # 'need_to_test == "true"' is the single gate, matching
+      # record-monitor-outcome's gate: a cycle that didn't run the
+      # test has nothing new to persist, so we skip both. schedule
+      # and workflow_dispatch are both covered (decide emits
+      # need_to_test=true unconditionally for dispatch, and for
+      # schedule only when a monitor fired or a retry is due).
+      # No `always()`: when the test failed, record-monitor-outcome
+      # still wrote the failure flag (its gate is met because
+      # need_to_test was set before test.conclusion was known), and
+      # the publish path still needs to land that flag in the cache
+      # so the next schedule cycle sees it. The publish-and-persist
+      # job itself runs on `if: always()` at the job level - that's
+      # what keeps the chain alive when monitor-and-test fails.
       #
       # Run-id suffix on the cache key: actions/cache refuses to
       # overwrite an existing entry with the same key, so a static
       # key would make every save after the first a silent no-op.
       - name: Restore monitor state to disk
-        if: github.event_name == 'schedule' && needs.monitor-and-test.outputs.need_to_test == 'true'
+        if: needs.monitor-and-test.outputs.need_to_test == 'true'
         env:
           monitor_last_release_id:        ${{ needs.monitor-and-test.outputs.monitor_last_release_id }}
           monitor_release_test_result:    ${{ needs.monitor-and-test.outputs.monitor_release_test_result }}
@@ -772,7 +779,7 @@ jobs:
           fi
 
       - name: Persist monitor state to cache
-        if: github.event_name == 'schedule' && needs.monitor-and-test.outputs.need_to_test == 'true'
+        if: needs.monitor-and-test.outputs.need_to_test == 'true'
         uses: actions/cache/save@v6
         with:
           path: .monitor-state

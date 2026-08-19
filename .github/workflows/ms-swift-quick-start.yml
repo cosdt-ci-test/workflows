@@ -115,11 +115,11 @@ jobs:
         # workflow_dispatch. Re-enable before merging - dispatch
         # touching the cache would clobber the schedule retry chain.
         # if: github.event_name == 'schedule'
-        # No `key:` on purpose - a per-run-id exact key would always
-        # miss, fall through to restore-keys, and waste a lookup.
-        # restore-keys alone is enough: the Persist step below always
-        # writes under the same stable name, so prefix-match there
-        # returns the previous run's state.
+        # No `key:` on purpose - it would be an exact-match attempt
+        # that always misses (we never saved under it yet), wasting a
+        # lookup before falling through to restore-keys. With only
+        # restore-keys, the prefix-match goes straight to the most
+        # recent Persist entry.
         uses: actions/cache/restore@v6
         with:
           path: .monitor-state

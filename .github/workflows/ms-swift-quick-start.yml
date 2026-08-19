@@ -780,7 +780,7 @@ jobs:
               echo "release_test_result='$monitor_release_test_result'"
               echo "release_test_error='$monitor_release_test_error'"
             } > "$MONITOR_RELEASE_FILE"
-            echo "  wrote $MONITOR_RELEASE_FILE (from monitor-and-test outputs monitor_last_release_id=$monitor_last_release_id monitor_release_test_result=$monitor_release_test_result monitor_release_test_error=$monitor_release_test_error):"
+            echo "  wrote $MONITOR_RELEASE_FILE (from monitor-and-test outputs):"
             cat "$MONITOR_RELEASE_FILE"
             wrote=$((wrote + 1))
           fi
@@ -790,7 +790,7 @@ jobs:
               echo "doc_test_result='$monitor_doc_test_result'"
               echo "doc_test_error='$monitor_doc_test_error'"
             } > "$MONITOR_DOC_FILE"
-            echo "  wrote $MONITOR_DOC_FILE (from monitor-and-test outputs monitor_doc_hash=$monitor_doc_hash monitor_doc_test_result=$monitor_doc_test_result monitor_doc_test_error=$monitor_doc_test_error):"
+            echo "  wrote $MONITOR_DOC_FILE (from monitor-and-test outputs):"
             cat "$MONITOR_DOC_FILE"
             wrote=$((wrote + 1))
           fi

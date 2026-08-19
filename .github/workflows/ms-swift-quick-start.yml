@@ -270,22 +270,24 @@ jobs:
           set -euo pipefail
           DECISION_FILE="/tmp/.decision"
 
-          # Default all three decision keys before either branch so
-          # `set -u` is safe: dispatch overwrites; schedule sources
-          # /tmp/.decision when present, else falls through with the
-          # defaults (no monitor fired -> need_to_test stays "false").
-          NEED_TO_TEST="false"
-          REASON=""
-          REF=""
+          # Default all three decision keys (lowercase - same name as the
+          # /tmp/.decision file's vars and the `if` reads below) before
+          # either branch so `set -u` is safe: dispatch overwrites;
+          # schedule sources /tmp/.decision when present, else falls
+          # through with the defaults (no monitor fired ->
+          # need_to_test stays "false").
+          need_to_test="false"
+          reason=""
+          ref=""
 
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            NEED_TO_TEST="true"
-            REASON="manual"
-            REF="${INPUT_REF:-main}"
+            need_to_test="true"
+            reason="manual"
+            ref="${INPUT_REF:-main}"
             {
-              echo "need_to_test='$NEED_TO_TEST'"
-              echo "ref='$REF'"
-              echo "reason='$REASON'"
+              echo "need_to_test='$need_to_test'"
+              echo "ref='$ref'"
+              echo "reason='$reason'"
             } > "$DECISION_FILE"
           elif [ -f $DECISION_FILE ]; then
             . $DECISION_FILE
@@ -294,7 +296,7 @@ jobs:
           if [ "$need_to_test" = "true" ]; then
             echo "need_to_test=true" >> "$GITHUB_OUTPUT"
             echo "test_ref=$ref" >> "$GITHUB_OUTPUT"
-            echo "Monitor fired: reason=$REASON ref=$ref"
+            echo "Monitor fired: reason=$reason ref=$ref"
 
             SHA=$(curl -fsSL "$GH_API/repos/${{ env.UPSTREAM_REPO }}/commits/$ref" \
               | jq -r '.sha // empty')

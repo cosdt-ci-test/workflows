@@ -446,9 +446,7 @@ jobs:
       # makes the next schedule cycle know to retry.
       - name: Record monitor outcome
         id: record-monitor-outcome
-        if: |
-          github.event_name == 'schedule' &&
-          steps.decide.outputs.need_to_test == 'true'
+        if: steps.decide.outputs.need_to_test == 'true'
         env:
           # REASON / REF / TEST_REF come from /tmp/.decision (written
           # by decide), not from any step's $GITHUB_OUTPUT - that's the

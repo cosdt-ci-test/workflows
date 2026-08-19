@@ -392,8 +392,8 @@ class TestQuickStartAscendEndToEnd(unittest.TestCase):
     other environment.
     """
 
-    doc_path: str = None
-    blocks: list[list[dict]] = None
+    doc_path: str
+    blocks: list[list[dict]]
 
     @classmethod
     def setUpClass(cls):

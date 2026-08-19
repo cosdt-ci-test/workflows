@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Diff a target examples tree against examples_manifest.yaml.
 
-The manifest's scan section (root, include_extensions) decides what to
-scan. Writes a machine-readable JSON result (new/stale paths, supported
+The manifest's scan section decides what to scan. Default unit is
+files (root + include_extensions). unit: directories treats each
+child directory as one example (optional marker file, max_depth).
+Writes a machine-readable JSON result (new/stale paths, supported
 entries, target repo/ref) to --result-json and stdout.
 Writes supported_matrix and has_supported to GITHUB_OUTPUT when set.
 
@@ -27,30 +29,85 @@ import yaml
 
 DEFAULT_SCAN_ROOT = 'examples'
 DEFAULT_INCLUDE_EXTENSIONS = ('.sh', '.py', '.yaml')
+DEFAULT_SCAN_UNIT = 'files'
+DEFAULT_DIR_MARKER = 'CMakeLists.txt'
+DEFAULT_DIR_MAX_DEPTH = 1
+SCAN_UNITS = ('files', 'directories')
 NPU_DEVICES_RE = re.compile(r'^\d+(,\d+)*$')
+
+
+def load_scan(scan: dict) -> dict:
+    unit = scan.get('unit') or DEFAULT_SCAN_UNIT
+    if unit not in SCAN_UNITS:
+        raise SystemExit(
+            f'scan.unit must be one of {SCAN_UNITS}, got {unit!r}')
+    max_depth = scan.get('max_depth', DEFAULT_DIR_MAX_DEPTH)
+    if not isinstance(max_depth, int) or max_depth < 1:
+        raise SystemExit(
+            f'scan.max_depth must be an integer >= 1, got {max_depth!r}')
+    marker = scan.get('marker')
+    if unit == 'directories':
+        if marker is None:
+            marker = DEFAULT_DIR_MARKER
+        elif not isinstance(marker, str) or not marker.strip():
+            raise SystemExit('scan.marker must be a non-empty string')
+        marker = marker.strip()
+    elif marker is not None:
+        marker = None
+    return {
+        'scan_root': scan.get('root') or DEFAULT_SCAN_ROOT,
+        'unit': unit,
+        'marker': marker,
+        'max_depth': max_depth,
+        'include_extensions': tuple(
+            scan.get('include_extensions') or DEFAULT_INCLUDE_EXTENSIONS),
+    }
 
 
 def load_manifest(path: Path) -> dict:
     data = yaml.safe_load(path.read_text(encoding='utf-8')) or {}
-    scan = data.get('scan') or {}
-    return {
-        'scan_root': scan.get('root') or DEFAULT_SCAN_ROOT,
-        'include_extensions': tuple(scan.get('include_extensions') or DEFAULT_INCLUDE_EXTENSIONS),
-        'supported': data.get('supported') or [],
-        'unsupported': data.get('unsupported') or [],
-    }
+    loaded = load_scan(data.get('scan') or {})
+    loaded['supported'] = data.get('supported') or []
+    loaded['unsupported'] = data.get('unsupported') or []
+    return loaded
 
 
-def scan_examples(target_root: Path, scan_root: str,
-                  include_extensions: tuple[str, ...]) -> list[str]:
-    examples_root = target_root / scan_root
-    if not examples_root.is_dir():
-        raise SystemExit(f'{scan_root}/ not found under {target_root}')
+def scan_file_units(examples_root: Path, target_root: Path,
+                    include_extensions: tuple[str, ...]) -> list[str]:
     found: list[str] = []
     for path in sorted(examples_root.rglob('*')):
         if path.is_file() and path.suffix in include_extensions:
             found.append(path.relative_to(target_root).as_posix())
     return found
+
+
+def scan_directory_units(examples_root: Path, target_root: Path,
+                         marker: str, max_depth: int) -> list[str]:
+    found: list[str] = []
+
+    def visit(directory: Path, depth: int) -> None:
+        if depth >= max_depth:
+            return
+        for child in sorted(directory.iterdir(), key=lambda item: item.name):
+            if not child.is_dir():
+                continue
+            if (child / marker).is_file():
+                found.append(child.relative_to(target_root).as_posix())
+            visit(child, depth + 1)
+
+    visit(examples_root, 0)
+    return found
+
+
+def scan_examples(target_root: Path, scan: dict) -> list[str]:
+    examples_root = target_root / scan['scan_root']
+    if not examples_root.is_dir():
+        raise SystemExit(f"{scan['scan_root']}/ not found under {target_root}")
+    if scan['unit'] == 'directories':
+        return scan_directory_units(
+            examples_root, target_root, scan['marker'], scan['max_depth'])
+    return scan_file_units(
+        examples_root, target_root, scan['include_extensions'])
 
 
 def device_options_from_npu_devices(npu_devices: str) -> str:
@@ -90,9 +147,16 @@ def matrix_entries(supported: list[dict]) -> list[dict]:
             errors.append(
                 f'{path}: overlay_args must be a list of non-empty strings')
             continue
+        exec_path = item.get('exec')
+        if exec_path is not None and (
+                not isinstance(exec_path, str) or not exec_path.strip()):
+            errors.append(f'{path}: exec must be a non-empty string')
+            continue
         entry = dict(item)
         entry['device_options'] = options
         entry['overlay_args'] = overlay_args
+        if exec_path is not None:
+            entry['exec'] = exec_path.strip()
         entries.append(entry)
     if errors:
         for message in errors:
@@ -142,8 +206,7 @@ def main() -> None:
     args = parser.parse_args()
     target_root = Path(args.target_root).resolve()
     manifest = load_manifest(Path(args.manifest))
-    scanned = set(scan_examples(
-        target_root, manifest['scan_root'], manifest['include_extensions']))
+    scanned = set(scan_examples(target_root, manifest))
     supported_paths = {item['path'] for item in manifest['supported']}
     listed = supported_paths | set(manifest['unsupported'])
     new_paths = sorted(scanned - listed)
@@ -151,7 +214,9 @@ def main() -> None:
     write_result(args.result_json, args.trigger, args.target_repo,
                  args.target_ref, new_paths, stale_paths, manifest['supported'])
     write_github_output(matrix_entries(manifest['supported']))
-    missing_supported = sorted(supported_paths - scanned)
+    missing_supported = sorted(
+        path for path in supported_paths
+        if not (target_root / path).exists())
     if missing_supported:
         for path in missing_supported:
             print(f'supported example missing from target tree: {path}',

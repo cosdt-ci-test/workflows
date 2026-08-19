@@ -304,6 +304,7 @@ jobs:
       - name: Run example
         env:
           EXAMPLE_PATH: ${{ matrix.example.path }}
+          EXEC: ${{ matrix.example.exec }}
           OVERLAY_ARGS: ${{ toJSON(matrix.example.overlay_args) }}
         run: |
           source /usr/local/Ascend/ascend-toolkit/set_env.sh

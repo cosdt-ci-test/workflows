@@ -563,9 +563,6 @@ jobs:
             echo "reason=$REASON" >> "$GITHUB_OUTPUT"
           fi
 
-          if [ -f "$MONITOR_RELEASE_FILE" ]; then
-            . "$MONITOR_RELEASE_FILE"
-          fi
           {
             echo "monitor_last_release_id=$last_release_id"
             echo "monitor_release_test_result=$release_test_result"
@@ -573,9 +570,6 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "shipped release monitor state: id=$last_release_id result=$release_test_result error=$release_test_error"
 
-          if [ -f "$MONITOR_DOC_FILE" ]; then
-            . "$MONITOR_DOC_FILE"
-          fi
           {
             echo "monitor_doc_hash=$doc_hash"
             echo "monitor_doc_test_result=$doc_test_result"

@@ -151,9 +151,11 @@ jobs:
           if [ -f "$MONITOR_RELEASE_FILE" ]; then
             . "$MONITOR_RELEASE_FILE"
           fi
+          
           LAST_RELEASE_ID="$last_release_id"
           RELEASE_TEST_RESULT="$release_test_result"
           RELEASE_TEST_ERROR="$release_test_error"
+          echo "release monitor: cache: last_release_id=${LAST_RELEASE_ID} result=${RELEASE_TEST_RESULT} error=${RELEASE_TEST_ERROR}"
 
           curl -fsSL --retry 3 \
             "$GH_API/repos/${{ env.UPSTREAM_REPO }}/releases/latest" -o /tmp/release.json
@@ -221,6 +223,7 @@ jobs:
           DOC_HASH="$doc_hash"
           DOC_TEST_RESULT="$doc_test_result"
           DOC_TEST_ERROR="$doc_test_error"
+          echo "doc monitor: cache: hash=${DOC_HASH} result=${DOC_TEST_RESULT} error=${DOC_TEST_ERROR}"
 
           CURRENT_DOC_HASH=$(curl -fsSL --retry 3 "$DOC_URL" | sha256sum | cut -d' ' -f1)
 
@@ -764,7 +767,8 @@ jobs:
               echo "release_test_result='$monitor_release_test_result'"
               echo "release_test_error='$monitor_release_test_error'"
             } > "$MONITOR_RELEASE_FILE"
-            echo "  wrote $MONITOR_RELEASE_FILE ($(wc -c < "$MONITOR_RELEASE_FILE") bytes)"
+            echo "  wrote $MONITOR_RELEASE_FILE (from monitor-and-test outputs):"
+            cat "$MONITOR_RELEASE_FILE"
             wrote=$((wrote + 1))
           fi
           if [ -n "$monitor_doc_hash" ]; then
@@ -773,7 +777,8 @@ jobs:
               echo "doc_test_result='$monitor_doc_test_result'"
               echo "doc_test_error='$monitor_doc_test_error'"
             } > "$MONITOR_DOC_FILE"
-            echo "  wrote $MONITOR_DOC_FILE ($(wc -c < "$MONITOR_DOC_FILE") bytes)"
+            echo "  wrote $MONITOR_DOC_FILE (from monitor-and-test outputs):"
+            cat "$MONITOR_DOC_FILE"
             wrote=$((wrote + 1))
           fi
           if [ "$wrote" -eq 0 ]; then

@@ -423,21 +423,21 @@ jobs:
           python -m unittest tests.test_quick_start_ascend -v 2>&1
 
       # ===== Record outcome =====
-      # 'always()' is load-bearing: when the test step itself failed,
-      # this step stamps release_test_result=failure / release_test_error=...
-      # (or the doc_* equivalents) into the merged file under
-      # .monitor-state/. That field is what makes the next schedule run
-      # know to retry - drop it and the retry mechanism silently breaks.
-      # 'schedule' / 'workflow_dispatch' gating keeps manual-dispatch
-      # runs (which lack a "next cycle") from touching the cache.
-      - name: Record outcome
+      # 'need_to_test == "true"' gates on "this cycle actually ran the
+      # test". decide only emits the output when one of the monitors
+      # fired (or manual dispatch forced it on), so a missing output
+      # means "no monitor fired" -> nothing new to record and we skip.
+      # 'workflow_dispatch' is the manual-trigger path; decide emits
+      # need_to_test=true unconditionally for it. The failure path
+      # still runs through this gate (need_to_test is set before
+      # test.conclusion is known), so the failure flag this step
+      # writes into .monitor-state/ is what makes the next schedule
+      # cycle know to retry.
+      - name: Record monitor outcome
         id: record-monitor-outcome
         if: |
-          always() &&
-          (
-            github.event_name == 'schedule' ||
-            github.event_name == 'workflow_dispatch'
-          )
+          github.event_name == 'workflow_dispatch' ||
+          steps.decide.outputs.need_to_test == 'true'
         env:
           # REASON / REF / TEST_REF come from /tmp/.decision (written
           # by decide), not from any step's $GITHUB_OUTPUT - that's the
@@ -574,7 +574,7 @@ jobs:
       # so they share one env block. The summary reads back the merged
       # monitor cache file record-monitor-outcome just wrote so the
       # 'Last failure' line surfaces for THIS run, not the cycle before.
-      - name: Write result.json + summarize
+      - name: Write result and summarize
         id: write-result
         if: always()
         env:

@@ -113,7 +113,10 @@ jobs:
       # to restore-keys.
       - name: Restore monitor state
         id: cache-restore
-        if: github.event_name == 'schedule'
+        # DEBUG: gate disabled to simulate the schedule-only path via
+        # workflow_dispatch. Re-enable before merging - dispatch
+        # touching the cache would clobber the schedule retry chain.
+        # if: github.event_name == 'schedule'
         uses: actions/cache/restore@v6
         with:
           path: .monitor-state
@@ -129,7 +132,8 @@ jobs:
       # from record-monitor-outcome clears that flag.
       - name: Monitor upstream latest release id
         id: monitor-release
-        if: github.event_name == 'schedule'
+        # DEBUG: gate disabled to simulate schedule-only path. Re-enable before merging.
+        # if: github.event_name == 'schedule'
         run: |
           set -euo pipefail
           STATE_DIR=".monitor-state"
@@ -201,7 +205,10 @@ jobs:
 
       - name: Monitor doc hash
         id: monitor-doc
-        if: github.event_name == 'schedule' && steps.monitor-release.outputs.skip_monitor_doc == 'false'
+        # DEBUG: schedule half of gate disabled to simulate schedule-only path.
+        # Re-enable both before merging.
+        # if: github.event_name == 'schedule' && steps.monitor-release.outputs.skip_monitor_doc == 'false'
+        if: steps.monitor-release.outputs.skip_monitor_doc == 'false'
         env:
           DOC_URL: ${{ env.MONITORED_DOC_URL }}
         run: |
@@ -449,9 +456,11 @@ jobs:
       # makes the next schedule cycle know to retry.
       - name: Record monitor outcome
         id: record-monitor-outcome
-        if: |
-          github.event_name == 'schedule' &&
-          steps.decide.outputs.need_to_test == 'true'
+        # DEBUG: gate disabled to simulate schedule-only path. Re-enable before merging.
+        # if: |
+        #   github.event_name == 'schedule' &&
+        #   steps.decide.outputs.need_to_test == 'true'
+        if: steps.decide.outputs.need_to_test == 'true'
         env:
           # REASON / REF / TEST_REF come from /tmp/.decision (written
           # by decide), not from any step's $GITHUB_OUTPUT - that's the
@@ -743,7 +752,11 @@ jobs:
       # overwrite an existing entry with the same key, so a static
       # key would make every save after the first a silent no-op.
       - name: Restore monitor state to disk
-        if: github.event_name == 'schedule' && needs.monitor-and-test.outputs.need_to_test == 'true'
+        # DEBUG: schedule half of gate disabled to simulate schedule-only
+        # path. Re-enable both before merging - dispatch touching the
+        # cache would clobber the schedule retry chain.
+        # if: github.event_name == 'schedule' && needs.monitor-and-test.outputs.need_to_test == 'true'
+        if: needs.monitor-and-test.outputs.need_to_test == 'true'
         env:
           monitor_last_release_id:        ${{ needs.monitor-and-test.outputs.monitor_last_release_id }}
           monitor_release_test_result:    ${{ needs.monitor-and-test.outputs.monitor_release_test_result }}
@@ -786,7 +799,11 @@ jobs:
           fi
 
       - name: Persist monitor state to cache
-        if: github.event_name == 'schedule' && needs.monitor-and-test.outputs.need_to_test == 'true'
+        # DEBUG: schedule half of gate disabled to simulate schedule-only
+        # path. Re-enable both before merging - dispatch persisting would
+        # overwrite cache entries the schedule retry chain depends on.
+        # if: github.event_name == 'schedule' && needs.monitor-and-test.outputs.need_to_test == 'true'
+        if: needs.monitor-and-test.outputs.need_to_test == 'true'
         uses: actions/cache/save@v6
         with:
           path: .monitor-state

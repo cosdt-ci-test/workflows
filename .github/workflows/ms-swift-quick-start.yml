@@ -123,6 +123,7 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: .monitor-state
+          key: cache-not-used-restore-keys-only # not exist key then match for restore-keys
           restore-keys: monitor-state-ms-swift-
 
       # Two monitors feed the decide step (release > doc by priority).

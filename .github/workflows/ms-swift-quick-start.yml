@@ -14,7 +14,10 @@ concurrency:
 
 on:
   schedule:
-    - cron: '0 */6 * * *'
+    # Tight 5-minute cadence for local testing only - GitHub caps
+    # schedule at 5 min minimum. Production is '0 */6 * * *'
+    # (every 6 hours); switch back before merging.
+    - cron: '*/5 * * * *'
   workflow_dispatch:
     inputs:
       upstream_ref:
@@ -423,21 +426,22 @@ jobs:
           python -m unittest tests.test_quick_start_ascend -v 2>&1
 
       # ===== Record outcome =====
-      # 'always()' is load-bearing: when the test step itself failed,
-      # this step stamps release_test_result=failure / release_test_error=...
-      # (or the doc_* equivalents) into the merged file under
-      # .monitor-state/. That field is what makes the next schedule run
-      # know to retry - drop it and the retry mechanism silently breaks.
-      # 'schedule' / 'workflow_dispatch' gating keeps manual-dispatch
-      # runs (which lack a "next cycle") from touching the cache.
-      - name: Record outcome
+      # Single gate: 'schedule && need_to_test == "true"', matching
+      # the Persist step downstream. decide only emits need_to_test
+      # when a monitor fired (release/doc change) or a previous-cycle
+      # failure flag forces a retry, so a missing output means "no
+      # monitor fired this cycle" -> nothing new to record. dispatch
+      # is excluded: it's a one-shot read-only path and must not
+      # touch the cache or its failure-flag state. The failure path
+      # (test failed) still runs through this gate because
+      # need_to_test is set before test.conclusion is known, so the
+      # failure flag this step writes into .monitor-state/ is what
+      # makes the next schedule cycle know to retry.
+      - name: Record monitor outcome
         id: record-monitor-outcome
         if: |
-          always() &&
-          (
-            github.event_name == 'schedule' ||
-            github.event_name == 'workflow_dispatch'
-          )
+          github.event_name == 'schedule' &&
+          steps.decide.outputs.need_to_test == 'true'
         env:
           # REASON / REF / TEST_REF come from /tmp/.decision (written
           # by decide), not from any step's $GITHUB_OUTPUT - that's the
@@ -574,7 +578,7 @@ jobs:
       # so they share one env block. The summary reads back the merged
       # monitor cache file record-monitor-outcome just wrote so the
       # 'Last failure' line surfaces for THIS run, not the cycle before.
-      - name: Write result.json + summarize
+      - name: Write result and summarize
         id: write-result
         if: always()
         env:
@@ -717,15 +721,14 @@ jobs:
       # here on ubuntu-latest, which CAN reach cache blob storage (the
       # NPU runner could not - hence this split).
       #
-      # 'always()' is load-bearing: when monitor-and-test failed, the
-      # failure flag written here is what makes the next schedule run
-      # retry; dropping it would break the retry chain.
-      # 'need_to_test == "true"' is the cycle gate: no monitor fired this
-      # cycle means no test ran and nothing new to persist (rewriting
-      # would just re-save the previous cycle's state byte-for-byte
-      # under a new run-id key). The retry chain survives because
-      # failure-flag writes only happen on the test-ran path, which
-      # the gate does NOT exclude.
+      # 'schedule' gate: dispatch is a one-shot read-only path and
+      # must not touch the cache. The previous-cycle state in
+      # .monitor-state/ belongs to schedule, and dispatch overriding
+      # it with a manual ref's outcome would clobber the failure
+      # flag the retry chain depends on. Schedule + need_to_test is
+      # the only path that Persists: when the schedule cycle ran
+      # the test, its outcome (success or failure) becomes the new
+      # cache state.
       #
       # Run-id suffix on the cache key: actions/cache refuses to
       # overwrite an existing entry with the same key, so a static

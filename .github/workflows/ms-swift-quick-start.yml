@@ -117,7 +117,7 @@ jobs:
         # if: github.event_name == 'schedule'
         uses: actions/cache/restore@v6
         with:
-          path: ${{ github.workspace }}/.monitor-state
+          path: .monitor-state
           key: monitor-state-ms-swift-${{ github.run_id }}
           restore-keys: monitor-state-ms-swift-
 
@@ -694,5 +694,5 @@ jobs:
         if: needs.monitor-and-test.outputs.need_to_test == 'true'
         uses: actions/cache/save@v6
         with:
-          path: ${{ github.workspace }}/.monitor-state
+          path: .monitor-state
           key: monitor-state-ms-swift-${{ github.run_id }}

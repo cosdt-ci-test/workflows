@@ -141,9 +141,13 @@ jobs:
           # silent because both sides would still match).
           MONITOR_RELEASE_FILE="$STATE_DIR/.monitor_release"
 
-          LAST_RELEASE_ID=""
-          RELEASE_TEST_RESULT=""
-          RELEASE_TEST_ERROR=""
+          # Default the lowercase vars (matching /tmp/.release_monitor's
+          # file contents and the `if` reads below) before the source
+          # so set -u is safe when the cache is cold (first-ever run)
+          # and MONITOR_RELEASE_FILE doesn't exist yet.
+          last_release_id=""
+          release_test_result=""
+          release_test_error=""
           if [ -f "$MONITOR_RELEASE_FILE" ]; then
             . "$MONITOR_RELEASE_FILE"
           fi
@@ -205,9 +209,12 @@ jobs:
           LOCAL_DOC_MONITOR="/tmp/.doc_monitor"
           MONITOR_DOC_FILE="$STATE_DIR/.monitor_doc"
 
-          DOC_HASH=""
-          DOC_TEST_RESULT=""
-          DOC_TEST_ERROR=""
+          # Default the lowercase vars (matching /tmp/.doc_monitor's
+          # file contents and the `if` reads below) before the source
+          # so set -u is safe when the cache is cold.
+          doc_hash=""
+          doc_test_result=""
+          doc_test_error=""
           if [ -f "$MONITOR_DOC_FILE" ]; then
             . "$MONITOR_DOC_FILE"
           fi

@@ -141,11 +141,20 @@ jobs:
           fi
 
       # ===== Restore from cache =====
-      # `key:` is exact-match against the API-derived key, so we
-      # never rely on restore-keys prefix matching. `fail-on-cache-miss`
-      # is left default (false) so a stale delete / cache eviction
-      # doesn't fail the whole job - it just means a cold-start
-      # baseline gets recorded this run.
+      # actions/cache/restore@v6 looks up entries by (user_key, version)
+      # tuple, where version = SHA256(paths + compression + platform +
+      # versionSalt) (see @actions/cache/lib/internal/cacheUtils.js
+      # getCacheVersion). The Cache REST API exposes entries by user
+      # key only, so the API's "latest key" is the right key but may
+      # have a stale version (the saved paths differed from current).
+      # To still get a hit, pass the API-derived key as the first
+      # restore-keys entry: restoreKeys is prefix-matched against the
+      # user key only (no version), and a single full key as the
+      # prefix yields the same set as exact-match against that key
+      # minus the version constraint. The trailing wildcard prefix
+      # picks up any older entry if the latest one was evicted.
+      # fail-on-cache-miss stays default (false) so a miss is a cold-
+      # start baseline, not a job failure.
       - name: Restore monitor state
         id: cache-restore
         # DEBUG: gate disabled to simulate schedule-only path via
@@ -156,7 +165,10 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: .monitor-state
-          key: ${{ steps.find-key.outputs.key }}
+          key: cache-not-used-restore-keys-only
+          restore-keys: |
+            ${{ steps.find-key.outputs.key }}
+            monitor-state-ms-swift-
 
       # Two monitors feed the decide step (release > doc by priority).
       # Each step sources its cache file, decides in-memory against

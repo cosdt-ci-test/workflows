@@ -17,8 +17,10 @@ EXAMPLE_REL="${EXAMPLE_PATH:-}"
 QWEN_MODEL_URL=https://modelscope.cn/models/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/master/qwen2.5-0.5b-instruct-q4_0.gguf
 QWEN_MODEL_FILE=qwen2.5-0.5b-instruct-q4_0.gguf
 # ModelScope has no Dream GGUF copy. mradermacher has Q8_0, not Q4_0.
+# NPU pods already NFS-mount SFS Turbo at /root/.cache; the job workspace does not persist.
 DREAM_MODEL_URL=https://hf-mirror.com/mradermacher/Dream-v0-Instruct-7B-GGUF/resolve/main/Dream-v0-Instruct-7B.Q8_0.gguf
 DREAM_MODEL_FILE=Dream-v0-Instruct-7B.Q8_0.gguf
+DREAM_MODEL_DEST=/root/.cache/cosdt-ci-test/llama.cpp/$DREAM_MODEL_FILE
 
 require_exec() {
   if [[ -z "$EXEC_REL" ]]; then
@@ -141,7 +143,7 @@ setup_cann-diffusion() {
   cmake_llama -DGGML_CANN=on
   build_target
   assert_cann_lib "$TARGET_ROOT/build/bin"
-  fetch_gguf "$DREAM_MODEL_URL" "$GITHUB_WORKSPACE/models/$DREAM_MODEL_FILE" \
+  fetch_gguf "$DREAM_MODEL_URL" "$DREAM_MODEL_DEST" \
     "Dream GGUF unavailable: $DREAM_MODEL_URL"
 }
 

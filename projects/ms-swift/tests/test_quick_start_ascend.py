@@ -41,11 +41,12 @@ import subprocess
 import time
 import traceback
 import unittest
+import urllib.error
 import urllib.request
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-DOC = REPO_ROOT / 'projects' / 'ms-swift' / 'docs' / 'Quick-start-Ascend.md'
+
 
 
 def _log(msg: str) -> None:
@@ -65,9 +66,10 @@ def fetch_doc_text() -> tuple[str, str]:
     test is exactly the doc that triggered this run. Failure to fetch
     raises - the test fails (this is a CI failure, not a silent skip).
 
-    Returns (text, url). Falls back to the local checkout copy when
-    MONITORED_DOC_URL is not set, so the test can still be exercised
-    by hand without the workflow.
+    Returns (text, url). No local fallback by design: a stale copy
+    of the doc would silently desynchronise the test from the URL the
+    monitor hashed. The URL is set by the workflow; running this test
+    outside CI requires setting MONITORED_DOC_URL by hand.
     """
     url = os.environ.get('MONITORED_DOC_URL')
     if url:
@@ -81,23 +83,16 @@ def fetch_doc_text() -> tuple[str, str]:
                     url, headers={'User-Agent': 'cosdt-ci-test/quick-start'})
                 with urllib.request.urlopen(req, timeout=30) as resp:
                     return resp.read().decode('utf-8'), url
-            except Exception as e:
+            except (urllib.error.URLError, TimeoutError, OSError) as e:
                 last_err = e
                 _log(f'fetch_doc_text: attempt {attempt+1}/2 failed for {url}')
                 _log(traceback.format_exc())
                 time.sleep(2)
         raise RuntimeError(
             f'failed to fetch {url} after 2 attempts: {last_err!r}')
-    if DOC.exists():
-        return DOC.read_text(encoding='utf-8'), f'local:{DOC}'
-    raise FileNotFoundError(
-        f'Quick Start doc not found at {DOC} '
-        '(and MONITORED_DOC_URL is unset)')
-
-
-def resolve_doc_path() -> Path:
-    """Backwards-compatible shim for callers that still want a Path."""
-    return DOC
+    raise RuntimeError(
+        'MONITORED_DOC_URL is unset - the test must run inside the '
+        'workflow which sets it; there is no local fallback by design.')
 
 
 def parse_blocks(doc_text: str) -> list[list[dict]]:

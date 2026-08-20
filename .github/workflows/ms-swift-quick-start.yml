@@ -69,7 +69,7 @@ jobs:
             [ -n "${doc_hash:-}" ]        && echo "cache_doc_hash=$doc_hash" >> "$GITHUB_OUTPUT"
             [ -n "${test_result:-}" ]    && echo "cache_test_result=$test_result" >> "$GITHUB_OUTPUT"
             [ -n "${test_error:-}" ]     && echo "cache_test_error=$test_error" >> "$GITHUB_OUTPUT"
-            echo "monitor state restored: cache_last_release_id='$last_release_id' cache_doc_hash='$doc_hash' cache_test_result='$test_result' cache_test_error='$test_error'"
+            echo "monitor state restored: cache_last_release_id='${last_release_id:-}' cache_doc_hash='${doc_hash:-}' cache_test_result='${test_result:-}' cache_test_error='${test_error:-}'"
           else
             echo "no cache entry restored - cold start (empty monitor state)"
           fi
@@ -227,10 +227,17 @@ jobs:
           fi
 
           # ----- doc signal (only if release didn't fire) -----
+          # raw.githubusercontent.com is not always reachable from the
+          # NPU runner (cluster firewall). Treat a fetch failure as
+          # "doc signal unknown" rather than aborting the whole cycle:
+          # doc is the lower-priority signal, release (when it fires)
+          # already covers the test path, and a missed doc signal just
+          # delays the next doc-driven cycle until the next schedule.
           if [ "$SKIP_DOC" = "false" ]; then
-            CURRENT_DOC_HASH=$(curl -fsSL --retry 3 "$DOC_URL" | sha256sum | cut -d' ' -f1)
-            echo "monitor: doc hash current=$CURRENT_DOC_HASH cached=$DOC_HASH"
-            if [ "$DOC_HASH" != "$CURRENT_DOC_HASH" ]; then
+            if ! CURRENT_DOC_HASH=$(curl -fsSL --retry 3 --max-time 30 "$DOC_URL" \
+                                    | sha256sum | cut -d' ' -f1); then
+              echo "monitor: doc signal not fired (fetch failed; release signal, if any, still drives the cycle)"
+            elif [ "$DOC_HASH" != "$CURRENT_DOC_HASH" ]; then
               DOC_HASH="$CURRENT_DOC_HASH"
               NEED_TO_TEST="true"
               REF="$CURRENT_RELEASE_TAG"
@@ -316,6 +323,7 @@ jobs:
             echo "sha=$SHA" >> "$GITHUB_OUTPUT"
             echo "Upstream commit: $SHA"
           else
+            echo "need_to_test=false" >> "$GITHUB_OUTPUT"
             echo "No upstream changes - skipping install + test"
           fi
 

@@ -166,6 +166,17 @@ jobs:
         with:
           path: .monitor-state
           key: cache-not-used-restore-keys-only
+          # enableCrossOsArchive: true keeps process.platform out of
+          # the cache version hash. The cache is written by the
+          # publish-and-persist job on ubuntu-latest (x86_64) and read
+          # here on linux-aarch64-a2-1 (self-hosted NPU runner) - both
+          # report process.platform='linux' so the cross-OS path is
+          # not actually exercised, but stripping platform from the
+          # version still helps in case the runner base image ever
+          # changes its reported platform. compressionMethod still
+          # participates in the hash, so both sides need zstd installed
+          # (or both uninstalled) for the version to match.
+          enableCrossOsArchive: true
           restore-keys: |
             ${{ steps.find-key.outputs.key }}
             monitor-state-ms-swift-
@@ -752,3 +763,12 @@ jobs:
         with:
           path: .monitor-state
           key: monitor-state-ms-swift-${{ github.run_id }}
+          # enableCrossOsArchive: true keeps process.platform out of
+          # the cache version hash. Save runs on ubuntu-latest (x86_64)
+          # while Restore runs on linux-aarch64-a2-1 (self-hosted NPU
+          # runner); without this the platform salt would still match
+          # (both 'linux'), but stripping it makes the version robust
+          # to future runner-image changes. compressionMethod still
+          # participates - both runners need zstd (or neither) for the
+          # restore version hash to align.
+          enableCrossOsArchive: true

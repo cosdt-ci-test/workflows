@@ -2,6 +2,7 @@
 # Run one example from a CI working copy of the target tree.
 # Overlay CLI args come from OVERLAY_ARGS (JSON array). Never
 # git add/commit/push.
+# PROFILE comes from the workflow as an environment variable.
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
@@ -13,6 +14,7 @@ EXAMPLE_REL="$1"
 TARGET_ROOT="${TARGET_ROOT:?TARGET_ROOT is required}"
 CI_OUTPUT_DIR="${CI_OUTPUT_DIR:?CI_OUTPUT_DIR is required}"
 EXEC_REL="${EXEC:-}"
+PROFILE="${PROFILE:-}"
 
 EXAMPLE_PATH="$TARGET_ROOT/$EXAMPLE_REL"
 
@@ -83,15 +85,36 @@ fi
 
 cd "$TARGET_ROOT"
 export CI_OUTPUT_DIR ASCEND_RT_VISIBLE_DEVICES="${ASCEND_RT_VISIBLE_DEVICES:-0}"
-if [[ -n "$EXEC_REL" ]]; then
-  RUN_LOG="$CI_OUTPUT_DIR/$(basename "$EXEC_REL").log"
-  "$EXEC_PATH" "${EXTRA_ARGS[@]}" 2>&1 | tee "$RUN_LOG"
-  # ggml falls back to CPU when no CANN device shows up and llama-simple
-  # still exits 0. That green would be a lie.
-  if ! grep -q 'CANN[0-9]' "$RUN_LOG"; then
+
+assert_cann_used() {
+  local run_log="$1"
+  if [[ "$PROFILE" == "cpu" ]]; then
+    return 0
+  fi
+  if ! grep -q 'CANN[0-9]' "$run_log"; then
     echo "run used no CANN device; check the container card mounts" >&2
     exit 1
   fi
+}
+
+if [[ -n "$EXEC_REL" ]]; then
+  RUN_LOG="$CI_OUTPUT_DIR/$(basename "$EXEC_REL").log"
+  case "$EXAMPLE_REL" in
+    examples/gguf)
+      "$EXEC_PATH" "$CI_OUTPUT_DIR/ci-demo.gguf" w 2>&1 | tee "$RUN_LOG"
+      "$EXEC_PATH" "$CI_OUTPUT_DIR/ci-demo.gguf" r 2>&1 | tee -a "$RUN_LOG"
+      ;;
+    examples/simple-chat)
+      printf 'Hello\n' | "$EXEC_PATH" "${EXTRA_ARGS[@]}" 2>&1 | tee "$RUN_LOG"
+      ;;
+    examples/retrieval)
+      printf 'hello\n' | "$EXEC_PATH" "${EXTRA_ARGS[@]}" 2>&1 | tee "$RUN_LOG"
+      ;;
+    *)
+      "$EXEC_PATH" "${EXTRA_ARGS[@]}" 2>&1 | tee "$RUN_LOG"
+      ;;
+  esac
+  assert_cann_used "$RUN_LOG"
   exit 0
 fi
 case "$EXAMPLE_PATH" in

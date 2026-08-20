@@ -189,7 +189,14 @@ jobs:
       # from record-monitor-outcome clears that flag.
       - name: Monitor upstream release and doc
         id: monitor
-        # DEBUG: gate disabled to simulate schedule-only path. Re-enable before merging.
+        # Monitor only runs on schedule - it maintains the cache state
+        # (.monitor-state/.monitor) by comparing the latest release /
+        # doc hash against the cached previous-cycle values. On
+        # workflow_dispatch we don't want to mutate that state:
+        # dispatch is a one-shot read-only path that just decides
+        # "test the latest release now" without overwriting the
+        # schedule's retry chain. The dispatch branch in `decide`
+        # below fetches the latest release tag independently.
         # if: github.event_name == 'schedule'
         env:
           DOC_URL: ${{ env.MONITORED_DOC_URL }}
@@ -310,20 +317,26 @@ jobs:
           reason=""
           ref=""
 
-          if [ -f "$DECISION_FILE" ]; then
-            . "$DECISION_FILE"
-          fi
-
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             need_to_test="true"
             reason="manual"
-            # ref is whatever the monitor step wrote - usually the
-            # latest upstream release tag. Fall back to 'main' if the
-            # monitor step couldn't resolve anything (cold cache + no
-            # API access); the resolve-SHA block below would otherwise
-            # exit 1 on an empty ref.
-            [ -z "$ref" ] && ref="main"
+            # The monitor step is gated to schedule only - it never
+            # ran for this dispatch, so /tmp/.decision is empty.
+            # Fetch the latest upstream release tag independently.
+            # Fall back to 'main' if the API call fails (cluster
+            # can't reach api.github.com, rate-limited, etc) - the
+            # resolve-SHA block below would otherwise exit 1 on an
+            # empty ref.
+            if ref=$(curl -fsSL --max-time 30 "$GH_API/repos/${{ env.UPSTREAM_REPO }}/releases/latest" \
+                   | jq -r '.tag_name // empty'); then
+              [ -z "$ref" ] && ref="main"
+            else
+              echo "WARN: failed to resolve latest release; falling back to 'main'"
+              ref="main"
+            fi
             echo "monitor decision (manual override): ref=$ref need_to_test=true reason=manual"
+          elif [ -f $DECISION_FILE ]; then
+            . $DECISION_FILE
           fi
 
           if [ "$need_to_test" = "true" ]; then

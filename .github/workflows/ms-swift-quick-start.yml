@@ -69,7 +69,7 @@ jobs:
             [ -n "${doc_hash:-}" ]        && echo "cache_doc_hash=$doc_hash" >> "$GITHUB_OUTPUT"
             [ -n "${test_result:-}" ]    && echo "cache_test_result=$test_result" >> "$GITHUB_OUTPUT"
             [ -n "${test_error:-}" ]     && echo "cache_test_error=$test_error" >> "$GITHUB_OUTPUT"
-            echo "monitor state restored: cache_last_release_id='$last_release_id' cache_doc_hash='$doc_hash' cache_test_result='$test_result' cache_test_error='$test_error'"
+            echo "monitor state restored: cache_last_release_id='${last_release_id:-}' cache_doc_hash='${doc_hash:-}' cache_test_result='${test_result:-}' cache_test_error='${test_error:-}'"
           else
             echo "no cache entry restored - cold start (empty monitor state)"
           fi
@@ -316,6 +316,7 @@ jobs:
             echo "sha=$SHA" >> "$GITHUB_OUTPUT"
             echo "Upstream commit: $SHA"
           else
+            echo "need_to_test=false" >> "$GITHUB_OUTPUT"
             echo "No upstream changes - skipping install + test"
           fi
 

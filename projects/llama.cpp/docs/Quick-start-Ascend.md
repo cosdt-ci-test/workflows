@@ -4,12 +4,6 @@
 
 [llama.cpp](https://github.com/ggml-org/llama.cpp) 是面向 GGUF 格式大模型的轻量推理引擎。昇腾侧通过 **CANN 后端**（`-DGGML_CANN=on`）把计算图调度到 NPU；设备在日志里显示为 `CANN0`、`CANN1` 等。
 
-**怎么用本文**
-
-- 找一台空目录作为工作区（下文命令默认在此执行；编译后会出现 `llama.cpp/` 子目录）。
-- 每个代码块都是**可直接粘贴**的 bash；折行用 `\`。
-- 按顺序执行；某步失败时先对照该节的「预期结果」，再查 [CANN 后端文档](https://github.com/ggml-org/llama.cpp/blob/master/docs/backend/CANN.md) 或本文末尾的故障排查。
-
 ---
 
 ## 前置条件
@@ -26,19 +20,6 @@ Atlas **800T** / **900 A2** 训练系列（Ascend **910B**）。本文示例为*
 | 编译工具 | cmake ≥ 3.14、g++（C++17）、make、git |
 | 下载工具 | curl |
 | llama.cpp | 本文从 GitHub 源码编译，见下文 |
-
-### 本文验证过的环境
-
-在下列组合上跑通过；你的环境不必完全一致，但版本差距过大时请先对照 [CANN 后端文档](https://github.com/ggml-org/llama.cpp/blob/master/docs/backend/CANN.md) 与上游 issue。
-
-| 项目 | 版本 |
-| --- | --- |
-| 机器 | Atlas 900 A2 PODc（910B4 64GB × 1） |
-| 操作系统 | Ubuntu 22.04 aarch64 |
-| 容器镜像（可选） | `swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12` |
-| CANN | 9.1.0 |
-| cmake / g++ | 3.22 / 11.4 |
-| 示例模型 | [Qwen2.5-0.5B-Instruct-GGUF](https://modelscope.cn/models/Qwen/Qwen2.5-0.5B-Instruct-GGUF)（Q4_0，约 409 MiB） |
 
 ---
 
@@ -83,7 +64,6 @@ cmake --version
 
 将 `<UPSTREAM_REF>` 换成目标**分支、tag 或 commit**（上游默认分支为 `master`）。
 
-> **国内网络提示**：全量编译时 cmake 可能尝试从 HuggingFace 拉取 `llama-server` 的预构建 Web UI，失败会自动跳过、**不影响推理**，但最坏可能多等约 10 分钟。若希望跳过等待，在 `cmake -B build ...` 一行追加 `-DLLAMA_USE_PREBUILT_UI=OFF`。
 
 ```shell
 git clone https://github.com/ggml-org/llama.cpp.git

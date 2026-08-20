@@ -19,11 +19,6 @@ on:
     # (every 6 hours); switch back before merging.
     - cron: '*/5 * * * *'
   workflow_dispatch:
-    inputs:
-      upstream_ref:
-        description: 'manual run: ref to test (tag, branch, or main)'
-        required: false
-        default: 'main'
 
 permissions:
   contents: read
@@ -265,45 +260,31 @@ jobs:
           } > "$DECISION_FILE"
           echo "monitor decision: release_tag=$REF need_to_test=$NEED_TO_TEST reason=$REASON"
 
-      # Picks the higher-priority monitor (release > doc), or for
-      # manual dispatch uses inputs.upstream_ref directly. Only
-      # test_ref crosses the $GITHUB_OUTPUT boundary here - every
-      # other monitor output stays in /tmp/.decision until record-
-      # monitor-outcome sources it.
+      # Picks the higher-priority monitor (release > doc) and sources
+      # /tmp/.decision for test_ref. Both schedule and workflow_dispatch
+      # run the same monitor path - dispatch is just an on-demand kick
+      # of the same logic, so a manual run with no upstream change
+      # produces need_to_test=false (no diff to test). Only test_ref
+      # crosses the $GITHUB_OUTPUT boundary here - every other monitor
+      # output stays in /tmp/.decision until record-monitor-outcome
+      # sources it.
       - name: Decide which ref to test
         id: decide
-        env:
-          # Route user-controlled values (inputs.*) through env so
-          # bash treats them as parameter expansions, never command
-          # substitutions: a crafted ref like 'main $(curl evil)' is
-          # expanded as a single value, not re-parsed.
-          EVENT_NAME: ${{ github.event_name }}
-          INPUT_REF:  ${{ inputs.upstream_ref }}
         run: |
           set -euo pipefail
           DECISION_FILE="/tmp/.decision"
 
-          # Default all three decision keys (lowercase - same name as the
-          # /tmp/.decision file's vars and the `if` reads below) before
-          # either branch so `set -u` is safe: dispatch overwrites;
-          # schedule sources /tmp/.decision when present, else falls
-          # through with the defaults (no monitor fired ->
-          # need_to_test stays "false").
+          # Default all three decision keys (lowercase - same name as
+          # the /tmp/.decision file's vars and the `if` reads below)
+          # before sourcing so `set -u` is safe when the monitor step
+          # didn't fire (cold cache / no signal change -> need_to_test
+          # stays "false").
           need_to_test="false"
           reason=""
           ref=""
 
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            need_to_test="true"
-            reason="manual"
-            ref="${INPUT_REF:-main}"
-            {
-              echo "need_to_test='$need_to_test'"
-              echo "ref='$ref'"
-              echo "reason='$reason'"
-            } > "$DECISION_FILE"
-          elif [ -f $DECISION_FILE ]; then
-            . $DECISION_FILE
+          if [ -f "$DECISION_FILE" ]; then
+            . "$DECISION_FILE"
           fi
 
           if [ "$need_to_test" = "true" ]; then

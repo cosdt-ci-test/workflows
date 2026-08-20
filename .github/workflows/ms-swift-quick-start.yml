@@ -237,23 +237,33 @@ jobs:
           REF=""
           REASON=""
           SKIP_DOC="false"
+          echo "monitor: upstream latest release id=$CURRENT_RELEASE_ID tag=$CURRENT_RELEASE_TAG (cached last_release_id=$LAST_RELEASE_ID)"
           if [ -n "$CURRENT_RELEASE_ID" ] && [ "$LAST_RELEASE_ID" != "$CURRENT_RELEASE_ID" ]; then
             LAST_RELEASE_ID="$CURRENT_RELEASE_ID"
             NEED_TO_TEST="true"
             REF="$CURRENT_RELEASE_TAG"
             REASON="release"
             SKIP_DOC="true"
+            echo "monitor: release signal FIRED (id=$CURRENT_RELEASE_ID tag=$CURRENT_RELEASE_TAG)"
+          else
+            echo "monitor: release signal not fired (current=$CURRENT_RELEASE_ID cached=$LAST_RELEASE_ID)"
           fi
 
           # ----- doc signal (only if release didn't fire) -----
           if [ "$SKIP_DOC" = "false" ]; then
             CURRENT_DOC_HASH=$(curl -fsSL --retry 3 "$DOC_URL" | sha256sum | cut -d' ' -f1)
+            echo "monitor: doc hash current=$CURRENT_DOC_HASH cached=$DOC_HASH"
             if [ "$DOC_HASH" != "$CURRENT_DOC_HASH" ]; then
               DOC_HASH="$CURRENT_DOC_HASH"
               NEED_TO_TEST="true"
               REF="$CURRENT_RELEASE_TAG"
               REASON="doc"
+              echo "monitor: doc signal FIRED (hash=$CURRENT_DOC_HASH)"
+            else
+              echo "monitor: doc signal not fired (hash unchanged)"
             fi
+          else
+            echo "monitor: doc signal skipped (release already fired)"
           fi
 
           # ----- retry signal (lowest priority) -----
@@ -264,6 +274,9 @@ jobs:
             NEED_TO_TEST="true"
             REF="$CURRENT_RELEASE_TAG"
             REASON="retry"
+            echo "monitor: retry signal FIRED (previous cycle test_result=failure)"
+          else
+            echo "monitor: retry signal not fired (need_to_test=$NEED_TO_TEST test_result=${TEST_RESULT:-none})"
           fi
 
           # Values are single-quoted so literals like 'none' and any

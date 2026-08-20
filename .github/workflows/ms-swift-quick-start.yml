@@ -155,6 +155,29 @@ jobs:
       # picks up any older entry if the latest one was evicted.
       # fail-on-cache-miss stays default (false) so a miss is a cold-
       # start baseline, not a job failure.
+      - name: Ensure zstd for cache action
+        # actions/cache@v6 picks compressionMethod by probing for
+        # `zstd` on PATH: if present it uses zstd (.tzst / version
+        # salt = 'zstd-without-long'), otherwise gzip (.tgz / salt
+        # = 'gzip'). That salt is part of the cache version hash
+        # (see @actions/cache/lib/internal/cacheUtils.js
+        # getCacheVersion), so the Save side (ubuntu-latest, has
+        # zstd preinstalled) writes entries with one version and
+        # the Restore side (linux-aarch64-a2-1, base image doesn't
+        # ship zstd) would compute a different version, missing
+        # the entry on exact-match. Install zstd on this runner
+        # so both sides compute the same version hash.
+        if: steps.find-key.outputs.key != ''
+        run: |
+          set -euo pipefail
+          if command -v zstd >/dev/null 2>&1; then
+            echo "zstd already installed: $(zstd --version | head -1)"
+          else
+            apt-get update -qq
+            apt-get install -y -qq zstd
+            echo "installed zstd: $(zstd --version | head -1)"
+          fi
+
       - name: Restore monitor state
         id: cache-restore
         # DEBUG: gate disabled to simulate schedule-only path via
@@ -165,21 +188,7 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: .monitor-state
-          key: cache-not-used-restore-keys-only
-          # enableCrossOsArchive: true keeps process.platform out of
-          # the cache version hash. The cache is written by the
-          # publish-and-persist job on ubuntu-latest (x86_64) and read
-          # here on linux-aarch64-a2-1 (self-hosted NPU runner) - both
-          # report process.platform='linux' so the cross-OS path is
-          # not actually exercised, but stripping platform from the
-          # version still helps in case the runner base image ever
-          # changes its reported platform. compressionMethod still
-          # participates in the hash, so both sides need zstd installed
-          # (or both uninstalled) for the version to match.
-          enableCrossOsArchive: true
-          restore-keys: |
-            ${{ steps.find-key.outputs.key }}
-            monitor-state-ms-swift-
+          key: ${{ steps.find-key.outputs.key }}
 
       # Two monitors feed the decide step (release > doc by priority).
       # Each step sources its cache file, decides in-memory against
@@ -320,13 +329,6 @@ jobs:
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             need_to_test="true"
             reason="manual"
-            # The monitor step is gated to schedule only - it never
-            # ran for this dispatch, so /tmp/.decision is empty.
-            # Fetch the latest upstream release tag independently.
-            # No fallback: if the API call fails or returns an empty
-            # tag, fail loudly so the operator notices (silent
-            # fallback to 'main' would mask GitHub API outages by
-            # quietly testing an unrelated branch).
             ref=$(curl -fsSL --max-time 30 "$GH_API/repos/${{ env.UPSTREAM_REPO }}/releases/latest" \
                    | jq -r '.tag_name // empty')
             [ -n "$ref" ] || { echo "ERROR: failed to resolve latest upstream release tag"; exit 1; }

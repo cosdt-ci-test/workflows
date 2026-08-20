@@ -1,0 +1,352 @@
+name: llama.cpp-quick-start
+
+on:
+  # 第一次 force 跑绿后再取消注释。避开 0 */6（ms-swift quick-start）和 30 */6（llama.cpp examples）。
+  # schedule:
+  #   - cron: '15 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: skip monitor gate and run the doc test
+        type: boolean
+        default: false
+      target_repo:
+        description: Target llama.cpp repository (force only)
+        default: ggml-org/llama.cpp
+        type: string
+      target_ref:
+        description: Branch, tag, or SHA (force only)
+        default: master
+        type: string
+
+# format() not || : `'manual-' || github.run_id` short-circuits to the
+# literal `manual-` and every manual run shares one group.
+concurrency:
+  group: ${{ github.event_name == 'schedule' && 'llama.cpp-quick-start-schedule' || format('manual-{0}', github.run_id) }}
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: read
+
+env:
+  CI_IMAGE: &ci_image swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+  UPSTREAM_REPO: ggml-org/llama.cpp
+  GH_API: https://api.github.com
+  # Contents API, not raw.githubusercontent.com: the NPU runner's
+  # egress reaches api.github.com only. ref=github.sha so monitor and
+  # test hash the commit this run checked out, including feature branches.
+  MONITORED_DOC_URL: https://api.github.com/repos/${{ github.repository }}/contents/projects/llama.cpp/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.decide.outputs.changed }}
+      trigger: ${{ steps.decide.outputs.trigger }}
+      targets: ${{ steps.decide.outputs.targets }}
+    steps:
+      - name: Checkout workflows
+        uses: actions/checkout@v4
+
+      - name: Restore monitor state
+        id: cache-restore
+        if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.force) }}
+        uses: actions/cache/restore@v4
+        with:
+          path: .monitor-state
+          # Must not prefix-collide with llama.cpp-examples-monitor-state-
+          # or monitor-state-ms-swift-. restore-keys matches by prefix.
+          key: llama.cpp-quick-start-monitor-state-${{ github.run_id }}
+          restore-keys: |
+            llama.cpp-quick-start-monitor-state-
+
+      - name: Monitor Quick Start doc hash
+        id: monitor-doc
+        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.force }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          STATE_DIR=".monitor-state"
+          mkdir -p "$STATE_DIR"
+          AUTH_HEADER="Authorization: Bearer ${GH_TOKEN}"
+          JSON_ACCEPT="Accept: application/vnd.github+json"
+          RAW_ACCEPT="Accept: application/vnd.github.raw"
+          doc_file=$(mktemp)
+          curl -fsSL --retry 3 \
+            -H "$AUTH_HEADER" \
+            -H "$RAW_ACCEPT" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$MONITORED_DOC_URL" -o "$doc_file"
+          digest=$(sha256sum "$doc_file" | awk '{print $1}')
+          rm -f "$doc_file"
+          if [ -z "$digest" ]; then
+            echo "failed to hash Quick Start doc" >&2
+            exit 1
+          fi
+          master_sha=$(curl -fsSL --retry 3 \
+            -H "$AUTH_HEADER" -H "$JSON_ACCEPT" \
+            "$GH_API/repos/$UPSTREAM_REPO/commits/master" \
+            | jq -r '.sha // empty')
+          if [ -z "$master_sha" ]; then
+            echo "failed to resolve master SHA" >&2
+            exit 1
+          fi
+          old=""
+          if [ -f "$STATE_DIR/.doc_hash" ]; then
+            old=$(tr -d '[:space:]' < "$STATE_DIR/.doc_hash")
+          fi
+          if [ "$digest" != "$old" ]; then
+            printf '%s\n' "$digest" > "$STATE_DIR/.doc_hash"
+            doc_changed=true
+          else
+            doc_changed=false
+          fi
+          {
+            echo "changed=${doc_changed}"
+            echo "master_sha=$master_sha"
+            echo "doc_hash=$digest"
+          } >> "$GITHUB_OUTPUT"
+          echo "doc_hash=$digest changed=${doc_changed} master_sha=$master_sha"
+
+      - name: Monitor upstream latest release id
+        id: monitor-release
+        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.force }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          STATE_DIR=".monitor-state"
+          mkdir -p "$STATE_DIR"
+          AUTH_HEADER="Authorization: Bearer ${GH_TOKEN}"
+          ACCEPT_HEADER="Accept: application/vnd.github+json"
+          payload=$(curl -fsSL --retry 3 \
+            -H "$AUTH_HEADER" -H "$ACCEPT_HEADER" \
+            "$GH_API/repos/$UPSTREAM_REPO/releases/latest")
+          id=$(jq -r '.id // empty' <<<"$payload")
+          tag=$(jq -r '.tag_name // empty' <<<"$payload")
+          if [ -z "$id" ] || [ -z "$tag" ]; then
+            echo "failed to read latest release id/tag" >&2
+            exit 1
+          fi
+          tag_enc=$(jq -rn --arg t "$tag" '$t|@uri')
+          release_sha=$(curl -fsSL --retry 3 \
+            -H "$AUTH_HEADER" -H "$ACCEPT_HEADER" \
+            "$GH_API/repos/$UPSTREAM_REPO/commits/${tag_enc}" \
+            | jq -r '.sha // empty')
+          if [ -z "$release_sha" ]; then
+            echo "failed to resolve release SHA for tag ${tag}" >&2
+            exit 1
+          fi
+          old=$(cat "$STATE_DIR/.last_release_id" 2>/dev/null || echo "")
+          if [ "$old" != "$id" ]; then
+            echo "$id" > "$STATE_DIR/.last_release_id"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "release_sha=$release_sha" >> "$GITHUB_OUTPUT"
+          echo "release_id=$id" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$tag"
+          echo "release_id=$id sha=$release_sha old=$old"
+
+      - name: Persist monitor state
+        if: ${{ always() && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.force)) }}
+        uses: actions/cache/save@v4
+        with:
+          path: .monitor-state
+          key: llama.cpp-quick-start-monitor-state-${{ github.run_id }}
+
+      - name: Decide targets
+        id: decide
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force }}
+          INPUT_REPO: ${{ inputs.target_repo }}
+          INPUT_REF: ${{ inputs.target_ref }}
+          GH_TOKEN: ${{ github.token }}
+          DOC_CHANGED: ${{ steps.monitor-doc.outputs.changed }}
+          REL_CHANGED: ${{ steps.monitor-release.outputs.changed }}
+          MASTER_SHA: ${{ steps.monitor-doc.outputs.master_sha }}
+          RELEASE_SHA: ${{ steps.monitor-release.outputs.release_sha }}
+        run: |
+          set -euo pipefail
+          AUTH_HEADER="Authorization: Bearer ${GH_TOKEN}"
+          ACCEPT_HEADER="Accept: application/vnd.github+json"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$FORCE" = "true" ]; then
+            repo="${INPUT_REPO:-$UPSTREAM_REPO}"
+            ref="${INPUT_REF:-master}"
+            sha=$(curl -fsSL --retry 3 \
+              -H "$AUTH_HEADER" -H "$ACCEPT_HEADER" \
+              "$GH_API/repos/${repo}/commits/${ref}" | jq -r '.sha // empty')
+            if [ -z "$sha" ]; then
+              echo "failed to resolve ${repo}@${ref}" >&2
+              exit 1
+            fi
+            targets=$(jq -cn --arg repo "$repo" --arg ref "$sha" \
+              '[{target_repo:$repo,target_ref:$ref,reason:"manual"}]')
+            {
+              echo "changed=true"
+              echo "trigger=workflow_dispatch"
+              echo "targets<<EOF"
+              echo "$targets"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+            echo "force run repo=$repo sha=$sha"
+            exit 0
+          fi
+          targets='[]'
+          if [ "${DOC_CHANGED:-}" = "true" ] && [ "${REL_CHANGED:-}" = "true" ]; then
+            if [ "$MASTER_SHA" = "$RELEASE_SHA" ]; then
+              targets=$(jq -cn --arg repo "$UPSTREAM_REPO" --arg ref "$MASTER_SHA" \
+                '[{target_repo:$repo,target_ref:$ref,reason:"doc,release"}]')
+            else
+              targets=$(jq -cn --arg repo "$UPSTREAM_REPO" --arg m "$MASTER_SHA" --arg r "$RELEASE_SHA" \
+                '[{target_repo:$repo,target_ref:$m,reason:"doc"},{target_repo:$repo,target_ref:$r,reason:"release"}]')
+            fi
+          elif [ "${DOC_CHANGED:-}" = "true" ]; then
+            targets=$(jq -cn --arg repo "$UPSTREAM_REPO" --arg ref "$MASTER_SHA" \
+              '[{target_repo:$repo,target_ref:$ref,reason:"doc"}]')
+          elif [ "${REL_CHANGED:-}" = "true" ]; then
+            targets=$(jq -cn --arg repo "$UPSTREAM_REPO" --arg ref "$RELEASE_SHA" \
+              '[{target_repo:$repo,target_ref:$ref,reason:"release"}]')
+          fi
+          if [ "$targets" != "[]" ]; then
+            changed=true
+          else
+            changed=false
+          fi
+          {
+            echo "changed=${changed}"
+            echo "trigger=${EVENT_NAME}"
+            echo "targets<<EOF"
+            echo "$targets"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "targets=$targets"
+
+  run-quick-start:
+    name: quick-start (${{ matrix.target.target_ref }})
+    needs: monitor
+    if: needs.monitor.outputs.changed == 'true'
+    runs-on: linux-aarch64-a2-1
+    timeout-minutes: 240
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.monitor.outputs.targets) }}
+    # Result.json is written by hosted publish-result. This NPU job
+    # does not upload artifacts.
+    container:
+      image: *ci_image
+      options: >-
+        --shm-size=64g
+        --device=/dev/davinci0
+        --device=/dev/davinci_manager --device=/dev/devmm_svm --device=/dev/hisi_hdc
+        --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
+        --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
+        --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
+    steps:
+      - name: Checkout workflows
+        uses: actions/checkout@v4
+        with:
+          path: workflows
+
+      - name: Run Quick Start doc
+        env:
+          LLAMA_CPP_NPU_E2E: "1"
+          UPSTREAM_REF: ${{ matrix.target.target_ref }}
+          UPSTREAM_COMMIT: ${{ matrix.target.target_ref }}
+          MONITORED_DOC_URL: ${{ env.MONITORED_DOC_URL }}
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          export PATH="/usr/local/sbin:$PATH"
+          source /usr/local/Ascend/ascend-toolkit/set_env.sh
+          cd workflows/projects/llama.cpp
+          python -m unittest tests.test_quick_start_ascend -v
+
+  publish-result:
+    name: publish-result (${{ matrix.target.target_ref }})
+    needs: [monitor, run-quick-start]
+    if: always() && needs.monitor.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.monitor.outputs.targets) }}
+    steps:
+      - name: Checkout workflows
+        uses: actions/checkout@v4
+        with:
+          path: workflows
+
+      - name: Write result JSON
+        env:
+          TARGET_REPO: ${{ matrix.target.target_repo }}
+          TARGET_REF: ${{ matrix.target.target_ref }}
+          TRIGGER: ${{ needs.monitor.outputs.trigger }}
+          REASON: ${{ matrix.target.reason }}
+          DOC_PATH: projects/llama.cpp/docs/Quick-start-Ascend.md
+          IMAGE: ${{ env.CI_IMAGE }}
+          EXPECTED_JOB_NAME: quick-start (${{ matrix.target.target_ref }})
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          conclusion="$(
+            gh api --paginate \
+              "/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" |
+              jq -r --arg name "$EXPECTED_JOB_NAME" \
+                '.jobs[] | select(.name == $name) | .conclusion'
+          )"
+          if [ -z "$conclusion" ]; then
+            echo "could not find completed job: $EXPECTED_JOB_NAME"
+            exit 1
+          fi
+          case "$conclusion" in
+            success|cancelled)
+              job_status="$conclusion"
+              ;;
+            *)
+              job_status="failure"
+              ;;
+          esac
+          mkdir -p "$GITHUB_WORKSPACE/output"
+          export JOB_STATUS="$job_status"
+          python3 - <<'EOF'
+          import json
+          import os
+
+          result = {
+              'trigger': os.environ['TRIGGER'],
+              'target_repo': os.environ['TARGET_REPO'],
+              'target_ref': os.environ['TARGET_REF'],
+              'path': os.environ['DOC_PATH'],
+              'image': os.environ['IMAGE'],
+              'job_status': os.environ['JOB_STATUS'],
+              'reason': os.environ['REASON'],
+          }
+          out = os.path.join(os.environ['GITHUB_WORKSPACE'], 'output', 'result.json')
+          with open(out, 'w', encoding='utf-8') as handle:
+              json.dump(result, handle, ensure_ascii=False, indent=2)
+              handle.write('\n')
+          EOF
+
+      - name: Validate result.json
+        run: |
+          set -euo pipefail
+          python3 -m pip install -q check-jsonschema
+          check-jsonschema --schemafile workflows/schemas/result.schema.json \
+            output/result.json
+
+      - name: Upload result JSON
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama.cpp-quick-start-${{ github.run_id }}-${{ strategy.job-index }}
+          if-no-files-found: error
+          path: output/result.json

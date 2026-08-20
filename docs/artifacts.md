@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | example 结果 | `<project>-examples-<run_id>-<job_index>` | 每个 `publish-result` matrix job（对应一个 `run-example`），`if: always()` |
 | manifest 检查 | `<project>-manifest-check` | `manifest-check` job，`if: always()` |
-| quick-start 结果 | `<project>-quick-start-<run_id>` | `monitor-and-test` job，`if: always()` |
+| quick-start 结果 | `<project>-quick-start-<run_id>`，一轮测多棵树时用 `<project>-quick-start-<run_id>-<job_index>` | 托管 runner 上的 `publish-result`（或仍在同一 job 里写结果的旧流水线）。NPU 上的测试 job 不上传。无变化时整个 run 在 monitor 后结束，不产生此 artifact |
 
 `run_id` 是 GitHub Actions 的 `github.run_id`。`job_index` 是 matrix 的 `strategy.job-index`（从 0 起）。失败也必须上传，不能只在绿的时候留文件。
 
@@ -28,9 +28,11 @@ artifact 刻意只装 result.json，不装运行日志和训练产物，且不�
 
 单个文件 `manifest_check_result.json`，符合 [schemas/manifest_check_result.schema.json](../schemas/manifest_check_result.schema.json)。字段：`trigger`、`target_repo`、`target_ref`、`new_paths`、`stale_paths`、`supported`。`new_paths` / `stale_paths` 只记录、不使 job 失败——例外是 supported 条目的 path 已不在磁盘上：manifest-check 会在写完本文件后立即判红，避免 run-example 白占 NPU runner。`supported` 条目的 `path`、`profile`、`runner`、`npu_devices`、`image`、`timeout_minutes` 均为必填（`overlay_args` 和 `exec` 可选）——example 流水线按这些字段调度 runner、卡、容器镜像、超时和 setup 例程，缺字段会在 manifest-check 被 schema 校验拦下。`path` 是目标树上的身份（文件或目录）；`exec` 只在 `path` 不是那个要启动的文件时写。
 
-### `<project>-quick-start-<run_id>`
+### `<project>-quick-start-<run_id>` 或 `<project>-quick-start-<run_id>-<job_index>`
 
-至少包含 `result.json`（同一份 [result.schema.json](../schemas/result.schema.json)）。quick-start 额外写 `tests_ran`（布尔）：监控无变化、未跑测试时为 `false`。还可以附带 unittest 日志、release API 响应等调试文件。
+至少包含 `result.json`（同一份 [result.schema.json](../schemas/result.schema.json)）。还可以附带 unittest 日志、release API 响应等调试文件。一轮只测一棵树时用前者。一轮测多棵树时用后者，避免两个 job 重名。
+
+llama.cpp 的 quick-start 结果由跑在 GitHub 托管 runner 上的 `publish-result` 生成，不由 NPU runner 上传。它通过 Jobs API 读取对应 `run-quick-start` 的 conclusion 再写文件。`schedule` 触发但 monitor 未检测到变化时，后面的 job 跳过，不产生 artifact。
 
 example 流水线里，每个 `publish-result` job 在上传前用 `check-jsonschema --schemafile schemas/result.schema.json` 校验自己生成的 `result.json`；quick-start 流水线同样在上传前校验。缺文件或不合规即红。
 

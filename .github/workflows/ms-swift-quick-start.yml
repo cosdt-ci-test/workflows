@@ -27,6 +27,10 @@ on:
 
 permissions:
   contents: read
+  # find-key queries GET /repos/{repo}/actions/caches which needs
+  # actions: read on the workflow token; without it the call returns
+  # 403 and find-key treats it as a cold cache.
+  actions: read
 
 env:
   CI_IMAGE: &ci_image swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
@@ -124,12 +128,15 @@ jobs:
           set -euo pipefail
           # /actions/caches?key= prefix filters server-side; per_page=1
           # + sort=created_at:desc returns the single most recent entry.
-          # Empty array (cold cache) -> .actions_caches is [] and the
-          # // empty fallback leaves KEY="".
-          KEY=$(gh api \
+          # Empty array (cold cache) -> .actions_caches[0].key is null
+          # and jq's // empty fallback leaves KEY="". curl + jq are
+          # part of every runner base image; `gh` isn't, so we don't
+          # depend on it here.
+          KEY=$(curl -sS \
+            -H "Authorization: token $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
-            "/repos/${{ github.repository }}/actions/caches?key=monitor-state-ms-swift-&per_page=1&sort=created_at&direction=desc" \
-            --jq '.actions_caches[0].key // empty')
+            "https://api.github.com/repos/${{ github.repository }}/actions/caches?key=monitor-state-ms-swift-&per_page=1&sort=created_at&direction=desc" \
+            | jq -r '.actions_caches[0].key // empty')
           if [ -n "$KEY" ]; then
             echo "latest cache key: $KEY"
             echo "key=$KEY" >> "$GITHUB_OUTPUT"

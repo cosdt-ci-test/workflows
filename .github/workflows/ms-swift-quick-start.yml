@@ -52,21 +52,14 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: .monitor-state
-          # Stable key + restore-keys prefix so we always pull the
-          # most recent entry, regardless of the current run_id.
           key: cache-not-used-restore-keys-only
           restore-keys: monitor-state-ms-swift-
 
-      # .monitor-state/.monitor is a bash-sourceable key=value file
-      # (last_release_id='...', doc_hash='...', test_result='...',
-      # test_error='...'). Source it and re-emit each field as a
-      # step output so monitor-and-test can ship them through env
-      # to the materialize step below - cleaner than passing the
-      # raw file content as one big string output. A cold cache
-      # (no entry restored) means no outputs are written; the
-      # downstream `needs.X.outputs.Y` expressions evaluate to an
-      # empty string in that case, which the materialize step
-      # handles by writing empty values into .monitor.
+      # Re-emit each field as a separate step output rather than passing
+      # the raw file content as one big string - keeps the materializer
+      # in monitor-and-test trivially shell-quotable. Cold cache =
+      # no outputs written; downstream needs.X.outputs.Y evaluates
+      # to '' and the materializer writes empty values into .monitor.
       - id: read-monitor
         run: |
           set -euo pipefail
@@ -86,11 +79,9 @@ jobs:
     needs: restore-cache
     runs-on: [linux-aarch64-a2-1]
     timeout-minutes: 180
-    # Each monitor field ships as its own job output; record-monitor-
-    # outcome is the single writer, publish-and-persist reconstructs
-    # .monitor-state/ + calls actions/cache/save. The NPU runner
-    # cannot reach GitHub's cache blob storage (firewalled), so we
-    # route persistence through job outputs to the ubuntu-latest job.
+    # The NPU runner is firewalled from GitHub's cache blob storage,
+    # so monitor state persists via job outputs to publish-and-persist
+    # (ubuntu-latest, the only runner that can reach cache storage).
     outputs:
       result_json:             ${{ steps.write-result.outputs.result_json }}
       trigger:                 ${{ steps.write-result.outputs.trigger }}
@@ -148,15 +139,12 @@ jobs:
           path: workflows
           fetch-depth: 1
 
-      # ===== Materialize monitor state from upstream job =====
-      # restore-cache ran on ubuntu-latest, read .monitor-state/.monitor
-      # from cache, and shipped each tracked field as a job output.
-      # Reconstruct the same bash-sourceable key=value file here so
-      # the monitor step below can `.` it as if it had been restored
-      # locally. Cold cache means upstream outputs are empty strings,
-      # which yields a file with all four values empty - the monitor
-      # step handles that with its own lower-case defaults before
-      # sourcing.
+      # restore-cache ran on ubuntu-latest (the only runner that can reach
+      # the cache blob storage) and shipped each tracked field as a job
+      # output. Reconstruct the same bash-sourceable key=value file
+      # here so the monitor step below can `.` it as if it had been
+      # restored locally. Cold cache means upstream outputs are empty
+      # strings; the monitor step's lower-case defaults handle that.
       - name: Materialize monitor state file
         env:
           RESTORED_LAST_RELEASE_ID: ${{ needs.restore-cache.outputs.cache_last_release_id }}
@@ -175,22 +163,15 @@ jobs:
           echo "materialized .monitor-state/.monitor:"
           cat .monitor-state/.monitor
 
-      # Two monitors feed the decide step (release > doc by priority).
-      # Each step sources its cache file, decides in-memory against
-      # local vars only, then writes its decision to /tmp/.decision
-      # (read by decide). A failure outcome from a previous cycle
-      # forces a retry even if the signal hasn't changed; a success
-      # from record-monitor-outcome clears that flag.
+      # Schedule-only: this step is what maintains .monitor-state/.monitor
+      # (the failure flag / last_release_id / doc_hash). Dispatch is a
+      # one-shot read-only path that must not mutate that state -
+      # otherwise a manual run would clobber the failure flag the next
+      # schedule cycle needs to decide whether to retry. The dispatch
+      # branch in `decide` below fetches the latest release tag
+      # independently.
       - name: Monitor upstream release and doc
         id: monitor
-        # Monitor only runs on schedule - it maintains the cache state
-        # (.monitor-state/.monitor) by comparing the latest release /
-        # doc hash against the cached previous-cycle values. On
-        # workflow_dispatch we don't want to mutate that state:
-        # dispatch is a one-shot read-only path that just decides
-        # "test the latest release now" without overwriting the
-        # schedule's retry chain. The dispatch branch in `decide`
-        # below fetches the latest release tag independently.
         if: github.event_name == 'schedule'
         env:
           DOC_URL: ${{ env.MONITORED_DOC_URL }}
@@ -200,19 +181,15 @@ jobs:
           mkdir -p "$STATE_DIR"
           DECISION_FILE="/tmp/.decision"
           LOCAL_MONITOR="/tmp/.monitor"
-          # Single merged cache file. Release and doc signals travel
-          # together: they're sourced / written as one unit and the
-          # decide step sees whichever side fired via REASON.
+          # Release and doc signals share one merged cache file -
+          # test_result / test_error don't track which side fired
+          # because a retry re-runs the same upstream commit either
+          # way, and REASON tells the consumer which side triggered
+          # the current cycle.
           MONITOR_FILE="$STATE_DIR/.monitor"
 
-          # Default all four lowercase vars (matching the file's vars
-          # and the `if` reads below) before sourcing so set -u is
-          # safe when the cache is cold and MONITOR_FILE doesn't
-          # exist yet. test_result / test_error cover both release
-          # and doc signals - we don't need to track which side
-          # failed because a retry re-runs the same upstream commit
-          # either way, and the side that triggered the next cycle
-          # is in REASON.
+          # Default all four keys so set -u stays safe when the cache is cold
+          # and MONITOR_FILE doesn't exist yet.
           last_release_id=""
           doc_hash=""
           test_result=""
@@ -297,14 +274,11 @@ jobs:
           } > "$DECISION_FILE"
           echo "monitor decision: release_tag=$REF need_to_test=$NEED_TO_TEST reason=$REASON"
 
-      # Picks the higher-priority monitor (release > doc) for test_ref.
-      # Schedule: source /tmp/.decision - need_to_test reflects whether
-      # the upstream signal actually changed since last run.
-      # workflow_dispatch: force need_to_test=true regardless of cache
-      # state, but use the same release ref the monitor step just
-      # resolved (NOT a hardcoded 'main') so dispatch always tests the
-      # most recent upstream release. Only test_ref crosses the
-      # $GITHUB_OUTPUT boundary here - every other monitor output stays
+      # Schedule: source /tmp/.decision. workflow_dispatch forces
+      # need_to_test=true and resolves the latest release tag itself -
+      # NOT a hardcoded 'main' - so dispatch always tests the most
+      # recent upstream release. Only test_ref crosses the
+      # $GITHUB_OUTPUT boundary here; every other monitor output stays
       # in /tmp/.decision until record-monitor-outcome sources it.
       - name: Decide which ref to test
         id: decide
@@ -314,12 +288,8 @@ jobs:
           set -euo pipefail
           DECISION_FILE="/tmp/.decision"
 
-          # Default all three decision keys (lowercase - same name as
-          # the /tmp/.decision file's vars and the `if` reads below)
-          # before either branch so `set -u` is safe: dispatch
-          # overwrites; schedule sources /tmp/.decision when present,
-          # else falls through with the defaults (no monitor fired ->
-          # need_to_test stays "false").
+          # Defaults so set -u stays safe; dispatch overwrites,
+          # schedule sources /tmp/.decision when present.
           need_to_test="false"
           reason=""
           ref=""
@@ -419,21 +389,15 @@ jobs:
           # uv handles PEP 517 build deps more reliably than pip and
           # the test's setUpClass invokes `uv pip install ...`.
           python -m pip install uv
-          # The pinned CANN 9.1.0 / py3.12 image ships torch 2.9.0 +
-          # torch_npu 2.9.0.post2 pre-installed, so probe first and
-          # skip the install when the image's torch stack matches.
-          # The fall-through path is hit only when the image is rebuilt
-          # without a torch stack or bumped to a different torch line.
-          # We don't pin torch here by default because hard-pinning
-          # torch==2.9.0+cpu on a workflow that doesn't need to
-          # reinstall torch tends to trigger PyPI simple-page lookups
-          # under the +cpu local version label, which the cluster
-          # cache does not serve.
+          # Probe first and skip the install when the image's torch
+          # stack matches. We don't hard-pin torch here because
+          # torch==2.9.0+cpu triggers PyPI simple-page lookups under
+          # the +cpu local version label, which the cluster cache
+          # does not serve.
           #
-          # Note: torch.__version__ surfaces as '2.9.0+cpu' via the
-          # PEP 440 local version label regardless of device - the
-          # '+cpu' names the libtorch build variant, not the runtime.
-          # Actual compute goes through torch_npu (CANN backend);
+          # torch.__version__ surfaces as '2.9.0+cpu' regardless of
+          # device - the '+cpu' names the libtorch build variant, not
+          # the runtime. Compute goes through torch_npu (CANN backend);
           # ms-swift moves the model with .to('npu:0').
           if python -c "
           import torch, torch_npu
@@ -450,46 +414,30 @@ jobs:
                 torch==2.9.0 torch_npu==2.9.0.post2
           fi
           python -m pip install "transformers<5.0" "peft<0.19"
-          # vLLM-Ascend setup removed: vllm-ascend 0.18.0 (and the
-          # matching 0.22.1rc1 line) both have unresolved dep conflicts
-          # in this runner's reachable mirror set - the 0.18 wheel
-          # Requires-Dist pins triton-ascend==3.2.0, but the
-          # huaweicloud ascend mirror only publishes 3.2.1 / 3.2.2.
-          # Quick-start therefore tests the transformers / torch_npu
-          # infer backend only; vLLM-Ascend setup is in NPU-support.md.
-          # The doc owns the source install step (its '## install
-          # ms-swift' block runs git clone + uv pip install -e . for
-          # the exact <UPSTREAM_REF>); we just run the doc itself as
-          # a unittest - every shell block becomes one or more cases.
+          # vLLM-Ascend setup removed: vllm-ascend 0.18.0 pins
+          # triton-ascend==3.2.0 but the huaweicloud ascend mirror
+          # only publishes 3.2.1 / 3.2.2. Quick-start therefore
+          # tests the transformers / torch_npu infer backend only;
+          # vLLM-Ascend setup lives in NPU-support.md.
           cd workflows/projects/ms-swift
           python -m unittest tests.test_quick_start_ascend -v 2>&1
 
-      # ===== Record outcome =====
-      # Single gate: 'schedule && need_to_test == "true"', matching
-      # the Persist step downstream. decide only emits need_to_test
-      # when a monitor fired (release/doc change) or a previous-cycle
-      # failure flag forces a retry, so a missing output means "no
-      # monitor fired this cycle" -> nothing new to record. dispatch
-      # is excluded: it's a one-shot read-only path and must not
-      # touch the cache or its failure-flag state. The failure path
-      # (test failed) still runs through this gate because
-      # need_to_test is set before test.conclusion is known, so the
-      # failure flag this step writes into .monitor-state/ is what
-      # makes the next schedule cycle know to retry.
+      # Schedule + need_to_test - dispatch forces need_to_test=true
+      # but must not mutate monitor state (otherwise it would clobber
+      # the failure flag the next schedule cycle uses to decide
+      # whether to retry). need_to_test is set BEFORE test.conclusion
+      # is known, so this step still runs through the failure path -
+      # writing the new failure flag is what makes the next cycle
+      # decide to retry.
       - name: Record monitor outcome
         id: record-monitor-outcome
-        # Schedule only: dispatch forces need_to_test=true regardless
-        # of upstream signal, so without this gate dispatch would
-        # write a 'manual' outcome into monitor state and clobber
-        # the cached failure flag the next schedule cycle needs to
-        # decide whether to retry.
         if: |
           github.event_name == 'schedule' &&
           steps.decide.outputs.need_to_test == 'true'
         env:
-          # REASON / REF / TEST_REF come from /tmp/.decision (written
-          # by decide), not from any step's $GITHUB_OUTPUT - that's the
-          # point of the split: monitor outputs only surface here.
+          # REASON / REF come from /tmp/.decision (written by decide),
+          # not from any step's $GITHUB_OUTPUT - monitor outputs only
+          # surface in this step.
           CONCLUSION: ${{ steps.test.conclusion }}
         run: |
           set -euo pipefail
@@ -500,9 +448,7 @@ jobs:
           mkdir -p "$STATE_DIR"
           MONITOR_FILE="$STATE_DIR/.monitor"
 
-          # Default all expected keys before sourcing so a missing /
-          # partial decision file leaves every variable defined;
-          # otherwise set -u trips on the later reads.
+          # Defaults so set -u stays safe when DECISION_FILE is absent.
           changed="false"
           reason=""
           ref=""
@@ -538,15 +484,12 @@ jobs:
               ;;
           esac
 
-          # Source the merged monitor file (cache + /tmp/.monitor), then
-          # update test_result / test_error for any cycle that fired
-          # (REASON non-empty - 'release' / 'doc' / 'retry'). A retry
-          # doesn't need to know which side previously failed because
-          # the next cycle re-tests the same upstream commit either
-          # way; the new RESULT/ERROR overwrites the failure flag.
-          # If REASON is empty we leave test_result / test_error
-          # unchanged so a still-pending failure keeps triggering a
-          # retry next cycle.
+          # REASON empty -> leave test_result / test_error unchanged so
+          # a still-pending failure keeps triggering a retry next cycle.
+          # REASON non-empty -> overwrite with this cycle's outcome
+          # (success or new failure); a retry doesn't need to know which
+          # side previously failed because the next cycle re-tests the
+          # same upstream commit either way.
 
           last_release_id=""
           doc_hash=""
@@ -581,13 +524,10 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "shipped monitor state: release(id=$last_release_id) doc(hash=$doc_hash) test(result=$test_result error=$test_error)"
 
-      # Write result.json + summarize. Gate matches record-monitor-outcome:
-      # dispatch always writes (manual run produces a result); schedule
-      # writes only when need_to_test=true, so a no-signal schedule
-      # cycle never emits target_ref="" (which the schema's
-      # minLength: 1 rejects). The summary reads back the merged
-      # monitor cache file record-monitor-outcome just wrote so the
-      # 'Last failure' line surfaces for THIS run, not the cycle before.
+      # need_to_test gates dispatch (always writes - manual run
+      # produces a result) and schedule (writes only when a monitor
+      # fired, so the schema's target_ref minLength:1 is never
+      # violated by a no-signal cycle).
       - name: Write result and summarize
         id: write-result
         if: steps.decide.outputs.need_to_test == 'true'
@@ -606,10 +546,6 @@ jobs:
           set -euo pipefail
           mkdir -p output
 
-          # 7 fields: 6 required by schemas/result.schema.json + 'reason'.
-          # Tests-ran is implied by reason non-empty; upstream ref/commit
-          # are derivable from reason + the API; Actions run object
-          # carries created_at.
           jq -n \
             --arg trigger          "$TRIGGER" \
             --arg reason           "$REASON" \
@@ -647,10 +583,8 @@ jobs:
           echo "  Upstream commit:  $UPSTREAM_SHA"
           echo "  Trigger reason:   $REASON"
           echo "------------------------------------------------------------"
-          # Default _r/_e empty so set -u stays safe when the monitor
-          # file is missing or half-written. test_result / test_error
-          # cover both release and doc (single shared flag), so we
-          # read them directly - no REASON-based dispatch needed.
+          # Defaults so set -u stays safe when the monitor file is
+          # missing or half-written.
           STATE_DIR=".monitor-state"
           MONITOR_FILE="$STATE_DIR/.monitor"
           _r=""
@@ -665,18 +599,17 @@ jobs:
           fi
           echo "============================================================"
 
-  # The NPU runner can't reach GitHub's blob / cache storage, so
-  # result.json + .monitor-state/ ship as job outputs and this job
-  # does the actual upload + cache save + schema validation here.
+  # Complement of monitor-and-test: actual upload + cache save +
+  # cache restore, all on ubuntu-latest (the only runner that can reach
+  # GitHub's blob / cache storage).
   publish-and-persist:
     name: publish result.json + persist monitor state
     needs: monitor-and-test
     if: always()
     runs-on: ubuntu-latest
     steps:
-      # schemas/result.schema.json lives in this repo, and this job
-      # runs on a fresh ubuntu-latest runner - no workflows checkout
-      # of its own.
+      # Fresh runner, so checkout brings schemas/result.schema.json
+      # alongside the just-materialized output/result.json.
       - name: Checkout workflows (provides schemas/result.schema.json)
         uses: actions/checkout@v6
         with:
@@ -718,23 +651,9 @@ jobs:
           path: output/result.json
           if-no-files-found: warn
 
-      # Persist monitor state. The 6 cache fields arrive as one job output
-      # each (set by record-monitor-outcome); reconstruct the merged files
-      # here on ubuntu-latest, which CAN reach cache blob storage (the
-      # NPU runner could not - hence this split).
-      #
-      # 'schedule' gate: dispatch is a one-shot read-only path and
-      # must not touch the cache. The previous-cycle state in
-      # .monitor-state/ belongs to schedule, and dispatch overriding
-      # it with a manual ref's outcome would clobber the failure
-      # flag the retry chain depends on. Schedule + need_to_test is
-      # the only path that Persists: when the schedule cycle ran
-      # the test, its outcome (success or failure) becomes the new
-      # cache state.
-      #
-      # Run-id suffix on the cache key: actions/cache refuses to
-      # overwrite an existing entry with the same key, so a static
-      # key would make every save after the first a silent no-op.
+      # Cache fields arrive as one job output each (set by
+      # record-monitor-outcome); reconstruct the merged file on
+      # ubuntu-latest, which CAN reach cache blob storage.
       - name: Restore monitor state to disk
         # Schedule only: dispatch must not write monitor state,
         # otherwise it would clobber the cached failure flag the
@@ -759,6 +678,9 @@ jobs:
           echo "  wrote $MONITOR_FILE (from monitor-and-test outputs):"
           cat "$MONITOR_FILE"
 
+      # Run-id suffix: actions/cache refuses to overwrite an existing
+      # entry with the same key, so a static key would silently no-op
+      # every save after the first.
       - name: Persist monitor state to cache
         if: github.event_name == 'schedule' && needs.monitor-and-test.outputs.need_to_test == 'true'
         uses: actions/cache/save@v6

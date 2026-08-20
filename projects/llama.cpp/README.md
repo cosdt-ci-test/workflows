@@ -57,3 +57,31 @@ python3 scripts/bootstrap_manifest.py \
 不做失败重试。看见新哈希或新 release id 就写入 cache；后面 NPU 红了也不为同一对值再跑。要再跑：等信号再变，或 `force=true`。
 
 `ggml/`、CANN 后端、本仓 `setup_example.sh` / `overlay_args` 不算进 supported 哈希。那些要靠新 release，或 `force=true`。
+
+## Quick Start 看护
+
+文档在 `docs/Quick-start-Ascend.md`。流水线是 `.github/workflows/llama.cpp-quick-start.yml`。它按字面执行文档里的 `shell` 块，跳过 `shell skip` 块，并把紧邻的 `text` 和实际输出做正则比对。
+
+触发契约和上面的 example 看护相同，只是信号 A 换成这篇文档的 sha256。
+
+- `schedule`：cron 是 `15 */6 * * *`。**接入阶段保持注释**，第一次 `force=true` 跑绿后再打开。打开后每 6 小时跑监控，任一信号亮了才上 NPU。
+- `workflow_dispatch`：手动触发。默认 `force=false`，和定时走**同一套监控、同一份 cache**。只有 `force=true` 才跳过监控门、必跑，并且**不读不写** monitor cache。`target_repo` / `target_ref` 只在 `force=true` 时有意义。
+
+两个监控信号都跑，是「或」，互不跳过、没有优先级：
+
+1. 本仓这篇 Quick Start 文档的 sha256。`MONITORED_DOC_URL` 走 GitHub Contents API（`ref` 是这次 run 的 `github.sha`），不用 `raw.githubusercontent.com`：NPU runner 的出口到不了那个域名。monitor 和测试拉同一 URL。本信号亮了，测的是这一轮解析到的上游 `master` commit SHA。
+2. `/releases/latest` 的 release **id**（数字，不是 tag 字符串。不过滤 `bxxxxx` / `v*`）。本信号亮了，测的是该 release tag 当前指到的 commit SHA。
+
+谁亮了就测谁的树：
+
+- 只有 doc 亮：测 `MASTER_SHA`，`reason=doc`。
+- 只有 release 亮：测 `RELEASE_SHA`，`reason=release`。
+- 两个都亮且两个 SHA 不同：跑两份，`reason` 分别是 `doc` 和 `release`。
+- 两个都亮且 SHA 相同：只跑一份（同一份代码不编两遍），`reason=doc,release`。
+- 都没亮：`targets` 为空，后面的 job 跳过，不写 `result.json`。
+
+`force=true` 时 `targets` 只有一项，`reason=manual`，repo/ref 用输入解析出的 commit SHA。
+
+不做失败重试。看见新哈希或新 release id 就写入 cache。后面 NPU 红了也不为同一对值再跑。要再跑：等信号再变，或 `force=true`。
+
+NPU job 不上传 artifact。`result.json` 由托管 runner 上的 `publish-result` 按 job 名回看 conclusion 后上传。

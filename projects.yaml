@@ -26,3 +26,4 @@ projects:
     dir: projects/llama.cpp
     workflows:
       examples: .github/workflows/llama.cpp-examples.yml
+      quick_start: .github/workflows/llama.cpp-quick-start.yml

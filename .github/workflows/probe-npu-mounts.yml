@@ -50,7 +50,20 @@ jobs:
             fi
           done
           echo "=== mount grep ==="
-          mount | grep -Ei 'models|ci-cache|/data|nfs|workspace' || echo "no matching mounts"
+          mount | grep -Ei 'models|ci-cache|/data|nfs|workspace|/.cache' || echo "no matching mounts"
+          echo "=== /root/.cache ==="
+          if [ -e /root/.cache ]; then
+            echo "EXISTS /root/.cache"
+            ls -la /root/.cache | head -60
+            findmnt -T /root/.cache || true
+          else
+            echo "MISSING /root/.cache"
+          fi
+          mkdir -p /root/.cache/cosdt-ci-test
+          echo "probe-npu-mounts ${GITHUB_RUN_ID} $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            > /root/.cache/cosdt-ci-test/probe-npu-mounts.marker
+          echo "WROTE marker:"
+          cat /root/.cache/cosdt-ci-test/probe-npu-mounts.marker
 
   via-host-root:
     name: container plus host root bind
@@ -90,3 +103,39 @@ jobs:
           findmnt -T /host/models /host/data /host/workspace 2>&1
           echo "=== host nfs ==="
           findmnt -t nfs,nfs4 /host 2>&1 || echo "no nfs under /host"
+
+  read-cache-share:
+    name: read marker from a new pod
+    needs: [in-container]
+    runs-on: linux-aarch64-a2-1
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      ASCEND_RT_VISIBLE_DEVICES: "0"
+    container:
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+      options: >-
+        --shm-size=64g
+        --device=/dev/davinci0
+        --device=/dev/davinci_manager --device=/dev/devmm_svm --device=/dev/hisi_hdc
+        --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
+        --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
+        --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
+    steps:
+      - name: Read cross-job marker
+        run: |
+          set +e
+          echo "=== /root/.cache ==="
+          ls -la /root/.cache | head -60
+          echo "=== findmnt /root/.cache ==="
+          findmnt -T /root/.cache || true
+          MARKER=/root/.cache/cosdt-ci-test/probe-npu-mounts.marker
+          if [ -f "$MARKER" ]; then
+            echo "EXISTS marker"
+            cat "$MARKER"
+          else
+            echo "MISSING marker"
+            exit 1
+          fi

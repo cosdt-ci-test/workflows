@@ -227,10 +227,17 @@ jobs:
           fi
 
           # ----- doc signal (only if release didn't fire) -----
+          # raw.githubusercontent.com is not always reachable from the
+          # NPU runner (cluster firewall). Treat a fetch failure as
+          # "doc signal unknown" rather than aborting the whole cycle:
+          # doc is the lower-priority signal, release (when it fires)
+          # already covers the test path, and a missed doc signal just
+          # delays the next doc-driven cycle until the next schedule.
           if [ "$SKIP_DOC" = "false" ]; then
-            CURRENT_DOC_HASH=$(curl -fsSL --retry 3 "$DOC_URL" | sha256sum | cut -d' ' -f1)
-            echo "monitor: doc hash current=$CURRENT_DOC_HASH cached=$DOC_HASH"
-            if [ "$DOC_HASH" != "$CURRENT_DOC_HASH" ]; then
+            if ! CURRENT_DOC_HASH=$(curl -fsSL --retry 3 --max-time 30 "$DOC_URL" \
+                                    | sha256sum | cut -d' ' -f1); then
+              echo "monitor: doc signal not fired (fetch failed; release signal, if any, still drives the cycle)"
+            elif [ "$DOC_HASH" != "$CURRENT_DOC_HASH" ]; then
               DOC_HASH="$CURRENT_DOC_HASH"
               NEED_TO_TEST="true"
               REF="$CURRENT_RELEASE_TAG"

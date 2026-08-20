@@ -73,7 +73,12 @@ def fetch_doc_text() -> tuple[str, str]:
     if url:
         # urllib's default has no timeout - on flaky networks the
         # call can hang indefinitely. Cap each attempt at 30s and
-        # retry once before giving up.
+        # retry once before giving up. On total failure fall back
+        # to the local checkout copy: the runner may not reach the
+        # upstream URL (e.g. cluster firewall blocks raw.githubusercontent.com)
+        # but the workflows checkout still ships the doc, so we can
+        # still exercise the shell blocks - just not the
+        # "doc-updated-this-cycle" assertion.
         last_err = None
         for attempt in range(2):
             try:
@@ -86,8 +91,7 @@ def fetch_doc_text() -> tuple[str, str]:
                 _log(f'fetch_doc_text: attempt {attempt+1}/2 failed for {url}')
                 _log(traceback.format_exc())
                 time.sleep(2)
-        raise RuntimeError(
-            f'failed to fetch {url} after 2 attempts: {last_err!r}')
+        _log(f'fetch_doc_text: falling back to local {DOC}: {last_err!r}')
     if DOC.exists():
         return DOC.read_text(encoding='utf-8'), f'local:{DOC}'
     raise FileNotFoundError(

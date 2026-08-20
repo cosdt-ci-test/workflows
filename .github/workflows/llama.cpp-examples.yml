@@ -489,12 +489,15 @@ jobs:
       - name: Setup example environment
         env:
           PROFILE: ${{ matrix.example.profile }}
+          EXEC: ${{ matrix.example.exec }}
+          EXAMPLE_PATH: ${{ matrix.example.path }}
         run: bash "$PROJECT_ROOT/scripts/setup_example.sh" "$PROFILE"
 
       - name: Run example
         env:
           EXAMPLE_PATH: ${{ matrix.example.path }}
           EXEC: ${{ matrix.example.exec }}
+          PROFILE: ${{ matrix.example.profile }}
           OVERLAY_ARGS: ${{ toJSON(matrix.example.overlay_args) }}
         run: |
           source /usr/local/Ascend/ascend-toolkit/set_env.sh

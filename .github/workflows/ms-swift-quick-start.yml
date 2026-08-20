@@ -22,10 +22,6 @@ on:
 
 permissions:
   contents: read
-  # find-key queries GET /repos/{repo}/actions/caches which needs
-  # actions: read on the workflow token; without it the call returns
-  # 403 and find-key treats it as a cold cache.
-  actions: read
 
 env:
   CI_IMAGE: &ci_image swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
@@ -34,8 +30,60 @@ env:
   GH_API: https://api.github.com
 
 jobs:
+  # Restore the previous run's monitor state on a GitHub-hosted
+  # ubuntu-latest runner, then ship the four tracked fields as job
+  # outputs to monitor-and-test (which runs on a self-hosted NPU
+  # runner that can't reach the cache blob storage and can't be
+  # trusted to compute the same cache version hash because of
+  # platform / compression differences). Doing the restore here
+  # keeps save (publish-and-persist, also ubuntu-latest) and
+  # restore on the same runner type, so the cache version hash
+  # is consistent across write and read.
+  restore-cache:
+    name: restore monitor state from cache
+    runs-on: ubuntu-latest
+    outputs:
+      cache_last_release_id: ${{ steps.read-monitor.outputs.cache_last_release_id }}
+      cache_doc_hash:        ${{ steps.read-monitor.outputs.cache_doc_hash }}
+      cache_test_result:     ${{ steps.read-monitor.outputs.cache_test_result }}
+      cache_test_error:      ${{ steps.read-monitor.outputs.cache_test_error }}
+    steps:
+      - name: Restore monitor state
+        uses: actions/cache/restore@v6
+        with:
+          path: .monitor-state
+          # Stable key + restore-keys prefix so we always pull the
+          # most recent entry, regardless of the current run_id.
+          key: cache-not-used-restore-keys-only
+          restore-keys: monitor-state-ms-swift-
+
+      # .monitor-state/.monitor is a bash-sourceable key=value file
+      # (last_release_id='...', doc_hash='...', test_result='...',
+      # test_error='...'). Source it and re-emit each field as a
+      # step output so monitor-and-test can ship them through env
+      # to the materialize step below - cleaner than passing the
+      # raw file content as one big string output. A cold cache
+      # (no entry restored) means no outputs are written; the
+      # downstream `needs.X.outputs.Y` expressions evaluate to an
+      # empty string in that case, which the materialize step
+      # handles by writing empty values into .monitor.
+      - id: read-monitor
+        run: |
+          set -euo pipefail
+          if [ -f .monitor-state/.monitor ]; then
+            . .monitor-state/.monitor
+            [ -n "${last_release_id:-}" ] && echo "cache_last_release_id=$last_release_id" >> "$GITHUB_OUTPUT"
+            [ -n "${doc_hash:-}" ]        && echo "cache_doc_hash=$doc_hash" >> "$GITHUB_OUTPUT"
+            [ -n "${test_result:-}" ]    && echo "cache_test_result=$test_result" >> "$GITHUB_OUTPUT"
+            [ -n "${test_error:-}" ]     && echo "cache_test_error=$test_error" >> "$GITHUB_OUTPUT"
+            echo "monitor state restored: cache_last_release_id='$last_release_id' cache_doc_hash='$doc_hash' cache_test_result='$test_result' cache_test_error='$test_error'"
+          else
+            echo "no cache entry restored - cold start (empty monitor state)"
+          fi
+
   monitor-and-test:
     name: monitor + test on change
+    needs: restore-cache
     runs-on: [linux-aarch64-a2-1]
     timeout-minutes: 180
     # Each monitor field ships as its own job output; record-monitor-
@@ -46,7 +94,7 @@ jobs:
     outputs:
       result_json:             ${{ steps.write-result.outputs.result_json }}
       trigger:                 ${{ steps.write-result.outputs.trigger }}
-      reason:                   ${{ steps.record-monitor-outcome.outputs.reason }}
+      reason:                  ${{ steps.record-monitor-outcome.outputs.reason }}
       job_status:              ${{ steps.write-result.outputs.job_status }}
       need_to_test:            ${{ steps.decide.outputs.need_to_test }}
       monitor_last_release_id: ${{ steps.record-monitor-outcome.outputs.monitor_last_release_id }}
@@ -100,95 +148,32 @@ jobs:
           path: workflows
           fetch-depth: 1
 
-      # ===== Restore =====
-      # actions/cache/restore's built-in restore-keys prefix-match is
-      # ambiguous about which path it extracts to (the Cache service
-      # resolves `path:` against its own workspace path, which on a
-      # self-hosted runner can differ from bash's $GITHUB_WORKSPACE).
-      # To sidestep that, query the GitHub Cache API directly for the
-      # most recent entry under our key prefix, then hand that exact
-      # key to restore. The exact-match lookup is a single round-trip
-      # with a well-defined "miss" semantics, and the API's
-      # sort=created_at:desc gives us a deterministic "latest" pick.
-      # ===== Find latest cache key =====
-      - name: Find latest monitor-state cache key
-        id: find-key
-        # DEBUG: gate disabled to simulate schedule-only path via
-        # workflow_dispatch. Re-enable before merging - dispatch
-        # touching the cache would clobber the schedule retry chain.
-        # if: github.event_name == 'schedule'
+      # ===== Materialize monitor state from upstream job =====
+      # restore-cache ran on ubuntu-latest, read .monitor-state/.monitor
+      # from cache, and shipped each tracked field as a job output.
+      # Reconstruct the same bash-sourceable key=value file here so
+      # the monitor step below can `.` it as if it had been restored
+      # locally. Cold cache means upstream outputs are empty strings,
+      # which yields a file with all four values empty - the monitor
+      # step handles that with its own lower-case defaults before
+      # sourcing.
+      - name: Materialize monitor state file
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RESTORED_LAST_RELEASE_ID: ${{ needs.restore-cache.outputs.cache_last_release_id }}
+          RESTORED_DOC_HASH:        ${{ needs.restore-cache.outputs.cache_doc_hash }}
+          RESTORED_TEST_RESULT:     ${{ needs.restore-cache.outputs.cache_test_result }}
+          RESTORED_TEST_ERROR:      ${{ needs.restore-cache.outputs.cache_test_error }}
         run: |
           set -euo pipefail
-          # /actions/caches?key= prefix filters server-side; per_page=1
-          # + sort=created_at:desc returns the single most recent entry.
-          # Empty array (cold cache) -> .actions_caches[0].key is null
-          # and jq's // empty fallback leaves KEY="". curl + jq are
-          # part of every runner base image; `gh` isn't, so we don't
-          # depend on it here.
-          KEY=$(curl -sS \
-            -H "Authorization: token $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${{ github.repository }}/actions/caches?key=monitor-state-ms-swift-&per_page=1&sort=created_at&direction=desc" \
-            | jq -r '.actions_caches[0].key // empty')
-          if [ -n "$KEY" ]; then
-            echo "latest cache key: $KEY"
-            echo "key=$KEY" >> "$GITHUB_OUTPUT"
-          else
-            echo "no prior cache - cold start"
-            echo "key=" >> "$GITHUB_OUTPUT"
-          fi
-
-      # ===== Restore from cache =====
-      # actions/cache/restore@v6 looks up entries by (user_key, version)
-      # tuple, where version = SHA256(paths + compression + platform +
-      # versionSalt) (see @actions/cache/lib/internal/cacheUtils.js
-      # getCacheVersion). The Cache REST API exposes entries by user
-      # key only, so the API's "latest key" is the right key but may
-      # have a stale version (the saved paths differed from current).
-      # To still get a hit, pass the API-derived key as the first
-      # restore-keys entry: restoreKeys is prefix-matched against the
-      # user key only (no version), and a single full key as the
-      # prefix yields the same set as exact-match against that key
-      # minus the version constraint. The trailing wildcard prefix
-      # picks up any older entry if the latest one was evicted.
-      # fail-on-cache-miss stays default (false) so a miss is a cold-
-      # start baseline, not a job failure.
-      - name: Ensure zstd for cache action
-        # actions/cache@v6 picks compressionMethod by probing for
-        # `zstd` on PATH: if present it uses zstd (.tzst / version
-        # salt = 'zstd-without-long'), otherwise gzip (.tgz / salt
-        # = 'gzip'). That salt is part of the cache version hash
-        # (see @actions/cache/lib/internal/cacheUtils.js
-        # getCacheVersion), so the Save side (ubuntu-latest, has
-        # zstd preinstalled) writes entries with one version and
-        # the Restore side (linux-aarch64-a2-1, base image doesn't
-        # ship zstd) would compute a different version, missing
-        # the entry on exact-match. Install zstd on this runner
-        # so both sides compute the same version hash.
-        if: steps.find-key.outputs.key != ''
-        run: |
-          set -euo pipefail
-          if command -v zstd >/dev/null 2>&1; then
-            echo "zstd already installed: $(zstd --version | head -1)"
-          else
-            apt-get update -qq
-            apt-get install -y -qq zstd
-            echo "installed zstd: $(zstd --version | head -1)"
-          fi
-
-      - name: Restore monitor state
-        id: cache-restore
-        # DEBUG: gate disabled to simulate schedule-only path via
-        # workflow_dispatch. Re-enable before merging - dispatch
-        # touching the cache would clobber the schedule retry chain.
-        # if: github.event_name == 'schedule'
-        if: steps.find-key.outputs.key != ''
-        uses: actions/cache/restore@v6
-        with:
-          path: .monitor-state
-          key: ${{ steps.find-key.outputs.key }}
+          mkdir -p .monitor-state
+          {
+            echo "last_release_id='$RESTORED_LAST_RELEASE_ID'"
+            echo "doc_hash='$RESTORED_DOC_HASH'"
+            echo "test_result='$RESTORED_TEST_RESULT'"
+            echo "test_error='$RESTORED_TEST_ERROR'"
+          } > .monitor-state/.monitor
+          echo "materialized .monitor-state/.monitor:"
+          cat .monitor-state/.monitor
 
       # Two monitors feed the decide step (release > doc by priority).
       # Each step sources its cache file, decides in-memory against

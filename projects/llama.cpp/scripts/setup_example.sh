@@ -16,9 +16,8 @@ EXAMPLE_REL="${EXAMPLE_PATH:-}"
 # 910B DataType table lists FP16 / Q8_0 / Q4_0 / BF16 (Q4_K_M etc. not in table); upstream docs/backend/CANN.md.
 QWEN_MODEL_URL=https://modelscope.cn/models/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/master/qwen2.5-0.5b-instruct-q4_0.gguf
 QWEN_MODEL_FILE=qwen2.5-0.5b-instruct-q4_0.gguf
-# ModelScope has no Dream GGUF copy. mradermacher has Q8_0, not Q4_0.
-# NPU pods already NFS-mount SFS Turbo at /root/.cache; the job workspace does not persist.
-DREAM_MODEL_URL=https://hf-mirror.com/mradermacher/Dream-v0-Instruct-7B-GGUF/resolve/main/Dream-v0-Instruct-7B.Q8_0.gguf
+# Dream GGUF is produced by prepare-dream-gguf (ModelScope HF → Q8_0).
+# This profile only consumes the cached file; it does not download.
 DREAM_MODEL_FILE=Dream-v0-Instruct-7B.Q8_0.gguf
 DREAM_MODEL_DEST=/root/.cache/cosdt-ci-test/llama.cpp/$DREAM_MODEL_FILE
 
@@ -143,8 +142,13 @@ setup_cann-diffusion() {
   cmake_llama -DGGML_CANN=on
   build_target
   assert_cann_lib "$TARGET_ROOT/build/bin"
-  fetch_gguf "$DREAM_MODEL_URL" "$DREAM_MODEL_DEST" \
-    "Dream GGUF unavailable: $DREAM_MODEL_URL"
+  if [[ ! -f "$DREAM_MODEL_DEST" || "$(head -c 4 "$DREAM_MODEL_DEST")" != "GGUF" ]]; then
+    echo "Dream GGUF missing or incomplete: $DREAM_MODEL_DEST" >&2
+    echo "prepare-dream-gguf must populate the NFS cache before this job." >&2
+    exit 1
+  fi
+  echo "LLAMA_CI_MODEL=$DREAM_MODEL_DEST" >> "$GITHUB_ENV"
+  echo "model ready: $DREAM_MODEL_DEST"
 }
 
 setup_cmake-pkg() {

@@ -295,6 +295,15 @@ jobs:
     outputs:
       supported_matrix: ${{ steps.check.outputs.supported_matrix }}
       has_supported: ${{ steps.check.outputs.has_supported }}
+      run_matrix: ${{ steps.check.outputs.run_matrix }}
+      has_run_matrix: ${{ steps.check.outputs.has_run_matrix }}
+      diffusion_matrix: ${{ steps.check.outputs.diffusion_matrix }}
+      has_diffusion: ${{ steps.check.outputs.has_diffusion }}
+      dream_target_repo: ${{ steps.check.outputs.dream_target_repo }}
+      dream_target_ref: ${{ steps.check.outputs.dream_target_ref }}
+      dream_image: ${{ steps.check.outputs.dream_image }}
+      dream_runner: ${{ steps.check.outputs.dream_runner }}
+      dream_device_options: ${{ steps.check.outputs.dream_device_options }}
     steps:
       - name: Checkout workflows
         uses: actions/checkout@v4
@@ -320,7 +329,8 @@ jobs:
           targets = json.loads(os.environ['TARGETS'])
           trigger = os.environ['TRIGGER']
           all_entries = []
-          has_supported = False
+          run_entries = []
+          diffusion_entries = []
 
           def checkout(repo, ref, dest):
               dest_path = Path(dest)
@@ -370,7 +380,6 @@ jobs:
               result = json.loads(
                   Path(result_path).read_text(encoding='utf-8'))
               for item in result['supported']:
-                  has_supported = True
                   npu = item['npu_devices']
                   options = ' '.join(
                       f'--device=/dev/davinci{index}'
@@ -385,16 +394,40 @@ jobs:
                   entry['target_ref'] = ref
                   entry['reason'] = reason
                   all_entries.append(entry)
+                  if item['path'] == 'examples/diffusion':
+                      diffusion_entries.append(entry)
+                  else:
+                      run_entries.append(entry)
 
           output_path = os.environ['GITHUB_OUTPUT']
-          payload = json.dumps(all_entries, ensure_ascii=False)
           with open(output_path, 'a', encoding='utf-8') as handle:
-              handle.write('supported_matrix<<EOF\n')
-              handle.write(payload)
-              handle.write('\nEOF\n')
+              def write_matrix(name, entries):
+                  handle.write(f'{name}<<EOF\n')
+                  handle.write(json.dumps(entries, ensure_ascii=False))
+                  handle.write('\nEOF\n')
+
+              write_matrix('supported_matrix', all_entries)
+              write_matrix('run_matrix', run_entries)
+              write_matrix('diffusion_matrix', diffusion_entries)
               handle.write(
                   'has_supported={}\n'.format(
-                      'true' if has_supported else 'false'))
+                      'true' if all_entries else 'false'))
+              handle.write(
+                  'has_run_matrix={}\n'.format(
+                      'true' if run_entries else 'false'))
+              handle.write(
+                  'has_diffusion={}\n'.format(
+                      'true' if diffusion_entries else 'false'))
+              if diffusion_entries:
+                  first = diffusion_entries[0]
+                  handle.write(
+                      f'dream_target_repo={first["target_repo"]}\n')
+                  handle.write(
+                      f'dream_target_ref={first["target_ref"]}\n')
+                  handle.write(f'dream_image={first["image"]}\n')
+                  handle.write(f'dream_runner={first["runner"]}\n')
+                  handle.write(
+                      f'dream_device_options={first["device_options"]}\n')
           PY
 
       - name: Validate manifest check result
@@ -432,11 +465,52 @@ jobs:
             manifest_check_result-supported.json
             manifest_check_result-release.json
 
-  # Skipped when the manifest has no supported entry (an empty matrix fails the run).
+  # Dream GGUF is ~8GB. Only examples/diffusion needs it. GitHub Actions
+  # `needs` is per-job, not per matrix row, so diffusion is split out and
+  # only that job waits here. HF weights stay in NFS if convert fails.
+  prepare-dream-gguf:
+    needs: [monitor, manifest-check]
+    if: needs.manifest-check.outputs.has_diffusion == 'true'
+    runs-on: ${{ needs.manifest-check.outputs.dream_runner }}
+    timeout-minutes: 240
+    defaults:
+      run:
+        shell: bash
+    env:
+      TARGET_ROOT: ${{ github.workspace }}/target
+      PIP_EXTRA_INDEX_URL: https://repo.huaweicloud.com/ascend/repos/pypi
+      PIP_TIMEOUT: "120"
+    container:
+      image: ${{ needs.manifest-check.outputs.dream_image }}
+      options: >-
+        --shm-size=64g
+        ${{ needs.manifest-check.outputs.dream_device_options }}
+        --device=/dev/davinci_manager --device=/dev/devmm_svm --device=/dev/hisi_hdc
+        --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
+        --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
+        --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
+        --volume=/root/.cache/cosdt-ci-test:/root/.cache/cosdt-ci-test
+    steps:
+      - name: Checkout workflows
+        uses: actions/checkout@v4
+        with:
+          path: workflows
+
+      - name: Checkout target
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ needs.manifest-check.outputs.dream_target_repo }}
+          ref: ${{ needs.manifest-check.outputs.dream_target_ref }}
+          path: target
+
+      - name: Prepare Dream GGUF
+        run: bash workflows/projects/llama.cpp/scripts/prepare_dream_gguf.sh
+
+  # Skipped when the remaining matrix is empty (an empty matrix fails the run).
   run-example:
     name: run-example (${{ matrix.example.path }} @ ${{ matrix.example.target_ref }})
     needs: [monitor, manifest-check]
-    if: needs.manifest-check.outputs.has_supported == 'true'
+    if: needs.manifest-check.outputs.has_run_matrix == 'true'
     runs-on: ${{ matrix.example.runner }}
     timeout-minutes: ${{ matrix.example.timeout_minutes }}
     defaults:
@@ -445,7 +519,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        example: ${{ fromJSON(needs.manifest-check.outputs.supported_matrix) }}
+        example: ${{ fromJSON(needs.manifest-check.outputs.run_matrix) }}
     env:
       ASCEND_RT_VISIBLE_DEVICES: ${{ matrix.example.npu_devices }}
       PROJECT_ROOT: ${{ github.workspace }}/workflows/projects/llama.cpp
@@ -457,6 +531,8 @@ jobs:
       image: ${{ matrix.example.image }}
       # Card mounts come from npu_devices via matrix.example.device_options.
       # Card selection also uses ASCEND_RT_VISIBLE_DEVICES (manifest npu_devices).
+      # SFS Turbo is on the host at /root/.cache; bind it so later jobs can
+      # reuse the Dream GGUF (harmless for examples that do not read it).
       options: >-
         --shm-size=64g
         ${{ matrix.example.device_options }}
@@ -464,6 +540,7 @@ jobs:
         --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
         --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
         --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
+        --volume=/root/.cache/cosdt-ci-test:/root/.cache/cosdt-ci-test
     steps:
       - name: Checkout workflows
         uses: actions/checkout@v4
@@ -506,9 +583,80 @@ jobs:
             bash "$PROJECT_ROOT/scripts/run_example.sh" "$EXAMPLE_PATH" \
             2>&1 | tee "$GITHUB_WORKSPACE/output/train.log"
 
+  # Same display name as run-example so publish-result Jobs API lookup still
+  # matches. Only this job waits on prepare-dream-gguf.
+  run-diffusion:
+    name: run-example (${{ matrix.example.path }} @ ${{ matrix.example.target_ref }})
+    needs: [monitor, manifest-check, prepare-dream-gguf]
+    if: needs.manifest-check.outputs.has_diffusion == 'true'
+    runs-on: ${{ matrix.example.runner }}
+    timeout-minutes: ${{ matrix.example.timeout_minutes }}
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        example: ${{ fromJSON(needs.manifest-check.outputs.diffusion_matrix) }}
+    env:
+      ASCEND_RT_VISIBLE_DEVICES: ${{ matrix.example.npu_devices }}
+      PROJECT_ROOT: ${{ github.workspace }}/workflows/projects/llama.cpp
+      TARGET_ROOT: ${{ github.workspace }}/target
+      FIXTURE_DIR: ${{ github.workspace }}/workflows/projects/llama.cpp/fixtures
+      PIP_EXTRA_INDEX_URL: https://repo.huaweicloud.com/ascend/repos/pypi
+      PIP_TIMEOUT: "120"
+    container:
+      image: ${{ matrix.example.image }}
+      options: >-
+        --shm-size=64g
+        ${{ matrix.example.device_options }}
+        --device=/dev/davinci_manager --device=/dev/devmm_svm --device=/dev/hisi_hdc
+        --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
+        --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
+        --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
+        --volume=/root/.cache/cosdt-ci-test:/root/.cache/cosdt-ci-test
+    steps:
+      - name: Checkout workflows
+        uses: actions/checkout@v4
+        with:
+          path: workflows
+
+      - name: Checkout target
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ matrix.example.target_repo }}
+          ref: ${{ matrix.example.target_ref }}
+          path: target
+
+      - name: Source CANN and check NPU
+        run: |
+          export PATH="/usr/local/sbin:$PATH"
+          source /usr/local/Ascend/ascend-toolkit/set_env.sh
+          npu-smi info
+
+      - name: Setup example environment
+        env:
+          PROFILE: ${{ matrix.example.profile }}
+          EXEC: ${{ matrix.example.exec }}
+          EXAMPLE_PATH: ${{ matrix.example.path }}
+        run: bash "$PROJECT_ROOT/scripts/setup_example.sh" "$PROFILE"
+
+      - name: Run example
+        env:
+          EXAMPLE_PATH: ${{ matrix.example.path }}
+          EXEC: ${{ matrix.example.exec }}
+          PROFILE: ${{ matrix.example.profile }}
+          OVERLAY_ARGS: ${{ toJSON(matrix.example.overlay_args) }}
+        run: |
+          source /usr/local/Ascend/ascend-toolkit/set_env.sh
+          mkdir -p "$GITHUB_WORKSPACE/output"
+          CI_OUTPUT_DIR="$GITHUB_WORKSPACE/output" \
+            bash "$PROJECT_ROOT/scripts/run_example.sh" "$EXAMPLE_PATH" \
+            2>&1 | tee "$GITHUB_WORKSPACE/output/train.log"
+
   validate-results:
     name: publish-result (${{ matrix.example.path }} @ ${{ matrix.example.target_ref }})
-    needs: [monitor, manifest-check, run-example]
+    needs: [monitor, manifest-check, run-example, run-diffusion]
     if: always() && needs.manifest-check.outputs.has_supported == 'true'
     runs-on: ubuntu-latest
     strategy:

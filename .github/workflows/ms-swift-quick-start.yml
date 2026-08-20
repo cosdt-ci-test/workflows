@@ -43,10 +43,10 @@ jobs:
     name: restore monitor state from cache
     runs-on: ubuntu-latest
     outputs:
-      cache_last_release_id: ${{ steps.read-monitor.outputs.last_release_id }}
-      cache_doc_hash:        ${{ steps.read-monitor.outputs.doc_hash }}
-      cache_test_result:     ${{ steps.read-monitor.outputs.test_result }}
-      cache_test_error:      ${{ steps.read-monitor.outputs.test_error }}
+      cache_last_release_id: ${{ steps.read-monitor.outputs.cache_last_release_id }}
+      cache_doc_hash:        ${{ steps.read-monitor.outputs.cache_doc_hash }}
+      cache_test_result:     ${{ steps.read-monitor.outputs.cache_test_result }}
+      cache_test_error:      ${{ steps.read-monitor.outputs.cache_test_error }}
     steps:
       - name: Restore monitor state
         uses: actions/cache/restore@v6
@@ -72,11 +72,11 @@ jobs:
           set -euo pipefail
           if [ -f .monitor-state/.monitor ]; then
             . .monitor-state/.monitor
-            [ -n "${last_release_id:-}" ] && echo "last_release_id=$last_release_id" >> "$GITHUB_OUTPUT"
-            [ -n "${doc_hash:-}" ]        && echo "doc_hash=$doc_hash" >> "$GITHUB_OUTPUT"
-            [ -n "${test_result:-}" ]    && echo "test_result=$test_result" >> "$GITHUB_OUTPUT"
-            [ -n "${test_error:-}" ]     && echo "test_error=$test_error" >> "$GITHUB_OUTPUT"
-            echo "monitor state restored: last_release_id='$last_release_id' doc_hash='$doc_hash' test_result='$test_result' test_error='$test_error'"
+            [ -n "${last_release_id:-}" ] && echo "cache_last_release_id=$last_release_id" >> "$GITHUB_OUTPUT"
+            [ -n "${doc_hash:-}" ]        && echo "cache_doc_hash=$doc_hash" >> "$GITHUB_OUTPUT"
+            [ -n "${test_result:-}" ]    && echo "cache_test_result=$test_result" >> "$GITHUB_OUTPUT"
+            [ -n "${test_error:-}" ]     && echo "cache_test_error=$test_error" >> "$GITHUB_OUTPUT"
+            echo "monitor state restored: cache_last_release_id='$last_release_id' cache_doc_hash='$doc_hash' cache_test_result='$test_result' cache_test_error='$test_error'"
           else
             echo "no cache entry restored - cold start (empty monitor state)"
           fi

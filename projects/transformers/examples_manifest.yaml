@@ -1,0 +1,127 @@
+version: 1
+scan:
+  root: examples
+  include_extensions: ['.py']
+supported:
+  - path: examples/pytorch/text-generation/run_generation.py
+    profile: generation
+    runner: linux-aarch64-a2-2
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --model_type gpt2
+      - --model_name_or_path sshleifer/tiny-gpt2
+      - --prompt Hello
+      - --length 10
+      - --seed 42
+    timeout_minutes: 60
+  - path: examples/pytorch/text-classification/run_glue_no_trainer.py
+    profile: glue
+    runner: linux-aarch64-a2-2
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --model_name_or_path distilbert/distilbert-base-uncased
+      - --train_file ${TARGET_ROOT}/tests/fixtures/tests_samples/MRPC/train.csv
+      - --validation_file ${TARGET_ROOT}/tests/fixtures/tests_samples/MRPC/dev.csv
+      - --max_length 64
+      - --per_device_train_batch_size 2
+      - --per_device_eval_batch_size 2
+      - --max_train_steps 1
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 60
+unsupported:
+  - examples/3D_parallel.py
+  - examples/modular-transformers/configuration_dummy.py
+  - examples/modular-transformers/configuration_duplicated_method.py
+  - examples/modular-transformers/configuration_my_new_model.py
+  - examples/modular-transformers/configuration_my_new_model2.py
+  - examples/modular-transformers/configuration_new_model.py
+  - examples/modular-transformers/configuration_super.py
+  - examples/modular-transformers/image_processing_new_imgproc_model.py
+  - examples/modular-transformers/modeling_add_function.py
+  - examples/modular-transformers/modeling_dummy_bert.py
+  - examples/modular-transformers/modeling_from_uppercase_model.py
+  - examples/modular-transformers/modeling_global_indexing.py
+  - examples/modular-transformers/modeling_multimodal2.py
+  - examples/modular-transformers/modeling_my_new_model2.py
+  - examples/modular-transformers/modeling_new_task_model.py
+  - examples/modular-transformers/modeling_roberta.py
+  - examples/modular-transformers/modeling_super.py
+  - examples/modular-transformers/modeling_switch_function.py
+  - examples/modular-transformers/modeling_test_detr.py
+  - examples/modular-transformers/modeling_test_suffix.py
+  - examples/modular-transformers/modular_add_function.py
+  - examples/modular-transformers/modular_dummy_bert.py
+  - examples/modular-transformers/modular_duplicated_method.py
+  - examples/modular-transformers/modular_from_uppercase_model.py
+  - examples/modular-transformers/modular_global_indexing.py
+  - examples/modular-transformers/modular_multimodal2.py
+  - examples/modular-transformers/modular_my_new_model.py
+  - examples/modular-transformers/modular_my_new_model2.py
+  - examples/modular-transformers/modular_new_imgproc_model.py
+  - examples/modular-transformers/modular_new_model.py
+  - examples/modular-transformers/modular_new_task_model.py
+  - examples/modular-transformers/modular_roberta.py
+  - examples/modular-transformers/modular_super.py
+  - examples/modular-transformers/modular_switch_function.py
+  - examples/modular-transformers/modular_test_detr.py
+  - examples/modular-transformers/modular_test_suffix.py
+  - examples/pytorch/3d_parallel_checks.py
+  - examples/pytorch/audio-classification/run_audio_classification.py
+  - examples/pytorch/conftest.py
+  - examples/pytorch/context_parallel.py
+  - examples/pytorch/continuous_batching.py
+  - examples/pytorch/continuous_batching_simple.py
+  - examples/pytorch/contrastive-image-text/run_clip.py
+  - examples/pytorch/image-classification/run_image_classification.py
+  - examples/pytorch/image-classification/run_image_classification_no_trainer.py
+  - examples/pytorch/image-pretraining/run_mae.py
+  - examples/pytorch/image-pretraining/run_mim.py
+  - examples/pytorch/image-pretraining/run_mim_no_trainer.py
+  - examples/pytorch/instance-segmentation/run_instance_segmentation.py
+  - examples/pytorch/instance-segmentation/run_instance_segmentation_no_trainer.py
+  - examples/pytorch/language-modeling/run_clm.py
+  - examples/pytorch/language-modeling/run_clm_no_trainer.py
+  - examples/pytorch/language-modeling/run_fim.py
+  - examples/pytorch/language-modeling/run_fim_no_trainer.py
+  - examples/pytorch/language-modeling/run_mlm.py
+  - examples/pytorch/language-modeling/run_mlm_no_trainer.py
+  - examples/pytorch/language-modeling/run_plm.py
+  - examples/pytorch/multiple-choice/run_swag.py
+  - examples/pytorch/multiple-choice/run_swag_no_trainer.py
+  - examples/pytorch/object-detection/run_object_detection.py
+  - examples/pytorch/object-detection/run_object_detection_no_trainer.py
+  - examples/pytorch/old_test_xla_examples.py
+  - examples/pytorch/question-answering/run_qa.py
+  - examples/pytorch/question-answering/run_qa_beam_search.py
+  - examples/pytorch/question-answering/run_qa_beam_search_no_trainer.py
+  - examples/pytorch/question-answering/run_qa_no_trainer.py
+  - examples/pytorch/question-answering/run_seq2seq_qa.py
+  - examples/pytorch/question-answering/trainer_qa.py
+  - examples/pytorch/question-answering/trainer_seq2seq_qa.py
+  - examples/pytorch/question-answering/utils_qa.py
+  - examples/pytorch/semantic-segmentation/run_semantic_segmentation.py
+  - examples/pytorch/semantic-segmentation/run_semantic_segmentation_no_trainer.py
+  - examples/pytorch/speech-pretraining/run_wav2vec2_pretraining_no_trainer.py
+  - examples/pytorch/speech-recognition/run_speech_recognition_ctc.py
+  - examples/pytorch/speech-recognition/run_speech_recognition_ctc_adapter.py
+  - examples/pytorch/speech-recognition/run_speech_recognition_seq2seq.py
+  - examples/pytorch/summarization/run_summarization.py
+  - examples/pytorch/summarization/run_summarization_no_trainer.py
+  - examples/pytorch/test_accelerate_examples.py
+  - examples/pytorch/test_pytorch_examples.py
+  - examples/pytorch/text-classification/run_classification.py
+  - examples/pytorch/text-classification/run_glue.py
+  - examples/pytorch/text-classification/run_xnli.py
+  - examples/pytorch/token-classification/run_ner.py
+  - examples/pytorch/token-classification/run_ner_no_trainer.py
+  - examples/pytorch/transformers_serve_cb_eval_job.py
+  - examples/pytorch/translation/run_translation.py
+  - examples/pytorch/translation/run_translation_no_trainer.py
+  - examples/pytorch/xla_spawn.py
+  - examples/quantization/custom_quantization.py
+  - examples/quantization/custom_quantization_int8_example.py
+  - examples/run_on_remote.py
+  - examples/scheduler/run_greedy.py
+  - examples/training/distributed_training.py

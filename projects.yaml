@@ -27,3 +27,13 @@ projects:
     workflows:
       examples: .github/workflows/llama.cpp-examples.yml
       quick_start: .github/workflows/llama.cpp-quick-start.yml
+  - name: transformers
+    category: 训练加速
+    support_level: 基础支持
+    upstream_repo: huggingface/transformers
+    phase: A
+    runner: linux-aarch64-a2-2
+    dir: projects/transformers
+    workflows:
+      examples: .github/workflows/transformers-examples.yml
+      quick_start: .github/workflows/transformers-quick-start.yml

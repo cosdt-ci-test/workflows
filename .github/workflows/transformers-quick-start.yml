@@ -1,0 +1,169 @@
+name: transformers-quick-start
+
+on:
+#  schedule:
+#    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      upstream_ref:
+        description: Ref to test
+        required: false
+        default: main
+        type: string
+
+concurrency:
+  group: transformers-quick-start
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  UPSTREAM_REPO: huggingface/transformers
+  MONITORED_DOC_URL: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/transformers/docs/Quick-start-Ascend.md
+  GH_API: https://api.github.com
+  CI_IMAGE: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+
+jobs:
+  monitor-and-test:
+    runs-on: linux-aarch64-a2-2
+    timeout-minutes: 180
+    outputs:
+      result_json: ${{ steps.result.outputs.result_json }}
+    container:
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+      options: >-
+        --privileged --shm-size=64g
+        --device=/dev/davinci0
+        --device=/dev/davinci_manager --device=/dev/devmm_svm --device=/dev/hisi_hdc
+        --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
+        --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
+        --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
+        --volume=/data/ci-cache/pip:/root/.cache/pip
+    env:
+      ASCEND_RT_VISIBLE_DEVICES: '0'
+      TARGET_ROOT: ${{ github.workspace }}/target
+      PIP_INDEX_URL: https://repo.huaweicloud.com/ascend/repos/pypi
+      PIP_TRUSTED_HOST: repo.huaweicloud.com
+      PIP_TIMEOUT: '120'
+    steps:
+      # Manual dispatch always tests. Schedule runs compare the local guard
+      # doc hash, latest release id, and main HEAD before spending NPU time.
+      - name: Restore state
+        if: github.event_name == 'schedule'
+        uses: actions/cache/restore@v4
+        with:
+          path: .monitor-state
+          key: transformers-quick-start-monitor-state-${{ github.run_id }}
+          restore-keys: transformers-quick-start-monitor-state-
+      - name: Checkout workflows
+        uses: actions/checkout@v4
+        with:
+          path: workflows
+      - name: Monitor signals
+        id: monitor
+        env:
+          INPUT_REF: ${{ inputs.upstream_ref }}
+        run: |
+          set -euo pipefail
+          mkdir -p .monitor-state
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            echo changed=true >> "$GITHUB_OUTPUT"
+            echo test_ref="${INPUT_REF:-main}" >> "$GITHUB_OUTPUT"
+            echo reason=manual >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          doc=$(curl -fsSL --retry 3 "$MONITORED_DOC_URL" | sha256sum | cut -d' ' -f1)
+          release=$(curl -fsSL --retry 3 "$GH_API/repos/$UPSTREAM_REPO/releases/latest" | jq -r '.id // empty')
+          commit=$(curl -fsSL --retry 3 "$GH_API/repos/$UPSTREAM_REPO/commits/main" | jq -r '.sha // empty')
+          changed=false; reason=; ref=main
+          if [ "$(cat .monitor-state/.doc_hash 2>/dev/null || true)" != "$doc" ]; then changed=true; reason=doc; fi
+          if [ "$(cat .monitor-state/.release_id 2>/dev/null || true)" != "$release" ]; then changed=true; reason=release; fi
+          if [ "$(cat .monitor-state/.main_sha 2>/dev/null || true)" != "$commit" ]; then changed=true; reason=commit; fi
+          echo "$doc" > .monitor-state/.doc_hash
+          echo "$release" > .monitor-state/.release_id
+          echo "$commit" > .monitor-state/.main_sha
+          echo changed=$changed >> "$GITHUB_OUTPUT"
+          echo test_ref=$ref >> "$GITHUB_OUTPUT"
+          echo reason=$reason >> "$GITHUB_OUTPUT"
+      - name: Check NPU
+        if: steps.monitor.outputs.changed == 'true'
+        run: |
+          source /usr/local/Ascend/ascend-toolkit/set_env.sh
+          npu-smi info
+          python -c "import torch, torch_npu; print(torch.__version__, torch_npu.__version__, torch.npu.device_count())"
+      - name: Checkout target
+        if: steps.monitor.outputs.changed == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.UPSTREAM_REPO }}
+          ref: ${{ steps.monitor.outputs.test_ref }}
+          path: target
+          fetch-depth: 1
+      - name: Install target and run Quick Start
+        if: steps.monitor.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          source /usr/local/Ascend/ascend-toolkit/set_env.sh
+          python -m pip install -U pip
+          # Reuse the image's NPU torch stack when available. The fallback
+          # keeps the workflow usable if the selected CANN image was rebuilt
+          # without torch_npu.
+          if python -c "import torch, torch_npu; print(torch.__version__, torch_npu.__version__, torch.npu.device_count())"; then
+            echo "reusing image torch stack"
+          else
+            python -m pip install --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
+              torch==2.9.0 torch_npu==2.9.0.post2
+          fi
+          python -m pip install -e target --no-deps accelerate
+          mkdir -p output
+          python -m unittest discover -s workflows/projects/transformers/tests -p 'test_quick_start_ascend.py' -v 2>&1 | tee "$GITHUB_WORKSPACE/output/quick-start.log"
+      - name: Write result
+        id: result
+        if: always()
+        # Result generation stays on the NPU job, then upload-artifact runs
+        # from the same job so external consumers always get result.json.
+        env:
+          STATUS: ${{ job.status }}
+          CHANGED: ${{ steps.monitor.outputs.changed }}
+          REF: ${{ steps.monitor.outputs.test_ref }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/output"
+          python3 -c 'import json,os; json.dump({"trigger":os.environ["GITHUB_EVENT_NAME"],"target_repo":os.environ["UPSTREAM_REPO"],"target_ref":os.environ.get("REF") or "main","path":"projects/transformers/docs/Quick-start-Ascend.md","image":os.environ["CI_IMAGE"],"job_status":os.environ["STATUS"],"tests_ran":os.environ.get("CHANGED") == "true"},open("output/result.json","w"),indent=2)'
+          echo result_json="$GITHUB_WORKSPACE/output/result.json" >> "$GITHUB_OUTPUT"
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: transformers-quick-start-${{ github.run_id }}
+          # A schedule with no changed signal skips the test log, but result.json
+          # is still written and remains the required machine-readable artifact.
+          if-no-files-found: ignore
+          path: |
+            ${{ github.workspace }}/output/result.json
+            ${{ github.workspace }}/output/quick-start.log
+      - name: Persist state
+        if: github.event_name == 'schedule' && always()
+        uses: actions/cache/save@v4
+        with:
+          path: .monitor-state
+          key: transformers-quick-start-monitor-state-${{ github.run_id }}-post
+    
+  validate-results:
+    needs: monitor-and-test
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: workflows
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: transformers-quick-start-*
+          path: downloaded
+      - name: Validate result
+        run: |
+          python3 -m pip install -q check-jsonschema
+          files=(downloaded/*/result.json)
+          check-jsonschema --schemafile workflows/schemas/result.schema.json "${files[@]}"

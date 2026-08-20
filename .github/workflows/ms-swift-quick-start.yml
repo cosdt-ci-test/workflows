@@ -102,29 +102,59 @@ jobs:
           fetch-depth: 1
 
       # ===== Restore =====
-      # Run-id suffix on the key because actions/cache refuses to
-      # overwrite an existing entry with the same key - a static key
-      # would make every save after the first a silent no-op, so a
-      # real outcome change (failure -> success on retry) would
-      # never propagate. The exact-match key always misses on this
-      # run (we never saved under it yet), so restore falls through
-      # to restore-keys.
+      # actions/cache/restore's built-in restore-keys prefix-match is
+      # ambiguous about which path it extracts to (the Cache service
+      # resolves `path:` against its own workspace path, which on a
+      # self-hosted runner can differ from bash's $GITHUB_WORKSPACE).
+      # To sidestep that, query the GitHub Cache API directly for the
+      # most recent entry under our key prefix, then hand that exact
+      # key to restore. The exact-match lookup is a single round-trip
+      # with a well-defined "miss" semantics, and the API's
+      # sort=created_at:desc gives us a deterministic "latest" pick.
+      # ===== Find latest cache key =====
+      - name: Find latest monitor-state cache key
+        id: find-key
+        # DEBUG: gate disabled to simulate schedule-only path via
+        # workflow_dispatch. Re-enable before merging - dispatch
+        # touching the cache would clobber the schedule retry chain.
+        # if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # /actions/caches?key= prefix filters server-side; per_page=1
+          # + sort=created_at:desc returns the single most recent entry.
+          # Empty array (cold cache) -> .actions_caches is [] and the
+          # // empty fallback leaves KEY="".
+          KEY=$(gh api \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/${{ github.repository }}/actions/caches?key=monitor-state-ms-swift-&per_page=1&sort=created_at&direction=desc" \
+            --jq '.actions_caches[0].key // empty')
+          if [ -n "$KEY" ]; then
+            echo "latest cache key: $KEY"
+            echo "key=$KEY" >> "$GITHUB_OUTPUT"
+          else
+            echo "no prior cache - cold start"
+            echo "key=" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ===== Restore from cache =====
+      # `key:` is exact-match against the API-derived key, so we
+      # never rely on restore-keys prefix matching. `fail-on-cache-miss`
+      # is left default (false) so a stale delete / cache eviction
+      # doesn't fail the whole job - it just means a cold-start
+      # baseline gets recorded this run.
       - name: Restore monitor state
         id: cache-restore
         # DEBUG: gate disabled to simulate schedule-only path via
         # workflow_dispatch. Re-enable before merging - dispatch
         # touching the cache would clobber the schedule retry chain.
         # if: github.event_name == 'schedule'
-        # No `key:` on purpose - it would be an exact-match attempt
-        # that always misses (we never saved under it yet), wasting a
-        # lookup before falling through to restore-keys. With only
-        # restore-keys, the prefix-match goes straight to the most
-        # recent Persist entry.
+        if: steps.find-key.outputs.key != ''
         uses: actions/cache/restore@v6
         with:
           path: .monitor-state
-          key: cache-not-used-restore-keys-only # not exist key then match for restore-keys
-          restore-keys: monitor-state-ms-swift-
+          key: ${{ steps.find-key.outputs.key }}
 
       # Two monitors feed the decide step (release > doc by priority).
       # Each step sources its cache file, decides in-memory against
@@ -699,8 +729,9 @@ jobs:
         if: needs.monitor-and-test.outputs.need_to_test == 'true'
         # run-id suffix because actions/cache/save refuses to overwrite
         # an existing entry with the same key (it errors with
-        # 'Cache already exists'). The next Restore's restore-keys
-        # prefix-match picks this run's entry as the most recent one.
+        # 'Cache already exists'). The next Restore's find-key step
+        # queries the Cache API for the most recent entry under this
+        # prefix and uses its returned key as exact-match.
         uses: actions/cache/save@v6
         with:
           path: .monitor-state

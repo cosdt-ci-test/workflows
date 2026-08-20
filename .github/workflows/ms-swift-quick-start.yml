@@ -323,17 +323,13 @@ jobs:
             # The monitor step is gated to schedule only - it never
             # ran for this dispatch, so /tmp/.decision is empty.
             # Fetch the latest upstream release tag independently.
-            # Fall back to 'main' if the API call fails (cluster
-            # can't reach api.github.com, rate-limited, etc) - the
-            # resolve-SHA block below would otherwise exit 1 on an
-            # empty ref.
-            if ref=$(curl -fsSL --max-time 30 "$GH_API/repos/${{ env.UPSTREAM_REPO }}/releases/latest" \
-                   | jq -r '.tag_name // empty'); then
-              [ -z "$ref" ] && ref="main"
-            else
-              echo "WARN: failed to resolve latest release; falling back to 'main'"
-              ref="main"
-            fi
+            # No fallback: if the API call fails or returns an empty
+            # tag, fail loudly so the operator notices (silent
+            # fallback to 'main' would mask GitHub API outages by
+            # quietly testing an unrelated branch).
+            ref=$(curl -fsSL --max-time 30 "$GH_API/repos/${{ env.UPSTREAM_REPO }}/releases/latest" \
+                   | jq -r '.tag_name // empty')
+            [ -n "$ref" ] || { echo "ERROR: failed to resolve latest upstream release tag"; exit 1; }
             echo "monitor decision (manual override): ref=$ref need_to_test=true reason=manual"
           elif [ -f $DECISION_FILE ]; then
             . $DECISION_FILE

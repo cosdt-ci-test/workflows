@@ -260,31 +260,47 @@ jobs:
           } > "$DECISION_FILE"
           echo "monitor decision: release_tag=$REF need_to_test=$NEED_TO_TEST reason=$REASON"
 
-      # Picks the higher-priority monitor (release > doc) and sources
-      # /tmp/.decision for test_ref. Both schedule and workflow_dispatch
-      # run the same monitor path - dispatch is just an on-demand kick
-      # of the same logic, so a manual run with no upstream change
-      # produces need_to_test=false (no diff to test). Only test_ref
-      # crosses the $GITHUB_OUTPUT boundary here - every other monitor
-      # output stays in /tmp/.decision until record-monitor-outcome
-      # sources it.
+      # Picks the higher-priority monitor (release > doc) for test_ref.
+      # Schedule: source /tmp/.decision - need_to_test reflects whether
+      # the upstream signal actually changed since last run.
+      # workflow_dispatch: force need_to_test=true regardless of cache
+      # state, but use the same release ref the monitor step just
+      # resolved (NOT a hardcoded 'main') so dispatch always tests the
+      # most recent upstream release. Only test_ref crosses the
+      # $GITHUB_OUTPUT boundary here - every other monitor output stays
+      # in /tmp/.decision until record-monitor-outcome sources it.
       - name: Decide which ref to test
         id: decide
+        env:
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
           DECISION_FILE="/tmp/.decision"
 
           # Default all three decision keys (lowercase - same name as
           # the /tmp/.decision file's vars and the `if` reads below)
-          # before sourcing so `set -u` is safe when the monitor step
-          # didn't fire (cold cache / no signal change -> need_to_test
-          # stays "false").
+          # before either branch so `set -u` is safe: dispatch
+          # overwrites; schedule sources /tmp/.decision when present,
+          # else falls through with the defaults (no monitor fired ->
+          # need_to_test stays "false").
           need_to_test="false"
           reason=""
           ref=""
 
           if [ -f "$DECISION_FILE" ]; then
             . "$DECISION_FILE"
+          fi
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            need_to_test="true"
+            reason="manual"
+            # ref is whatever the monitor step wrote - usually the
+            # latest upstream release tag. Fall back to 'main' if the
+            # monitor step couldn't resolve anything (cold cache + no
+            # API access); the resolve-SHA block below would otherwise
+            # exit 1 on an empty ref.
+            [ -z "$ref" ] && ref="main"
+            echo "monitor decision (manual override): ref=$ref need_to_test=true reason=manual"
           fi
 
           if [ "$need_to_test" = "true" ]; then

@@ -191,7 +191,7 @@ jobs:
         # "test the latest release now" without overwriting the
         # schedule's retry chain. The dispatch branch in `decide`
         # below fetches the latest release tag independently.
-        # if: github.event_name == 'schedule'
+        if: github.event_name == 'schedule'
         env:
           DOC_URL: ${{ env.MONITORED_DOC_URL }}
         run: |
@@ -462,7 +462,7 @@ jobs:
           # the exact <UPSTREAM_REF>); we just run the doc itself as
           # a unittest - every shell block becomes one or more cases.
           cd workflows/projects/ms-swift
-          # python -m unittest tests.test_quick_start_ascend -v 2>&1
+          python -m unittest tests.test_quick_start_ascend -v 2>&1
 
       # ===== Record outcome =====
       # Single gate: 'schedule && need_to_test == "true"', matching
@@ -478,11 +478,14 @@ jobs:
       # makes the next schedule cycle know to retry.
       - name: Record monitor outcome
         id: record-monitor-outcome
-        # DEBUG: gate disabled to simulate schedule-only path. Re-enable before merging.
-        # if: |
-        #   github.event_name == 'schedule' &&
-        #   steps.decide.outputs.need_to_test == 'true'
-        if: steps.decide.outputs.need_to_test == 'true'
+        # Schedule only: dispatch forces need_to_test=true regardless
+        # of upstream signal, so without this gate dispatch would
+        # write a 'manual' outcome into monitor state and clobber
+        # the cached failure flag the next schedule cycle needs to
+        # decide whether to retry.
+        if: |
+          github.event_name == 'schedule' &&
+          steps.decide.outputs.need_to_test == 'true'
         env:
           # REASON / REF / TEST_REF come from /tmp/.decision (written
           # by decide), not from any step's $GITHUB_OUTPUT - that's the
@@ -733,11 +736,10 @@ jobs:
       # overwrite an existing entry with the same key, so a static
       # key would make every save after the first a silent no-op.
       - name: Restore monitor state to disk
-        # DEBUG: schedule half of gate disabled to simulate schedule-only
-        # path. Re-enable both before merging - dispatch touching the
-        # cache would clobber the schedule retry chain.
-        # if: github.event_name == 'schedule' && needs.monitor-and-test.outputs.need_to_test == 'true'
-        if: needs.monitor-and-test.outputs.need_to_test == 'true'
+        # Schedule only: dispatch must not write monitor state,
+        # otherwise it would clobber the cached failure flag the
+        # next schedule cycle uses to decide whether to retry.
+        if: github.event_name == 'schedule' && needs.monitor-and-test.outputs.need_to_test == 'true'
         env:
           monitor_last_release_id: ${{ needs.monitor-and-test.outputs.monitor_last_release_id }}
           monitor_doc_hash:        ${{ needs.monitor-and-test.outputs.monitor_doc_hash }}
@@ -758,26 +760,8 @@ jobs:
           cat "$MONITOR_FILE"
 
       - name: Persist monitor state to cache
-        # DEBUG: schedule half of gate disabled to simulate schedule-only
-        # path. Re-enable both before merging - dispatch persisting would
-        # overwrite cache entries the schedule retry chain depends on.
-        # if: github.event_name == 'schedule' && needs.monitor-and-test.outputs.need_to_test == 'true'
-        if: needs.monitor-and-test.outputs.need_to_test == 'true'
-        # run-id suffix because actions/cache/save refuses to overwrite
-        # an existing entry with the same key (it errors with
-        # 'Cache already exists'). The next Restore's find-key step
-        # queries the Cache API for the most recent entry under this
-        # prefix and uses its returned key as exact-match.
+        if: github.event_name == 'schedule' && needs.monitor-and-test.outputs.need_to_test == 'true'
         uses: actions/cache/save@v6
         with:
           path: .monitor-state
           key: monitor-state-ms-swift-${{ github.run_id }}
-          # enableCrossOsArchive: true keeps process.platform out of
-          # the cache version hash. Save runs on ubuntu-latest (x86_64)
-          # while Restore runs on linux-aarch64-a2-1 (self-hosted NPU
-          # runner); without this the platform salt would still match
-          # (both 'linux'), but stripping it makes the version robust
-          # to future runner-image changes. compressionMethod still
-          # participates - both runners need zstd (or neither) for the
-          # restore version hash to align.
-          enableCrossOsArchive: true

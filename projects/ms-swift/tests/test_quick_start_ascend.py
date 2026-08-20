@@ -41,6 +41,7 @@ import subprocess
 import time
 import traceback
 import unittest
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -82,7 +83,7 @@ def fetch_doc_text() -> tuple[str, str]:
                     url, headers={'User-Agent': 'cosdt-ci-test/quick-start'})
                 with urllib.request.urlopen(req, timeout=30) as resp:
                     return resp.read().decode('utf-8'), url
-            except Exception as e:
+            except (urllib.error.URLError, TimeoutError, OSError) as e:
                 last_err = e
                 _log(f'fetch_doc_text: attempt {attempt+1}/2 failed for {url}')
                 _log(traceback.format_exc())

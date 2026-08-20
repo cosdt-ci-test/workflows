@@ -27,6 +27,10 @@ on:
 
 permissions:
   contents: read
+  # find-key step queries GET /repos/{repo}/actions/caches which
+  # requires actions: read on the workflow token. Without this the
+  # call returns 403 and the step produces an empty key (cold cache).
+  actions: read
 
 env:
   CI_IMAGE: &ci_image swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12

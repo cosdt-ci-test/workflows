@@ -1,0 +1,92 @@
+# One-shot probe: what mount points exist inside a real
+# linux-aarch64-a2-1 + CANN container job. Manual only.
+# Do not treat missing /models as example failure.
+name: probe-npu-mounts
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  in-container:
+    name: llama.cpp-shaped container
+    runs-on: linux-aarch64-a2-1
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      ASCEND_RT_VISIBLE_DEVICES: "0"
+    container:
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+      options: >-
+        --shm-size=64g
+        --device=/dev/davinci0
+        --device=/dev/davinci_manager --device=/dev/devmm_svm --device=/dev/hisi_hdc
+        --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
+        --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
+        --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
+    steps:
+      - name: List candidate mount points
+        run: |
+          set +e
+          echo "=== uname ==="
+          uname -a
+          echo "=== df -h ==="
+          df -h
+          echo "=== / ==="
+          ls -la /
+          echo "=== findmnt ==="
+          findmnt -T /models /data /workspace /data/ci-cache 2>&1
+          echo "=== paths ==="
+          for p in /models /data /data/ci-cache /workspace; do
+            if [ -e "$p" ]; then
+              echo "EXISTS $p"
+              ls -la "$p" | head -40
+            else
+              echo "MISSING $p"
+            fi
+          done
+          echo "=== mount grep ==="
+          mount | grep -Ei 'models|ci-cache|/data|nfs|workspace' || echo "no matching mounts"
+
+  via-host-root:
+    name: container plus host root bind
+    runs-on: linux-aarch64-a2-1
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      ASCEND_RT_VISIBLE_DEVICES: "0"
+    container:
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+      options: >-
+        --shm-size=64g
+        --device=/dev/davinci0
+        --device=/dev/davinci_manager --device=/dev/devmm_svm --device=/dev/hisi_hdc
+        --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
+        --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
+        --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
+        --volume=/:/host:ro
+    steps:
+      - name: List host paths through /host
+        run: |
+          set +e
+          echo "=== /host ==="
+          ls -la /host
+          echo "=== host paths ==="
+          for p in /host/models /host/data /host/data/ci-cache /host/workspace; do
+            if [ -e "$p" ]; then
+              echo "EXISTS $p"
+              ls -la "$p" | head -40
+            else
+              echo "MISSING $p"
+            fi
+          done
+          echo "=== host findmnt ==="
+          findmnt -T /host/models /host/data /host/workspace 2>&1
+          echo "=== host nfs ==="
+          findmnt -t nfs,nfs4 /host 2>&1 || echo "no nfs under /host"

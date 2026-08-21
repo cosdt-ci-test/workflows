@@ -610,19 +610,17 @@ class MarkdownDocTestBase(ABC):
     # ============================================================
     # 公开：模板方法入口 + 子类钩子 + 框架实现
     # ============================================================
-    def pre_setup(self) -> None:
-        """搭建测试运行所需的 Python/系统环境。默认空实现。
+    def setup_for_test(self) -> None:
+        """搭建测试运行所需的 Python/系统环境。**框架不自调**，由子类
+        在 ``setUpClass`` / ``setUp`` 自行触发（通常会 ``super()`` 链上来）。
 
-        在 ``run_template`` 最开始、``pre_process`` 之前调用一次。适合做
-        框架无感知、项目专属的准备工作，例如：
-
-        * 写入 ``PIP_CONSTRAINT`` / ``UV_CONSTRAINT`` 之类的 pip 约束
-        * 探测并选择性安装 torch / torch_npu 等 wheel
-        * 装 doc 表格里钉死的 transformers / peft 版本
-
-        不应包含任何会修改文档解析/执行结果的工作（属于 ``pre_process``
-        / ``#test-setup`` 块的范围）。
+        默认实现：装框架自身的 markdown 解析依赖 ``mistune``（仅在缺失时）。
+        子类应 ``super().setup_for_test()`` 之后再叠加项目专属步骤
         """
+        subprocess.run(
+            ['python', '-m', 'pip', 'install', 'mistune'],
+            check=True,
+        )
 
     def pre_process(self) -> str:
         """从 ``MONITORED_DOC_URL`` 拉 doc 文本。
@@ -684,11 +682,12 @@ class MarkdownDocTestBase(ABC):
                 raise
 
     def run_template(self) -> None:
-        """``pre_setup`` -> ``pre_process`` -> ``parse`` -> ``execute`` -> ``post_process``。
+        """``pre_process`` -> ``parse`` -> ``execute`` -> ``post_process``。
 
         ``post_process`` 在 ``finally`` 里调用，确保 ``execute`` 抛错时也跑清理。
+        注意：``setup_for_test`` 不在这里自动调——子类在 ``setUpClass`` /
+        ``setUp`` 自行触发。
         """
-        self.pre_setup()
         text = self.pre_process()
         commands, test_expected_results = self.parse(text)
         self.log(

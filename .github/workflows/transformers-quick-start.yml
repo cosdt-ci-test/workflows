@@ -119,7 +119,8 @@ jobs:
             python -m pip install --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
               torch==2.9.0 torch_npu==2.9.0.post2
           fi
-          python -m pip install -e target --no-deps accelerate
+          python -m pip install -e target --no-deps
+          python -m pip install accelerate
           mkdir -p output
           python -m unittest discover -s workflows/projects/transformers/tests -p 'test_quick_start_ascend.py' -v 2>&1 | tee "$GITHUB_WORKSPACE/output/quick-start.log"
       - name: Write result

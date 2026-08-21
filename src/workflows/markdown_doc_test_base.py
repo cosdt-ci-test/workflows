@@ -556,9 +556,20 @@ class MarkdownDocTestBase(ABC):
                     f'setup command failed (rc={rc}); CMD stderr:\n{err.rstrip() or "(empty)"}'
                 )
             if cmd.store:
-                self._captures[cmd.store] = out
+                # Strip trailing whitespace from captured stdout:
+                # subprocess output always ends with \n, and injecting
+                # that \n into a multi-line command with `\` continuations
+                # splits the command at the substitution point — e.g.
+                # `--adapters <ckpt> \` becomes two lines after
+                # substitution because <ckpt> carries the capture's
+                # trailing \n, breaking the line continuation and
+                # confusing the heredoc that follows. rstrip() (not
+                # rstrip('\n')) preserves internal newlines for multi-
+                # line captures while normalizing the boundary.
+                self._captures[cmd.store] = out.rstrip()
                 self.log(
-                    f'[Step {idx}] captured {cmd.store!r} ({len(out)}B)'
+                    f'[Step {idx}] captured {cmd.store!r} '
+                    f'({len(out)}B, stripped)'
                 )
             return
 

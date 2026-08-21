@@ -1,556 +1,262 @@
-# Copyright (c) ModelScope Contributors. All rights reserved.
-"""Tests that walk through the Ascend Quick Start documentation.
+"""Quick-start-Ascend 文档测试：基于 ``MarkdownDocTestBase`` 契约的端到端用例。
 
-The Quick Start is structured as a sequence of ``shell`` fenced code
-blocks. Each block contains one or more ``>>>`` REPL commands followed
-by their expected output. This test:
+被测文档：``projects/ms-swift/docs/Quick-start-Ascend.md``（遵循
+``docs/markdown_doc_test_label.md`` 契约：每个 ``shell`` 代码块带 ``#test`` /
+``#test-setup`` / ``#test-result`` 标签与 ``id=`` / ``store=`` / ``load='x>>y'`` /
+``fuzzy='xxx'`` 参数）。
 
-  1. Parses every ``shell`` block in
-     ``docs/source/GetStarted/Quick-start-Ascend.md`` (or the English
-     twin) into ``(command, expected_output_lines)`` pairs.
-  2. Executes each command in a fresh subshell.
-  3. Compares the actual output against the expected output line by
-     line, using regex matching so that placeholders in the doc can
-     stand in for dynamic values (PIDs, version build numbers, etc.).
+跑法：``python -m unittest tests.test_quick_start_ascend -v 2>&1``
 
-If the Quick Start doc is changed in a way that breaks any block, this
-test fails.
+环境变量（由 GitHub workflow ``ms-swift-quick-start.yml`` 注入）：
+    ``MONITORED_DOC_URL``         必填，被测文档的原始 URL。
+    ``UPSTREAM_REF``              可选，``load="upstream_ref>>ref"`` 的
+                                  ``upstream_ref`` 实际取值。
+    ``UPSTREAM_COMMIT``           可选，被 ``pre_process`` 用于把 doc 中的
+                                  ``<UPSTREAM_REF>`` 占位符替换成确切 SHA。
+    ``SWIFT_NPU_E2E`` 已废弃（v1 老测试遗留），新约定一律用 ``NPU_READY``。
+                                  CI runner 上设 ``NPU_READY=true`` 解除
+                                  skip；本地开发机不设也能 import / 静态
+                                  检查通过（类直接 skip）。
 
-Placeholder syntax
-------------------
-* ``...``  - match any number of characters on this line (wildcard).
-* ``<pid>`` - match a number and capture it; the captured value is
-              substituted into later commands that contain ``<pid>``.
-* ``xxx``   - match any non-whitespace run.
-* ``MAJOR.MINOR.x`` - match any ``d.d.<patch>`` triple (e.g. ``3.12.x``,
-              ``3.11.x``, ``2.7.x`` - one placeholder line covers all
-              minor versions without per-minor entries).
-* ``2.9.0.postX`` - match ``2.9.0.post<patch>`` (legacy pre-MINOR.x
-              placeholder for Ascend NPU plugin releases).
-* ``x.y.z`` - match ``d.d.d``.
-* Plain lines that are not ``...`` are matched exactly.
-
-The test runner is expected to be an NPU CI container
-(``linux-aarch64-a2-1`` in this repo's ``citest_npu.yaml``) where
-CANN, torch, torch_npu and ms-swift are already available.
+端到端测试只在 NPU runner 上跑：本地开发机 / 普通 ubuntu runner 没有
+``/dev/davinci*`` 设备，硬跑会因 ``import torch_npu`` 失败。
 """
+
+from __future__ import annotations
 
 import os
 import re
 import subprocess
-import time
-import traceback
 import unittest
-import urllib.error
-import urllib.request
-from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+from workflows.markdown_doc_test_base import MarkdownDocTestBase
 
-
-
-def _log(msg: str) -> None:
-    """Print a timestamped, flushed log line so CI output shows progress
-    even when subprocess buffers haven't been flushed yet."""
-    print(f'[{time.strftime("%H:%M:%S")}] {msg}', flush=True)
+def _is_truthy(value: str | None) -> bool:
+    """``'true'`` → True（大小写不敏感），其它（含未设）→ False。"""
+    if not value:
+        return False
+    return value.strip().lower() == 'true'
 
 
-# --------------------------------------------------------------------------- #
-# Parsing                                                                     #
-# --------------------------------------------------------------------------- #
-
-def fetch_doc_text() -> tuple[str, str]:
-    """Fetch the Quick Start doc from MONITORED_DOC_URL.
-
-    The URL must match what the monitor step hashed, so the doc under
-    test is exactly the doc that triggered this run. Failure to fetch
-    raises - the test fails (this is a CI failure, not a silent skip).
-
-    Returns (text, url). No local fallback by design: a stale copy
-    of the doc would silently desynchronise the test from the URL the
-    monitor hashed. The URL is set by the workflow; running this test
-    outside CI requires setting MONITORED_DOC_URL by hand.
-    """
-    url = os.environ.get('MONITORED_DOC_URL')
-    if url:
-        # urllib's default has no timeout - on flaky networks the
-        # call can hang indefinitely. Cap each attempt at 30s and
-        # retry once before giving up.
-        last_err = None
-        for attempt in range(2):
-            try:
-                req = urllib.request.Request(
-                    url, headers={'User-Agent': 'cosdt-ci-test/quick-start'})
-                with urllib.request.urlopen(req, timeout=30) as resp:
-                    return resp.read().decode('utf-8'), url
-            except (urllib.error.URLError, TimeoutError, OSError) as e:
-                last_err = e
-                _log(f'fetch_doc_text: attempt {attempt+1}/2 failed for {url}')
-                _log(traceback.format_exc())
-                time.sleep(2)
-        raise RuntimeError(
-            f'failed to fetch {url} after 2 attempts: {last_err!r}')
-    raise RuntimeError(
-        'MONITORED_DOC_URL is unset - the test must run inside the '
-        'workflow which sets it; there is no local fallback by design.')
+def _e2e_enabled() -> bool:
+    """``NPU_READY=true`` 时放开 skip。"""
+    return _is_truthy(os.environ.get('NPU_READY'))
 
 
-def parse_blocks(doc_text: str) -> list[list[dict]]:
-    """Parse every ``shell`` block into a list of ``{cmd, expected}``.
+class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
+    """``Quick-start-Ascend.md`` 端到端测试：拉 doc -> 校验契约 -> 顺序执行
+    ``#test-setup`` / ``#test`` -> 比对 ``#test-result``。"""
 
-    Returns one inner list per fenced block. Each inner list contains
-    the REPL commands and their expected output in source order. If a
-    block contains no ``>>>`` command, the inner list is empty and the
-    raw body is returned in the ``raw`` field of a sentinel dict so the
-    runner can syntax-check the hand-written command.
-    """
-    fence_re = re.compile(r'```shell\s*\n(.*?)```', re.DOTALL)
-    blocks: list[list[dict]] = []
-    for m in fence_re.finditer(doc_text):
-        body = m.group(1)
-        block: list[dict] = []
-        cur_cmd: list[str] = []
-        cur_exp: list[str] = []
-        in_cmd = False   # True right after a '>>>' line - `...` then
-                        # continues the command; False once any
-                        # non-`...` line (expected output) is seen.
-        for raw in body.splitlines():
-            stripped = raw.lstrip()
-            if stripped.startswith('>>> '):
-                if cur_cmd or cur_exp:
-                    block.append({
-                        'cmd': '\n'.join(cur_cmd).rstrip(),
-                        'expected': cur_exp,
-                    })
-                cur_cmd = [stripped[4:]]
-                cur_exp = []
-                # Right after `>>>`, `...` lines are bash
-                # continuations of the command, not wildcards.
-                in_cmd = True
-            elif in_cmd and stripped.startswith('... '):
-                # `...` continuation of the current `>>>` command.
-                cur_cmd.append(stripped[4:])
-            elif stripped == '...':
-                # Bare ``...`` line - swallow whatever the actual
-                # line ends up being (true wildcard).
-                cur_exp.append('...')
-                in_cmd = False
-            elif stripped.startswith('... ') and stripped.lstrip('...').strip().startswith('#'):
-                # ``...`` followed by an inline comment only (the
-                # whole line is annotation + wildcard, no content
-                # anchor past it). Strip the comment so the regex
-                # framework sees a single ``...``.
-                cur_exp.append('...')
-                in_cmd = False
-            elif stripped.startswith('...#'):
-                # ``...#...`` (no leading space before the comment).
-                # Same handling as ``... # ...`` above.
-                cur_exp.append('...')
-                in_cmd = False
-            elif stripped.startswith('...'):
-                # ``...`` followed by literal content - we keep the
-                # whole line so the literal content survives as a
-                # regex anchor instead of being silently dropped.
-                # The downstream framework already turns every
-                # ``...`` sequence into ``.*?`` (non-overlapping
-                # ``\\.\\.\\.`` -> ``.*?`` replacement in
-                # ``_compare_lines``), so ``...你好...`` becomes the
-                # regex ``.*?你好.*?`` - the leading / trailing
-                # ``...`` swallow variable noise; ``你好`` literal
-                # anchors swift infer actually emitting that token.
-                cur_exp.append(stripped)
-                in_cmd = False
-            elif stripped.startswith('<<<'):
-                cur_cmd.append(f': <<< {stripped[4:]}')
-                in_cmd = True
-            elif stripped.startswith('#'):
-                # Drop comment lines entirely (neither a command nor
-                # expected output). Lets the doc author sprinkle plain
-                # `# ...` explanations inside a shell block.
-                continue
-            else:
-                # Any non-`...` non-comment line ends the command-
-                # continuation phase; subsequent `...` are wildcards.
-                cur_exp.append(raw)
-                in_cmd = False
-        if cur_cmd or cur_exp:
-            block.append({
-                'cmd': '\n'.join(cur_cmd).rstrip(),
-                'expected': cur_exp,
-            })
-        # Trim trailing blank expected lines.
-        for c in block:
-            while c['expected'] and c['expected'][-1].strip() == '':
-                c['expected'].pop()
-        # If no ``>>>`` was found anywhere, the whole body is a hand-written
-        # command. Encode it as a single sentinel step with empty cmd and
-        # the raw body in ``expected`` so the runner can pick it up.
-        if not any(c['cmd'].strip() for c in block):
-            block = [{'cmd': '', 'expected': [body], 'raw': body}]
-        blocks.append(block)
-    return blocks
+    # swift sft 全量训练可能跑 30+ 分钟；覆盖基类 1800s 默认值。
+    DEFAULT_COMMAND_TIMEOUT = 3600
 
-
-# --------------------------------------------------------------------------- #
-# Placeholder handling                                                        #
-# --------------------------------------------------------------------------- #
-
-# (pattern, regex_fragment). Named-capture fragments use (?P<name>...).
-#
-# Only placeholders that the doc actually emits are kept. The
-# Quick-start-Ascend.md is the only doc that runs through this
-# test today (the ms-swift-examples.yml doc is a separate suite
-# and does not import from this file).
-_PLACEHOLDER_PATTERNS: list[tuple[re.Pattern, str]] = [
-    # ``<checkpoint>`` captures the Swift-SFT checkpoint path emitted by
-    # ``ls -dt output/*/checkpoint-* | head -n 1`` so a later
-    # ``swift infer --adapters <checkpoint>`` substitutes the actual
-    # checkpoint directory instead of relying on a placeholder that
-    # would never exist on disk.
-    (re.compile(r'<checkpoint>'), r'(?P<checkpoint>output/[^/\s]+/checkpoint-\S+)'),
-    # Generic ``MAJOR.MINOR.x`` version placeholder: matches any
-    # ``d.d.<patch>`` so 3.12.x, 3.11.x, 2.7.x etc. all work without
-    # us having to add a pattern line per minor. The ``\b`` rejects
-    # ``3.12.x.y`` (extra dot) and ``3.12x`` (no dot before x) by
-    # virtue of the ``\.`` between the digit groups.
-    (re.compile(r'\b\d+\.\d+\.x\b'), r'\d+\.\d+\.\d+'),
-    # ``xxx`` is a one-or-more non-whitespace, non-comma run. Used
-    # to match the loss dict's ``2.27966142``, the train_runtime's
-    # ``2.4083461``, and so on - any place the doc wants to flag a
-    # specific number that the test should not pin.
-    (re.compile(r'\bxxx\b'),       r'[^,\s]+?'),
-]
-
-
-def _sentinel(i: int) -> str:
-    """A control-character token that ``re.escape`` will not touch."""
-    return f'\x01S{i}\x01'
-
-
-def substitute_placeholders(expected: str) -> tuple[str, dict]:
-    """Swap placeholders for sentinels, returning (escaped_text, mapping)."""
-    mapping: dict = {}
-    text = expected
-    counter = 0
-
-    # Named-capture placeholders go first so the group name survives.
-    for pat, repl in _PLACEHOLDER_PATTERNS:
-        if '(?P<' not in repl:
-            continue
-        token = _sentinel(counter)
-        mapping[counter] = repl
-        counter += 1
-        text = pat.sub(token, text)
-
-    for pat, repl in _PLACEHOLDER_PATTERNS:
-        if '(?P<' in repl:
-            continue
-        token = _sentinel(counter)
-        mapping[counter] = repl
-        counter += 1
-        text = pat.sub(token, text)
-
-    return text, mapping
-
-
-def expected_line_to_regex(expected: str) -> re.Pattern:
-    """Build a regex that matches a single line of actual output."""
-    text, mapping = substitute_placeholders(expected)
-    escaped = re.escape(text)
-    for i, frag in mapping.items():
-        escaped = escaped.replace(_sentinel(i), frag)
-    # A literal ``...`` in the expected line becomes a wildcard.
-    escaped = escaped.replace(r'\.\.\.', '.*')
-    return re.compile('^' + escaped + '$')
-
-
-# --------------------------------------------------------------------------- #
-# Command execution                                                           #
-# --------------------------------------------------------------------------- #
-
-def run_command(cmd: str, env: dict, cwd: Path, timeout: int) -> tuple[int, str]:
-    """Run ``cmd`` in bash; return ``(returncode, stdout+stderr)``."""
-    t0 = time.time()
-    # Truncate to 2000 chars so a multi-line swift sft invocation
-    # stays visible in the log without flooding it.
-    _log(f'CMD start (timeout={timeout}s): {cmd[:2000]}')
-    proc = subprocess.run(
-        ['bash', '-c', cmd],
-        env=env,
-        cwd=cwd,
-        capture_output=True,
-        check=False,
-        timeout=timeout,
+    # 进程级 CUDA 排除清单。原写在 workflow step 内，作为子进程 env 透传给
+    # pip / uv / swift 自身的 wheel 解析。挪到测试层后写到 /tmp 并 export，
+    # 子进程 (subprocess.run 默认继承父 env) 同样生效。
+    _CUDA_CONSTRAINTS = (
+        'modelscope==1.37.0',
+        'cuda-toolkit<0',
+        'cuda-python<0',
+        'cuda-bindings<0',
+        'cuda-core<0',
+        'cuda-pathfinder<0',
+        'flashinfer-python<0',
+        'nvidia-cublas<0',
+        'nvidia-cuda-runtime<0',
+        'nvidia-cuda-nvrtc<0',
+        'nvidia-cuda-cupti<0',
+        'nvidia-cudnn<0',
+        'nvidia-cudnn-frontend<0',
+        'nvidia-cufft<0',
+        'nvidia-curand<0',
+        'nvidia-cusolver<0',
+        'nvidia-cusparse<0',
+        'nvidia-cutlass-dsl<0',
+        'nvidia-cutlass-dsl-libs-base<0',
+        'nvidia-cutlass-dsl-libs-core<0',
+        'nvidia-cutlass-dsl-libs-cu12<0',
+        'nvidia-ml-py<0',
+        'nvidia-nccl<0',
+        'nvidia-nvjitlink<0',
+        'nvidia-nvtx<0',
+        'nvidia-cublas-cu12<0',
+        'nvidia-cuda-nvdisasm<0',
+        'nvidia-cuda-runtime-cu12<0',
+        'nvidia-cuda-nvrtc-cu12<0',
+        'nvidia-cuda-cupti-cu12<0',
+        'nvidia-cudnn-cu12<0',
+        'nvidia-cufft-cu12<0',
+        'nvidia-curand-cu12<0',
+        'nvidia-cusolver-cu12<0',
+        'nvidia-cusparse-cu12<0',
+        'nvidia-cusparselt-cu12<0',
+        'nvidia-nccl-cu12<0',
+        'nvidia-nvjitlink-cu12<0',
+        'nvidia-nvtx-cu12<0',
     )
-    out = proc.stdout.decode('utf-8', errors='replace')
-    err = proc.stderr.decode('utf-8', errors='replace')
-    elapsed = time.time() - t0
-    _log(f'CMD done in {elapsed:.1f}s rc={proc.returncode} '
-         f'(stdout={len(out)}B stderr={len(err)}B)')
-    # Surface the actual output when the command didn't return what we
-    # expected, so the GitHub step log shows the failure mode without
-    # having to download an artifact. Truncate to keep the log sane
-    # (swift sft training can easily produce hundreds of MB of stdout).
-    #
-    # We also dump stderr when the process looks "healthy" (rc=0) but
-    # the canonical error markers are present. swift infer on the
-    # NPU runner has been seen to swallow [ERROR] / Exception lines
-    # into stderr while exiting cleanly, masking a real failure
-    # behind a successful run-conclusion.
-    error_markers = ('[ERROR]', 'Traceback (most recent call last)',
-                     'applicaiton exception', 'ERR99999')
-    stderr_has_error = any(m in err for m in error_markers)
-    if proc.returncode != 0 or stderr_has_error \
-            or (out.strip() == '' and err.strip() != ''):
-        head_out = out[:2000]
-        tail_out = out[-2000:] if len(out) > 2000 else ''
-        head_err = err[:2000]
-        tail_err = err[-2000:] if len(err) > 2000 else ''
-        # When the stderr carries an error marker we dump it FULL
-        # (capped at a generous ~256 KB) instead of head/tail-only.
-        # ERR99999 on the NPU runner often points at a Python
-        # traceback nested deep in stderr; if we only show the first
-        # and last 2 KB the actual offending file/line is silently
-        # truncated and the next CI round reproduces the same red.
-        full_err = err if stderr_has_error and len(err) <= 256_000 else ''
-        if full_err:
-            _log(f'CMD stderr (full, {len(full_err)}B):\n'
-                 f'{full_err.rstrip()}')
-        else:
-            if head_err:
-                _log(f'CMD stderr (head):\n{head_err.rstrip()}')
-            if tail_err and tail_err != head_err:
-                _log(f'CMD stderr (tail):\n{tail_err.rstrip()}')
-        if head_out:
-            _log(f'CMD stdout (head):\n{head_out.rstrip()}')
-        if tail_out and tail_out != head_out:
-            _log(f'CMD stdout (tail):\n{tail_out.rstrip()}')
-    # Return only stdout - stderr is noise (init banners, warnings)
-    # that would otherwise get folded into 'expected output' and
-    # cause spurious mismatches. Stderr is still logged above for
-    # debugging when the command fails.
-    return proc.returncode, out
+    _CONSTRAINTS_FILE = '/tmp/ms_swift_npu_constraints.txt'
 
+    # Cluster-internal nginx PyPI cache + 华为云 ascend 双源镜像。
+    _CLUSTER_INDEX = 'http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple'
+    _CLUSTER_TRUSTED = 'cache-service.nginx-pypi-cache.svc.cluster.local'
+    _ASCEND_EXTRA = 'https://repo.huaweicloud.com/ascend/repos/pypi'
 
-# Per-block wall-clock budgets (seconds). The full doc takes the sum.
-BLOCK_TIMEOUTS = {
-    'install': 600,   # pip install ms-swift (CI image is pre-installed)
-    'train': 1800,    # swift sft on 1000 samples
-    'merge': 600,     # swift export --merge_lora
-    'infer': 600,     # swift infer with piped input
-    'deploy': 900,    # swift deploy + chat completion + kill
-    'default': 300,
-}
+    # CANN toolkit：source 一次拿到 ASCEND_HOME / LD_LIBRARY_PATH 等 env。
+    # 路径写死，跟 GitHub workflow container 镜像 (CI_IMAGE) 绑定。
+    _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
 
+    # ----------------------------------------------------------
+    # pre_setup：CUDA 约束 + uv + torch 栈探测 + transformers/peft
+    # ----------------------------------------------------------
 
-def block_kind(block: list[dict]) -> str:
-    """Guess the kind of a block from its first command.
+    def pre_setup(self) -> None:
+        """CANN env + CUDA 约束 + uv + torch 栈探测 + transformers/peft 一气装好。
 
-    Strips a leading ``VAR=...`` prefix (e.g. ``ASCEND_RT_VISIBLE_DEVICES=0``)
-    before matching so the timeout bucket reflects what the command
-    actually does, not how it was prefixed.
-    """
-    if not block:
-        return 'default'
-    head = block[0]['cmd'].lstrip().splitlines()[0] if block[0]['cmd'] else ''
-    # Strip `KEY=VALUE ` prefix(es) that often precede the real command.
-    while '=' in head.split(' ', 1)[0]:
-        head = head.split(' ', 1)[1] if ' ' in head else ''
-    if 'pip install' in head:
-        return 'install'
-    if head.startswith('swift sft'):
-        return 'train'
-    if head.startswith('swift export'):
-        return 'merge'
-    if head.startswith('swift infer'):
-        return 'infer'
-    if head.startswith(('nohup swift deploy', 'swift deploy')):
-        return 'deploy'
-    return 'default'
+        原写死在 ``ms-swift-quick-start.yml`` 的 ``Run quick start test``
+        step 里，每次 cycle 都重做一遍。现在挪到测试层，由 ``setUpClass``
+        触发一次；workflow 该 step 只剩 ``python -m unittest …``。
 
-
-# End-to-end tests are only run on the NPU runner. Set SWIFT_NPU_E2E=1 to
-# actually execute the test; otherwise the class is skipped.
-_SKIP_E2E = os.environ.get('SWIFT_NPU_E2E', '0') != '1'
-
-
-@unittest.skipIf(_SKIP_E2E,
-                 'end-to-end tests require NPU runner; set SWIFT_NPU_E2E=1 to run')
-class TestQuickStartAscendEndToEnd(unittest.TestCase):
-    """End-to-end: actually run every block on a real NPU runner.
-
-    These tests are **only** meant to run on a self-hosted NPU runner
-    (the ``linux-aarch64-a2-1`` runner in this repo's
-    ``citest_npu.yaml``). They execute real ``swift sft`` /
-    ``swift infer`` commands and compare stdout against the expected
-    output declared in the doc. They are skipped by default in any
-    other environment.
-    """
-
-    doc_path: str
-    blocks: list[list[dict]]
-
-    @classmethod
-    def setUpClass(cls):
-        _log(f'setUpClass: fetching doc from {os.environ.get("MONITORED_DOC_URL", "<unset>")}')
-        cls.doc_text, cls.doc_path = fetch_doc_text()
-        _log(f'setUpClass: fetched doc ({len(cls.doc_text)} bytes)')
-        # Record the upstream ref / commit being tested. The CI
-        # workflow sets these before invoking unittest; when running
-        # outside CI both are unset and the test is skipped below.
-        cls.upstream_ref = os.environ.get('UPSTREAM_REF', '')
-        cls.upstream_commit = os.environ.get('UPSTREAM_COMMIT', '')
-        if not cls.upstream_ref or not cls.upstream_commit:
-            raise unittest.SkipTest(
-                'end-to-end requires UPSTREAM_REF and UPSTREAM_COMMIT '
-                '(set by the CI workflow)')
-        os.environ.setdefault('UPSTREAM_REF', cls.upstream_ref)
-        os.environ.setdefault('UPSTREAM_COMMIT', cls.upstream_commit)
-        _log(f'setUpClass: upstream ref={cls.upstream_ref} commit={cls.upstream_commit[:12]}')
-        # Substitute <UPSTREAM_REF> in the doc with the exact ref/SHA
-        # the monitor triggered on, then parse. The doc's
-        # `## install ms-swift` block uses this placeholder to do the
-        # source install in-band; we no longer install ms-swift here.
-        cls.doc_text = cls.doc_text.replace(
-            '<UPSTREAM_REF>', cls.upstream_commit)
-        cls.blocks = parse_blocks(cls.doc_text)
-        total_steps = sum(len(b) for b in cls.blocks)
-        _log(f'setUpClass: parsed {total_steps} steps across '
-             f'{len(cls.blocks)} blocks')
-        if not cls.blocks:
-            raise unittest.SkipTest(
-                f'No shell code blocks found in {cls.doc_path}')
-
-    def test_runs_quick_start(self):
-        """Walk every block and execute, comparing actual vs expected.
-
-        Fail fast on the first mismatch - subsequent blocks likely
-        depend on previous ones (e.g. swift sft needs swift CLI from
-        the install block).
+        关键点：
+        * CANN env（``ASCEND_HOME`` 等）通过 ``bash -c 'source X && env'``
+          注入到 ``os.environ``；后续 ``swift sft`` / ``swift infer`` 子
+          进程自动继承。Path 写死，跟 runner 镜像绑定。
+        * 不硬钉 torch 版本：镜像里是 ``2.9.0+cpu``，cluster cache 不认
+          ``+cpu`` 这种 local version label，会去外部 simple page 查然后
+          失败（064a5d7 / 7136ed1 都栽过）。先 probe，匹配就跳过。
+        * ``torch.__version__ == '2.9.0+cpu'`` 的 ``+cpu`` 是 libtorch
+          构建变体名，不是运行时；计算走 ``torch_npu`` (CANN 后端)。
+        * ``PIP_CONSTRAINT`` / ``UV_CONSTRAINT`` 是进程级 env，对 doc 里
+          ``#test-setup pip install ms-swift -U`` 那段也生效——前提是
+          子进程继承父进程 env（Python ``subprocess.run`` 默认如此）。
         """
-        env = os.environ.copy()
-        env['UPSTREAM_REF'] = self.upstream_ref
-        env['UPSTREAM_COMMIT'] = self.upstream_commit
-        env.setdefault('HF_HUB_DISABLE_TELEMETRY', '1')
-        env.setdefault('MODELSCOPE_CACHE', str(Path.home() / '.cache'))
-        work_dir = REPO_ROOT / 'output' / 'npu-quick-start-lora'
-        if work_dir.exists():
-            import shutil
-            shutil.rmtree(work_dir)
-        env['WORK_DIR'] = str(work_dir)
-
-        captures: dict = {}
-
-        _log(f'test_runs_quick_start: starting {len(self.blocks)} blocks')
-        for bi, block in enumerate(self.blocks):
-            kind = block_kind(block)
-            timeout = BLOCK_TIMEOUTS.get(kind, BLOCK_TIMEOUTS['default'])
-            _log(f'[Test block {bi}/{len(self.blocks)-1}] kind={kind} timeout={timeout}s '
-                 f'steps={len(block)}')
-            if len(block) == 1 and not block[0]['cmd'].strip():
-                _log(f'[Test block {bi}]: sentinel, skip')
-                continue
-            self._run_block(block, kind, env, captures, timeout, bi)
-        _log('test_runs_quick_start: all blocks done')
-
-    def _run_block(self, block, kind, env, captures, timeout, block_idx):
-        actual_lines_per_step: list[list[str]] = []
-        for si, step in enumerate(block):
-            cmd = step['cmd']
-            for k, v in captures.items():
-                cmd = cmd.replace(f'<{k}>', v)
-            rc, out = run_command(cmd, env, REPO_ROOT, timeout)
-            self.assertEqual(
-                rc, 0,
-                f'block #{block_idx} ({kind}) command failed (rc={rc}):\n'
-                f'  cmd: {cmd!r}\n'
-                f'  output:\n{out}')
-            actual_lines_per_step.append(out.splitlines())
-
-        for si, (step, actual_lines) in enumerate(zip(block, actual_lines_per_step)):
-            expected = step['expected']
-            if not expected:
-                continue
-            self._compare_lines(
-                block_idx, si, kind, expected, actual_lines, captures,
+        # 0) CANN env：source set_env.sh 后拿 env 流，merge 进 os.environ
+        if os.path.isfile(self._CANN_SET_ENV):
+            merged = subprocess.run(
+                ['bash', '-c', f'source {self._CANN_SET_ENV} >/dev/null 2>&1; env'],
+                capture_output=True, text=True, check=True,
+            )
+            for line in merged.stdout.splitlines():
+                if '=' not in line:
+                    continue
+                key, _, value = line.partition('=')
+                # 不覆盖 workflow 显式注入的 env（jobs.env / steps.env）；
+                # 只补 CANN 缺失的键，避免冲突。
+                os.environ.setdefault(key, value)
+            self.log('pre_setup: sourced CANN env from set_env.sh')
+        else:
+            self.log(
+                f'pre_setup: skipping CANN env source ({self._CANN_SET_ENV} not present)'
             )
 
-    def _compare_lines(self, block_idx, step_idx, kind, expected, actual, captures):
-        """Match the whole expected block against the whole actual block.
+        # 1) CUDA 排除清单 + 进程级 env
+        with open(self._CONSTRAINTS_FILE, 'w', encoding='utf-8') as fh:
+            fh.write('\n'.join(self._CUDA_CONSTRAINTS) + '\n')
+        os.environ['PIP_CONSTRAINT'] = self._CONSTRAINTS_FILE
+        os.environ['UV_CONSTRAINT'] = self._CONSTRAINTS_FILE
 
-        Join both into one string per side and build a single regex
-        over the expected text. `...` becomes non-greedy `.*?` under
-        `re.DOTALL` so it can swallow variable-length noise runs
-        (loss logs, init banners). `xxx` becomes `\S+` for single-token
-        placeholders. One `re.search` over both sides replaces the old
-        per-line lockstep walk - simpler state machine, same coverage.
+        # 2) uv：test 的 setUpClass 会调 ``uv pip install``，比 pip 处理
+        # PEP 517 build deps 更稳。
+        subprocess.run(
+            ['python', '-m', 'pip', 'install', 'uv'],
+            check=True,
+        )
 
-        Log policy:
-          - When everything matches, log a single 'OK' line.
-          - When something mismatches, dump the full expected and
-            actual blocks once (so the reader sees them side by side).
+        # 3) torch 栈探测：版本匹配则复用镜像预装的 wheel，避免再走
+        # cluster cache 触发 ``+cpu`` 解析。
+        _PROBE_SCRIPT = (
+            'import torch, torch_npu\n'
+            "raise SystemExit(0 if "
+            "torch.__version__.startswith('2.9.0') "
+            "and torch_npu.__version__.startswith('2.9.0') "
+            "else 1)"
+        )
+        probe = subprocess.run(
+            ['python', '-c', _PROBE_SCRIPT],
+            capture_output=True,
+            check=False,  # probe 的成败本身就是分支信号，不能 raise
+        )
+        if probe.returncode == 0:
+            _VERSIONS_SCRIPT = (
+                'import torch, torch_npu; '
+                'print(torch.__version__, torch_npu.__version__)'
+            )
+            versions = subprocess.run(
+                ['python', '-c', _VERSIONS_SCRIPT],
+                capture_output=True, text=True, check=True,
+            )
+            self.log(f'pre_setup: reusing image torch stack ({versions.stdout.strip()})')
+        else:
+            self.log('pre_setup: installing torch==2.9.0 torch_npu==2.9.0.post2')
+            subprocess.run(
+                [
+                    'python', '-m', 'pip', 'install',
+                    '--index-url', self._CLUSTER_INDEX,
+                    '--extra-index-url', self._ASCEND_EXTRA,
+                    '--trusted-host', self._CLUSTER_TRUSTED,
+                    'torch==2.9.0', 'torch_npu==2.9.0.post2',
+                ],
+                check=True,
+            )
+
+        # 4) transformers / peft：doc 表格钉死的版本约束。
+        subprocess.run(
+            ['python', '-m', 'pip', 'install', 'transformers<5.0', 'peft<0.19'],
+            check=True,
+        )
+
+    # ----------------------------------------------------------
+    # pre_process：拉 doc + 把 <UPSTREAM_REF> 替换成实际 commit
+    # ----------------------------------------------------------
+
+    # <UPSTREAM_REF> 出现形态：单 token，前后空白/标点分隔。
+    _UPSTREAM_REF_PATTERN = re.compile(r'<UPSTREAM_REF>')
+
+    def pre_process(self) -> str:
+        """拉被测文档，并把 ``<UPSTREAM_REF>`` 替换成 workflow 注入的 SHA。
+
+        替代基类默认实现：基类只读 ``MONITORED_DOC_URL`` 拿 doc 文本，不做
+        占位符替换。``Quick-start-Ascend.md`` 的源码安装块写
+        ``cd ms-swift && git checkout <UPSTREAM_REF>``——必须替换成确切
+        SHA 后才能在 NPU runner 上 checkout 到对应 commit。
         """
-        expected_text = '\n'.join(expected)
-        actual_text = '\n'.join(actual)
+        text = super().pre_process()
+        upstream_commit = os.environ.get('UPSTREAM_COMMIT', '').strip()
+        if upstream_commit:
+            text = self._UPSTREAM_REF_PATTERN.sub(upstream_commit, text)
+            self.log(
+                f'pre_process: substituted <UPSTREAM_REF> -> '
+                f'{upstream_commit[:12]}'
+            )
+        # UPSTREAM_REF 注入到子进程环境，runner 的 capture 路径靠它。
+        # 若用户显式设过不要覆盖；否则用 UPSTREAM_COMMIT 兜底。
+        os.environ.setdefault('UPSTREAM_REF', upstream_commit)
+        return text
 
-        text, mapping = substitute_placeholders(expected_text)
-        escaped = re.escape(text)
-        for i, frag in mapping.items():
-            escaped = escaped.replace(_sentinel(i), frag)
-        # `...` becomes non-greedy `.*?` with DOTALL so it can span
-        # multiple actual lines (loss dicts, init banners).
-        escaped = escaped.replace(r'\.\.\.', r'.*?')
-        pattern = re.compile(escaped, re.DOTALL)
-        m = pattern.search(actual_text)
+    # ----------------------------------------------------------
+    # test entry
+    # ----------------------------------------------------------
 
-        # Pick up named captures whether or not we matched.
-        if m:
-            for k, v in m.groupdict().items():
-                if v is not None:
-                    captures[k] = v
+    @classmethod
+    def setUpClass(cls) -> None:
+        """整套测试类只跑一次 env setup：CUDA 约束 + uv + torch 栈 +
+        transformers / peft。subsequent test 方法不会再装一遍。
 
-        if m:
-            _log(f'[Test block {block_idx}] step {step_idx} ({kind}): OK '
-                 f'({len(expected)} expected, {len(actual)} actual)')
-            # Always print the full actual block (capped at 30 lines) so a
-            # reader can spot-check what was matched without rerunning.
-            self._log_block('actual', actual, cap=30)
-            return
-
-        # Mismatch - dump both blocks.
-        _log(f'[Test block {block_idx}] step {step_idx} ({kind}): MISMATCH '
-             f'({len(expected)} expected, {len(actual)} actual)')
-        self._log_block('expected', expected)
-        self._log_block('actual', actual)
-        self.fail(
-            f'block #{block_idx} step #{step_idx} ({kind}) output '
-            'mismatch; see summary above')
-
-    @staticmethod
-    def _log_block(label: str, lines, cap: int = 30) -> None:
-        """Pretty-print a block (or head+tail if it exceeds ``cap``).
-
-        Always emits a consistent header so the OK and MISMATCH code paths
-        show the same shape; an explicit ``cap`` keeps CI logs from
-        flooding when the swift sft output runs into hundreds of lines.
-        Output budget is exactly ``cap`` lines (default 30) for the head
-        half of those plus the tail half of those, never exceeding it.
+        受 ``NPU_READY`` 门控：本地开发机不设环境变量时，连 ``import
+        torch_npu`` 都不该尝试；只跑静态解析 / skip 检查。
         """
-        _log(f'  --- {label} (head + tail if huge) ---')
-        if len(lines) <= cap:
-            for i, ln in enumerate(lines, 1):
-                _log(f'  {i:>3}. {ln}')
+        if not _e2e_enabled():
             return
-        half = cap // 2
-        head = lines[:half]
-        tail = lines[-half:]
-        for i, ln in enumerate(head, 1):
-            _log(f'  {i:>3}. {ln}')
-        elided = len(lines) - 2 * half
-        _log(f'  ... [{elided} line(s) elided] ...')
-        tail_start = len(lines) - half + 1
-        for offset, ln in enumerate(tail):
-            _log(f'  {tail_start + offset:>3}. {ln}')
+        cls().pre_setup()
+
+    @unittest.skipIf(
+        not _e2e_enabled(),
+        'end-to-end requires NPU runner; set NPU_READY=true',
+    )
+    def test_runs_doc(self) -> None:
+        """模板方法入口。基类 ``run_template()`` 跑完 ``pre_setup`` ->
+        ``pre_process`` -> ``parse`` -> ``execute`` -> ``post_process``
+        全流程。"""
+        self.run_template()
 
 
 if __name__ == '__main__':

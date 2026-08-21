@@ -32,7 +32,7 @@ env:
 jobs:
   # Restore the previous run's monitor state on a GitHub-hosted
   # ubuntu-latest runner, then ship the four tracked fields as job
-  # outputs to monitor-and-test (which runs on a self-hosted NPU
+  # outputs to test (which runs on a self-hosted NPU
   # runner that can't reach the cache blob storage and can't be
   # trusted to compute the same cache version hash because of
   # platform / compression differences). Doing the restore here
@@ -57,7 +57,7 @@ jobs:
 
       # Re-emit each field as a separate step output rather than passing
       # the raw file content as one big string - keeps the materializer
-      # in monitor-and-test trivially shell-quotable. Cold cache =
+      # in test trivially shell-quotable. Cold cache =
       # no outputs written; downstream needs.X.outputs.Y evaluates
       # to '' and the materializer writes empty values into .monitor.
       - id: read-monitor
@@ -74,7 +74,7 @@ jobs:
             echo "no cache entry restored - cold start (empty monitor state)"
           fi
 
-  monitor-and-test:
+  test:
     name: monitor + test on change
     needs: restore-cache
     runs-on: [linux-aarch64-a2-1]
@@ -112,15 +112,7 @@ jobs:
       # Cluster-internal nginx PyPI cache fronts every package
       # (PEP 517 build deps + NPU wheels), so installs don't fall
       # back to external mirrors the runner can't reach.
-      UV_INDEX_URL: "http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple"
-      UV_EXTRA_INDEX_URL: "https://repo.huaweicloud.com/ascend/repos/pypi"
-      UV_INDEX_STRATEGY: "unsafe-best-match"
-      UV_INSECURE_HOST: "cache-service.nginx-pypi-cache.svc.cluster.local"
-      UV_HTTP_TIMEOUT: "120"
-      UV_NO_CACHE: "1"
-      UV_SYSTEM_PYTHON: "1"
       PIP_INDEX_URL: "http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple"
-      PIP_TRUSTED_HOST: "cache-service.nginx-pypi-cache.svc.cluster.local"
       PIP_TIMEOUT: "120"
     steps:
       - name: Print context and source CANN
@@ -334,101 +326,12 @@ jobs:
           # Only the three vars test_quick_start_ascend.py actually
           # reads; UPSTREAM_REPO / MONITORED_DOC_URL propagate from
           # jobs.env and REASON is purely diagnostic.
-          SWIFT_NPU_E2E:   '1'
+          NPU_READY:       'true'
           UPSTREAM_REF:    ${{ steps.decide.outputs.test_ref }}
           UPSTREAM_COMMIT: ${{ steps.decide.outputs.sha }}
         run: |
           set -euo pipefail
-          # CANN env only lives in the shell that sourced it; re-source
-          # here so swift sft / swift infer see ASCEND_HOME etc.
-          export PATH="/usr/local/sbin:$PATH"
-          source /usr/local/Ascend/ascend-toolkit/set_env.sh
-          # Block CUDA wheels so a transitive dep can't silently pull
-          # nvidia-* into an NPU run. torch / torch_npu are NOT
-          # constrained here: the torch_stack_probe below decides
-          # whether to reuse the image's pre-installed torch or
-          # install from the cluster cache. Pinning torch here would
-          # force pip to redo the wheel lookup, which 064a5d7 / 7136ed1
-          # tried and failed when aliyun's mirror was reachable but
-          # the cluster cache was not authoritative.
-          cat >/tmp/ms_swift_npu_constraints.txt <<'EOF'
-          modelscope==1.37.0
-          cuda-toolkit<0
-          cuda-python<0
-          cuda-bindings<0
-          cuda-core<0
-          cuda-pathfinder<0
-          flashinfer-python<0
-          nvidia-cublas<0
-          nvidia-cuda-runtime<0
-          nvidia-cuda-nvrtc<0
-          nvidia-cuda-cupti<0
-          nvidia-cudnn<0
-          nvidia-cudnn-frontend<0
-          nvidia-cufft<0
-          nvidia-curand<0
-          nvidia-cusolver<0
-          nvidia-cusparse<0
-          nvidia-cutlass-dsl<0
-          nvidia-cutlass-dsl-libs-base<0
-          nvidia-cutlass-dsl-libs-core<0
-          nvidia-cutlass-dsl-libs-cu12<0
-          nvidia-ml-py<0
-          nvidia-nccl<0
-          nvidia-nvjitlink<0
-          nvidia-nvtx<0
-          nvidia-cublas-cu12<0
-          nvidia-cuda-nvdisasm<0
-          nvidia-cuda-runtime-cu12<0
-          nvidia-cuda-nvrtc-cu12<0
-          nvidia-cuda-cupti-cu12<0
-          nvidia-cudnn-cu12<0
-          nvidia-cufft-cu12<0
-          nvidia-curand-cu12<0
-          nvidia-cusolver-cu12<0
-          nvidia-cusparse-cu12<0
-          nvidia-cusparselt-cu12<0
-          nvidia-nccl-cu12<0
-          nvidia-nvjitlink-cu12<0
-          nvidia-nvtx-cu12<0
-          EOF
-          export PIP_CONSTRAINT=/tmp/ms_swift_npu_constraints.txt
-          export UV_CONSTRAINT=/tmp/ms_swift_npu_constraints.txt
-          # uv handles PEP 517 build deps more reliably than pip and
-          # the test's setUpClass invokes `uv pip install ...`.
-          python -m pip install uv
-          # Probe first and skip the install when the image's torch
-          # stack matches. We don't hard-pin torch here because
-          # torch==2.9.0+cpu triggers PyPI simple-page lookups under
-          # the +cpu local version label, which the cluster cache
-          # does not serve.
-          #
-          # torch.__version__ surfaces as '2.9.0+cpu' regardless of
-          # device - the '+cpu' names the libtorch build variant, not
-          # the runtime. Compute goes through torch_npu (CANN backend);
-          # ms-swift moves the model with .to('npu:0').
-          if python -c "
-          import torch, torch_npu
-          raise SystemExit(0 if torch.__version__.startswith('2.9.0') \
-              and torch_npu.__version__.startswith('2.9.0') else 1)
-          " 2>/dev/null; then
-            echo "reusing image torch stack (torch $(python -c 'import torch; print(torch.__version__)'), torch_npu $(python -c 'import torch_npu; print(torch_npu.__version__)'))"
-          else
-            echo "installing torch==2.9.0 torch_npu==2.9.0.post2"
-            python -m pip install \
-                --index-url http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple \
-                --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
-                --trusted-host cache-service.nginx-pypi-cache.svc.cluster.local \
-                torch==2.9.0 torch_npu==2.9.0.post2
-          fi
-          python -m pip install "transformers<5.0" "peft<0.19"
-          # vLLM-Ascend setup removed: vllm-ascend 0.18.0 pins
-          # triton-ascend==3.2.0 but the huaweicloud ascend mirror
-          # only publishes 3.2.1 / 3.2.2. Quick-start therefore
-          # tests the transformers / torch_npu infer backend only;
-          # vLLM-Ascend setup lives in NPU-support.md.
-          cd workflows/projects/ms-swift
-          python -m unittest tests.test_quick_start_ascend -v 2>&1
+          python -m unittest workflows/projects/ms-swift/tests.test_quick_start_ascend -v 2>&1
 
       # Schedule + need_to_test - dispatch forces need_to_test=true
       # but must not mutate monitor state (otherwise it would clobber
@@ -607,12 +510,12 @@ jobs:
           fi
           echo "============================================================"
 
-  # Complement of monitor-and-test: actual upload + cache save +
+  # Complement of test: actual upload + cache save +
   # cache restore, all on ubuntu-latest (the only runner that can reach
   # GitHub's blob / cache storage).
   publish-and-persist:
     name: publish result.json + persist monitor state
-    needs: monitor-and-test
+    needs: test
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -626,14 +529,14 @@ jobs:
 
       - name: Materialize result.json
         env:
-          RESULT_JSON: ${{ needs.monitor-and-test.outputs.result_json }}
+          RESULT_JSON: ${{ needs.test.outputs.result_json }}
         run: |
           set -euo pipefail
           mkdir -p output
           # Empty result_json means upstream skipped - exit cleanly so
-          # the workflow conclusion is driven by monitor-and-test alone.
+          # the workflow conclusion is driven by test alone.
           if [ -z "$RESULT_JSON" ]; then
-            echo "no result_json from monitor-and-test; nothing to publish"
+            echo "no result_json from test; nothing to publish"
             exit 0
           fi
           printf '%s\n' "$RESULT_JSON" > output/result.json
@@ -666,12 +569,12 @@ jobs:
         # Schedule only: dispatch must not write monitor state,
         # otherwise it would clobber the cached failure flag the
         # next schedule cycle uses to decide whether to retry.
-        if: github.event_name == 'schedule' && needs.monitor-and-test.outputs.need_to_test == 'true'
+        if: github.event_name == 'schedule' && needs.test.outputs.need_to_test == 'true'
         env:
-          monitor_last_release_id: ${{ needs.monitor-and-test.outputs.monitor_last_release_id }}
-          monitor_doc_hash:        ${{ needs.monitor-and-test.outputs.monitor_doc_hash }}
-          monitor_test_result:     ${{ needs.monitor-and-test.outputs.monitor_test_result }}
-          monitor_test_error:      ${{ needs.monitor-and-test.outputs.monitor_test_error }}
+          monitor_last_release_id: ${{ needs.test.outputs.monitor_last_release_id }}
+          monitor_doc_hash:        ${{ needs.test.outputs.monitor_doc_hash }}
+          monitor_test_result:     ${{ needs.test.outputs.monitor_test_result }}
+          monitor_test_error:      ${{ needs.test.outputs.monitor_test_error }}
         run: |
           set -euo pipefail
           STATE_DIR=".monitor-state"
@@ -683,14 +586,14 @@ jobs:
             echo "test_result='$monitor_test_result'"
             echo "test_error='$monitor_test_error'"
           } > "$MONITOR_FILE"
-          echo "  wrote $MONITOR_FILE (from monitor-and-test outputs):"
+          echo "  wrote $MONITOR_FILE (from test outputs):"
           cat "$MONITOR_FILE"
 
       # Run-id suffix: actions/cache refuses to overwrite an existing
       # entry with the same key, so a static key would silently no-op
       # every save after the first.
       - name: Persist monitor state to cache
-        if: github.event_name == 'schedule' && needs.monitor-and-test.outputs.need_to_test == 'true'
+        if: github.event_name == 'schedule' && needs.test.outputs.need_to_test == 'true'
         uses: actions/cache/save@v6
         with:
           path: .monitor-state

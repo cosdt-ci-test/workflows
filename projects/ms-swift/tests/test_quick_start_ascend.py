@@ -31,11 +31,13 @@ import unittest
 
 from workflows.markdown_doc_test_base import MarkdownDocTestBase
 
+
 def _is_truthy(value: str | None) -> bool:
     """``'true'`` → True（大小写不敏感），其它（含未设）→ False。"""
     if not value:
         return False
     return value.strip().lower() == 'true'
+
 
 
 def _e2e_enabled() -> bool:

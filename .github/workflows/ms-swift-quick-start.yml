@@ -331,7 +331,11 @@ jobs:
           UPSTREAM_COMMIT: ${{ steps.decide.outputs.sha }}
         run: |
           set -euo pipefail
-          python -m unittest workflows/projects/ms-swift/tests.test_quick_start_ascend -v 2>&1
+          # 进项目 tests/ 后用短名跑 unittest：unittest 解析 dotted name
+          # 走 __import__，连字符 ``ms-swift`` 会让它在 ``.ms`` 处断成
+          # ``workflows.projects.ms``，ModuleNotFoundError。
+          cd workflows/projects/ms-swift
+          python -m unittest tests.test_quick_start_ascend -v 2>&1
 
       # Schedule + need_to_test - dispatch forces need_to_test=true
       # but must not mutate monitor state (otherwise it would clobber

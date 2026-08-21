@@ -106,7 +106,7 @@ npu-smi info
 ```shell #test-setup store="swift-install-binary"
 pip install ms-swift -U
 pip install uv
-uv pip install ms-swift -U --torch-backend=npu
+uv pip install ms-swift -U --torch-backend=auto
 python -c "import swift; print('ms-swift', swift.__version__)"
 ```
 
@@ -134,8 +134,8 @@ echo "${UPSTREAM_REF}"
 ```shell #test id="swift-install-source" load="upstream_ref>>ref"
 git clone https://github.com/modelscope/ms-swift.git
 cd ms-swift && git checkout <ref>
-cd ms-swift && uv pip install -e . --torch-backend=npu
-cd ms-swift && python -c "import swift; print('ms-swift', swift.__version__)"
+uv pip install -e . --torch-backend=auto
+python -c "import swift; print('ms-swift', swift.__version__)"
 ```
 *\<ref> 由工作流注入的最新 release tag 替换*
 

@@ -161,7 +161,7 @@ ASCEND_RT_VISIBLE_DEVICES=0 swift sft \
 
 输出结果如下：
 
-```shell #test-result id="train"
+```shell #test-result id="train" fuzzy='xxx' fuzzy='...'
 run sh: xxx
 ...
 {'loss': xxx, 'grad_norm': xxx, 'learning_rate': xxx, 'token_acc': xxx, ... 'global_step/max_steps': '1/5', ...}

@@ -785,7 +785,15 @@ class MarkdownDocTestBase(ABC):
         """
         if disable_fuzzy:
             # Fully literal match: no placeholder splitting on expected.
-            return re.search(re.escape(expected), actual, re.DOTALL) is not None
+            # Anchor to start + end (\\A...\\Z) so actual doesn't accidentally
+            # pass via substring overlap. ``\\n*\\Z`` allows trailing
+            # newlines in actual (subprocess output always has one) so
+            # tests where expected has no trailing \\n still pass.
+            return re.search(
+                rf'\A{re.escape(expected)}\n*\Z',
+                actual,
+                re.DOTALL,
+            ) is not None
         # Split expected by all placeholders; join segments with non-greedy cross-line match.
         # ``str.split(sep)`` only supports a single sep, so use a regex split for many.
         # Placeholder order doesn't matter: split uses occurrence position.
@@ -796,11 +804,17 @@ class MarkdownDocTestBase(ABC):
             placeholders = list(fuzzy)
         if not placeholders:
             # Fallback: empty fuzzy + non-disable_fuzzy = literal match, equivalent to disable_fuzzy
-            return re.search(re.escape(expected), actual, re.DOTALL) is not None
+            return re.search(
+                rf'\A{re.escape(expected)}\n*\Z',
+                actual,
+                re.DOTALL,
+            ) is not None
         sep_pattern = '|'.join(re.escape(p) for p in placeholders)
         parts = re.split(sep_pattern, expected)
         pattern = r'.*?'.join(re.escape(part) for part in parts)
-        return re.search(pattern, actual, re.DOTALL) is not None
+        return re.search(
+            rf'\A{pattern}\n*\Z', actual, re.DOTALL
+        ) is not None
 
     def log(self, msg: str) -> None:
         """``[HH:MM:SS.mmm] {msg}``，``flush=True``。"""

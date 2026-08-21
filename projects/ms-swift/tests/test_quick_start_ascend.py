@@ -144,17 +144,8 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
         # 2) uv：test 的 setup 会调 ``uv pip install``，比 pip 处理
         # PEP 517 build deps 更稳。
-        # 索引策略：公网 PyPI 作主源，cluster cache 作 fallback。
-        # NPU runner 上 cluster cache 不可达，公网能直接装；本地 / 普通
-        # ubuntu runner 上 cluster cache 优先命中，省时间。
         subprocess.run(
-            [
-                'python', '-m', 'pip', 'install',
-                '--index-url', 'https://pypi.org/simple',
-                '--extra-index-url', cls._CLUSTER_INDEX,
-                '--trusted-host', cls._CLUSTER_TRUSTED,
-                'uv',
-            ],
+            ['python', '-m', 'pip', 'install', 'uv'],
             check=True,
         )
 

@@ -53,7 +53,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
     # swift sft full training can run 30+ minutes; override the base
     # class's 1800s default.
-    DEFAULT_COMMAND_TIMEOUT = 3600
+    DEFAULT_COMMAND_TIMEOUT = 1200  # 20 min: long enough for swift sft 5-step, short enough to fail fast on hangs
 
     # Process-level CUDA exclusion list. Originally written inside the
     # workflow step as a child-process env passed through to pip / uv /

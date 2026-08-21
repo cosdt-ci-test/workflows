@@ -133,6 +133,33 @@ jobs:
           source /usr/local/Ascend/ascend-toolkit/set_env.sh
           npu-smi info || true
 
+      - name: Probe package mirrors
+        # Quick reachability check for the two PyPI indexes the install
+        # path relies on. set +e so one mirror being down doesn't kill
+        # the whole job - the install step itself will report the real
+        # failure with package names.
+        run: |
+          set +e
+          echo "=========================================="
+          echo "Probing package mirror reachability"
+          echo "=========================================="
+          probe() {
+            local url="$1"
+            local label="$2"
+            local out
+            out=$(curl -sS -o /dev/null -w "http=%{http_code} time=%{time_total}s" \
+                  --connect-timeout 10 --max-time 30 "$url" 2>&1)
+            local rc=$?
+            if [ $rc -eq 0 ]; then
+              echo "[ OK ] $label  ($url)  $out"
+            else
+              echo "[FAIL] $label  ($url)  curl_exit=$rc  $out"
+            fi
+          }
+          probe "https://repo.huaweicloud.com/ascend/repos/pypi/" "huaweicloud-ascend"
+          probe "https://pypi.org/simple/"                      "pypi-org"
+          echo "=========================================="
+
       - name: Checkout workflows (provides the test code and doc)
         uses: actions/checkout@v6
         with:

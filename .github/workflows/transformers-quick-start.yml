@@ -28,6 +28,9 @@ jobs:
   monitor-and-test:
     runs-on: linux-aarch64-a2-2
     timeout-minutes: 180
+    defaults:
+      run:
+        shell: bash
     outputs:
       result_json: ${{ steps.result.outputs.result_json }}
     container:
@@ -43,8 +46,9 @@ jobs:
     env:
       ASCEND_RT_VISIBLE_DEVICES: '0'
       TARGET_ROOT: ${{ github.workspace }}/target
-      PIP_INDEX_URL: https://repo.huaweicloud.com/ascend/repos/pypi
+      PIP_INDEX_URL: https://pypi.tuna.tsinghua.edu.cn/simple
       PIP_TRUSTED_HOST: repo.huaweicloud.com
+      HF_ENDPOINT: https://hf-mirror.com
       PIP_TIMEOUT: '120'
     steps:
       # Manual dispatch always tests. Schedule runs compare the local guard

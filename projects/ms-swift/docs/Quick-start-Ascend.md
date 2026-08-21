@@ -103,7 +103,7 @@ npu-smi info
 
 ### 使用 pip 进行安装
 
-```shell #test-setup store="swift-install-binary"
+```shell #test id="swift-install-binary"
 pip install ms-swift -U
 pip install uv
 uv pip install ms-swift -U --torch-backend=auto

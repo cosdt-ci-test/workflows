@@ -143,9 +143,15 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         os.environ['UV_CONSTRAINT'] = cls._CONSTRAINTS_FILE
 
         # 2) uv：test 的 setup 会调 ``uv pip install``，比 pip 处理
-        # PEP 517 build deps 更稳。
+        # PEP 517 build deps 更稳。强制公网 PyPI：外层 workflow 注入的
+        # ``PIP_INDEX_URL`` 指向 cluster-internal cache（NPU runner 不可达），
+        # 不强制 index 会让 ``uv`` 找不到。
         subprocess.run(
-            ['python', '-m', 'pip', 'install', 'uv'],
+            [
+                'python', '-m', 'pip', 'install',
+                '--index-url', 'https://pypi.org/simple',
+                'uv',
+            ],
             check=True,
         )
 

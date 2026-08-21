@@ -205,6 +205,16 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             check=True,
         )
 
+        # Pin cache under a test-scoped subdir outside the bind-mount:
+        # the host-side /data/ci-cache/modelscope persists across CI
+        # runs and accumulates stale files (incomplete downloads,
+        # model revision drift, cross-project leftovers) that would
+        # otherwise surface here as hash mismatches. This keeps each
+        # run's cache isolated in the container's local fs.
+        os.environ.setdefault(
+            'MODELSCOPE_CACHE', str(Path.home() / '.cache' / 'modelscope_quick_start_test'),
+        )
+
     # ----------------------------------------------------------
     # test entry
     # ----------------------------------------------------------
@@ -229,17 +239,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         ``run_template()`` runs the full ``pre_process`` -> ``parse`` ->
         ``execute`` -> ``post_process`` flow. ``prepare_environment`` is
         triggered by ``setUpClass`` once, not from ``run_template``."""
-        # Pin ModelScope cache under ~/.cache so doc commands that
-        # resolve dataset/model paths via the default ModelScope layout
-        # hit the same location the legacy test relied on. Without this
-        # the cache may land elsewhere (e.g. inside the workflow's
-        # $GITHUB_WORKSPACE) and swift sft will then fail with
-        # ``dataset not found`` / ``model not found`` even though the
-        # files are physically present. ``setdefault`` preserves any
-        # value the workflow explicitly injected via jobs.env.
-        os.environ.setdefault(
-            'MODELSCOPE_CACHE', str(Path.home() / '.cache'),
-        )
+
         self.run_template()
 
 

@@ -1,24 +1,29 @@
-"""共享 workflow 工具与基类的命名空间包。
+"""Shared workflow utilities and base classes.
 
-所有项目复用的源码放在这里（如 markdown 文档测试框架）。子模块通常通过
-``sys.path`` 注入仓库根 + ``src/`` 后按 ``workflows.<模块名>`` 导入。
+This is the namespace package for code reused across projects (e.g. the
+markdown documentation test framework). Submodules are typically imported
+as ``workflows.<module>`` after ``sys.path`` is set up to include the
+repo root and ``src/``.
 
-框架自身依赖
-==============
+Framework dependencies
+======================
 
-``markdown_doc_test_base.py`` 顶层 ``import mistune``（line 39），比
-``setUpClass`` 早、比 ``setUp`` 早——任何 import 触发 ``workflows.*``
-之前必须先装。两种路径会触发本 ``__init__.py``：
+``markdown_doc_test_base.py`` does ``import mistune`` at the top of the
+module (line 39), which runs before ``setUpClass`` and before ``setUp``,
+so any import that triggers ``workflows.*`` requires ``mistune`` to be
+installed first. Two paths trigger this ``__init__.py``:
 
-- 项目 ``tests/__init__.py`` 注入 sys.path 后 ``import workflows`` 链式触发；
-- 终端直接 ``python -c "import workflows"`` 测试时。
+- Project ``tests/__init__.py`` injects sys.path then ``import workflows``
+  (chain trigger).
+- Terminal use, e.g. ``python -c "import workflows"``.
 
-两层守卫：
+Two layers of guard:
 
-1. ``importlib.util.find_spec('mistune')`` 只查 sys.path，不实际 import——
-   已装就直接走，省一次 subprocess。
-2. Python 解释器对包 ``__init__`` 自带去重，即使被多次 import 也只跑一次本
-   模块体，所以冷 runner 装过一次后，热 runner 不会重复 pip install。
+1. ``importlib.util.find_spec('mistune')`` only inspects sys.path; if
+   already installed, no subprocess is spawned.
+2. Python's package ``__init__`` is naturally idempotent — even on
+   multiple imports, this module body runs at most once per process, so
+   a cold runner installs once and a warm runner never re-pip-installs.
 """
 
 from __future__ import annotations
@@ -27,13 +32,13 @@ import importlib.util
 import subprocess
 import sys
 
-# 框架依赖：仅在缺失时安装。继承外层 ``PIP_INDEX_URL`` / ``PIP_TRUSTED_HOST``
-#（yml job-level env 设的 cluster cache 路径与 trusted-host）。钉 ``>=3,<4``
-# 因为 ``markdown_doc_test_base._scan_blocks`` 依赖 v3 AST 形态
-#（attrs.info / block_html.raw）；v4 会让 CI 中途炸。
+# Framework dependency: only install when missing. The ``>=3,<4`` pin is
+# required because ``markdown_doc_test_base._scan_blocks`` relies on the
+# v3 AST shape (``attrs.info`` / ``block_html.raw``); v4 breaks CI mid-run.
+# Inherit ``PIP_INDEX_URL`` / ``PIP_TRUSTED_HOST`` from the workflow
+# job-level env (cluster cache + trusted-host).
 if importlib.util.find_spec('mistune') is None:
     subprocess.run(
         [sys.executable, '-m', 'pip', 'install', 'mistune>=3,<4'],
         check=True,
     )
-

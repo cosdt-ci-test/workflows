@@ -206,6 +206,30 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             check=True,
         )
 
+        # 5) Final state dump: print torch/torch_npu/python + NPU
+        # visibility so a CI failure pinned to torch ABI mismatch is
+        # self-explanatory without a re-run. Mirrors the doc's
+        # ``check-torch`` block; runs once after the four setup branches
+        # have converged (whether we reused the image's wheels or
+        # freshly installed).
+        _DUMP_SCRIPT = (
+            'import torch, torch_npu, sys\n'
+            'print("py=", sys.version.split()[0])\n'
+            'print("torch=", torch.__version__)\n'
+            'print("torch_npu=", torch_npu.__version__)\n'
+            'print("npu_avail=", torch.npu.is_available())\n'
+            'print("npu_count=", torch.npu.device_count())\n'
+        )
+        dump = subprocess.run(
+            ['python', '-c', _DUMP_SCRIPT],
+            capture_output=True, text=True, check=False,
+        )
+        print('setup: versions:\n' +
+              '\n'.join('  ' + ln for ln in dump.stdout.rstrip().splitlines()))
+        if dump.returncode != 0:
+            print(f'setup: probe failed (rc={dump.returncode}): '
+                  f'{dump.stderr.strip()}')
+
     # ----------------------------------------------------------
     # test entry
     # ----------------------------------------------------------

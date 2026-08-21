@@ -1,0 +1,1 @@
+# Quick-start test for DeepSpeed on Ascend NPU.

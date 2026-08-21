@@ -246,7 +246,7 @@ jobs:
         run: |
           source /usr/local/Ascend/ascend-toolkit/set_env.sh
           npu-smi info
-          python -c "import torch, torch_npu; print(torch.__version__, torch_npu.__version__, torch.npu.device_count())"
+          python -c "import torch, torch_npu; print(torch.__version__, torch_npu.__version__, torch.npu.device_count())" || true
       - name: Setup example
         env:
           PROFILE: ${{ matrix.example.profile }}

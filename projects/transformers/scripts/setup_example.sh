@@ -25,6 +25,8 @@ esac
 
 : "${TARGET_ROOT:?TARGET_ROOT is required}"
 : "${GITHUB_ENV:?GITHUB_ENV is required}"
+export PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple"
+export PIP_TRUSTED_HOST="repo.huaweicloud.com"
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 
 python -m pip install -U pip

@@ -68,8 +68,9 @@ jobs:
         --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
         --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
     env:
-      PIP_INDEX_URL: https://repo.huaweicloud.com/ascend/repos/pypi
+      PIP_INDEX_URL: https://pypi.tuna.tsinghua.edu.cn/simple
       PIP_TRUSTED_HOST: repo.huaweicloud.com
+      HF_ENDPOINT: https://hf-mirror.com
       PIP_TIMEOUT: "120"
     steps:
       - name: Print context

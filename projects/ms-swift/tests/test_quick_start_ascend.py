@@ -144,13 +144,13 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
         # 2) uv：test 的 setup 会调 ``uv pip install``，比 pip 处理
         # PEP 517 build deps 更稳。
-        # 强制公网 PyPI：NPU runner 上 cluster cache 访问得到但 proxy 范围
-        # 不含 ``uv``（cache 命中失败报"No matching distribution"），公网
-        # 才能装到。普通 ubuntu runner 上 cluster cache 仍可命中其他包。
+        # 走 cluster cache：继承外层 ``PIP_INDEX_URL``，再 ``--trusted-host``
+        # 放行（pip 21+ 默认拒 http 源；yml job-level env 没设
+        # PIP_TRUSTED_HOST，所以这里必须显式声明）。
         subprocess.run(
             [
                 'python', '-m', 'pip', 'install',
-                '--index-url', 'https://pypi.org/simple',
+                '--trusted-host', cls._CLUSTER_TRUSTED,
                 'uv',
             ],
             check=True,

@@ -17,16 +17,17 @@ The image provides the CANN runtime and normally includes a compatible `torch` /
 3. Installs the monitored transformers checkout with `python -m pip install -e target --no-deps`.
 4. Installs `accelerate`, which supplies the device selected by `Accelerator().device`.
 
-The runner exposes NPU device `0` as `ASCEND_RT_VISIBLE_DEVICES=0`. Package downloads use `https://repo.huaweicloud.com/ascend/repos/pypi`; the model is public, so no `HF_HUB_READ_TOKEN` or other secret is required. The first run may download `Qwen/Qwen2.5-1.5B` into the runner cache.
+The runner exposes NPU device `0` as `ASCEND_RT_VISIBLE_DEVICES=0`. Package downloads use `https://repo.huaweicloud.com/ascend/repos/pypi`; the model is public, so no `HF_HUB_READ_TOKEN` or other secret is required. `Qwen/Qwen2.5-1.5B` is pre-downloaded from ModelScope (China-reachable) into the local cache before the test runs; CI sets `QUICK_START_MODEL` to point the pipeline at that local path so it loads offline. A local run without `QUICK_START_MODEL` set downloads the model from HuggingFace as before.
 
 ```pycon
+>>> import os
 >>> from accelerate import Accelerator
 >>> from transformers import pipeline
 >>>
 >>> device = Accelerator().device
 >>> pipe = pipeline(
 ...     "text-generation",
-...     model="Qwen/Qwen2.5-1.5B",
+...     model=os.environ.get("QUICK_START_MODEL", "Qwen/Qwen2.5-1.5B"),
 ...     device=device,
 ... )
 >>> result = pipe("The secret to baking a good cake is ", max_new_tokens=16)

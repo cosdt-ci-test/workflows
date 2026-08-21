@@ -10,7 +10,7 @@ supported:
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
       - --model_type gpt2
-      - --model_name_or_path sshleifer/tiny-gpt2
+      - --model_name_or_path ${TINYGPT2_PATH}
       - --prompt Hello
       - --length 10
       - --seed 42
@@ -21,7 +21,7 @@ supported:
     npu_devices: '0'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - --model_name_or_path distilbert/distilbert-base-uncased
+      - --model_name_or_path ${DISTILBERT_PATH}
       - --train_file ${TARGET_ROOT}/tests/fixtures/tests_samples/MRPC/train.csv
       - --validation_file ${TARGET_ROOT}/tests/fixtures/tests_samples/MRPC/dev.csv
       - --max_length 64

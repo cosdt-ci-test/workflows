@@ -45,3 +45,23 @@ fi
 # and its torch requirement is already satisfied by the image build.
 python -m pip install -e "$TARGET_ROOT"
 python -m pip install "${DEPS[@]}"
+
+# Pre-download example model weights from ModelScope (China-reachable) so the
+# examples load them from a local path instead of the blocked HuggingFace CDN.
+# The returned local snapshot dirs are exported as env vars for the example
+# (overlay_args in examples_manifest.yaml reference them via ${VAR}).
+python -m pip install modelscope
+python - <<'PY'
+import os
+from modelscope import snapshot_download
+
+MODEL_CACHE = os.environ.get("MODELSCOPE_CACHE", os.path.expanduser("~/.cache/modelscope"))
+mapping = {
+    "DISTILBERT_PATH": "distilbert/distilbert-base-uncased",
+    "TINYGPT2_PATH": "sshleifer/tiny-gpt2",
+}
+for env_name, model_id in mapping.items():
+    local = snapshot_download(model_id, cache_dir=MODEL_CACHE)
+    with open(os.environ["GITHUB_ENV"], "a") as fh:
+        fh.write(f"{env_name}={local}\n")
+PY

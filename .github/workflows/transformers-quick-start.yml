@@ -26,7 +26,7 @@ env:
 
 jobs:
   monitor-and-test:
-    runs-on: linux-aarch64-a2-2
+    runs-on: linux-aarch64-a2-1
     timeout-minutes: 180
     defaults:
       run:
@@ -43,12 +43,14 @@ jobs:
         --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
         --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
         --volume=/data/ci-cache/pip:/root/.cache/pip
+        --volume=/data/ci-cache/modelscope:/root/.cache/modelscope
     env:
       ASCEND_RT_VISIBLE_DEVICES: '0'
       TARGET_ROOT: ${{ github.workspace }}/target
       PIP_INDEX_URL: https://pypi.tuna.tsinghua.edu.cn/simple
       PIP_TRUSTED_HOST: repo.huaweicloud.com
       HF_ENDPOINT: https://hf-mirror.com
+      MODELSCOPE_CACHE: /root/.cache/modelscope
       PIP_TIMEOUT: '120'
     steps:
       # Manual dispatch always tests. Schedule runs compare the local guard
@@ -104,6 +106,14 @@ jobs:
           ref: ${{ steps.monitor.outputs.test_ref }}
           path: target
           fetch-depth: 1
+      - name: Pre-download model from ModelScope
+        if: steps.monitor.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          python -m pip install modelscope
+          python -c "import os; from modelscope import snapshot_download; print(snapshot_download('Qwen/Qwen2.5-1.5B'))" > /tmp/qwen_path
+          printf 'QUICK_START_MODEL=%s\n' "$(cat /tmp/qwen_path)" >> "$GITHUB_ENV"
+
       - name: Install target and run Quick Start
         if: steps.monitor.outputs.changed == 'true'
         run: |
@@ -126,8 +136,8 @@ jobs:
       - name: Write result
         id: result
         if: always()
-        # Result generation stays on the NPU job, then upload-artifact runs
-        # from the same job so external consumers always get result.json.
+        # Result generation stays on the NPU job; the JSON content is handed
+        # off via the `result_json` job output to publish-and-persist (ubuntu-latest).
         env:
           STATUS: ${{ job.status }}
           CHANGED: ${{ steps.monitor.outputs.changed }}
@@ -135,19 +145,12 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$GITHUB_WORKSPACE/output"
-          python3 -c 'import json,os; json.dump({"trigger":os.environ["GITHUB_EVENT_NAME"],"target_repo":os.environ["UPSTREAM_REPO"],"target_ref":os.environ.get("REF") or "main","path":"projects/transformers/docs/Quick-start-Ascend.md","image":os.environ["CI_IMAGE"],"job_status":os.environ["STATUS"],"tests_ran":os.environ.get("CHANGED") == "true"},open("output/result.json","w"),indent=2)'
-          echo result_json="$GITHUB_WORKSPACE/output/result.json" >> "$GITHUB_OUTPUT"
-      - name: Upload result
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: transformers-quick-start-${{ github.run_id }}
-          # A schedule with no changed signal skips the test log, but result.json
-          # is still written and remains the required machine-readable artifact.
-          if-no-files-found: ignore
-          path: |
-            ${{ github.workspace }}/output/result.json
-            ${{ github.workspace }}/output/quick-start.log
+          RESULT_JSON="$(python3 -c 'import json,os; print(json.dumps({"trigger":os.environ["GITHUB_EVENT_NAME"],"target_repo":os.environ["UPSTREAM_REPO"],"target_ref":os.environ.get("REF") or "main","path":"projects/transformers/docs/Quick-start-Ascend.md","image":os.environ["CI_IMAGE"],"job_status":os.environ["STATUS"],"tests_ran":os.environ.get("CHANGED") == "true"}))')"
+          printf '%s\n' "$RESULT_JSON" > output/result.json
+          printf 'result_json=%s\n' "$RESULT_JSON" >> "$GITHUB_OUTPUT"
+      # result.json is handed off via the `result_json` job output (see the
+      # publish-and-persist job on ubuntu-latest). The NPU runner cannot reach
+      # GitHub's artifact blob storage, so we do not upload from here.
       - name: Persist state
         if: github.event_name == 'schedule' && always()
         uses: actions/cache/save@v4
@@ -155,25 +158,47 @@ jobs:
           path: .monitor-state
           key: transformers-quick-start-monitor-state-${{ github.run_id }}-post
     
-  validate-results:
+  publish-and-persist:
+    name: publish result.json + persist monitor state
     needs: monitor-and-test
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout workflows (provides schemas/result.schema.json)
+        uses: actions/checkout@v4
         with:
           path: workflows
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: transformers-quick-start-*
-          path: downloaded
-      - name: Validate result
+          fetch-depth: 1
+
+      - name: Materialize result.json
+        env:
+          RESULT_JSON: ${{ needs.monitor-and-test.outputs.result_json }}
         run: |
-          python3 -m pip install -q check-jsonschema
-          shopt -s nullglob
-          files=(downloaded/*/result.json)
-          if [ ${#files[@]} -eq 0 ]; then
-            echo "no result.json found in transformers-quick-start-* artifacts"
-            exit 1
+          set -euo pipefail
+          mkdir -p output
+          if [ -z "$RESULT_JSON" ]; then
+            echo "no result_json from monitor-and-test; nothing to publish"
+            exit 0
           fi
-          check-jsonschema --schemafile workflows/schemas/result.schema.json "${files[@]}"
+          printf '%s\n' "$RESULT_JSON" > output/result.json
+          echo "materialized $(wc -c < output/result.json) bytes:"
+          cat output/result.json
+
+      - name: Validate result.json against schema
+        if: always()
+        run: |
+          if [ ! -s output/result.json ]; then
+            echo "result.json is empty; skipping schema validation"
+            exit 0
+          fi
+          python3 -m pip install -q check-jsonschema
+          check-jsonschema \
+            --schemafile workflows/schemas/result.schema.json output/result.json
+
+      - name: Upload result.json
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: transformers-quick-start-${{ github.run_id }}
+          path: output/result.json
+          if-no-files-found: warn

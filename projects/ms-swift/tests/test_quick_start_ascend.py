@@ -38,8 +38,6 @@ def _is_truthy(value: str | None) -> bool:
         return False
     return value.strip().lower() == 'true'
 
-
-
 def _e2e_enabled() -> bool:
     """``NPU_READY=true`` 时放开 skip。"""
     return _is_truthy(os.environ.get('NPU_READY'))
@@ -108,21 +106,21 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
 
     # ----------------------------------------------------------
-    # setup_for_test：CUDA 约束 + uv + torch 栈探测 + transformers/peft
+    # prepare_environment：CUDA 约束 + uv + torch 栈探测 + transformers/peft
     # ----------------------------------------------------------
 
-    def setup_for_test(self) -> None:
+    @classmethod
+    def prepare_environment(cls) -> None:
         """CANN env + CUDA 约束 + uv + torch 栈探测 + transformers/peft 一气装好。
 
-        测试的前置安装，由 ``setUpClass`` 触发一次。先 ``super()`` 装基类
-        自身依赖（mistune），再叠加项目专属步骤。
+        类级 setup：整个测试类只装一次，由 ``setUpClass`` 调一次得起。
+        无关 ``unittest.TestCase.setUp``（那是个生命周期 hook，会在每个
+        test method 跑前都调一次——不适合做前置安装）。
         """
-        super().setup_for_test()
-
         # 0) CANN env：source set_env.sh 后拿 env 流，merge 进 os.environ
-        if os.path.isfile(self._CANN_SET_ENV):
+        if os.path.isfile(cls._CANN_SET_ENV):
             merged = subprocess.run(
-                ['bash', '-c', f'source {self._CANN_SET_ENV} >/dev/null 2>&1; env'],
+                ['bash', '-c', f'source {cls._CANN_SET_ENV} >/dev/null 2>&1; env'],
                 capture_output=True, text=True, check=True,
             )
             for line in merged.stdout.splitlines():
@@ -132,19 +130,19 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 # 不覆盖 workflow 显式注入的 env（jobs.env / steps.env）；
                 # 只补 CANN 缺失的键，避免冲突。
                 os.environ.setdefault(key, value)
-            self.log('setup_for_test: sourced CANN env from set_env.sh')
+            print('setup: sourced CANN env from set_env.sh')
         else:
-            self.log(
-                f'setup_for_test: skipping CANN env source ({self._CANN_SET_ENV} not present)'
+            print(
+                f'setup: skipping CANN env source ({cls._CANN_SET_ENV} not present)'
             )
 
         # 1) CUDA 排除清单 + 进程级 env
-        with open(self._CONSTRAINTS_FILE, 'w', encoding='utf-8') as fh:
-            fh.write('\n'.join(self._CUDA_CONSTRAINTS) + '\n')
-        os.environ['PIP_CONSTRAINT'] = self._CONSTRAINTS_FILE
-        os.environ['UV_CONSTRAINT'] = self._CONSTRAINTS_FILE
+        with open(cls._CONSTRAINTS_FILE, 'w', encoding='utf-8') as fh:
+            fh.write('\n'.join(cls._CUDA_CONSTRAINTS) + '\n')
+        os.environ['PIP_CONSTRAINT'] = cls._CONSTRAINTS_FILE
+        os.environ['UV_CONSTRAINT'] = cls._CONSTRAINTS_FILE
 
-        # 2) uv：test 的 setUpClass 会调 ``uv pip install``，比 pip 处理
+        # 2) uv：test 的 setup 会调 ``uv pip install``，比 pip 处理
         # PEP 517 build deps 更稳。
         subprocess.run(
             ['python', '-m', 'pip', 'install', 'uv'],
@@ -174,15 +172,15 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 ['python', '-c', _VERSIONS_SCRIPT],
                 capture_output=True, text=True, check=True,
             )
-            self.log(f'setup_for_test: reusing image torch stack ({versions.stdout.strip()})')
+            print(f'setup: reusing image torch stack ({versions.stdout.strip()})')
         else:
-            self.log('setup_for_test: installing torch==2.9.0 torch_npu==2.9.0.post2')
+            print('setup: installing torch==2.9.0 torch_npu==2.9.0.post2')
             subprocess.run(
                 [
                     'python', '-m', 'pip', 'install',
-                    '--index-url', self._CLUSTER_INDEX,
-                    '--extra-index-url', self._ASCEND_EXTRA,
-                    '--trusted-host', self._CLUSTER_TRUSTED,
+                    '--index-url', cls._CLUSTER_INDEX,
+                    '--extra-index-url', cls._ASCEND_EXTRA,
+                    '--trusted-host', cls._CLUSTER_TRUSTED,
                     'torch==2.9.0', 'torch_npu==2.9.0.post2',
                 ],
                 check=True,
@@ -200,16 +198,12 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        """整套测试类只跑一次 env setup：基类依赖（mistune）+ 项目专属
-        （CUDA 约束 + uv + torch 栈 + transformers/peft + CANN env）。
-        subsequent test 方法不会再装一遍。
-
-        受 ``NPU_READY`` 门控：本地开发机不设环境变量时，连 ``import
-        torch_npu`` 都不该尝试；只跑静态解析 / skip 检查。
+        """整套测试类只跑一次 env setup：CUDA 约束 + uv + torch 栈 +
+        transformers/peft + CANN env。``@unittest.skipIf`` 装饰器在
+        未设 ``NPU_READY`` 时让整个类跳过，``setUpClass`` 也不会被调。
         """
-        if not _e2e_enabled():
-            return
-        cls().setup_for_test()
+        if _e2e_enabled():
+            cls.prepare_environment()
 
     @unittest.skipIf(
         not _e2e_enabled(),
@@ -217,8 +211,8 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     )
     def test_runs_doc(self) -> None:
         """模板方法入口。基类 ``run_template()`` 跑完 ``pre_process`` ->
-        ``parse`` -> ``execute`` -> ``post_process`` 全流程（``setup_for_test``
-        由 ``setUpClass`` 触发，不在 ``run_template`` 里）。"""
+        ``parse`` -> ``execute`` -> ``post_process`` 全流程。``prepare_environment``
+        由 ``setUpClass`` 调一次，不在 ``run_template`` 里。"""
         self.run_template()
 
 

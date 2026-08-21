@@ -610,16 +610,6 @@ class MarkdownDocTestBase(ABC):
     # ============================================================
     # 公开：模板方法入口 + 子类钩子 + 框架实现
     # ============================================================
-    def setup_for_test(self) -> None:
-        """搭建测试运行所需的 Python/系统环境。**框架不自调**，由子类
-        在 ``setUpClass`` / ``setUp`` 自行触发（通常会 ``super()`` 链上来）。
-
-        默认实现是空操作。注意：``mistune``（本基类顶层 import 的依赖）
-        **不应**在这里装——它在 ``markdown_doc_test_base.py`` 模块顶层
-        import 时就需要，比 setUpClass 早得多。框架依赖的安装应放在
-        ``tests/__init__.py`` 或 workflow 装步骤里。
-        """
-
     def pre_process(self) -> str:
         """从 ``MONITORED_DOC_URL`` 拉 doc 文本。
 
@@ -683,8 +673,7 @@ class MarkdownDocTestBase(ABC):
         """``pre_process`` -> ``parse`` -> ``execute`` -> ``post_process``。
 
         ``post_process`` 在 ``finally`` 里调用，确保 ``execute`` 抛错时也跑清理。
-        注意：``setup_for_test`` 不在这里自动调——子类在 ``setUpClass`` /
-        ``setUp`` 自行触发。
+        注意：``run_template`` 不负责环境准备——子类自行负责。
         """
         text = self.pre_process()
         commands, test_expected_results = self.parse(text)

@@ -106,29 +106,15 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
 
     # ----------------------------------------------------------
-    # pre_setup：CUDA 约束 + uv + torch 栈探测 + transformers/peft
+    # setup_for_test：CUDA 约束 + uv + torch 栈探测 + transformers/peft
     # ----------------------------------------------------------
 
-    def pre_setup(self) -> None:
+    def setup_for_test(self) -> None:
         """CANN env + CUDA 约束 + uv + torch 栈探测 + transformers/peft 一气装好。
-
-        原写死在 ``ms-swift-quick-start.yml`` 的 ``Run quick start test``
-        step 里，每次 cycle 都重做一遍。现在挪到测试层，由 ``setUpClass``
-        触发一次；workflow 该 step 只剩 ``python -m unittest …``。
-
-        关键点：
-        * CANN env（``ASCEND_HOME`` 等）通过 ``bash -c 'source X && env'``
-          注入到 ``os.environ``；后续 ``swift sft`` / ``swift infer`` 子
-          进程自动继承。Path 写死，跟 runner 镜像绑定。
-        * 不硬钉 torch 版本：镜像里是 ``2.9.0+cpu``，cluster cache 不认
-          ``+cpu`` 这种 local version label，会去外部 simple page 查然后
-          失败（064a5d7 / 7136ed1 都栽过）。先 probe，匹配就跳过。
-        * ``torch.__version__ == '2.9.0+cpu'`` 的 ``+cpu`` 是 libtorch
-          构建变体名，不是运行时；计算走 ``torch_npu`` (CANN 后端)。
-        * ``PIP_CONSTRAINT`` / ``UV_CONSTRAINT`` 是进程级 env，对 doc 里
-          ``#test-setup pip install ms-swift -U`` 那段也生效——前提是
-          子进程继承父进程 env（Python ``subprocess.run`` 默认如此）。
+           测试的前置安装
         """
+        super().setup_for_test()
+
         # 0) CANN env：source set_env.sh 后拿 env 流，merge 进 os.environ
         if os.path.isfile(self._CANN_SET_ENV):
             merged = subprocess.run(
@@ -142,10 +128,10 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 # 不覆盖 workflow 显式注入的 env（jobs.env / steps.env）；
                 # 只补 CANN 缺失的键，避免冲突。
                 os.environ.setdefault(key, value)
-            self.log('pre_setup: sourced CANN env from set_env.sh')
+            self.log('setup_for_test: sourced CANN env from set_env.sh')
         else:
             self.log(
-                f'pre_setup: skipping CANN env source ({self._CANN_SET_ENV} not present)'
+                f'setup_for_test: skipping CANN env source ({self._CANN_SET_ENV} not present)'
             )
 
         # 1) CUDA 排除清单 + 进程级 env
@@ -184,9 +170,9 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 ['python', '-c', _VERSIONS_SCRIPT],
                 capture_output=True, text=True, check=True,
             )
-            self.log(f'pre_setup: reusing image torch stack ({versions.stdout.strip()})')
+            self.log(f'setup_for_test: reusing image torch stack ({versions.stdout.strip()})')
         else:
-            self.log('pre_setup: installing torch==2.9.0 torch_npu==2.9.0.post2')
+            self.log('setup_for_test: installing torch==2.9.0 torch_npu==2.9.0.post2')
             subprocess.run(
                 [
                     'python', '-m', 'pip', 'install',
@@ -201,14 +187,6 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         # 4) transformers / peft：doc 表格钉死的版本约束。
         subprocess.run(
             ['python', '-m', 'pip', 'install', 'transformers<5.0', 'peft<0.19'],
-            check=True,
-        )
-
-        # 5) mistune：基类解析 markdown AST 用。镜像里没预装，必须显式
-        # 装。不写版本约束是因为基类不锁——跟 torch / transformers 不同，
-        # 这是测试框架本身的依赖，不该被项目文档钉死。
-        subprocess.run(
-            ['python', '-m', 'pip', 'install', 'mistune'],
             check=True,
         )
 
@@ -246,24 +224,26 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        """整套测试类只跑一次 env setup：CUDA 约束 + uv + torch 栈 +
-        transformers / peft。subsequent test 方法不会再装一遍。
+        """整套测试类只跑一次 env setup：基类依赖（mistune）+ 项目专属
+        （CUDA 约束 + uv + torch 栈 + transformers/peft + CANN env）。
+        subsequent test 方法不会再装一遍。
 
         受 ``NPU_READY`` 门控：本地开发机不设环境变量时，连 ``import
         torch_npu`` 都不该尝试；只跑静态解析 / skip 检查。
         """
         if not _e2e_enabled():
             return
-        cls().pre_setup()
+        # 先 super 装基类自身依赖（mistune），再叠加项目专属步骤。
+        cls().setup_for_test()
 
     @unittest.skipIf(
         not _e2e_enabled(),
         'end-to-end requires NPU runner; set NPU_READY=true',
     )
     def test_runs_doc(self) -> None:
-        """模板方法入口。基类 ``run_template()`` 跑完 ``pre_setup`` ->
-        ``pre_process`` -> ``parse`` -> ``execute`` -> ``post_process``
-        全流程。"""
+        """模板方法入口。基类 ``run_template()`` 跑完 ``pre_process`` ->
+        ``parse`` -> ``execute`` -> ``post_process`` 全流程（``setup_for_test``
+        由 ``setUpClass`` 触发，不在 ``run_template`` 里）。"""
         self.run_template()
 
 

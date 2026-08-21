@@ -143,16 +143,10 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         os.environ['UV_CONSTRAINT'] = cls._CONSTRAINTS_FILE
 
         # 2) uv：test 的 setup 会调 ``uv pip install``，比 pip 处理
-        # PEP 517 build deps 更稳。
-        # 走 cluster cache：继承外层 ``PIP_INDEX_URL``，再 ``--trusted-host``
-        # 放行（pip 21+ 默认拒 http 源；yml job-level env 没设
-        # PIP_TRUSTED_HOST，所以这里必须显式声明）。
+        # PEP 517 build deps 更稳。继承外层 ``PIP_INDEX_URL`` + ``PIP_TRUSTED_HOST``
+        #（yml job-level env 设的 cluster cache 路径与 trusted-host）。
         subprocess.run(
-            [
-                'python', '-m', 'pip', 'install',
-                '--trusted-host', cls._CLUSTER_TRUSTED,
-                'uv',
-            ],
+            ['python', '-m', 'pip', 'install', 'uv'],
             check=True,
         )
 

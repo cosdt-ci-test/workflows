@@ -31,6 +31,7 @@ from __future__ import annotations
 import os
 import subprocess
 import unittest
+from pathlib import Path
 
 from workflows.markdown_doc_test_base import MarkdownDocTestBase
 
@@ -51,8 +52,6 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     contract -> run ``#test-setup`` / ``#test`` in order -> compare against
     ``#test-result``."""
 
-    # swift sft full training can run 30+ minutes; override the base
-    # class's 1800s default.
     DEFAULT_COMMAND_TIMEOUT = 1200  # 20 min: long enough for swift sft 5-step, short enough to fail fast on hangs
 
     # Process-level CUDA exclusion list. Originally written inside the
@@ -206,30 +205,6 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             check=True,
         )
 
-        # 5) Final state dump: print torch/torch_npu/python + NPU
-        # visibility so a CI failure pinned to torch ABI mismatch is
-        # self-explanatory without a re-run. Mirrors the doc's
-        # ``check-torch`` block; runs once after the four setup branches
-        # have converged (whether we reused the image's wheels or
-        # freshly installed).
-        _DUMP_SCRIPT = (
-            'import torch, torch_npu, sys\n'
-            'print("py=", sys.version.split()[0])\n'
-            'print("torch=", torch.__version__)\n'
-            'print("torch_npu=", torch_npu.__version__)\n'
-            'print("npu_avail=", torch.npu.is_available())\n'
-            'print("npu_count=", torch.npu.device_count())\n'
-        )
-        dump = subprocess.run(
-            ['python', '-c', _DUMP_SCRIPT],
-            capture_output=True, text=True, check=False,
-        )
-        print('setup: versions:\n' +
-              '\n'.join('  ' + ln for ln in dump.stdout.rstrip().splitlines()))
-        if dump.returncode != 0:
-            print(f'setup: probe failed (rc={dump.returncode}): '
-                  f'{dump.stderr.strip()}')
-
     # ----------------------------------------------------------
     # test entry
     # ----------------------------------------------------------
@@ -254,6 +229,17 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         ``run_template()`` runs the full ``pre_process`` -> ``parse`` ->
         ``execute`` -> ``post_process`` flow. ``prepare_environment`` is
         triggered by ``setUpClass`` once, not from ``run_template``."""
+        # Pin ModelScope cache under ~/.cache so doc commands that
+        # resolve dataset/model paths via the default ModelScope layout
+        # hit the same location the legacy test relied on. Without this
+        # the cache may land elsewhere (e.g. inside the workflow's
+        # $GITHUB_WORKSPACE) and swift sft will then fail with
+        # ``dataset not found`` / ``model not found`` even though the
+        # files are physically present. ``setdefault`` preserves any
+        # value the workflow explicitly injected via jobs.env.
+        os.environ.setdefault(
+            'MODELSCOPE_CACHE', str(Path.home() / '.cache'),
+        )
         self.run_template()
 
 

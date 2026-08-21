@@ -204,6 +204,14 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             check=True,
         )
 
+        # 5) mistune：基类解析 markdown AST 用。镜像里没预装，必须显式
+        # 装。不写版本约束是因为基类不锁——跟 torch / transformers 不同，
+        # 这是测试框架本身的依赖，不该被项目文档钉死。
+        subprocess.run(
+            ['python', '-m', 'pip', 'install', 'mistune'],
+            check=True,
+        )
+
     # ----------------------------------------------------------
     # pre_process：拉 doc + 把 <UPSTREAM_REF> 替换成实际 commit
     # ----------------------------------------------------------

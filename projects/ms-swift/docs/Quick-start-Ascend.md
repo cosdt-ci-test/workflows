@@ -103,16 +103,22 @@ npu-smi info
 
 ### 使用 uv 进行安装
 
-```shell
-uv pip install --index-url https://pypi.org/simple ms-swift -U --torch-backend=auto
+```shell #test id="swift-install-binary"
+uv pip install --index-url https://mirrors.aliyun.com/pypi/simple ms-swift -U --torch-backend=auto
 python -c "import swift; print('ms-swift', swift.__version__)"
 ```
 
 输出结果类似如下：
 
-```shell
+```shell #test-result id="swift-install-binary" fuzzy='4.5.2'
 ms-swift 4.5.2
 ```
+- xxx 表示最新的版本号
+<!-- 
+```shell #test-setup
+uv pip uninstall ms-swift -y
+```
+-->
 
 ### 从源码安装
 <!-- 
@@ -131,12 +137,12 @@ python -c "import swift; print('ms-swift', swift.__version__)"
 ```
 *\<ref> 由工作流注入的最新 release tag 替换*
 
-输出结果如下：
+输出结果类似如下：
 
 ```shell #test-result id="swift-install-source" fuzzy='xxx'
 ms-swift xxx
 ```
-
+- xxx 表示最新的版本号
 ## 使用样例
 
 ~2 分钟在单卡昇腾 NPU 上对 Qwen3-4B-Instruct-2507 做 5 步自我认知微调（够快来验证整条链路；想跑完整 1 epoch 预算 ~19 分钟，把下面 6 个 `max_steps/save_steps/logging_steps/eval_strategy/report_to` 参数去掉即可，doc 末尾的 `5/5` 预期输出也会对应变成 `94/94` 左右，需要相应调整 expected）：

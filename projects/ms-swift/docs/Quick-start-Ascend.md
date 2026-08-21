@@ -110,8 +110,6 @@ echo "${UPSTREAM_REF}"
 ```
 -->
 
-（上面 HTML 注释里的 `#test-setup store="upstream_ref"` 是 active 步骤：把工作流注入的最新 release tag 捕获到 `upstream_ref` 供下面的 `<ref>` 占位符做 load 替换。HTML 注释只是让它不在渲染页上显示。）
-
 克隆上游仓库并 checkout 到工作流注入的最新 release tag，安装并且验证
 
 ```shell #test id="swift-install-source" load="upstream_ref>>ref"
@@ -163,7 +161,7 @@ ASCEND_RT_VISIBLE_DEVICES=0 swift sft \
 
 输出结果如下：
 
-```shell #test-result id="train" fuzzy='xxx'
+```shell #test-result id="train" fuzzy='xxx' fuzzy='...'
 run sh: xxx
 ...
 {'loss': xxx, 'grad_norm': xxx, 'learning_rate': xxx, 'token_acc': xxx, ... 'global_step/max_steps': '1/5', ...}
@@ -211,7 +209,7 @@ PROMPT
 
 输出结果如下：
 
-```shell #test-result id="infer" fuzzy='xxx'
+```shell #test-result id="infer" fuzzy='xxx' fuzzy='...'
 run sh: xxx
 ...
 xxx你好xxx

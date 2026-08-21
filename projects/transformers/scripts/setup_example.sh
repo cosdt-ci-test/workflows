@@ -39,7 +39,9 @@ else
   python -m pip install --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
     torch==2.9.0 torch_npu==2.9.0.post2
 fi
-# Install the current target checkout, while keeping dependency resolution
-# explicit in this script so pip cannot replace the NPU torch stack.
-python -m pip install -e "$TARGET_ROOT" --no-deps
+# Install the current target checkout. Its dependencies (regex, tokenizers,
+# huggingface-hub, safetensors, ...) are resolved by pip from the index; this is
+# safe for the NPU torch stack because transformers does not depend on torch_npu
+# and its torch requirement is already satisfied by the image build.
+python -m pip install -e "$TARGET_ROOT"
 python -m pip install "${DEPS[@]}"

@@ -550,10 +550,10 @@ class MarkdownDocTestBase(ABC):
 
     def _run_one(self, cmd, results, env, cwd, timeout, idx):
         if isinstance(cmd, SetupCommand):
-            rc, out = self.run_command(cmd.cmd, env, cwd, timeout)
+            rc, out, err = self.run_command(cmd.cmd, env, cwd, timeout)
             if rc != 0:
                 raise AssertionError(
-                    f'setup command failed (rc={rc}); see CMD stderr above'
+                    f'setup command failed (rc={rc}); CMD stderr:\n{err.rstrip() or "(empty)"}'
                 )
             if cmd.store:
                 self._captures[cmd.store] = out
@@ -575,10 +575,10 @@ class MarkdownDocTestBase(ABC):
             expected_body = self.substitute_placeholders(
                 expected_obj.body, expected_obj.load, self._captures
             )
-            rc, actual = self.run_command(actual_cmd, env, cwd, timeout)
+            rc, actual, err = self.run_command(actual_cmd, env, cwd, timeout)
             if rc != 0:
                 raise AssertionError(
-                    f'test command failed (rc={rc}); see CMD stderr above'
+                    f'test command failed (rc={rc}); CMD stderr:\n{err.rstrip() or "(empty)"}'
                 )
             if self.compare_output(
                 actual, expected_body,
@@ -688,7 +688,7 @@ class MarkdownDocTestBase(ABC):
 
     def run_command(
         self, cmd: str, env: dict, cwd, timeout: int
-    ) -> tuple[int, str]:
+    ) -> tuple[int, str, str]:
         """``bash -c`` + forced flush + on error dump all stderr (<= 256 KB).
 
         On stdout error path dump first 2000 + last 2000 chars; stderr with error markers (``[ERROR]`` /
@@ -738,7 +738,7 @@ class MarkdownDocTestBase(ABC):
             if tail_out and tail_out != head_out:
                 self.log(f'CMD stdout (tail):\n{tail_out.rstrip()}')
 
-        return proc.returncode, out
+        return proc.returncode, out, err
 
     def parse(self, text: str) -> tuple[list, dict]:
         """Parse + validate.

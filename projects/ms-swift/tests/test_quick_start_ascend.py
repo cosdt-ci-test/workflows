@@ -1,26 +1,29 @@
-"""Quick-start-Ascend 文档测试：基于 ``MarkdownDocTestBase`` 契约的端到端用例。
+"""Quick-start-Ascend documentation test: end-to-end case built on top
+of the ``MarkdownDocTestBase`` contract.
 
-被测文档：``projects/ms-swift/docs/Quick-start-Ascend.md``（遵循
-``docs/markdown_doc_test_label.md`` 契约：每个 ``shell`` 代码块带 ``#test`` /
-``#test-setup`` / ``#test-result`` 标签与 ``id=`` / ``store=`` / ``load='x>>y'`` /
-``fuzzy='xxx'`` 参数）。
+Document under test: ``projects/ms-swift/docs/Quick-start-Ascend.md``
+(follows the ``docs/markdown_doc_test_label.md`` contract: every
+``shell`` code block carries one of the ``#test`` / ``#test-setup`` /
+``#test-result`` labels plus ``id=`` / ``store=`` / ``load='x>>y'`` /
+``fuzzy='xxx'`` parameters).
 
-跑法：``python -m unittest tests.test_quick_start_ascend -v 2>&1``
+Run: ``python -m unittest tests.test_quick_start_ascend -v 2>&1``
 
-环境变量（由 GitHub workflow ``ms-swift-quick-start.yml`` 注入）：
-    ``MONITORED_DOC_URL``         必填，被测文档的原始 URL。
-    ``UPSTREAM_REF``              必填，bash 直接读 ``$UPSTREAM_REF`` 拿到
-                                  最新 release tag；通过 ``#test-setup
-                                  store="upstream_ref"`` 的 stdout 注入
-                                  ``captures``，最终替换 doc 命令体中的 ``<ref>``。
-    ``NPU_READY=true``            必填，否则整个类跳过。端到端测试只在 NPU runner
-                                  上跑：本地开发机 / 普通 ubuntu runner 没有
-                                  ``/dev/davinci*`` 设备，硬跑会因
-                                  ``import torch_npu`` 失败。
-                                  ``SWIFT_NPU_E2E`` 已废弃（v1 老测试遗留）。
-
-端到端测试只在 NPU runner 上跑：本地开发机 / 普通 ubuntu runner 没有
-``/dev/davinci*`` 设备，硬跑会因 ``import torch_npu`` 失败。
+Environment variables (injected by GitHub workflow
+``ms-swift-quick-start.yml``):
+    ``MONITORED_DOC_URL``         Required; raw URL of the document under test.
+    ``UPSTREAM_REF``              Required; bash reads ``$UPSTREAM_REF`` to get
+                                  the latest release tag. The value is
+                                  captured into ``captures`` via the
+                                  ``#test-setup store="upstream_ref"`` block's
+                                  stdout, then substituted into the doc
+                                  command body where ``<ref>`` appears.
+    ``NPU_READY=true``            Required, otherwise the class is skipped.
+                                  End-to-end tests only run on the NPU runner:
+                                  local dev machines / normal ubuntu runners
+                                  have no ``/dev/davinci*`` device, and the
+                                  hard run would fail on ``import torch_npu``.
+                                  ``SWIFT_NPU_E2E`` is deprecated (legacy v1).
 """
 
 from __future__ import annotations
@@ -33,26 +36,30 @@ from workflows.markdown_doc_test_base import MarkdownDocTestBase
 
 
 def _is_truthy(value: str | None) -> bool:
-    """``'true'`` → True（大小写不敏感），其它（含未设）→ False。"""
+    """``'true'`` -> True (case-insensitive); anything else (including unset) -> False."""
     if not value:
         return False
     return value.strip().lower() == 'true'
 
 def _e2e_enabled() -> bool:
-    """``NPU_READY=true`` 时放开 skip。"""
+    """Return True when ``NPU_READY=true`` is set, releasing the skip."""
     return _is_truthy(os.environ.get('NPU_READY'))
 
 
 class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
-    """``Quick-start-Ascend.md`` 端到端测试：拉 doc -> 校验契约 -> 顺序执行
-    ``#test-setup`` / ``#test`` -> 比对 ``#test-result``。"""
+    """``Quick-start-Ascend.md`` end-to-end test: fetch doc -> validate
+    contract -> run ``#test-setup`` / ``#test`` in order -> compare against
+    ``#test-result``."""
 
-    # swift sft 全量训练可能跑 30+ 分钟；覆盖基类 1800s 默认值。
+    # swift sft full training can run 30+ minutes; override the base
+    # class's 1800s default.
     DEFAULT_COMMAND_TIMEOUT = 3600
 
-    # 进程级 CUDA 排除清单。原写在 workflow step 内，作为子进程 env 透传给
-    # pip / uv / swift 自身的 wheel 解析。挪到测试层后写到 /tmp 并 export，
-    # 子进程 (subprocess.run 默认继承父 env) 同样生效。
+    # Process-level CUDA exclusion list. Originally written inside the
+    # workflow step as a child-process env passed through to pip / uv /
+    # swift's own wheel resolver. Moved to the test layer: write to /tmp
+    # and export; subprocesses (subprocess.run inherits parent env by
+    # default) see it the same way.
     _CUDA_CONSTRAINTS = (
         'modelscope==1.37.0',
         'cuda-toolkit<0',
@@ -96,28 +103,32 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     )
     _CONSTRAINTS_FILE = '/tmp/ms_swift_npu_constraints.txt'
 
-    # Cluster-internal nginx PyPI cache + 华为云 ascend 双源镜像。
+    # Cluster-internal nginx PyPI cache + Huawei Cloud ascend dual-source.
     _CLUSTER_INDEX = 'http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple'
     _CLUSTER_TRUSTED = 'cache-service.nginx-pypi-cache.svc.cluster.local'
     _ASCEND_EXTRA = 'https://repo.huaweicloud.com/ascend/repos/pypi'
 
-    # CANN toolkit：source 一次拿到 ASCEND_HOME / LD_LIBRARY_PATH 等 env。
-    # 路径写死，跟 GitHub workflow container 镜像 (CI_IMAGE) 绑定。
+    # CANN toolkit: source once to get ASCEND_HOME / LD_LIBRARY_PATH etc.
+    # Path is hard-coded, tied to the GitHub workflow container image
+    # (CI_IMAGE).
     _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
 
     # ----------------------------------------------------------
-    # prepare_environment：CUDA 约束 + uv + torch 栈探测 + transformers/peft
+    # prepare_environment: CUDA constraints + uv + torch stack probe + transformers/peft
     # ----------------------------------------------------------
 
     @classmethod
     def prepare_environment(cls) -> None:
-        """CANN env + CUDA 约束 + uv + torch 栈探测 + transformers/peft 一气装好。
+        """Install CANN env + CUDA constraints + uv + torch stack probe
+        + transformers/peft in one go.
 
-        类级 setup：整个测试类只装一次，由 ``setUpClass`` 调一次得起。
-        无关 ``unittest.TestCase.setUp``（那是个生命周期 hook，会在每个
-        test method 跑前都调一次——不适合做前置安装）。
+        Class-level setup: run once per test class, triggered by
+        ``setUpClass``. Not the same as ``unittest.TestCase.setUp`` —
+        that lifecycle hook fires before every test method, which is
+        wrong for a one-shot install.
         """
-        # 0) CANN env：source set_env.sh 后拿 env 流，merge 进 os.environ
+        # 0) CANN env: source set_env.sh and merge the env stream into
+        # os.environ
         if os.path.isfile(cls._CANN_SET_ENV):
             merged = subprocess.run(
                 ['bash', '-c', f'source {cls._CANN_SET_ENV} >/dev/null 2>&1; env'],
@@ -127,8 +138,9 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 if '=' not in line:
                     continue
                 key, _, value = line.partition('=')
-                # 不覆盖 workflow 显式注入的 env（jobs.env / steps.env）；
-                # 只补 CANN 缺失的键，避免冲突。
+                # Don't overwrite envs explicitly injected by the
+                # workflow (jobs.env / steps.env); only fill in CANN
+                # keys that are missing, to avoid conflicts.
                 os.environ.setdefault(key, value)
             print('setup: sourced CANN env from set_env.sh')
         else:
@@ -136,22 +148,24 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 f'setup: skipping CANN env source ({cls._CANN_SET_ENV} not present)'
             )
 
-        # 1) CUDA 排除清单 + 进程级 env
+        # 1) CUDA exclusion list + process-level env
         with open(cls._CONSTRAINTS_FILE, 'w', encoding='utf-8') as fh:
             fh.write('\n'.join(cls._CUDA_CONSTRAINTS) + '\n')
         os.environ['PIP_CONSTRAINT'] = cls._CONSTRAINTS_FILE
         os.environ['UV_CONSTRAINT'] = cls._CONSTRAINTS_FILE
 
-        # 2) uv：test 的 setup 会调 ``uv pip install``，比 pip 处理
-        # PEP 517 build deps 更稳。继承外层 ``PIP_INDEX_URL`` + ``PIP_TRUSTED_HOST``
-        #（yml job-level env 设的 cluster cache 路径与 trusted-host）。
+        # 2) uv: the test setup calls ``uv pip install`` which handles
+        # PEP 517 build deps more reliably than pip. Inherit
+        # ``PIP_INDEX_URL`` + ``PIP_TRUSTED_HOST`` from the yml job-level
+        # env (cluster cache path + trusted-host).
         subprocess.run(
             ['python', '-m', 'pip', 'install', 'uv'],
             check=True,
         )
 
-        # 3) torch 栈探测：版本匹配则复用镜像预装的 wheel，避免再走
-        # cluster cache 触发 ``+cpu`` 解析。
+        # 3) torch stack probe: when version matches the image's
+        # pre-installed wheels, reuse them to avoid the cluster cache
+        # triggering ``+cpu`` resolution.
         _PROBE_SCRIPT = (
             'import torch, torch_npu\n'
             "raise SystemExit(0 if "
@@ -162,7 +176,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         probe = subprocess.run(
             ['python', '-c', _PROBE_SCRIPT],
             capture_output=True,
-            check=False,  # probe 的成败本身就是分支信号，不能 raise
+            check=False,  # probe's success/failure is the branch signal — don't raise
         )
         if probe.returncode == 0:
             _VERSIONS_SCRIPT = (
@@ -186,7 +200,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 check=True,
             )
 
-        # 4) transformers / peft：doc 表格钉死的版本约束。
+        # 4) transformers / peft: hard-pinned versions from the doc table.
         subprocess.run(
             ['python', '-m', 'pip', 'install', 'transformers<5.0', 'peft<0.19'],
             check=True,
@@ -198,9 +212,11 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        """整套测试类只跑一次 env setup：CUDA 约束 + uv + torch 栈 +
-        transformers/peft + CANN env。``@unittest.skipIf`` 装饰器在
-        未设 ``NPU_READY`` 时让整个类跳过，``setUpClass`` 也不会被调。
+        """Run env setup once per test class: CUDA constraints + uv +
+        torch stack + transformers/peft + CANN env. The
+        ``@unittest.skipIf`` decorator skips the whole class when
+        ``NPU_READY`` is unset, so ``setUpClass`` won't be called in
+        that case.
         """
         if _e2e_enabled():
             cls.prepare_environment()
@@ -210,9 +226,10 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         'end-to-end requires NPU runner; set NPU_READY=true',
     )
     def test_runs_doc(self) -> None:
-        """模板方法入口。基类 ``run_template()`` 跑完 ``pre_process`` ->
-        ``parse`` -> ``execute`` -> ``post_process`` 全流程。``prepare_environment``
-        由 ``setUpClass`` 调一次，不在 ``run_template`` 里。"""
+        """Template-method entry point. The base class
+        ``run_template()`` runs the full ``pre_process`` -> ``parse`` ->
+        ``execute`` -> ``post_process`` flow. ``prepare_environment`` is
+        triggered by ``setUpClass`` once, not from ``run_template``."""
         self.run_template()
 
 

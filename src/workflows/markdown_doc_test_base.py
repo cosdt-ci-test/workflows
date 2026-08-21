@@ -1,25 +1,25 @@
-"""Markdown 文档标签测试基类：模板方法 pre_process -> parse -> execute -> post_process。
+"""Markdown document label test base class: template method pre_process -> parse -> execute -> post_process.
 
-契约定义在 docs/markdown_doc_test_label.md：每个代码块 info string 上挂
-``#test`` / ``#test-result`` / ``#test-setup`` 标签，加 ``id=`` / ``store=`` /
-``load='x>>y'`` / ``fuzzy='xxx'`` 参数。本模块把这条契约落成可执行框架：
+The contract is defined in docs/markdown_doc_test_label.md: every code block's info string carries
+``#test`` / ``#test-result`` / ``#test-setup`` labels, plus ``id=`` / ``store=`` /
+``load='x>>y'`` / ``fuzzy='xxx'`` parameters. This module turns the contract into an executable framework:
 
-* 解析（``parse`` -> mistune AST + 内层 fence 回扫 + ``_parse_block`` ->
-  ``_fold``）返回 ``SetupCommand`` / ``TestCommand`` 主序列 +
-  ``TestExpectedOutput`` 注册表；
-* 校验（``_validate``）嵌入解析，规则 2/5/7/10/11 违规抛 ``LabelSpecError``；
-* 执行（``execute``）按文档顺序跑命令，``SetupCommand`` 捕获 stdout 进
-  ``captures``，``TestCommand`` 替换 ``<local>`` 占位符后跑，再按 id 查
-  ``TestExpectedOutput`` 比对；
-* 日志（``log`` / ``log_block``）统一格式，失败时 dump 失败命令本身 + 实际输出。
+* Parsing (``parse`` -> mistune AST + inner fence re-scan + ``_parse_block`` ->
+  ``_fold``) returns the ``SetupCommand`` / ``TestCommand`` main sequence +
+  the ``TestExpectedOutput`` registry;
+* Validation (``_validate``) is embedded in parsing; rules 2/5/7/10/11 violations raise ``LabelSpecError``;
+* Execution (``execute``) runs commands in document order; ``SetupCommand`` captures stdout into
+  ``captures``; ``TestCommand`` substitutes ``<local>`` placeholders then runs, then looks up by id in
+  ``TestExpectedOutput`` for comparison;
+* Logging (``log`` / ``log_block``) uses a unified format; on failure, dumps the failing command itself + actual output.
 
-解析器借助 mistune v3 的 AST 处理"外层 fence + HTML 注释范围"，对
-``block_html.raw`` 内部的 fence 再做一次行扫描以救回被 CommonMark HTML block
-折叠掉的注释内 setup（v2 契约里 ``<!-- ```shell #test-setup ... ``` -->``
-是被支持的形态，但任何标准 markdown 库都不会单独把内部 fence 切出来）。
+The parser relies on mistune v3's AST to handle the "outer fence + HTML comment span", and applies
+a line-scan to fences inside ``block_html.raw`` to rescue setups inside comments that got folded by the CommonMark HTML block
+parser (the v2 contract supports ``<!-- ```shell #test-setup ... ````<!-- ``` -->`` form inside
+comments, but no standard markdown library carves out the inner fence by itself).
 
-子类只需实现 ``pre_process``（取 markdown 文本）和 ``post_process``（清理），
-可覆盖 ``DEFAULT_COMMAND_TIMEOUT``（所有 subprocess 共用的超时秒数，默认 1800）。
+Subclasses only need to implement ``pre_process`` (get the markdown text) and ``post_process`` (cleanup),
+and may override ``DEFAULT_COMMAND_TIMEOUT`` (timeout seconds shared by all subprocesses, default 1800).
 """
 
 from __future__ import annotations
@@ -39,19 +39,19 @@ from typing import Any
 import mistune
 
 # ============================================================
-# 数据结构：每个标签一个 schema
+# Data structures: one schema per label
 # ============================================================
 
 
 @dataclass(frozen=True)
 class SetupCommand:
-    """#test-setup 命令：跑 + 捕获 stdout。
+    """#test-setup command: run + capture stdout.
 
-    ``hidden=True`` 表示该 setup 块在 HTML 注释内（页面上不渲染），但仍参与执行
-    与 store 链（契约规则 10）。
+    ``hidden=True`` means the setup block sits inside an HTML comment (not rendered on the page), but it still participates in
+    execution and the store chain (contract rule 10).
 
-    ``__post_init__`` 在构造期校验字段:cmd 非空、store 非空字符串。这是
-    "不可变契约"——runner 拿到 dataclass 时所有字段必然合法,无须再防御。
+    ``__post_init__`` validates fields at construction time: cmd non-empty, store non-empty string. This is the
+    "immutable contract" — when the runner receives the dataclass, every field is guaranteed valid; no extra defense needed.
     """
 
     cmd: str
@@ -71,10 +71,10 @@ class SetupCommand:
 
 @dataclass(frozen=True)
 class TestCommand:
-    """#test 命令：跑 + 比对期望。注意：不携带 expected。
+    """#test command: run + compare against expected. Note: does not carry expected.
 
-    比对时由 runner 按 ``id`` 到 ``TestExpectedOutput`` 注册表查期望输出。
-    ``__post_init__`` 校验必填字段 + load 元组形态。
+    At comparison time, the runner looks up the expected output by ``id`` in the ``TestExpectedOutput`` registry.
+    ``__post_init__`` validates required fields + the load tuple shape.
     """
 
     id: str
@@ -89,7 +89,7 @@ class TestCommand:
             raise LabelSpecError('TestCommand.cmd must be non-empty')
         if not self.language:
             raise LabelSpecError('TestCommand.language must be non-empty')
-        # load 是 ((store_var, local_name), ...) 形态
+        # load is the ((store_var, local_name), ...) shape
         for i, item in enumerate(self.load):
             if (
                 not isinstance(item, tuple)
@@ -104,21 +104,21 @@ class TestCommand:
 
 @dataclass(frozen=True)
 class TestExpectedOutput:
-    """#test-result 命令：期望输出，放在注册表，不进主序列。
+    """#test-result command: expected output, stored in the registry, not in the main sequence.
 
-    ``body`` 里的 ``<local>`` 占位符在比对前由 ``substitute_placeholders``
-    替换（用同一份 captures）；``fuzzy`` 是非贪婪匹配占位符集合（默认
-    ``...``）。支持多个：每个 placeholder 都是"非贪婪通配"的同义词，
-    任意一个出现在 expected 里都按通配处理。
-    ``disable_fuzzy=True`` 时所有占位符(含默认 ``...``)按字面匹配。
-    ``__post_init__`` 校验:必填字段非空、fuzzy 项为非空字符串、
-    ``disable_fuzzy=True`` 时 fuzzy 必空(解析期规则 16 已挡,这里是防御性兜底)。
+    ``<local>`` placeholders in ``body`` are substituted by ``substitute_placeholders`` before comparison
+    (using the same captures); ``fuzzy`` is a non-greedy placeholder set (default
+    ``...``). Multiple are supported: each placeholder is a synonym for "non-greedy wildcard",
+    and any of them appearing in expected is treated as a wildcard.
+    When ``disable_fuzzy=True``, all placeholders (including the default ``...``) are matched literally.
+    ``__post_init__`` validates: required fields non-empty, fuzzy items non-empty strings,
+    fuzzy must be empty when ``disable_fuzzy=True`` (parse-time rule 16 already blocks this; defensive fallback here).
     """
 
     id: str
     body: str
-    fuzzy: tuple = ()  # placeholder 字符串元组;空表示只用默认 '...'
-    disable_fuzzy: bool = False  # True 时关闭所有非贪婪匹配
+    fuzzy: tuple = ()  # tuple of placeholder strings; empty means use only the default '...'
+    disable_fuzzy: bool = False  # when True, disables all non-greedy matching
     load: tuple = ()  # ((store_var, local_name), ...)
 
     def __post_init__(self) -> None:
@@ -150,20 +150,20 @@ class TestExpectedOutput:
 
 
 class LabelSpecError(Exception):
-    """契约违规。错误信息里包含足够的上下文（id / load value / 当前已知
-    store 集合）以便在文档里直接定位出错的代码块。"""
+    """Contract violation. The error message includes enough context (id / load value / currently-known
+    store set) to locate the offending code block directly in the document."""
 
 # ============================================================
-# 模块级工具
+# Module-level utilities
 # ============================================================
 
 
 def _rescan_fences(raw: str) -> list[tuple[str, str]]:
-    """从 ``block_html.raw`` 里切出所有 ``` 围栏，返回 ``[(info, body), ...]``。
+    """Carve out all ``` fences from ``block_html.raw``, returning ``[(info, body), ...]``.
 
-    例：
+    Example:
 
-        输入 raw（mistune 给的 ``block_html.raw`` 字段）::
+        Input raw (mistune's ``block_html.raw`` field)::
 
             <!--
             ```shell #test-setup store="x"
@@ -175,12 +175,12 @@ def _rescan_fences(raw: str) -> list[tuple[str, str]]:
             ```
             -->
 
-        返回 ``[
+        Returns ``[
             ('shell #test-setup store="x"', 'echo captured'),
             ('shell #test-setup store="y"', 'echo twice'),
-        ]`` —— 把注释内被吃掉的两个 fence 拆出来。
+        ]`` — splits the two fences swallowed inside the comment.
 
-    未闭合抛 ``LabelSpecError``（保留契约内的错误类型，避免文档作者看一堆不同的异常类）。
+    Unclosed raises ``LabelSpecError`` (keep the contract's error type so doc authors don't see a pile of different exception classes).
     """
     out: list[tuple[str, str]] = []
     lines = raw.splitlines()
@@ -209,59 +209,59 @@ def _rescan_fences(raw: str) -> list[tuple[str, str]]:
     return out
 
 # ============================================================
-# 基类：模板方法模式
+# Base class: template method pattern
 # ============================================================
 
 
-# mistune 模块单例：renderer='ast' 输出 dict 流；plugins=[] 禁掉所有扩展以免
-# 改变 fence 切分行为。测试运行一个 doc 只调用一次，重复实例化浪费。
+# mistune module singleton: renderer='ast' yields a dict stream; plugins=[] disables all extensions to avoid
+# changing fence-splitting behavior. A test run calls once per doc, re-instantiation would be wasteful.
 _MD_AST = mistune.create_markdown(renderer='ast', plugins=[])
 
 
 class MarkdownDocTestBase(ABC):
-    """抽象基类：模板方法 ``pre_process`` -> ``parse`` -> ``execute`` -> ``post_process``。
+    """Abstract base class: template method ``pre_process`` -> ``parse`` -> ``execute`` -> ``post_process``.
 
-    子类可以覆盖实现：
-        ``pre_process()`` -> ``str``    取 markdown 文本
-        ``post_process()`` -> ``None``   清理 / 上报
+    Subclasses may override:
+        ``pre_process()`` -> ``str``    get the markdown text
+        ``post_process()`` -> ``None``   cleanup / report
 
-    子类可覆盖：
-        ``DEFAULT_COMMAND_TIMEOUT``      所有 subprocess 共用的超时（秒），默认 1800
+    Subclasses may override:
+        ``DEFAULT_COMMAND_TIMEOUT``      timeout shared by all subprocesses (seconds), default 1800
 
-    用法（在 unittest TestCase 子类里）：
-        ``@unittest.skipIf(...)``        按项目门控
+    Usage (in a unittest TestCase subclass):
+        ``@unittest.skipIf(...)``        per-project gating
         ``def test_runs_doc(self):``
-            ``self.run_template()``      模板方法入口
+            ``self.run_template()``      template-method entry
     """
 
-    DEFAULT_COMMAND_TIMEOUT: int = 1800  # 30 分钟;训练类长命令子类需覆盖。
+    DEFAULT_COMMAND_TIMEOUT: int = 1800  # 30 minutes; subclasses with long training commands should override.
 
     # ============================================================
-    # 私有：解析器内部
+    # Private: parser internals
     # ============================================================
 
     _LABEL_TEST = '#test'
     _LABEL_TEST_RESULT = '#test-result'
     _LABEL_TEST_SETUP = '#test-setup'
     _KNOWN_LABELS = (_LABEL_TEST, _LABEL_TEST_RESULT, _LABEL_TEST_SETUP)
-    # 契约承认的参数名(typo 早死):fuzzy / disable_fuzzy 仅 #test-result 允许,
-    # 但 _KNOWN_PARAMS 不区分标签——标签限制在 _parse_block 里另行校验。
+    # Parameter names recognized by the contract (typo fail-fast): fuzzy / disable_fuzzy only allowed on #test-result,
+    # but _KNOWN_PARAMS is label-agnostic — label-specific checks happen in _parse_block.
     _KNOWN_PARAMS = frozenset({'id', 'store', 'load', 'fuzzy', 'disable_fuzzy'})
-    # 默认非贪婪占位符:不指定 fuzzy= 时,该 placeholder 永远生效。
-    # _parse_block 在 fuzzies 为空时自动把这一项放进 fuzzy 字段。
+    # Default non-greedy placeholder: when fuzzy= is not specified, this placeholder is always in effect.
+    # _parse_block auto-injects this item into the fuzzy field when fuzzies is empty.
     _DEFAULT_FUZZY_PLACEHOLDER = '...'
-    # 契约当前只支持 shell。其它语言(text / console / python 等)直接报
-    # 规则 7 违规。要新增语言时,先在执行器侧落地 selector,再加进 tuple。
+    # The contract currently supports shell only. Other languages (text / console / python / etc.) directly trigger
+    # rule 7 violation. To add a new language, land the selector on the executor side first, then add to the tuple.
     _KNOWN_LANGUAGES = ('shell',)
 
-    # 无值 flag 参数（不带 ``=value``）。识别后值用 ``['1']`` 占位,
-    # 实际语义在 _parse_block / compare_output 里按 key 名判定。
+    # Value-less flag arguments (no ``=value``). After recognition, the value is ``['1']`` as a placeholder,
+    # actual semantics are decided by key name in _parse_block / compare_output.
     _FLAG_PARAMS = ('disable_fuzzy',)
 
     @staticmethod
     def _parse_params(param_strs: list[str]) -> dict[str, list[str]]:
-        """解析 ``key='value'`` / ``key="value"`` tokens 成多值 dict。
-        也接受无值 flag（如 ``disable_fuzzy``），值用 ``['1']`` 占位。"""
+        """Parse ``key='value'`` / ``key="value"`` tokens into a multi-value dict.
+        Value-less flags (e.g. ``disable_fuzzy``) are also accepted, with the value as ``['1']``."""
         params: dict[str, list[str]] = {}
         for tok in param_strs:
             if '=' not in tok:
@@ -272,7 +272,7 @@ class MarkdownDocTestBase(ABC):
                     f"invalid parameter (no '='): {tok!r}"
                 )
             key, _, value = tok.partition('=')
-            # len(value) < 2 意味着只有引号
+            # len(value) < 2 means only quotes, no content
             if len(value) < 2 or not (
                 (value.startswith("'") and value.endswith("'"))
                 or (value.startswith('"') and value.endswith('"'))
@@ -298,10 +298,10 @@ class MarkdownDocTestBase(ABC):
         return parts[0], parts[1]
     
     def _scan_blocks(self, text: str) -> list[dict]:
-        """识别代码块，或者html注释（<!-- -->）里的代码块
+        """Identify code blocks, or code blocks inside HTML comments (<!-- -->)
         """
-        # mistune 的 Markdown.__call__ 没有精确的类型注解（返回 list[dict]），
-        # 静态检查工具看不到节点字段，这里用 Any 接收后按 dict 访问。
+        # mistune's Markdown.__call__ has no precise type annotation (returns list[dict]),
+        # so static checkers can't see the node fields; use Any here and access as dict.
         ast: Any = _MD_AST(text)
         blocks: list[dict] = []
         for node in ast:
@@ -309,9 +309,9 @@ class MarkdownDocTestBase(ABC):
                 raw = node['raw']
                 if not raw.lstrip().startswith('<!--'):
                     continue
-                # raw 字段保留尾部换行（mistune 直接复制原文本段），
-                # bash -c 执行多一个 \n 无影响，但保持 body 不带尾换行
-                # 让单元测试断言更直观（cmd=='<expected lines>'）。
+                # the raw field keeps the trailing newline (mistune copies the original text segment),
+                # an extra \n in bash -c has no effect, but keeping body without trailing newline
+                # makes unit test assertions more intuitive (cmd=='<expected lines>').
                 for info, body in _rescan_fences(raw):
                     blocks.append({
                         'info': info,
@@ -329,7 +329,7 @@ class MarkdownDocTestBase(ABC):
         return blocks
 
     def _parse_block(self, block: dict) -> dict | None:
-        """解析单个代码块的 info string。返回 ``None`` 表示无标签（规则 9 跳过）。"""
+        """Parse a single code block's info string. Returns ``None`` for unlabeled (rule 9 skips it)."""
         info = block['info']
         parts = info.split()
         if not parts:
@@ -345,7 +345,7 @@ class MarkdownDocTestBase(ABC):
         if label_idx < 0:
             return None
 
-        # language：标签前的第一个 token（若标签不在第一位）
+        # language: first token before the label (when label isn't first)
         language = parts[0] if label_idx > 0 else None
 
         param_strs = parts[label_idx + 1:]
@@ -370,26 +370,26 @@ class MarkdownDocTestBase(ABC):
             )
 
         fuzzies = params.get('fuzzy', [])
-        # fuzzy= 仅 #test-result 允许:#test 是命令体,#test-setup 是 setup
-        # 命令,body 不参与模糊匹配。
+        # fuzzy= only allowed on #test-result: #test is the command body, #test-setup is the setup
+        # command; body doesn't participate in fuzzy matching.
         if fuzzies and label != self._LABEL_TEST_RESULT:
             raise LabelSpecError(
                 f"fuzzy= is only valid on #test-result, got {label}"
             )
-        # 同一个 placeholder 重复出现算契约违规:用户多半是笔误。
+        # Duplicate placeholder is a contract violation: usually a typo.
         if len(fuzzies) != len(set(fuzzies)):
             raise LabelSpecError(
                 f'duplicate fuzzy placeholder: {fuzzies!r}'
             )
 
         disable_fuzzy = bool(params.get('disable_fuzzy'))
-        # fuzzy= 与 disable_fuzzy 互斥:前者要占位符,后者明确取消,
-        # 文档规则 3 明确写一起就报错。
+        # fuzzy= and disable_fuzzy are mutually exclusive: the former wants placeholders, the latter explicitly cancels,
+        # doc rule 3 explicitly says writing both together is an error.
         if disable_fuzzy and fuzzies:
             raise LabelSpecError(
                 "disable_fuzzy conflicts with fuzzy=: pick one"
             )
-        # disable_fuzzy 仅 #test-result 允许(沿用 fuzzy 的标签限制)。
+        # disable_fuzzy only allowed on #test-result (inherits fuzzy's label restriction).
         if disable_fuzzy and label != self._LABEL_TEST_RESULT:
             raise LabelSpecError(
                 f"disable_fuzzy is only valid on #test-result, got {label}"
@@ -399,20 +399,20 @@ class MarkdownDocTestBase(ABC):
         for raw in params.get('load', []):
             loads.append(self._parse_load_value(raw))
 
-        # 拒绝未知参数（typo 早死）
+        # Reject unknown parameters (typo fail-fast)
         unknown = set(params) - self._KNOWN_PARAMS
         if unknown:
             raise LabelSpecError(
                 f'unknown parameter(s): {sorted(unknown)}'
             )
 
-        # 注入默认 placeholder:不写 fuzzy= 且没 disable_fuzzy 的 #test-result,
-        # fuzzy 字段自动含 '...'。把 '...' 当成"占位符集合的一员"统一处理,
-        # dataclass 自描述一个块生效的全部 placeholder,compare_output 拿到
-        # 这个字段就能直接跑（不必再内置默认）。
-        # 注意:fuzzy= 与 disable_fuzzy 互斥(规则 16),此处 disable_fuzzy 为真
-        # 时 fuzzies 必空,所以"fuzzies 空 && disable_fuzzy 真"等价于"关闭",
-        # 不补默认。
+        # Inject default placeholder: for #test-result without fuzzy= and without disable_fuzzy,
+        # the fuzzy field auto-contains '...'. Treat '...' as a member of the placeholder set uniformly,
+        # the dataclass self-describes all placeholders in effect for a block; compare_output
+        # reads this field directly (no need to embed the default).
+        # Note: fuzzy= and disable_fuzzy are mutually exclusive (rule 16); here when disable_fuzzy is true
+        # fuzzies must be empty, so "fuzzies empty && disable_fuzzy true" is equivalent to "disable",
+        # no default is added.
         if (
             label == self._LABEL_TEST_RESULT
             and not fuzzies
@@ -433,8 +433,8 @@ class MarkdownDocTestBase(ABC):
         }
 
     def _validate(self, parsed: list[dict]) -> None:
-        """规则 2/5/7/10/11 校验。任一违规抛 ``LabelSpecError``。"""
-        # 规则 10：HTML 注释内仅允许 #test-setup
+        """Rules 2/5/7/10/11 validation. Any violation raises ``LabelSpecError``."""
+        # Rule 10: HTML comments only allow #test-setup
         for p in parsed:
             if p['hidden'] and p['label'] != self._LABEL_TEST_SETUP:
                 raise LabelSpecError(
@@ -442,8 +442,8 @@ class MarkdownDocTestBase(ABC):
                     f'got {p["label"]}'
                 )
 
-        # 规则 7:#test / #test-setup 必须指定 language,且必须在契约白名单
-        # 内(当前只支持 shell)
+        # Rule 7: #test / #test-setup must specify a language, and it must be in the contract whitelist
+        # (currently shell only)
         for p in parsed:
             if p['label'] not in (self._LABEL_TEST, self._LABEL_TEST_SETUP):
                 continue
@@ -459,7 +459,7 @@ class MarkdownDocTestBase(ABC):
                     f'block body={p["body"]!r}'
                 )
 
-        # 规则 2：同 type id 唯一
+        # Rule 2: id unique within same type
         seen_ids: dict[str, set[str]] = {
             label: set() for label in self._KNOWN_LABELS
         }
@@ -473,7 +473,7 @@ class MarkdownDocTestBase(ABC):
                 )
             bucket.add(p['id'])
 
-        # 规则 5：#test 与 #test-result 按 id 配对
+        # Rule 5: #test and #test-result pair by id
         result_ids = {
             p['id'] for p in parsed
             if p['label'] == self._LABEL_TEST_RESULT and p['id']
@@ -490,9 +490,9 @@ class MarkdownDocTestBase(ABC):
             if p['label'] == self._LABEL_TEST_RESULT and not p['id']:
                 raise LabelSpecError('#test-result block must have id=')
 
-        # 规则 11：load 引用必须晚于 store（按文档顺序）
-        # HTML 注释内的 #test-setup 同样计入 seen_stores，因为它们执行时
-        # 仍会写 captures。
+        # Rule 11: load references must come after store (document order)
+        # #test-setup inside HTML comments also counts toward seen_stores, because when they execute
+        # they still write captures.
         seen_stores: set[str] = set()
         for p in parsed:
             if p['label'] == self._LABEL_TEST_SETUP and p['store']:
@@ -509,9 +509,9 @@ class MarkdownDocTestBase(ABC):
     def _fold(
         self, parsed: list[dict]
     ) -> tuple[list, dict]:
-        """按 type 生成 SetupCommand / TestCommand / TestExpectedOutput。
+        """Generate SetupCommand / TestCommand / TestExpectedOutput by type.
 
-        ``TestExpectedOutput`` 进 dict 备查，不进主序列。
+        ``TestExpectedOutput`` goes into a dict for lookup, not in the main sequence.
         """
         commands: list = []
         results: dict = {}
@@ -531,7 +531,7 @@ class MarkdownDocTestBase(ABC):
                 ))
             elif p['label'] == self._LABEL_TEST_RESULT:
                 if p['id'] in results:
-                    # 规则 2 已挡，这里防御性
+                    # Rule 2 already blocks this; defensive here
                     raise LabelSpecError(
                         f"duplicate #test-result id={p['id']!r}"
                     )
@@ -545,15 +545,15 @@ class MarkdownDocTestBase(ABC):
         return commands, results
 
     # ============================================================
-    # 私有：单步执行细节
+    # Private: per-step execution details
     # ============================================================
 
     def _run_one(self, cmd, results, env, cwd, timeout, idx):
         if isinstance(cmd, SetupCommand):
-            rc, out = self.run_command(cmd.cmd, env, cwd, timeout)
+            rc, out, err = self.run_command(cmd.cmd, env, cwd, timeout)
             if rc != 0:
                 raise AssertionError(
-                    f'setup command failed (rc={rc}); see CMD stderr above'
+                    f'setup command failed (rc={rc}); CMD stderr:\n{err.rstrip() or "(empty)"}'
                 )
             if cmd.store:
                 self._captures[cmd.store] = out
@@ -565,7 +565,7 @@ class MarkdownDocTestBase(ABC):
         if isinstance(cmd, TestCommand):
             expected_obj = results.get(cmd.id)
             if expected_obj is None:
-                # _validate 已挡；这里是防御性
+                # _validate already blocks this; defensive here
                 raise AssertionError(
                     f'no #test-result for id={cmd.id!r}'
                 )
@@ -575,10 +575,10 @@ class MarkdownDocTestBase(ABC):
             expected_body = self.substitute_placeholders(
                 expected_obj.body, expected_obj.load, self._captures
             )
-            rc, actual = self.run_command(actual_cmd, env, cwd, timeout)
+            rc, actual, err = self.run_command(actual_cmd, env, cwd, timeout)
             if rc != 0:
                 raise AssertionError(
-                    f'test command failed (rc={rc}); see CMD stderr above'
+                    f'test command failed (rc={rc}); CMD stderr:\n{err.rstrip() or "(empty)"}'
                 )
             if self.compare_output(
                 actual, expected_body,
@@ -608,13 +608,13 @@ class MarkdownDocTestBase(ABC):
         return f'unknown:{type(cmd).__name__}'
 
     # ============================================================
-    # 公开：模板方法入口 + 子类钩子 + 框架实现
+    # Public: template-method entry + subclass hooks + framework implementation
     # ============================================================
     def pre_process(self) -> str:
-        """从 ``MONITORED_DOC_URL`` 拉 doc 文本。
+        """Fetch the doc text from ``MONITORED_DOC_URL``.
 
-        失败抛 ``RuntimeError``（不是 ``SkipTest``），让 CI 显式失败。无本地
-        fallback：stale 本地副本会与触发源失同步。
+        Failures raise ``RuntimeError`` (not ``SkipTest``) so CI fails explicitly. No local
+        fallback: stale local copies would drift from the trigger source.
         """
         url = os.environ.get('MONITORED_DOC_URL')
         if not url:
@@ -623,7 +623,7 @@ class MarkdownDocTestBase(ABC):
                 'workflow which sets it; no local fallback by design.'
             )
 
-        # urllib 默认无 timeout：网络抖动可能挂死。每 30s timeout 重试 1 次。
+        # urllib has no default timeout: network noise can hang. Retry once with 30s timeout each.
         last_err: Exception | None = None
         for attempt in range(2):
             try:
@@ -644,11 +644,11 @@ class MarkdownDocTestBase(ABC):
         )
 
     def post_process(self) -> None:
-        """清理临时文件 / 上传 artifact / 关闭连接。"""
+        """Clean up temp files / upload artifacts / close connections."""
         return
 
     def execute(self, commands: list, results: dict) -> None:
-        """按顺序跑命令。失败抛 unittest 断言异常 + dump 失败命令本身 + 实际输出。"""
+        """Run commands in order. Failures raise a unittest assertion + dump the failing command itself + actual output."""
         self._captures: dict = {}
         env = os.environ.copy()
         cwd = Path.cwd()
@@ -664,7 +664,7 @@ class MarkdownDocTestBase(ABC):
             except unittest.SkipTest:
                 raise
             except Exception as e:
-                # 失败时 dump 失败命令本身 + 实际输出
+                # On failure, dump the failing command itself + actual output
                 self.log(f'[Step {i}] FAILED: {e}')
                 self.log_block('cmd', cmd.cmd.splitlines(), cap=0)
                 raise
@@ -672,8 +672,8 @@ class MarkdownDocTestBase(ABC):
     def run_template(self) -> None:
         """``pre_process`` -> ``parse`` -> ``execute`` -> ``post_process``。
 
-        ``post_process`` 在 ``finally`` 里调用，确保 ``execute`` 抛错时也跑清理。
-        注意：``run_template`` 不负责环境准备——子类自行负责。
+        ``post_process`` runs in a ``finally`` so cleanup runs even if ``execute`` raises.
+        Note: ``run_template`` does not handle environment preparation — subclasses handle it themselves.
         """
         text = self.pre_process()
         commands, test_expected_results = self.parse(text)
@@ -688,12 +688,12 @@ class MarkdownDocTestBase(ABC):
 
     def run_command(
         self, cmd: str, env: dict, cwd, timeout: int
-    ) -> tuple[int, str]:
-        """``bash -c`` + 强制 flush + 错误时 dump stderr 全量（<= 256 KB）。
+    ) -> tuple[int, str, str]:
+        """``bash -c`` + forced flush + on error dump all stderr (<= 256 KB).
 
-        stdout 错误路径 dump 头 2000 + 尾 2000；stderr 含错误标记（``[ERROR]`` /
+        On stdout error path dump first 2000 + last 2000 chars; stderr with error markers (``[ERROR]`` /
         ``Traceback (most recent call last)`` / ``applicaiton exception`` /
-        ``ERR99999``）时 dump 全部（<= 256 KB），因为错误标记常在 traceback 中段。
+        ``ERR99999``) dumps everything (<= 256 KB), since error markers often sit in the middle of the traceback.
         """
         self.log(f'CMD start (timeout={timeout}s): {cmd[:2000]}')
         t0 = time.time()
@@ -738,18 +738,18 @@ class MarkdownDocTestBase(ABC):
             if tail_out and tail_out != head_out:
                 self.log(f'CMD stdout (tail):\n{tail_out.rstrip()}')
 
-        return proc.returncode, out
+        return proc.returncode, out, err
 
     def parse(self, text: str) -> tuple[list, dict]:
-        """解析 + 校验。
+        """Parse + validate.
 
-        失败抛 ``LabelSpecError``；返回 ``(主命令序列, TestExpectedOutput 注册表)``。
-        主序列只含 ``SetupCommand`` / ``TestCommand``；``TestExpectedOutput`` 进
-        dict，runner 执行 ``TestCommand`` 时按 ``id`` 取对应期望。
+        Failures raise ``LabelSpecError``; returns ``(main command sequence, TestExpectedOutput registry)``.
+        The main sequence only contains ``SetupCommand`` / ``TestCommand``; ``TestExpectedOutput`` goes
+        into a dict; the runner executes ``TestCommand`` and looks up the expected by ``id``.
         """
         raw_blocks = self._scan_blocks(text)
         parsed = [self._parse_block(b) for b in raw_blocks]
-        # 过滤无标签的普通块（规则 9）
+        # Filter out unlabeled plain blocks (rule 9)
         parsed = [p for p in parsed if p is not None]
         self._validate(parsed)
         return self._fold(parsed)
@@ -757,11 +757,11 @@ class MarkdownDocTestBase(ABC):
     def substitute_placeholders(
         self, text: str, load: tuple, captures: dict
     ) -> str:
-        """把 ``<local>`` 替换为 ``captures[store_var]``。
+        """Substitute ``<local>`` with ``captures[store_var]``.
 
-        ``store_var`` 不在 ``captures`` 时保留占位符不动（规则 11 已在解析期校验
-        load 引用必须晚于 store，这里理论上必然命中；保留字面让 bash 报错比静默
-        替换成空字符串更易诊断）。
+        When ``store_var`` is not in ``captures``, the placeholder is kept verbatim (rule 11 validates at parse time
+        that load references must come after store, so theoretically it always hits; keeping the literal lets bash err rather than
+        silently substituting an empty string, which is easier to diagnose.
         """
         for store_var, local in load:
             if store_var in captures:
@@ -773,29 +773,29 @@ class MarkdownDocTestBase(ABC):
         fuzzy: str | tuple[str, ...] = (),
         disable_fuzzy: bool = False,
     ) -> bool:
-        """``actual`` vs ``expected`` 正则匹配；``fuzzy`` 列出所有非贪婪
-        placeholder，每个出现于 expected 时按跨行非贪婪通配（``re.DOTALL``）。
+        """``actual`` vs ``expected`` regex match; ``fuzzy`` lists all non-greedy
+        placeholders; each occurrence in expected is non-greedy across-line wildcard (uses ``re.DOTALL``).
 
-        调用方负责提供完整 placeholder 集合——runner 从 ``TestExpectedOutput.fuzzy``
-        直接拿，单元测试调用方自行决定要传什么。常见用法:
+        Callers must provide the full placeholder set — the runner pulls from ``TestExpectedOutput.fuzzy``
+        directly; unit test callers decide what to pass. Common usage:
 
-            fuzzy=('...',)           # 默认,空 fuzzies 已自动注入
-            fuzzy=('xxx', 'yyy')     # 多种自定义占位符并用
-            disable_fuzzy=True       # 关闭所有非贪婪匹配,按字面匹配
+            fuzzy=('...',)           # default, empty fuzzies auto-injected
+            fuzzy=('xxx', 'yyy')     # multiple custom placeholders
+            disable_fuzzy=True       # disable all non-greedy matching, match literally
         """
         if disable_fuzzy:
-            # 完全字面匹配:不对 expected 做任何 placeholder 切分。
+            # Fully literal match: no placeholder splitting on expected.
             return re.search(re.escape(expected), actual, re.DOTALL) is not None
-        # 把 expected 按所有 placeholder 切成段;段与段之间用非贪婪跨行匹配
-        # 连接。``str.split(sep)`` 只支持单 sep,所以用正则 split 一次搞定
-        # 多种 placeholder。注意 placeholder 顺序无关:split 按出现位置切。
+        # Split expected by all placeholders; join segments with non-greedy cross-line match.
+        # ``str.split(sep)`` only supports a single sep, so use a regex split for many.
+        # Placeholder order doesn't matter: split uses occurrence position.
         placeholders: list[str]
         if isinstance(fuzzy, str):
             placeholders = [fuzzy]
         else:
             placeholders = list(fuzzy)
         if not placeholders:
-            # 兜底:空 fuzzy + 非 disable_fuzzy = 字面匹配,等价于 disable_fuzzy
+            # Fallback: empty fuzzy + non-disable_fuzzy = literal match, equivalent to disable_fuzzy
             return re.search(re.escape(expected), actual, re.DOTALL) is not None
         sep_pattern = '|'.join(re.escape(p) for p in placeholders)
         parts = re.split(sep_pattern, expected)
@@ -809,10 +809,10 @@ class MarkdownDocTestBase(ABC):
         print(f'[{ts}] {msg}', flush=True)
 
     def log_block(self, label: str, lines, cap: int = 30) -> None:
-        """块日志：OK 路径 ``cap`` 行 head+tail，MISMATCH 路径 ``cap=0`` 不截断。
+        """Block log: OK path ``cap`` lines head+tail; MISMATCH path ``cap=0`` no truncation.
 
-        每行带行号（``1.`` / ``2.`` / ``154.``）便于对照；超长输出 dump 头
-        ``cap/2`` + 尾 ``cap/2``，中间 ``... [N line(s) elided] ...``。
+        Each line is prefixed with a line number (``1.`` / ``2.`` / ``154.``) for easy comparison; oversized output dumps the first
+        ``cap/2`` + last ``cap/2`` with ``... [N line(s) elided] ...`` in the middle.
         """
         lines = list(lines)
         self.log(f'  --- {label} (head + tail if huge) ---')

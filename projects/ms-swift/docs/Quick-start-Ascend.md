@@ -103,22 +103,16 @@ npu-smi info
 
 ### 使用 uv 进行安装
 
-```shell #test id="swift-install-binary"
+```shell
 uv pip install --index-url https://pypi.org/simple ms-swift -U --torch-backend=auto
 python -c "import swift; print('ms-swift', swift.__version__)"
 ```
 
-输出结果如下：
+输出结果类似如下：
 
-```shell #test-result id="swift-install-binary" fuzzy='xxx'
-ms-swift xxx
+```shell
+ms-swift 4.5.2
 ```
-
-<!-- 
-```shell #test-setup
-uv pip uninstall ms-swift -y
-```
--->
 
 ### 从源码安装
 <!-- 

@@ -107,7 +107,7 @@ npu-smi info
 pip install ms-swift -U
 pip install uv
 uv pip install ms-swift -U --torch-backend=npu
-cd ms-swift && python -c "import swift; print('ms-swift', swift.__version__)"
+python -c "import swift; print('ms-swift', swift.__version__)"
 ```
 
 输出结果如下：

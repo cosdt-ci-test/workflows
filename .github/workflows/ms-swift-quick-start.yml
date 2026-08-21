@@ -14,10 +14,11 @@ concurrency:
 
 on:
   schedule:
-    # Tight 5-minute cadence for local testing only - GitHub caps
-    # schedule at 5 min minimum. Production is '0 */6 * * *'
-    # (every 6 hours); switch back before merging.
-    - cron: '*/5 * * * *'
+    # Run every 3 hours: '0 */3 * * *' fires at minute 0 of every
+    # 3rd hour (00:00, 03:00, 06:00, ...). GitHub Actions caps
+    # schedule at 5 min minimum, so tighter cadences need
+    # workflow_dispatch instead.
+    - cron: '0 */3 * * *'
   workflow_dispatch:
 
 permissions:

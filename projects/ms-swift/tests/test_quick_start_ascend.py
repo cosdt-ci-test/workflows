@@ -9,14 +9,15 @@
 
 环境变量（由 GitHub workflow ``ms-swift-quick-start.yml`` 注入）：
     ``MONITORED_DOC_URL``         必填，被测文档的原始 URL。
-    ``UPSTREAM_REF``              可选，``load="upstream_ref>>ref"`` 的
-                                  ``upstream_ref`` 实际取值。
-    ``UPSTREAM_COMMIT``           可选，被 ``pre_process`` 用于把 doc 中的
-                                  ``<UPSTREAM_REF>`` 占位符替换成确切 SHA。
-    ``SWIFT_NPU_E2E`` 已废弃（v1 老测试遗留），新约定一律用 ``NPU_READY``。
-                                  CI runner 上设 ``NPU_READY=true`` 解除
-                                  skip；本地开发机不设也能 import / 静态
-                                  检查通过（类直接 skip）。
+    ``UPSTREAM_REF``              必填，bash 直接读 ``$UPSTREAM_REF`` 拿到
+                                  最新 release tag；通过 ``#test-setup
+                                  store="upstream_ref"`` 的 stdout 注入
+                                  ``captures``，最终替换 doc 命令体中的 ``<ref>``。
+    ``NPU_READY=true``            必填，否则整个类跳过。端到端测试只在 NPU runner
+                                  上跑：本地开发机 / 普通 ubuntu runner 没有
+                                  ``/dev/davinci*`` 设备，硬跑会因
+                                  ``import torch_npu`` 失败。
+                                  ``SWIFT_NPU_E2E`` 已废弃（v1 老测试遗留）。
 
 端到端测试只在 NPU runner 上跑：本地开发机 / 普通 ubuntu runner 没有
 ``/dev/davinci*`` 设备，硬跑会因 ``import torch_npu`` 失败。
@@ -25,7 +26,6 @@
 from __future__ import annotations
 
 import os
-import re
 import subprocess
 import unittest
 
@@ -111,7 +111,9 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
     def setup_for_test(self) -> None:
         """CANN env + CUDA 约束 + uv + torch 栈探测 + transformers/peft 一气装好。
-           测试的前置安装
+
+        测试的前置安装，由 ``setUpClass`` 触发一次。先 ``super()`` 装基类
+        自身依赖（mistune），再叠加项目专属步骤。
         """
         super().setup_for_test()
 
@@ -191,34 +193,6 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         )
 
     # ----------------------------------------------------------
-    # pre_process：拉 doc + 把 <UPSTREAM_REF> 替换成实际 commit
-    # ----------------------------------------------------------
-
-    # <UPSTREAM_REF> 出现形态：单 token，前后空白/标点分隔。
-    _UPSTREAM_REF_PATTERN = re.compile(r'<UPSTREAM_REF>')
-
-    def pre_process(self) -> str:
-        """拉被测文档，并把 ``<UPSTREAM_REF>`` 替换成 workflow 注入的 SHA。
-
-        替代基类默认实现：基类只读 ``MONITORED_DOC_URL`` 拿 doc 文本，不做
-        占位符替换。``Quick-start-Ascend.md`` 的源码安装块写
-        ``cd ms-swift && git checkout <UPSTREAM_REF>``——必须替换成确切
-        SHA 后才能在 NPU runner 上 checkout 到对应 commit。
-        """
-        text = super().pre_process()
-        upstream_commit = os.environ.get('UPSTREAM_COMMIT', '').strip()
-        if upstream_commit:
-            text = self._UPSTREAM_REF_PATTERN.sub(upstream_commit, text)
-            self.log(
-                f'pre_process: substituted <UPSTREAM_REF> -> '
-                f'{upstream_commit[:12]}'
-            )
-        # UPSTREAM_REF 注入到子进程环境，runner 的 capture 路径靠它。
-        # 若用户显式设过不要覆盖；否则用 UPSTREAM_COMMIT 兜底。
-        os.environ.setdefault('UPSTREAM_REF', upstream_commit)
-        return text
-
-    # ----------------------------------------------------------
     # test entry
     # ----------------------------------------------------------
 
@@ -233,7 +207,6 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         """
         if not _e2e_enabled():
             return
-        # 先 super 装基类自身依赖（mistune），再叠加项目专属步骤。
         cls().setup_for_test()
 
     @unittest.skipIf(

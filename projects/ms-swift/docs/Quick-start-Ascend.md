@@ -1,11 +1,12 @@
 # Quick Start (Ascend NPU)
 
-10 分钟在单卡昇腾 NPU 上对 Qwen3-4B-Instruct-2507 进行自我认知微调。本文档结构与默认 [Quick Start](./Quick-start.md) **1:1 对齐**（训练 / 推理 / 推送 3 段），只是把 GPU 换成昇腾 NPU；命令/参数照搬 CUDA 版，环境变量与推理后端替换为 NPU 等价项。
+10 分钟在单卡昇腾 NPU 上对 Qwen3-4B-Instruct-2507 进行自我认知微调。
+
 ## 前置条件
 
 ### 硬件
 
-Atlas 900 A2 / A3 训练系列产品或者 Ascend 950 系列产品，并按需完成物理机或容器内的设备挂载（`/dev/davinci*` 等）。本文档示例使用单卡。
+Atlas 900 A2 / A3 训练系列产品或者 Ascend 950 系列产品，并按需完成物理机或容器内的设备挂载（`/dev/davinci*` 等）。
 
 ### 基础软件
 
@@ -43,15 +44,28 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | 模型 | [Qwen/Qwen3-4B-Instruct-2507](https://www.modelscope.cn/Qwen/Qwen3-4B-Instruct-2507) |
 | 数据集 | `AI-ModelScope/alpaca-gpt4-data-zh#500` + `AI-ModelScope/alpaca-gpt4-data-en#500` + `swift/self-cognition#500` |
 | 推理后端 | 本文 doc 默认 transformers / torch_npu（`--infer_backend transformers`）。vLLM-Ascend 加速推理不在本文档范围内，请参考 [NPU 最佳实践文档](../BestPractices/NPU-support.md#vllm-ascend)。 |
-| 部署 | `swift deploy`（OpenAI 兼容接口，**由 NPU 最佳实践文档负责**，本文档不演示） |
 
 ### 检查前置是否满足
 
-检查依赖组件版本
-```shell
->>> python --version
-Python 3.12.x
->>> python -c "import torch, torch_npu; print('torch=', torch.__version__); print('torch_npu=', torch_npu.__version__); print('is_available:', torch.npu.is_available()); print('count:', torch.npu.device_count())"
+检查 Python 版本：
+
+```shell #test id="check-py"
+python --version
+```
+输出结果如下：
+```shell #test-result id="check-py" fuzzy='xxx'
+Python 3.12.xxx
+```
+
+检查 torch / torch_npu 是否装好且 NPU 设备可用：
+
+```shell #test id="check-torch"
+python -c "import torch, torch_npu; print('torch=', torch.__version__); print('torch_npu=', torch_npu.__version__); print('is_available:', torch.npu.is_available()); print('count:', torch.npu.device_count())"
+```
+
+输出结果如下：
+
+```shell #test-result id="check-torch"
 torch= 2.9.0+cpu
 torch_npu= 2.9.0.post2
 is_available: True
@@ -64,75 +78,127 @@ count: 1
 npu-smi info
 ```
 
+输出如下类似结果：
+
+```
++------------------------------------------------------------------------------------------------+
+| npu-smi 25.5.2                   Version: 25.5.2                                               |
++---------------------------+---------------+----------------------------------------------------+
+| NPU   Name                | Health        | Power(W)    Temp(C)           Hugepages-Usage(page)|
+| Chip                      | Bus-Id        | AICore(%)   Memory-Usage(MB)  HBM-Usage(MB)        |
++===========================+===============+====================================================+
+| 5     910B4               | OK            | 89.9        39                0    / 0             |
+| 0                         | 0000:41:00.0  | 0           0    / 0          2922 / 32768         |
++===========================+===============+====================================================+
++---------------------------+---------------+----------------------------------------------------+
+| NPU     Chip              | Process id    | Process name             | Process memory(MB)      |
++===========================+===============+====================================================+
+| No running processes found in NPU 5                                                            |
++===========================+===============+====================================================+
+```
+
 > 如果 `npu-smi` 不存在，请回到 [Ascend 官方快速安装指南](https://ascend.github.io/docs/sources/ascend/quick_install.html) 补装驱动；如果 `import torch_npu` 失败，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查 torch / torch_npu / CANN 三方兼容矩阵。
 
 ## 安装 ms-swift
 
-使用pip进行安装：
+### 使用 pip 进行安装
 
-```shell
+```shell #test-setup store="swift-install-binary"
 pip install ms-swift -U
 pip install uv
 uv pip install ms-swift -U --torch-backend=auto
+cd ms-swift && python -c "import swift; print('ms-swift', swift.__version__)"
 ```
 
-从源码安装：
+输出结果如下：
 
-```shell
-# Clone the upstream ms-swift repo into ./ms-swift
->>> git clone https://github.com/modelscope/ms-swift.git
-# Pin the repo to the exact ref/SHA that triggered this CI run
->>> cd ms-swift && git checkout <UPSTREAM_REF>
-# Editable install: `swift` CLI is now on PATH, source changes take effect on rerun
->>> cd ms-swift && uv pip install -e . --torch-backend=auto
-# Sanity check the install: should print the installed ms-swift version
->>> python -c "import swift; print('ms-swift', swift.__version__)"
+```shell #test-result id="swift-install-binary" fuzzy='xxx'
 ms-swift xxx
 ```
 
-`<UPSTREAM_REF>`： 改成实际版本。
+<!-- 
+```shell #test-setup
+uv pip uninstall ms-swift -y
+```
+-->
+
+### 从源码安装
+<!-- 
+```shell #test-setup store="upstream_ref"
+echo "${UPSTREAM_REF}"
+```
+-->
+
+克隆上游仓库并 checkout 到工作流注入的最新 release tag，安装并且验证
+
+```shell #test id="swift-install-source" load="upstream_ref>>ref"
+git clone https://github.com/modelscope/ms-swift.git
+cd ms-swift && git checkout <ref>
+cd ms-swift && uv pip install -e . --torch-backend=auto
+cd ms-swift && python -c "import swift; print('ms-swift', swift.__version__)"
+```
+*\<ref> 由工作流注入的最新 release tag 替换*
+
+输出结果如下：
+
+```shell #test-result id="swift-install-source" fuzzy='xxx'
+ms-swift xxx
+```
 
 ## 使用样例
 
-~2 分钟在单卡昇腾 NPU 上对 Qwen3-4B-Instruct-2507 做 5 步自我认知微调（够快来验证整条链路；想跑完整 1 epoch 预算 ~19 分钟，把下面 `\` 续行的 6 个 `max_steps/save_steps/logging_steps/eval_strategy/report_to` 参数去掉即可，doc 末尾的 `5/5` 预期输出也会对应变成 `94/94` 左右，需要相应调整 expected）：
+~2 分钟在单卡昇腾 NPU 上对 Qwen3-4B-Instruct-2507 做 5 步自我认知微调（够快来验证整条链路；想跑完整 1 epoch 预算 ~19 分钟，把下面 6 个 `max_steps/save_steps/logging_steps/eval_strategy/report_to` 参数去掉即可，doc 末尾的 `5/5` 预期输出也会对应变成 `94/94` 左右，需要相应调整 expected）：
 
-```shell
->>> ASCEND_RT_VISIBLE_DEVICES=0 swift sft \
-...     --model Qwen/Qwen3-4B-Instruct-2507 \
-...     --tuner_type lora \
-...     --dataset 'AI-ModelScope/alpaca-gpt4-data-zh#500' \
-...               'AI-ModelScope/alpaca-gpt4-data-en#500' \
-...               'swift/self-cognition#500' \
-...     --torch_dtype bfloat16 \
-...     --per_device_train_batch_size 1 \
-...     --per_device_eval_batch_size 1 \
-...     --learning_rate 1e-4 \
-...     --lora_rank 8 \
-...     --lora_alpha 32 \
-...     --target_modules all-linear \
-...     --gradient_accumulation_steps 16 \
-...     --max_length 2048 \
-...     --output_dir output \
-...     --warmup_ratio 0.05 \
-...     --dataloader_num_workers 4 \
-...     --model_author swift \
-...     --model_name swift-robot \
-...     --max_steps 5 \
-...     --save_strategy steps \
-...     --save_steps 5 \
-...     --logging_steps 1 \
-...     --eval_strategy no \
-...     --report_to none
-run sh: ...
-...                              # downloading model + 5 step loss dicts
+```shell #test id="train"
+ASCEND_RT_VISIBLE_DEVICES=0 swift sft \
+    --model Qwen/Qwen3-4B-Instruct-2507 \
+    --tuner_type lora \
+    --dataset 'AI-ModelScope/alpaca-gpt4-data-zh#500' \
+              'AI-ModelScope/alpaca-gpt4-data-en#500' \
+              'swift/self-cognition#500' \
+    --torch_dtype bfloat16 \
+    --per_device_train_batch_size 1 \
+    --per_device_eval_batch_size 1 \
+    --learning_rate 1e-4 \
+    --lora_rank 8 \
+    --lora_alpha 32 \
+    --target_modules all-linear \
+    --gradient_accumulation_steps 16 \
+    --max_length 2048 \
+    --output_dir output \
+    --warmup_ratio 0.05 \
+    --dataloader_num_workers 4 \
+    --model_author swift \
+    --model_name swift-robot \
+    --max_steps 5 \
+    --save_strategy steps \
+    --save_steps 5 \
+    --logging_steps 1 \
+    --eval_strategy no \
+    --report_to none
+```
+
+输出结果如下：
+
+```shell #test-result id="train" fuzzy='xxx'
+run sh: xxx
+...
 {'loss': xxx, 'grad_norm': xxx, 'learning_rate': xxx, 'token_acc': xxx, ... 'global_step/max_steps': '1/5', ...}
 ...
 {'loss': xxx, 'grad_norm': xxx, 'learning_rate': xxx, 'token_acc': xxx, ... 'global_step/max_steps': '5/5', ...}
 {'train_runtime': xxx, ... 'train_loss': xxx, ... 'global_step/max_steps': '5/5', ...}
->>> echo "train done, checkpoint dir: $(ls -dt output/*/checkpoint-* | head -n 1)"
-train done, checkpoint dir: <checkpoint>
 ```
 
+捕获 checkpoint 路径供推理阶段复用（将输出结果复制到下文的\<ckpt>中去复用）：
+
+```shell #test-setup store="checkpoint"
+ls -dt output/*/checkpoint-* | head -n 1
+```
+
+输出类似：
+```
+output/v0-20260101_120000-1234/checkpoint-5
+```
 小贴士：
 
 - 如果要使用自定义数据集进行训练，你可以参考[这里](../Customization/Custom-dataset.md)组织数据集格式，并指定 `--dataset <dataset_path>`。
@@ -143,23 +209,29 @@ train done, checkpoint dir: <checkpoint>
 
 ## 训练完成后推理
 
-- 这里的 `<checkpoint>` 占位符跟上面 `>>> echo "train done, checkpoint dir: <checkpoint>"` 实际捕获到的是同一个值：训练阶段生成的 last checkpoint 文件夹（如 `output/v0-20260101_120000-1234/checkpoint-5`）。
+这里的 `<ckpt>` 占位符跟上面 `ls -dt output/*/checkpoint-* | head -n 1` 输出的是同一个值：训练阶段生成的 last checkpoint 文件夹（本例为 `output/v0-20260101_120000-1234/checkpoint-5`）。
 
 ### 交互式命令行推理（transformers / torch_npu 后端）
 
-```shell
->>> ASCEND_RT_VISIBLE_DEVICES=0 \
-... swift infer \
-...     --adapters <checkpoint> \
-...     --stream true \
-...     --temperature 0 \
-...     --max_new_tokens 2048 <<'PROMPT'
-... 你好，请介绍一下自己。
-... exit
-... PROMPT
-run sh: ...
+```shell #test id="infer" load="checkpoint>>ckpt"
+ASCEND_RT_VISIBLE_DEVICES=0 \
+swift infer \
+    --adapters <ckpt> \
+    --stream true \
+    --temperature 0 \
+    --max_new_tokens 2048 <<'PROMPT'
+你好，请介绍一下自己。
+exit
+PROMPT
+```
+\<ckpt>在本例子中替换为：output/v0-20260101_120000-1234/checkpoint-5
+
+输出结果如下：
+
+```shell #test-result id="infer" fuzzy='xxx'
+run sh: xxx
 ...
-...你好...
+xxx你好xxx
 ...
 ```
 
@@ -168,10 +240,11 @@ run sh: ...
 ```shell
 ASCEND_RT_VISIBLE_DEVICES=0 \
 swift export \
-    --adapters <checkpoint> \
+    --adapters <ckpt> \
     --push_to_hub true \
     --hub_model_id '<your-model-id>' \
     --hub_token '<your-sdk-token>' \
     --use_hf false
 ```
 
+这里的 `<ckpt>` 占位符跟上面 `ls -dt output/*/checkpoint-* | head -n 1` 输出的是同一个值：训练阶段生成的 last checkpoint 文件夹（本例为 `output/v0-20260101_120000-1234/checkpoint-5`）。

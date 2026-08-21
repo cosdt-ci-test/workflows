@@ -181,7 +181,6 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                     'python', '-m', 'pip', 'install',
                     '--index-url', cls._CLUSTER_INDEX,
                     '--extra-index-url', cls._ASCEND_EXTRA,
-                    '--trusted-host', cls._CLUSTER_TRUSTED,
                     'torch==2.9.0', 'torch_npu==2.9.0.post2',
                 ],
                 check=True,

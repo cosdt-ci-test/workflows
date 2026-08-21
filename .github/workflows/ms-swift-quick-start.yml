@@ -157,7 +157,7 @@ jobs:
             fi
           }
           probe "https://repo.huaweicloud.com/ascend/repos/pypi/" "huaweicloud-ascend"
-          probe "https://pypi.org/simple/"                      "pypi-org"
+          probe "https://mirrors.aliyun.com/pypi/simple/"                      "aliyun"
           echo "=========================================="
 
       - name: Checkout workflows (provides the test code and doc)

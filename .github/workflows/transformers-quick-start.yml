@@ -95,7 +95,7 @@ jobs:
         run: |
           source /usr/local/Ascend/ascend-toolkit/set_env.sh
           npu-smi info
-          python -c "import torch, torch_npu; print(torch.__version__, torch_npu.__version__, torch.npu.device_count())"
+          python -c "import torch, torch_npu; print(torch.__version__, torch_npu.__version__, torch.npu.device_count())" || true
       - name: Checkout target
         if: steps.monitor.outputs.changed == 'true'
         uses: actions/checkout@v4
@@ -169,5 +169,10 @@ jobs:
       - name: Validate result
         run: |
           python3 -m pip install -q check-jsonschema
+          shopt -s nullglob
           files=(downloaded/*/result.json)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "no result.json found in transformers-quick-start-* artifacts"
+            exit 1
+          fi
           check-jsonschema --schemafile workflows/schemas/result.schema.json "${files[@]}"

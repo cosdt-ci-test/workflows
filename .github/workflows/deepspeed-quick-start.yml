@@ -1,0 +1,289 @@
+# Quick Start doc test for DeepSpeed on Ascend NPU.
+# Template: templates/project-quick-start.yml. Replacements:
+# <project>           = deepspeed
+# <fork_repo>         = deepspeedai/DeepSpeed
+# <upstream_repo>     = deepspeedai/DeepSpeed
+# <runner-label>      = linux-aarch64-a2-1
+# <swr-image>         = swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+# <monitored-doc-url> = https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/deepspeed/docs/Quick-start-Ascend.md
+# <monitored-doc-path> = projects/deepspeed/docs/Quick-start-Ascend.md
+# Default branch: master (not main)
+name: deepspeed-quick-start
+
+concurrency:
+  group: deepspeed-quick-start
+  cancel-in-progress: false
+
+on:
+  # Enable schedule after the first successful dispatch run.
+  # schedule:
+  #   - cron: '0 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      force_install:
+        description: 'force the install + test steps to run (skip the monitor check)'
+        type: boolean
+        default: false
+      upstream_repo:
+        description: 'override the upstream repo to test'
+        required: false
+        default: ''
+      upstream_ref:
+        description: 'override the upstream ref to test'
+        required: false
+        default: 'master'
+      monitored_doc_url:
+        description: 'override the doc URL to monitor'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+env:
+  CI_IMAGE: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+  UPSTREAM_REPO: ${{ inputs.upstream_repo || 'deepspeedai/DeepSpeed' }}
+  UPSTREAM_REF_DEFAULT: ${{ inputs.upstream_ref || 'master' }}
+  MONITORED_DOC_URL: ${{ inputs.monitored_doc_url || 'https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/deepspeed/docs/Quick-start-Ascend.md' }}
+  GH_API: https://api.github.com
+
+jobs:
+  monitor-and-test:
+    name: monitor + (test on change)
+    runs-on: linux-aarch64-a2-1
+    timeout-minutes: 180
+    defaults:
+      run:
+        shell: bash
+    container:
+      image: ${{ env.CI_IMAGE }}
+      options: >-
+        --shm-size=64g
+        --device=/dev/davinci0
+        --device=/dev/davinci_manager --device=/dev/devmm_svm --device=/dev/hisi_hdc
+        --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
+        --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
+        --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
+    env:
+      PIP_INDEX_URL: https://repo.huaweicloud.com/ascend/repos/pypi
+      PIP_TRUSTED_HOST: repo.huaweicloud.com
+      PIP_TIMEOUT: "120"
+    steps:
+      - name: Print context
+        run: |
+          echo "Trigger:    ${{ github.event_name }}"
+          echo "Upstream:   ${{ env.UPSTREAM_REPO }}@${{ env.UPSTREAM_REF_DEFAULT }}"
+          echo "Force:      ${{ inputs.force_install || 'false' }}"
+
+      - name: Source CANN and check NPU
+        run: |
+          export PATH="/usr/local/sbin:$PATH"
+          source /usr/local/Ascend/ascend-toolkit/set_env.sh
+          npu-smi info || true
+          python -c "import torch, torch_npu; print(torch.__version__, torch_npu.__version__, torch.npu.device_count())" || true
+
+      - name: Checkout workflows
+        uses: actions/checkout@v4
+        with:
+          path: workflows
+          fetch-depth: 1
+
+      - name: Restore monitor state
+        id: cache-restore
+        if: inputs.force_install != true
+        uses: actions/cache/restore@v4
+        with:
+          path: .monitor-state
+          key: monitor-state-deepspeed-${{ github.run_id }}
+          restore-keys: |
+            monitor-state-deepspeed-
+
+      - name: Monitor doc hash
+        id: monitor-doc
+        if: inputs.force_install != true
+        env:
+          DOC_URL: ${{ env.MONITORED_DOC_URL }}
+        run: |
+          set -euo pipefail
+          STATE_DIR=".monitor-state"
+          mkdir -p "$STATE_DIR"
+          NEW=$(curl -fsSL --retry 3 "$DOC_URL" | sha256sum | cut -d' ' -f1)
+          OLD=$(cat "$STATE_DIR/.doc_hash" 2>/dev/null || echo "")
+          if [ "$OLD" != "$NEW" ]; then
+            echo "$NEW" > "$STATE_DIR/.doc_hash"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "ref=master" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Monitor upstream latest release SHA
+        id: monitor-release
+        if: inputs.force_install != true
+        run: |
+          set -euo pipefail
+          STATE_DIR=".monitor-state"
+          mkdir -p "$STATE_DIR"
+          curl -fsSL --retry 3 \
+            "$GH_API/repos/${{ env.UPSTREAM_REPO }}/releases/latest" -o /tmp/release.json
+          TAG=$(jq -r '.tag_name // empty' /tmp/release.json)
+          SHA=$(jq -r '.target_commitish // empty' /tmp/release.json)
+          OLD=$(cat "$STATE_DIR/.last_release_sha" 2>/dev/null || echo "")
+          if [ -n "$SHA" ] && [ "$OLD" != "$SHA" ]; then
+            echo "$SHA" > "$STATE_DIR/.last_release_sha"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "ref=$TAG" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Monitor upstream master HEAD
+        id: monitor-commit
+        if: inputs.force_install != true
+        run: |
+          set -euo pipefail
+          STATE_DIR=".monitor-state"
+          mkdir -p "$STATE_DIR"
+          SHA=$(curl -fsSL --retry 3 \
+            "$GH_API/repos/${{ env.UPSTREAM_REPO }}/commits/master" | jq -r '.sha // empty')
+          OLD=$(cat "$STATE_DIR/.last_tested_sha" 2>/dev/null || echo "")
+          if [ -n "$SHA" ] && [ "$OLD" != "$SHA" ]; then
+            echo "$SHA" > "$STATE_DIR/.last_tested_sha"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "ref=master" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Persist monitor state
+        if: inputs.force_install != true && always()
+        uses: actions/cache/save@v4
+        with:
+          path: .monitor-state
+          key: monitor-state-deepspeed-${{ github.run_id }}
+
+      - name: Decide whether to run tests
+        id: decide
+        if: inputs.force_install != true
+        run: |
+          CHANGED="false"
+          REF="${{ env.UPSTREAM_REF_DEFAULT }}"
+          if [ "${{ steps.monitor-doc.outputs.changed }}" = "true" ]; then
+            CHANGED="true"
+            REF="${{ steps.monitor-doc.outputs.ref }}"
+          elif [ "${{ steps.monitor-release.outputs.changed }}" = "true" ]; then
+            CHANGED="true"
+            REF="${{ steps.monitor-release.outputs.ref }}"
+          elif [ "${{ steps.monitor-commit.outputs.changed }}" = "true" ]; then
+            CHANGED="true"
+            REF="${{ steps.monitor-commit.outputs.ref }}"
+          fi
+          echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+
+      - name: Install project and run quick-start tests
+        id: test
+        if: |
+          inputs.force_install == true ||
+          steps.decide.outputs.changed == 'true'
+        env:
+          DEEPSPEED_NPU_E2E: '1'
+          UPSTREAM_REF: ${{ steps.decide.outputs.ref }}
+          UPSTREAM_COMMIT: ${{ steps.decide.outputs.ref }}
+          MONITORED_DOC_URL: ${{ env.MONITORED_DOC_URL }}
+        run: |
+          set -euo pipefail
+          export PATH="/usr/local/sbin:$PATH"
+          source /usr/local/Ascend/ascend-toolkit/set_env.sh
+
+          if python -c "
+          import torch, torch_npu
+          raise SystemExit(0 if torch.__version__.startswith('2.9.0') \
+              and torch_npu.__version__.startswith('2.9.0') else 1)
+          " 2>/dev/null; then
+            echo "reusing image torch stack"
+          else
+            echo "installing torch==2.9.0 torch_npu==2.9.0.post2"
+            python -m pip install \
+              --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
+              torch==2.9.0 torch_npu==2.9.0.post2
+          fi
+
+          cd workflows
+          python -m unittest projects.deepspeed.tests.test_quick_start_ascend -v 2>&1 | tee /tmp/unittest.log
+
+      - name: Write result JSON
+        if: always()
+        env:
+          TRIGGER: ${{ github.event_name }}
+          TARGET_REPO: ${{ env.UPSTREAM_REPO }}
+          TARGET_REF: ${{ steps.decide.outputs.ref }}
+          JOB_STATUS: ${{ job.status }}
+          FORCE_INSTALL: ${{ inputs.force_install || false }}
+          CHANGED: ${{ steps.decide.outputs.changed }}
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/output"
+          if [ "$FORCE_INSTALL" = "true" ] || [ "$CHANGED" = "true" ]; then
+            tests_ran=true
+          else
+            tests_ran=false
+          fi
+          python3 - "$tests_ran" <<'EOF'
+          import json
+          import os
+          import sys
+
+          result = {
+              'trigger': os.environ['TRIGGER'],
+              'target_repo': os.environ['TARGET_REPO'],
+              'target_ref': os.environ['TARGET_REF'],
+              'path': 'projects/deepspeed/docs/Quick-start-Ascend.md',
+              'image': os.environ['CI_IMAGE'],
+              'job_status': os.environ['JOB_STATUS'],
+              'tests_ran': sys.argv[1] == 'true',
+          }
+          out = os.path.join(os.environ['GITHUB_WORKSPACE'], 'output', 'result.json')
+          with open(out, 'w', encoding='utf-8') as handle:
+              json.dump(result, handle, ensure_ascii=False, indent=2)
+              handle.write('\n')
+          EOF
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deepspeed-quick-start-${{ github.run_id }}
+          if-no-files-found: ignore
+          path: |
+            /tmp/unittest.log
+            /tmp/release.json
+            ${{ github.workspace }}/output/result.json
+
+  validate-results:
+    needs: [monitor-and-test]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout workflows
+        uses: actions/checkout@v4
+        with:
+          path: workflows
+
+      - name: Download quick-start results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: deepspeed-quick-start-*
+          path: downloaded
+          merge-multiple: false
+
+      - name: Validate result.json
+        run: |
+          set -euo pipefail
+          python3 -m pip install -q check-jsonschema
+          shopt -s nullglob
+          files=(downloaded/*/result.json)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "no result.json found in deepspeed-quick-start-* artifacts"
+            exit 1
+          fi
+          check-jsonschema --schemafile workflows/schemas/result.schema.json "${files[@]}"

@@ -614,13 +614,11 @@ class MarkdownDocTestBase(ABC):
         """搭建测试运行所需的 Python/系统环境。**框架不自调**，由子类
         在 ``setUpClass`` / ``setUp`` 自行触发（通常会 ``super()`` 链上来）。
 
-        默认实现：装框架自身的 markdown 解析依赖 ``mistune``（仅在缺失时）。
-        子类应 ``super().setup_for_test()`` 之后再叠加项目专属步骤
+        默认实现是空操作。注意：``mistune``（本基类顶层 import 的依赖）
+        **不应**在这里装——它在 ``markdown_doc_test_base.py`` 模块顶层
+        import 时就需要，比 setUpClass 早得多。框架依赖的安装应放在
+        ``tests/__init__.py`` 或 workflow 装步骤里。
         """
-        subprocess.run(
-            ['python', '-m', 'pip', 'install', 'mistune'],
-            check=True,
-        )
 
     def pre_process(self) -> str:
         """从 ``MONITORED_DOC_URL`` 拉 doc 文本。

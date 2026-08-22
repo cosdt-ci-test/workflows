@@ -332,12 +332,12 @@ jobs:
         id: test
         if: steps.decide.outputs.need_to_test == 'true'
         env:
-          # Only the three vars test_quick_start_ascend.py actually
+          # Only the two vars test_quick_start_ascend.py actually
           # reads; UPSTREAM_REPO / MONITORED_DOC_URL propagate from
-          # jobs.env and REASON is purely diagnostic.
+          # jobs.env and REASON is purely diagnostic. UPSTREAM_COMMIT
+          # was dropped — no consumer in the test.
           NPU_READY:       'true'
           UPSTREAM_REF:    ${{ steps.decide.outputs.test_ref }}
-          UPSTREAM_COMMIT: ${{ steps.decide.outputs.sha }}
         run: |
           set -euo pipefail
           cd workflows/projects/ms-swift

@@ -501,13 +501,12 @@ class TestEndToEndV2Doc(unittest.TestCase):
     """拿 v2 doc 真实跑解析,验证契约回归(不执行 subprocess)。"""
 
     DOC_PATH = (
-        '/Users/hdc/Company/workflows/projects/ms-swift/docs/'
-        'Quick-start-Ascend-v2.md'
+        Path(__file__).resolve().parent.parent
+        / 'projects' / 'ms-swift' / 'docs' / 'Quick-start-Ascend.md'
     )
 
     def test_v2_doc_parses(self):
-        import os
-        if not os.path.exists(self.DOC_PATH):
+        if not self.DOC_PATH.exists():
             self.skipTest(f'{self.DOC_PATH} not present')
         with open(self.DOC_PATH) as f:
             text = f.read()

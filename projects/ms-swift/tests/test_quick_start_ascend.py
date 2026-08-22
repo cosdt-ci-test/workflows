@@ -53,6 +53,12 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     ``#test-result``."""
 
     DEFAULT_COMMAND_TIMEOUT = 1200  # 20 min: long enough for swift sft 5-step, short enough to fail fast on hangs
+    USER_AGENT = 'cosdt-ci-test/quick-start'  # monitored source is the fork under cosdt-ci-test org
+    ERROR_MARKERS = (
+        *MarkdownDocTestBase.ERROR_MARKERS,  # generic [ERROR] + Traceback
+        'applicaiton exception',  # CANN toolkit emits this typo (sic) in its Python driver
+        'ERR99999',  # CANN sentinel for unrecoverable runtime failure
+    )
 
     # Process-level CUDA exclusion list. Originally written inside the
     # workflow step as a child-process env passed through to pip / uv /
@@ -222,10 +228,12 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         """Run env setup once per test class: CUDA constraints + uv +
-        torch stack + transformers/peft + CANN env. The
-        ``@unittest.skipIf`` decorator skips the whole class when
-        ``NPU_READY`` is unset, so ``setUpClass`` won't be called in
-        that case.
+        torch stack + transformers/peft + CANN env.
+
+        ``@unittest.skipIf`` only skips the test *method* — ``setUpClass``
+        itself always runs. The ``if _e2e_enabled()`` body guard below is
+        what actually keeps heavy setup from firing when ``NPU_READY`` is
+        unset.
         """
         if _e2e_enabled():
             cls.prepare_environment()

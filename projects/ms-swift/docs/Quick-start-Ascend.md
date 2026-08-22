@@ -101,7 +101,24 @@ npu-smi info
 
 ## 安装 ms-swift
 
+### 使用 uv 进行安装
 
+```shell #test id="swift-install-binary"
+uv pip install --index-url https://mirrors.aliyun.com/pypi/simple ms-swift
+python -c "import swift; print('ms-swift', swift.__version__)"
+```
+
+输出结果类似如下：
+
+```shell #test-result id="swift-install-binary" fuzzy='xxx'
+ms-swift xxx
+```
+- xxx 表示最新的版本号
+<!-- 
+```shell #test-setup
+uv pip uninstall ms-swift -y
+```
+-->
 
 ### 从源码安装
 <!-- 
@@ -115,7 +132,7 @@ echo "${UPSTREAM_REF}"
 ```shell #test id="swift-install-source" load="upstream_ref>>ref"
 git clone https://github.com/modelscope/ms-swift.git
 cd ms-swift && git checkout <ref>
-uv pip install -e . --torch-backend=auto
+uv pip install -e .
 python -c "import swift; print('ms-swift', swift.__version__)"
 ```
 *\<ref> 由工作流注入的最新 release tag 替换*

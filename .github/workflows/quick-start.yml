@@ -1,34 +1,87 @@
-name: ms-swift-quick-start
+# Quick Start guard engine - the common, reusable part of the quick
+# start guarding pipeline.
+#
+# Design doc: docs/design-quickstart-common-template.md. The guard
+# logic below (monitor / decide / record / publish) is ported verbatim
+# from the legacy single-project workflow ms-swift-quick-start.yml
+# (4ee7f63); only the project-specific values are parameterized as
+# workflow_call inputs. Do not editorialize the bash here - when the
+# guard logic evolves, re-port it from the legacy workflow.
+#
+# Division of labor:
+#   * The caller (per-project thin trigger, e.g.
+#     ms-swift-quick-start-2.yml) owns: cron schedule, dispatch,
+#     workflow-level concurrency, and every project variant, declared
+#     as inputs here. Note that caller env does NOT cross the `uses:`
+#     boundary.
+#   * This engine owns the fixed guard loop: restore monitor state ->
+#     monitor (release > doc > retry) -> decide -> test -> record ->
+#     validate + publish result.json -> persist monitor state.
+#   * Two runner classes (engine-fixed, not project-configurable): the
+#     cache I/O jobs (restore-cache / publish-and-persist) run on
+#     GitHub-hosted ubuntu-latest because the self-hosted NPU runner
+#     can't reach the cache blob storage and can't compute a consistent
+#     cache version hash (platform / compression differences); only the
+#     test job runs on the project-declared runner inside its container.
+#   * The cluster pip/uv mirror env lives here at test-job level: the
+#     framework bootstrap (src/workflows/__init__.py installs mistune)
+#     runs during test-process import, before any project Python hook
+#     could override env. A project test subclass may still override
+#     these with direct assignment in prepare_environment.
+#
+# Test-process env contract (read-only from the test side):
+#   MONITORED_DOC_URL   doc to fetch and execute (inputs.doc_url)
+#   UPSTREAM_REF        release tag substituted into the doc's <ref>
+#   NPU_READY           'true'; gates the project's E2E test class
+#   UV_* / PIP_*        cluster mirror defaults (overridable in hook)
 
-concurrency:
-  # format() is load-bearing: a '||' between 'manual-' and
-  # github.run_id would short-circuit on the truthy literal and
-  # every dispatch would share one 'manual-' group.
-  group: ${{ github.event_name == 'schedule' && 'ms-swift-quick-start-schedule' || format('manual-{0}', github.run_id) }}
-  # cancel-in-progress: false because (1) a schedule run cancelled
-  # mid-way loses its outcome writeback - the outcome is what makes
-  # the retry mechanism work, and the 'if: always()' guard isn't
-  # enough when the container is being torn down; (2) dispatch runs
-  # already live in unique groups so there's nothing to cancel.
-  cancel-in-progress: false
+name: quick-start
 
 on:
-  schedule:
-    # Run every 3 hours: '0 */3 * * *' fires at minute 0 of every
-    # 3rd hour (00:00, 03:00, 06:00, ...). GitHub Actions caps
-    # schedule at 5 min minimum, so tighter cadences need
-    # workflow_dispatch instead.
-    - cron: '0 */3 * * *'
-  workflow_dispatch:
+  workflow_call:
+    inputs:
+      project:
+        description: Project directory under projects/; namespaces cache keys, artifact names and the test working directory
+        type: string
+        required: true
+      test_runner:
+        description: JSON array of runner labels for the test job, e.g. '["linux-aarch64-a2-1"]' (cache jobs stay on ubuntu-latest)
+        type: string
+        required: true
+      image:
+        description: Container image for the test job (also recorded in result.json)
+        type: string
+        required: true
+      container_options:
+        description: Container options for the test job (device mounts, read-only volumes, shm size, ...)
+        type: string
+        required: true
+      timeout_minutes:
+        description: Test job timeout in minutes
+        type: number
+        default: 180
+      upstream_repo:
+        description: Upstream repo (owner/name) polled for releases; recorded as target_repo in result.json
+        type: string
+        required: true
+      doc_url:
+        description: URL of the monitored quick-start doc; the monitor hashes it and the test fetches the same URL
+        type: string
+        required: true
+      doc_path:
+        description: Doc locator recorded in result.json's path field - conventionally the GitHub blob URL (human-clickable link); only needs to identify the tested doc
+        type: string
+        required: true
+      test_command:
+        description: Test entry command, executed with cwd projects/<project>
+        type: string
+        required: true
+
+# Concurrency deliberately lives in the caller (thin trigger): it is
+# evaluated at the run entry point and covers the whole called chain.
 
 permissions:
   contents: read
-
-env:
-  CI_IMAGE: &ci_image swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-  UPSTREAM_REPO: modelscope/ms-swift
-  MONITORED_DOC_URL: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/ms-swift/docs/Quick-start-Ascend.md
-  GH_API: https://api.github.com
 
 jobs:
   # Restore the previous run's monitor state on a GitHub-hosted
@@ -54,7 +107,7 @@ jobs:
         with:
           path: .monitor-state
           key: cache-not-used-restore-keys-only
-          restore-keys: monitor-state-ms-swift-
+          restore-keys: monitor-state-${{ inputs.project }}-
 
       # Re-emit each field as a separate step output rather than passing
       # the raw file content as one big string - keeps the materializer
@@ -78,8 +131,8 @@ jobs:
   test:
     name: monitor + test on change
     needs: restore-cache
-    runs-on: [linux-aarch64-a2-1]
-    timeout-minutes: 180
+    runs-on: ${{ fromJSON(inputs.test_runner) }}
+    timeout-minutes: ${{ inputs.timeout_minutes }}
     # The NPU runner is firewalled from GitHub's cache blob storage,
     # so monitor state persists via job outputs to publish-and-persist
     # (ubuntu-latest, the only runner that can reach cache storage).
@@ -97,22 +150,21 @@ jobs:
       run:
         shell: bash
     container:
-      image: *ci_image
-      options: >-
-        --privileged --shm-size=64g
-        --device=/dev/davinci0
-        --device=/dev/davinci1
-        --device=/dev/davinci_manager
-        --device=/dev/devmm_svm
-        --device=/dev/hisi_hdc
-        --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
-        --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
-        --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
-        --volume=/data/ci-cache/modelscope:/root/.cache/modelscope
+      image: ${{ inputs.image }}
+      options: ${{ inputs.container_options }}
     env:
+      # Engine-fixed env: upstream repo + monitored doc come from the
+      # caller's inputs (caller env does not cross the `uses:` boundary).
+      UPSTREAM_REPO: ${{ inputs.upstream_repo }}
+      MONITORED_DOC_URL: ${{ inputs.doc_url }}
+      GH_API: https://api.github.com
       # Cluster-internal nginx PyPI cache fronts every package
       # (PEP 517 build deps + NPU wheels), so installs don't fall
-      # back to external mirrors the runner can't reach.
+      # back to external mirrors the runner can't reach. These are
+      # cluster-level defaults: a project test subclass may override
+      # them via direct assignment in prepare_environment (they must
+      # be in job env because the mistune bootstrap runs during test
+      # process import, before any Python hook).
       UV_INDEX_URL: "http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple"
       UV_EXTRA_INDEX_URL: "https://repo.huaweicloud.com/ascend/repos/pypi"
       UV_INDEX_STRATEGY: "unsafe-best-match"
@@ -124,14 +176,20 @@ jobs:
       PIP_TRUSTED_HOST: "cache-service.nginx-pypi-cache.svc.cluster.local"
       PIP_TIMEOUT: "120"
     steps:
-      - name: Print context and source CANN
+      # Diagnostics only. No `source set_env.sh` here: an export inside
+      # this step wouldn't survive the step boundary anyway - the CANN
+      # env the test actually runs with is sourced inside the project
+      # test subclass's prepare_environment (test process, same env as
+      # the doc commands).
+      - name: Print context and probe NPU
         run: |
           echo "=========================================="
           echo "Trigger:    ${{ github.event_name }}"
           echo "Runner:     ${{ runner.name }}"
+          echo "Project:    ${{ inputs.project }}"
+          echo "Upstream:   ${{ inputs.upstream_repo }}"
           echo "=========================================="
           export PATH="/usr/local/sbin:$PATH"
-          source /usr/local/Ascend/ascend-toolkit/set_env.sh
           npu-smi info || true
 
       - name: Checkout workflows (provides the test code and doc)
@@ -317,20 +375,24 @@ jobs:
             echo "No upstream changes - skipping install + test"
           fi
 
+      # The project's test entry: everything project-specific (env prep,
+      # installs, doc fetch/parse/execute) lives in projects/<project>'s
+      # test command; the engine only supplies the env contract below
+      # plus the cluster mirror env from job env.
       - name: Run quick start test
         id: test
         if: steps.decide.outputs.need_to_test == 'true'
         env:
-          # Only the two vars test_quick_start_ascend.py actually
-          # reads; UPSTREAM_REPO / MONITORED_DOC_URL propagate from
-          # jobs.env and REASON is purely diagnostic. UPSTREAM_COMMIT
-          # was dropped — no consumer in the test.
+          # Only the vars the project test actually reads;
+          # UPSTREAM_REPO / MONITORED_DOC_URL propagate from job env
+          # and REASON is purely diagnostic. UPSTREAM_COMMIT is not
+          # injected - no consumer in the test process.
           NPU_READY:       'true'
           UPSTREAM_REF:    ${{ steps.decide.outputs.test_ref }}
+        working-directory: workflows/projects/${{ inputs.project }}
         run: |
           set -euo pipefail
-          cd workflows/projects/ms-swift
-          python -m unittest tests.test_quick_start_ascend -v 2>&1
+          ${{ inputs.test_command }}
 
       # Schedule + need_to_test - dispatch forces need_to_test=true
       # but must not mutate monitor state (otherwise it would clobber
@@ -433,9 +495,10 @@ jobs:
           # never get re-parsed by bash.
           TRIGGER:         ${{ github.event_name }}
           REASON:          ${{ steps.decide.outputs.reason }}
-          TARGET_REPO:     'modelscope/ms-swift'
+          TARGET_REPO:     ${{ inputs.upstream_repo }}
           TARGET_REF:      ${{ steps.decide.outputs.test_ref }}
-          IMAGE:           ${{ env.CI_IMAGE }}
+          DOC_PATH:        ${{ inputs.doc_path }}
+          IMAGE:           ${{ inputs.image }}
           JOB_STATUS:      ${{ job.status }}
           UPSTREAM_SHA:    ${{ steps.decide.outputs.sha }}
         run: |
@@ -447,7 +510,7 @@ jobs:
             --arg reason           "$REASON" \
             --arg target_repo      "$TARGET_REPO" \
             --arg target_ref       "$TARGET_REF" \
-            --arg path             "https://github.com/cosdt-ci-test/workflows/blob/main/projects/ms-swift/docs/Quick-start-Ascend.md" \
+            --arg path             "$DOC_PATH" \
             --arg image            "$IMAGE" \
             --arg job_status       "$JOB_STATUS" \
             '{
@@ -543,7 +606,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: ms-swift-quick-start-${{ github.run_id }}
+          name: ${{ inputs.project }}-quick-start-${{ github.run_id }}
           path: output/result.json
           if-no-files-found: warn
 
@@ -582,4 +645,4 @@ jobs:
         uses: actions/cache/save@v6
         with:
           path: .monitor-state
-          key: monitor-state-ms-swift-${{ github.run_id }}
+          key: monitor-state-${{ inputs.project }}-${{ github.run_id }}

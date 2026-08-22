@@ -10,7 +10,7 @@
 #
 # Division of labor:
 #   * The caller (per-project thin trigger, e.g.
-#     ms-swift-quick-start-2.yml) owns: cron schedule, dispatch,
+#     ms-swift-quick-start.yml) owns: cron schedule, dispatch,
 #     workflow-level concurrency, and every project variant, declared
 #     as inputs here. Note that caller env does NOT cross the `uses:`
 #     boundary.

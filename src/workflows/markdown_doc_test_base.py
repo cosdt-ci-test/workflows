@@ -235,6 +235,13 @@ class MarkdownDocTestBase(ABC):
     """
 
     DEFAULT_COMMAND_TIMEOUT: int = 1800  # 30 minutes; subclasses with long training commands should override.
+    USER_AGENT: str = 'markdown-doc-test/1.0'  # subclasses mirroring a monitored source override.
+    ERROR_MARKERS: tuple[str, ...] = (
+        # stderr substrings that trigger a full dump (<= 256 KB) instead of head/tail.
+        # Generic markers; subclasses extend with project-specific ones (e.g. CANN ERR99999).
+        '[ERROR]',
+        'Traceback (most recent call last)',
+    )
 
     # ============================================================
     # Private: parser internals
@@ -473,7 +480,10 @@ class MarkdownDocTestBase(ABC):
                 )
             bucket.add(p['id'])
 
-        # Rule 5: #test and #test-result pair by id
+        # Rule 5 (forward only): every #test must have a matching #test-result by id.
+        # Orphan #test-result (with no #test) is intentionally NOT validated — extra result
+        # blocks are simply ignored at runtime, so commented-out examples in the doc don't
+        # break parsing. Symmetric pass belongs here if that trade-off changes.
         result_ids = {
             p['id'] for p in parsed
             if p['label'] == self._LABEL_TEST_RESULT and p['id']
@@ -640,7 +650,7 @@ class MarkdownDocTestBase(ABC):
             try:
                 req = urllib.request.Request(
                     url,
-                    headers={'User-Agent': 'cosdt-ci-test/quick-start-v2'},
+                    headers={'User-Agent': self.USER_AGENT},
                 )
                 with urllib.request.urlopen(req, timeout=30) as resp:
                     return resp.read().decode('utf-8')
@@ -702,20 +712,35 @@ class MarkdownDocTestBase(ABC):
     ) -> tuple[int, str, str]:
         """``bash -c`` + forced flush + on error dump all stderr (<= 256 KB).
 
-        On stdout error path dump first 2000 + last 2000 chars; stderr with error markers (``[ERROR]`` /
-        ``Traceback (most recent call last)`` / ``applicaiton exception`` /
-        ``ERR99999``) dumps everything (<= 256 KB), since error markers often sit in the middle of the traceback.
+        On stdout error path dump first 2000 + last 2000 chars; stderr matching any substring in
+        ``self.ERROR_MARKERS`` dumps everything (<= 256 KB), since error markers often sit in the
+        middle of the traceback. Subclasses extend ``ERROR_MARKERS`` for project-specific signatures.
+
+        On ``subprocess.TimeoutExpired`` the partial stdout/stderr carried on ``e`` is dumped using the same
+        rule before re-raising, so a timeout doesn't strand the reader with only a bare traceback.
         """
         self.log(f'CMD start (timeout={timeout}s): {cmd[:2000]}')
         t0 = time.time()
-        proc = subprocess.run(
-            ['bash', '-c', cmd],
-            env=env,
-            cwd=cwd,
-            capture_output=True,
-            check=False,
-            timeout=timeout,
-        )
+        try:
+            proc = subprocess.run(
+                ['bash', '-c', cmd],
+                env=env,
+                cwd=cwd,
+                capture_output=True,
+                check=False,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as e:
+            elapsed = time.time() - t0
+            partial_out = (e.stdout or b'').decode('utf-8', errors='replace')
+            partial_err = (e.stderr or b'').decode('utf-8', errors='replace')
+            self.log(
+                f'CMD TIMEOUT after {elapsed:.1f}s '
+                f'(stdout={len(partial_out)}B stderr={len(partial_err)}B); '
+                'dumping partial output before re-raising'
+            )
+            self._dump_command_output(partial_out, partial_err)
+            raise
         out = proc.stdout.decode('utf-8', errors='replace')
         err = proc.stderr.decode('utf-8', errors='replace')
         elapsed = time.time() - t0
@@ -724,32 +749,41 @@ class MarkdownDocTestBase(ABC):
             f'(stdout={len(out)}B stderr={len(err)}B)'
         )
 
-        error_markers = (
-            '[ERROR]', 'Traceback (most recent call last)',
-            'applicaiton exception', 'ERR99999',
-        )
-        stderr_has_error = any(m in err for m in error_markers)
+        stderr_has_error = any(m in err for m in self.ERROR_MARKERS)
         if proc.returncode != 0 or stderr_has_error \
                 or (out.strip() == '' and err.strip() != ''):
-            head_err = err[:2000]
-            tail_err = err[-2000:] if len(err) > 2000 else ''
-            if stderr_has_error and len(err) <= 256_000:
-                self.log(
-                    f'CMD stderr (full, {len(err)}B):\n{err.rstrip()}'
-                )
-            else:
-                if head_err:
-                    self.log(f'CMD stderr (head):\n{head_err.rstrip()}')
-                if tail_err and tail_err != head_err:
-                    self.log(f'CMD stderr (tail):\n{tail_err.rstrip()}')
-            head_out = out[:2000]
-            tail_out = out[-2000:] if len(out) > 2000 else ''
-            if head_out:
-                self.log(f'CMD stdout (head):\n{head_out.rstrip()}')
-            if tail_out and tail_out != head_out:
-                self.log(f'CMD stdout (tail):\n{tail_out.rstrip()}')
+            self._dump_command_output(out, err)
 
         return proc.returncode, out, err
+
+    def _dump_command_output(self, out: str, err: str) -> None:
+        """Apply the head / full / tail dump rule to already-decoded stdout/stderr.
+
+        Always dumps — caller is responsible for deciding whether to call this. stderr matching any
+        substring in ``self.ERROR_MARKERS`` dumps everything (<= 256 KB) since markers often sit
+        mid-traceback; otherwise head + tail of both streams (first/last 2000 chars). No-op when
+        both streams are empty.
+        """
+        if not out and not err:
+            return
+        stderr_has_error = any(m in err for m in self.ERROR_MARKERS)
+        head_err = err[:2000]
+        tail_err = err[-2000:] if len(err) > 2000 else ''
+        if stderr_has_error and len(err) <= 256_000:
+            self.log(
+                f'CMD stderr (full, {len(err)}B):\n{err.rstrip()}'
+            )
+        else:
+            if head_err:
+                self.log(f'CMD stderr (head):\n{head_err.rstrip()}')
+            if tail_err and tail_err != head_err:
+                self.log(f'CMD stderr (tail):\n{tail_err.rstrip()}')
+        head_out = out[:2000]
+        tail_out = out[-2000:] if len(out) > 2000 else ''
+        if head_out:
+            self.log(f'CMD stdout (head):\n{head_out.rstrip()}')
+        if tail_out and tail_out != head_out:
+            self.log(f'CMD stdout (tail):\n{tail_out.rstrip()}')
 
     def parse(self, text: str) -> tuple[list, dict]:
         """Parse + validate.

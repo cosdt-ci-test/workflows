@@ -298,6 +298,11 @@ jobs:
                    | jq -r '.tag_name // empty')
             [ -n "$ref" ] || { echo "ERROR: failed to resolve latest upstream release tag"; exit 1; }
             echo "monitor decision (manual override): ref=$ref need_to_test=true reason=manual"
+            {
+              echo "need_to_test='$need_to_test'"
+              echo "ref='$ref'"
+              echo "reason='$reason'"
+            } > "$DECISION_FILE"
           elif [ -f $DECISION_FILE ]; then
             . $DECISION_FILE
           fi

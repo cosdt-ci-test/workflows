@@ -268,7 +268,14 @@ class MarkdownDocTestBase(ABC):
     @staticmethod
     def _parse_params(param_strs: list[str]) -> dict[str, list[str]]:
         """Parse ``key='value'`` / ``key="value"`` tokens into a multi-value dict.
-        Value-less flags (e.g. ``disable_fuzzy``) are also accepted, with the value as ``['1']``."""
+
+        Value-less flags (those in ``_FLAG_PARAMS``, e.g. ``disable_fuzzy``) are accepted
+        only in their bare form — ``disable_fuzzy='false'`` is rejected. The consumer
+        (``_parse_block``) reads the flag's presence via ``bool(params.get(key))`` and
+        ignores any list contents, so a quoted ``'false'`` would silently flip semantics
+        from "the author wanted to disable" to "flag is set". Failing here keeps the
+        contract's "no value" promise visible at parse time.
+        """
         params: dict[str, list[str]] = {}
         for tok in param_strs:
             if '=' not in tok:
@@ -279,6 +286,13 @@ class MarkdownDocTestBase(ABC):
                     f"invalid parameter (no '='): {tok!r}"
                 )
             key, _, value = tok.partition('=')
+            # Flags are contractually value-less; reject ``flag='x'`` so the author's
+            # intent isn't silently inverted by ``bool(non-empty list) == True``.
+            if key in MarkdownDocTestBase._FLAG_PARAMS:
+                raise LabelSpecError(
+                    f"flag parameter {key!r} takes no value; write it "
+                    f"bare, got {tok!r}"
+                )
             # len(value) < 2 means only quotes, no content
             if len(value) < 2 or not (
                 (value.startswith("'") and value.endswith("'"))

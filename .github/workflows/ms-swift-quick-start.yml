@@ -302,6 +302,8 @@ jobs:
             . $DECISION_FILE
           fi
 
+          echo "reason=$reason" >> "$GITHUB_OUTPUT"
+
           if [ "$need_to_test" = "true" ]; then
             echo "need_to_test=true" >> "$GITHUB_OUTPUT"
             echo "test_ref=$ref" >> "$GITHUB_OUTPUT"
@@ -316,8 +318,6 @@ jobs:
             echo "need_to_test=false" >> "$GITHUB_OUTPUT"
             echo "No upstream changes - skipping install + test"
           fi
-
-          echo "reason=$reason" >> "$GITHUB_OUTPUT"
 
       - name: Run quick start test
         id: test

@@ -16,7 +16,7 @@ Atlas 900 A2 / A3 训练系列产品或者 Ascend 950 系列产品，并按需�
 - 可用的 CANN（参考[快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html)）
 - 与上面 CANN 匹配的 `torch` + `torch_npu`，且 `torch` 能正常 `import` 并 `torch.npu.is_available() == True`（参考 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch)，按 torch ↔ torch_npu ↔ CANN 三方兼容矩阵选择版本）
 
-完整 NPU 适配（镜像选择、DDP/DeepSpeed/MindSpeed、`vllm-ascend` 部署等）请参考 [NPU 最佳实践文档](../BestPractices/NPU-support.md)。
+完整 NPU 适配（镜像选择、DDP/DeepSpeed/MindSpeed、`vllm-ascend` 部署等）请参考 [NPU 最佳实践文档](https://github.com/modelscope/ms-swift/blob/main/docs/source/BestPractices/NPU-support.md)。
 
 ### 本文档示例使用的版本
 
@@ -43,7 +43,7 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | ms-swift | 本仓库当前 main 分支源码（`pip install -e .`） |
 | 模型 | [Qwen/Qwen3-4B-Instruct-2507](https://www.modelscope.cn/Qwen/Qwen3-4B-Instruct-2507) |
 | 数据集 | `AI-ModelScope/alpaca-gpt4-data-zh#500` + `AI-ModelScope/alpaca-gpt4-data-en#500` + `swift/self-cognition#500` |
-| 推理后端 | 本文 doc 默认 transformers / torch_npu（`--infer_backend transformers`）。vLLM-Ascend 加速推理不在本文档范围内，请参考 [NPU 最佳实践文档](../BestPractices/NPU-support.md#vllm-ascend)。 |
+| 推理后端 | 本文 doc 默认 transformers / torch_npu（`--infer_backend transformers`）。vLLM-Ascend 加速推理不在本文档范围内，请参考 [NPU 最佳实践文档](https://github.com/modelscope/ms-swift/blob/main/docs/source/BestPractices/NPU-support.md#vllm-ascend)。 |
 
 ### 检查前置是否满足
 
@@ -135,7 +135,7 @@ cd ms-swift && git checkout <ref>
 uv pip install -e .
 python -c "import swift; print('ms-swift', swift.__version__)"
 ```
-*\<ref> 由工作流注入的最新 release tag 替换*
+<ref> 为安装的最新的release 分支
 
 输出结果类似如下：
 
@@ -199,11 +199,11 @@ output/v0-20260101_120000-1234/checkpoint-5
 ```
 小贴士：
 
-- 如果要使用自定义数据集进行训练，你可以参考[这里](../Customization/Custom-dataset.md)组织数据集格式，并指定 `--dataset <dataset_path>`。
+- 如果要使用自定义数据集进行训练，你可以参考[这里](https://github.com/modelscope/ms-swift/blob/main/docs/source/Customization/Custom-dataset.md)组织数据集格式，并指定 `--dataset <dataset_path>`。
 - `--model_author` 和 `--model_name` 参数只有当数据集中包含 `swift/self-cognition` 时才生效。
 - 如果要使用其他模型进行训练，你只需要修改 `--model <model_id/model_path>` 即可。
 - 默认使用 **ModelScope** 进行模型和数据集的下载。如果要使用 HuggingFace，指定 `--use_hf true` 即可。
-- 训练启动前会自动应用 NPU 适配（`enable_npu_model_patch` 默认开启）。如需排查，参考 [NPU 最佳实践文档](../BestPractices/NPU-support.md) §"NPU 模型 Patch 开关"。
+- 训练启动前会自动应用 NPU 适配（`enable_npu_model_patch` 默认开启）。如需排查，参考 [NPU 最佳实践文档](https://github.com/modelscope/ms-swift/blob/main/docs/source/BestPractices/NPU-support.md) §"NPU 模型 Patch 开关"。
 
 ## 训练完成后推理
 

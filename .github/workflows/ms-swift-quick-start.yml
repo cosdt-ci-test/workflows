@@ -386,12 +386,12 @@ jobs:
               ;;
           esac
 
-          # REASON empty -> leave test_result / test_error unchanged so
-          # a still-pending failure keeps triggering a retry next cycle.
-          # REASON non-empty -> overwrite with this cycle's outcome
-          # (success or new failure); a retry doesn't need to know which
-          # side previously failed because the next cycle re-tests the
-          # same upstream commit either way.
+          # REASON is guaranteed non-empty here: this step's if: gates on
+          # need_to_test=true, which the decide step sets together with
+          # REASON in the same cycle. Overwriting test_result / test_error
+          # unconditionally is therefore safe -- there is no "REASON empty"
+          # branch to preserve. A retry on a still-pending failure is
+          # handled by the monitor step's TEST_RESULT=failure branch.
 
           last_release_id=""
           doc_hash=""

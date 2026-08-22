@@ -54,7 +54,7 @@
 - **单 workflow + matrix 枚举项目**：否决。每个 workflow 文件只能声明一组 cron，无法让不同项目有不同周期；各项目容器 options、设备挂载差异大，matrix 会退化成一张越来越稀疏的表。
 - **composite action**：否决。承载不了 `schedule` 触发器，也表达不了"测试 job 在 NPU runner、缓存 job 在 ubuntu-latest"这种跨 job 的输出接力。
 - **复制模板（copy-template）**：否决，且有实证——`templates/project-quick-start.yml`（283 行，v1 时代产物）就是复制模板路线的产物，它与线上 workflow 已经**严重漂移**：模板还是"三独立信号 + checkout target + force_install"的旧结构，而线上已演进为 release > doc > retry 信号链、跨 runner 缓存接力、v2 测试入口。复制模板修 bug 的成本 = N 次手工同步，漏同步已经实际发生过。
-- **reusable workflow（workflow_call）+ 薄触发器**（选定）：schedule 留在薄触发器；引擎 job 的 `runs-on` / `container` / `timeout-minutes` 引用 `inputs.*` 表达式（GitHub 支持）；其余变体运行期从 inputs / env 读。同仓库本地引用（`uses: ./.github/workflows/quick-start.yml`）与触发器同 commit，评审面一致。
+- **reusable workflow（workflow_call）+ 薄触发器**（选定）：schedule 留在薄触发器；引擎 job 的 `runs-on` / `container` / `timeout-minutes` 引用 `inputs.*` 表达式（GitHub 支持）；其余变体运行期从 inputs / env 读。同仓库本地引用（`uses: ./.github/workflows/quick-start-template.yml`）与触发器同 commit，评审面一致。
 
 ### 2.3 核心问题三：前置安装住哪——"双层前置"概念与环境变量分层
 
@@ -100,7 +100,7 @@ flowchart TD
     subgraph thin["薄触发器（每项目 ~40 行）"]
         CRON["cron / 无参 dispatch"] --> CALL["uses: quick-start.yml<br/>project / test_runner / image / options<br/>upstream_repo / doc_url / doc_path / test_command"]
     end
-    subgraph engine["看护引擎 quick-start.yml（reusable）"]
+    subgraph engine["看护引擎 quick-start-template.yml（reusable）"]
         subgraph rc["restore-cache @ ubuntu-latest"]
             R1["cache/restore<br/>restore-keys: monitor-state-&lt;project&gt;-"] --> R2["4 个状态字段 → job outputs"]
         end
@@ -251,7 +251,7 @@ jobs:
       test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1
 ```
 
-### 4.2 引擎（`.github/workflows/quick-start.yml`，reusable）
+### 4.2 引擎（`.github/workflows/quick-start-template.yml`，reusable）
 
 `on: workflow_call` + 4.1 的 inputs 定义。与现状的结构性差异只有七处：
 
@@ -299,10 +299,11 @@ class TestXxxQuickStart(MarkdownDocTestBase, unittest.TestCase):
 | `templates/project-quick-start.yml`（283 行陈旧复制模板） | 删除；README / guarding 文档的指引改为"复制薄触发器骨架" |
 | `test_quick_start_ascend.py` / `markdown_doc_test_base.py` / 文档 | 不动 |
 
-迁移两步，每步独立验证：
+迁移状态（2026-08-22 更新）：
 
-1. **引擎抽取 + ms-swift 触发器改写**。行为等价验证：一次 dispatch 全链路（测试跑通，result.json / artifact / 缓存 key 与旧值逐字段比对——`monitor-state-ms-swift-` 前缀不变，上轮失败标记与 doc hash 不丢）；再观察一轮 schedule（无信号时应 skip 且不产 result.json）。
-2. **第二项目试点**（`feat/add-project-transformers` / `feat/llama.cpp-quick-start` 分支已有雏形可作候选）：验证成本假设——新增项目只有薄触发器 + 测试子类 + 文档三个文件，引擎零改动；同时在 `projects.yaml` 登记。
+1. **引擎抽取 + ms-swift 切换：已完成**。引擎落地为 `.github/workflows/quick-start-template.yml`，ms-swift 薄触发器直接顶替原 `ms-swift-quick-start.yml`（硬切换，未走共存路线；旧单体实现留在 git 历史 ~4ee7f63）。缓存 key 前缀 `monitor-state-ms-swift-` 派生值不变，监控状态无缝延续。待验证项：一次 dispatch 全链路（result.json / artifact / 缓存逐字段对拍）+ 一轮 schedule 观察（无信号时应 skip 且不产 result.json）。
+2. **第二项目试点：待做**。llama.cpp / deepspeed / transformers 已各自带着**单体式** quick-start workflow 合入（复制路线的产物，各自内联 monitor 逻辑、actions@v4），是迁移到引擎的现成候选——每个项目改写为 ~80 行薄触发器 + 测试子类，引擎零改动。建议按"先迁移一个项目验证、再批量迁移"进行，同时确认各项目缓存 key 前缀不冲突（引擎统一为 `monitor-state-<project>-`）。
+3. **收尾清理：待做**。删除 `templates/project-quick-start.yml`（v1 陈旧复制模板，已确认无代码引用，仅 README.md:27 一句指引），README 指引改为"参考 `ms-swift-quick-start.yml` 薄触发器"。
 
 ## 5. 一致性校验
 
@@ -320,3 +321,4 @@ class TestXxxQuickStart(MarkdownDocTestBase, unittest.TestCase):
 | --- | --- | --- |
 | 2026-08-22 | 初版：三层结构（看护引擎 / 薄触发器+测试子类 / 文档契约）、reusable workflow + 薄触发器复用机制、"机器前置 / 文档安装"双层判据、"引擎默认 env + 钩子 env"两层环境契约、`project` input 统一命名空间、引擎抽取迁移步骤 | ms-swift 单项目看护流水线需要抽出公共部分成为公共模板，其他项目仅做镜像 / 环境变量 / 前置安装定制 |
 | 2026-08-22 | 显式化"双 runner 类别"：缓存读写 job（restore-cache / publish-and-persist）由引擎固定在 GitHub 托管 ubuntu-latest（无 inputs 通路），`runner` input 更名 `test_runner` 以自证仅作用于测试 job | 单一 `runner` input 易被误读为"一个 runner 解决所有 job"；自管 NPU runner 够不着 cache blob 存储，缓存 I/O 必须用官方机器读写同型进行 |
+| 2026-08-22 | 落地：引擎定名 `quick-start-template.yml`，ms-swift 薄触发器顶替原 `ms-swift-quick-start.yml`（硬切换而非共存）；迁移章节更新为实际状态，第二项目试点对象明确为已合入的单体式 llama.cpp / deepspeed / transformers quick-start workflow | 重组代码结构；llama.cpp / deepspeed / transformers 经 PR 合入，带来三个复制路线的单体 workflow，成为迁移引擎的现成候选 |

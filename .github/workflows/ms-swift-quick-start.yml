@@ -402,10 +402,8 @@ jobs:
           fi
 
           echo "outcome for ${REASON}: result=${RESULT} error=${ERROR}"
-          if [ -n "$REASON" ]; then
-            test_result="$RESULT"
-            test_error="$ERROR"
-          fi
+          test_result="$RESULT"
+          test_error="$ERROR"
 
           # ----- Write the merged cache file -----
           {

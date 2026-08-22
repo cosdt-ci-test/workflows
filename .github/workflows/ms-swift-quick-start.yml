@@ -431,7 +431,8 @@ jobs:
       # violated by a no-signal cycle).
       - name: Write result and summarize
         id: write-result
-        if: !cancelled() && steps.decide.outputs.need_to_test == 'true'
+        if: |
+          !cancelled() && steps.decide.outputs.need_to_test == 'true'
         env:
           # Route upstream step outputs through env so jq / printf
           # parameter-expand them; values containing shell-meta chars

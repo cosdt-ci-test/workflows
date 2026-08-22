@@ -274,9 +274,7 @@ jobs:
       # Schedule: source /tmp/.decision. workflow_dispatch forces
       # need_to_test=true and resolves the latest release tag itself -
       # NOT a hardcoded 'main' - so dispatch always tests the most
-      # recent upstream release. Only test_ref crosses the
-      # $GITHUB_OUTPUT boundary here; every other monitor output stays
-      # in /tmp/.decision until record-monitor-outcome sources it.
+      # recent upstream release.
       - name: Decide which ref to test
         id: decide
         env:
@@ -347,9 +345,9 @@ jobs:
           !cancelled() && github.event_name == 'schedule' &&
           steps.decide.outputs.need_to_test == 'true'
         env:
-          # REASON / REF come from /tmp/.decision (written by decide),
-          # not from any step's $GITHUB_OUTPUT - monitor outputs only
-          # surface in this step.
+          # REASON / REF come from /tmp/.decision — written by the
+          # monitor step on schedule, mirrored by decide's dispatch
+          # branch (542aa13).
           CONCLUSION: ${{ steps.test.conclusion }}
         run: |
           set -euo pipefail

@@ -86,7 +86,7 @@ jobs:
     outputs:
       result_json:             ${{ steps.write-result.outputs.result_json }}
       trigger:                 ${{ steps.write-result.outputs.trigger }}
-      reason:                  ${{ steps.record-monitor-outcome.outputs.reason }}
+      reason:                  ${{ steps.decide.outputs.reason }}
       job_status:              ${{ steps.write-result.outputs.job_status }}
       need_to_test:            ${{ steps.decide.outputs.need_to_test }}
       monitor_last_release_id: ${{ steps.record-monitor-outcome.outputs.monitor_last_release_id }}
@@ -298,11 +298,6 @@ jobs:
                    | jq -r '.tag_name // empty')
             [ -n "$ref" ] || { echo "ERROR: failed to resolve latest upstream release tag"; exit 1; }
             echo "monitor decision (manual override): ref=$ref need_to_test=true reason=manual"
-            {
-              echo "need_to_test='$need_to_test'"
-              echo "ref='$ref'"
-              echo "reason='$reason'"
-            } > "$DECISION_FILE"
           elif [ -f $DECISION_FILE ]; then
             . $DECISION_FILE
           fi
@@ -321,6 +316,8 @@ jobs:
             echo "need_to_test=false" >> "$GITHUB_OUTPUT"
             echo "No upstream changes - skipping install + test"
           fi
+
+          echo "reason=$reason" >> "$GITHUB_OUTPUT"
 
       - name: Run quick start test
         id: test
@@ -418,8 +415,6 @@ jobs:
             echo "test_error='$test_error'"
           } > "$MONITOR_FILE"
 
-          echo "reason=$REASON" >> "$GITHUB_OUTPUT"
-
           {
             echo "monitor_last_release_id=$last_release_id"
             echo "monitor_doc_hash=$doc_hash"
@@ -441,7 +436,7 @@ jobs:
           # parameter-expand them; values containing shell-meta chars
           # never get re-parsed by bash.
           TRIGGER:         ${{ github.event_name }}
-          REASON:          ${{ steps.record-monitor-outcome.outputs.reason }}
+          REASON:          ${{ steps.decide.outputs.reason }}
           TARGET_REPO:     'modelscope/ms-swift'
           TARGET_REF:      ${{ steps.decide.outputs.test_ref }}
           IMAGE:           ${{ env.CI_IMAGE }}

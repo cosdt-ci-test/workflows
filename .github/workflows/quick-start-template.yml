@@ -35,7 +35,7 @@
 #   NPU_READY           'true'; gates the project's E2E test class
 #   UV_* / PIP_*        cluster mirror defaults (overridable in hook)
 
-name: quick-start
+name: quick-start-template
 
 on:
   workflow_call:

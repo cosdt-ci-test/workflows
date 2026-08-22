@@ -18,8 +18,13 @@ a line-scan to fences inside ``block_html.raw`` to rescue setups inside comments
 parser (the v2 contract supports ``<!-- ```shell #test-setup ... ````<!-- ``` -->`` form inside
 comments, but no standard markdown library carves out the inner fence by itself).
 
-Subclasses only need to implement ``pre_process`` (get the markdown text) and ``post_process`` (cleanup),
-and may override ``DEFAULT_COMMAND_TIMEOUT`` (timeout seconds shared by all subprocesses, default 1800).
+Subclasses get ``pre_process`` (fetch markdown text from ``MONITORED_DOC_URL``) and
+``post_process`` (no-op cleanup) as working defaults; override either to swap doc
+source or add teardown. Typical customisation lives in ``setUpClass`` /
+``prepare_environment`` (env-specific install) plus a single
+``def test_runs_doc(self): self.run_template()`` entry.
+``DEFAULT_COMMAND_TIMEOUT`` (timeout seconds shared by all subprocesses, default 1800)
+may also be overridden.
 """
 
 from __future__ import annotations
@@ -827,6 +832,16 @@ class MarkdownDocTestBase(ABC):
                 text = text.replace(f'<{local}>', captures[store_var])
         return text
 
+    @staticmethod
+    def _literal_match(actual: str, expected: str) -> bool:
+        """Full-string literal match: \\A...\\Z anchor so actual doesn't pass via
+        substring overlap; ``\\n*\\Z`` allows trailing newlines in actual
+        (subprocess output always has one) so tests where expected has no
+        trailing ``\\n`` still pass."""
+        return re.search(
+            rf'\A{re.escape(expected)}\n*\Z', actual, re.DOTALL,
+        ) is not None
+
     def compare_output(
         self, actual: str, expected: str,
         fuzzy: str | tuple[str, ...] = (),
@@ -843,16 +858,7 @@ class MarkdownDocTestBase(ABC):
             disable_fuzzy=True       # disable all non-greedy matching, match literally
         """
         if disable_fuzzy:
-            # Fully literal match: no placeholder splitting on expected.
-            # Anchor to start + end (\\A...\\Z) so actual doesn't accidentally
-            # pass via substring overlap. ``\\n*\\Z`` allows trailing
-            # newlines in actual (subprocess output always has one) so
-            # tests where expected has no trailing \\n still pass.
-            return re.search(
-                rf'\A{re.escape(expected)}\n*\Z',
-                actual,
-                re.DOTALL,
-            ) is not None
+            return self._literal_match(actual, expected)
         # Split expected by all placeholders; join segments with non-greedy cross-line match.
         # ``str.split(sep)`` only supports a single sep, so use a regex split for many.
         # Placeholder order doesn't matter: split uses occurrence position.
@@ -862,12 +868,8 @@ class MarkdownDocTestBase(ABC):
         else:
             placeholders = list(fuzzy)
         if not placeholders:
-            # Fallback: empty fuzzy + non-disable_fuzzy = literal match, equivalent to disable_fuzzy
-            return re.search(
-                rf'\A{re.escape(expected)}\n*\Z',
-                actual,
-                re.DOTALL,
-            ) is not None
+            # Empty fuzzy + non-disable_fuzzy -> literal match (same as disable_fuzzy)
+            return self._literal_match(actual, expected)
         sep_pattern = '|'.join(re.escape(p) for p in placeholders)
         parts = re.split(sep_pattern, expected)
         pattern = r'.*?'.join(re.escape(part) for part in parts)

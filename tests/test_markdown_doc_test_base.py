@@ -313,6 +313,27 @@ class TestValidateRules(unittest.TestCase):
                 _parse(text)
             self.assertIn('disable_fuzzy', str(cm.exception))
 
+    def test_disable_fuzzy_with_value_rejected(self):
+        """``disable_fuzzy='false'`` / ``='true'`` 必须报错（flag 无值，契约强制 fail-fast）。
+
+        关键点：作者写 ``disable_fuzzy='false'`` 通常是想关掉字面匹配、回到默认 fuzzy，
+        但旧解析器把 ``'false'`` 存进 list，下游 ``bool(list)`` 恒为 True，语义被静默翻转
+        成"开启字面匹配"。修复后任一带 ``=`` 的写法都在 ``_parse_params`` 阶段抛
+        ``LabelSpecError``，避免静默 bug。
+        """
+        for val in ("'false'", "'true'", '"false"', '"true"'):
+            text = (
+                '```shell #test-result id="x" '
+                f'disable_fuzzy={val}\n'
+                'a\n```\n'
+            )
+            with self.assertRaises(LabelSpecError) as cm:
+                _parse(text)
+            # 错误信息要明确指出 "flag 无值"，而不是降级成"值未引号"——后者
+            # 会让作者以为修个引号就完事了。
+            self.assertIn('flag parameter', str(cm.exception))
+            self.assertIn('takes no value', str(cm.exception))
+
     def test_rule11_load_after_store_ok(self):
         """load 引用的 store 在更早位置出现则通过。"""
         text = (

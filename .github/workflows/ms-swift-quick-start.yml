@@ -179,14 +179,7 @@ jobs:
         run: |
           set -euo pipefail
           STATE_DIR=".monitor-state"
-          mkdir -p "$STATE_DIR"
           DECISION_FILE="/tmp/.decision"
-          LOCAL_MONITOR="/tmp/.monitor"
-          # Release and doc signals share one merged cache file -
-          # test_result / test_error don't track which side fired
-          # because a retry re-runs the same upstream commit either
-          # way, and REASON tells the consumer which side triggered
-          # the current cycle.
           MONITOR_FILE="$STATE_DIR/.monitor"
 
           # Default all four keys so set -u stays safe when the cache is cold
@@ -199,11 +192,7 @@ jobs:
             echo "MONITOR_FILE exist"
             . "$MONITOR_FILE"
           fi
-          LAST_RELEASE_ID="$last_release_id"
-          DOC_HASH="$doc_hash"
-          TEST_RESULT="$test_result"
-          TEST_ERROR="$test_error"
-          echo "monitor cache: release(id=$LAST_RELEASE_ID) doc(hash=$DOC_HASH) test(result=$TEST_RESULT error=$TEST_ERROR)"
+          echo "monitor cache: release(id=$last_release_id) doc(hash=$doc_hash) test(result=$test_result error=$test_error)"
 
           # ----- release signal -----
           curl -fsSL --retry 3 \
@@ -215,16 +204,16 @@ jobs:
           REF=""
           REASON=""
           SKIP_DOC="false"
-          echo "monitor: upstream latest release id=$CURRENT_RELEASE_ID tag=$CURRENT_RELEASE_TAG (cached last_release_id=$LAST_RELEASE_ID)"
-          if [ -n "$CURRENT_RELEASE_ID" ] && [ "$LAST_RELEASE_ID" != "$CURRENT_RELEASE_ID" ]; then
-            LAST_RELEASE_ID="$CURRENT_RELEASE_ID"
+          echo "monitor: upstream latest release id=$CURRENT_RELEASE_ID tag=$CURRENT_RELEASE_TAG (cached last_release_id=$last_release_id)"
+          if [ -n "$CURRENT_RELEASE_ID" ] && [ "$last_release_id" != "$CURRENT_RELEASE_ID" ]; then
+            last_release_id="$CURRENT_RELEASE_ID"
             NEED_TO_TEST="true"
             REF="$CURRENT_RELEASE_TAG"
             REASON="release"
             SKIP_DOC="true"
             echo "monitor: release signal FIRED (id=$CURRENT_RELEASE_ID tag=$CURRENT_RELEASE_TAG)"
           else
-            echo "monitor: release signal not fired (current=$CURRENT_RELEASE_ID cached=$LAST_RELEASE_ID)"
+            echo "monitor: release signal not fired (current=$CURRENT_RELEASE_ID cached=$last_release_id)"
           fi
 
           # ----- doc signal (only if release didn't fire) -----
@@ -238,8 +227,8 @@ jobs:
             if ! CURRENT_DOC_HASH=$(curl -fsSL --retry 3 --max-time 30 "$DOC_URL" \
                                     | sha256sum | cut -d' ' -f1); then
               echo "monitor: doc signal not fired (fetch failed; release signal, if any, still drives the cycle)"
-            elif [ "$DOC_HASH" != "$CURRENT_DOC_HASH" ]; then
-              DOC_HASH="$CURRENT_DOC_HASH"
+            elif [ "$doc_hash" != "$CURRENT_DOC_HASH" ]; then
+              doc_hash="$CURRENT_DOC_HASH"
               NEED_TO_TEST="true"
               REF="$CURRENT_RELEASE_TAG"
               REASON="doc"
@@ -255,25 +244,25 @@ jobs:
           # Triggered when neither release nor doc signal changed but
           # the previous cycle's outcome was failure. REASON stays
           # 'release' / 'doc' / empty above; this only sets 'retry'.
-          if [ "$NEED_TO_TEST" = "false" ] && [ "$TEST_RESULT" = "failure" ]; then
+          if [ "$NEED_TO_TEST" = "false" ] && [ "$test_result" = "failure" ]; then
             NEED_TO_TEST="true"
             REF="$CURRENT_RELEASE_TAG"
             REASON="retry"
             echo "monitor: retry signal FIRED (previous cycle test_result=failure)"
           else
-            echo "monitor: retry signal not fired (need_to_test=$NEED_TO_TEST test_result=${TEST_RESULT:-none})"
+            echo "monitor: retry signal not fired (need_to_test=$NEED_TO_TEST test_result=${test_result:-none})"
           fi
 
           # Values are single-quoted so literals like 'none' and any
           # shell-meta chars round-trip safely when record-monitor-
           # outcome sources this file via `.`.
           {
-            echo "last_release_id='$LAST_RELEASE_ID'"
-            echo "doc_hash='$DOC_HASH'"
-            echo "test_result='$TEST_RESULT'"
-            echo "test_error='$TEST_ERROR'"
-          } > "$LOCAL_MONITOR"
-          echo "monitor state: release(id=$LAST_RELEASE_ID) doc(hash=$DOC_HASH) test(result=$TEST_RESULT error=$TEST_ERROR)"
+            echo "last_release_id='$last_release_id'"
+            echo "doc_hash='$doc_hash'"
+            echo "test_result='$test_result'"
+            echo "test_error='$test_error'"
+          } > "$MONITOR_FILE"
+          echo "monitor state: release(id=$last_release_id) doc(hash=$doc_hash) test(result=$test_result error=$test_error)"
 
           {
             echo "need_to_test='$NEED_TO_TEST'"
@@ -353,7 +342,7 @@ jobs:
       - name: Record monitor outcome
         id: record-monitor-outcome
         if: |
-          github.event_name == 'schedule' &&
+          !cancelled() && github.event_name == 'schedule' &&
           steps.decide.outputs.need_to_test == 'true'
         env:
           # REASON / REF come from /tmp/.decision (written by decide),
@@ -363,23 +352,17 @@ jobs:
         run: |
           set -euo pipefail
           DECISION_FILE="/tmp/.decision"
-          LOCAL_MONITOR="/tmp/.monitor"
-
           STATE_DIR=".monitor-state"
-          mkdir -p "$STATE_DIR"
           MONITOR_FILE="$STATE_DIR/.monitor"
 
           # Defaults so set -u stays safe when DECISION_FILE is absent.
-          changed="false"
           reason=""
           ref=""
 
           if [ -f $DECISION_FILE ]; then
             . $DECISION_FILE
           fi
-          CHANGED="$changed"
           REASON="$reason"
-          REF="$ref"
 
           # ----- Map test conclusion to outcome -----
           case "$CONCLUSION" in
@@ -419,9 +402,6 @@ jobs:
           if [ -f "$MONITOR_FILE" ]; then
             . "$MONITOR_FILE"
           fi
-          if [ -f $LOCAL_MONITOR ]; then
-            . $LOCAL_MONITOR
-          fi
 
           echo "outcome for ${REASON}: result=${RESULT} error=${ERROR}"
           test_result="$RESULT"
@@ -451,7 +431,7 @@ jobs:
       # violated by a no-signal cycle).
       - name: Write result and summarize
         id: write-result
-        if: steps.decide.outputs.need_to_test == 'true'
+        if: !cancelled() && steps.decide.outputs.need_to_test == 'true'
         env:
           # Route upstream step outputs through env so jq / printf
           # parameter-expand them; values containing shell-meta chars
@@ -579,7 +559,7 @@ jobs:
         # Schedule only: dispatch must not write monitor state,
         # otherwise it would clobber the cached failure flag the
         # next schedule cycle uses to decide whether to retry.
-        if: github.event_name == 'schedule' && needs.test.outputs.need_to_test == 'true'
+        if: github.event_name == 'schedule' && needs.test.outputs.need_to_test == 'true' && needs.test.outputs.reason != ''
         env:
           monitor_last_release_id: ${{ needs.test.outputs.monitor_last_release_id }}
           monitor_doc_hash:        ${{ needs.test.outputs.monitor_doc_hash }}
@@ -603,7 +583,7 @@ jobs:
       # entry with the same key, so a static key would silently no-op
       # every save after the first.
       - name: Persist monitor state to cache
-        if: github.event_name == 'schedule' && needs.test.outputs.need_to_test == 'true'
+        if: github.event_name == 'schedule' && needs.test.outputs.need_to_test == 'true' && needs.test.outputs.reason != ''
         uses: actions/cache/save@v6
         with:
           path: .monitor-state

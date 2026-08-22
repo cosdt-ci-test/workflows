@@ -346,8 +346,8 @@ jobs:
           steps.decide.outputs.need_to_test == 'true'
         env:
           # REASON / REF come from /tmp/.decision — written by the
-          # monitor step on schedule, mirrored by decide's dispatch
-          # branch (542aa13).
+          # monitor step on schedule. (decide's dispatch branch no
+          # longer writes it: c87d2b2 made decide own the output.)
           CONCLUSION: ${{ steps.test.conclusion }}
         run: |
           set -euo pipefail

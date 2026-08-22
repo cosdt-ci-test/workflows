@@ -53,7 +53,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     ``#test-result``."""
 
     DEFAULT_COMMAND_TIMEOUT = 1200  # 20 min: long enough for swift sft 5-step, short enough to fail fast on hangs
-    USER_AGENT = 'cosdt-ci-test/quick-start-v2'  # monitored source is the fork under cosdt-ci-test org
+    USER_AGENT = 'cosdt-ci-test/quick-start'  # monitored source is the fork under cosdt-ci-test org
     ERROR_MARKERS = (
         *MarkdownDocTestBase.ERROR_MARKERS,  # generic [ERROR] + Traceback
         'applicaiton exception',  # CANN toolkit emits this typo (sic) in its Python driver

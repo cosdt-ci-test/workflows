@@ -110,7 +110,6 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
     # Cluster-internal nginx PyPI cache + Huawei Cloud ascend dual-source.
     _CLUSTER_INDEX = 'http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple'
-    _CLUSTER_TRUSTED = 'cache-service.nginx-pypi-cache.svc.cluster.local'
     _ASCEND_EXTRA = 'https://repo.huaweicloud.com/ascend/repos/pypi'
 
     # CANN toolkit: source once to get ASCEND_HOME / LD_LIBRARY_PATH etc.
@@ -205,7 +204,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 check=True,
             )
 
-        # 4) transformers / peft: hard-pinned versions from the doc table.
+        # 4) transformers / peft: upper bounds from the doc table.
         subprocess.run(
             ['python', '-m', 'pip', 'install', 'transformers<5.0', 'peft<0.19'],
             check=True,

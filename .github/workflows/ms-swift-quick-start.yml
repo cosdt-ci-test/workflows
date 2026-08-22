@@ -378,10 +378,6 @@ jobs:
               RESULT="failure"
               ERROR="prior step failed before test could run"
               ;;
-            cancelled)
-              RESULT="failure"
-              ERROR="job cancelled"
-              ;;
             *)
               RESULT="failure"
               ERROR="unknown conclusion (${CONCLUSION})"
@@ -404,8 +400,10 @@ jobs:
           fi
 
           echo "outcome for ${REASON}: result=${RESULT} error=${ERROR}"
-          test_result="$RESULT"
-          test_error="$ERROR"
+          if [ -n "$REASON" ]; then
+            test_result="$RESULT"
+            test_error="$ERROR"
+          fi
 
           # ----- Write the merged cache file -----
           {

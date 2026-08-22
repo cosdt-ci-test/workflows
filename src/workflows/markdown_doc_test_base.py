@@ -7,7 +7,7 @@ The contract is defined in docs/markdown_doc_test_label.md: every code block's i
 * Parsing (``parse`` -> mistune AST + inner fence re-scan + ``_parse_block`` ->
   ``_fold``) returns the ``SetupCommand`` / ``TestCommand`` main sequence +
   the ``TestExpectedOutput`` registry;
-* Validation (``_validate``) is embedded in parsing; rules 2/5/7/10/11 violations raise ``LabelSpecError``;
+* Validation (``_validate``) is embedded in parsing; rules 2/5/7/10 + load-store ordering violations raise ``LabelSpecError``;
 * Execution (``execute``) runs commands in document order; ``SetupCommand`` captures stdout into
   ``captures``; ``TestCommand`` substitutes ``<local>`` placeholders then runs, then looks up by id in
   ``TestExpectedOutput`` for comparison;
@@ -112,7 +112,7 @@ class TestExpectedOutput:
     and any of them appearing in expected is treated as a wildcard.
     When ``disable_fuzzy=True``, all placeholders (including the default ``...``) are matched literally.
     ``__post_init__`` validates: required fields non-empty, fuzzy items non-empty strings,
-    fuzzy must be empty when ``disable_fuzzy=True`` (parse-time rule 16 already blocks this; defensive fallback here).
+    fuzzy must be empty when ``disable_fuzzy=True`` (parse-time #test-result 扩展规则 3 already blocks this; defensive fallback here).
     """
 
     id: str
@@ -405,7 +405,7 @@ class MarkdownDocTestBase(ABC):
 
         disable_fuzzy = bool(params.get('disable_fuzzy'))
         # fuzzy= and disable_fuzzy are mutually exclusive: the former wants placeholders, the latter explicitly cancels,
-        # doc rule 3 explicitly says writing both together is an error.
+        # #test-result 扩展规则 3 explicitly says writing both together is an error.
         if disable_fuzzy and fuzzies:
             raise LabelSpecError(
                 "disable_fuzzy conflicts with fuzzy=: pick one"
@@ -431,7 +431,7 @@ class MarkdownDocTestBase(ABC):
         # the fuzzy field auto-contains '...'. Treat '...' as a member of the placeholder set uniformly,
         # the dataclass self-describes all placeholders in effect for a block; compare_output
         # reads this field directly (no need to embed the default).
-        # Note: fuzzy= and disable_fuzzy are mutually exclusive (rule 16); here when disable_fuzzy is true
+        # Note: fuzzy= and disable_fuzzy are mutually exclusive (#test-result 扩展规则 3); here when disable_fuzzy is true
         # fuzzies must be empty, so "fuzzies empty && disable_fuzzy true" is equivalent to "disable",
         # no default is added.
         if (
@@ -818,7 +818,7 @@ class MarkdownDocTestBase(ABC):
     ) -> str:
         """Substitute ``<local>`` with ``captures[store_var]``.
 
-        When ``store_var`` is not in ``captures``, the placeholder is kept verbatim (rule 11 validates at parse time
+        When ``store_var`` is not in ``captures``, the placeholder is kept verbatim (load-store ordering validates at parse time
         that load references must come after store, so theoretically it always hits; keeping the literal lets bash err rather than
         silently substituting an empty string, which is easier to diagnose.
         """
@@ -838,7 +838,7 @@ class MarkdownDocTestBase(ABC):
         Callers must provide the full placeholder set — the runner pulls from ``TestExpectedOutput.fuzzy``
         directly; unit test callers decide what to pass. Common usage:
 
-            fuzzy=('...',)           # default, empty fuzzies auto-injected
+            fuzzy=('...',)           # not auto-injected here; () means literal match -- the default lives in _parse_block
             fuzzy=('xxx', 'yyy')     # multiple custom placeholders
             disable_fuzzy=True       # disable all non-greedy matching, match literally
         """

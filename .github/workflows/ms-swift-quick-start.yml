@@ -86,7 +86,7 @@ jobs:
     outputs:
       result_json:             ${{ steps.write-result.outputs.result_json }}
       trigger:                 ${{ steps.write-result.outputs.trigger }}
-      reason:                  ${{ steps.record-monitor-outcome.outputs.reason }}
+      reason:                  ${{ steps.decide.outputs.reason }}
       job_status:              ${{ steps.write-result.outputs.job_status }}
       need_to_test:            ${{ steps.decide.outputs.need_to_test }}
       monitor_last_release_id: ${{ steps.record-monitor-outcome.outputs.monitor_last_release_id }}
@@ -302,6 +302,8 @@ jobs:
             . $DECISION_FILE
           fi
 
+          echo "reason=$reason" >> "$GITHUB_OUTPUT"
+
           if [ "$need_to_test" = "true" ]; then
             echo "need_to_test=true" >> "$GITHUB_OUTPUT"
             echo "test_ref=$ref" >> "$GITHUB_OUTPUT"
@@ -378,22 +380,18 @@ jobs:
               RESULT="failure"
               ERROR="prior step failed before test could run"
               ;;
-            cancelled)
-              RESULT="failure"
-              ERROR="job cancelled"
-              ;;
             *)
               RESULT="failure"
               ERROR="unknown conclusion (${CONCLUSION})"
               ;;
           esac
 
-          # REASON empty -> leave test_result / test_error unchanged so
-          # a still-pending failure keeps triggering a retry next cycle.
-          # REASON non-empty -> overwrite with this cycle's outcome
-          # (success or new failure); a retry doesn't need to know which
-          # side previously failed because the next cycle re-tests the
-          # same upstream commit either way.
+          # REASON is guaranteed non-empty here: this step's if: gates on
+          # need_to_test=true, which the decide step sets together with
+          # REASON in the same cycle. Overwriting test_result / test_error
+          # unconditionally is therefore safe -- there is no "REASON empty"
+          # branch to preserve. A retry on a still-pending failure is
+          # handled by the monitor step's TEST_RESULT=failure branch.
 
           last_release_id=""
           doc_hash=""
@@ -414,8 +412,6 @@ jobs:
             echo "test_result='$test_result'"
             echo "test_error='$test_error'"
           } > "$MONITOR_FILE"
-
-          echo "reason=$REASON" >> "$GITHUB_OUTPUT"
 
           {
             echo "monitor_last_release_id=$last_release_id"
@@ -438,7 +434,7 @@ jobs:
           # parameter-expand them; values containing shell-meta chars
           # never get re-parsed by bash.
           TRIGGER:         ${{ github.event_name }}
-          REASON:          ${{ steps.record-monitor-outcome.outputs.reason }}
+          REASON:          ${{ steps.decide.outputs.reason }}
           TARGET_REPO:     'modelscope/ms-swift'
           TARGET_REF:      ${{ steps.decide.outputs.test_ref }}
           IMAGE:           ${{ env.CI_IMAGE }}

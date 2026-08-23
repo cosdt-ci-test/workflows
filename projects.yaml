@@ -37,3 +37,13 @@ projects:
     workflows:
       examples: .github/workflows/transformers-examples.yml
       quick_start: .github/workflows/transformers-quick-start.yml
+  - name: ray
+    category: 推理加速
+    support_level: 基础支持
+    upstream_repo: ray-project/ray
+    phase: A
+    runner: linux-aarch64-a2-2
+    dir: projects/ray
+    workflows:
+      examples: .github/workflows/ray-examples.yml
+      quick_start: .github/workflows/ray-quick-start.yml

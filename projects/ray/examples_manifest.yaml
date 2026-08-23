@@ -1,0 +1,21 @@
+version: 1
+scan:
+  paths:
+    - python/ray/tests/accelerators/test_npu.py
+    - python/ray/train/tests/test_torch_device_manager.py
+supported:
+  - path: python/ray/tests/accelerators/test_npu.py
+    profile: core
+    runner: linux-aarch64-a2-1
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    timeout_minutes: 60
+  - path: python/ray/train/tests/test_torch_device_manager.py
+    profile: train
+    runner: linux-aarch64-a2-2
+    npu_devices: '0,1'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - -k test_npu_device_manager
+    timeout_minutes: 120
+unsupported: []

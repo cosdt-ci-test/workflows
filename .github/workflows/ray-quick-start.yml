@@ -1,0 +1,43 @@
+# Ray Ascend quick-start guard. Project-specific values live here; monitor,
+# retry, cache relay, result validation and artifact upload use the shared engine.
+name: ray-quick-start
+
+concurrency:
+  group: ${{ github.event_name == 'schedule' && 'ray-quick-start-schedule' || format('manual-{0}', github.run_id) }}
+  cancel-in-progress: false
+
+on:
+  # Enable after the first successful workflow_dispatch run.
+  # schedule:
+  #   - cron: '45 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ray-quick-start:
+    uses: ./.github/workflows/quick-start-template.yml
+    with:
+      project: ray
+      test_runner: '["linux-aarch64-a2-2"]'
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+      container_options: >-
+        --shm-size=64g
+        --device=/dev/davinci0
+        --device=/dev/davinci1
+        --device=/dev/davinci_manager
+        --device=/dev/devmm_svm
+        --device=/dev/hisi_hdc
+        --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
+        --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
+        --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
+        --volume=/data/ci-cache/pip:/root/.cache/pip
+      timeout_minutes: 120
+      upstream_repo: ray-project/ray
+      doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/ray/docs/Quick-start-Ascend.md
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/ray/docs/Quick-start-Ascend.md
+      # mistune is imported before the project test's setUpClass hook runs.
+      test_command: >-
+        python -m pip install -q 'mistune>=3,<4' &&
+        python -m unittest tests.test_quick_start_ascend -v 2>&1

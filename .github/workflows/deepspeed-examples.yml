@@ -254,7 +254,7 @@ jobs:
     container:
       image: ${{ matrix.example.image }}
       options: >-
-        --shm-size=64g
+        --privileged --shm-size=64g
         ${{ matrix.example.device_options }}
         --device=/dev/davinci_manager --device=/dev/devmm_svm --device=/dev/hisi_hdc
         --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro

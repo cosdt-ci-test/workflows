@@ -34,6 +34,7 @@ import unittest
 
 from workflows.markdown_doc_test_base import MarkdownDocTestBase
 from workflows.modelscope_cache import (
+    ensure_safetensors,
     purge_corrupt_models,
     resolve_modelscope_cache,
 )
@@ -210,13 +211,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         # 4) safetensors: native loader used by the cache validation
         # step below. Pulled in transitively by torch on most images;
         # install defensively in case the CANN base ships without it.
-        try:
-            import safetensors  # noqa: F401
-        except ImportError:
-            subprocess.run(
-                ['python', '-m', 'pip', 'install', 'safetensors'],
-                check=True,
-            )
+        ensure_safetensors()
 
         # 5) Cache validation: persistent host-side bind mount can hold
         # truncated safetensors from interrupted runs. Walk every shard

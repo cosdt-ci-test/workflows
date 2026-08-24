@@ -42,7 +42,30 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 from pathlib import Path
+
+
+def ensure_safetensors() -> None:
+    """Defensively install ``safetensors`` if not already importable.
+
+    The CANN base image used by the runner may not ship
+    ``safetensors``; torch < 4.20 doesn't hard-depend on it. The
+    validation helpers below need it, so callers should invoke
+    this once in their ``prepare_environment`` before
+    ``purge_corrupt_models``. No-op when already installed.
+
+    Inherits the parent env, so any ``PIP_INDEX_URL`` /
+    ``PIP_CONSTRAINT`` / ``UV_*`` configured by the workflow
+    carries through to the install.
+    """
+    try:
+        import safetensors  # noqa: F401
+    except ImportError:
+        subprocess.run(
+            ['python', '-m', 'pip', 'install', 'safetensors'],
+            check=True,
+        )
 
 
 def resolve_modelscope_cache() -> Path:
@@ -62,12 +85,13 @@ def safetensors_header_ok(path: Path) -> bool:
     tensor offsets fit within the file). ``SafetensorError`` or
     ``OSError`` means the shard is unusable.
 
-    Lazy import: callers should install ``safetensors`` defensively
-    in their ``prepare_environment`` (the CANN base image may ship
-    without it; torch >= 4.20 is the first version that hard-deps
-    on it). The module itself loads fine on machines that don't
-    have safetensors installed yet — the import only fires when a
-    caller actually invokes this function."""
+    Lazy import: the module itself loads fine on machines that
+    don't have ``safetensors`` installed yet — the import only
+    fires when a caller actually invokes this function. Callers
+    should run ``ensure_safetensors()`` once first if they intend
+    to call this in an environment where ``safetensors`` may be
+    missing.
+    """
     from safetensors import safe_open, SafetensorError  # noqa: I001
     try:
         with safe_open(str(path), framework='pt') as f:

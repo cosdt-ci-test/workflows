@@ -190,32 +190,46 @@ def block_kind(cmd: str) -> str:
     return 'default'
 
 
-_SKIP_E2E = os.environ.get('LLAMA_CPP_NPU_E2E', '0') != '1'
+def _e2e_enabled() -> bool:
+    return os.environ.get('NPU_READY', '').strip().lower() == 'true'
 
 
 @unittest.skipIf(
-    _SKIP_E2E,
-    'end-to-end tests require NPU runner; set LLAMA_CPP_NPU_E2E=1 to run')
+    not _e2e_enabled(),
+    'end-to-end tests require NPU runner; set NPU_READY=true to run')
 class TestQuickStartAscendEndToEnd(unittest.TestCase):
     doc_path: str
     steps: list[dict]
 
     @classmethod
     def setUpClass(cls):
+        path_dirs = '/usr/local/sbin:/usr/local/bin'
+        os.environ['PATH'] = f'{path_dirs}:{os.environ.get("PATH", "")}'
+        cann_set_env = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
+        merged = subprocess.run(
+            ['bash', '-c', f'set -e; source {cann_set_env} >/dev/null 2>&1; env'],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        for line in merged.stdout.splitlines():
+            if '=' not in line:
+                continue
+            key, _, value = line.partition('=')
+            os.environ[key] = value
+        _log(f'setUpClass: sourced CANN environment from {cann_set_env}')
+
         _log(f'setUpClass: fetching doc from {os.environ.get("MONITORED_DOC_URL", "<unset>")}')
         cls.doc_text, cls.doc_path = fetch_doc_text()
         _log(f'setUpClass: fetched doc ({len(cls.doc_text)} bytes)')
         cls.upstream_ref = os.environ.get('UPSTREAM_REF', '')
-        cls.upstream_commit = os.environ.get('UPSTREAM_COMMIT', '')
-        if not cls.upstream_ref or not cls.upstream_commit:
+        if not cls.upstream_ref:
             raise unittest.SkipTest(
-                'end-to-end requires UPSTREAM_REF and UPSTREAM_COMMIT '
-                '(set by the CI workflow)')
+                'end-to-end requires UPSTREAM_REF (set by the CI workflow)')
         os.environ.setdefault('UPSTREAM_REF', cls.upstream_ref)
-        os.environ.setdefault('UPSTREAM_COMMIT', cls.upstream_commit)
-        _log(f'setUpClass: upstream ref={cls.upstream_ref} commit={cls.upstream_commit[:12]}')
+        _log(f'setUpClass: upstream ref={cls.upstream_ref}')
         cls.doc_text = cls.doc_text.replace(
-            '<UPSTREAM_REF>', cls.upstream_commit)
+            '<UPSTREAM_REF>', cls.upstream_ref)
         cls.steps = parse_blocks(cls.doc_text)
         _log(f'setUpClass: parsed {len(cls.steps)} steps')
         if not cls.steps:
@@ -225,7 +239,6 @@ class TestQuickStartAscendEndToEnd(unittest.TestCase):
     def test_runs_quick_start(self):
         env = os.environ.copy()
         env['UPSTREAM_REF'] = self.upstream_ref
-        env['UPSTREAM_COMMIT'] = self.upstream_commit
 
         if WORK_DIR.exists():
             shutil.rmtree(WORK_DIR)

@@ -8,7 +8,3 @@ root's ``src/`` (typically by each project's ``tests/__init__.py``).
 Framework dependencies (mistune) are installed by the common
 quick-start workflow template, not at import time here.
 """
-
-from __future__ import annotations
-
-__version__ = '0.1.0'

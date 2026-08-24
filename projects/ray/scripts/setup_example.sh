@@ -9,12 +9,35 @@ fi
 
 PROFILE="$1"
 TARGET_ROOT="${TARGET_ROOT:?TARGET_ROOT is required}"
+TORCH_VERSION=2.9.0
+TORCH_NPU_VERSION=2.9.0.post2
+ASCEND_PIP_INDEX=https://repo.huaweicloud.com/ascend/repos/pypi
 
 source_cann() {
   export PATH="/usr/local/sbin:$PATH"
   # The selected CANN container provides this file.
   # shellcheck disable=SC1091
   source /usr/local/Ascend/ascend-toolkit/set_env.sh
+}
+
+ensure_torch_stack() {
+  if python -c "
+import torch, torch_npu
+raise SystemExit(
+    0 if torch.__version__.startswith('${TORCH_VERSION}')
+    and torch_npu.__version__.startswith('${TORCH_NPU_VERSION}')
+    else 1
+)
+"; then
+    echo "reusing torch ${TORCH_VERSION} / torch_npu ${TORCH_NPU_VERSION} stack"
+  else
+    echo "installing torch==${TORCH_VERSION} torch_npu==${TORCH_NPU_VERSION}"
+    python -m pip install \
+      --extra-index-url "$ASCEND_PIP_INDEX" \
+      "torch==${TORCH_VERSION}" \
+      "torch_npu==${TORCH_NPU_VERSION}"
+  fi
+  python -c 'import torch, torch_npu; assert torch.npu.is_available(); print(torch.__version__, torch_npu.__version__, torch.npu.device_count())'
 }
 
 ray_version() {
@@ -72,8 +95,7 @@ setup_core() {
 }
 
 setup_train() {
-  source_cann
-  python -c 'import torch, torch_npu; assert torch.npu.is_available(); print(torch.__version__, torch_npu.__version__)'
+  ensure_torch_stack
   install_target_ray train
 }
 

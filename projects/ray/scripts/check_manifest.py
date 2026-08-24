@@ -12,7 +12,9 @@ import yaml
 
 
 _WORKFLOWS_ROOT = Path(__file__).resolve().parents[3]
-_COMMON_PATH = _WORKFLOWS_ROOT / "scripts" / "check_examples_manifest.py"
+_COMMON_DIR = _WORKFLOWS_ROOT / "scripts"
+_COMMON_PATH = _COMMON_DIR / "check_examples_manifest.py"
+sys.path.insert(0, str(_COMMON_DIR))
 _SPEC = importlib.util.spec_from_file_location(
     "common_examples_manifest", _COMMON_PATH
 )

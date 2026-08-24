@@ -40,7 +40,7 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | transformers | `<5.0` |
 | peft | `<0.19` |
 | modelscope | 1.37.0 |
-| ms-swift | 本仓库当前 main 分支源码（`pip install -e .`） |
+| ms-swift | 最新 release 的源码/二进制 |
 | 模型 | [Qwen/Qwen3-4B-Instruct-2507](https://www.modelscope.cn/Qwen/Qwen3-4B-Instruct-2507) |
 | 数据集 | `AI-ModelScope/alpaca-gpt4-data-zh#500` + `AI-ModelScope/alpaca-gpt4-data-en#500` + `swift/self-cognition#500` |
 | 推理后端 | 本文 doc 默认 transformers / torch_npu（`--infer_backend transformers`）。vLLM-Ascend 加速推理不在本文档范围内，请参考 [NPU 最佳实践文档](https://github.com/modelscope/ms-swift/blob/main/docs/source/BestPractices/NPU-support.md#vllm-ascend)。 |
@@ -134,6 +134,7 @@ python -c "import swift; print('ms-swift', swift.__version__)"
 ms-swift xxx
 ```
 - xxx 表示最新的版本号
+
 <!-- 
 ```shell #test-setup
 uv pip uninstall ms-swift -y
@@ -155,7 +156,7 @@ cd ms-swift && git checkout <ref>
 uv pip install -e .
 python -c "import swift; print('ms-swift', swift.__version__)"
 ```
-<ref> 为安装的最新的release 分支
+\<ref> 为安装的最新的release 分支
 
 输出结果类似如下：
 
@@ -164,9 +165,10 @@ ms-swift xxx
 ```
 
 - xxx 表示最新的版本号
+
 ## 使用样例
 
-~2 分钟在单卡昇腾 NPU 上对 Qwen3-4B-Instruct-2507 做 5 步自我认知微调（够快来验证整条链路；想跑完整 1 epoch 预算 ~19 分钟，把下面 6 个 `max_steps/save_steps/logging_steps/eval_strategy/report_to` 参数去掉即可，doc 末尾的 `5/5` 预期输出也会对应变成 `94/94` 左右，需要相应调整 expected）：
+~2 分钟在单卡昇腾 NPU 上对 Qwen3-4B-Instruct-2507 做 5 步自我认知微调（够快来验证整条链路；想跑完整 1 epoch 预算 ~19 分钟，把下面 5 个 `max_steps/save_steps/logging_steps/eval_strategy/report_to` 参数去掉即可，doc 末尾的 `5/5` 预期输出也会对应变成 `94/94` 左右，需要相应调整 expected）：
 
 ```shell #test id="train"
 ASCEND_RT_VISIBLE_DEVICES=0 swift sft \

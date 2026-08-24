@@ -102,8 +102,12 @@ count: 1
 
 安装 `transformers` / `peft` / `modelscope`：
 
-```shell #test id="install-deps"
+```shell #test-setup
 pip install 'transformers<5.0' 'peft<0.19' 'modelscope==1.37.0'
+```
+
+打印安装版本：
+```shell #test id="install-deps"
 python -c "import transformers, peft, modelscope; print('transformers', transformers.__version__); print('peft', peft.__version__); print('modelscope', modelscope.__version__)"
 ```
 
@@ -158,6 +162,7 @@ python -c "import swift; print('ms-swift', swift.__version__)"
 ```shell #test-result id="swift-install-source" fuzzy='xxx'
 ms-swift xxx
 ```
+
 - xxx 表示最新的版本号
 ## 使用样例
 

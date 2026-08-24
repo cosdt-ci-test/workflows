@@ -85,7 +85,8 @@ pip install -e .
 python -c "import deepspeed; print('DeepSpeed:', deepspeed.__version__)"
 ```
 
-```shell #test-result id="install-deepspeed" fuzzy='xxx'
+```shell #test-result id="install-deepspeed" fuzzy='...' fuzzy='xxx'
+...
 DeepSpeed: xxx
 ```
 
@@ -129,7 +130,7 @@ deepspeed --bind_cores_to_rank train_bert_ds.py \
     --dtype bf16
 ```
 
-```shell #test-result id="train-hd" fuzzy='xxx'
+```shell #test-result id="train-hd" fuzzy='...' fuzzy='xxx'
 ...
 Loss: xxx
 ...

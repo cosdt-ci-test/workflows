@@ -4,6 +4,10 @@
 
 [DeepSpeed](https://github.com/deepspeedai/DeepSpeed) 是微软开源的深度学习训练优化库，通过 **NPU 加速器**（`accelerator/npu_accelerator.py`）自动适配昇腾硬件，加速器名称为 `npu`。
 
+<!-- ```shell #test-setup store="upstream_ref"
+echo $UPSTREAM_REF
+``` -->
+
 ---
 
 ## 前置条件
@@ -27,9 +31,13 @@ Atlas **800T** / **900 A2** 训练系列（Ascend **910B**）。本文示例为*
 
 新开终端后 CANN 变量不会自动生效。`npu-smi` 在常见容器布局下需手动加入 `PATH`。
 
-```shell
+```shell #test id="load-cann"
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 export PATH=/usr/local/sbin:$PATH
+```
+
+```shell #test-result id="load-cann"
+...
 ```
 
 ---
@@ -38,23 +46,27 @@ export PATH=/usr/local/sbin:$PATH
 
 ### 2.1 确认 NPU 在线
 
-```shell
+```shell #test id="check-npu"
 npu-smi info
+```
+
+```shell #test-result id="check-npu"
+...
 ```
 
 **预期**：命令退出码为 0，并打印设备列表。表格中的功耗、HBM 占用每次不同，**不必**与任何样例逐字一致。
 
 ### 2.2 确认 PyTorch 与 torch_npu
 
-```shell
+```shell #test id="check-torch"
 python -c "import torch, torch_npu; print('torch:', torch.__version__); print('torch_npu:', torch_npu.__version__); print('is_available:', torch.npu.is_available()); print('count:', torch.npu.device_count())"
 ```
 
-```text
+```shell #test-result id="check-torch" fuzzy='xxx'
 torch: 2.9.0+cpu
 torch_npu: 2.9.0.post2
 is_available: True
-count: 1
+count: xxx
 ```
 
 ---
@@ -63,7 +75,7 @@ count: 1
 
 克隆上游仓库，检出你要用的 ref，然后 `pip install -e .` 安装。将 `<UPSTREAM_REF>` 换成目标**分支、tag 或 commit**（上游默认分支为 `master`）。
 
-```shell
+```shell #test id="install-deepspeed" load="upstream_ref>>UPSTREAM_REF"
 git clone https://github.com/deepspeedai/DeepSpeed.git
 cd DeepSpeed
 git checkout <UPSTREAM_REF>
@@ -71,7 +83,7 @@ pip install -e .
 python -c "import deepspeed; print('DeepSpeed:', deepspeed.__version__)"
 ```
 
-```text
+```shell #test-result id="install-deepspeed" fuzzy='xxx'
 DeepSpeed: xxx
 ```
 
@@ -81,12 +93,12 @@ DeepSpeed: xxx
 
 `ds_report` 应列出 `torch_npu` 和 `ascend_cann` 版本。`get_accelerator()._name` 应为 `npu`。
 
-```shell
+```shell #test id="verify-accelerator"
 ds_report 2>&1 | grep -i 'torch_npu\|ascend_cann'
 python -c "from deepspeed.accelerator import get_accelerator; print('accelerator:', get_accelerator()._name)"
 ```
 
-```text
+```shell #test-result id="verify-accelerator"
 ...
 accelerator: npu
 ```
@@ -99,7 +111,7 @@ accelerator: npu
 
 克隆 DeepSpeedExamples 仓库，安装依赖，用 `deepspeed` 启动训练：
 
-```shell
+```shell #test id="train-hd"
 git clone https://github.com/deepspeedai/DeepSpeedExamples.git
 cd DeepSpeedExamples/training/HelloDeepSpeed
 pip install -r requirements.txt
@@ -115,14 +127,14 @@ deepspeed --bind_cores_to_rank train_bert_ds.py \
     --dtype bf16
 ```
 
-```text
+```shell #test-result id="train-hd" fuzzy='xxx'
 ...
 Loss: xxx
 ...
 Saved model to .../experiment_deepspeed/bert_pretrain.xxx
 ```
 
-**怎样算成功**：进程退出码为 0，且日志中出现 `Loss: ...` 的训练输出。
+**怎样算成功**：进程退出码为 0，且日志中出现 `Loss: xxx` 的训练输出。
 
 > 上面的参数把模型压到最小（2 层、h_dim 64、10 步）以快速验证整条链路。去掉这些参数会按上游默认值跑完整模型（6 层、h_dim 256、10000 步）。
 
@@ -145,4 +157,4 @@ Saved model to .../experiment_deepspeed/bert_pretrain.xxx
 | `import torch_npu` 失败 | torch_npu 未安装或版本不匹配 | 检查 torch ↔ torch_npu ↔ CANN 三方兼容矩阵 |
 | `ds_report` 无 `npu` 加速器 | 安装时 torch_npu 不可 import | 确保 `source set_env.sh` 后 `python -c "import torch_npu"` 成功 |
 | 训练退出 0 但无 `npu` 加速器 | 设备未挂载或驱动异常 | 检查 `/dev/davinci0` 是否存在，`npu-smi info` 是否正常 |
-| 训练卡住不输出 | 分布式通信异常 | 检查 `ASCEND_RT_VISIBLE_DEVICES` 是否设置正确 |
+| 训练卡住不输出 | 分布式通信异常 | 检查 `ASCEND_RT_VISIBLE_DEVICES` 是否设置正确

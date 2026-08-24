@@ -223,6 +223,17 @@ jobs:
           echo "materialized .monitor-state/.monitor:"
           cat .monitor-state/.monitor
 
+      # Framework dep: mistune is required by
+      # src/workflows/markdown_doc_test_base.py at import time. Install
+      # here (one place, all 10 callers benefit) instead of
+      # side-effect-installing from src/workflows/__init__.py. The
+      # find_spec guard previously lived there; this step makes install
+      # timing explicit and auditable, and a pip failure surfaces at the
+      # workflow layer (not in the test stack). Inherits PIP_INDEX_URL /
+      # PIP_TRUSTED_HOST from job env (cluster cache + trusted-host).
+      - name: Install test framework deps
+        run: python -m pip install 'mistune>=3,<4'
+
       # Schedule-only: this step is what maintains .monitor-state/.monitor
       # (the failure flag / last_release_id / doc_hash). Dispatch is a
       # one-shot read-only path that must not mutate that state -

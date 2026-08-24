@@ -223,14 +223,14 @@ peft_model = get_peft_model(
 )
 peft_model.save_pretrained("output/peft-adapter")
 PY
-ls output/peft-adapter/adapter_model.safetensors output/peft-adapter/adapter_config.json
+ls output/peft-adapter/adapter_config.json output/peft-adapter/adapter_model.safetensors
 ```
 
 输出结果如下：
 
 ```shell #test-result id="save-adapter"
-output/peft-adapter/adapter_model.safetensors
 output/peft-adapter/adapter_config.json
+output/peft-adapter/adapter_model.safetensors
 ```
 
 ## 加载用于推理的 PEFT 模型

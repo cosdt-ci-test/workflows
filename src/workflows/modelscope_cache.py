@@ -1,0 +1,118 @@
+"""Modelscope hub cache validation: purge stale safetensors shards.
+
+Shared utility used by the ``prepare_environment`` step of every
+project whose quick-start test downloads model weights via
+``modelscope`` (ms-swift, peft, diffusers, torchtune, torchtitan
+as of writing). Lives in the ``workflows`` namespace package so
+each project's test can ``from workflows.modelscope_cache
+import ...`` instead of copy-pasting the same logic.
+
+Why this exists
+---------------
+
+The runner uses a host-side bind mount
+(``/data/ci-cache/modelscope/<project>/...``) so the modelscope
+cache survives across CI runs. Useful for cache hits, but it also
+lets stale partial ``.safetensors`` shards from interrupted runs
+(kill -9, OOM, network drop) leak into the next run. ``transformers``
+then trips on ``safetensors.safe_open`` with::
+
+    safetensors._safetensors_rust.SafetensorError:
+        Error while deserializing header: incomplete metadata,
+        file not fully covered
+
+This module walks the cache, uses the native ``safetensors`` loader
+to validate each shard's header, and ``rmtree``-s the parent model
+dir on any failure. ``modelscope`` will re-download the whole model
+on next access.
+
+Layout
+------
+
+ModelScope stores models under::
+
+    <cache_root>/hub/models/<org>/<model>/<revision>/*.safetensors
+
+Unlike HuggingFace Hub's ``blobs/`` + symlink pattern — we walk the
+full model dir to cover both layouts, and rely on
+``safetensors.safe_open`` to resolve symlinks transparently.
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+from pathlib import Path
+
+
+def resolve_modelscope_cache() -> Path:
+    """Return the modelscope cache root the same way modelscope does:
+    prefer ``$MODELSCOPE_CACHE`` if set, otherwise
+    ``~/.cache/modelscope``. Computed at call time (not import time)
+    so tests / subprocesses that mutate the env get the right value."""
+    return Path(
+        os.environ.get('MODELSCOPE_CACHE')
+        or str(Path.home() / '.cache' / 'modelscope')
+    )
+
+
+def safetensors_header_ok(path: Path) -> bool:
+    """Use safetensors' native loader to validate the file header.
+    Returns True iff ``safe_open`` accepts the file (header parses,
+    tensor offsets fit within the file). ``SafetensorError`` or
+    ``OSError`` means the shard is unusable.
+
+    Lazy import: callers should install ``safetensors`` defensively
+    in their ``prepare_environment`` (the CANN base image may ship
+    without it; torch >= 4.20 is the first version that hard-deps
+    on it). The module itself loads fine on machines that don't
+    have safetensors installed yet — the import only fires when a
+    caller actually invokes this function."""
+    from safetensors import safe_open, SafetensorError  # noqa: I001
+    try:
+        with safe_open(str(path), framework='pt') as f:
+            list(f.keys())  # force header read
+    except (SafetensorError, OSError):
+        return False
+    return True
+
+
+def purge_corrupt_models(cache_root: Path) -> None:
+    """Scan every ``*.safetensors`` file under each model dir and purge
+    the model dir if any shard is corrupt. ``modelscope`` will
+    re-download the whole model on next access. No-op when the
+    cache root is absent (fresh container, or first-time setup).
+
+    Walks the full model dir (not just ``blobs/``) because
+    ModelScope's layout is
+    ``<model_dir>/<revision>/*.safetensors`` — unlike HuggingFace
+    Hub which uses ``blobs/`` + symlinks. ``safe_open`` resolves
+    symlinks transparently, so this also catches a future
+    modelscope release that switches to the HF-style layout.
+
+    Parameters
+    ----------
+    cache_root : Path
+        The modelscope cache root (i.e. the value of
+        ``$MODELSCOPE_CACHE`` or its default ``~/.cache/modelscope``).
+        Passed in as a parameter so the function is reusable from
+        tests with a tmp dir and doesn't carry an implicit dependency
+        on a module-level constant.
+    """
+    hub_models = cache_root / 'hub' / 'models'
+    if not hub_models.exists():
+        return
+    for model_dir in hub_models.glob('*/*'):
+        if not model_dir.is_dir():
+            continue
+        corrupt = [
+            p for p in model_dir.rglob('*.safetensors')
+            if not safetensors_header_ok(p)
+        ]
+        if not corrupt:
+            continue
+        print(
+            f'cache: purging {model_dir.parent.name}/{model_dir.name} '
+            f'({len(corrupt)} corrupt shard(s)); modelscope will re-download'
+        )
+        shutil.rmtree(model_dir)

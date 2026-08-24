@@ -229,15 +229,11 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         # touches ``device_map`` / ``Accelerator``; skipping accelerate
         # keeps the install footprint aligned with what the doc exercises.
 
-        # Pin cache under a test-scoped subdir outside the bind-mount:
-        # the host-side /data/ci-cache/modelscope persists across CI
-        # runs and accumulates stale files (incomplete downloads,
-        # model revision drift, cross-project leftovers) that would
-        # otherwise surface here as hash mismatches. This keeps each
-        # run's cache isolated in the container's local fs.
-        os.environ.setdefault(
-            'MODELSCOPE_CACHE', str(Path.home() / '.cache' / 'modelscope_quick_start_test'),
-        )
+        # ModelScope cache: pinned at the project-scoped host path via the
+        # workflow's bind-mount (--volume=/data/ci-cache/modelscope/peft:
+        # /root/.cache/modelscope). snapshot_download picks up files there
+        # transparently; missing files trigger a normal download into the
+        # same mount. No MODELSCOPE_CACHE override needed here.
 
     # ----------------------------------------------------------
     # test entry

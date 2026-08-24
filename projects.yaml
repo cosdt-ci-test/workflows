@@ -104,3 +104,13 @@ projects:
     workflows:
       examples: .github/workflows/bitsandbytes-examples.yml
       quick_start: .github/workflows/bitsandbytes-quick-start.yml
+  - name: onnxruntime
+    category: 推理加速
+    support_level: 基础支持
+    upstream_repo: microsoft/onnxruntime
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/onnxruntime
+    workflows:
+      examples: .github/workflows/onnxruntime-examples.yml
+      quick_start: .github/workflows/onnxruntime-quick-start.yml

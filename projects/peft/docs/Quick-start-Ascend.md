@@ -132,7 +132,7 @@ peft xxx
 - xxx 表示最新的版本号
 <!--
 ```shell #test-setup
-python -m pip uninstall peft -y
+uv pip uninstall peft -y
 ```
 -->
 
@@ -148,7 +148,7 @@ echo "${UPSTREAM_REF}"
 ```shell #test id="peft-install-source" load="upstream_ref>>ref"
 git clone https://github.com/huggingface/peft.git
 cd peft && git checkout <ref>
-python -m pip install -e .
+uv pip install -e .
 python -c "import peft; print('peft', peft.__version__)"
 ```
 \<ref> 为安装的最新的 release 分支
@@ -169,7 +169,7 @@ peft xxx
 默认使用 **ModelScope** 进行模型下载。
 
 ```shell #test-setup store="model_path"
-python -c "from modelscope import snapshot_download; print(snapshot_download('Qwen/Qwen2.5-3B-Instruct'))"
+python -c "from modelscope import snapshot_download; print(snapshot_download('Qwen/Qwen2.5-3B-Instruct'))" | tail -n 1
 ```
 
 ### 应用 LoRA 适配器
@@ -177,7 +177,7 @@ python -c "from modelscope import snapshot_download; print(snapshot_download('Qw
 把基础模型加载到 NPU 上（`bfloat16` 省显存），构造 `LoraConfig` 描述要插入的 LoRA 矩阵（rank=8 / alpha=32 / 自回归 LM 任务），再用 `get_peft_model` 包成 PEFT 模型——底座权重默认冻结，只有新注入的 LoRA 矩阵参与训练。
 
 ```shell #test id="apply-lora" load="model_path>>model_path"
-python << 'PY' 2>&1 | tail -1
+python << 'PY'
 import torch
 from transformers import AutoModelForCausalLM
 from peft import LoraConfig, TaskType, get_peft_model
@@ -209,7 +209,7 @@ trainable params: xxx || all params: xxx || trainable%: xxx
 把刚刚构造的 LoRA 矩阵落到 `output/peft-adapter`。保存的只有几十 MB 的适配器权重（`adapter_model.safetensors` + `adapter_config.json`），底座模型保持不动。后续推理和分发都基于这个目录，跟底座解耦。
 
 ```shell #test id="save-adapter" load="model_path>>model_path"
-python << 'PY' 2>&1 | tail -1
+python << 'PY'
 import torch
 from transformers import AutoModelForCausalLM
 from peft import LoraConfig, get_peft_model, TaskType
@@ -241,7 +241,7 @@ saved adapter to output/peft-adapter
 推理的第一步：加载 `tokenizer` + 底座（`AutoModelForCausalLM`），然后用 `PeftModel.from_pretrained(base, "output/peft-adapter")` 把适配器「贴」上去——这一步在底座上原地构造 PEFT 包装，权重来自上一步保存的目录。
 
 ```shell #test id="load-adapter" load="model_path>>model_path"
-python << 'PY' 2>&1 | tail -1
+python << 'PY'
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import PeftModel
@@ -268,7 +268,7 @@ trainable params: xxx || all params: xxx || trainable%: xxx...
 端到端跑一次生成：tokenizer 把 prompt 编码成 ids，搬到 NPU 上，`model.generate(max_new_tokens=20, do_sample=False)` 续写 20 个 token，解码回文本。PEFT 模型继承 `PreTrainedModel` 接口，`generate` 调用方式与底座完全一致。
 
 ```shell #test id="infer" load="model_path>>model_path"
-python << 'PY' 2>&1 | tail -1
+python << 'PY'
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import PeftModel

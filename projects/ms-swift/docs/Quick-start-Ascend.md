@@ -156,7 +156,7 @@ cd ms-swift && git checkout <ref>
 uv pip install -e .
 python -c "import swift; print('ms-swift', swift.__version__)"
 ```
-<ref> 为安装的最新的release 分支
+\<ref> 为安装的最新的release 分支
 
 输出结果类似如下：
 

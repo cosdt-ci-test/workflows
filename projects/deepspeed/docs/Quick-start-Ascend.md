@@ -9,6 +9,13 @@
 echo $UPSTREAM_REF
 ```
 -->
+<!--
+```shell #test-setup
+apt-get update -y
+apt-get install -y numactl 2>/dev/null || true
+pip install --upgrade tokenizers 2>/dev/null || true
+```
+-->
 
 ---
 

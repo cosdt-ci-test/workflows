@@ -209,21 +209,23 @@ trainable params: xxx || all params: xxx || trainable%: xxx
 把刚刚构造的 LoRA 矩阵落到 `output/peft-adapter`。保存的只有几十 MB 的适配器权重（`adapter_model.safetensors` + `adapter_config.json`），底座模型保持不动。后续推理和分发都基于这个目录，跟底座解耦。
 
 ```shell #test id="save-adapter" load="model_path>>model_path"
-python << 'PY'
-import torch
-from transformers import AutoModelForCausalLM
-from peft import LoraConfig, get_peft_model, TaskType
+{
+  python << 'PY'
+  import torch
+  from transformers import AutoModelForCausalLM
+  from peft import LoraConfig, get_peft_model, TaskType
 
-model = AutoModelForCausalLM.from_pretrained(
-    "<model_path>", torch_dtype=torch.bfloat16,
-).to("npu:0")
-peft_model = get_peft_model(
-    model,
-    LoraConfig(r=16, lora_alpha=32, task_type=TaskType.CAUSAL_LM),
-)
-peft_model.save_pretrained("output/peft-adapter")
-PY
-ls output/peft-adapter/adapter_model.safetensors output/peft-adapter/adapter_config.json
+  model = AutoModelForCausalLM.from_pretrained(
+      "<model_path>", torch_dtype=torch.bfloat16,
+  ).to("npu:0")
+  peft_model = get_peft_model(
+      model,
+      LoraConfig(r=16, lora_alpha=32, task_type=TaskType.CAUSAL_LM),
+  )
+  peft_model.save_pretrained("output/peft-adapter")
+  PY
+} >/dev/null
+ls output/peft-adapter/adapter_config.json output/peft-adapter/adapter_model.safetensors
 ```
 
 输出结果如下：

@@ -229,8 +229,8 @@ ls output/peft-adapter/adapter_model.safetensors output/peft-adapter/adapter_con
 输出结果如下：
 
 ```shell #test-result id="save-adapter"
-output/peft-adapter/adapter_model.safetensors
 output/peft-adapter/adapter_config.json
+output/peft-adapter/adapter_model.safetensors
 ```
 
 ## 加载用于推理的 PEFT 模型

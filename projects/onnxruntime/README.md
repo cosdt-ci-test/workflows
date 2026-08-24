@@ -87,7 +87,7 @@ coder 上（A2-910B，CANN 9.1.0，无 docker，不是 CI 镜像）目前测到�
 - `onnxruntime-cann==1.24.4` + CPython 3.12 + `numpy<2`：`get_available_providers()` 含 `CANNExecutionProvider`，也能建起关掉 fallback 的 `InferenceSession`。不钉 `numpy<2` 时 import 会炸。
 - 同一 session 上跑最小 Add 图失败：`ge::aclgrphBuildInitialize` 返回 `CANN failure -1`。逻辑卡 0 和 1 都一样。`npu-smi` 两张卡 HBM 约 31 GiB / 32 GiB，进程表是空的。Quick Start 的 `install` / `providers` / `make-model` 三块在 NPU 上按字面通过。完整 unittest 红在 `infer`。文档形状仍是 pip wheel，没有改成源码编 wheel。
 - `--use_cann` 在 CANN 9.1.0 + gcc-12 + cmake 3.31 上能编过，并链出 `libonnxruntime_providers_cann.so` 和 `onnxruntime_provider_test`。
-- `cann-gtest`：`CannExecutionProviderTest.FunctionTest` 能匹配到并在 NPU=0 上跑。失败是 `aclopCompileAndExecute("Add")` 返回 `ACL_ERROR_FAILURE` / `CANN failure 500001`。环境已就绪（CANN 已 source、filter 命中、守卫抓到 `CANN failure`）。这是诚实红，不是「编错二进制」或假绿。空 filter 和错误卡号都被守卫判红。
+- `cann-gtest`：`CannExecutionProviderTest.FunctionTest` 能匹配到并在 NPU=0 上跑。官方 `run_example.sh` 路径上的失败是 `aclrtAllocatorGetByStream failed. Parameter stream is invalid`。环境已就绪（CANN 已 source、`--use_cann` 编过、filter 命中）。这是诚实红，不是「编错二进制」或假绿。空 `--gtest_filter` 被守卫判红（`0 tests from 0 test suites`）。不 source CANN 时加载 `libonnxruntime_providers_cann.so` 失败（缺 `libmsprofiler.so`），不会假绿。
 - `cmake-consumer`：绿。日志有 `ONNX Runtime version: 1.30.0` 和 `Result: PASS`。默认 SessionOptions，没有 NPU 锚点。
 - 默认是 gcc 11.4 和 cmake 3.22。`setup_example.sh` 会装 gcc-12，并用华为通用 PyPI 装 `cmake>=3.28,<4`。不要覆盖 `/etc/apt/sources.list`。不要从 pypi.org 拉 cmake。不要装 cmake 4。ORT 的 FetchContent 还依赖 cmake 3 的兼容行为。
 

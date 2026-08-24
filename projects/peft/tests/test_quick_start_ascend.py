@@ -229,12 +229,6 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         # touches ``device_map`` / ``Accelerator``; skipping accelerate
         # keeps the install footprint aligned with what the doc exercises.
 
-        # ModelScope cache: pinned at the project-scoped host path via the
-        # workflow's bind-mount (--volume=/data/ci-cache/modelscope/peft:
-        # /root/.cache/modelscope). snapshot_download picks up files there
-        # transparently; missing files trigger a normal download into the
-        # same mount. No MODELSCOPE_CACHE override needed here.
-
     # ----------------------------------------------------------
     # test entry
     # ----------------------------------------------------------

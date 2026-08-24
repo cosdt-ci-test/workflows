@@ -175,12 +175,12 @@ def block_kind(cmd: str) -> str:
     return 'default'
 
 
-_SKIP_E2E = os.environ.get('DEEPSPEED_NPU_E2E', '0') != '1'
+_SKIP_E2E = os.environ.get('NPU_READY', '') != 'true'
 
 
 @unittest.skipIf(
     _SKIP_E2E,
-    'end-to-end tests require NPU runner; set DEEPSPEED_NPU_E2E=1 to run')
+    'end-to-end tests require NPU runner; set NPU_READY=true to run')
 class TestQuickStartAscendEndToEnd(unittest.TestCase):
     doc_path: str
     steps: list[dict]
@@ -191,16 +191,14 @@ class TestQuickStartAscendEndToEnd(unittest.TestCase):
         cls.doc_text, cls.doc_path = fetch_doc_text()
         _log(f'setUpClass: fetched doc ({len(cls.doc_text)} bytes)')
         cls.upstream_ref = os.environ.get('UPSTREAM_REF', '')
-        cls.upstream_commit = os.environ.get('UPSTREAM_COMMIT', '')
-        if not cls.upstream_ref or not cls.upstream_commit:
+        if not cls.upstream_ref:
             raise unittest.SkipTest(
-                'end-to-end requires UPSTREAM_REF and UPSTREAM_COMMIT '
+                'end-to-end requires UPSTREAM_REF '
                 '(set by the CI workflow)')
         os.environ.setdefault('UPSTREAM_REF', cls.upstream_ref)
-        os.environ.setdefault('UPSTREAM_COMMIT', cls.upstream_commit)
-        _log(f'setUpClass: upstream ref={cls.upstream_ref} commit={cls.upstream_commit[:12]}')
+        _log(f'setUpClass: upstream ref={cls.upstream_ref}')
         cls.doc_text = cls.doc_text.replace(
-            '<UPSTREAM_REF>', cls.upstream_commit)
+            '<UPSTREAM_REF>', cls.upstream_ref)
         cls.steps = parse_blocks(cls.doc_text)
         _log(f'setUpClass: parsed {len(cls.steps)} steps')
         if not cls.steps:
@@ -210,7 +208,6 @@ class TestQuickStartAscendEndToEnd(unittest.TestCase):
     def test_runs_quick_start(self):
         env = os.environ.copy()
         env['UPSTREAM_REF'] = self.upstream_ref
-        env['UPSTREAM_COMMIT'] = self.upstream_commit
 
         if WORK_DIR.exists():
             shutil.rmtree(WORK_DIR)

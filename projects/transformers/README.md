@@ -31,7 +31,7 @@ python3 scripts/bootstrap_manifest.py \
 
 ## Quick Start
 
-[`docs/Quick-start-Ascend.md`](docs/Quick-start-Ascend.md) 是本仓专用的 Ascend Quick Start smoke，使用公开的 `Qwen/Qwen2.5-1.5B` Pipeline 文本生成示例，不需要 Hugging Face token。`tests/test_quick_start_ascend.py` 从文档提取 Python 代码并在 NPU runner 中执行，文档代码变化后测试会随之验证。
+[`docs/Quick-start-Ascend.md`](docs/Quick-start-Ascend.md) 是本仓专用的 Ascend Quick Start smoke，使用公开的 `Qwen/Qwen2.5-1.5B` Pipeline 文本生成示例，不需要 Hugging Face token。文档遵守 [`docs/markdown_doc_test_label.md`](../../docs/markdown_doc_test_label.md)，包含前置条件、环境检查、依赖安装和最终 smoke；`tests/test_quick_start_ascend.py` 从文档提取 `pycon` 示例并在 NPU runner 中执行。
 
 ## 触发和结果
 

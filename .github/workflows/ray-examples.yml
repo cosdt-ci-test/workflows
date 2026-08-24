@@ -267,16 +267,6 @@ jobs:
       PIP_TIMEOUT: '120'
     container:
       image: ${{ matrix.example.image }}
-      options: >-
-        --shm-size=64g
-        ${{ matrix.example.device_options }}
-        --device=/dev/davinci_manager
-        --device=/dev/devmm_svm
-        --device=/dev/hisi_hdc
-        --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
-        --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
-        --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
-        --volume=/data/ci-cache/pip:/root/.cache/pip
     steps:
       - name: Checkout workflows
         uses: actions/checkout@v4
@@ -296,7 +286,6 @@ jobs:
           export PATH="/usr/local/sbin:$PATH"
           source /usr/local/Ascend/ascend-toolkit/set_env.sh
           npu-smi info
-          python -c 'import torch, torch_npu; print(torch.__version__, torch_npu.__version__, torch.npu.device_count())'
 
       - name: Setup test environment
         env:

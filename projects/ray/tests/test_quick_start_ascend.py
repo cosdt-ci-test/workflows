@@ -17,6 +17,12 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     DEFAULT_COMMAND_TIMEOUT = 1200
     USER_AGENT = "cosdt-ci-test/ray-quick-start"
     _CANN_SET_ENV = "/usr/local/Ascend/ascend-toolkit/set_env.sh"
+    _CLUSTER_INDEX = (
+        "http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple"
+    )
+    _ASCEND_EXTRA = "https://repo.huaweicloud.com/ascend/repos/pypi"
+    _TORCH_VERSION = "2.9.0"
+    _TORCH_NPU_VERSION = "2.9.0.post2"
 
     @classmethod
     def prepare_environment(cls) -> None:
@@ -37,6 +43,45 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         os.environ.setdefault("ASCEND_RT_VISIBLE_DEVICES", "0,1")
         os.environ.setdefault("RAY_USAGE_STATS_ENABLED", "0")
         os.environ.setdefault("RAY_DEDUP_LOGS", "0")
+
+        probe_script = (
+            "import torch, torch_npu\n"
+            "raise SystemExit(0 if "
+            f"torch.__version__.startswith('{cls._TORCH_VERSION}') "
+            f"and torch_npu.__version__.startswith('{cls._TORCH_NPU_VERSION}') "
+            "else 1)"
+        )
+        probe = subprocess.run(
+            ["python", "-c", probe_script],
+            capture_output=True,
+            check=False,
+        )
+        if probe.returncode == 0:
+            print(
+                "setup: reusing torch "
+                f"{cls._TORCH_VERSION} / torch_npu {cls._TORCH_NPU_VERSION}"
+            )
+        else:
+            print(
+                "setup: installing torch=="
+                f"{cls._TORCH_VERSION} torch_npu=={cls._TORCH_NPU_VERSION}"
+            )
+            subprocess.run(
+                [
+                    "python",
+                    "-m",
+                    "pip",
+                    "install",
+                    "--index-url",
+                    cls._CLUSTER_INDEX,
+                    "--extra-index-url",
+                    cls._ASCEND_EXTRA,
+                    f"torch=={cls._TORCH_VERSION}",
+                    f"torch_npu=={cls._TORCH_NPU_VERSION}",
+                ],
+                check=True,
+            )
+
         subprocess.run(
             [
                 "python",

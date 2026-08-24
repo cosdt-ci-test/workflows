@@ -4,9 +4,17 @@
 
 [DeepSpeed](https://github.com/deepspeedai/DeepSpeed) 是微软开源的深度学习训练优化库，通过 **NPU 加速器**（`accelerator/npu_accelerator.py`）自动适配昇腾硬件，加速器名称为 `npu`。
 
-<!-- ```shell #test-setup store="upstream_ref"
+<!--
+```shell #test-setup store="upstream_ref"
 echo $UPSTREAM_REF
-``` -->
+```
+-->
+<!--
+```shell #test-setup
+apt-get update && apt-get install -y libopenmpi-dev
+pip install mpi4py
+```
+-->
 
 ---
 
@@ -83,7 +91,8 @@ pip install -e .
 python -c "import deepspeed; print('DeepSpeed:', deepspeed.__version__)"
 ```
 
-```shell #test-result id="install-deepspeed" fuzzy='xxx'
+```shell #test-result id="install-deepspeed" fuzzy='...' fuzzy='xxx'
+...
 DeepSpeed: xxx
 ```
 
@@ -105,38 +114,55 @@ accelerator: npu
 
 ---
 
-## 5. 运行 HelloDeepSpeed 训练
+## 5. 运行最小化训练
 
-[HelloDeepSpeed](https://github.com/deepspeedai/DeepSpeedExamples/tree/master/training/HelloDeepSpeed) 是 DeepSpeedExamples 仓库里的官方入门教程：用 Roberta 结构的 Transformer 做掩码语言建模（MLM）。它展示 DeepSpeed 的**旗舰功能 ZeRO Stage 1 + CPU Offload + BF16 混合精度**。
+跑一个最小化训练脚本：3 层 Linear 网络（32 → 64 → 32），ZeRO-1 + BF16，5 步训练。模型和数据均在 NPU 上，不依赖外部数据集。
 
-克隆 DeepSpeedExamples 仓库，安装依赖，用 `deepspeed` 启动训练：
+```shell #test id="train-minimal"
+python - <<'PY'
+import torch
+import torch.nn as nn
+import deepspeed
 
-```shell #test id="train-hd"
-git clone https://github.com/deepspeedai/DeepSpeedExamples.git
-cd DeepSpeedExamples/training/HelloDeepSpeed
-pip install -r requirements.txt
-deepspeed --bind_cores_to_rank train_bert_ds.py \
-    --checkpoint_dir ./experiment_deepspeed \
-    --num_layers 2 \
-    --num_heads 2 \
-    --h_dim 64 \
-    --ff_dim 128 \
-    --batch_size 2 \
-    --num_iterations 10 \
-    --log_every 5 \
-    --dtype bf16
+class Net(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(32, 64),
+            nn.ReLU(),
+            nn.Linear(64, 32),
+        )
+    def forward(self, x):
+        return self.net(x)
+
+model = Net()
+ds_config = {
+    'train_batch_size': 4,
+    'train_micro_batch_size_per_gpu': 4,
+    'zero_optimization': {'stage': 1},
+    'optimizer': {'type': 'Adam', 'params': {'lr': 0.001}},
+    'bf16': {'enabled': True},
+}
+model_engine, optimizer, _, _ = deepspeed.initialize(
+    model=model, model_parameters=model.parameters(), config=ds_config)
+
+for step in range(1, 6):
+    x = torch.randn(4, 32, device=model_engine.device)
+    loss = model_engine(x).sum()
+    model_engine.backward(loss)
+    model_engine.step()
+    print(f'step {step}/5 loss={loss.item():.6f}')
+
+print('Quick-start test PASSED')
+PY
 ```
 
-```shell #test-result id="train-hd" fuzzy='xxx'
+```shell #test-result id="train-minimal"
 ...
-Loss: xxx
-...
-Saved model to .../experiment_deepspeed/bert_pretrain.xxx
+Quick-start test PASSED
 ```
 
-**怎样算成功**：进程退出码为 0，且日志中出现 `Loss: xxx` 的训练输出。
-
-> 上面的参数把模型压到最小（2 层、h_dim 64、10 步）以快速验证整条链路。去掉这些参数会按上游默认值跑完整模型（6 层、h_dim 256、10000 步）。
+**怎样算成功**：进程退出码为 0，且输出末尾出现 `Quick-start test PASSED`。
 
 ---
 

@@ -31,7 +31,6 @@ from __future__ import annotations
 import os
 import subprocess
 import unittest
-from pathlib import Path
 
 from workflows.markdown_doc_test_base import MarkdownDocTestBase
 
@@ -204,15 +203,13 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 check=True,
             )
 
-        # Pin cache under a test-scoped subdir outside the bind-mount:
-        # the host-side /data/ci-cache/modelscope persists across CI
-        # runs and accumulates stale files (incomplete downloads,
-        # model revision drift, cross-project leftovers) that would
-        # otherwise surface here as hash mismatches. This keeps each
-        # run's cache isolated in the container's local fs.
-        os.environ.setdefault(
-            'MODELSCOPE_CACHE', str(Path.home() / '.cache' / 'modelscope_quick_start_test'),
-        )
+        # Cache isolation now lives at the host-side bind mount
+        # (/data/ci-cache/modelscope/<project>/...), so the container
+        # already gets a project-namespaced cache root without an
+        # in-container override. The earlier test-scoped
+        # modelscope_quick_start_test/ override was a workaround for the
+        # pre-namespaced mount and would now route traffic onto the
+        # container's local fs, bypassing the bind mount entirely.
 
     # ----------------------------------------------------------
     # test entry

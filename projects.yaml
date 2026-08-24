@@ -67,3 +67,30 @@ projects:
     workflows:
       examples: .github/workflows/whisper.cpp-examples.yml
       quick_start: .github/workflows/whisper.cpp-quick-start.yml
+  - name: accelerate
+    category: 训练加速
+    support_level: 基础支持
+    upstream_repo: huggingface/accelerate
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/accelerate
+    workflows:
+      quick_start: .github/workflows/accelerate-quick-start.yml
+  - name: peft
+    category: 训练加速
+    support_level: 基础支持
+    upstream_repo: huggingface/peft
+    phase: A
+    runner: linux-aarch64-a2-2
+    dir: projects/peft
+    workflows:
+      quick_start: .github/workflows/peft-quick-start.yml
+  - name: diffusers
+    category: 训练加速
+    support_level: 基础支持
+    upstream_repo: huggingface/diffusers
+    phase: A
+    runner: linux-aarch64-a2-2
+    dir: projects/diffusers
+    workflows:
+      quick_start: .github/workflows/diffusers-quick-start.yml

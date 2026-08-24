@@ -13,7 +13,7 @@ echo $UPSTREAM_REF
 ```shell #test-setup
 apt-get update -y
 apt-get install -y numactl
-pip install transformers datasets fire loguru sh tqdm
+pip install datasets==1.13.3 transformers fire loguru sh tqdm
 ```
 -->
 

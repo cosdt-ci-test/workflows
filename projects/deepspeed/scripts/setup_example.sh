@@ -63,6 +63,11 @@ print('DeepSpeed version:', deepspeed.__version__)
   ds_report 2>&1 | grep -i 'npu' || {
     echo 'WARNING: ds_report did not list npu accelerator'
   }
+  echo "installing system dependencies"
+  apt-get update -y
+  apt-get install -y numactl
+  echo "upgrading tokenizers for aarch64 prebuilt wheel"
+  pip install --upgrade tokenizers
   echo "installing HelloDeepSpeed dependencies"
   python -m pip install transformers datasets fire loguru sh tqdm
 }

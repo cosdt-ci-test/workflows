@@ -28,7 +28,7 @@ jobs:
       test_runner: '["linux-aarch64-a2-1"]'
       image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
       container_options: >-
-        --shm-size=64g
+        --privileged --shm-size=64g
         --device=/dev/davinci0
         --device=/dev/davinci_manager --device=/dev/devmm_svm --device=/dev/hisi_hdc
         --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro

@@ -5,7 +5,7 @@ scan:
 supported:
   - path: training/HelloDeepSpeed/run_ds.sh
     profile: deepspeed
-    runner: linux-aarch64-a2-2
+    runner: linux-aarch64-a2-4
     npu_devices: '0'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:

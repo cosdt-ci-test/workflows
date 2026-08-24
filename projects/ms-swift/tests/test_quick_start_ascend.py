@@ -29,8 +29,10 @@ Environment variables (injected by GitHub workflow
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import unittest
+from pathlib import Path
 
 from workflows.markdown_doc_test_base import MarkdownDocTestBase
 
@@ -44,6 +46,67 @@ def _is_truthy(value: str | None) -> bool:
 def _e2e_enabled() -> bool:
     """Return True when ``NPU_READY=true`` is set, releasing the skip."""
     return _is_truthy(os.environ.get('NPU_READY'))
+
+
+# ----------------------------------------------------------
+# cache validation
+# ----------------------------------------------------------
+#
+# The host-side bind mount makes the modelscope cache survive across
+# CI runs. Useful for cache hits, but it also lets stale partial
+# safetensors from interrupted runs (kill -9, OOM, network drop)
+# leak into the next run. The next run then trips on transformers'
+# safe_open with "incomplete metadata, file not fully covered".
+#
+# Validate every shard up front and purge the parent model dir on
+# failure; modelscope will re-download cleanly on next access.
+# Local safetensors import because prepare_environment installs the
+# package defensively above (CANN base image may ship without it).
+
+
+# Resolve the cache root the same way modelscope does: prefer
+# $MODELSCOPE_CACHE if set, otherwise ~/.cache/modelscope.
+_MODELSCOPE_CACHE = Path(
+    os.environ.get('MODELSCOPE_CACHE') or str(Path.home() / '.cache' / 'modelscope')
+)
+
+
+def _safetensors_header_ok(path: Path) -> bool:
+    """Use safetensors' native loader to validate the file header.
+    Returns True iff ``safe_open`` accepts the file (header parses,
+    tensor offsets fit within the file). ``SafetensorError`` or
+    ``OSError`` means the shard is unusable."""
+    from safetensors import safe_open, SafetensorError
+    try:
+        with safe_open(str(path), framework='pt') as f:
+            list(f.keys())  # force header read
+    except (SafetensorError, OSError):
+        return False
+    return True
+
+
+def _purge_corrupt_models() -> None:
+    """Scan ``hub/models/*/*/blobs/*.safetensors`` and purge any
+    model dir that contains a corrupt shard. modelscope will
+    re-download the whole model on next access. No-op when the
+    cache root is absent (fresh container). Walk ``blobs/`` only,
+    not ``snapshots/``, to avoid double-counting symlinks."""
+    hub_models = _MODELSCOPE_CACHE / 'hub' / 'models'
+    if not hub_models.exists():
+        return
+    for blobs in hub_models.glob('*/*/blobs'):
+        model_dir = blobs.parent
+        corrupt = [
+            p for p in blobs.rglob('*.safetensors')
+            if not _safetensors_header_ok(p)
+        ]
+        if not corrupt:
+            continue
+        print(
+            f'cache: purging {model_dir.parent.name}/{model_dir.name} '
+            f'({len(corrupt)} corrupt shard(s)); ms-swift will re-download'
+        )
+        shutil.rmtree(model_dir)
 
 
 class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
@@ -203,13 +266,23 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 check=True,
             )
 
-        # Cache isolation now lives at the host-side bind mount
-        # (/data/ci-cache/modelscope/<project>/...), so the container
-        # already gets a project-namespaced cache root without an
-        # in-container override. The earlier test-scoped
-        # modelscope_quick_start_test/ override was a workaround for the
-        # pre-namespaced mount and would now route traffic onto the
-        # container's local fs, bypassing the bind mount entirely.
+        # 4) safetensors: native loader used by the cache validation
+        # step below. Pulled in transitively by torch on most images;
+        # install defensively in case the CANN base ships without it.
+        try:
+            import safetensors  # noqa: F401
+        except ImportError:
+            subprocess.run(
+                ['python', '-m', 'pip', 'install', 'safetensors'],
+                check=True,
+            )
+
+        # 5) Cache validation: persistent host-side bind mount can hold
+        # truncated safetensors from interrupted runs. Walk every shard
+        # under hub/models/*/*/blobs/ and purge the parent model dir
+        # on failure; modelscope will re-download cleanly on next
+        # access. See module-level helpers above for the full rationale.
+        _purge_corrupt_models()
 
     # ----------------------------------------------------------
     # test entry

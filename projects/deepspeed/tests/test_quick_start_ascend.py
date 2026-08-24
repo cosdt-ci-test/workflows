@@ -68,6 +68,14 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     DEFAULT_COMMAND_TIMEOUT = 1800
     USER_AGENT = 'cosdt-ci-test/quick-start'
 
+    def pre_process(self) -> str:
+        """Read the local doc instead of fetching from MONITORED_DOC_URL.
+        The doc is bundled in the repo, so the test always uses the version
+        that ships with the code.
+        """
+        doc = Path(__file__).resolve().parent.parent / 'docs' / 'Quick-start-Ascend.md'
+        return doc.read_text(encoding='utf-8')
+
     @classmethod
     def setUpClass(cls) -> None:
         if _e2e_enabled():

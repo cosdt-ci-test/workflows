@@ -39,6 +39,7 @@ supported:
       - --model_name_or_path ${DISTILBERT_PATH}
       - --train_file ${TARGET_ROOT}/tests/fixtures/tests_samples/SQUAD/sample.json
       - --validation_file ${TARGET_ROOT}/tests/fixtures/tests_samples/SQUAD/sample.json
+      - --version_2_with_negative
       - --max_seq_length 128
       - --doc_stride 64
       - --max_train_samples 4

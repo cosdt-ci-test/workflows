@@ -44,9 +44,8 @@ cd "$TARGET_ROOT"
 export ASCEND_RT_VISIBLE_DEVICES="${ASCEND_RT_VISIBLE_DEVICES:-0}"
 
 case "$EXAMPLE_REL" in
-  */text-classification/run_glue_no_trainer.py)
-    # This example uses Accelerate's launcher to initialize its training
-    # process; the generation smoke is a single Python process.
+  */run_*_no_trainer.py)
+    # No-trainer examples use Accelerate to initialize their training process.
     accelerate launch "$EXAMPLE_PATH" "${EXTRA_ARGS[@]}"
     ;;
   *)

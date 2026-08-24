@@ -7,8 +7,9 @@
 ## 清单、fixture 和脚本
 
 - `examples_manifest.yaml` 扫描目标仓 `examples/` 下的 Python、Shell 和 YAML 文件。`supported` 是实际调度的低成本 smoke 用例；其他路径先由 manifest-check 报为新增或失效，不自动占用 NPU。
-- 首批 supported 用例为 `examples/pytorch/text-generation/run_generation.py` 和 `examples/pytorch/text-classification/run_glue_no_trainer.py`。前者使用公开的 `sshleifer/tiny-gpt2`，后者使用目标仓内 MRPC fixture，并把训练限制为单步和小 batch。
-- `scripts/setup_example.sh` 按 profile 安装 editable transformers 和 example 依赖；`scripts/run_example.sh` 只修改目标 checkout 的临时副本来追加参数，不向上游仓库写入、提交或推送。
+- 当前 supported 用例覆盖 generation、GLUE、抽取式 QA、多选和 NER。QA、SWAG、NER 使用目标仓内的小型 fixture、DistilBERT 缓存、单卡和单步训练，避免重复加入同一任务的 Trainer/no-trainer 入口。
+- `scripts/setup_example.sh` 按 profile 安装 editable transformers 和 example 依赖；`generation` / `glue` 保持原有依赖，`small-training` 用于 QA、SWAG、NER，并额外安装 `seqeval`。
+- `scripts/run_example.sh` 对 `run_*_no_trainer.py` 使用 Accelerate 启动，其他普通 Python example 直接执行；脚本只修改目标 checkout 的临时副本来追加参数，不向上游仓库写入、提交或推送。
 - 训练和模型缓存优先使用 runner 上的共享缓存；运行输出写入 `CI_OUTPUT_DIR`，不污染目标 checkout。
 
 重新生成清单时，先确认 supported 段，再手工补回 profile、资源和 `overlay_args`：
@@ -31,7 +32,7 @@ python3 scripts/bootstrap_manifest.py \
 
 ## Quick Start
 
-[`docs/Quick-start-Ascend.md`](docs/Quick-start-Ascend.md) 是本仓专用的 Ascend Quick Start smoke，使用公开的 `Qwen/Qwen2.5-1.5B` Pipeline 文本生成示例，不需要 Hugging Face token。`tests/test_quick_start_ascend.py` 从文档提取 Python 代码并在 NPU runner 中执行，文档代码变化后测试会随之验证。
+[`docs/Quick-start-Ascend.md`](docs/Quick-start-Ascend.md) 是本仓专用的 Ascend Quick Start smoke，使用公开的 `Qwen/Qwen2.5-1.5B` Pipeline 文本生成示例，不需要 Hugging Face token。文档遵守 [`docs/markdown_doc_test_label.md`](../../docs/markdown_doc_test_label.md)，包含前置条件、环境检查、依赖安装和最终 smoke；`tests/test_quick_start_ascend.py` 从文档提取 `pycon` 示例并在 NPU runner 中执行。
 
 ## 触发和结果
 

@@ -17,8 +17,11 @@ case "$PROFILE" in
   glue)
     DEPS=(accelerate datasets evaluate scikit-learn)
     ;;
+  small-training)
+    DEPS=(accelerate datasets evaluate seqeval)
+    ;;
   *)
-    echo "unknown profile: $PROFILE (supported: generation glue)" >&2
+    echo "unknown profile: $PROFILE (supported: generation glue small-training)" >&2
     exit 1
     ;;
 esac

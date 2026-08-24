@@ -57,3 +57,13 @@ projects:
     workflows:
       examples: .github/workflows/deepspeed-examples.yml
       quick_start: .github/workflows/deepspeed-quick-start.yml
+  - name: whisper.cpp
+    category: 推理加速
+    support_level: 新兴适配
+    upstream_repo: ggml-org/whisper.cpp
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/whisper.cpp
+    workflows:
+      examples: .github/workflows/whisper.cpp-examples.yml
+      quick_start: .github/workflows/whisper.cpp-quick-start.yml

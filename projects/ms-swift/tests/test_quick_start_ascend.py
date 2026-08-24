@@ -118,13 +118,13 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
 
     # ----------------------------------------------------------
-    # prepare_environment: CUDA constraints + uv + torch stack probe + transformers/peft
+    # prepare_environment: CUDA constraints + uv + torch stack probe
     # ----------------------------------------------------------
 
     @classmethod
     def prepare_environment(cls) -> None:
         """Install CANN env + CUDA constraints + uv + torch stack probe
-        + transformers/peft in one go.
+        in one go. 
 
         Class-level setup: run once per test class, triggered by
         ``setUpClass``. Not the same as ``unittest.TestCase.setUp`` —
@@ -204,12 +204,6 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 check=True,
             )
 
-        # 4) transformers / peft: upper bounds from the doc table.
-        subprocess.run(
-            ['python', '-m', 'pip', 'install', 'transformers<5.0', 'peft<0.19'],
-            check=True,
-        )
-
         # Pin cache under a test-scoped subdir outside the bind-mount:
         # the host-side /data/ci-cache/modelscope persists across CI
         # runs and accumulates stale files (incomplete downloads,
@@ -227,7 +221,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         """Run env setup once per test class: CUDA constraints + uv +
-        torch stack + transformers/peft + CANN env.
+        torch stack + CANN env.
 
         ``@unittest.skipIf`` only skips the test *method* — ``setUpClass``
         itself always runs. The ``if _e2e_enabled()`` body guard below is

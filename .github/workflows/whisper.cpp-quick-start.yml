@@ -1,29 +1,29 @@
-# llama.cpp quick start guard - project thin trigger.
+# whisper.cpp quick start guard - project thin trigger.
 #
 # The shared quick-start template owns monitoring, cache state, result
 # validation, and artifact publishing. Project-specific environment setup
-# and document execution live in projects/llama.cpp/tests.
+# and document execution live in projects/whisper.cpp/tests.
 
-name: llama.cpp-quick-start
+name: whisper.cpp-quick-start
 
 concurrency:
-  group: ${{ github.event_name == 'schedule' && 'llama.cpp-quick-start-schedule' || format('manual-{0}', github.run_id) }}
+  group: ${{ github.event_name == 'schedule' && 'whisper.cpp-quick-start-schedule' || format('manual-{0}', github.run_id) }}
   cancel-in-progress: false
 
 on:
   # Enable after the first successful workflow_dispatch run.
   # schedule:
-  #   - cron: '15 */6 * * *'
+  #   - cron: '45 */6 * * *'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  llama-cpp-quick-start:
+  whisper-cpp-quick-start:
     uses: ./.github/workflows/quick-start-template.yml
     with:
-      project: llama.cpp
+      project: whisper.cpp
       test_runner: '["linux-aarch64-a2-1"]'
       image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
       container_options: >-
@@ -36,7 +36,7 @@ jobs:
         --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
         --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
       timeout_minutes: 240
-      upstream_repo: ggml-org/llama.cpp
-      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/llama.cpp/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
-      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/llama.cpp/docs/Quick-start-Ascend.md
+      upstream_repo: ggml-org/whisper.cpp
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/whisper.cpp/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/whisper.cpp/docs/Quick-start-Ascend.md
       test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1

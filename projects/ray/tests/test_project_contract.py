@@ -64,10 +64,26 @@ class TestRayProjectContract(unittest.TestCase):
         test_ids = {command.id for command in commands if hasattr(command, "id")}
         self.assertEqual(
             test_ids,
-            {"check-environment", "ray-detects-npus", "ray-isolates-npus"},
+            {
+                "check-py",
+                "check-torch",
+                "ray-install",
+                "ray-detects-npus",
+                "ray-isolates-npus",
+            },
         )
         self.assertEqual(set(results), test_ids)
         text = doc_path.read_text(encoding="utf-8")
+        self.assertIn("## 前置条件", text)
+        self.assertIn("### 硬件", text)
+        self.assertIn("### 基础软件", text)
+        self.assertIn("### 本文档示例使用的版本", text)
+        self.assertIn("### 检查前置是否满足", text)
+        self.assertIn("| torch_npu | 2.9.0.post2 |", text)
+        self.assertIn("| Ray | 当前最新 release，Linux aarch64 wheel |", text)
+        self.assertIn("## 安装 Ray", text)
+        self.assertIn('python -m pip install -q -U "ray[default]"', text)
+        self.assertNotIn("ray[default]==", text)
         self.assertIn("ray-core/scheduling/accelerators", text)
         self.assertIn('resources={"NPU": 1}', text)
         self.assertIn("ASCEND_RT_VISIBLE_DEVICES", text)
@@ -89,14 +105,39 @@ class TestRayProjectContract(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("uses: ./.github/workflows/quick-start-template.yml", quick_workflow)
 
-    def test_example_setup_installs_the_target_commit_aarch64_wheel(self) -> None:
+    def test_example_setup_routes_release_to_pypi_and_dev_to_commit_wheel(
+        self,
+    ) -> None:
         setup_path = _REPO_ROOT / "projects" / "ray" / "scripts" / "setup_example.sh"
         text = setup_path.read_text(encoding="utf-8")
+        dev_branch = 'if [[ "$version" == *dev* ]]; then'
+        self.assertIn(dev_branch, text)
         self.assertIn("ray-wheels/master", text)
         self.assertIn("python/ray/_version.py", text)
         self.assertIn("manylinux2014_aarch64.whl", text)
         self.assertIn("requirement=\"ray[${extras}] @ ${wheel_url}\"", text)
+        self.assertLess(text.index(dev_branch), text.index('wheel_url="'))
+        self.assertIn('python -m pip install "ray[${extras}]==${version}"', text)
+        self.assertNotIn("falling back to the released aarch64 wheel", text)
         self.assertIn("install_target_ray train", text)
+
+    def test_train_profile_bootstraps_torch_after_npu_preflight(self) -> None:
+        setup_text = (
+            _REPO_ROOT / "projects" / "ray" / "scripts" / "setup_example.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn("ensure_torch_stack", setup_text)
+        setup_train = setup_text.split("setup_train()", 1)[1].split(
+            "supported_profiles()", 1
+        )[0]
+        self.assertIn("ensure_torch_stack", setup_train)
+
+        workflow_text = (
+            _REPO_ROOT / ".github" / "workflows" / "ray-examples.yml"
+        ).read_text(encoding="utf-8")
+        preflight = workflow_text.split("- name: Source CANN and check NPU", 1)[
+            1
+        ].split("- name: Setup test environment", 1)[0]
+        self.assertNotIn("import torch", preflight)
 
     def test_example_workflow_uses_the_project_local_checker(self) -> None:
         workflow_path = _REPO_ROOT / ".github" / "workflows" / "ray-examples.yml"

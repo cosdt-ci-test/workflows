@@ -86,18 +86,25 @@ def _safetensors_header_ok(path: Path) -> bool:
 
 
 def _purge_corrupt_models() -> None:
-    """Scan ``hub/models/*/*/blobs/*.safetensors`` and purge any
-    model dir that contains a corrupt shard. modelscope will
+    """Scan every ``*.safetensors`` file under each model dir and purge
+    the model dir if any shard is corrupt. modelscope will
     re-download the whole model on next access. No-op when the
-    cache root is absent (fresh container). Walk ``blobs/`` only,
-    not ``snapshots/``, to avoid double-counting symlinks."""
+    cache root is absent (fresh container).
+
+    Walks the full model dir (not just ``blobs/``) because
+    ModelScope's layout is ``<model_dir>/<revision>/*.safetensors``
+    — unlike HuggingFace Hub which uses ``blobs/`` + symlinks.
+    ``safe_open`` resolves symlinks transparently, so this catches
+    both physical files and blob symlinks if a future modelscope
+    release switches to one."""
     hub_models = _MODELSCOPE_CACHE / 'hub' / 'models'
     if not hub_models.exists():
         return
-    for blobs in hub_models.glob('*/*/blobs'):
-        model_dir = blobs.parent
+    for model_dir in hub_models.glob('*/*'):
+        if not model_dir.is_dir():
+            continue
         corrupt = [
-            p for p in blobs.rglob('*.safetensors')
+            p for p in model_dir.rglob('*.safetensors')
             if not _safetensors_header_ok(p)
         ]
         if not corrupt:
@@ -279,9 +286,9 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
         # 5) Cache validation: persistent host-side bind mount can hold
         # truncated safetensors from interrupted runs. Walk every shard
-        # under hub/models/*/*/blobs/ and purge the parent model dir
-        # on failure; modelscope will re-download cleanly on next
-        # access. See module-level helpers above for the full rationale.
+        # under each model dir and purge it on failure; modelscope
+        # will re-download cleanly on next access. See module-level
+        # helpers above for the full rationale.
         _purge_corrupt_models()
 
     # ----------------------------------------------------------

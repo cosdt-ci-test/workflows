@@ -187,7 +187,7 @@ model = AutoModelForCausalLM.from_pretrained(
 ).to("npu:0")
 
 peft_config = LoraConfig(
-    r=8,
+    r=16,
     lora_alpha=32,
     task_type=TaskType.CAUSAL_LM,
 )
@@ -219,17 +219,18 @@ model = AutoModelForCausalLM.from_pretrained(
 ).to("npu:0")
 peft_model = get_peft_model(
     model,
-    LoraConfig(r=8, lora_alpha=32, task_type=TaskType.CAUSAL_LM),
+    LoraConfig(r=16, lora_alpha=32, task_type=TaskType.CAUSAL_LM),
 )
 peft_model.save_pretrained("output/peft-adapter")
-print("saved adapter to output/peft-adapter")
 PY
+ls output/peft-adapter/adapter_model.safetensors output/peft-adapter/adapter_config.json
 ```
 
 输出结果如下：
 
 ```shell #test-result id="save-adapter"
-saved adapter to output/peft-adapter
+output/peft-adapter/adapter_model.safetensors
+output/peft-adapter/adapter_config.json
 ```
 
 ## 加载用于推理的 PEFT 模型

@@ -9,6 +9,11 @@
 echo $UPSTREAM_REF
 ```
 -->
+<!--
+```shell #test-setup
+pip install mpi4py
+```
+-->
 
 ---
 

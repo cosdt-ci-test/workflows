@@ -4,9 +4,11 @@
 
 [DeepSpeed](https://github.com/deepspeedai/DeepSpeed) 是微软开源的深度学习训练优化库，通过 **NPU 加速器**（`accelerator/npu_accelerator.py`）自动适配昇腾硬件，加速器名称为 `npu`。
 
-<!-- ```shell #test-setup store="upstream_ref"
+<!--
+```shell #test-setup store="upstream_ref"
 echo $UPSTREAM_REF
-``` -->
+```
+-->
 
 ---
 

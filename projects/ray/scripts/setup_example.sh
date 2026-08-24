@@ -40,6 +40,25 @@ raise SystemExit(
   python -c 'import torch, torch_npu; assert torch.npu.is_available(); print(torch.__version__, torch_npu.__version__, torch.npu.device_count())'
 }
 
+install_test_dependencies() {
+  local profile="$1"
+  local test_requirements="$TARGET_ROOT/python/requirements/test-requirements.txt"
+  local train_requirements="$TARGET_ROOT/python/requirements/ml/train-test-requirements.txt"
+  local resolver
+  local resolver_args=(--requirement "$test_requirements" pytest)
+  local resolved
+  local packages
+  resolver="$(dirname "${BASH_SOURCE[0]}")/resolve_test_requirements.py"
+
+  if [[ "$profile" == "train" ]]; then
+    resolver_args+=(--requirement "$train_requirements" boto3)
+  fi
+
+  resolved=$(python "$resolver" "${resolver_args[@]}")
+  mapfile -t packages <<< "$resolved"
+  python -m pip install "${packages[@]}"
+}
+
 ray_version() {
   python - "$TARGET_ROOT/python/ray/_version.py" <<'PY'
 import re
@@ -88,17 +107,18 @@ install_target_ray() {
       python -m pip install "ray==${version}"
     fi
   fi
-  python -m pip install pytest mock
   python -c 'import ray; print("ray", ray.__version__, ray.__file__)'
 }
 
 setup_core() {
   install_target_ray ""
+  install_test_dependencies core
 }
 
 setup_train() {
   ensure_torch_stack
   install_target_ray train
+  install_test_dependencies train
 }
 
 supported_profiles() {

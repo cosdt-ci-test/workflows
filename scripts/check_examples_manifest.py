@@ -4,8 +4,10 @@
 The manifest's scan section decides what to scan. Default unit is
 files (root + include_extensions). unit: directories treats each
 child directory as one example (optional marker file, max_depth).
-Writes a machine-readable JSON result (new/stale paths, supported
-entries, target repo/ref) to --result-json and stdout.
+unit: mixed unions depth-limited directories (marker optional) with
+depth-limited files. Writes a machine-readable JSON result
+(new/stale paths, supported entries, target repo/ref) to
+--result-json and stdout.
 Writes supported_matrix and has_supported to GITHUB_OUTPUT when set.
 
 New/stale paths are recorded but do not fail the check, with one
@@ -27,41 +29,9 @@ from pathlib import Path
 
 import yaml
 
-DEFAULT_SCAN_ROOT = 'examples'
-DEFAULT_INCLUDE_EXTENSIONS = ('.sh', '.py', '.yaml')
-DEFAULT_SCAN_UNIT = 'files'
-DEFAULT_DIR_MARKER = 'CMakeLists.txt'
-DEFAULT_DIR_MAX_DEPTH = 1
-SCAN_UNITS = ('files', 'directories')
+from examples_manifest_scan import load_scan, scan_examples
+
 NPU_DEVICES_RE = re.compile(r'^\d+(,\d+)*$')
-
-
-def load_scan(scan: dict) -> dict:
-    unit = scan.get('unit') or DEFAULT_SCAN_UNIT
-    if unit not in SCAN_UNITS:
-        raise SystemExit(
-            f'scan.unit must be one of {SCAN_UNITS}, got {unit!r}')
-    max_depth = scan.get('max_depth', DEFAULT_DIR_MAX_DEPTH)
-    if not isinstance(max_depth, int) or max_depth < 1:
-        raise SystemExit(
-            f'scan.max_depth must be an integer >= 1, got {max_depth!r}')
-    marker = scan.get('marker')
-    if unit == 'directories':
-        if marker is None:
-            marker = DEFAULT_DIR_MARKER
-        elif not isinstance(marker, str) or not marker.strip():
-            raise SystemExit('scan.marker must be a non-empty string')
-        marker = marker.strip()
-    elif marker is not None:
-        marker = None
-    return {
-        'scan_root': scan.get('root') or DEFAULT_SCAN_ROOT,
-        'unit': unit,
-        'marker': marker,
-        'max_depth': max_depth,
-        'include_extensions': tuple(
-            scan.get('include_extensions') or DEFAULT_INCLUDE_EXTENSIONS),
-    }
 
 
 def load_manifest(path: Path) -> dict:
@@ -72,42 +42,15 @@ def load_manifest(path: Path) -> dict:
     return loaded
 
 
-def scan_file_units(examples_root: Path, target_root: Path,
-                    include_extensions: tuple[str, ...]) -> list[str]:
-    found: list[str] = []
-    for path in sorted(examples_root.rglob('*')):
-        if path.is_file() and path.suffix in include_extensions:
-            found.append(path.relative_to(target_root).as_posix())
-    return found
+def listed_paths(manifest: dict) -> set[str]:
+    paths = {item['path'] for item in manifest['supported'] if item.get('path')}
+    paths.update(path for path in manifest['unsupported'] if path)
+    return paths
 
 
-def scan_directory_units(examples_root: Path, target_root: Path,
-                         marker: str, max_depth: int) -> list[str]:
-    found: list[str] = []
-
-    def visit(directory: Path, depth: int) -> None:
-        if depth >= max_depth:
-            return
-        for child in sorted(directory.iterdir(), key=lambda item: item.name):
-            if not child.is_dir():
-                continue
-            if (child / marker).is_file():
-                found.append(child.relative_to(target_root).as_posix())
-            visit(child, depth + 1)
-
-    visit(examples_root, 0)
-    return found
-
-
-def scan_examples(target_root: Path, scan: dict) -> list[str]:
-    examples_root = target_root / scan['scan_root']
-    if not examples_root.is_dir():
-        raise SystemExit(f"{scan['scan_root']}/ not found under {target_root}")
-    if scan['unit'] == 'directories':
-        return scan_directory_units(
-            examples_root, target_root, scan['marker'], scan['max_depth'])
-    return scan_file_units(
-        examples_root, target_root, scan['include_extensions'])
+def missing_on_disk(target_root: Path, paths: set[str]) -> list[str]:
+    return sorted(
+        path for path in paths if not (target_root / path).exists())
 
 
 def device_options_from_npu_devices(npu_devices: str) -> str:
@@ -207,16 +150,15 @@ def main() -> None:
     target_root = Path(args.target_root).resolve()
     manifest = load_manifest(Path(args.manifest))
     scanned = set(scan_examples(target_root, manifest))
-    supported_paths = {item['path'] for item in manifest['supported']}
-    listed = supported_paths | set(manifest['unsupported'])
+    listed = listed_paths(manifest)
     new_paths = sorted(scanned - listed)
-    stale_paths = sorted(listed - scanned)
+    stale_paths = missing_on_disk(target_root, listed)
     write_result(args.result_json, args.trigger, args.target_repo,
                  args.target_ref, new_paths, stale_paths, manifest['supported'])
     write_github_output(matrix_entries(manifest['supported']))
-    missing_supported = sorted(
-        path for path in supported_paths
-        if not (target_root / path).exists())
+    missing_supported = missing_on_disk(
+        target_root, {item['path'] for item in manifest['supported']
+                      if item.get('path')})
     if missing_supported:
         for path in missing_supported:
             print(f'supported example missing from target tree: {path}',

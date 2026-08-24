@@ -11,6 +11,7 @@ echo $UPSTREAM_REF
 -->
 <!--
 ```shell #test-setup
+apt-get update && apt-get install -y libopenmpi-dev
 pip install mpi4py
 ```
 -->

@@ -76,7 +76,12 @@ def _safetensors_header_ok(path: Path) -> bool:
     Returns True iff ``safe_open`` accepts the file (header parses,
     tensor offsets fit within the file). ``SafetensorError`` or
     ``OSError`` means the shard is unusable."""
-    from safetensors import safe_open, SafetensorError
+    # Lazy import: prepare_environment installs safetensors
+    # defensively above (step 4), so the module must load even when
+    # the package isn't installed yet on this Python. noqa because
+    # Ruff I001 wants this at module top, which would break that
+    # contract.
+    from safetensors import safe_open, SafetensorError  # noqa: I001
     try:
         with safe_open(str(path), framework='pt') as f:
             list(f.keys())  # force header read

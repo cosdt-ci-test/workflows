@@ -105,13 +105,20 @@ class TestRayProjectContract(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("uses: ./.github/workflows/quick-start-template.yml", quick_workflow)
 
-    def test_example_setup_installs_the_target_commit_aarch64_wheel(self) -> None:
+    def test_example_setup_routes_release_to_pypi_and_dev_to_commit_wheel(
+        self,
+    ) -> None:
         setup_path = _REPO_ROOT / "projects" / "ray" / "scripts" / "setup_example.sh"
         text = setup_path.read_text(encoding="utf-8")
+        dev_branch = 'if [[ "$version" == *dev* ]]; then'
+        self.assertIn(dev_branch, text)
         self.assertIn("ray-wheels/master", text)
         self.assertIn("python/ray/_version.py", text)
         self.assertIn("manylinux2014_aarch64.whl", text)
         self.assertIn("requirement=\"ray[${extras}] @ ${wheel_url}\"", text)
+        self.assertLess(text.index(dev_branch), text.index('wheel_url="'))
+        self.assertIn('python -m pip install "ray[${extras}]==${version}"', text)
+        self.assertNotIn("falling back to the released aarch64 wheel", text)
         self.assertIn("install_target_ray train", text)
 
     def test_train_profile_bootstraps_torch_after_npu_preflight(self) -> None:

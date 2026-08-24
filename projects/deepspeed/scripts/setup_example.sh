@@ -63,8 +63,11 @@ print('DeepSpeed version:', deepspeed.__version__)
   ds_report 2>&1 | grep -i 'npu' || {
     echo 'WARNING: ds_report did not list npu accelerator'
   }
+  echo "installing MPI runtime for deepspeed.initialize distributed discovery"
+  apt-get update && apt-get install -y libopenmpi-dev
+  python -m pip install mpi4py
   echo "installing HelloDeepSpeed dependencies"
-  python -m pip install transformers datasets fire loguru sh tqdm
+  python -m pip install datasets==1.13.3 transformers fire loguru sh tqdm
 }
 
 supported_profiles() {

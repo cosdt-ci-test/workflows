@@ -664,13 +664,18 @@ class MarkdownDocTestBase(ABC):
             )
 
         # urllib has no default timeout: network noise can hang. Retry once with 30s timeout each.
+        # NPU runners can reach api.github.com but not raw.githubusercontent.com.
+        # Contents API URLs need Accept: raw plus the workflow token.
         last_err: Exception | None = None
+        headers = {'User-Agent': self.USER_AGENT}
+        token = os.environ.get('GITHUB_TOKEN') or os.environ.get('GH_TOKEN')
+        if token:
+            headers['Authorization'] = f'Bearer {token}'
+        if 'api.github.com' in url:
+            headers['Accept'] = 'application/vnd.github.raw'
         for attempt in range(2):
             try:
-                req = urllib.request.Request(
-                    url,
-                    headers={'User-Agent': self.USER_AGENT},
-                )
+                req = urllib.request.Request(url, headers=headers)
                 with urllib.request.urlopen(req, timeout=30) as resp:
                     return resp.read().decode('utf-8')
             except (urllib.error.URLError, TimeoutError, OSError) as e:

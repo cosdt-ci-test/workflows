@@ -1,0 +1,144 @@
+version: 1
+scan:
+  root: examples
+  unit: mixed
+  max_depth: 1
+  include_extensions: ['.sh', '.py']
+supported:
+  - path: examples/cli
+    profile: cann
+    runner: linux-aarch64-a2-1
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    exec: build/bin/whisper-cli
+    overlay_args:
+      - -m ${WHISPER_CI_MODEL}
+      - -f ${TARGET_ROOT}/samples/jfk.wav
+      - -t 4
+      - --device 0
+    timeout_minutes: 60
+  - path: examples/bench
+    profile: cann
+    runner: linux-aarch64-a2-1
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    exec: build/bin/whisper-bench
+    overlay_args:
+      - -m ${WHISPER_CI_MODEL}
+      - -t 4
+    timeout_minutes: 60
+  - path: examples/quantize
+    profile: host
+    runner: linux-aarch64-a2-1
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    exec: build/bin/whisper-quantize
+    overlay_args:
+      - ${WHISPER_CI_MODEL}
+      - ${CI_OUTPUT_DIR}/tiny.en-q8_0.bin
+      - q8_0
+    timeout_minutes: 60
+  - path: examples/parakeet-quantize
+    profile: host
+    runner: linux-aarch64-a2-1
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    exec: build/bin/parakeet-quantize
+    overlay_args:
+      - ${PARAKEET_CI_MODEL}
+      - ${CI_OUTPUT_DIR}/parakeet-tdt-q8_0.bin
+      - q8_0
+    timeout_minutes: 90
+  - path: examples/parakeet-cli
+    profile: parakeet
+    runner: linux-aarch64-a2-1
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    exec: build/bin/parakeet-cli
+    overlay_args:
+      - -m ${PARAKEET_CI_MODEL}
+      - -f ${TARGET_ROOT}/samples/jfk.wav
+      - -t 4
+      - --device 0
+    timeout_minutes: 60
+  - path: examples/test-cmake
+    profile: cmake-pkg
+    runner: linux-aarch64-a2-1
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    exec: examples/test-cmake/build/test-cmake
+    timeout_minutes: 90
+  - path: examples/vad-speech-segments
+    profile: vad
+    runner: linux-aarch64-a2-1
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    exec: build/bin/whisper-vad-speech-segments
+    overlay_args:
+      - -vm ${WHISPER_CI_VAD_MODEL}
+      - -f ${TARGET_ROOT}/samples/jfk.wav
+      - -t 4
+    timeout_minutes: 60
+  - path: examples/addon.node
+    profile: node
+    runner: linux-aarch64-a2-1
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    exec: build/Release/addon.node
+    overlay_args:
+      - --model=${WHISPER_CI_MODEL}
+      - --fname_inp=${TARGET_ROOT}/samples/jfk.wav
+      - --language=en
+    timeout_minutes: 90
+  - path: examples/server
+    profile: cann
+    runner: linux-aarch64-a2-1
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    exec: build/bin/whisper-server
+    overlay_args:
+      - -m ${WHISPER_CI_MODEL}
+      - -t 4
+      - --device 0
+      - --host 127.0.0.1
+      - --port 18080
+    timeout_minutes: 60
+unsupported:
+  # Browser / WebAssembly ports.
+  - examples/bench.wasm
+  - examples/command.wasm
+  - examples/stream.wasm
+  - examples/whisper.wasm
+  # WASM static file server. serve_forever. Real HTTP inference is examples/server.
+  - examples/server.py
+  # Thin wrapper around the retired ./main binary. In-tree fixture is missing.
+  - examples/python
+  # Microphone + sox + ffplay. Interactive.
+  - examples/generate-karaoke.sh
+  # External live stream and an infinite loop.
+  - examples/livestream.sh
+  # Twitch + streamlink. Infinite loop.
+  - examples/twitch.sh
+  # YouTube VOD via yt-dlp + ffmpeg. Unbounded download and mainland network.
+  - examples/yt-wsp.sh
+  # Microphone + SDL2 interactive tools.
+  - examples/command
+  - examples/stream
+  # Rename shim. Always exits failure.
+  - examples/deprecation-warning
+  # Long-running language server. Also gated on WHISPER_SDL2.
+  - examples/lsp
+  # Intel SYCL backend.
+  - examples/sycl
+  # Needs llama.cpp plus SDL2 and a microphone.
+  - examples/talk-llama
+  # Voice-controlled chess, SDL2 / interactive.
+  - examples/wchess
+  # Android SDK / NDK / device. JNI is CPU.
+  - examples/whisper.android
+  - examples/whisper.android.java
+  # Neovim + microphone + interactive stream.
+  - examples/whisper.nvim
+  # Xcode / iOS / macOS platform ports.
+  - examples/whisper.objc
+  - examples/whisper.swiftui

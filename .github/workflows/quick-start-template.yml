@@ -157,6 +157,7 @@ jobs:
       # caller's inputs (caller env does not cross the `uses:` boundary).
       UPSTREAM_REPO: ${{ inputs.upstream_repo }}
       MONITORED_DOC_URL: ${{ inputs.doc_url }}
+      GH_TOKEN: ${{ github.token }}
       GH_API: https://api.github.com
       # Cluster-internal nginx PyPI cache fronts every package
       # (PEP 517 build deps + NPU wheels), so installs don't fall
@@ -282,7 +283,10 @@ jobs:
           # already covers the test path, and a missed doc signal just
           # delays the next doc-driven cycle until the next schedule.
           if [ "$SKIP_DOC" = "false" ]; then
-            if ! CURRENT_DOC_HASH=$(curl -fsSL --retry 3 --max-time 30 "$DOC_URL" \
+            if ! CURRENT_DOC_HASH=$(curl -fsSL --retry 3 --max-time 30 \
+                                    -H "Authorization: Bearer $GH_TOKEN" \
+                                    -H "Accept: application/vnd.github.raw" \
+                                    "$DOC_URL" \
                                     | sha256sum | cut -d' ' -f1); then
               echo "monitor: doc signal not fired (fetch failed; release signal, if any, still drives the cycle)"
             elif [ "$doc_hash" != "$CURRENT_DOC_HASH" ]; then

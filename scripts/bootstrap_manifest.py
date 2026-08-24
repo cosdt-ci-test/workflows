@@ -9,7 +9,8 @@ task rule, not a community judgment.
 control what is scanned and are recorded in the manifest's scan
 section, which the CI-side check_examples_manifest.py replays.
 Default unit is files (.sh / .py / .yaml). unit=directories treats
-each child directory as one example. --runner / --npu-devices /
+each child directory as one example. unit=mixed unions depth-limited
+directories with depth-limited files. --runner / --npu-devices /
 --image / --timeout-minutes / --profile apply to every supported
 entry; entries that need different values must be edited by hand
 afterwards. overlay_args and exec are optional and left as comments
@@ -23,58 +24,15 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-DEFAULT_SCAN_ROOT = 'examples'
-DEFAULT_INCLUDE_EXTENSIONS = ('.sh', '.py', '.yaml')
-DEFAULT_SCAN_UNIT = 'files'
-DEFAULT_DIR_MARKER = 'CMakeLists.txt'
-DEFAULT_DIR_MAX_DEPTH = 1
-SCAN_UNITS = ('files', 'directories')
-
-
-def normalize_extension(ext: str) -> str:
-    ext = ext.strip()
-    if not ext:
-        raise SystemExit('empty value passed to --include-extension')
-    return ext if ext.startswith('.') else f'.{ext}'
-
-
-def scan_file_units(examples_root: Path, target_root: Path,
-                    include_extensions: tuple[str, ...]) -> list[str]:
-    found: list[str] = []
-    for path in sorted(examples_root.rglob('*')):
-        if path.is_file() and path.suffix in include_extensions:
-            found.append(path.relative_to(target_root).as_posix())
-    return found
-
-
-def scan_directory_units(examples_root: Path, target_root: Path,
-                         marker: str, max_depth: int) -> list[str]:
-    found: list[str] = []
-
-    def visit(directory: Path, depth: int) -> None:
-        if depth >= max_depth:
-            return
-        for child in sorted(directory.iterdir(), key=lambda item: item.name):
-            if not child.is_dir():
-                continue
-            if (child / marker).is_file():
-                found.append(child.relative_to(target_root).as_posix())
-            visit(child, depth + 1)
-
-    visit(examples_root, 0)
-    return found
-
-
-def scan_examples(target_root: Path, scan_root: str, unit: str,
-                  include_extensions: tuple[str, ...], marker: str,
-                  max_depth: int) -> list[str]:
-    examples_root = target_root / scan_root
-    if not examples_root.is_dir():
-        raise SystemExit(f'{scan_root}/ not found under {target_root}')
-    if unit == 'directories':
-        return scan_directory_units(
-            examples_root, target_root, marker, max_depth)
-    return scan_file_units(examples_root, target_root, include_extensions)
+from examples_manifest_scan import (
+    DEFAULT_DIR_MARKER,
+    DEFAULT_DIR_MAX_DEPTH,
+    DEFAULT_SCAN_ROOT,
+    DEFAULT_SCAN_UNIT,
+    SCAN_UNITS,
+    load_scan,
+    scan_examples,
+)
 
 
 def render_supported_entry(
@@ -103,7 +61,7 @@ def render_supported_entry(
         lines.append(f'    image: {image}')
     else:
         lines.append('    # image: <swr-image>')
-    if unit == 'directories':
+    if unit in ('directories', 'mixed'):
         lines.append('    # exec: build/bin/<binary>')
     lines.append('    # overlay_args: []')
     if timeout_minutes is not None:
@@ -113,23 +71,26 @@ def render_supported_entry(
     return lines
 
 
-def render_scan_section(
-    scan_root: str,
-    unit: str,
-    include_extensions: tuple[str, ...],
-    marker: str,
-    max_depth: int,
-) -> list[str]:
+def render_scan_section(scan: dict) -> list[str]:
     lines = [
         'scan:',
-        f'  root: {scan_root}',
+        f"  root: {scan['scan_root']}",
     ]
+    unit = scan['unit']
     if unit == 'directories':
         lines.append('  unit: directories')
-        lines.append(f'  marker: {marker}')
-        lines.append(f'  max_depth: {max_depth}')
+        lines.append(f"  marker: {scan['marker']}")
+        lines.append(f"  max_depth: {scan['max_depth']}")
         return lines
-    rendered_extensions = ', '.join(f"'{ext}'" for ext in include_extensions)
+    rendered_extensions = ', '.join(
+        f"'{ext}'" for ext in scan['include_extensions'])
+    if unit == 'mixed':
+        lines.append('  unit: mixed')
+        lines.append(f"  max_depth: {scan['max_depth']}")
+        if scan['marker']:
+            lines.append(f"  marker: {scan['marker']}")
+        lines.append(f'  include_extensions: [{rendered_extensions}]')
+        return lines
     lines.append(f'  include_extensions: [{rendered_extensions}]')
     return lines
 
@@ -137,11 +98,7 @@ def render_scan_section(
 def render_manifest(
     paths: list[str],
     supported_paths: list[str],
-    scan_root: str,
-    unit: str,
-    include_extensions: tuple[str, ...],
-    marker: str,
-    max_depth: int,
+    scan: dict,
     runner: str | None,
     npu_devices: str | None,
     image: str | None,
@@ -155,15 +112,14 @@ def render_manifest(
     unsupported = [p for p in paths if p not in supported_set]
     lines = [
         'version: 1',
-        *render_scan_section(
-            scan_root, unit, include_extensions, marker, max_depth),
+        *render_scan_section(scan),
         'supported:',
     ]
     if supported_paths:
         for path in supported_paths:
             lines.extend(render_supported_entry(
                 path, runner, npu_devices, image, timeout_minutes,
-                profile, unit,
+                profile, scan['unit'],
             ))
     else:
         lines.append('  []')
@@ -172,6 +128,19 @@ def render_manifest(
         lines.append(f'  - {path}')
     lines.append('')
     return '\n'.join(lines)
+
+
+def scan_from_args(args: argparse.Namespace) -> dict:
+    raw: dict = {
+        'root': args.scan_root,
+        'unit': args.unit,
+        'max_depth': args.max_depth,
+    }
+    if args.include_extension is not None:
+        raw['include_extensions'] = args.include_extension
+    if args.marker is not None:
+        raw['marker'] = args.marker
+    return load_scan(raw)
 
 
 def main() -> None:
@@ -194,8 +163,8 @@ def main() -> None:
         action='append',
         default=None,
         help="File extension to scan, with or without the leading dot "
-             "(default: .sh .py .yaml). Repeatable. Ignored when "
-             "--unit directories.",
+             "(default: .sh .py .yaml for files, .sh .py for mixed). "
+             "Repeatable. Ignored when --unit directories.",
     )
     parser.add_argument(
         '--unit',
@@ -207,7 +176,8 @@ def main() -> None:
         '--marker',
         default=None,
         help='File that must exist in a directory unit '
-             f'(default: {DEFAULT_DIR_MARKER} when --unit directories)',
+             f'(default: {DEFAULT_DIR_MARKER} when --unit directories; '
+             'omit or pass empty for mixed with no marker)',
     )
     parser.add_argument(
         '--max-depth',
@@ -224,30 +194,11 @@ def main() -> None:
     args = parser.parse_args()
     target_root = Path(args.target_root).resolve()
     output = Path(args.output)
-    if args.max_depth < 1:
-        raise SystemExit('--max-depth must be >= 1')
-    if args.unit == 'directories':
-        marker = (args.marker or DEFAULT_DIR_MARKER).strip()
-        if not marker:
-            raise SystemExit('--marker must be a non-empty string')
-        include_extensions = DEFAULT_INCLUDE_EXTENSIONS
-    else:
-        marker = DEFAULT_DIR_MARKER
-        if args.include_extension is None:
-            include_extensions = DEFAULT_INCLUDE_EXTENSIONS
-        else:
-            include_extensions = tuple(
-                normalize_extension(ext) for ext in args.include_extension)
+    scan = scan_from_args(args)
     text = render_manifest(
-        scan_examples(
-            target_root, args.scan_root, args.unit, include_extensions,
-            marker, args.max_depth),
+        scan_examples(target_root, scan),
         args.supported,
-        args.scan_root,
-        args.unit,
-        include_extensions,
-        marker,
-        args.max_depth,
+        scan,
         args.runner,
         args.npu_devices,
         args.image,

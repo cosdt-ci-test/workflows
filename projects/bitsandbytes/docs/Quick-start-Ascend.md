@@ -177,6 +177,8 @@ NF4 forward on Ascend NPU: OK
 - 分页优化器 / Intel XPU 示例
 - 未合入的 [PR #1695](https://github.com/bitsandbytes-foundation/bitsandbytes/pull/1695) 以及 `multi-backend-refactor` / `bitsandbytes-npu-beta` 分支
 
+需要 8-bit 权重量化或分页优化器时，走昇腾侧已有的方案，而不是等 bitsandbytes 官方后端。常见方向是 MindIE / msModelSlim 的 W8A8，以及 AWQ / GPTQ。
+
 ---
 
 ## 故障排查

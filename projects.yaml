@@ -47,3 +47,13 @@ projects:
     workflows:
       examples: .github/workflows/ray-examples.yml
       quick_start: .github/workflows/ray-quick-start.yml
+  - name: deepspeed
+    category: 训练加速
+    support_level: 基础支持
+    upstream_repo: deepspeedai/DeepSpeed
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/deepspeed
+    workflows:
+      examples: .github/workflows/deepspeed-examples.yml
+      quick_start: .github/workflows/deepspeed-quick-start.yml

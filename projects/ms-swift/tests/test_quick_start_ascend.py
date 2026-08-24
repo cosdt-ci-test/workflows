@@ -90,7 +90,7 @@ def _safetensors_header_ok(path: Path) -> bool:
     return True
 
 
-def _purge_corrupt_models() -> None:
+def _purge_corrupt_models(cache_root: Path) -> None:
     """Scan every ``*.safetensors`` file under each model dir and purge
     the model dir if any shard is corrupt. modelscope will
     re-download the whole model on next access. No-op when the
@@ -101,8 +101,14 @@ def _purge_corrupt_models() -> None:
     — unlike HuggingFace Hub which uses ``blobs/`` + symlinks.
     ``safe_open`` resolves symlinks transparently, so this catches
     both physical files and blob symlinks if a future modelscope
-    release switches to one."""
-    hub_models = _MODELSCOPE_CACHE / 'hub' / 'models'
+    release switches to one.
+
+    ``cache_root`` is the modelscope cache root (i.e. the value of
+    ``$MODELSCOPE_CACHE`` or its default ``~/.cache/modelscope``).
+    Passed in as a parameter so the function is reusable from
+    tests with a tmp dir and doesn't carry an implicit dependency
+    on the module-level ``_MODELSCOPE_CACHE`` constant."""
+    hub_models = cache_root / 'hub' / 'models'
     if not hub_models.exists():
         return
     for model_dir in hub_models.glob('*/*'):
@@ -294,7 +300,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         # under each model dir and purge it on failure; modelscope
         # will re-download cleanly on next access. See module-level
         # helpers above for the full rationale.
-        _purge_corrupt_models()
+        _purge_corrupt_models(_MODELSCOPE_CACHE)
 
     # ----------------------------------------------------------
     # test entry

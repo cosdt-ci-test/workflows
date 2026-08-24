@@ -12,8 +12,8 @@ echo $UPSTREAM_REF
 <!--
 ```shell #test-setup
 apt-get update -y
-apt-get install -y numactl 2>/dev/null || true
-pip install --upgrade tokenizers 2>/dev/null || true
+apt-get install -y numactl
+pip install transformers datasets fire loguru sh tqdm
 ```
 -->
 
@@ -124,7 +124,7 @@ accelerator: npu
 ```shell #test id="train-hd"
 git clone https://github.com/deepspeedai/DeepSpeedExamples.git
 cd DeepSpeedExamples/training/HelloDeepSpeed
-pip install -r requirements.txt
+pip install --no-deps -r requirements.txt
 deepspeed --bind_cores_to_rank train_bert_ds.py \
     --checkpoint_dir ./experiment_deepspeed \
     --num_layers 2 \

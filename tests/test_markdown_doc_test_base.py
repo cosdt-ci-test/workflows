@@ -532,9 +532,11 @@ class TestEndToEndV2Doc(unittest.TestCase):
         with open(self.DOC_PATH) as f:
             text = f.read()
         commands, results = _Bare().parse(text)
-        # v2 文档包含 9 个 commands + 6 个 expected outputs
-        self.assertEqual(len(commands), 9)
-        self.assertEqual(len(results), 6)
+        # v2 文档包含 11 个 commands + 7 个 expected outputs
+        # (b3e3d53 把 transformers/peft/modelscope 依赖安装挪进文档，
+        # 新增 1 个无 store 的 #test-setup + 1 个 #test install-deps)
+        self.assertEqual(len(commands), 11)
+        self.assertEqual(len(results), 7)
         # 两个 hidden setup（uninstall 无 store + upstream_ref 有 store）
         hidden_setups = [
             c for c in commands

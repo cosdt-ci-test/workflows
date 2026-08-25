@@ -1,0 +1,83 @@
+# diffusers quick start guard - project thin trigger.
+#
+# Calls the common engine .github/workflows/quick-start-template.yml;
+# this file only declares what varies per project: schedule,
+# concurrency, runner, container image + options, upstream repo,
+# monitored doc, and the test entry command. The guard loop, cache
+# I/O, state relay and publishing all live in the engine.
+#
+# Device mounts: davinci0 only - the doc examples are single-card and
+# check-torch expects `count: 1`.
+#
+# Modelscope cache: the doc's slowest block downloads Qwen-Image (~58 GB),
+# so unlike ms-swift/peft (run-scoped container-local cache), this project
+# persists downloads across runs. The bind-mount is project-isolated
+# (/data/ci-cache/modelscope/diffusers - per-project subdir under the
+# shared modelscope cache root, NOT the shared root itself) so this
+# project's 58 GB never collides with other projects' cache entries.
+# Stale/corrupt leftovers are handled by the test's prepare_environment
+# (workflows.modelscope_cache.purge_corrupt_models: safetensors header
+# validation per shard, model dir wiped on failure), so a dirty cache
+# self-heals instead of failing the run.
+
+name: diffusers-quick-start
+
+concurrency:
+  # format() is load-bearing: a '||' between 'manual-' and
+  # github.run_id would short-circuit on the truthy literal and
+  # every dispatch would share one 'manual-' group.
+  group: ${{ github.event_name == 'schedule' && 'diffusers-quick-start-schedule' || format('manual-{0}', github.run_id) }}
+  # cancel-in-progress: false because (1) a schedule run cancelled
+  # mid-way loses its outcome writeback - the outcome is what makes
+  # the retry mechanism work, and the 'if: always()' guard isn't
+  # enough when the container is being torn down; (2) dispatch runs
+  # already live in unique groups so there's nothing to cancel.
+  cancel-in-progress: false
+
+on:
+  schedule:
+    # Run every 3 hours: '0 */3 * * *' fires at minute 0 of every
+    # 3rd hour (00:00, 03:00, 06:00, ...). GitHub Actions caps
+    # schedule at 5 min minimum, so tighter cadences need
+    # workflow_dispatch instead.
+    - cron: '0 */3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diffusers-quick-start:
+    uses: ./.github/workflows/quick-start-template.yml
+    with:
+      # Namespaces cache keys (monitor-state-diffusers-*), artifacts
+      # (diffusers-quick-start-<run_id>) and the test working dir
+      # (workflows/projects/diffusers).
+      project: diffusers
+      # Self-hosted NPU runner for the test job only; the engine pins
+      # the cache I/O jobs (restore-cache / publish-and-persist) to
+      # GitHub-hosted ubuntu-latest.
+      test_runner: '["linux-aarch64-a2-2"]'
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+      container_options: >-
+        --privileged --shm-size=64g
+        --device=/dev/davinci0
+        --device=/dev/davinci_manager
+        --device=/dev/devmm_svm
+        --device=/dev/hisi_hdc
+        --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
+        --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
+        --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
+        --volume=/data/ci-cache/modelscope/diffusers:/root/.cache/modelscope
+      timeout_minutes: 180
+      upstream_repo: huggingface/diffusers
+      # Raw URL the engine's monitor hashes and the test fetches;
+      # doc-hash state lives under the monitor-state-diffusers- cache
+      # prefix.
+      doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/diffusers/docs/Quick-start-Ascend.md
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/diffusers/docs/Quick-start-Ascend.md
+      # cwd is workflows/projects/diffusers; env contract (MONITORED_DOC_URL /
+      # UPSTREAM_REF / NPU_READY) is injected by the engine. All project
+      # env prep and installs live in the test subclass's
+      # prepare_environment hook.
+      test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1

@@ -114,6 +114,17 @@ def purge_corrupt_models(cache_root: Path) -> None:
     symlinks transparently, so this also catches a future
     modelscope release that switches to the HF-style layout.
 
+    For dotted model ids (``Qwen2.5-...``), modelscope stores the
+    files in a masked dir (``.`` → ``___``) plus a *symlink* named
+    after the original id for readability. ``is_dir()`` follows the
+    symlink, so without the ``not is_symlink()`` filter both entries
+    match: each shard gets validated twice, and when a corrupt shard
+    triggers the purge, ``shutil.rmtree`` on the symlink entry raises
+    ``OSError`` (rmtree refuses symlinks by design) and crashes
+    ``prepare_environment`` — exactly in the scenario the purge
+    exists for. Skipping the symlink entries keeps the purge on the
+    masked dir only.
+
     Parameters
     ----------
     cache_root : Path
@@ -127,7 +138,10 @@ def purge_corrupt_models(cache_root: Path) -> None:
     if not hub_models.exists():
         print(f'cache: miss ({hub_models} not present yet); nothing to validate')
         return
-    model_dirs = [d for d in hub_models.glob('*/*') if d.is_dir()]
+    model_dirs = [
+        d for d in hub_models.glob('*/*')
+        if d.is_dir() and not d.is_symlink()
+    ]
     purged = 0
     for model_dir in model_dirs:
         corrupt = [

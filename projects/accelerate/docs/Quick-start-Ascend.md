@@ -136,9 +136,10 @@ accelerate xxx
 ASCEND_RT_VISIBLE_DEVICES=0,1 accelerate env
 ```
 
-输出结果类似如下（`accelerate env` 的 stdout 起始段；CANN / 平台字段名是固定的，只有版本号会变）：
+输出结果类似如下（`accelerate env` 的 stdout 起始段；开头会先打印一个空行，结尾的 `...` 覆盖 `Accelerate default config`——未生成默认配置时值为 `Not found`——以及后续字段）：
 
 ```shell #test-result id="acc-env" fuzzy='xxx' fuzzy='...'
+...
 Copy-and-paste the text below in your GitHub issue
 
 - `Accelerate` version: xxx
@@ -150,7 +151,6 @@ Copy-and-paste the text below in your GitHub issue
 - PyTorch accelerator: NPU
 - System RAM: xxx
 - CANN version: xxx
-- `Accelerate` default config: xxx
 ...
 ```
 

@@ -135,27 +135,48 @@ jobs:
           path: .monitor-state
           key: cache-dit-examples-monitor-state-${{ github.run_id }}
 
-      - name: Decide whether to run
+      - name: Decide target
         id: decide
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_REPO: ${{ inputs.target_repo }}
+          INPUT_REF: ${{ inputs.target_ref }}
         run: |
           set -euo pipefail
-          CHANGED="${{ steps.monitor-examples.outputs.changed }}"
-          TRIGGER="${{ steps.monitor-examples.outputs.trigger }}"
-          REASON="${{ steps.monitor-examples.outputs.reason }}"
-          TARGET_REPO="${{ steps.monitor-examples.outputs.target_repo }}"
-          TARGET_REF="${{ steps.monitor-examples.outputs.target_ref }}"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "trigger=workflow_dispatch" >> "$GITHUB_OUTPUT"
+            echo "reason=manual" >> "$GITHUB_OUTPUT"
+            echo "target_repo=${INPUT_REPO:-$UPSTREAM_REPO}" >> "$GITHUB_OUTPUT"
+            echo "target_ref=${INPUT_REF:-main}" >> "$GITHUB_OUTPUT"
+            echo "resolved repo=${INPUT_REPO:-$UPSTREAM_REPO} ref=${INPUT_REF:-main} (manual)"
+            exit 0
+          fi
+          CHANGED="false"
+          REASON=""
+          REF=""
+          if [ "${{ steps.monitor-examples.outputs.changed }}" = "true" ]; then
+            CHANGED="true"
+            REASON="${{ steps.monitor-examples.outputs.reason }}"
+            REF="${{ steps.monitor-examples.outputs.ref }}"
+          elif [ "${{ steps.monitor-release.outputs.changed }}" = "true" ]; then
+            CHANGED="true"
+            REASON="${{ steps.monitor-release.outputs.reason }}"
+            REF="${{ steps.monitor-release.outputs.ref }}"
+          elif [ "${{ steps.monitor-commit.outputs.changed }}" = "true" ]; then
+            CHANGED="true"
+            REASON="${{ steps.monitor-commit.outputs.reason }}"
+            REF="${{ steps.monitor-commit.outputs.ref }}"
+          fi
+          echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
+          echo "trigger=schedule" >> "$GITHUB_OUTPUT"
+          echo "reason=$REASON" >> "$GITHUB_OUTPUT"
+          echo "target_repo=$UPSTREAM_REPO" >> "$GITHUB_OUTPUT"
+          echo "target_ref=$REF" >> "$GITHUB_OUTPUT"
           if [ "$CHANGED" = "true" ]; then
-            echo "run_mode=yes" >> "$GITHUB_OUTPUT"
-            echo "trigger=$TRIGGER" >> "$GITHUB_OUTPUT"
-            echo "reason=$REASON" >> "$GITHUB_OUTPUT"
-            echo "target_repo=$TARGET_REPO" >> "$GITHUB_OUTPUT"
-            echo "target_ref=$TARGET_REF" >> "$GITHUB_OUTPUT"
+            echo "resolved repo=$UPSTREAM_REPO ref=$REF reason=$REASON"
           else
-            echo "run_mode=no" >> "$GITHUB_OUTPUT"
-            echo "trigger=$TRIGGER" >> "$GITHUB_OUTPUT"
-            echo "reason=$REASON" >> "$GITHUB_OUTPUT"
-            echo "target_repo=$TARGET_REPO" >> "$GITHUB_OUTPUT"
-            echo "target_ref=$TARGET_REF" >> "$GITHUB_OUTPUT"
+            echo "No upstream changes - skipping manifest check and examples"
           fi
 
   manifest-check:

@@ -9,8 +9,8 @@ Document under test: ``projects/peft/docs/Quick-start-Ascend.md``
 
 Run: ``python -m unittest tests.test_quick_start_ascend -v 2>&1``
 
-Environment variables (injected by GitHub workflow
-``peft-quick-start.yml``):
+Environment variables (injected by the quick-start engine workflow
+``quick-start-template.yml``, triggered by ``peft-quick-start.yml``):
     ``MONITORED_DOC_URL``         Required; raw URL of the document under test.
     ``UPSTREAM_REF``              Required; bash reads ``$UPSTREAM_REF`` to get
                                   the latest release tag. The value is
@@ -116,8 +116,8 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     _ASCEND_EXTRA = 'https://repo.huaweicloud.com/ascend/repos/pypi'
 
     # CANN toolkit: source once to get ASCEND_HOME / LD_LIBRARY_PATH etc.
-    # Path is hard-coded, tied to the GitHub workflow container image
-    # (CI_IMAGE).
+    # Path is hard-coded, tied to the container image pinned by the
+    # ``image:`` input of ``peft-quick-start.yml``.
     _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
 
     # ----------------------------------------------------------
@@ -232,16 +232,9 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         # docstring for the full rationale.
         purge_corrupt_models(resolve_modelscope_cache())
 
-        # 6) transformers / modelscope are installed by the doc's
-        # ``### 前置安装`` block ``check-ml-deps`` (it now carries the
-        # install + verify pair itself). This class no longer installs
-        # them — keeping install here on top would just be redundant
-        # ``pip install``-idempotent noise.
-        #
-        # ``peft`` is also NOT installed here: it's the subject of the
-        # test and gets installed by the doc's ``## 安装 PEFT`` blocks
-        # (``peft-install-binary`` / ``peft-install-source``), which
-        # exercise both binary and source install paths.
+        # 6) transformers / modelscope / peft are NOT installed here —
+        # see the docstring above for why (the doc's own blocks install
+        # them in document order).
         #
         # accelerate is intentionally NOT installed anywhere: this
         # quickstart uses explicit ``.to("npu:0")`` placement and never
@@ -258,9 +251,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         torch stack + safetensors + modelscope cache purge.
 
         ``transformers`` / ``modelscope`` / ``peft`` are NOT installed
-        here — the doc's ``#test`` blocks (``check-ml-deps`` /
-        ``peft-install-binary`` / ``peft-install-source``) install them
-        themselves in document order.
+        here — see ``prepare_environment`` for why.
 
         ``@unittest.skipIf`` only skips the test *method* — ``setUpClass``
         itself always runs. The ``if _e2e_enabled()`` body guard below is

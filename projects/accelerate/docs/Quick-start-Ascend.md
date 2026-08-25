@@ -278,11 +278,12 @@ from accelerate import Accelerator
 accelerator = Accelerator()
 model = nn.Linear(1, 1)
 prepared = accelerator.prepare(model)
-x = torch.tensor([[0.5]])
+# prepare moves the model to the device, NOT your inputs —
+# data tensors must be placed explicitly.
+x = torch.tensor([[0.5]], device=accelerator.device)
 y = prepared(x)
 print(f'device={y.device.type}')
-print(f'shape={list(y.shape)}')
-"
+print(f'shape={list(y.shape)}')"
 ```
 
 输出结果如下：

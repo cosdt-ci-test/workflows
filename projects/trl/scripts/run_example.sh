@@ -73,5 +73,51 @@ if ((${#EXTRA_ARGS[@]})); then
   printf 'overlay arg: %q\n' "${EXTRA_ARGS[@]}"
 fi
 
+# 上游示例脚本以 load_dataset(path) 的形式传入本地 .jsonl 文件路径，而
+# datasets 3.x 无法从单文件路径推断 builder。这里通过 sitecustomize.py
+# 在解释器启动时 patch datasets.load_dataset，把本地数据文件路径自动改写
+# 为 load_dataset("<builder>", data_files=path)，其余情况原样透传。
+prepare_dataset_shim() {
+  local shim_dir="$GITHUB_WORKSPACE/ci_patch"
+  mkdir -p "$shim_dir"
+  cat > "$shim_dir/sitecustomize.py" <<'PY'
+import os
+import datasets as _datasets
+
+_original_load_dataset = _datasets.load_dataset
+
+_BUILDERS = {
+    ".json": "json",
+    ".jsonl": "json",
+    ".json.gz": "json",
+    ".csv": "csv",
+    ".tsv": "csv",
+    ".parquet": "parquet",
+    ".txt": "text",
+}
+
+
+def _patched_load_dataset(path, *args, **kwargs):
+    if isinstance(path, str) and os.path.isfile(path):
+        ext = os.path.splitext(path)[1].lower()
+        if ext in _BUILDERS and "data_files" not in kwargs:
+            name = kwargs.pop("name", None)
+            if args and name is None:
+                name = args[0]
+                args = args[1:]
+            if name is not None:
+                kwargs["name"] = name
+            kwargs["data_files"] = path
+            return _original_load_dataset(_BUILDERS[ext], *args, **kwargs)
+    return _original_load_dataset(path, *args, **kwargs)
+
+
+_datasets.load_dataset = _patched_load_dataset
+PY
+  export PYTHONPATH="$shim_dir:${PYTHONPATH:-}"
+}
+
+prepare_dataset_shim
+
 cd "$TARGET_ROOT"
 python "$LAUNCH_PATH" "${EXTRA_ARGS[@]}"

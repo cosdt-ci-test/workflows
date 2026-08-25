@@ -336,7 +336,7 @@ gathered=[1, 2, 3, 1, 2, 3]
 
 ### 启动 bf16 混合精度路径
 
-把玩具脚本再跑一遍，但把 `--mixed_precision` 从 `no` 切到 `bf16`，验证 Accelerate 的 autocast 包装在 NPU 上不出错。脚本不动一行——Accelerate 自动包 `torch.autocast`（`<path>` 仍是 Step 1 的 `train_npu.py`）：
+把 Step 1 的 `train_npu.py` 再跑一遍，但把 `--mixed_precision` 从 `no` 切到 `bf16`，验证 Accelerate 的 autocast 包装在 NPU 上不出错。脚本不动一行——Accelerate 自动包 `torch.autocast`（`<path>` 仍是 Step 1 的 `train_npu.py`）：
 
 ```shell #test id="acc-launch-bf16" load="script_path>>path"
 ASCEND_RT_VISIBLE_DEVICES=0,1 accelerate launch --num_processes 2 --mixed_precision bf16 <path>

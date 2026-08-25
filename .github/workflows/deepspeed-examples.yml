@@ -286,7 +286,6 @@ jobs:
           export PATH="/usr/local/sbin:$PATH"
           source /usr/local/Ascend/ascend-toolkit/set_env.sh
           npu-smi info
-          python -c "import torch, torch_npu; print(torch.__version__, torch_npu.__version__, torch.npu.device_count())"
 
       - name: Setup example environment
         env:

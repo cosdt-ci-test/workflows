@@ -1,0 +1,32 @@
+version: 1
+scan:
+  root: examples
+  include_extensions: ['.py']
+  max_depth: 3
+supported:
+  - path: tests/test_ops.py
+    profile: bnb4bit
+    runner: linux-aarch64-a2-1
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '-k Test4bitBlockwiseQuantOps'
+    timeout_minutes: 60
+  - path: tests/test_linear4bit.py
+    profile: bnb4bit
+    runner: linux-aarch64-a2-1
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '-k "not serialization and not compile and not fsdp"'
+    timeout_minutes: 60
+unsupported:
+  # Downloads google/gemma-2-2b-it (~5 GB), uses device_map="auto", and needs torch.compile. Inductor is not available on NPU.
+  - examples/compile_inference.py
+  # Downloads gated meta-llama/Llama-2-7b-hf and hard-codes torch.cuda.mem_get_info() / torch.cuda.device_count().
+  - examples/int8_inference_huggingface.py
+  # CPU training. Also downloads JackFram/llama-68m + yahma/alpaca-cleaned. Not an Ascend example.
+  - examples/cpu/cpu_training.py
+  # Asserts torch.xpu.is_available() or CUDA. Intel GPU only.
+  - examples/xpu/paged_xpu_training.py
+  - examples/xpu/benchmark_paged_memory.py

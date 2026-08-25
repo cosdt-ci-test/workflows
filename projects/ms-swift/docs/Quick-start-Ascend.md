@@ -1,12 +1,12 @@
 # Quick Start (Ascend NPU)
 
-10 分钟在单卡昇腾 NPU 上对 Qwen3-4B-Instruct-2507 进行自我认知微调。
+在单卡昇腾 NPU 上对 Qwen3-4B-Instruct-2507 进行自我认知微调。
 
 ## 前置条件
 
 ### 硬件
 
-Atlas 900 A2 / A3 训练系列产品或者 Ascend 950 系列产品，并按需完成物理机或容器内的设备挂载（`/dev/davinci*` 等）。
+Atlas 900 A2 / A3 训练系列产品或者 Ascend 950 系列产品，并按需完成物理机或容器内的设备挂载。
 
 ### 基础软件
 
@@ -40,12 +40,38 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | transformers | `<5.0` |
 | peft | `<0.19` |
 | modelscope | 1.37.0 |
-| ms-swift | 本仓库当前 main 分支源码（`pip install -e .`） |
+| ms-swift | 最新 release 的源码/二进制 |
 | 模型 | [Qwen/Qwen3-4B-Instruct-2507](https://www.modelscope.cn/Qwen/Qwen3-4B-Instruct-2507) |
 | 数据集 | `AI-ModelScope/alpaca-gpt4-data-zh#500` + `AI-ModelScope/alpaca-gpt4-data-en#500` + `swift/self-cognition#500` |
 | 推理后端 | 本文 doc 默认 transformers / torch_npu（`--infer_backend transformers`）。vLLM-Ascend 加速推理不在本文档范围内，请参考 [NPU 最佳实践文档](https://github.com/modelscope/ms-swift/blob/main/docs/source/BestPractices/NPU-support.md#vllm-ascend)。 |
 
-### 检查前置是否满足
+### 前置安装
+确认能看到 NPU 设备：
+
+```shell
+npu-smi info
+```
+
+输出类似：
+
+```
++------------------------------------------------------------------------------------------------+
+| npu-smi 25.5.2                   Version: 25.5.2                                               |
++---------------------------+---------------+----------------------------------------------------+
+| NPU   Name                | Health        | Power(W)    Temp(C)           Hugepages-Usage(page)|
+| Chip                      | Bus-Id        | AICore(%)   Memory-Usage(MB)  HBM-Usage(MB)        |
++===========================+===============+====================================================+
+| 5     910B4               | OK            | 89.9        39                0    / 0             |
+| 0                         | 0000:41:00.0  | 0           0    / 0          2922 / 32768         |
++===========================+===============+====================================================+
++---------------------------+---------------+----------------------------------------------------+
+| NPU     Chip              | Process id    | Process name             | Process memory(MB)      |
++===========================+===============+====================================================+
+| No running processes found in NPU 5                                                            |
++===========================+===============+====================================================+
+```
+
+> 如果 `npu-smi` 不存在，请回到 [Ascend 官方快速安装指南](https://ascend.github.io/docs/sources/ascend/quick_install.html) 补装驱动。
 
 检查 Python 版本：
 
@@ -72,32 +98,26 @@ is_available: True
 count: 1
 ```
 
-确认能看到 NPU 设备：
+> 如果 `import torch_npu` 失败，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查 torch / torch_npu / CANN 三方兼容矩阵。
 
-```shell
-npu-smi info
+安装 `transformers` / `peft` / `modelscope`：
+
+```shell #test-setup
+pip install 'transformers<5.0' 'peft<0.19' 'modelscope==1.37.0'
 ```
 
-输出如下类似结果：
-
-```
-+------------------------------------------------------------------------------------------------+
-| npu-smi 25.5.2                   Version: 25.5.2                                               |
-+---------------------------+---------------+----------------------------------------------------+
-| NPU   Name                | Health        | Power(W)    Temp(C)           Hugepages-Usage(page)|
-| Chip                      | Bus-Id        | AICore(%)   Memory-Usage(MB)  HBM-Usage(MB)        |
-+===========================+===============+====================================================+
-| 5     910B4               | OK            | 89.9        39                0    / 0             |
-| 0                         | 0000:41:00.0  | 0           0    / 0          2922 / 32768         |
-+===========================+===============+====================================================+
-+---------------------------+---------------+----------------------------------------------------+
-| NPU     Chip              | Process id    | Process name             | Process memory(MB)      |
-+===========================+===============+====================================================+
-| No running processes found in NPU 5                                                            |
-+===========================+===============+====================================================+
+打印安装版本：
+```shell #test id="install-deps"
+python -c "import transformers, peft, modelscope; print('transformers', transformers.__version__); print('peft', peft.__version__); print('modelscope', modelscope.__version__)"
 ```
 
-> 如果 `npu-smi` 不存在，请回到 [Ascend 官方快速安装指南](https://ascend.github.io/docs/sources/ascend/quick_install.html) 补装驱动；如果 `import torch_npu` 失败，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查 torch / torch_npu / CANN 三方兼容矩阵。
+输出结果如下：
+
+```shell #test-result id="install-deps" fuzzy='xxx'
+transformers xxx
+peft xxx
+modelscope 1.37.0
+```
 
 ## 安装 ms-swift
 
@@ -114,6 +134,7 @@ python -c "import swift; print('ms-swift', swift.__version__)"
 ms-swift xxx
 ```
 - xxx 表示最新的版本号
+
 <!-- 
 ```shell #test-setup
 uv pip uninstall ms-swift -y
@@ -135,17 +156,19 @@ cd ms-swift && git checkout <ref>
 uv pip install -e .
 python -c "import swift; print('ms-swift', swift.__version__)"
 ```
-<ref> 为安装的最新的release 分支
+\<ref> 为安装的最新的release 分支
 
 输出结果类似如下：
 
 ```shell #test-result id="swift-install-source" fuzzy='xxx'
 ms-swift xxx
 ```
+
 - xxx 表示最新的版本号
+
 ## 使用样例
 
-~2 分钟在单卡昇腾 NPU 上对 Qwen3-4B-Instruct-2507 做 5 步自我认知微调（够快来验证整条链路；想跑完整 1 epoch 预算 ~19 分钟，把下面 6 个 `max_steps/save_steps/logging_steps/eval_strategy/report_to` 参数去掉即可，doc 末尾的 `5/5` 预期输出也会对应变成 `94/94` 左右，需要相应调整 expected）：
+~2 分钟在单卡昇腾 NPU 上对 Qwen3-4B-Instruct-2507 做 5 步自我认知微调（够快来验证整条链路；想跑完整 1 epoch 预算 ~19 分钟，把下面 5 个 `max_steps/save_steps/logging_steps/eval_strategy/report_to` 参数去掉即可，doc 末尾的 `5/5` 预期输出也会对应变成 `94/94` 左右，需要相应调整 expected）：
 
 ```shell #test id="train"
 ASCEND_RT_VISIBLE_DEVICES=0 swift sft \

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install the Ray wheel built from the exact upstream commit under test.
+# Install a released Ray target from PyPI or an exact development commit wheel.
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
@@ -40,6 +40,39 @@ raise SystemExit(
   python -c 'import torch, torch_npu; assert torch.npu.is_available(); print(torch.__version__, torch_npu.__version__, torch.npu.device_count())'
 }
 
+install_test_dependencies() {
+  local profile="$1"
+  local test_requirements="$TARGET_ROOT/python/requirements/test-requirements.txt"
+  local train_requirements="$TARGET_ROOT/python/requirements/ml/train-test-requirements.txt"
+  local resolver
+  local resolver_args=(--requirement "$test_requirements" pytest)
+  local resolved
+  local packages
+  resolver="$(dirname "${BASH_SOURCE[0]}")/resolve_test_requirements.py"
+
+  if [[ "$profile" == "train" ]]; then
+    resolver_args+=(--requirement "$train_requirements" boto3)
+  fi
+
+  resolved=$(python "$resolver" "${resolver_args[@]}")
+  mapfile -t packages <<< "$resolved"
+  python -m pip install "${packages[@]}"
+}
+
+link_target_ray_tests() {
+  local setup_dev="$TARGET_ROOT/python/ray/setup-dev.py"
+  local verifier
+  verifier="$(dirname "${BASH_SOURCE[0]}")/verify_ray_test_support.py"
+
+  if [[ ! -f "$setup_dev" ]]; then
+    echo "target Ray setup-dev.py is missing: $setup_dev" >&2
+    exit 1
+  fi
+
+  python "$setup_dev" --yes --allow tests
+  python "$verifier" "$TARGET_ROOT"
+}
+
 ray_version() {
   python - "$TARGET_ROOT/python/ray/_version.py" <<'PY'
 import re
@@ -57,46 +90,51 @@ PY
 install_target_ray() {
   local extras="$1"
   local sha version py_tag arch wheel_url requirement
-  sha=$(git -C "$TARGET_ROOT" rev-parse HEAD)
   version=$(ray_version)
-  py_tag=$(python -c 'import sys; print(f"cp{sys.version_info.major}{sys.version_info.minor}")')
-  arch=$(uname -m)
-  if [[ "$arch" != "aarch64" && "$arch" != "arm64" ]]; then
-    echo "Ray Ascend guard requires aarch64, got: $arch" >&2
-    exit 1
-  fi
 
-  wheel_url="https://s3-us-west-2.amazonaws.com/ray-wheels/master/${sha}/ray-${version}-${py_tag}-${py_tag}-manylinux2014_aarch64.whl"
-  if [[ -n "$extras" ]]; then
-    requirement="ray[${extras}] @ ${wheel_url}"
-  else
-    requirement="ray @ ${wheel_url}"
-  fi
+  if [[ "$version" == *dev* ]]; then
+    sha=$(git -C "$TARGET_ROOT" rev-parse HEAD)
+    py_tag=$(python -c 'import sys; print(f"cp{sys.version_info.major}{sys.version_info.minor}")')
+    arch=$(uname -m)
+    if [[ "$arch" != "aarch64" && "$arch" != "arm64" ]]; then
+      echo "Ray Ascend guard requires aarch64, got: $arch" >&2
+      exit 1
+    fi
 
-  echo "installing Ray ${version} from target commit ${sha}"
-  if ! python -m pip install "$requirement"; then
-    if [[ "$version" == *dev* ]]; then
+    wheel_url="https://s3-us-west-2.amazonaws.com/ray-wheels/master/${sha}/ray-${version}-${py_tag}-${py_tag}-manylinux2014_aarch64.whl"
+    if [[ -n "$extras" ]]; then
+      requirement="ray[${extras}] @ ${wheel_url}"
+    else
+      requirement="ray @ ${wheel_url}"
+    fi
+
+    echo "installing Ray ${version} from target commit ${sha}"
+    if ! python -m pip install "$requirement"; then
       echo "exact master wheel is unavailable: $wheel_url" >&2
       exit 1
     fi
-    echo "falling back to the released aarch64 wheel for Ray ${version}"
+  else
+    echo "installing released Ray ${version} from PyPI"
     if [[ -n "$extras" ]]; then
       python -m pip install "ray[${extras}]==${version}"
     else
       python -m pip install "ray==${version}"
     fi
   fi
-  python -m pip install pytest mock
   python -c 'import ray; print("ray", ray.__version__, ray.__file__)'
 }
 
 setup_core() {
   install_target_ray ""
+  install_test_dependencies core
+  link_target_ray_tests
 }
 
 setup_train() {
   ensure_torch_stack
   install_target_ray train
+  install_test_dependencies train
+  link_target_ray_tests
 }
 
 supported_profiles() {

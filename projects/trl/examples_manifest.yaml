@@ -1,0 +1,130 @@
+version: 1
+scan:
+  root: examples
+  unit: mixed
+  max_depth: 1
+  include_extensions: ['.py', '.ipynb']
+supported:
+  # DPO LoRA on a small VLM. The upstream docstring targets
+  # Qwen/Qwen2.5-VL-3B-Instruct from HuggingFace; runners cannot reach
+  # HuggingFace, so setup_example.sh downloads the same model from
+  # ModelScope and exports DPO_MODEL_PATH. The HF dataset is replaced by
+  # an 8-row fixture in TRL's conversational prompt/chosen/rejected format.
+  - path: examples/dpo_reduce_hallucinations
+    profile: peft_lora
+    runner: linux-aarch64-a2-1
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    exec: examples/dpo_reduce_hallucinations/dpo_reduce_hallucinations.py
+    overlay_args:
+      - --model_name_or_path ${DPO_MODEL_PATH}
+      - --dataset_name ${FIXTURE_DIR}/ci_dpo_8.jsonl
+      - --dataset_num_proc 1
+      - --per_device_train_batch_size 1
+      - --gradient_accumulation_steps 1
+      - --max_steps 2
+      - --max_length 256
+      - --logging_steps 1
+      - --report_to none
+      - --save_strategy no
+      - --dtype bfloat16
+      - --use_peft
+      - --lora_target_modules all-linear
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 120
+  # TPO LoRA on Qwen3-0.6B. The script is fully CLI-driven
+  # (HfArgumentParser over ScriptArguments/TPOConfig/ModelConfig); the
+  # model comes from ModelScope via TPO_MODEL_PATH and the ultrafeedback
+  # dataset is replaced by an 8-row triple-preference fixture. TPO needs
+  # --no_remove_unused_columns to keep the reference column.
+  - path: examples/tpo_ultrafeedback
+    profile: peft_lora
+    runner: linux-aarch64-a2-1
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    exec: examples/tpo_ultrafeedback/tpo.py
+    overlay_args:
+      - --model_name_or_path ${TPO_MODEL_PATH}
+      - --dataset_name ${FIXTURE_DIR}/ci_tpo_8.jsonl
+      - --dataset_num_proc 1
+      - --per_device_train_batch_size 1
+      - --gradient_accumulation_steps 1
+      - --max_steps 2
+      - --max_length 256
+      - --learning_rate 5e-6
+      - --logging_steps 1
+      - --report_to none
+      - --save_strategy no
+      - --dtype bfloat16
+      - --use_peft
+      - --lora_r 8
+      - --lora_alpha 16
+      - --no_remove_unused_columns
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 120
+unsupported:
+  # Shared accelerate launch configs, not runnable examples.
+  - examples/accelerate_configs
+  - examples/async_distillation_math
+  - examples/async_grpo_math
+  - examples/async_grpo_opencode
+  # Dataset conversion scripts, not runnable examples.
+  - examples/datasets
+  - examples/gold_chatbot_arena
+  - examples/gold_qwen3_vl
+  - examples/grpo_2048
+  - examples/grpo_browsergym
+  - examples/grpo_carla
+  # Needs OpenEnv docker/space environment and vLLM.
+  - examples/grpo_catch
+  - examples/grpo_continuous_batching
+  # Needs a remote OpenEnv HF Space server.
+  - examples/grpo_echo
+  # Needs docker harness environments.
+  - examples/grpo_harbor
+  # Notebook-only, targets Colab GPU.
+  - examples/grpo_ministral3_vl
+  - examples/grpo_multi_env
+  # Notebook-only, targets Colab GPU.
+  - examples/grpo_qlora
+  # Notebook-only, targets Colab GPU.
+  - examples/grpo_qwen3_vl
+  # Notebook-only, targets Colab GPU.
+  - examples/grpo_rnj_1_instruct
+  - examples/grpo_seta
+  - examples/grpo_sql_agent
+  - examples/grpo_sudoku
+  - examples/grpo_visual_math
+  - examples/grpo_wordle
+  # GRPO with vLLM generation; not CI-scale yet.
+  - examples/gspo_math
+  - examples/gspo_visual_math
+  - examples/mpo_visual_preferences
+  - examples/online_dpo_visual_math
+  # Experimental PPO; needs reward model + large batch.
+  - examples/ppo_sentiment
+  - examples/ppo_tldr
+  # RLOO with vLLM generation.
+  - examples/rloo_math
+  - examples/rloo_visual_math
+  # Experimental SDFT with teacher generation loop.
+  - examples/sdft_privileged_context
+  - examples/sdpo_math
+  - examples/sft_diffusion_gemma
+  # Hardcodes gemma-3-12b-it and push_to_hub; no CLI overrides.
+  - examples/sft_gemma3
+  - examples/sft_gemma3_vision
+  # 20B MoE with deepspeed zero3.
+  - examples/sft_gpt_oss
+  # Notebook-only, targets Colab GPU.
+  - examples/sft_ministral3_vl
+  # 30B model with mamba_ssm/causal_conv1d CUDA-only deps.
+  - examples/sft_nemotron_3
+  # Notebook-only (Colab); hardcodes HF login, trackio and push_to_hub.
+  - examples/sft_qlora
+  # Notebook-only, targets Colab GPU.
+  - examples/sft_qwen3_vl
+  # Hardcodes model/dataset and push_to_hub; bitsandbytes 4-bit.
+  - examples/sft_tool_calling
+  - examples/sft_visual_chat
+  - examples/ssd_codegen

@@ -31,9 +31,13 @@ from __future__ import annotations
 import os
 import subprocess
 import unittest
-from pathlib import Path
 
 from workflows.markdown_doc_test_base import MarkdownDocTestBase
+from workflows.modelscope_cache import (
+    ensure_safetensors,
+    purge_corrupt_models,
+    resolve_modelscope_cache,
+)
 
 
 def _is_truthy(value: str | None) -> bool:
@@ -66,7 +70,6 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     # and export; subprocesses (subprocess.run inherits parent env by
     # default) see it the same way.
     _CUDA_CONSTRAINTS = (
-        'modelscope==1.37.0',
         'cuda-toolkit<0',
         'cuda-python<0',
         'cuda-bindings<0',
@@ -118,13 +121,13 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
 
     # ----------------------------------------------------------
-    # prepare_environment: CUDA constraints + uv + torch stack probe + transformers/peft
+    # prepare_environment: CUDA constraints + uv + torch stack probe
     # ----------------------------------------------------------
 
     @classmethod
     def prepare_environment(cls) -> None:
         """Install CANN env + CUDA constraints + uv + torch stack probe
-        + transformers/peft in one go.
+        in one go. 
 
         Class-level setup: run once per test class, triggered by
         ``setUpClass``. Not the same as ``unittest.TestCase.setUp`` —
@@ -204,21 +207,18 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 check=True,
             )
 
-        # 4) transformers / peft: upper bounds from the doc table.
-        subprocess.run(
-            ['python', '-m', 'pip', 'install', 'transformers<5.0', 'peft<0.19'],
-            check=True,
-        )
+        # 4) safetensors: native loader used by the cache validation
+        # step below. Pulled in transitively by torch on most images;
+        # install defensively in case the CANN base ships without it.
+        ensure_safetensors()
 
-        # Pin cache under a test-scoped subdir outside the bind-mount:
-        # the host-side /data/ci-cache/modelscope persists across CI
-        # runs and accumulates stale files (incomplete downloads,
-        # model revision drift, cross-project leftovers) that would
-        # otherwise surface here as hash mismatches. This keeps each
-        # run's cache isolated in the container's local fs.
-        os.environ.setdefault(
-            'MODELSCOPE_CACHE', str(Path.home() / '.cache' / 'modelscope_quick_start_test'),
-        )
+        # 5) Cache validation: persistent host-side bind mount can hold
+        # truncated safetensors from interrupted runs. Walk every shard
+        # under each model dir and purge it on failure; modelscope
+        # will re-download cleanly on next access. Implementation
+        # lives in workflows.modelscope_cache; see that module's
+        # docstring for the full rationale.
+        purge_corrupt_models(resolve_modelscope_cache())
 
     # ----------------------------------------------------------
     # test entry
@@ -227,7 +227,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         """Run env setup once per test class: CUDA constraints + uv +
-        torch stack + transformers/peft + CANN env.
+        torch stack + CANN env.
 
         ``@unittest.skipIf`` only skips the test *method* — ``setUpClass``
         itself always runs. The ``if _e2e_enabled()`` body guard below is

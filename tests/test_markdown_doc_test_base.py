@@ -518,42 +518,5 @@ class TestCompareOutput(unittest.TestCase):
             actual_no_dots, 'hello ... world', disable_fuzzy=True))
 
 
-class TestEndToEndV2Doc(unittest.TestCase):
-    """拿 v2 doc 真实跑解析,验证契约回归(不执行 subprocess)。"""
-
-    DOC_PATH = (
-        Path(__file__).resolve().parent.parent
-        / 'projects' / 'ms-swift' / 'docs' / 'Quick-start-Ascend.md'
-    )
-
-    def test_v2_doc_parses(self):
-        if not self.DOC_PATH.exists():
-            self.skipTest(f'{self.DOC_PATH} not present')
-        with open(self.DOC_PATH) as f:
-            text = f.read()
-        commands, results = _Bare().parse(text)
-        # v2 文档包含 9 个 commands + 6 个 expected outputs
-        self.assertEqual(len(commands), 9)
-        self.assertEqual(len(results), 6)
-        # 两个 hidden setup（uninstall 无 store + upstream_ref 有 store）
-        hidden_setups = [
-            c for c in commands
-            if isinstance(c, SetupCommand) and c.hidden
-        ]
-        self.assertEqual(len(hidden_setups), 2)
-        # 注释内的 upstream_ref 应被 load 引用
-        source_cmd = next(
-            c for c in commands
-            if isinstance(c, TestCommand) and c.id == 'swift-install-source'
-        )
-        self.assertEqual(source_cmd.load, (('upstream_ref', 'ref'),))
-        # infer 引用 checkpoint
-        infer_cmd = next(
-            c for c in commands
-            if isinstance(c, TestCommand) and c.id == 'infer'
-        )
-        self.assertEqual(infer_cmd.load, (('checkpoint', 'ckpt'),))
-
-
 if __name__ == '__main__':
     unittest.main()

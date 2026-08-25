@@ -19,9 +19,14 @@ The project-local `scripts/check_manifest.py` interprets the manifest's
 `scan.paths` because these two upstream tests live in unrelated directories.
 The shared manifest checker remains unchanged, and the guard does not add or
 replace a Ray example.
-`setup_example.sh` installs the official Linux aarch64 wheel built from the
-exact target commit on Ray master. A released target falls back to its matching
-PyPI version when a per-commit master wheel is unavailable.
+`setup_example.sh` installs a released target directly from its matching PyPI
+version. Development targets such as Ray master use the official Linux aarch64
+wheel built from the exact target commit.
+Ray wheels intentionally exclude test packages. After the matching runtime is
+installed, the setup uses the target checkout's own `python/ray/setup-dev.py`
+to link only `ray/tests` into the wheel. A project-local verifier rejects a
+runtime version mismatch or a test package that resolves outside the target
+checkout.
 
 ## Quick Start
 

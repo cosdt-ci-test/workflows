@@ -52,6 +52,23 @@ raise SystemExit(0 if torch.__version__.startswith('2.9.0') and torch_npu.__vers
   pip_ascend torch==2.9.0 torch_npu==2.9.0.post2
 }
 
+patch_working_copy() {
+  local target="$TARGET_ROOT/training/HelloDeepSpeed/train_bert_ds.py"
+  python3 - "$target" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+old = 'datasets.load_dataset("wikitext",'
+new = 'datasets.load_dataset("Salesforce/wikitext",'
+if old not in text:
+    raise SystemExit(f"wikitext load_dataset not found in {path}")
+path.write_text(text.replace(old, new, 1), encoding="utf-8")
+print(f"patched {path}: wikitext -> Salesforce/wikitext")
+PY
+}
+
 setup_deepspeed() {
   local src="${DEEPSPEED_SOURCE_ROOT:-$TARGET_ROOT}"
   echo "installing DeepSpeed from source at $src"
@@ -63,8 +80,13 @@ print('DeepSpeed version:', deepspeed.__version__)
   ds_report 2>&1 | grep -i 'npu' || {
     echo 'WARNING: ds_report did not list npu accelerator'
   }
+  echo "installing MPI runtime for deepspeed.initialize distributed discovery"
+  apt-get update && apt-get install -y libopenmpi-dev numactl
+  python -m pip install mpi4py
   echo "installing HelloDeepSpeed dependencies"
-  python -m pip install transformers datasets fire loguru sh tqdm
+  PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple" \
+    python -m pip install "tokenizers>=0.22.0,<0.23" datasets transformers fire loguru "sh==1.14.2" tqdm pytz tensorboard
+  patch_working_copy
 }
 
 supported_profiles() {

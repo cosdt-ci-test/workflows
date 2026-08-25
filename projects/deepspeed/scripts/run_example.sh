@@ -63,7 +63,7 @@ if ((${#EXTRA_ARGS[@]})); then
   printf 'overlay arg: %q\n' "${EXTRA_ARGS[@]}"
 fi
 
-cd "$TARGET_ROOT"
+cd "$(dirname "$EXAMPLE_PATH")"
 export CI_OUTPUT_DIR ASCEND_RT_VISIBLE_DEVICES="${ASCEND_RT_VISIBLE_DEVICES:-0}"
 
 case "$EXAMPLE_PATH" in

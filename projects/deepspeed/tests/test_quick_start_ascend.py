@@ -67,10 +67,49 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
     DEFAULT_COMMAND_TIMEOUT = 1800
     USER_AGENT = 'cosdt-ci-test/quick-start'
+    _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
+
+    def pre_process(self) -> str:
+        """Read the local doc instead of fetching from MONITORED_DOC_URL.
+        The doc is bundled in the repo, so the test always uses the version
+        that ships with the code.
+        """
+        doc = Path(__file__).resolve().parent.parent / 'docs' / 'Quick-start-Ascend.md'
+        return doc.read_text(encoding='utf-8')
+
+    @classmethod
+    def prepare_environment(cls) -> None:
+        """Source CANN env once so later ``bash -c`` blocks inherit it.
+
+        Class-level setup: run once per test class, triggered by
+        ``setUpClass``. Each labeled fence is a new subprocess, so a
+        ``source set_env.sh`` block in the document does not persist.
+        """
+        path_dirs = '/usr/local/sbin:/usr/local/bin'
+        current_path = os.environ.get('PATH', '')
+        if path_dirs not in current_path:
+            os.environ['PATH'] = f'{path_dirs}:{current_path}'
+
+        if os.path.isfile(cls._CANN_SET_ENV):
+            merged = subprocess.run(
+                ['bash', '-c', f'source {cls._CANN_SET_ENV} >/dev/null 2>&1; env'],
+                capture_output=True, text=True, check=True,
+            )
+            for line in merged.stdout.splitlines():
+                if '=' not in line:
+                    continue
+                key, _, value = line.partition('=')
+                os.environ.setdefault(key, value)
+            print('setup: sourced CANN env from set_env.sh')
+        else:
+            print(
+                f'setup: skipping CANN env source ({cls._CANN_SET_ENV} not present)'
+            )
 
     @classmethod
     def setUpClass(cls) -> None:
         if _e2e_enabled():
+            cls.prepare_environment()
             _ensure_torch_npu()
 
     @unittest.skipIf(

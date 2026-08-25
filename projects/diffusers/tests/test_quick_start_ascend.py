@@ -57,9 +57,9 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     contract -> run ``#test-setup`` / ``#test`` in order -> compare against
     ``#test-result``."""
 
-    # 50 min per command: long enough for the ~58 GB Qwen-Image snapshot
-    # download (first run, the doc's slowest block) plus 20B pipeline load
-    # + 8-step generation; short enough to fail fast on hangs.
+    # 50 min per command: long enough for the ~72 GB SD3.5-large-turbo
+    # snapshot download (first run, the doc's slowest block) plus 8B
+    # pipeline load + 4-step generation; short enough to fail fast on hangs.
     DEFAULT_COMMAND_TIMEOUT = 3000
     USER_AGENT = 'cosdt-ci-test/quick-start'  # monitored source is the fork under cosdt-ci-test org
     ERROR_MARKERS = (
@@ -235,7 +235,9 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         # runs via a project-isolated host bind mount
         # (/data/ci-cache/modelscope/diffusers at /root/.cache/modelscope;
         # MODELSCOPE_CACHE left unset so the mount point applies) because
-        # Qwen-Image (~58 GB) re-downloaded every trigger is unsustainable.
+        # Qwen-Image-size (~58 GB) re-downloads every trigger are
+        # unsustainable; the doc's current model (SD3.5-large-turbo,
+        # ~72 GB) is even heavier.
         # A persistent cache can hold truncated safetensors from
         # interrupted runs; walk every shard under each model dir and
         # purge it on failure so modelscope re-downloads cleanly on next

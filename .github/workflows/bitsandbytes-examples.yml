@@ -388,9 +388,6 @@ jobs:
                   entry = dict(item)
                   entry['device_options'] = options
                   entry['overlay_args'] = item.get('overlay_args') or []
-                  exec_path = item.get('exec')
-                  if exec_path:
-                      entry['exec'] = exec_path.strip()
                   entry['target_repo'] = repo
                   entry['target_ref'] = ref
                   entry['reason'] = reason

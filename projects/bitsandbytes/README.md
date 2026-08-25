@@ -1,6 +1,6 @@
 # bitsandbytes
 
-本目录是 [bitsandbytes](https://github.com/bitsandbytes-foundation/bitsandbytes) 的看护配套数据，不是 bitsandbytes 源码。example 流水线在 [.github/workflows/bitsandbytes-examples.yml](../../.github/workflows/bitsandbytes-examples.yml)。Quick Start 流水线在 [.github/workflows/bitsandbytes-quick-start.yml](../../.github/workflows/bitsandbytes-quick-start.yml)。注册信息见根目录 [projects.yaml](../../projects.yaml)（分类：推理加速；支持程度：基础支持；阶段 A）。项目表把 bitsandbytes 列在推理加速 / 基础支持。
+本目录是 [bitsandbytes](https://github.com/bitsandbytes-foundation/bitsandbytes) 的看护配套数据，不是 bitsandbytes 源码。example 流水线在 [.github/workflows/bitsandbytes-examples.yml](../../.github/workflows/bitsandbytes-examples.yml)。Quick Start 流水线在 [.github/workflows/bitsandbytes-quick-start.yml](../../.github/workflows/bitsandbytes-quick-start.yml)。注册信息见根目录 [projects.yaml](../../projects.yaml)（分类：推理加速；支持程度：基础支持；阶段 A）。
 
 上游默认分支是 `main`。上游官方不支持昇腾（[issue #1847](https://github.com/bitsandbytes-foundation/bitsandbytes/issues/1847)），也没有健康的昇腾 CI。本仓先走阶段 A：在本仓流水线把能跑的路径跑通。
 
@@ -62,6 +62,6 @@ NPU job 不上传 artifact。`result.json` 由托管 runner 上的 `validate-res
 
 Quick Start **不**抄本项目 example 线的「两信号或、无重试」。它走共享模板自己的监控：互斥优先级 `release` > `doc` > `retry`（字面 `retry`，不是 `-retry`）。cache 前缀是模板拥有的 `monitor-state-bitsandbytes-`，不要再发明第二套前缀。
 
-这是相对本项目 example 线、也相对 Quick Start skill「抄同项目 examples」规则的**有意偏离**：用户要求 Quick Start 触发器抄 whisper.cpp 薄模板。whisper.cpp README 里把 QS 写成和 example 一样的或关系 / `force`，那是过时描述，不要再抄。
+这是相对本项目 example 线的**有意偏离**：本仓 Quick Start 触发器统一走共享模板，触发语义以 `quick-start-template.yml` 为准。
 
 `schedule` 保持注释。`force` 行为由模板解释。文档 URL 走 GitHub Contents API（`Accept: application/vnd.github.raw`），不走 `raw.githubusercontent.com`。

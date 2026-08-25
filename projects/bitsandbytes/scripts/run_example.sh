@@ -33,14 +33,8 @@ fi
 mkdir -p "$CI_OUTPUT_DIR"
 RUN_LOG="$CI_OUTPUT_DIR/run.log"
 
-if command -v python3 >/dev/null 2>&1; then
-  PYTHON=python3
-else
-  PYTHON=python
-fi
-
 expand_overlay() {
-  "$PYTHON" - <<'PY'
+  python - <<'PY'
 import json
 import os
 import shlex
@@ -48,20 +42,11 @@ import shlex
 raw = os.environ.get('OVERLAY_ARGS', '').strip()
 if not raw or raw in ('null', '""'):
     raise SystemExit(0)
-try:
-    items = json.loads(raw)
-except json.JSONDecodeError as exc:
-    raise SystemExit(f'OVERLAY_ARGS is not valid JSON: {exc}') from exc
-if items in (None, ''):
-    raise SystemExit(0)
-if not isinstance(items, list):
-    raise SystemExit(
-        f'OVERLAY_ARGS must be a JSON array, got {type(items).__name__}')
+items = json.loads(raw)
+if not isinstance(items, list) or not all(isinstance(item, str) for item in items):
+    raise SystemExit('OVERLAY_ARGS must be a JSON array of strings')
 tokens = []
 for item in items:
-    if not isinstance(item, str):
-        raise SystemExit(
-            f'OVERLAY_ARGS items must be strings, got {type(item).__name__}')
     tokens.extend(shlex.split(os.path.expandvars(item), posix=True))
 print(' '.join(shlex.quote(token) for token in tokens))
 PY

@@ -90,6 +90,5 @@ if ! declare -F "setup_${PROFILE}" >/dev/null 2>&1; then
 fi
 
 TARGET_ROOT="${TARGET_ROOT:?TARGET_ROOT is required}"
-GITHUB_ENV="${GITHUB_ENV:?GITHUB_ENV is required}"
 
 "setup_${PROFILE}"

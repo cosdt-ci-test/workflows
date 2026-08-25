@@ -17,7 +17,7 @@
 - 检查 Python 版本
 - 生成 CUDA 屏蔽约束并安装 `torch==2.10.0` / `torch-npu==2.10.0.post4`，断言 `npu_available True`
 - 源码安装 vLLM 0.23.0 与 `vllm-ascend==0.23.0`（克隆到 `vllm-src`，避免 `./vllm` 挡住 import），断言 `vllm_device npu`
-- 安装 `lmcache==<LMCACHE_VER> --no-deps` 以及导入期 Python 依赖，按 `$UPSTREAM_REF` 用 HTTP/1.1 克隆 LMCache-Ascend 并拉子模块，补上 HIXL 的 `pkg_inc` include 和 KV connector 的第三个参数，再 `SOC_VERSION=Ascend910B4` 编译，断言 `soc Ascend910B4` 与 `c_ops_ok True`
+- 安装 `lmcache==<LMCACHE_VER> --no-deps --no-build-isolation` 以及导入期 Python 依赖，按 `$UPSTREAM_REF` 用 HTTP/1.1 克隆 LMCache-Ascend 并拉子模块，补上 HIXL 的 `pkg_inc` include 和 KV connector 的第三个参数，再 `SOC_VERSION=Ascend910B4` 编译，断言 `soc Ascend910B4` 与 `c_ops_ok True`
 - 把离线脚本存成文件，设 `VLLM_WORKER_MULTIPROC_METHOD=spawn`，用 `vllm.LLM` + `LMCacheAscendConnectorV1Dynamic` 对 Qwen2.5-0.5B 做一次短生成。工作负载块的预期输出含 `Platform plugin ascend is activated`、`Using NPU for LMCache engine.` 与 `current_device npu:0`
 
 无标签、**不看护**的步骤：

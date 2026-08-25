@@ -212,13 +212,13 @@ npu_available True
 
 ## 5. 安装 LMCache 并编译 LMCache-Ascend
 
-PyPI 上的 `lmcache` 在 aarch64 没有预编译轮子，会现场编 sdist。元数据里写了 `cupy-cuda12x`、`nvtx`、`nixl` 这些 CUDA 包。不要让 pip 去解析它们，否则会下一份 CUDA 轮子。加上 `--no-deps` 和 `NO_CUDA_EXT=1`，只跳过这些 CUDA 依赖，不跳过 LMCache 自己的 Python 代码。后面再把 `import lmcache` 真正需要的包单独装上。
+PyPI 上的 `lmcache` 在 aarch64 没有预编译轮子，会现场编 sdist。元数据里写了 `cupy-cuda12x`、`nvtx`、`nixl` 这些 CUDA 包。不要让 pip 去解析它们，否则会下一份 CUDA 轮子。加上 `--no-deps` 和 `NO_CUDA_EXT=1`，只跳过这些 CUDA 依赖，不跳过 LMCache 自己的 Python 代码。`build-system` 还声明了 `torch`；上一节已经装好 NPU 版，必须加 `--no-build-isolation`，否则 pip 会在隔离环境里从 PyPI 再下一份。后面再把 `import lmcache` 真正需要的包单独装上。
 
-然后再克隆 **LMCache-Ascend** 源码，按 910B4 编译 C++ 插件。`build-system` 声明了 `torch` 和 `torch-npu`，必须 `--no-build-isolation`。`--depth 1` 只拉当前 tag，第一次跑通不必要完整历史。`git -c http.version=HTTP/1.1` 是因为国内访问 GitHub 时 HTTP/2 可能在中途断开（报 `Error in the HTTP2 framing layer`）。主仓在 GitHub，子模块在 gitcode / atomgit；和主仓分开拉。若 `LMCache-Ascend/csrc/hixl/CMakeLists.txt` 已经在，就跳过克隆。编译前删掉目录里的 `build/`。CANN 把昇腾核目标链接进 `.o` 时会原地改文件，留着上次的产物再编，链接器会报 `unknown file type`。
+然后再克隆 **LMCache-Ascend** 源码，按 910B4 编译 C++ 插件。`build-system` 声明了 `torch` 和 `torch-npu`，必须 `--no-build-isolation`。`--depth 1` 只拉当前 tag，第一次跑通不必要完整历史。`git -c http.version=HTTP/1.1` 是因为国内访问 GitHub 时 HTTP/2 可能在中途断开（报 `Error in the HTTP2 framing layer`）。主仓在 GitHub，子模块在 gitcode / atomgit；和主仓分开拉。若 `LMCache-Ascend/csrc/hixl/CMakeLists.txt` 已经在，就跳过克隆。不要 `cd` 进克隆目录，用 `-e ./LMCache-Ascend` 安装，和上一节的 `vllm-src` 一样；后面的离线脚本还要写在当前目录。编译前删掉目录里的 `build/`。CANN 把昇腾核目标链接进 `.o` 时会原地改文件，留着上次的产物再编，链接器会报 `unknown file type`。
 
 CANN 9.1 会把 HIXL 通道编进去。HIXL 的 CMake 只加了 `pkg_inc/runtime` 这一层 include，而 `runtime/config.h` 会再 `#include "runtime/rt_external_device.h"`，头文件实际在 `pkg_inc/runtime/`。克隆后补上 `pkg_inc` 这一层，再编译。
 
-vLLM 0.23 要求 KV connector 的构造函数第三个参数是 `kv_cache_config`。`lmcache` 主仓已经接了，LMCache-Ascend 当前 Release 的子类还是两个参数。克隆后改这一处。这只改你本地的克隆，不会向 GitHub 提交。若你拿到的 tag 已经带上第三个参数，下面的脚本会跳过，不重复改。
+vLLM 0.23 要求 KV connector 的构造函数第三个参数是 `kv_cache_config`。`lmcache` 主仓已经接了，LMCache-Ascend 当前 Release 的子类还是两个参数。克隆后改这一处。这只改你本地的克隆，不会向 GitHub 提交。若源码里已经出现 `kv_cache_config`，或 CMake 里已经有单独的 `pkg_inc` 行，脚本会跳过，不重复改。
 
 将 `<UPSTREAM_REF>` 换成目标 **tag**（撰写时最新 Release 是 `v0.4.4`）。`<LMCACHE_VER>` 是同一个 tag 去掉开头的 `v`，给 `pip install` 用（pip 不接受 `lmcache==v0.4.4`）。
 <!--
@@ -238,7 +238,7 @@ source /usr/local/Ascend/nnal/atb/set_env.sh
 export PATH=/usr/local/sbin:$PATH
 export PYTHONNOUSERSITE=1
 export PIP_CONSTRAINT="$PWD/constraints-npu-vllm.txt"
-NO_CUDA_EXT=1 python -m pip install lmcache==<LMCACHE_VER> --no-deps
+NO_CUDA_EXT=1 python -m pip install --no-build-isolation lmcache==<LMCACHE_VER> --no-deps
 python -m pip install \
   aiofile aiofiles blake3 aiohttp msgspec numpy psutil pyyaml pyzmq \
   redis safetensors sortedcontainers transformers modelscope
@@ -247,50 +247,50 @@ if [ ! -f LMCache-Ascend/csrc/hixl/CMakeLists.txt ]; then
   git -C LMCache-Ascend -c http.version=HTTP/1.1 submodule update --init --recursive
 fi
 python - <<'PY'
+import re
 from pathlib import Path
 
 cmake = Path("LMCache-Ascend/csrc/hixl/CMakeLists.txt")
-old = "    ${ASCEND_CANN_PACKAGE_PATH}/${ARCH_SUBDIR}/pkg_inc/runtime\n"
-new = old + "    ${ASCEND_CANN_PACKAGE_PATH}/${ARCH_SUBDIR}/pkg_inc\n"
 text = cmake.read_text()
-if new not in text:
-    if old not in text:
+runtime = "${ASCEND_CANN_PACKAGE_PATH}/${ARCH_SUBDIR}/pkg_inc/runtime"
+pkg = "${ASCEND_CANN_PACKAGE_PATH}/${ARCH_SUBDIR}/pkg_inc"
+if not re.search(r"/pkg_inc\s*$", text, re.M):
+    if runtime not in text:
         raise SystemExit("hixl cmake include line not found")
-    cmake.write_text(text.replace(old, new, 1))
+    cmake.write_text(text.replace(runtime, runtime + "\n    " + pkg, 1))
 
 conn = Path(
     "LMCache-Ascend/lmcache_ascend/integration/vllm/"
     "lmcache_ascend_connector_v1.py"
 )
-old_init = (
-    "class LMCacheAscendConnectorV1Dynamic(LMCacheConnectorV1Dynamic):\n"
-    "    def __init__(self, vllm_config: \"VllmConfig\", role: KVConnectorRole) -> None:\n"
-    "        super().__init__(vllm_config=vllm_config, role=role)\n"
-)
-new_init = (
-    "class LMCacheAscendConnectorV1Dynamic(LMCacheConnectorV1Dynamic):\n"
-    "    def __init__(\n"
-    "        self,\n"
-    "        vllm_config: \"VllmConfig\",\n"
-    "        role: KVConnectorRole,\n"
-    "        kv_cache_config=None,\n"
-    "    ) -> None:\n"
-    "        super().__init__(\n"
-    "            vllm_config=vllm_config,\n"
-    "            role=role,\n"
-    "            kv_cache_config=kv_cache_config,\n"
-    "        )\n"
-)
 text = conn.read_text()
-if new_init not in text:
+if "kv_cache_config" not in text:
+    old_init = (
+        "class LMCacheAscendConnectorV1Dynamic(LMCacheConnectorV1Dynamic):\n"
+        "    def __init__(self, vllm_config: \"VllmConfig\", role: KVConnectorRole) -> None:\n"
+        "        super().__init__(vllm_config=vllm_config, role=role)\n"
+    )
+    new_init = (
+        "class LMCacheAscendConnectorV1Dynamic(LMCacheConnectorV1Dynamic):\n"
+        "    def __init__(\n"
+        "        self,\n"
+        "        vllm_config: \"VllmConfig\",\n"
+        "        role: KVConnectorRole,\n"
+        "        kv_cache_config=None,\n"
+        "    ) -> None:\n"
+        "        super().__init__(\n"
+        "            vllm_config=vllm_config,\n"
+        "            role=role,\n"
+        "            kv_cache_config=kv_cache_config,\n"
+        "        )\n"
+    )
     if old_init not in text:
         raise SystemExit("connector __init__ not found")
     conn.write_text(text.replace(old_init, new_init, 1))
 print("patched_ok", True)
 PY
-cd LMCache-Ascend
-rm -rf build
-SOC_VERSION=Ascend910B4 python -m pip install -v --no-build-isolation -e .
+rm -rf LMCache-Ascend/build
+SOC_VERSION=Ascend910B4 python -m pip install -v --no-build-isolation -e ./LMCache-Ascend
 python -c "import lmcache, lmcache_ascend, torch, torch_npu; from lmcache_ascend import _build_info as b; import lmcache_ascend.c_ops; print('lmcache', lmcache.__version__); print('soc', b.__soc_version__); print('c_ops_ok', True); print('npu_available', torch.npu.is_available())"
 ```
 
@@ -350,9 +350,9 @@ from lmcache.v1.cache_engine import LMCacheEngineBuilder
 
 
 def main():
-    os.environ.setdefault("LMCACHE_CHUNK_SIZE", "256")
-    os.environ.setdefault("LMCACHE_LOCAL_CPU", "True")
-    os.environ.setdefault("LMCACHE_MAX_LOCAL_CPU_SIZE", "2")
+    os.environ["LMCACHE_CHUNK_SIZE"] = "256"
+    os.environ["LMCACHE_LOCAL_CPU"] = "True"
+    os.environ["LMCACHE_MAX_LOCAL_CPU_SIZE"] = "2"
 
     model = snapshot_download("Qwen/Qwen2.5-0.5B")
     ktc = KVTransferConfig(
@@ -422,6 +422,7 @@ workload_ok True
 | `ld.lld: unknown file type` | 上次编译的 `build/` 还在，核目标被原地改过 | 删掉 `LMCache-Ascend/build` 再编 |
 | 编译报缺 `runtime/rt_external_device.h` | 没给 HIXL 的 CMake 补 `pkg_inc` | 确认第 5 节的 CMake 修补已经执行 |
 | pip 去拉 `cupy-cuda12x` | 装 `lmcache` 时没加 `--no-deps` | 卸掉后按第 5 节用 `--no-deps` 重装 |
+| pip 卡住去拉 `torch==2.10.0`（pypi.org，CPU 接近 0） | 装 `lmcache` 时没加 `--no-build-isolation`，隔离环境会从 PyPI 再下一份 | 按第 5 节加上该旗标，复用上一节已经装好的 NPU 版 torch |
 | `git clone` 报 `curl 16` 或 `Error in the HTTP2 framing layer` | GitHub 的 HTTP/2 偶发失败 | 确认用了第 4、5 节的 `git -c http.version=HTTP/1.1`，再重试一次 |
 | `deprecated 2-argument constructor` | 没改连接器的第三个参数 | 确认第 5 节的 connector 修补已经执行 |
 | `Unsupported device platform for LMCache engine` | 先导入了 `lmcache_ascend`，NPU 版设备检测补丁没打上 | 先 `import vllm`，再 `import lmcache_ascend` |

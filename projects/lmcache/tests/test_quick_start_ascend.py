@@ -49,9 +49,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         source_cmd = f'source {cls._CANN_SET_ENV} >/dev/null 2>&1'
         if os.path.isfile(cls._ATB_SET_ENV):
             # ATB set_env.sh reads unbound ZSH_VERSION; nounset would abort.
-            source_cmd += (
-                f'; set +u; source {cls._ATB_SET_ENV} >/dev/null 2>&1'
-            )
+            source_cmd += f'; set +u; source {cls._ATB_SET_ENV} >/dev/null 2>&1'
         if os.path.isfile(cls._CANN_SET_ENV):
             merged = subprocess.run(
                 ['bash', '-c', f'{source_cmd}; env'],

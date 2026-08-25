@@ -70,7 +70,6 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     # and export; subprocesses (subprocess.run inherits parent env by
     # default) see it the same way.
     _CUDA_CONSTRAINTS = (
-        'modelscope==1.37.0',
         'cuda-toolkit<0',
         'cuda-python<0',
         'cuda-bindings<0',

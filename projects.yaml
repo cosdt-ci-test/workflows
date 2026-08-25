@@ -115,8 +115,8 @@ projects:
       examples: .github/workflows/onnxruntime-examples.yml
       quick_start: .github/workflows/onnxruntime-quick-start.yml
   - name: diffsynth-studio
-    category: TODO
-    support_level: TODO
+    category: 推理加速
+    support_level: 新兴适配
     upstream_repo: modelscope/DiffSynth-Studio
     phase: A
     runner: linux-aarch64-a2-1

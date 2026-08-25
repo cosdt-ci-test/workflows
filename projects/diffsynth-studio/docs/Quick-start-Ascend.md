@@ -6,6 +6,12 @@
 
 GitHub 上最新 Release 是 `v1.1.9`。那个 tag 里还没有 `diffsynth/core/device/`。本文从 PyPI 安装当前发布的 `diffsynth`（撰写时是 `2.1.3`），这份包已经带昇腾设备代码。
 
+<!--
+```shell #test-setup store="package_version"
+printf '%s\n' "$UPSTREAM_REF"
+```
+-->
+
 ---
 
 ## 前置条件
@@ -112,13 +118,14 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 export PATH=/usr/local/sbin:$PATH
 export PYTHONNOUSERSITE=1
 python -m pip install diffsynth
-python -c "from diffsynth.core.device.npu_compatible_device import get_device_name, get_device_type; print('device_type', get_device_type()); print('device_name', get_device_name())"
+python -c "from importlib.metadata import version; from diffsynth.core.device.npu_compatible_device import get_device_name, get_device_type; print('diffsynth', version('diffsynth')); print('device_type', get_device_type()); print('device_name', get_device_name())"
 ```
 
 输出结果如下：
 
-```shell #test-result id="install-diffsynth"
+```shell #test-result id="install-diffsynth" load="package_version>>version"
 ...
+diffsynth <version>
 device_type npu
 device_name npu:0
 ```

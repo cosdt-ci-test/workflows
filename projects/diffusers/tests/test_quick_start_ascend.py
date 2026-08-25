@@ -11,7 +11,13 @@ Run: ``python -m unittest tests.test_quick_start_ascend -v 2>&1``
 
 Environment variables (injected by the quick-start engine workflow
 ``quick-start-template.yml``, triggered by ``diffusers-quick-start.yml``):
-    ``MONITORED_DOC_URL``         Required; raw URL of the document under test.
+    ``MONITORED_DOC_URL``         Fallback doc URL. The doc is normally
+                                  read from the engine's local checkout
+                                  (same file, same commit the monitor
+                                  triggered on); the URL is only fetched
+                                  when the local copy is absent
+                                  (e.g. running the test standalone from
+                                  a bare project dir).
     ``UPSTREAM_REF``              Required; bash reads ``$UPSTREAM_REF`` to get
                                   the latest release tag. The value is
                                   captured into ``captures`` via the
@@ -30,6 +36,7 @@ from __future__ import annotations
 import os
 import subprocess
 import unittest
+from pathlib import Path
 
 from workflows.markdown_doc_test_base import MarkdownDocTestBase
 from workflows.modelscope_cache import (
@@ -62,6 +69,33 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     # pipeline load + 4-step generation; short enough to fail fast on hangs.
     DEFAULT_COMMAND_TIMEOUT = 3000
     USER_AGENT = 'cosdt-ci-test/quick-start'  # monitored source is the fork under cosdt-ci-test org
+
+    # Local copy of the monitored doc, relative to the test cwd
+    # (workflows/projects/diffusers). The engine checks the workflows repo
+    # out next to the project dir, and the monitor triggered this run off
+    # the very commit this checkout holds - same file, zero network.
+    _LOCAL_DOC = Path(__file__).resolve().parents[1] / 'docs' / 'Quick-start-Ascend.md'
+
+    def pre_process(self) -> str:
+        """Read the doc from the engine's local checkout, falling back to
+        ``MONITORED_DOC_URL``.
+
+        Why: raw.githubusercontent.com is not reliably reachable from the
+        NPU runner (cluster firewall; the engine's own monitor step treats
+        a doc-fetch failure as "signal unknown" for the same reason). The
+        base class's fetch-only pre_process makes the whole test suite
+        hinge on that flaky network path, while the very same doc sits on
+        local disk in the checkout the engine just made.
+        """
+        if self._LOCAL_DOC.is_file():
+            self.log(f'pre_process: reading local doc {self._LOCAL_DOC}')
+            return self._LOCAL_DOC.read_text(encoding='utf-8')
+        self.log(
+            f'pre_process: local doc missing ({self._LOCAL_DOC}); '
+            'falling back to MONITORED_DOC_URL fetch'
+        )
+        return super().pre_process()
+
     ERROR_MARKERS = (
         *MarkdownDocTestBase.ERROR_MARKERS,  # generic [ERROR] + Traceback
         'applicaiton exception',  # CANN toolkit emits this typo (sic) in its Python driver

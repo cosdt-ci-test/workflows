@@ -286,7 +286,7 @@ python -c "from modelscope import snapshot_download; print(snapshot_download('pr
 /root/.cache/modelscope/hub/models/prithivMLmods/SD3.5-Large-Turbo-HyperRealistic-LoRA
 ```
 
-在 SD 3.5 pipeline 上加载 LoRA 并用触发词生成（`load_lora_weights` 走 PEFT 的权重合并路径，与设备无关）：
+在 SD 3.5 pipeline 上加载 LoRA 并用触发词生成（`load_lora_weights` 走 PEFT 的权重合并路径，与设备无关；`load_lora_weights` 内部对 cpu offload 做了显式兼容——注入 LoRA 前临时摘下 offload hooks、注入后重新挂回，因此 LoRA 与 offload 可以组合使用，权重不必全量驻留显存）：
 
 ```shell #test id="sd35-lora" load="sd35_path>>sd35_path" load="lora_path>>lora_path"
 mkdir -p output
@@ -297,7 +297,8 @@ from diffusers import StableDiffusion3Pipeline
 
 pipe = StableDiffusion3Pipeline.from_pretrained(
     "<sd35_path>", dtype=torch.bfloat16,
-).to("npu:0")
+)
+pipe.enable_model_cpu_offload()
 pipe.load_lora_weights(
     "<lora_path>", weight_name="SD3.5-4Step-Large-Turbo-HyperRealistic-LoRA.safetensors",
 )
@@ -363,7 +364,7 @@ xxx output/sd35_offload.png
 
 ### 全量加载对比
 
-同一模型不带 offload 直接 `.to("npu:0")` 全量驻留显存（三个 text encoder + MMDiT 合计 ~29 GB bf16，32 GB 显存放得下但已接近上限；显存更小的卡上这一步会 OOM，正是上一节 offload 的用武之地）：
+同一模型不带 offload 直接 `.to("npu:0")` 全量驻留显存（三个 text encoder + MMDiT 合计 ~29 GB bf16，32 GB 显存放得下但已接近上限）。1024 分辨率下 VAE 解码的高分辨率激活会再加 ~1 GB 峰值，贴线环境容易 OOM，因此本块降到 768 分辨率留出余量；显存更小的卡上这一步会直接 OOM，正是上一节 offload 的用武之地：
 
 ```shell #test id="sd35-full" load="sd35_path>>sd35_path"
 mkdir -p output
@@ -380,6 +381,8 @@ image = pipe(
     "a black falcon twist in the air, close-up photo",
     num_inference_steps=4,
     guidance_scale=0.0,
+    height=768,
+    width=768,
 ).images[0]
 image.save("output/sd35_full.png")
 torch.npu.synchronize()
@@ -394,7 +397,7 @@ ls -l output/sd35_full.png | awk '{print $5, $9}'
 
 ```shell #test-result id="sd35-full" fuzzy='xxx' fuzzy='...'
 ...
-generated: (1024, 1024)
+generated: (768, 768)
 full-load peak NPU memory: xxx GB
 xxx output/sd35_full.png
 ```

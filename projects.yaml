@@ -183,3 +183,12 @@ projects:
     dir: projects/torchtitan
     workflows:
       quick_start: .github/workflows/torchtitan-quick-start.yml
+  - name: colossalai
+    category: 推理加速
+    support_level: 新兴适配
+    upstream_repo: hpcaitech/ColossalAI
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/colossalai
+    workflows:
+      quick_start: .github/workflows/colossalai-quick-start.yml

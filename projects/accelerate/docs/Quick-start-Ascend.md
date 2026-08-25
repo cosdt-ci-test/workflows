@@ -253,6 +253,8 @@ echo "${PWD}/train_npu.py"
 ASCEND_RT_VISIBLE_DEVICES=0,1 accelerate launch --num_processes 2 --mixed_precision no <path>
 ```
 
+其中 `<path>` 是 Step 1 生成的脚本绝对路径（即 `${PWD}/train_npu.py`）——CI runner 会在执行时自动把 Step 1 捕获的路径代入；手动照着跑时把它替换为你机器上的实际路径即可。
+
 输出结果类似：
 
 ```shell #test-result id="acc-launch" fuzzy='xxx'
@@ -297,10 +299,10 @@ shape=[1, 1]
 
 ### 跨卡 `gather_for_metrics`（DDP 双进程）
 
-把 `gather_for_metrics` 放进 `accelerate launch` 拉起的双进程里跑，验证它在 NPU 上真的跨卡做 `all_gather`（hccl 后端）而不是退回 identity：
+把 `gather_for_metrics` 放进 `accelerate launch` 拉起的双进程里跑，验证它在 NPU 上真的跨卡做 `all_gather`（hccl 后端）而不是退回 identity。注意 `accelerate launch` 只接受脚本文件路径、不支持 `python -c` 内联代码（它把第一个参数当作脚本去执行），所以先落盘再启动：
 
-```shell #test id="acc-gather-multi"
-ASCEND_RT_VISIBLE_DEVICES=0,1 accelerate launch --num_processes 2 python -c "
+```shell #test-setup store="gather_script_path"
+cat > gather_npu.py <<'PY'
 import torch
 from accelerate import Accelerator
 
@@ -312,8 +314,15 @@ x = torch.tensor([1, 2, 3], device=accelerator.device)
 accelerator.print(f'world={accelerator.num_processes}')
 accelerator.print(f'device={gathered.device.type}')
 accelerator.print(f'gathered={gathered.tolist()}')
-"
+PY
+echo "${PWD}/gather_npu.py"
 ```
+
+```shell #test id="acc-gather-multi" load="gather_script_path>>path"
+ASCEND_RT_VISIBLE_DEVICES=0,1 accelerate launch --num_processes 2 <path>
+```
+
+`<path>` 同样是上方 setup 块捕获的 `${PWD}/gather_npu.py` 绝对路径，由 runner 自动代入；手动跑时替换为实际路径。
 
 输出结果如下（两个 rank 都喂 `[1, 2, 3]`，all_gather 沿 dim=0 串成 `[1, 2, 3, 1, 2, 3]`，长度 6 = `world * 3`）：
 
@@ -327,7 +336,7 @@ gathered=[1, 2, 3, 1, 2, 3]
 
 ### 启动 bf16 混合精度路径
 
-把玩具脚本再跑一遍，但把 `--mixed_precision` 从 `no` 切到 `bf16`，验证 Accelerate 的 autocast 包装在 NPU 上不出错。脚本不动一行——Accelerate 自动包 `torch.autocast`：
+把 Step 1 的 `train_npu.py` 再跑一遍，但把 `--mixed_precision` 从 `no` 切到 `bf16`，验证 Accelerate 的 autocast 包装在 NPU 上不出错。脚本不动一行——Accelerate 自动包 `torch.autocast`（`<path>` 仍是 Step 1 的 `train_npu.py`）：
 
 ```shell #test id="acc-launch-bf16" load="script_path>>path"
 ASCEND_RT_VISIBLE_DEVICES=0,1 accelerate launch --num_processes 2 --mixed_precision bf16 <path>

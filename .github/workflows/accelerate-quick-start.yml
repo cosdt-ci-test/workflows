@@ -1,0 +1,85 @@
+# accelerate quick start guard - project thin trigger.
+#
+# Calls the common engine .github/workflows/quick-start-template.yml;
+# this file only declares what varies per project: schedule,
+# concurrency, runner, container image + options, upstream repo,
+# monitored doc, and the test entry command. The guard loop, cache
+# I/O, state relay and publishing all live in the engine. See
+# docs/design-quickstart-common-template.md for the design and the
+# full input contract.
+#
+# Cache keys (monitor-state-accelerate-*) and artifact names
+# are derived from project=accelerate, not from the workflow name.
+
+name: accelerate-quick-start
+
+concurrency:
+  # format() is load-bearing: a '||' between 'manual-' and
+  # github.run_id would short-circuit on the truthy literal and
+  # every dispatch would share one 'manual-' group.
+  group: ${{ github.event_name == 'schedule' && 'accelerate-quick-start-schedule' || format('manual-{0}', github.run_id) }}
+  # cancel-in-progress: false because (1) a schedule run cancelled
+  # mid-way loses its outcome writeback - the outcome is what makes
+  # the retry mechanism work, and the 'if: always()' guard isn't
+  # enough when the container is being torn down; (2) dispatch runs
+  # already live in unique groups so there's nothing to cancel.
+  cancel-in-progress: false
+
+on:
+  schedule:
+    # Run every 6 hours: '0 */6 * * *' fires at minute 0 of every
+    # 6th hour (00:00, 06:00, 12:00, 18:00). Cadence is loose enough
+    # for an upstream that releases monthly (Accelerate), but tight
+    # enough that doc fixes propagate within a day.
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  accelerate-quick-start:
+    uses: ./.github/workflows/quick-start-template.yml
+    with:
+      # Namespaces cache keys (monitor-state-accelerate-*), artifacts
+      # (accelerate-quick-start-<run_id>) and the test working dir
+      # (workflows/projects/accelerate).
+      project: accelerate
+      # Self-hosted dual-NPU runner for the test job only; the engine
+      # pins the cache I/O jobs (restore-cache / publish-and-persist) to
+      # GitHub-hosted ubuntu-latest. Two cards are mounted so the
+      # cross-process `gather_for_metrics` test can run a real 2-rank
+      # all_gather. ASCEND_RT_VISIBLE_DEVICES=0,1 is set in the test
+      # subclass (projects/accelerate/tests/test_quick_start_ascend.py)
+      # to expose both — the template doesn't inject it.
+      test_runner: '["linux-aarch64-a2-2"]'
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+      container_options: >-
+        --privileged --shm-size=64g
+        --device=/dev/davinci0
+        --device=/dev/davinci1
+        --device=/dev/davinci_manager
+        --device=/dev/devmm_svm
+        --device=/dev/hisi_hdc
+        --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
+        --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
+        --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
+      # Doc body now does: git clone + uv pip install -e . + accelerate env
+      # + init_empty_weights + accelerate launch (DDP 2-rank, no-amp) +
+      # gather_for_metrics single + gather_for_metrics multi +
+      # accelerate launch (DDP 2-rank, bf16). 90 min covers cold cache +
+      # cold launch + 2-rank hccl init.
+      timeout_minutes: 90
+      upstream_repo: huggingface/accelerate
+      # The doc under guard. Both URLs point at the cosdt-ci-test fork
+      # (this repo): the workflow monitors doc drift on this repo, not
+      # upstream — the doc is our authored artifact, accelerate's own
+      # quicktour lives at docs/source/quicktour.md and is referenced
+      # from inside the doc body.
+      doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/accelerate/docs/Quick-start-Ascend.md
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/accelerate/docs/Quick-start-Ascend.md
+      # cwd is workflows/projects/accelerate; env contract (MONITORED_DOC_URL /
+      # UPSTREAM_REF / NPU_READY) is injected by the engine. All project
+      # env prep and installs live in the test subclass's
+      # prepare_environment hook.
+      test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1

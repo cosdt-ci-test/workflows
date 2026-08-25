@@ -68,7 +68,7 @@ print('DeepSpeed version:', deepspeed.__version__)
   python -m pip install mpi4py
   echo "installing HelloDeepSpeed dependencies"
   PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple" \
-    python -m pip install "tokenizers>=0.22.0,<0.23" datasets transformers fire loguru sh tqdm
+    python -m pip install "tokenizers>=0.22.0,<0.23" datasets transformers fire loguru sh tqdm pytz
 }
 
 supported_profiles() {

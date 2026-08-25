@@ -258,11 +258,10 @@ Qwen-Image 约 58 GB，首次下载耗时长；CI 使用宿主机持久缓存（
 
 ```shell #test-setup store="qwen_image_path"
 set -o pipefail
-python -c "from modelscope import snapshot_download; print(snapshot_download('Qwen/Qwen-Image'))" | grep '^/' | tail -n 1 || \
 python -c "from modelscope import snapshot_download; print(snapshot_download('Qwen/Qwen-Image'))" | grep '^/' | tail -n 1
 ```
 
-说明：Qwen-Image 有 4 个 ~5 GB 的大分片，网络波动时可能部分失败（CI 实测出现过 2/4 分片下载中断）。`set -o pipefail` 让 python 崩溃时管道整体非零退出（不再被 tail 的退出码掩盖）；失败后重试一次——modelscope 的 snapshot_download 自带断点续传，已完成的分片不会重下，重试只补失败的分片；`grep '^/'` 确保捕获到的只会是路径行。
+说明：Qwen-Image 有 4 个 ~5 GB 的大分片，网络波动时可能部分失败（CI 实测出现过 2/4 分片下载中断，modelscope 抛 `FileDownloadError`）。`set -o pipefail` 让 python 崩溃时管道整体非零退出（不再被 tail 的退出码掩盖），失败会被测试框架立即判红——下一轮轮询的重试机制自会重跑；modelscope 的 snapshot_download 自带断点续传，重跑时已完成的分片不会重下。`grep '^/'` 确保捕获到的只会是路径行。
 
 输出类似：
 

@@ -18,7 +18,7 @@ supported:
     exec: examples/dpo_reduce_hallucinations/dpo_reduce_hallucinations.py
     overlay_args:
       - --model_name_or_path ${DPO_MODEL_PATH}
-      - --dataset_name ${FIXTURE_DIR}/ci_dpo_8.jsonl
+      - --dataset_name ${TARGET_ROOT}/fixtures/ci_dpo_8.jsonl
       - --dataset_num_proc 1
       - --per_device_train_batch_size 1
       - --gradient_accumulation_steps 1
@@ -45,7 +45,7 @@ supported:
     exec: examples/tpo_ultrafeedback/tpo.py
     overlay_args:
       - --model_name_or_path ${TPO_MODEL_PATH}
-      - --dataset_name ${FIXTURE_DIR}/ci_tpo_8.jsonl
+      - --dataset_name ${TARGET_ROOT}/fixtures/ci_tpo_8.jsonl
       - --dataset_num_proc 1
       - --per_device_train_batch_size 1
       - --gradient_accumulation_steps 1

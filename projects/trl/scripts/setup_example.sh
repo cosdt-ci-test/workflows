@@ -76,6 +76,27 @@ PY
   python -c "import torchvision; print('torchvision', torchvision.__version__)"
 }
 
+# Copy CI fixture data files into the target root so that example scripts
+# can load them via a local path under $TARGET_ROOT/fixtures/. This
+# decouples the example from the workflows-checkout subtree, which may
+# have file-system visibility issues on self-hosted runner containers.
+prepare_fixtures() {
+  local src="${FIXTURE_DIR:?FIXTURE_DIR is required}"
+  local dst="$TARGET_ROOT/fixtures"
+  echo "preparing fixtures from $src to $dst"
+  if ! ls "$src"/*.jsonl 1>/dev/null 2>&1; then
+    echo "FATAL: no fixture files (*.jsonl) found in $src" >&2
+    echo "the workflows checkout may be missing the fixtures directory" >&2
+    exit 1
+  fi
+  mkdir -p "$dst"
+  cp "$src"/*.jsonl "$dst/"
+  local count
+  count=$(ls "$dst"/*.jsonl 2>/dev/null | wc -l)
+  echo "copied $count fixture file(s) to $dst"
+  ls -la "$dst/"
+}
+
 setup_peft_lora() {
   # Covers the small-model LoRA examples (DPO/TPO). Installs TRL from the
   # target checkout with the peft extra; Pillow is needed by the VLM
@@ -130,5 +151,6 @@ select_pip_index
 python -m pip install -U pip setuptools wheel
 ensure_torch_stack
 ensure_torchvision
+prepare_fixtures
 
 "setup_${PROFILE}"

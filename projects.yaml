@@ -72,7 +72,7 @@ projects:
     support_level: 基础支持
     upstream_repo: huggingface/accelerate
     phase: A
-    runner: linux-aarch64-a2-1
+    runner: linux-aarch64-a2-2
     dir: projects/accelerate
     workflows:
       quick_start: .github/workflows/accelerate-quick-start.yml
@@ -124,3 +124,52 @@ projects:
     workflows:
       examples: .github/workflows/trl-examples.yml
       quick_start: .github/workflows/trl-quick-start.yml
+  - name: torchtune
+    category: 训练加速
+    support_level: 基础支持
+    upstream_repo: meta-pytorch/torchtune
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/torchtune
+    workflows:
+      quick_start: .github/workflows/torchtune-quick-start.yml
+  - name: xtuner
+    category: 训练加速
+    support_level: 基础支持
+    upstream_repo: InternLM/xtuner
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/xtuner
+    workflows:
+      quick_start: .github/workflows/xtuner-quick-start.yml
+  - name: speculators
+    category: 推理加速
+    support_level: 基础支持
+    upstream_repo: vllm-project/speculators
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/speculators
+    workflows:
+      quick_start: .github/workflows/speculators-quick-start.yml
+  - name: slime
+    category: 训练加速
+    support_level: 基础支持
+    upstream_repo: THUDM/slime
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/slime
+    workflows:
+      quick_start: .github/workflows/slime-quick-start.yml
+  # include_prerelease=true is wired in the workflow (not the engine
+  # schema) because torchtitan pre-stable marks every release as
+  # prerelease, so /releases/latest 404s on this repo and the engine
+  # falls back to /releases?per_page=20 picking the latest non-draft.
+  - name: torchtitan
+    category: 训练加速
+    support_level: 新兴适配
+    upstream_repo: pytorch/torchtitan
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/torchtitan
+    workflows:
+      quick_start: .github/workflows/torchtitan-quick-start.yml

@@ -9,8 +9,8 @@ Document under test: ``projects/torchtune/docs/Quick-start-Ascend.md``
 
 Run: ``python -m unittest tests.test_quick_start_ascend -v 2>&1``
 
-Environment variables (injected by GitHub workflow
-``torchtune-quick-start.yml``):
+Environment variables (injected by the ``quick-start-template.yml``
+engine that ``torchtune-quick-start.yml`` delegates to):
     ``MONITORED_DOC_URL``         Required; raw URL of the document under test.
     ``UPSTREAM_REF``              Required; bash reads ``$UPSTREAM_REF`` to get
                                   the latest release tag. The value is
@@ -30,6 +30,7 @@ from __future__ import annotations
 import os
 import subprocess
 import unittest
+from pathlib import Path
 
 from workflows.markdown_doc_test_base import MarkdownDocTestBase
 
@@ -186,12 +187,17 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         os.environ['PIP_CONSTRAINT'] = cls._CONSTRAINTS_FILE
         os.environ['UV_CONSTRAINT'] = cls._CONSTRAINTS_FILE
 
-        # 2) uv: the doc body's install steps are ``uv pip install torchtune``
-        # (binary) and ``uv pip install -e .`` (source), which give cleaner
-        # stdout than pip's "Obtaining/Installing collected packages"
-        # preamble so the #test-result fuzzy match against ``torchtune xxx``
-        # isn't polluted. Inherit ``PIP_INDEX_URL`` + ``PIP_TRUSTED_HOST``
-        # from the yml job-level env (cluster cache path + trusted-host).
+        # 2) uv: the doc body's binary install path passes
+        # ``--index-url https://mirrors.aliyun.com/pypi/simple`` explicitly
+        # to dodge the cluster cache (the cluster PyPI mirror doesn't
+        # always have a fresh torchtune wheel on release day), so the
+        # ``PIP_INDEX_URL`` / ``UV_INDEX_URL`` job-level env in
+        # ``quick-start-template.yml`` is overridden for that command and
+        # doesn't apply here. The source install path (``uv pip install -e .``)
+        # has no explicit index-url and picks up the cluster env. uv's
+        # output is also cleaner than pip's "Obtaining/Installing
+        # collected packages" preamble so the #test-result fuzzy match
+        # against ``torchtune xxx`` isn't polluted.
         subprocess.run(
             ['python', '-m', 'pip', 'install', 'uv'],
             check=True,

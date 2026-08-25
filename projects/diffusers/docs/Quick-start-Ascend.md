@@ -173,7 +173,7 @@ diffusers xxx
 默认使用 **ModelScope** 进行模型下载。
 
 ```shell #test-setup store="model_path"
-python -c "from modelscope import snapshot_download; print(snapshot_download('AI-ModelScope/stable-diffusion-v1-5'))" | tail -n 1
+python -c "from modelscope import snapshot_download; print(snapshot_download('AI-ModelScope/stable-diffusion-v1-5'))" | grep '^/' | tail -n 1
 ```
 
 输出类似：
@@ -256,7 +256,7 @@ xxx output/astronaut_unipc.png
 Qwen-Image 约 58 GB，首次下载耗时长；CI 使用宿主机持久缓存（容器挂载 `/root/.cache/modelscope`），后续运行直接命中本地文件。持久缓存中可能残留之前中断下载产生的残缺权重文件，测试框架会在下载前做 safetensors 完整性校验，损坏的模型目录会被整体清除并重新下载。
 
 ```shell #test-setup store="qwen_image_path"
-python -c "from modelscope import snapshot_download; print(snapshot_download('Qwen/Qwen-Image'))" | tail -n 1
+python -c "from modelscope import snapshot_download; print(snapshot_download('Qwen/Qwen-Image'))" | grep '^/' | tail -n 1
 ```
 
 输出类似：
@@ -272,7 +272,7 @@ LoRA 适配器只往基础模型插入少量可训练参数（本例 ~94 MB 对 
 先下载 LoRA 权重（同样走 ModelScope，落入持久缓存）：
 
 ```shell #test-setup store="lora_path"
-python -c "from modelscope import snapshot_download; print(snapshot_download('flymy-ai/qwen-image-realism-lora'))" | tail -n 1
+python -c "from modelscope import snapshot_download; print(snapshot_download('flymy-ai/qwen-image-realism-lora'))" | grep '^/' | tail -n 1
 ```
 
 输出类似：

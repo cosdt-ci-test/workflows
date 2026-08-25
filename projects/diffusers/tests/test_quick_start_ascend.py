@@ -9,8 +9,8 @@ Document under test: ``projects/diffusers/docs/Quick-start-Ascend.md``
 
 Run: ``python -m unittest tests.test_quick_start_ascend -v 2>&1``
 
-Environment variables (injected by GitHub workflow
-``diffusers-quick-start.yml``):
+Environment variables (injected by the quick-start engine workflow
+``quick-start-template.yml``, triggered by ``diffusers-quick-start.yml``):
     ``MONITORED_DOC_URL``         Required; raw URL of the document under test.
     ``UPSTREAM_REF``              Required; bash reads ``$UPSTREAM_REF`` to get
                                   the latest release tag. The value is
@@ -40,7 +40,8 @@ from workflows.modelscope_cache import (
 
 
 def _is_truthy(value: str | None) -> bool:
-    """``'true'`` -> True (case-insensitive); anything else (including unset) -> False."""
+    """``'true'`` -> True (case-insensitive, leading/trailing whitespace
+    tolerated); anything else (including unset) -> False."""
     if not value:
         return False
     return value.strip().lower() == 'true'
@@ -119,8 +120,8 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     _ASCEND_EXTRA = 'https://repo.huaweicloud.com/ascend/repos/pypi'
 
     # CANN toolkit: source once to get ASCEND_HOME / LD_LIBRARY_PATH etc.
-    # Path is hard-coded, tied to the GitHub workflow container image
-    # (CI_IMAGE).
+    # Path is hard-coded, tied to the container image pinned by the
+    # ``image:`` input of ``diffusers-quick-start.yml``.
     _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
 
     # ----------------------------------------------------------
@@ -131,10 +132,11 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     def prepare_environment(cls) -> None:
         """Install CANN env + CUDA constraints + uv + torch stack probe
         in one go. The remaining dependencies — ``transformers`` /
-        ``accelerate`` / ``modelscope`` (via the doc's ``install-deps``
-        section) and ``diffusers`` (via ``diffusers-install-binary`` /
-        ``diffusers-install-source``) — install themselves in document
-        order inside ``run_template``.
+        ``accelerate`` / ``peft`` / ``modelscope`` (via the doc's
+        dependency ``#test-setup`` block, verified by the
+        ``install-deps`` version print) and ``diffusers`` (via
+        ``diffusers-install-binary`` / ``diffusers-install-source``) —
+        install themselves in document order inside ``run_template``.
 
         Class-level setup: run once per test class, triggered by
         ``setUpClass``. Not the same as ``unittest.TestCase.setUp`` —
@@ -222,7 +224,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         # 5) transformers / accelerate / modelscope / diffusers are NOT
         # installed here: they are the subject of the doc itself and
         # install themselves in document order — the
-        # ``#test-setup`` dependency block (``pip install 'transformers<5.0'
+        # ``#test-setup`` dependency block (``pip install 'transformers>=5.0,<6.0'
         # 'accelerate>=1.0,<2.0' 'modelscope==1.37.0'`` + the
         # ``install-deps`` version print), then the diffusers blocks
         # (``diffusers-install-binary`` / ``diffusers-install-source``).

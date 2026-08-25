@@ -1,7 +1,7 @@
 """Quick-start-Ascend documentation test: end-to-end case built on top
 of the ``MarkdownDocTestBase`` contract.
 
-Document under test: ``projects/peft/docs/Quick-start-Ascend.md``
+Document under test: ``projects/cache-dit/docs/Quick-start-Ascend.md``
 (follows the ``docs/markdown_doc_test_label.md`` contract: every
 ``shell`` code block carries one of the ``#test`` / ``#test-setup`` /
 ``#test-result`` labels plus ``id=`` / ``store=`` / ``load='x>>y'`` /
@@ -9,8 +9,8 @@ Document under test: ``projects/peft/docs/Quick-start-Ascend.md``
 
 Run: ``python -m unittest tests.test_quick_start_ascend -v 2>&1``
 
-Environment variables (injected by the quick-start engine workflow
-``quick-start-template.yml``, triggered by ``peft-quick-start.yml``):
+Environment variables (injected by GitHub workflow
+``cache-dit-quick-start.yml``):
     ``MONITORED_DOC_URL``         Required; raw URL of the document under test.
     ``UPSTREAM_REF``              Required; bash reads ``$UPSTREAM_REF`` to get
                                   the latest release tag. The value is
@@ -30,13 +30,9 @@ from __future__ import annotations
 import os
 import subprocess
 import unittest
+from pathlib import Path
 
 from workflows.markdown_doc_test_base import MarkdownDocTestBase
-from workflows.modelscope_cache import (
-    ensure_safetensors,
-    purge_corrupt_models,
-    resolve_modelscope_cache,
-)
 
 
 def _is_truthy(value: str | None) -> bool:
@@ -56,7 +52,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     contract -> run ``#test-setup`` / ``#test`` in order -> compare against
     ``#test-result``."""
 
-    DEFAULT_COMMAND_TIMEOUT = 1200  # 20 min: long enough for model download + LoRA apply/save/load
+    DEFAULT_COMMAND_TIMEOUT = 1800  # 30 min: long enough for cache-dit generation, short enough to fail fast on hangs
     USER_AGENT = 'cosdt-ci-test/quick-start'  # monitored source is the fork under cosdt-ci-test org
     ERROR_MARKERS = (
         *MarkdownDocTestBase.ERROR_MARKERS,  # generic [ERROR] + Traceback
@@ -64,11 +60,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         'ERR99999',  # CANN sentinel for unrecoverable runtime failure
     )
 
-    # Process-level CUDA exclusion list. Originally written inside the
-    # workflow step as a child-process env passed through to pip / uv /
-    # peft's own wheel resolver. Moved to the test layer: write to /tmp
-    # and export; subprocesses (subprocess.run inherits parent env by
-    # default) see it the same way.
+    # Process-level CUDA exclusion list. Write to /tmp and export; subprocesses inherit parent env.
     _CUDA_CONSTRAINTS = (
         'cuda-toolkit<0',
         'cuda-python<0',
@@ -82,72 +74,58 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         'nvidia-cuda-cupti<0',
         'nvidia-cudnn<0',
         'nvidia-cudnn-frontend<0',
-        'nvidia-cufft<0',
-        'nvidia-curand<0',
-        'nvidia-cusolver<0',
-        'nvidia-cusparse<0',
-        'nvidia-cutlass-dsl<0',
-        'nvidia-cutlass-dsl-libs-base<0',
-        'nvidia-cutlass-dsl-libs-core<0',
-        'nvidia-cutlass-dsl-libs-cu12<0',
-        'nvidia-ml-py<0',
-        'nvidia-nccl<0',
-        'nvidia-nvjitlink<0',
-        'nvidia-nvtx<0',
-        'nvidia-cublas-cu12<0',
-        'nvidia-cuda-nvdisasm<0',
-        'nvidia-cuda-runtime-cu12<0',
-        'nvidia-cuda-nvrtc-cu12<0',
-        'nvidia-cuda-cupti-cu12<0',
-        'nvidia-cudnn-cu12<0',
-        'nvidia-cufft-cu12<0',
-        'nvidia-curand-cu12<0',
-        'nvidia-cusolver-cu12<0',
-        'nvidia-cusparse-cu12<0',
-        'nvidia-cusparselt-cu12<0',
-        'nvidia-nccl-cu12<0',
-        'nvidia-nvjitlink-cu12<0',
-        'nvidia-nvtx-cu12<0',
+        'nvidia-cufft<0>',
+        'nvidia-curand<0>',
+        'nvidia-cusolver<0>',
+        'nvidia-cusparse<0>',
+        'nvidia-cutlass-dsl<0>',
+        'nvidia-cutlass-dsl-libs-base<0>',
+        'nvidia-cutlass-dsl-libs-core<0>',
+        'nvidia-cutlass-dsl-libs-cu12<0>',
+        'nvidia-ml-py<0>',
+        'nvidia-nccl<0>',
+        'nvidia-nvjitlink<0>',
+        'nvidia-nvtx<0>',
+        'nvidia-cublas-cu12<0>',
+        'nvidia-cuda-nvdisasm<0>',
+        'nvidia-cuda-runtime-cu12<0>',
+        'nvidia-cuda-nvrtc-cu12<0>',
+        'nvidia-cuda-cupti-cu12<0>',
+        'nvidia-cudnn-cu12<0>',
+        'nvidia-cufft-cu12<0>',
+        'nvidia-curand-cu12<0>',
+        'nvidia-cusolver-cu12<0>',
+        'nvidia-cusparse-cu12<0>',
+        'nvidia-cusparselt-cu12<0>',
+        'nvidia-nccl-cu12<0>',
+        'nvidia-nvjitlink-cu12<0>',
+        'nvidia-nvtx-cu12<0>',
     )
-    _CONSTRAINTS_FILE = '/tmp/peft_npu_constraints.txt'
+    _CONSTRAINTS_FILE = '/tmp/cache_dit_npu_constraints.txt'
 
     # Cluster-internal nginx PyPI cache + Huawei Cloud ascend dual-source.
     _CLUSTER_INDEX = 'http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple'
     _ASCEND_EXTRA = 'https://repo.huaweicloud.com/ascend/repos/pypi'
 
     # CANN toolkit: source once to get ASCEND_HOME / LD_LIBRARY_PATH etc.
-    # Path is hard-coded, tied to the container image pinned by the
-    # ``image:`` input of ``peft-quick-start.yml``.
+    # Path is hard-coded, tied to the GitHub workflow container image (CI_IMAGE).
     _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
 
     # ----------------------------------------------------------
-    # prepare_environment: CANN env + CUDA constraints + torch stack probe
-    # + safetensors + modelscope cache purge (transformers / modelscope /
-    # peft are installed by the doc's `### 前置安装` / `## 安装 PEFT` blocks)
+    # prepare_environment: CUDA constraints + uv + torch stack probe + cache-dit deps
     # ----------------------------------------------------------
 
     @classmethod
     def prepare_environment(cls) -> None:
-        """Source CANN env + write CUDA exclusion list + install uv + torch stack probe
-        + safetensors + purge stale modelscope cache shards.
-
-        The doc's ``### 前置安装`` and ``## 安装 PEFT`` sections are the
-        single source of truth for which packages + versions get
-        installed; this class only handles ``torch`` / ``torch_npu``
-        here (via the cluster cache + Huawei ascend dual-source), the
-        defensive ``safetensors`` install, and the modelscope cache
-        purge. All other packages — ``transformers`` / ``modelscope``
-        (via ``check-ml-deps``) and ``peft`` (via
-        ``peft-install-binary`` / ``peft-install-source``) — install
-        themselves in document order via the ``#test`` machinery.
+        """Install CANN env + CUDA constraints + uv + torch stack probe
+        + cache-dit dependencies in one go.
 
         Class-level setup: run once per test class, triggered by
         ``setUpClass``. Not the same as ``unittest.TestCase.setUp`` —
         that lifecycle hook fires before every test method, which is
         wrong for a one-shot install.
         """
-        # 0) CANN env: source set_env.sh and merge the env stream into
-        # os.environ
+        # 0) CANN env: source set_env.sh and merge the env stream into os.environ
         if os.path.isfile(cls._CANN_SET_ENV):
             merged = subprocess.run(
                 ['bash', '-c', f'source {cls._CANN_SET_ENV} >/dev/null 2>&1; env'],
@@ -173,23 +151,23 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         os.environ['PIP_CONSTRAINT'] = cls._CONSTRAINTS_FILE
         os.environ['UV_CONSTRAINT'] = cls._CONSTRAINTS_FILE
 
-        # 2) uv: the doc's ``peft-install-source`` block calls
-        # ``uv pip install -e .`` which handles PEP 517 build deps more
-        # reliably than pip. Inherit ``PIP_INDEX_URL`` + ``PIP_TRUSTED_HOST``
-        # from the yml job-level env (cluster cache path + trusted-host).
+        # 2) uv: the test setup calls ``uv pip install`` which handles
+        # PEP 517 build deps more reliably than pip. Inherit
+        # ``PIP_INDEX_URL`` + ``PIP_TRUSTED_HOST`` from the yml job-level
+        # env (cluster cache path + trusted-host).
         subprocess.run(
             ['python', '-m', 'pip', 'install', 'uv'],
             check=True,
         )
 
-        # 3) torch stack probe + install: when version matches the image's
+        # 3) torch stack probe: when version matches the image's
         # pre-installed wheels, reuse them to avoid the cluster cache
         # triggering ``+cpu`` resolution.
         _PROBE_SCRIPT = (
             'import torch, torch_npu\n'
             "raise SystemExit(0 if "
-            "torch.__version__.startswith('2.9.0') "
-            "and torch_npu.__version__.startswith('2.9.0') "
+            "torch.__version__.startswith('2.8.0') "
+            "and torch_npu.__version__.startswith('2.8.0') "
             "else 1)"
         )
         probe = subprocess.run(
@@ -208,38 +186,45 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             )
             print(f'setup: reusing image torch stack ({versions.stdout.strip()})')
         else:
-            print('setup: installing torch==2.9.0 torch_npu==2.9.0.post2')
+            print('setup: installing torch==2.8.0 torch_npu==2.8.0.post2')
             subprocess.run(
                 [
                     'python', '-m', 'pip', 'install',
                     '--index-url', cls._CLUSTER_INDEX,
                     '--extra-index-url', cls._ASCEND_EXTRA,
-                    'torch==2.9.0', 'torch_npu==2.9.0.post2',
+                    'torch==2.8.0', 'torch_npu==2.8.0.post2',
                 ],
                 check=True,
             )
 
-        # 4) safetensors: native loader used by the cache validation
-        # step below. Pulled in transitively by torch on most images;
-        # install defensively in case the CANN base ships without it.
-        ensure_safetensors()
+        # 4) cache-dit and dependencies
+        print('setup: installing cache-dit and dependencies...')
+        subprocess.run(
+            ['python', '-m', 'pip', 'install', '-U', 'cache-dit'],
+            check=True,
+        )
+        subprocess.run(
+            ['python', '-m', 'pip', 'install', '--no-deps', 'torchvision==0.16.0'],
+            check=True,
+        )
+        subprocess.run(
+            ['python', '-m', 'pip', 'install', 'einops', 'sentencepiece', 'accelerate'],
+            check=True,
+        )
+        # Install diffusers for parallel support
+        subprocess.run(
+            ['python', '-m', 'pip', 'install', 'git+https://github.com/huggingface/diffusers.git'],
+            check=True,
+        )
 
-        # 5) Cache validation: persistent host-side bind mount can hold
-        # truncated safetensors from interrupted runs. Walk every shard
-        # under each model dir and purge it on failure; modelscope
-        # will re-download cleanly on next access. Implementation
-        # lives in workflows.modelscope_cache; see that module's
-        # docstring for the full rationale.
-        purge_corrupt_models(resolve_modelscope_cache())
-
-        # 6) transformers / modelscope / peft are NOT installed here —
-        # see the docstring above for why (the doc's own blocks install
-        # them in document order).
-        #
-        # accelerate is intentionally NOT installed anywhere: this
-        # quickstart uses explicit ``.to("npu:0")`` placement and never
-        # touches ``device_map`` / ``Accelerator``; skipping accelerate
-        # keeps the install footprint aligned with what the doc exercises.
+        # Pin cache under a test-scoped subdir outside the bind-mount:
+        # the host-side /data/ci-cache persists across CI
+        # runs and accumulates stale files that would
+        # otherwise surface here as hash mismatches. This keeps each
+        # run's cache isolated in the container's local fs.
+        os.environ.setdefault(
+            'HOME', str(Path.home())
+        )
 
     # ----------------------------------------------------------
     # test entry
@@ -247,11 +232,8 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        """Run env setup once per test class: CANN env + CUDA constraints + uv +
-        torch stack + safetensors + modelscope cache purge.
-
-        ``transformers`` / ``modelscope`` / ``peft`` are NOT installed
-        here — see ``prepare_environment`` for why.
+        """Run env setup once per test class: CUDA constraints + uv +
+        torch stack + cache-dit + CANN env.
 
         ``@unittest.skipIf`` only skips the test *method* — ``setUpClass``
         itself always runs. The ``if _e2e_enabled()`` body guard below is

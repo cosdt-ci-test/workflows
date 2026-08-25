@@ -1,7 +1,7 @@
 """Quick-start-Ascend documentation test: end-to-end case built on top
 of the ``MarkdownDocTestBase`` contract.
 
-Document under test: ``projects/peft/docs/Quick-start-Ascend.md``
+Document under test: ``projects/accelerate/docs/Quick-start-Ascend.md``
 (follows the ``docs/markdown_doc_test_label.md`` contract: every
 ``shell`` code block carries one of the ``#test`` / ``#test-setup`` /
 ``#test-result`` labels plus ``id=`` / ``store=`` / ``load='x>>y'`` /
@@ -9,8 +9,8 @@ Document under test: ``projects/peft/docs/Quick-start-Ascend.md``
 
 Run: ``python -m unittest tests.test_quick_start_ascend -v 2>&1``
 
-Environment variables (injected by the quick-start engine workflow
-``quick-start-template.yml``, triggered by ``peft-quick-start.yml``):
+Environment variables (injected by GitHub workflow
+``accelerate-quick-start.yml``):
     ``MONITORED_DOC_URL``         Required; raw URL of the document under test.
     ``UPSTREAM_REF``              Required; bash reads ``$UPSTREAM_REF`` to get
                                   the latest release tag. The value is
@@ -31,12 +31,13 @@ import os
 import subprocess
 import unittest
 
+# Dual-NPU test runner (``a2-2``): expose both mounted devices so the
+# cross-process ``gather_for_metrics`` #test can run a real 2-rank
+# all_gather. ``setdefault`` lets an outer test harness override
+# (e.g. for debugging on a single-card host).
+os.environ.setdefault('ASCEND_RT_VISIBLE_DEVICES', '0,1')
+
 from workflows.markdown_doc_test_base import MarkdownDocTestBase
-from workflows.modelscope_cache import (
-    ensure_safetensors,
-    purge_corrupt_models,
-    resolve_modelscope_cache,
-)
 
 
 def _is_truthy(value: str | None) -> bool:
@@ -54,21 +55,43 @@ def _e2e_enabled() -> bool:
 class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     """``Quick-start-Ascend.md`` end-to-end test: fetch doc -> validate
     contract -> run ``#test-setup`` / ``#test`` in order -> compare against
-    ``#test-result``."""
+    ``#test-result``.
 
-    DEFAULT_COMMAND_TIMEOUT = 1200  # 20 min: long enough for model download + LoRA apply/save/load
-    USER_AGENT = 'cosdt-ci-test/quick-start'  # monitored source is the fork under cosdt-ci-test org
+    The test subclass itself does not own any ``test_*`` method beyond the
+    template-method entry; the doc body is the spec. ``prepare_environment``
+    makes sure ``torch_npu`` + a pip-resolvable ``accelerate`` are in place
+    before the framework starts executing doc commands (the doc itself does
+    ``uv pip install -e .`` on a ``<ref>`` checkout, but we still probe to
+    fail fast on obviously broken runners).
+    """
+
+    # accelerate's smallest meaningful training command (a 3-step toy SGD on
+    # a 64-sample TensorDataset) finishes in well under a minute on a single
+    # 910B; 15 minutes leaves room for `git clone` of accelerate + `uv pip
+    # install -e .` + a cold `accelerate launch` first-time setup.
+    DEFAULT_COMMAND_TIMEOUT = 900
+
+    # Monitored source is the cosdt-ci-test/workflows fork (this repo): the
+    # doc lives at projects/accelerate/docs/Quick-start-Ascend.md and the
+    # engine sets MONITORED_DOC_URL to the raw.githubusercontent.com URL
+    # for the same path. Upstream accelerate's quicktour lives at
+    # huggingface/accelerate/docs/source/quicktour.md and is referenced
+    # from inside the doc body, but it is NOT the file under test.
+    USER_AGENT = 'cosdt-ci-test/quick-start'
+
+    # Extend the base ERROR_MARKERS with CANN's typo + sentinel so a CANN
+    # failure surfaces a full stderr dump (head/tail by default would hide
+    # the line that names the failure).
     ERROR_MARKERS = (
-        *MarkdownDocTestBase.ERROR_MARKERS,  # generic [ERROR] + Traceback
-        'applicaiton exception',  # CANN toolkit emits this typo (sic) in its Python driver
+        *MarkdownDocTestBase.ERROR_MARKERS,
+        'applicaiton exception',  # CANN toolkit emits this typo (sic)
         'ERR99999',  # CANN sentinel for unrecoverable runtime failure
     )
 
-    # Process-level CUDA exclusion list. Originally written inside the
-    # workflow step as a child-process env passed through to pip / uv /
-    # peft's own wheel resolver. Moved to the test layer: write to /tmp
-    # and export; subprocesses (subprocess.run inherits parent env by
-    # default) see it the same way.
+    # Process-level CUDA exclusion list. Same rationale as the ms-swift
+    # test: write to /tmp and export, so subprocesses (subprocess.run
+    # inherits parent env by default) see it. Accelerate's default extras
+    # (`deepspeed`, `rich`) sometimes pull CUDA wheels transitively.
     _CUDA_CONSTRAINTS = (
         'cuda-toolkit<0',
         'cuda-python<0',
@@ -109,42 +132,35 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         'nvidia-nvjitlink-cu12<0',
         'nvidia-nvtx-cu12<0',
     )
-    _CONSTRAINTS_FILE = '/tmp/peft_npu_constraints.txt'
+    _CONSTRAINTS_FILE = '/tmp/accelerate_npu_constraints.txt'
 
     # Cluster-internal nginx PyPI cache + Huawei Cloud ascend dual-source.
     _CLUSTER_INDEX = 'http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple'
     _ASCEND_EXTRA = 'https://repo.huaweicloud.com/ascend/repos/pypi'
 
     # CANN toolkit: source once to get ASCEND_HOME / LD_LIBRARY_PATH etc.
-    # Path is hard-coded, tied to the container image pinned by the
-    # ``image:`` input of ``peft-quick-start.yml``.
+    # Path is hard-coded, tied to the GitHub workflow container image.
     _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
 
     # ----------------------------------------------------------
     # prepare_environment: CANN env + CUDA constraints + torch stack probe
-    # + safetensors + modelscope cache purge (transformers / modelscope /
-    # peft are installed by the doc's `### 前置安装` / `## 安装 PEFT` blocks)
     # ----------------------------------------------------------
 
     @classmethod
     def prepare_environment(cls) -> None:
-        """Source CANN env + write CUDA exclusion list + install uv + torch stack probe
-        + safetensors + purge stale modelscope cache shards.
+        """Install CANN env + CUDA constraints + torch stack probe.
 
-        The doc's ``### 前置安装`` and ``## 安装 PEFT`` sections are the
-        single source of truth for which packages + versions get
-        installed; this class only handles ``torch`` / ``torch_npu``
-        here (via the cluster cache + Huawei ascend dual-source), the
-        defensive ``safetensors`` install, and the modelscope cache
-        purge. All other packages — ``transformers`` / ``modelscope``
-        (via ``check-ml-deps``) and ``peft`` (via
-        ``peft-install-binary`` / ``peft-install-source``) — install
-        themselves in document order via the ``#test`` machinery.
+        Accelerate itself is intentionally NOT pre-installed here: the doc
+        body runs ``git clone`` + ``uv pip install -e .`` against the upstream
+        release tag injected by the workflow, so the test exercises the
+        exact install path users get.
 
-        Class-level setup: run once per test class, triggered by
-        ``setUpClass``. Not the same as ``unittest.TestCase.setUp`` —
-        that lifecycle hook fires before every test method, which is
-        wrong for a one-shot install.
+        What this hook does pre-install:
+            * CANN env (so torch_npu is importable);
+            * CUDA exclusion list (so an accidental ``nvidia-cudnn`` pull
+              doesn't shadow the NPU build);
+            * torch / torch_npu, only if the image's pre-installed wheels
+              don't already match the version matrix.
         """
         # 0) CANN env: source set_env.sh and merge the env stream into
         # os.environ
@@ -158,8 +174,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                     continue
                 key, _, value = line.partition('=')
                 # Don't overwrite envs explicitly injected by the
-                # workflow (jobs.env / steps.env); only fill in CANN
-                # keys that are missing, to avoid conflicts.
+                # workflow; only fill in CANN keys that are missing.
                 os.environ.setdefault(key, value)
             print('setup: sourced CANN env from set_env.sh')
         else:
@@ -173,16 +188,18 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         os.environ['PIP_CONSTRAINT'] = cls._CONSTRAINTS_FILE
         os.environ['UV_CONSTRAINT'] = cls._CONSTRAINTS_FILE
 
-        # 2) uv: the doc's ``peft-install-source`` block calls
-        # ``uv pip install -e .`` which handles PEP 517 build deps more
-        # reliably than pip. Inherit ``PIP_INDEX_URL`` + ``PIP_TRUSTED_HOST``
-        # from the yml job-level env (cluster cache path + trusted-host).
+        # 2) uv: the doc body's install step is ``uv pip install -e .``,
+        # which gives clean stdout (no pip's "Obtaining/Installing
+        # collected packages" preamble) so the #test-result fuzzy match
+        # against ``accelerate xxx`` isn't polluted. Inherit
+        # ``PIP_INDEX_URL`` + ``PIP_TRUSTED_HOST`` from the yml job-level
+        # env (cluster cache path + trusted-host).
         subprocess.run(
             ['python', '-m', 'pip', 'install', 'uv'],
             check=True,
         )
 
-        # 3) torch stack probe + install: when version matches the image's
+        # 3) torch stack probe: when version matches the image's
         # pre-installed wheels, reuse them to avoid the cluster cache
         # triggering ``+cpu`` resolution.
         _PROBE_SCRIPT = (
@@ -219,27 +236,13 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 check=True,
             )
 
-        # 4) safetensors: native loader used by the cache validation
-        # step below. Pulled in transitively by torch on most images;
-        # install defensively in case the CANN base ships without it.
-        ensure_safetensors()
-
-        # 5) Cache validation: persistent host-side bind mount can hold
-        # truncated safetensors from interrupted runs. Walk every shard
-        # under each model dir and purge it on failure; modelscope
-        # will re-download cleanly on next access. Implementation
-        # lives in workflows.modelscope_cache; see that module's
-        # docstring for the full rationale.
-        purge_corrupt_models(resolve_modelscope_cache())
-
-        # 6) transformers / modelscope / peft are NOT installed here —
-        # see the docstring above for why (the doc's own blocks install
-        # them in document order).
-        #
-        # accelerate is intentionally NOT installed anywhere: this
-        # quickstart uses explicit ``.to("npu:0")`` placement and never
-        # touches ``device_map`` / ``Accelerator``; skipping accelerate
-        # keeps the install footprint aligned with what the doc exercises.
+        # 4) transformers: only used by Accelerate's CLI machinery
+        # (`accelerate env` prints transformers info if installed). Upper
+        # bound mirrors ms-swift's quick start.
+        subprocess.run(
+            ['python', '-m', 'pip', 'install', 'transformers<5.0'],
+            check=True,
+        )
 
     # ----------------------------------------------------------
     # test entry
@@ -247,11 +250,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        """Run env setup once per test class: CANN env + CUDA constraints + uv +
-        torch stack + safetensors + modelscope cache purge.
-
-        ``transformers`` / ``modelscope`` / ``peft`` are NOT installed
-        here — see ``prepare_environment`` for why.
+        """Run env setup once per test class.
 
         ``@unittest.skipIf`` only skips the test *method* — ``setUpClass``
         itself always runs. The ``if _e2e_enabled()`` body guard below is

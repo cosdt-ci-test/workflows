@@ -31,5 +31,5 @@
 `deepspeed-quick-start.yml` 看护本仓 [docs/Quick-start-Ascend.md](docs/Quick-start-Ascend.md)。该文档描述了在单卡昇腾 NPU 上安装 DeepSpeed、验证加速器、跑最小化训练脚本的完整流程。
 
 - 监控信号：doc 哈希、上游 latest release、master HEAD SHA。按 doc > release > commit 优先级，任一变化触发测试。
-- 测试内容：从上游源码安装 DeepSpeed → `ds_report` 验证 → `get_accelerator()._name == 'npu'` → HelloDeepSpeed Transformer MLM 训练（2 层、10 步、BF16）。
+- 测试内容：从上游源码安装 DeepSpeed → `ds_report` 验证 → `get_accelerator()._name == 'npu'` → 内联最小化训练（3 层 Linear 网络，ZeRO-1 + BF16，5 步）。
 - **当前为节约 NPU 资源，`schedule` 已注释，只保留手动 `workflow_dispatch`。**

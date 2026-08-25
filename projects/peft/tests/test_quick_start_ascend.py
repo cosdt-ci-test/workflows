@@ -33,6 +33,11 @@ import unittest
 from pathlib import Path
 
 from workflows.markdown_doc_test_base import MarkdownDocTestBase
+from workflows.modelscope_cache import (
+    ensure_safetensors,
+    purge_corrupt_models,
+    resolve_modelscope_cache,
+)
 
 
 def _is_truthy(value: str | None) -> bool:
@@ -118,22 +123,24 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
     # ----------------------------------------------------------
     # prepare_environment: CANN env + CUDA constraints + torch stack probe
-    # + transformers / modelscope (peft is installed by the doc's
-    # `## 安装 PEFT` blocks)
+    # + safetensors + modelscope cache purge (transformers / modelscope /
+    # peft are installed by the doc's `### 前置安装` / `## 安装 PEFT` blocks)
     # ----------------------------------------------------------
 
     @classmethod
     def prepare_environment(cls) -> None:
-        """Source CANN env + write CUDA exclusion list + install uv + torch stack probe.
+        """Source CANN env + write CUDA exclusion list + install uv + torch stack probe
+        + safetensors + purge stale modelscope cache shards.
 
         The doc's ``### 前置安装`` and ``## 安装 PEFT`` sections are the
         single source of truth for which packages + versions get
         installed; this class only handles ``torch`` / ``torch_npu``
-        here (via the cluster cache + Huawei ascend dual-source). All
-        other packages — ``transformers`` / ``modelscope`` (via
-        ``check-ml-deps``) and ``peft`` (via ``peft-install-binary`` /
-        ``peft-install-source``) — install themselves in document order
-        via the ``#test`` machinery.
+        here (via the cluster cache + Huawei ascend dual-source), the
+        defensive ``safetensors`` install, and the modelscope cache
+        purge. All other packages — ``transformers`` / ``modelscope``
+        (via ``check-ml-deps``) and ``peft`` (via
+        ``peft-install-binary`` / ``peft-install-source``) — install
+        themselves in document order via the ``#test`` machinery.
 
         Class-level setup: run once per test class, triggered by
         ``setUpClass``. Not the same as ``unittest.TestCase.setUp`` —
@@ -213,7 +220,20 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 check=True,
             )
 
-        # 4) transformers / modelscope are installed by the doc's
+        # 4) safetensors: native loader used by the cache validation
+        # step below. Pulled in transitively by torch on most images;
+        # install defensively in case the CANN base ships without it.
+        ensure_safetensors()
+
+        # 5) Cache validation: persistent host-side bind mount can hold
+        # truncated safetensors from interrupted runs. Walk every shard
+        # under each model dir and purge it on failure; modelscope
+        # will re-download cleanly on next access. Implementation
+        # lives in workflows.modelscope_cache; see that module's
+        # docstring for the full rationale.
+        purge_corrupt_models(resolve_modelscope_cache())
+
+        # 6) transformers / modelscope are installed by the doc's
         # ``### 前置安装`` block ``check-ml-deps`` (it now carries the
         # install + verify pair itself). This class no longer installs
         # them — keeping install here on top would just be redundant
@@ -235,7 +255,8 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        """Run env setup once per test class: CANN env + CUDA constraints + uv + torch stack.
+        """Run env setup once per test class: CANN env + CUDA constraints + uv +
+        torch stack + safetensors + modelscope cache purge.
 
         ``transformers`` / ``modelscope`` / ``peft`` are NOT installed
         here — the doc's ``#test`` blocks (``check-ml-deps`` /

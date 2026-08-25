@@ -67,7 +67,8 @@ print('DeepSpeed version:', deepspeed.__version__)
   apt-get update && apt-get install -y libopenmpi-dev
   python -m pip install mpi4py
   echo "installing HelloDeepSpeed dependencies"
-  python -m pip install datasets==1.13.3 transformers fire loguru sh tqdm
+  python -m pip install datasets==1.13.3 transformers fire loguru sh tqdm \
+    --index-url https://pypi.tuna.tsinghua.edu.cn/simple
 }
 
 supported_profiles() {

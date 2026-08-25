@@ -1,4 +1,4 @@
-# ms-swift quick start guard - project thin trigger.
+# peft quick start guard - project thin trigger.
 #
 # Calls the common engine .github/workflows/quick-start-template.yml;
 # this file only declares what varies per project: schedule,
@@ -7,20 +7,14 @@
 # I/O, state relay and publishing all live in the engine. See
 # docs/design-quickstart-common-template.md for the design and the
 # full input contract.
-#
-# This file replaced the legacy monolithic workflow of the same name
-# (hard cutover; the old implementation lives in git history around
-# 4ee7f63). Cache keys (monitor-state-ms-swift-*) and artifact names
-# are derived from project=ms-swift, not from the workflow name, so
-# monitor state carried over unchanged.
 
-name: ms-swift-quick-start
+name: peft-quick-start
 
 concurrency:
   # format() is load-bearing: a '||' between 'manual-' and
   # github.run_id would short-circuit on the truthy literal and
   # every dispatch would share one 'manual-' group.
-  group: ${{ github.event_name == 'schedule' && 'ms-swift-quick-start-schedule' || format('manual-{0}', github.run_id) }}
+  group: ${{ github.event_name == 'schedule' && 'peft-quick-start-schedule' || format('manual-{0}', github.run_id) }}
   # cancel-in-progress: false because (1) a schedule run cancelled
   # mid-way loses its outcome writeback - the outcome is what makes
   # the retry mechanism work, and the 'if: always()' guard isn't
@@ -41,13 +35,13 @@ permissions:
   contents: read
 
 jobs:
-  ms-swift-quick-start:
+  peft-quick-start:
     uses: ./.github/workflows/quick-start-template.yml
     with:
-      # Namespaces cache keys (monitor-state-ms-swift-*), artifacts
-      # (ms-swift-quick-start-<run_id>) and the test working dir
-      # (workflows/projects/ms-swift).
-      project: ms-swift
+      # Namespaces cache keys (monitor-state-peft-*), artifacts
+      # (peft-quick-start-<run_id>) and the test working dir
+      # (workflows/projects/peft).
+      project: peft
       # Self-hosted NPU runner for the test job only; the engine pins
       # the cache I/O jobs (restore-cache / publish-and-persist) to
       # GitHub-hosted ubuntu-latest.
@@ -62,14 +56,14 @@ jobs:
         --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
         --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
         --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
-        --volume=/data/ci-cache/modelscope/ms-swift:/root/.cache/modelscope
+        --volume=/data/ci-cache/modelscope/peft:/root/.cache/modelscope
       timeout_minutes: 180
-      upstream_repo: modelscope/ms-swift
+      upstream_repo: huggingface/peft
       # Same URL the legacy workflow monitors: doc-hash state carries
-      # over via the shared monitor-state-ms-swift- cache prefix.
-      doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/ms-swift/docs/Quick-start-Ascend.md
-      doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/ms-swift/docs/Quick-start-Ascend.md
-      # cwd is workflows/projects/ms-swift; env contract (MONITORED_DOC_URL /
+      # over via the shared monitor-state-peft- cache prefix.
+      doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/peft/docs/Quick-start-Ascend.md
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/peft/docs/Quick-start-Ascend.md
+      # cwd is workflows/projects/peft; env contract (MONITORED_DOC_URL /
       # UPSTREAM_REF / NPU_READY) is injected by the engine. All project
       # env prep and installs live in the test subclass's
       # prepare_environment hook.

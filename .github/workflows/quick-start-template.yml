@@ -396,6 +396,14 @@ jobs:
         working-directory: workflows/projects/${{ inputs.project }}
         run: |
           set -euo pipefail
+          # Framework dep: mistune is required by
+          # src/workflows/markdown_doc_test_base.py at import time.
+          # Install here (in the test step itself) rather than as a
+          # standalone step: pip failures surface in the same context as
+          # the test failure, and warm runners skip the install via
+          # pip's own resolver. Inherits PIP_INDEX_URL /
+          # PIP_TRUSTED_HOST from job env (cluster cache + trusted-host).
+          python -m pip install 'mistune>=3,<4'
           ${{ inputs.test_command }}
 
       # Schedule + need_to_test - dispatch forces need_to_test=true

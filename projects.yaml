@@ -351,3 +351,12 @@ projects:
     dir: projects/stable-diffusion-webui
     workflows:
       quick_start: .github/workflows/stable-diffusion-webui-quick-start.yml
+  - name: llm-d
+    category: 推理加速
+    support_level: 新兴适配
+    upstream_repo: llm-d/llm-d
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/llm-d
+    workflows:
+      quick_start: .github/workflows/llm-d-quick-start.yml

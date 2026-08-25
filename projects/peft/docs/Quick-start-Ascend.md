@@ -40,8 +40,7 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | transformers | `<5.0` |
 | peft | 最新 release 的源码/二进制 |
 | modelscope | 1.37.0 |
-| 模型 | [Qwen/Qwen2.5-3B-Instruct](https://www.modelscope.cn/Qwen/Qwen2.5-3B-Instruct) |
-| 数据集 | 本文档示例使用 2 条合成指令样本（够快来验证整条链路；替换为自有数据集时按 PEFT 标准格式传入即可） |
+| 模型 | [Qwen/Qwen2.5-3B-Instruct](https://www.modelscope.cn/models/Qwen/Qwen2.5-3B-Instruct) |
 
 ### 前置安装
 确认能看到 NPU 设备：
@@ -237,7 +236,7 @@ PY
 trainable params: xxx || all params: xxx || trainable%: xxx...
 ```
 
-> 这里的 `<model_path>` 和上面 `apply-lora` / `save-adapter` 块里的一样，由「下载基础模型」一节的 `#test-setup store="model_path"` 捕获并注入；不需要在本块手动替换。
+> 这里的 `<model_path>` 和上面 `apply-lora` 块里的一样，由「下载基础模型」一节的 `#test-setup store="model_path"` 捕获并注入；不需要在本块手动替换。
 
 ### 跑一次生成验证
 

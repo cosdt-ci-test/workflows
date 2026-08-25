@@ -12,7 +12,7 @@ projects:
     support_level: 基础支持
     upstream_repo: modelscope/ms-swift
     phase: A
-    runner: linux-aarch64-a2-2
+    runner: linux-aarch64-a2-1
     dir: projects/ms-swift
     workflows:
       examples: .github/workflows/ms-swift-examples.yml
@@ -81,7 +81,7 @@ projects:
     support_level: 基础支持
     upstream_repo: huggingface/peft
     phase: A
-    runner: linux-aarch64-a2-2
+    runner: linux-aarch64-a2-1
     dir: projects/peft
     workflows:
       quick_start: .github/workflows/peft-quick-start.yml

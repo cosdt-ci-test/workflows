@@ -253,6 +253,8 @@ echo "${PWD}/train_npu.py"
 ASCEND_RT_VISIBLE_DEVICES=0,1 accelerate launch --num_processes 2 --mixed_precision no <path>
 ```
 
+其中 `<path>` 是 Step 1 生成的脚本绝对路径（即 `${PWD}/train_npu.py`）——CI runner 会在执行时自动把 Step 1 捕获的路径代入；手动照着跑时把它替换为你机器上的实际路径即可。
+
 输出结果类似：
 
 ```shell #test-result id="acc-launch" fuzzy='xxx'
@@ -320,6 +322,8 @@ echo "${PWD}/gather_npu.py"
 ASCEND_RT_VISIBLE_DEVICES=0,1 accelerate launch --num_processes 2 <path>
 ```
 
+`<path>` 同样是上方 setup 块捕获的 `${PWD}/gather_npu.py` 绝对路径，由 runner 自动代入；手动跑时替换为实际路径。
+
 输出结果如下（两个 rank 都喂 `[1, 2, 3]`，all_gather 沿 dim=0 串成 `[1, 2, 3, 1, 2, 3]`，长度 6 = `world * 3`）：
 
 ```shell #test-result id="acc-gather-multi" fuzzy='...'
@@ -332,7 +336,7 @@ gathered=[1, 2, 3, 1, 2, 3]
 
 ### 启动 bf16 混合精度路径
 
-把玩具脚本再跑一遍，但把 `--mixed_precision` 从 `no` 切到 `bf16`，验证 Accelerate 的 autocast 包装在 NPU 上不出错。脚本不动一行——Accelerate 自动包 `torch.autocast`：
+把玩具脚本再跑一遍，但把 `--mixed_precision` 从 `no` 切到 `bf16`，验证 Accelerate 的 autocast 包装在 NPU 上不出错。脚本不动一行——Accelerate 自动包 `torch.autocast`（`<path>` 仍是 Step 1 的 `train_npu.py`）：
 
 ```shell #test id="acc-launch-bf16" load="script_path>>path"
 ASCEND_RT_VISIBLE_DEVICES=0,1 accelerate launch --num_processes 2 --mixed_precision bf16 <path>

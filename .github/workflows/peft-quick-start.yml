@@ -56,7 +56,7 @@ jobs:
         --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
         --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
         --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
-        --volume=/data/ci-cache/modelscope:/root/.cache/modelscope
+        --volume=/data/ci-cache/modelscope/peft:/root/.cache/modelscope
       timeout_minutes: 180
       upstream_repo: huggingface/peft
       # Same URL the legacy workflow monitors: doc-hash state carries

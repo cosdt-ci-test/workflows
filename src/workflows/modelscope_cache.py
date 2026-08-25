@@ -125,10 +125,11 @@ def purge_corrupt_models(cache_root: Path) -> None:
     """
     hub_models = cache_root / 'hub' / 'models'
     if not hub_models.exists():
+        print(f'cache: miss ({hub_models} not present yet); nothing to validate')
         return
-    for model_dir in hub_models.glob('*/*'):
-        if not model_dir.is_dir():
-            continue
+    model_dirs = [d for d in hub_models.glob('*/*') if d.is_dir()]
+    purged = 0
+    for model_dir in model_dirs:
         corrupt = [
             p for p in model_dir.rglob('*.safetensors')
             if not safetensors_header_ok(p)
@@ -140,3 +141,13 @@ def purge_corrupt_models(cache_root: Path) -> None:
             f'({len(corrupt)} corrupt shard(s)); modelscope will re-download'
         )
         shutil.rmtree(model_dir)
+        purged += 1
+    if purged:
+        print(
+            f'cache: partial — validated {len(model_dirs)} model dir(s), '
+            f'purged {purged}'
+        )
+    else:
+        print(
+            f'cache: hit {len(model_dirs)} model dir(s), all healthy'
+        )

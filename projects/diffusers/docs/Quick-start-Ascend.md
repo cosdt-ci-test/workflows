@@ -36,7 +36,7 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | CANN | 9.1.0 |
 | torch | 2.9.0+cpu |
 | torch_npu | 2.9.0.post2 |
-| transformers | `<5.0` |
+| transformers | `>=5.0,<6.0`（diffusers 0.40+ 依赖 huggingface-hub>=1.23，而 transformers 4.x 要求 hub<1.0，二者冲突；transformers 5.x 起适配 hub 1.x） |
 | accelerate | `>=1.0,<2.0` |
 | peft | `>=0.6` |
 | modelscope | 1.37.0 |
@@ -102,7 +102,7 @@ count: xxx
 安装 `transformers` / `accelerate` / `peft` / `modelscope`：
 
 ```shell #test-setup
-pip install 'transformers<5.0' 'accelerate>=1.0,<2.0' 'peft>=0.6' 'modelscope==1.37.0'
+pip install 'transformers>=5.0,<6.0' 'accelerate>=1.0,<2.0' 'peft>=0.6' 'modelscope==1.37.0'
 ```
 
 打印安装版本：

@@ -267,7 +267,7 @@ device=npu final_loss=xxx
 
 1. **设备探测**：`Accelerator()` 自动识别 `torch_npu`、拿到 `device='npu:0'`；
 2. **NPU 放置**：`accelerator.prepare(model)` 在非 distributed 上下文只做 `model.to(self.device)`，权重真在 NPU 上分配；
-4. **真 kernel 跑**：`prepared(x)` 在 `npu:0` 上跑一次 1×1 matmul + bias add，**不是只 alloc**——NPU kernel 真跑了一次。
+3. **真 kernel 跑**：`prepared(x)` 在 `npu:0` 上跑一次 1×1 matmul + bias add，**不是只 alloc**——NPU kernel 真跑了一次。
 
 ```shell #test id="acc-prepare"
 python -c "

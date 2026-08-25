@@ -224,7 +224,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         # 5) transformers / accelerate / modelscope / diffusers are NOT
         # installed here: they are the subject of the doc itself and
         # install themselves in document order — the
-        # ``#test-setup`` dependency block (``pip install 'transformers<5.0'
+        # ``#test-setup`` dependency block (``pip install 'transformers>=5.0,<6.0'
         # 'accelerate>=1.0,<2.0' 'modelscope==1.37.0'`` + the
         # ``install-deps`` version print), then the diffusers blocks
         # (``diffusers-install-binary`` / ``diffusers-install-source``).

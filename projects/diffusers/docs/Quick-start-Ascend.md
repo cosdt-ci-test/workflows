@@ -188,7 +188,7 @@ python -c "from modelscope import snapshot_download; print(snapshot_download('AI
 
 ```shell #test id="text-to-image" load="model_path>>model_path"
 mkdir -p output
-python << 'PY' 2>&1 | tail -1
+python << 'PY' 2>&1
 import torch
 import torch_npu
 from diffusers import DiffusionPipeline
@@ -205,9 +205,10 @@ PY
 ls -l output/astronaut_rides_horse.png | awk '{print $5, $9}'
 ```
 
-输出结果如下（下文中的`xxx` 为文件字节数）：
+输出结果如下（`...` 吞掉加载进度等前导日志，`xxx` 为实际文件字节数）：
 
 ```shell #test-result id="text-to-image" fuzzy='xxx' fuzzy='...'
+...
 generated: (512, 512)
 xxx output/astronaut_rides_horse.png
 ```
@@ -218,7 +219,7 @@ xxx output/astronaut_rides_horse.png
 
 ```shell #test id="swap-scheduler" load="model_path>>model_path"
 mkdir -p output
-python << 'PY' 2>&1 | tail -1
+python << 'PY' 2>&1
 import torch
 import torch_npu
 from diffusers import DiffusionPipeline, UniPCMultistepScheduler
@@ -236,9 +237,10 @@ PY
 ls -l output/astronaut_unipc.png | awk '{print $5, $9}'
 ```
 
-输出结果如下（`xxx` 为实际文件字节数）：
+输出结果如下（`...` 吞掉前导日志，`xxx` 为实际文件字节数）：
 
-```shell #test-result id="swap-scheduler" fuzzy='xxx'
+```shell #test-result id="swap-scheduler" fuzzy='xxx' fuzzy='...'
+...
 generated: (512, 512) via UniPCMultistepScheduler
 xxx output/astronaut_unipc.png
 ```
@@ -283,7 +285,7 @@ python -c "from modelscope import snapshot_download; print(snapshot_download('fl
 
 ```shell #test id="qwen-image-lora" load="qwen_image_path>>qwen_path" load="lora_path>>lora_path"
 mkdir -p output
-python << 'PY' 2>&1 | tail -2
+python << 'PY' 2>&1
 import torch
 import torch_npu
 from diffusers import DiffusionPipeline
@@ -304,9 +306,10 @@ PY
 ls -l output/qwen_image_lora.png | awk '{print $5, $9}'
 ```
 
-输出结果类似（`xxx` 为实际文件字节数）：
+输出结果类似（`...` 吞掉前导日志，`xxx` 为实际文件字节数）：
 
-```shell #test-result id="qwen-image-lora" fuzzy='xxx'
+```shell #test-result id="qwen-image-lora" fuzzy='xxx' fuzzy='...'
+...
 generated: (1328, 1328) lora loaded & unloaded
 xxx output/qwen_image_lora.png
 ```
@@ -317,7 +320,7 @@ xxx output/qwen_image_lora.png
 
 ```shell #test id="qwen-image-offload" load="qwen_image_path>>qwen_path"
 mkdir -p output
-python << 'PY' 2>&1 | tail -2
+python << 'PY' 2>&1
 import torch
 import torch_npu
 from diffusers import DiffusionPipeline
@@ -340,9 +343,10 @@ PY
 ls -l output/qwen_image_offload.png | awk '{print $5, $9}'
 ```
 
-输出结果类似（offload 峰值应明显低于全量权重 57 GB，接近最大的单个组件 transformer ~41 GB；`xxx` 为实际文件字节数 / 显存峰值）：
+输出结果类似（offload 峰值应明显低于全量权重 57 GB，接近最大的单个组件 transformer ~41 GB；`...` 吞掉前导日志，`xxx` 为实际文件字节数 / 显存峰值）：
 
-```shell #test-result id="qwen-image-offload" fuzzy='xxx'
+```shell #test-result id="qwen-image-offload" fuzzy='xxx' fuzzy='...'
+...
 generated: (1328, 1328)
 offload peak NPU memory: xxx GB
 xxx output/qwen_image_offload.png
@@ -354,7 +358,7 @@ xxx output/qwen_image_offload.png
 
 ```shell #test id="qwen-image-full" load="qwen_image_path>>qwen_path"
 mkdir -p output
-python << 'PY' 2>&1 | tail -2
+python << 'PY' 2>&1
 import torch
 import torch_npu
 from diffusers import DiffusionPipeline
@@ -376,9 +380,10 @@ PY
 ls -l output/qwen_image_full.png | awk '{print $5, $9}'
 ```
 
-输出结果类似（全量峰值 ≈ 全部权重 57 GB 驻留 + 激活；`xxx` 为实际文件字节数 / 显存峰值）：
+输出结果类似（全量峰值 ≈ 全部权重 57 GB 驻留 + 激活；`...` 吞掉前导日志，`xxx` 为实际文件字节数 / 显存峰值）：
 
-```shell #test-result id="qwen-image-full" fuzzy='xxx'
+```shell #test-result id="qwen-image-full" fuzzy='xxx' fuzzy='...'
+...
 generated: (1328, 1328)
 full-load peak NPU memory: xxx GB
 xxx output/qwen_image_full.png

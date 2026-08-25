@@ -64,7 +64,7 @@ print('DeepSpeed version:', deepspeed.__version__)
     echo 'WARNING: ds_report did not list npu accelerator'
   }
   echo "installing MPI runtime for deepspeed.initialize distributed discovery"
-  apt-get update && apt-get install -y libopenmpi-dev
+  apt-get update && apt-get install -y libopenmpi-dev numactl
   python -m pip install mpi4py
   echo "installing HelloDeepSpeed dependencies"
   PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple" \

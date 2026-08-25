@@ -114,3 +114,13 @@ projects:
     workflows:
       examples: .github/workflows/onnxruntime-examples.yml
       quick_start: .github/workflows/onnxruntime-quick-start.yml
+  - name: trl
+    category: 训练加速
+    support_level: 新兴适配
+    upstream_repo: huggingface/trl
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/trl
+    workflows:
+      examples: .github/workflows/trl-examples.yml
+      quick_start: .github/workflows/trl-quick-start.yml

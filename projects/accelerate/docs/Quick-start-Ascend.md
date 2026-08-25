@@ -297,10 +297,10 @@ shape=[1, 1]
 
 ### 跨卡 `gather_for_metrics`（DDP 双进程）
 
-把 `gather_for_metrics` 放进 `accelerate launch` 拉起的双进程里跑，验证它在 NPU 上真的跨卡做 `all_gather`（hccl 后端）而不是退回 identity：
+把 `gather_for_metrics` 放进 `accelerate launch` 拉起的双进程里跑，验证它在 NPU 上真的跨卡做 `all_gather`（hccl 后端）而不是退回 identity。注意 `accelerate launch` 只接受脚本文件路径、不支持 `python -c` 内联代码（它把第一个参数当作脚本去执行），所以先落盘再启动：
 
-```shell #test id="acc-gather-multi"
-ASCEND_RT_VISIBLE_DEVICES=0,1 accelerate launch --num_processes 2 python -c "
+```shell #test-setup store="gather_script_path"
+cat > gather_npu.py <<'PY'
 import torch
 from accelerate import Accelerator
 
@@ -312,7 +312,12 @@ x = torch.tensor([1, 2, 3], device=accelerator.device)
 accelerator.print(f'world={accelerator.num_processes}')
 accelerator.print(f'device={gathered.device.type}')
 accelerator.print(f'gathered={gathered.tolist()}')
-"
+PY
+echo "${PWD}/gather_npu.py"
+```
+
+```shell #test id="acc-gather-multi" load="gather_script_path>>path"
+ASCEND_RT_VISIBLE_DEVICES=0,1 accelerate launch --num_processes 2 <path>
 ```
 
 输出结果如下（两个 rank 都喂 `[1, 2, 3]`，all_gather 沿 dim=0 串成 `[1, 2, 3, 1, 2, 3]`，长度 6 = `world * 3`）：

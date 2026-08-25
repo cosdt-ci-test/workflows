@@ -300,3 +300,12 @@ projects:
     workflows:
       examples: .github/workflows/mooncake-examples.yml
       quick_start: .github/workflows/mooncake-quick-start.yml
+  - name: flagscale
+    category: TODO
+    support_level: TODO
+    upstream_repo: flagos-ai/FlagScale
+    phase: A
+    runner: linux-aarch64-a2-2
+    dir: projects/flagscale
+    workflows:
+      quick_start: .github/workflows/flagscale-quick-start.yml

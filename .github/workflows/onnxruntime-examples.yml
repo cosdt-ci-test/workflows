@@ -3,8 +3,8 @@
 # Two signals (supported-path hash OR latest release id), each tests its
 # own tree, no priority, no failure retry. Do not treat
 # docs/guarding-examples.md 要求 2 as this project's rule.
-# Upstream default branch is main. Output key master_sha and MASTER_SHA
-# are kept so decide still wires.
+# Upstream default branch is main; the master_sha output name is kept for
+# parity with the other examples workflows.
 name: onnxruntime-examples
 
 on:
@@ -71,7 +71,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           MANIFEST_PATH: projects/onnxruntime/examples_manifest.yaml
           # CANN EP source is not an example path. Hash it too so provider changes retrigger.
-          EXTRA_WATCH_PATHS: onnxruntime/core/providers/cann
+          EXTRA_WATCH_PATH: onnxruntime/core/providers/cann
           STATE_DIR: .monitor-state
         run: |
           set -euo pipefail
@@ -90,6 +90,7 @@ jobs:
           repo = os.environ['UPSTREAM_REPO']
           token = os.environ['GH_TOKEN']
           manifest_path = os.environ['MANIFEST_PATH']
+          extra_watch_path = os.environ['EXTRA_WATCH_PATH']
           state_dir = os.environ['STATE_DIR']
           github_output = os.environ['GITHUB_OUTPUT']
 
@@ -117,12 +118,7 @@ jobs:
               item['path'] for item in (manifest.get('supported') or [])
               if item.get('path')
           ]
-          # EP source is not an example path but must retrigger this hash.
-          extra = os.environ.get('EXTRA_WATCH_PATHS', '')
-          for raw in extra.split(','):
-              path = raw.strip()
-              if path:
-                  paths.append(path)
+          paths.append(extra_watch_path)
 
           commit, status = gh_json(f'{api}/repos/{repo}/commits/main')
           if status != 200 or not commit or not commit.get('sha'):

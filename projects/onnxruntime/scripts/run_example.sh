@@ -13,7 +13,7 @@ EXAMPLE_REL="$1"
 TARGET_ROOT="${TARGET_ROOT:?TARGET_ROOT is required}"
 CI_OUTPUT_DIR="${CI_OUTPUT_DIR:?CI_OUTPUT_DIR is required}"
 EXEC_REL="${EXEC:?EXEC is required}"
-PROFILE="${PROFILE:-}"
+PROFILE="${PROFILE:?PROFILE is required}"
 
 EXAMPLE_PATH="$TARGET_ROOT/$EXAMPLE_REL"
 
@@ -91,11 +91,7 @@ assert_cann-gtest() {
     echo "gtest log missing CannExecutionProviderTest.FunctionTest; empty --gtest_filter is a false green" >&2
     exit 1
   fi
-  if grep -Eq '\[  PASSED  \] 1 test' "$RUN_LOG"; then
-    :
-  elif grep -Eq '\[  PASSED  \] [1-9][0-9]* tests?' "$RUN_LOG"; then
-    :
-  else
+  if ! grep -Eq '\[  PASSED  \] [1-9][0-9]* tests?' "$RUN_LOG"; then
     echo "gtest did not report a non-zero PASSED count" >&2
     exit 1
   fi
@@ -118,15 +114,8 @@ assert_cmake-consumer() {
 
 "$EXEC_PATH" "${EXTRA_ARGS[@]}" 2>&1 | tee "$RUN_LOG"
 
-guard_fn=""
-if [[ -n "$PROFILE" ]] && declare -F "assert_${PROFILE}" >/dev/null 2>&1; then
-  guard_fn="assert_${PROFILE}"
-elif [[ "$EXAMPLE_REL" == "onnxruntime/test/providers/cann" ]]; then
-  guard_fn="assert_cann-gtest"
-elif [[ "$EXAMPLE_REL" == "samples/cxx" ]]; then
-  guard_fn="assert_cmake-consumer"
-else
-  echo "no stdout guard for profile=${PROFILE:-} path=${EXAMPLE_REL}" >&2
+if ! declare -F "assert_${PROFILE}" >/dev/null 2>&1; then
+  echo "no stdout guard for profile: ${PROFILE}" >&2
   exit 1
 fi
-"$guard_fn"
+"assert_${PROFILE}"

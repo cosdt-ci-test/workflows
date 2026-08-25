@@ -20,23 +20,7 @@ source_cann() {
 }
 
 version_ge() {
-  python3 - "$1" "$2" <<'PY'
-import sys
-
-def parts(value):
-    out = []
-    for piece in value.split('.'):
-        digits = ''.join(ch for ch in piece if ch.isdigit())
-        if digits:
-            out.append(int(digits))
-    return out or [0]
-
-have, need = parts(sys.argv[1]), parts(sys.argv[2])
-width = max(len(have), len(need))
-have.extend([0] * (width - len(have)))
-need.extend([0] * (width - len(need)))
-raise SystemExit(0 if have >= need else 1)
-PY
+  [[ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n1)" == "$1" ]]
 }
 
 # Ubuntu 22.04 defaults (cmake 3.22 / gcc 11) cannot compile aarch64 ORT
@@ -142,9 +126,6 @@ stage_ort_products() {
     exit 1
   fi
   cp -a "$src_build/onnxruntime_provider_test" "$part/bin/"
-  if [[ -x "$src_build/onnxruntime_test_all" ]]; then
-    cp -a "$src_build/onnxruntime_test_all" "$part/bin/"
-  fi
   copy_so_if_absent libonnxruntime_providers_cann.so "$part/bin" "$src_build" "$prefix"
   copy_so_if_absent libonnxruntime_providers_shared.so "$part/bin" "$src_build" "$prefix"
   copy_so_if_absent libonnxruntime_providers_cann.so "$prefix/lib" "$src_build" "$prefix"
@@ -227,7 +208,6 @@ require_exec() {
 
 setup_cann-gtest() {
   assert_toolchain
-  source_cann
   build_or_restore_ort
   require_exec
   assert_cann_provider_so "$TARGET_ROOT"
@@ -235,7 +215,6 @@ setup_cann-gtest() {
 
 setup_cmake-consumer() {
   assert_toolchain
-  source_cann
   build_or_restore_ort
   local prefix="$TARGET_ROOT/.ort-install"
   local header_dir="$prefix/include/onnxruntime"

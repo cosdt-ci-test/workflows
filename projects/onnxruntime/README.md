@@ -46,13 +46,13 @@ python3 scripts/bootstrap_manifest.py \
 
 ORT 从源码编 CANN 要数小时。产物按目标 commit SHA 放。
 
-`/root/.cache/cosdt-ci-test/onnxruntime/<sha>/{install,bin,dist}`
+`/root/.cache/cosdt-ci-test/onnxruntime/<sha>/{install,bin}`
 
 三层不要省。
 
 - `/root/.cache` 是宿主机持久化根。pip 和 HuggingFace 也会写自己的子目录。不要把看护产物堆在这一层。
 - `/root/.cache/cosdt-ci-test/` 是本看护体系前缀。容器 volume 挂这一层。
-- `/root/.cache/cosdt-ci-test/onnxruntime/` 是本项目根。再往下按 SHA 分。`install` 是 cmake 安装前缀。`bin` 放 `onnxruntime_provider_test`。`dist` 留给以后的 wheel，现在不编 wheel。
+- `/root/.cache/cosdt-ci-test/onnxruntime/` 是本项目根。再往下按 SHA 分。`install` 是 cmake 安装前缀。`bin` 放 `onnxruntime_provider_test`。
 
 写入先落到 `<sha>.part`，用 `flock` 串行，再 `mv` 成 `<sha>`。命中条件是 `bin/onnxruntime_provider_test`、`bin/` 下的 ORT `.so`（含 `libonnxruntime_providers_cann.so`）、`install/include`、`install/lib/libonnxruntime_providers_cann.so` 都在。缺一块就整份重编。同一 SHA 再跑应对齐到同一套文件。
 

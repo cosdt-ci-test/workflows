@@ -52,6 +52,30 @@ ensure_torch_stack() {
   pip_ascend torch==2.9.0 torch_npu==2.9.0.post2
 }
 
+ensure_torchvision() {
+  if python -c "import torchvision; print('found torchvision', torchvision.__version__)"; then
+    echo "reusing image torchvision"
+    return
+  fi
+  TV=$(python - <<'PY'
+import torch
+major, minor = (int(x) for x in torch.__version__.split('+')[0].split('.')[:2])
+mapping = {(2,0):'0.15.1',(2,1):'0.16.0',(2,2):'0.17.0',(2,3):'0.18.0',
+           (2,4):'0.19.0',(2,5):'0.20.0',(2,6):'0.21.0',(2,7):'0.22.0',
+           (2,8):'0.22.1',(2,9):'0.24.0',(2,10):'0.24.1'}
+print(mapping.get((major, minor), ''))
+PY
+  )
+  if [ -n "$TV" ]; then
+    echo "installing torchvision==$TV to match torch $(python -c 'import torch; print(torch.__version__)')"
+    python -m pip install "torchvision==$TV"
+  else
+    echo "installing torchvision (pip resolves compatible version)"
+    python -m pip install torchvision
+  fi
+  python -c "import torchvision; print('torchvision', torchvision.__version__)"
+}
+
 setup_peft_lora() {
   # Covers the small-model LoRA examples (DPO/TPO). Installs TRL from the
   # target checkout with the peft extra; Pillow is needed by the VLM
@@ -70,6 +94,9 @@ setup_peft_lora() {
   python -m pip install modelscope
   python - <<'PY'
 import os
+# Non-TTY CI logs: throttle tqdm refreshes instead of disabling, so
+# download progress is visible but not one line per MB. Tune via env.
+os.environ.setdefault("TQDM_MININTERVAL", os.environ.get("TQDM_MININTERVAL", "15"))
 from modelscope import snapshot_download
 
 MODEL_CACHE = os.environ.get("MODELSCOPE_CACHE", os.path.expanduser("~/.cache/modelscope"))
@@ -102,5 +129,6 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 select_pip_index
 python -m pip install -U pip setuptools wheel
 ensure_torch_stack
+ensure_torchvision
 
 "setup_${PROFILE}"

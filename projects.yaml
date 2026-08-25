@@ -67,6 +67,16 @@ projects:
     workflows:
       examples: .github/workflows/whisper.cpp-examples.yml
       quick_start: .github/workflows/whisper.cpp-quick-start.yml
+  - name: cache-dit
+    category: 推理加速
+    support_level: 基础支持
+    upstream_repo: vipshop/cache-dit
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/cache-dit
+    workflows:
+      examples: .github/workflows/cache-dit-examples.yml
+      quick_start: .github/workflows/cache-dit-quick-start.yml
   - name: accelerate
     category: 训练加速
     support_level: 基础支持

@@ -30,7 +30,6 @@ from __future__ import annotations
 import os
 import subprocess
 import unittest
-from pathlib import Path
 
 from workflows.markdown_doc_test_base import MarkdownDocTestBase
 from workflows.modelscope_cache import (

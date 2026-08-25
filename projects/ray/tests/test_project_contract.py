@@ -139,6 +139,47 @@ class TestRayProjectContract(unittest.TestCase):
         ].split("- name: Setup test environment", 1)[0]
         self.assertNotIn("import torch", preflight)
 
+    def test_example_test_dependencies_follow_the_target_requirements(self) -> None:
+        setup_text = (
+            _REPO_ROOT / "projects" / "ray" / "scripts" / "setup_example.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn("install_test_dependencies", setup_text)
+        self.assertIn("python/requirements/test-requirements.txt", setup_text)
+        self.assertIn(
+            "python/requirements/ml/train-test-requirements.txt", setup_text
+        )
+        self.assertIn(
+            'resolver_args=(--requirement "$test_requirements" pytest)',
+            setup_text,
+        )
+        self.assertIn(
+            'resolver_args+=(--requirement "$train_requirements" boto3)',
+            setup_text,
+        )
+        self.assertIn("resolve_test_requirements.py", setup_text)
+        self.assertNotIn("--constraint", setup_text)
+        self.assertNotIn("pytest==7.4.4", setup_text)
+        self.assertNotIn("boto3==1.29.7", setup_text)
+        self.assertNotIn("python -m pip install pytest mock", setup_text)
+
+    def test_example_setup_links_tests_from_the_target_checkout(self) -> None:
+        setup_text = (
+            _REPO_ROOT / "projects" / "ray" / "scripts" / "setup_example.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn("link_target_ray_tests", setup_text)
+        self.assertIn("python/ray/setup-dev.py", setup_text)
+        self.assertIn('--yes --allow tests', setup_text)
+        self.assertIn("verify_ray_test_support.py", setup_text)
+
+        setup_core = setup_text.split("setup_core()", 1)[1].split(
+            "setup_train()", 1
+        )[0]
+        setup_train = setup_text.split("setup_train()", 1)[1].split(
+            "supported_profiles()", 1
+        )[0]
+        self.assertIn("link_target_ray_tests", setup_core)
+        self.assertIn("link_target_ray_tests", setup_train)
+
     def test_example_workflow_uses_the_project_local_checker(self) -> None:
         workflow_path = _REPO_ROOT / ".github" / "workflows" / "ray-examples.yml"
         text = workflow_path.read_text(encoding="utf-8")

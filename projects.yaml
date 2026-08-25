@@ -94,3 +94,33 @@ projects:
     dir: projects/diffusers
     workflows:
       quick_start: .github/workflows/diffusers-quick-start.yml
+  - name: bitsandbytes
+    category: 推理加速
+    support_level: 基础支持
+    upstream_repo: bitsandbytes-foundation/bitsandbytes
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/bitsandbytes
+    workflows:
+      examples: .github/workflows/bitsandbytes-examples.yml
+      quick_start: .github/workflows/bitsandbytes-quick-start.yml
+  - name: onnxruntime
+    category: 推理加速
+    support_level: 基础支持
+    upstream_repo: microsoft/onnxruntime
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/onnxruntime
+    workflows:
+      examples: .github/workflows/onnxruntime-examples.yml
+      quick_start: .github/workflows/onnxruntime-quick-start.yml
+  - name: trl
+    category: 训练加速
+    support_level: 新兴适配
+    upstream_repo: huggingface/trl
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/trl
+    workflows:
+      examples: .github/workflows/trl-examples.yml
+      quick_start: .github/workflows/trl-quick-start.yml

@@ -30,6 +30,55 @@ supported:
       - --max_train_steps 1
       - --output_dir ${CI_OUTPUT_DIR}
     timeout_minutes: 60
+  - path: examples/pytorch/question-answering/run_qa_no_trainer.py
+    profile: small-training
+    runner: linux-aarch64-a2-2
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --model_name_or_path ${DISTILBERT_PATH}
+      - --train_file ${TARGET_ROOT}/tests/fixtures/tests_samples/SQUAD/sample.json
+      - --validation_file ${TARGET_ROOT}/tests/fixtures/tests_samples/SQUAD/sample.json
+      - --version_2_with_negative
+      - --max_seq_length 128
+      - --doc_stride 64
+      - --max_train_samples 4
+      - --max_eval_samples 4
+      - --per_device_train_batch_size 1
+      - --per_device_eval_batch_size 1
+      - --max_train_steps 1
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 60
+  - path: examples/pytorch/multiple-choice/run_swag_no_trainer.py
+    profile: small-training
+    runner: linux-aarch64-a2-2
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --model_name_or_path ${DISTILBERT_PATH}
+      - --train_file ${TARGET_ROOT}/tests/fixtures/tests_samples/swag/sample.json
+      - --validation_file ${TARGET_ROOT}/tests/fixtures/tests_samples/swag/sample.json
+      - --max_seq_length 64
+      - --per_device_train_batch_size 1
+      - --per_device_eval_batch_size 1
+      - --max_train_steps 1
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 60
+  - path: examples/pytorch/token-classification/run_ner_no_trainer.py
+    profile: small-training
+    runner: linux-aarch64-a2-2
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --model_name_or_path ${DISTILBERT_PATH}
+      - --train_file ${TARGET_ROOT}/tests/fixtures/tests_samples/conll/sample.json
+      - --validation_file ${TARGET_ROOT}/tests/fixtures/tests_samples/conll/sample.json
+      - --max_length 64
+      - --per_device_train_batch_size 1
+      - --per_device_eval_batch_size 1
+      - --max_train_steps 1
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 60
 unsupported:
   - examples/3D_parallel.py
   - examples/modular-transformers/configuration_dummy.py
@@ -89,14 +138,12 @@ unsupported:
   - examples/pytorch/language-modeling/run_mlm_no_trainer.py
   - examples/pytorch/language-modeling/run_plm.py
   - examples/pytorch/multiple-choice/run_swag.py
-  - examples/pytorch/multiple-choice/run_swag_no_trainer.py
   - examples/pytorch/object-detection/run_object_detection.py
   - examples/pytorch/object-detection/run_object_detection_no_trainer.py
   - examples/pytorch/old_test_xla_examples.py
   - examples/pytorch/question-answering/run_qa.py
   - examples/pytorch/question-answering/run_qa_beam_search.py
   - examples/pytorch/question-answering/run_qa_beam_search_no_trainer.py
-  - examples/pytorch/question-answering/run_qa_no_trainer.py
   - examples/pytorch/question-answering/run_seq2seq_qa.py
   - examples/pytorch/question-answering/trainer_qa.py
   - examples/pytorch/question-answering/trainer_seq2seq_qa.py
@@ -115,7 +162,6 @@ unsupported:
   - examples/pytorch/text-classification/run_glue.py
   - examples/pytorch/text-classification/run_xnli.py
   - examples/pytorch/token-classification/run_ner.py
-  - examples/pytorch/token-classification/run_ner_no_trainer.py
   - examples/pytorch/transformers_serve_cb_eval_job.py
   - examples/pytorch/translation/run_translation.py
   - examples/pytorch/translation/run_translation_no_trainer.py

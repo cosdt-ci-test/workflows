@@ -40,6 +40,39 @@ raise SystemExit(
   python -c 'import torch, torch_npu; assert torch.npu.is_available(); print(torch.__version__, torch_npu.__version__, torch.npu.device_count())'
 }
 
+install_test_dependencies() {
+  local profile="$1"
+  local test_requirements="$TARGET_ROOT/python/requirements/test-requirements.txt"
+  local train_requirements="$TARGET_ROOT/python/requirements/ml/train-test-requirements.txt"
+  local resolver
+  local resolver_args=(--requirement "$test_requirements" pytest)
+  local resolved
+  local packages
+  resolver="$(dirname "${BASH_SOURCE[0]}")/resolve_test_requirements.py"
+
+  if [[ "$profile" == "train" ]]; then
+    resolver_args+=(--requirement "$train_requirements" boto3)
+  fi
+
+  resolved=$(python "$resolver" "${resolver_args[@]}")
+  mapfile -t packages <<< "$resolved"
+  python -m pip install "${packages[@]}"
+}
+
+link_target_ray_tests() {
+  local setup_dev="$TARGET_ROOT/python/ray/setup-dev.py"
+  local verifier
+  verifier="$(dirname "${BASH_SOURCE[0]}")/verify_ray_test_support.py"
+
+  if [[ ! -f "$setup_dev" ]]; then
+    echo "target Ray setup-dev.py is missing: $setup_dev" >&2
+    exit 1
+  fi
+
+  python "$setup_dev" --yes --allow tests
+  python "$verifier" "$TARGET_ROOT"
+}
+
 ray_version() {
   python - "$TARGET_ROOT/python/ray/_version.py" <<'PY'
 import re
@@ -88,17 +121,20 @@ install_target_ray() {
       python -m pip install "ray==${version}"
     fi
   fi
-  python -m pip install pytest mock
   python -c 'import ray; print("ray", ray.__version__, ray.__file__)'
 }
 
 setup_core() {
   install_target_ray ""
+  install_test_dependencies core
+  link_target_ray_tests
 }
 
 setup_train() {
   ensure_torch_stack
   install_target_ray train
+  install_test_dependencies train
+  link_target_ray_tests
 }
 
 supported_profiles() {

@@ -1,24 +1,29 @@
-name: deepspeed-examples
+# Replace <project> and <upstream_repo>. Scheduling fields (runner,
+# npu_devices, image, timeout, profile) come from each supported entry in
+# projects/trl/examples_manifest.yaml. Contract: docs/guarding-examples.md.
+name: trl-examples
 
 on:
-  # Enable schedule after the first successful dispatch run.
-  # schedule:
-  #   - cron: '30 */6 * * *'
+  # Schedule is intentionally disabled during the initial bring-up phase
+  # (spec: 初期仅开 workflow_dispatch 手动触发). Re-enable the cron below
+  # once the pipeline has run green and stable for a few manual rounds.
+  #  schedule:
+  #    - cron: '30 */6 * * *'
   workflow_dispatch:
     inputs:
       target_repo:
-        description: Target DeepSpeed repository to checkout and run
+        description: Target repository to checkout and run
         required: true
-        default: deepspeedai/DeepSpeed
+        default: huggingface/trl
         type: string
       target_ref:
         description: Branch, tag, or SHA in the target repository
         required: true
-        default: master
+        default: main
         type: string
 
 concurrency:
-  group: deepspeed-examples
+  group: trl-examples
   cancel-in-progress: false
 
 permissions:
@@ -26,8 +31,7 @@ permissions:
   contents: read
 
 env:
-  UPSTREAM_REPO: deepspeedai/DeepSpeed
-  EXAMPLES_REPO: deepspeedai/DeepSpeedExamples
+  UPSTREAM_REPO: huggingface/trl
   GH_API: https://api.github.com
 
 jobs:
@@ -46,10 +50,13 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: .monitor-state
-          key: deepspeed-examples-monitor-state-${{ github.run_id }}
+          # Per-run key misses; restore-keys picks the latest save.
+          # Must not prefix-collide with trl-quick-start's keys.
+          key: trl-examples-monitor-state-${{ github.run_id }}
           restore-keys: |
-            deepspeed-examples-monitor-state-
+            trl-examples-monitor-state-
 
+      # path=examples must match scan.root in the project manifest.
       - name: Monitor upstream examples tree
         id: monitor-examples
         if: github.event_name == 'schedule'
@@ -58,7 +65,7 @@ jobs:
           STATE_DIR=".monitor-state"
           mkdir -p "$STATE_DIR"
           SHA=$(curl -fsSL --retry 3 \
-            "$GH_API/repos/$UPSTREAM_REPO/commits?sha=master&path=examples&per_page=1" \
+            "$GH_API/repos/$UPSTREAM_REPO/commits?sha=main&path=examples&per_page=1" \
             | jq -r '.[0].sha // empty')
           OLD=$(cat "$STATE_DIR/.examples_head" 2>/dev/null || echo "")
           OUTCOME=$(cat "$STATE_DIR/.examples_outcome" 2>/dev/null || echo "")
@@ -103,7 +110,7 @@ jobs:
           fi
           echo "release_tag=$TAG outcome=$OUTCOME"
 
-      - name: Monitor upstream master HEAD
+      - name: Monitor upstream main HEAD
         id: monitor-commit
         if: github.event_name == 'schedule'
         run: |
@@ -111,7 +118,7 @@ jobs:
           STATE_DIR=".monitor-state"
           mkdir -p "$STATE_DIR"
           SHA=$(curl -fsSL --retry 3 \
-            "$GH_API/repos/$UPSTREAM_REPO/commits/master" | jq -r '.sha // empty')
+            "$GH_API/repos/$UPSTREAM_REPO/commits/main" | jq -r '.sha // empty')
           OLD=$(cat "$STATE_DIR/.last_tested_sha" 2>/dev/null || echo "")
           OUTCOME=$(cat "$STATE_DIR/.commit_outcome" 2>/dev/null || echo "")
           if [ -n "$SHA" ] && [ "$OLD" != "$SHA" ]; then
@@ -134,7 +141,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: .monitor-state
-          key: deepspeed-examples-monitor-state-${{ github.run_id }}
+          key: trl-examples-monitor-state-${{ github.run_id }}
 
       - name: Decide target
         id: decide
@@ -149,8 +156,8 @@ jobs:
             echo "trigger=workflow_dispatch" >> "$GITHUB_OUTPUT"
             echo "reason=manual" >> "$GITHUB_OUTPUT"
             echo "target_repo=${INPUT_REPO:-$UPSTREAM_REPO}" >> "$GITHUB_OUTPUT"
-            echo "target_ref=${INPUT_REF:-master}" >> "$GITHUB_OUTPUT"
-            echo "resolved repo=${INPUT_REPO:-$UPSTREAM_REPO} ref=${INPUT_REF:-master} (manual)"
+            echo "target_ref=${INPUT_REF:-main}" >> "$GITHUB_OUTPUT"
+            echo "resolved repo=${INPUT_REPO:-$UPSTREAM_REPO} ref=${INPUT_REF:-main} (manual)"
             exit 0
           fi
           CHANGED="false"
@@ -193,24 +200,24 @@ jobs:
         with:
           path: workflows
 
-      - name: Checkout DeepSpeedExamples
+      - name: Checkout target
         uses: actions/checkout@v4
         with:
-          repository: ${{ env.EXAMPLES_REPO }}
-          ref: master
+          repository: ${{ needs.monitor.outputs.target_repo }}
+          ref: ${{ needs.monitor.outputs.target_ref }}
           path: target
 
       - name: Check examples manifest
         id: check
         env:
-          TARGET_REPO: ${{ env.EXAMPLES_REPO }}
+          TARGET_REPO: ${{ needs.monitor.outputs.target_repo }}
           TARGET_REF: ${{ needs.monitor.outputs.target_ref }}
           TRIGGER: ${{ needs.monitor.outputs.trigger }}
         run: |
           python3 -m pip install -q pyyaml
           python3 workflows/scripts/check_examples_manifest.py \
             --target-root target \
-            --manifest workflows/projects/deepspeed/examples_manifest.yaml \
+            --manifest workflows/projects/trl/examples_manifest.yaml \
             --result-json manifest_check_result.json \
             --target-repo "$TARGET_REPO" \
             --target-ref "$TARGET_REF" \
@@ -226,10 +233,11 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: deepspeed-manifest-check
+          name: trl-manifest-check
           if-no-files-found: ignore
           path: manifest_check_result.json
 
+  # Skipped when the manifest has no supported entry (an empty matrix fails the run).
   run-example:
     name: run-example (${{ matrix.example.path }})
     needs: [monitor, manifest-check]
@@ -245,17 +253,17 @@ jobs:
         example: ${{ fromJSON(needs.manifest-check.outputs.supported_matrix) }}
     env:
       ASCEND_RT_VISIBLE_DEVICES: ${{ matrix.example.npu_devices }}
-      PROJECT_ROOT: ${{ github.workspace }}/workflows/projects/deepspeed
-      TARGET_ROOT: ${{ github.workspace }}/target-examples
-      DEEPSPEED_SOURCE_ROOT: ${{ github.workspace }}/target
-      FIXTURE_DIR: ${{ github.workspace }}/workflows/projects/deepspeed/fixtures
+      PROJECT_ROOT: ${{ github.workspace }}/workflows/projects/trl
+      TARGET_ROOT: ${{ github.workspace }}/target
+      FIXTURE_DIR: ${{ github.workspace }}/workflows/projects/trl/fixtures
       PIP_EXTRA_INDEX_URL: https://repo.huaweicloud.com/ascend/repos/pypi
       PIP_TIMEOUT: "120"
-      HF_ENDPOINT: https://hf-mirror.com
     container:
       image: ${{ matrix.example.image }}
+      # Card mounts come from npu_devices via matrix.example.device_options.
+      # Card selection also uses ASCEND_RT_VISIBLE_DEVICES (manifest npu_devices).
       options: >-
-        --privileged --shm-size=64g
+        --shm-size=64g
         ${{ matrix.example.device_options }}
         --device=/dev/davinci_manager --device=/dev/devmm_svm --device=/dev/hisi_hdc
         --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
@@ -267,26 +275,23 @@ jobs:
         with:
           path: workflows
 
-      - name: Checkout DeepSpeed source
+      - name: Checkout target
         uses: actions/checkout@v4
         with:
           repository: ${{ needs.monitor.outputs.target_repo }}
           ref: ${{ needs.monitor.outputs.target_ref }}
           path: target
 
-      - name: Checkout DeepSpeedExamples
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.EXAMPLES_REPO }}
-          ref: master
-          path: target-examples
-
       - name: Source CANN and check NPU
         run: |
           export PATH="/usr/local/sbin:$PATH"
           source /usr/local/Ascend/ascend-toolkit/set_env.sh
           npu-smi info
+          python -c "import torch, torch_npu; print(torch.__version__, torch_npu.__version__, torch.npu.device_count())"
 
+      # Installs the project and any profile-specific deps. Each project
+      # implements projects/trl/scripts/setup_example.sh; $1 is the
+      # manifest profile. Unknown profiles must fail before installing.
       - name: Setup example environment
         env:
           PROFILE: ${{ matrix.example.profile }}
@@ -379,7 +384,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: deepspeed-examples-${{ github.run_id }}-${{ strategy.job-index }}
+          name: trl-examples-${{ github.run_id }}-${{ strategy.job-index }}
           if-no-files-found: error
           path: output/result.json
 
@@ -395,9 +400,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: .monitor-state
-          key: deepspeed-examples-monitor-state-${{ github.run_id }}-post
+          key: trl-examples-monitor-state-${{ github.run_id }}-post
           restore-keys: |
-            deepspeed-examples-monitor-state-
+            trl-examples-monitor-state-
 
       - name: Record outcome
         env:
@@ -409,7 +414,9 @@ jobs:
           set -euo pipefail
           STATE_DIR=".monitor-state"
           mkdir -p "$STATE_DIR"
+          # Strip the "-retry" suffix to map back to the base monitor.
           BASE="${REASON%-retry}"
+          # Skipped run-example is fine when there is no supported entry.
           if [ "$RUN_RESULT" = "success" ]; then
             OUT="success"
             REASON_TEXT=""
@@ -433,4 +440,4 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: .monitor-state
-          key: deepspeed-examples-monitor-state-${{ github.run_id }}-post
+          key: trl-examples-monitor-state-${{ github.run_id }}-post

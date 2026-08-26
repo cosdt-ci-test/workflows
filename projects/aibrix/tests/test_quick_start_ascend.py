@@ -83,7 +83,7 @@ def cleanup_aibrix_workdir(root: Path) -> None:
 def _merge_sourced_env(*scripts: str) -> None:
     sourced = ' && '.join(f'source {shlex.quote(script)}' for script in scripts)
     merged = subprocess.run(
-        ['bash', '-c', f'set +u; {sourced} >/dev/null; env'],
+        ['bash', '-c', f'set +u; {{ {sourced}; }} >/dev/null 2>&1; env'],
         capture_output=True,
         text=True,
         check=True,
@@ -143,6 +143,34 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
 
 class TestPostProcessCleanup(unittest.TestCase):
+    def test_merge_sourced_env_discards_source_stdout(self) -> None:
+        first = Path(tempfile.mkdtemp(prefix='aibrix-env-')) / 'first.sh'
+        second = first.with_name('second.sh')
+        first.write_text(
+            'echo "NOISE_FROM_CANN=should_not_leak"\nexport REAL_FROM_CANN=ok\n',
+            encoding='utf-8',
+        )
+        second.write_text(
+            'echo "NOISE_FROM_ATB=should_not_leak"\nexport REAL_FROM_ATB=ok\n',
+            encoding='utf-8',
+        )
+        os.environ.pop('NOISE_FROM_CANN', None)
+        os.environ.pop('NOISE_FROM_ATB', None)
+        os.environ.pop('REAL_FROM_CANN', None)
+        os.environ.pop('REAL_FROM_ATB', None)
+        try:
+            _merge_sourced_env(str(first), str(second))
+            self.assertEqual(os.environ.get('REAL_FROM_CANN'), 'ok')
+            self.assertEqual(os.environ.get('REAL_FROM_ATB'), 'ok')
+            self.assertNotIn('NOISE_FROM_CANN', os.environ)
+            self.assertNotIn('NOISE_FROM_ATB', os.environ)
+        finally:
+            os.environ.pop('REAL_FROM_CANN', None)
+            os.environ.pop('REAL_FROM_ATB', None)
+            os.environ.pop('NOISE_FROM_CANN', None)
+            os.environ.pop('NOISE_FROM_ATB', None)
+            shutil.rmtree(first.parent, ignore_errors=True)
+
     def test_stops_recorded_pid_when_infer_did_not_run(self) -> None:
         root = Path(tempfile.mkdtemp(prefix='aibrix-qs-'))
         proc = subprocess.Popen(['sleep', '120'])

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run aibrix local-mode gateway against a vLLM-Ascend backend.
-# After the upstream script exits 0, the log must contain backend=hccl.
+# After vLLM starts and before run-local.sh, VLLM_LOG must contain backend=hccl.
 set -euo pipefail
 
 export PYTHONNOUSERSITE=1
@@ -129,8 +129,6 @@ request = urllib.request.Request(
     method='POST',
 )
 with urllib.request.urlopen(request, timeout=120) as response:
-    if response.status != 200:
-        raise SystemExit(f'completion HTTP {response.status}')
     body = json.load(response)
 content = (body['choices'][0]['message']['content'] or '').strip()
 if body.get('model') != 'Qwen/Qwen2.5-0.5B-Instruct':

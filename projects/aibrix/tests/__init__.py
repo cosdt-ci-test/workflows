@@ -1,10 +1,7 @@
 """Tests package marker.
 
-Single responsibility: inject the repo root's ``src/`` into ``sys.path``
-so that ``from workflows.markdown_doc_test_base import ...`` can resolve.
-
-Framework deps (mistune) are installed by the common quick-start workflow
-template, not at import time here.
+Inject the repo root ``src/`` into ``sys.path`` so
+``from workflows.markdown_doc_test_base import ...`` can resolve.
 """
 
 from __future__ import annotations

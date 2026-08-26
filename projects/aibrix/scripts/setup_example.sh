@@ -12,6 +12,29 @@ fi
 
 PROFILE="$1"
 
+FALLBACK_PIP_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
+CLUSTER_PIP_HOST=cache-service.nginx-pypi-cache.svc.cluster.local
+export CLUSTER_PIP_INDEX="http://${CLUSTER_PIP_HOST}/pypi/simple"
+
+select_pip_index() {
+  if python -c "
+import os
+import urllib.error
+import urllib.request
+try:
+    urllib.request.urlopen(os.environ['CLUSTER_PIP_INDEX'], timeout=3)
+except urllib.error.HTTPError:
+    pass
+" 2>/dev/null; then
+    export PIP_INDEX_URL="$CLUSTER_PIP_INDEX"
+    export PIP_TRUSTED_HOST="$CLUSTER_PIP_HOST"
+  else
+    export PIP_INDEX_URL="$FALLBACK_PIP_INDEX"
+    unset PIP_TRUSTED_HOST
+  fi
+  echo "pip index: $PIP_INDEX_URL"
+}
+
 setup_local_gateway() {
   export PATH="/usr/local/sbin:/usr/local/bin:${PATH}"
   set +u
@@ -70,7 +93,7 @@ setup_local_gateway() {
   fi
   test -x "${TARGET_ROOT}/bin/gateway-plugins"
 
-  export PIP_INDEX_URL="${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
+  select_pip_index
   export PIP_DEFAULT_TIMEOUT="${PIP_DEFAULT_TIMEOUT:-120}"
   export PIP_RETRIES="${PIP_RETRIES:-5}"
   python -m pip install -U pip

@@ -104,7 +104,12 @@ DeepSpeed 安装成功，版本： xxx
 pip install deepspeed -i https://repo.huaweicloud.com/ascend/repos/pypi
 ```
 
-> 多卡训练依赖 MPI 通信库，请确认已安装 `libopenmpi-dev` 系统包与 `mpi4py` Python 包（命令：`apt-get install -y libopenmpi-dev && pip install mpi4py`）。
+DeepSpeed 需要通过 MPI 通信库发现分布式环境，安装完 DeepSpeed 后请一并安装：
+
+```shell #test-setup
+apt-get update && apt-get install -y libopenmpi-dev
+pip install mpi4py
+```
 
 ---
 
@@ -289,14 +294,7 @@ init_distributed PASSED
 
 ### 6.0 准备多卡训练依赖
 
-`deepspeed` 命令依赖 MPI 通信库在多进程之间分发信息，首次使用前请先安装：
-
-```shell #test-setup
-apt-get update && apt-get install -y libopenmpi-dev
-pip install mpi4py
-```
-
-先把 §5 的训练脚本保存成文件 `train_minimal.py`，供 `deepspeed` 命令调用：
+MPI 依赖已在 §3 安装，接下来把 §5 的训练脚本保存成文件 `train_minimal.py`，供 `deepspeed` 命令调用：
 
 ```shell #test-setup
 cat > train_minimal.py <<'EOF'

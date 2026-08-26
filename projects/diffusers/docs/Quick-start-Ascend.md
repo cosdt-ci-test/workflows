@@ -1,7 +1,8 @@
 # Quick Start (Ascend NPU)
 
 在单卡昇腾 NPU 上跑通 Diffusers 文生图全链路：SD 1.5 生成 / 换调度器，SD 3.5 Large Turbo（8B MMDiT）的 LoRA 风格加载，以及显存优化（cpu offload vs 全量加载实测对比）。
-使用 `DiffusionPipeline.from_pretrained` 加载文生图管线并生成图像，用 `UniPCMultistepScheduler` 等调度器控制生成速度与质量。
+
+参考 [Diffusers Quicktour](https://huggingface.co/docs/diffusers/quicktour)：用 `DiffusionPipeline.from_pretrained` 实现文生图，`UniPCMultistepScheduler` 等调度器控制生成速度与质量，`load_lora_weights` 切换生成风格，`enable_model_cpu_offload` 降低显存峰值。
 
 ## 前置条件
 
@@ -102,7 +103,7 @@ count: xxx
 安装 `transformers` / `accelerate` / `peft` / `modelscope`：
 
 ```shell #test-setup
-pip install 'transformers>=5.0,<6.0' 'accelerate>=1.0,<2.0' 'peft>=0.6' 'modelscope==1.37.0'
+uv pip install 'transformers>=5.0,<6.0' 'accelerate>=1.0,<2.0' 'peft>=0.6' 'modelscope==1.37.0'
 ```
 
 打印安装版本：
@@ -162,7 +163,7 @@ python -c "import diffusers; print('diffusers', diffusers.__version__)"
 ```shell #test-result id="diffusers-install-source" fuzzy='xxx'
 diffusers xxx
 ```
-- xxx 表示最新的版本号
+- xxx 表示最新release的版本号
 
 ## 使用样例
 
@@ -238,7 +239,7 @@ PY
 ls -l output/astronaut_unipc.png | awk '{print $5, $9}'
 ```
 
-输出结果如下（`...` 吞掉前导日志，`xxx` 为实际文件字节数）：
+输出结果如下（`xxx` 为实际文件字节数）：
 
 ```shell #test-result id="swap-scheduler" fuzzy='xxx' fuzzy='...'
 ...
@@ -248,13 +249,11 @@ xxx output/astronaut_unipc.png
 
 ## 大模型显存优化（SD 3.5 Large Turbo）
 
-上面 SD1.5 的所有组件加起来 ~2 GB，单卡显存放得下，不需要任何优化。但对应 Quicktour 的 Optimizations 一节：现代扩散模型（SD 3.5 Large Turbo：8B MMDiT + 三个 text encoder，含 T5-XXL，bf16 权重合计 ~29 GB）在 32 GB 显存的卡上全量加载已经放不下或贴着上限，`enable_model_cpu_offload()` 让组件**逐个上下场**——text encoder 编码完搬回 CPU 内存，再请 MMDiT 上 NPU 去噪，最后 VAE 解码——显存峰值从「所有组件之和」降到「最大单个组件」（transformer bf16 ~16 GB）。
+上面 SD1.5 的所有组件加起来 ~2 GB，单卡显存放得下，不需要任何优化。但现代扩散模型（SD 3.5 Large Turbo：8B MMDiT + 三个 text encoder，含 T5-XXL，bf16 权重合计 ~29 GB）在 32 GB 显存的卡上全量加载已经放不下或贴着上限，`enable_model_cpu_offload()` 让组件**逐个上下场**——text encoder 编码完搬回 CPU 内存，再请 MMDiT 上 NPU 去噪，最后 VAE 解码——显存峰值从「所有组件之和」降到「最大单个组件」（transformer bf16 ~16 GB）。
 
-本节用 SD 3.5 Large Turbo 实测两种加载方式的 NPU 显存峰值对比（`torch.npu.max_memory_allocated`，对应 Quicktour 量化小节打印 `torch.cuda.max_memory_allocated` 的做法）。Turbo 是 4 步蒸馏版（`num_inference_steps=4, guidance_scale=0.0`），单次生成快，适合 CI。
+本节用 SD 3.5 Large Turbo 实测两种加载方式的 NPU 显存峰值对比。
 
 ### 下载 SD 3.5 Large Turbo
-
-模型约 72 GB（含 fp32 权重），首次下载耗时长；CI 使用宿主机持久缓存（容器挂载 `/root/.cache/modelscope`），后续运行直接命中本地文件。持久缓存中可能残留之前中断下载产生的残缺权重文件，测试框架会在下载前做 safetensors 完整性校验，损坏的模型目录会被整体清除并重新下载。
 
 ```shell #test-setup store="sd35_path"
 set -o pipefail
@@ -272,11 +271,10 @@ print(snapshot_download(
 ))" | grep '^/' | tail -n 1
 ```
 
-说明（三个坑，前两个是真金白银的下载量）：
+说明：
 
 - **仓库冗余**：ModelScope 仓库 71.6 GB 里只有 ~39 GB 是 diffusers 布局需要的——`sd3.5_large_turbo.safetensors`（16.5 GB，ComfyUI 用的单文件全量权重）和 `text_encoders/`（16.3 GB，ComfyUI 版 T5/CLIP）对 `StableDiffusion3Pipeline` 完全无用，靠 `allow_file_pattern` 只下组件目录。
 - **fp16 重复**：`text_encoder_3/` 等目录同时存有 fp32（`model-*.safetensors`，from_pretrained 默认）和 fp16（`model.fp16-*.safetensors`）两套权重，`ignore_file_pattern=['*.fp16.*']` 再省 ~11 GB——加载时 `dtype=torch.bfloat16` 会从 fp32 转换，不需要 fp16 文件。净下载量 ~28 GB。
-- **失败处理**：`set -o pipefail` 让 python 崩溃时管道整体非零退出（不被 tail 掩盖），失败由测试框架判红、下一轮轮询重跑；modelscope 自带断点续传，已完成的分片不会重下。`grep '^/'` 确保捕获到的只会是路径行。
 
 输出类似：
 
@@ -284,7 +282,7 @@ print(snapshot_download(
 /root/.cache/modelscope/hub/models/stabilityai/stable-diffusion-3.5-large-turbo
 ```
 
-### 加载 LoRA（Quicktour LoRA 一节）
+### 加载 LoRA
 
 LoRA 适配器只往基础模型插入少量可训练参数（本例 ~270 MB 对 8B 的 MMDiT），推理时把 LoRA 权重加载/合并进 transformer 即可切换生成风格。对应 Quicktour 的 LoRA 一节：使用 `load_lora_weights` 加载适配器，prompt 里带上触发词激活风格。
 
@@ -301,7 +299,7 @@ python -c "from modelscope import snapshot_download; print(snapshot_download('pr
 /root/.cache/modelscope/hub/models/prithivMLmods/SD3.5-Large-Turbo-HyperRealistic-LoRA
 ```
 
-在 SD 3.5 pipeline 上加载 LoRA 并用触发词生成（`load_lora_weights` 走 PEFT 的权重合并路径，与设备无关；`load_lora_weights` 内部对 cpu offload 做了显式兼容——注入 LoRA 前临时摘下 offload hooks、注入后重新挂回，因此 LoRA 与 offload 可以组合使用，权重不必全量驻留显存）：
+在 SD 3.5 pipeline 上加载 LoRA 并用触发词生成：
 
 ```shell #test id="sd35-lora" load="sd35_path>>sd35_path" load="lora_path>>lora_path"
 mkdir -p output
@@ -330,7 +328,7 @@ PY
 ls -l output/sd35_lora.png | awk '{print $5, $9}'
 ```
 
-输出结果类似（`...` 吞掉前导日志，`xxx` 为实际文件字节数）：
+输出结果类似（`xxx` 为实际文件字节数）：
 
 ```shell #test-result id="sd35-lora" fuzzy='xxx' fuzzy='...'
 ...
@@ -339,8 +337,6 @@ xxx output/sd35_lora.png
 ```
 
 ### cpu offload 模式生成
-
-`enable_model_cpu_offload()` 之后不要手动 `.to("npu:0")`——offload hook 自己管理组件的进出，手动搬运会和 hook 冲突（对应 Quicktour「Memory usage」一节去掉 `device_map` 的写法）：
 
 ```shell #test id="sd35-offload" load="sd35_path>>sd35_path"
 mkdir -p output
@@ -379,7 +375,7 @@ xxx output/sd35_offload.png
 
 ### 全量加载对比
 
-同一模型不带 offload 直接 `.to("npu:0")` 全量驻留显存（三个 text encoder + MMDiT 合计 ~29 GB bf16，32 GB 显存放得下但已接近上限）。1024 分辨率下 VAE 解码的高分辨率激活会再加 ~1 GB 峰值，贴线环境容易 OOM，因此本块降到 768 分辨率留出余量；显存更小的卡上这一步会直接 OOM，正是上一节 offload 的用武之地：
+同一模型不带 offload 直接 `.to("npu:0")` 全量驻留显存（三个 text encoder + MMDiT 合计 ~29 GB bf16，32 GB 显存放得下但已接近上限）：
 
 ```shell #test id="sd35-full" load="sd35_path>>sd35_path"
 mkdir -p output
@@ -408,7 +404,7 @@ PY
 ls -l output/sd35_full.png | awk '{print $5, $9}'
 ```
 
-输出结果类似（全量峰值 ≈ 全部权重 ~29 GB 驻留 + 激活；`...` 吞掉前导日志，`xxx` 为实际文件字节数 / 显存峰值）：
+输出结果类似（全量峰值 ≈ 全部权重 ~29 GB 驻留 + 激活；`xxx` 为实际文件字节数 / 显存峰值）：
 
 ```shell #test-result id="sd35-full" fuzzy='xxx' fuzzy='...'
 ...

@@ -406,6 +406,7 @@ import torch, torch_npu
 import torch.nn as nn
 from tensordict import TensorDictParams
 torch.manual_seed(42)
+torch.npu.manual_seed(42)
 linear = nn.Linear(3, 4).to('npu:0')
 params = TensorDictParams(linear.state_dict())
 x = torch.randn(2, 3, device='npu:0')

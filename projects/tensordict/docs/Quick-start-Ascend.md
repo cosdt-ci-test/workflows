@@ -100,7 +100,7 @@ count: 1
 
 tensordict 同时支持 PyPI 二进制安装与 GitHub 源码安装，两条路径都把核心模块（`TensorDict` / `TensorDictBase` / `LazyStackedTensorDict` / `MemoryMappedTensor` / `tensorclass` 等）一起打包。
 
-### 使用 uv 进行安装
+### 使用 uv 进行安装（PyPI 二进制）
 
 ```shell #test id="tensordict-install-binary"
 uv pip install --index-url https://mirrors.aliyun.com/pypi/simple tensordict
@@ -114,12 +114,6 @@ tensordict xxx
 ```
 - xxx 表示最新的版本号
 
-<!--
-```shell #test-setup
-uv pip uninstall tensordict -y
-```
--->
-
 ### 从源码安装
 
 <!--
@@ -128,11 +122,11 @@ echo "${UPSTREAM_REF}"
 ```
 -->
 
-用 `git clone --depth 1 --branch <ref>` 直接浅克隆工作流注入的最新 release tag，安装并且验证：
+用 `git clone --depth 1 --branch <ref>` 直接浅克隆工作流注入的最新 release tag 到 `/tmp/tensordict-build`（**不**克隆到测试 cwd 下，避免在 cwd 留下一个没有 `__init__.py` 的 `tensordict/` 目录被 Python 当成 namespace package 注册），安装并且验证：
 
 ```shell #test id="tensordict-install-source" load="upstream_ref>>ref"
-git clone --depth 1 --branch <ref> https://github.com/pytorch/tensordict.git
-cd tensordict
+git clone --depth 1 --branch <ref> https://github.com/pytorch/tensordict.git /tmp/tensordict-build
+cd /tmp/tensordict-build
 uv pip install -e .
 python -c "import tensordict; print('tensordict', tensordict.__version__)"
 ```

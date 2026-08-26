@@ -172,7 +172,7 @@ for step in range(1, 6):
     model_engine.step()
     print(f'step {step}/5 loss={loss.item():.6f}')
 
-model_engine.save_checkpoint('./ds_ckpt', 'step5', client_sd={'step': 5})
+model_engine.save_checkpoint('./ds_ckpt', 'step5', client_state={'step': 5})
 print('Quick-start test PASSED')
 PY
 ```
@@ -216,8 +216,8 @@ ds_config = {
 model_engine, optimizer, _, _ = deepspeed.initialize(
     model=model, model_parameters=model.parameters(), config=ds_config)
 
-_, client_sd = model_engine.load_checkpoint('./ds_ckpt', 'step5')
-print(f'已加载断点，当前训练步数：{client_sd["step"]}')
+_, client_state = model_engine.load_checkpoint('./ds_ckpt', 'step5')
+print(f'已加载断点，当前训练步数：{client_state["step"]}')
 
 x = torch.randn(4, 32, device=model_engine.device)
 loss = model_engine(x).sum()

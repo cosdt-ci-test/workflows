@@ -104,7 +104,7 @@ export ASCEND_RT_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 pip3 install -U cache-dit
-pip3 install --no-deps torchvision==0.16.0
+pip3 install --no-deps torchvision==0.23.0
 pip3 install einops sentencepiece accelerate
 # 安装最新 diffusers 支持并行功能
 pip3 install git+https://github.com/huggingface/diffusers.git # or >= 0.36.0
@@ -147,7 +147,7 @@ https://gitcode.com/Ascend/pytorch/releases
 **安装额外依赖**：
 
 ```shell
-pip install --no-deps torchvision==0.16.0 
+pip install --no-deps torchvision==0.23.0
 pip install einops sentencepiece accelerate
 ```
 

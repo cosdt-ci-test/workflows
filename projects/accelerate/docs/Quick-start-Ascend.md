@@ -293,7 +293,7 @@ print(f'device={accelerator.device.type} final_loss={loss.item():.4f}')
 device=npu final_loss=xxx
 ```
 
-### 独立 `Accelerator.prepare`（非分布式）
+### 独立 `Accelerator.prepare`
 
 `Accelerator()` + `accelerator.prepare(model)` 跑一次 forward，验证 Accelerate 在 NPU 上：
 
@@ -346,8 +346,6 @@ device=npu final_loss=xxx
 
 分布式评估 = 多张 NPU 协同算一个验证集上的指标。`Accelerator()` 起 DDP 后，每个 rank 只看到数据集的 `1/world_size` 子集——必须把各 rank 算出的预测 / 标签汇总到主进程，再算最终 metric；否则算出来的只是「rank 0 看到的 1/N 数据」上的 metric，不是全量数据上的。
 
-上游 [Quicktour](https://github.com/huggingface/accelerate/blob/main/docs/source/quicktour.md)「分布式评估」一节的 canonical 循环——先 `prepare(dataloader)`，再在循环里 `forward → gather_for_metrics → metric.add_batch`：
-
 ```python
 validation_dataloader = accelerator.prepare(validation_dataloader)  # DDP 自动按 rank 切数据
 for inputs, targets in validation_dataloader:                       # 每张卡独立看 1/world_size 子集
@@ -358,7 +356,7 @@ for inputs, targets in validation_dataloader:                       # 每张卡�
     metric.add_batch(all_predictions, all_targets)                    # 主进程算 metric（accuracy / F1 / ...）
 ```
 
-下面抽 `gather_for_metrics` 这一行用最小可执行断言验它在 NPU 上真的跨卡做 `all_gather`（hccl 后端）而不是退回单进程 identity：
+下面抽 `gather_for_metrics` 这一行用最小可执行断言验它在 NPU 上真的跨卡做 `all_gather`（hccl 后端）：
 
 ```shell #test-setup store="gather_script_path"
 cat > gather_npu.py <<'PY'
@@ -391,15 +389,11 @@ device=npu
 gathered=[1, 2, 3, 1, 2, 3]
 ```
 
-> 这是「跨卡 collective 跑通」的可执行断言——单进程路径下 `gather_for_metrics` 文档化保证退化为 identity，要看 `all_gather` 必须 ≥2 张 NPU。
->
-> 边缘场景：长度不一致 → `pad_across_processes` 先 pad 再 gather；2D / 3D tensor 字典等复杂对象 → `use_gather_object=True`；数据集末尾样本会被 `DistributedSampler` 复制以补齐 `world_size` 倍数，`gather_for_metrics` 自动剔除重复。详见上游 [分布式评估](https://huggingface.co/docs/accelerate/basic_tutorials/evaluation) 教程。
-
 ## 大模型推理
 
-把上游 [Quicktour](https://github.com/huggingface/accelerate/blob/main/docs/source/quicktour.md)「大模型推理」一节的「空权重初始化」抽出来用最小模型跑一遍。
+Accelerate 的大模型推理分两半：先用 [`init_empty_weights`](https://huggingface.co/docs/accelerate/main/en/usage_guides/big_modeling#initializing-an-empty-model) 在 `meta` device 上建空骨架（参数都是 meta 占位符，0 显存），再用 [`load_checkpoint_and_dispatch`](https://huggingface.co/docs/accelerate/main/en/usage_guides/big_modeling#sharding-checkpoints) 把分片权重塞进多张设备。本节只覆盖第一半——meta 占位符 CI 可验；第二半需要真权重（Mixtral-8x7B ~90 GB），跳到上游 [Big model inference](https://huggingface.co/docs/accelerate/concept_guides/big_model_inference) 教程。
 
-### 空权重初始化
+### init_empty_weights
 
 ```shell #test id="acc-empty-weights"
 python -c "
@@ -432,5 +426,3 @@ device=meta
 ```
 
 `device=meta` 是 `init_empty_weights` 的合同行为：参数不在真实设备上，而是 PyTorch 的 meta 占位符，所以这一步**不占 NPU 显存**，CI 上跑稳。
-
-> 「Load and dispatch weights」这一半需要真权重（Mixtral-8x7B 之类 ~90 GB），CI 不试——文档正文里链接到上游 [Big model inference](https://huggingface.co/docs/accelerate/concept_guides/big_model_inference) 教程。

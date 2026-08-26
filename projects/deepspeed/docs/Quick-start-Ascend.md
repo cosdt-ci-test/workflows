@@ -363,7 +363,7 @@ Quick-start test PASSED
 通过 `--num_gpus` 指定使用几张 NPU。下面的命令会先检测可用 NPU 数量：有 2 张及以上就用 2 张启动，否则自动退化为 1 张。
 
 ```shell #test id="launch-multi" load="npu_count>>NPU_COUNT"
-NG=$(python -c "print(2 if int('$NPU_COUNT') >= 2 else 1)"); echo "检测到 $NPU_COUNT 张 NPU，将使用 $NG 张启动"; deepspeed --num_gpus $NG train_minimal.py 2>&1 | tail -n 30
+NG=$(python -c "print(2 if int('<NPU_COUNT>') >= 2 else 1)"); echo "检测到 <NPU_COUNT> 张 NPU，将使用 $NG 张启动"; deepspeed --num_gpus $NG train_minimal.py 2>&1 | tail -n 30
 ```
 
 ```shell #test-result id="launch-multi" fuzzy='...'

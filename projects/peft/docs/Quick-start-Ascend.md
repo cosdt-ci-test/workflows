@@ -145,8 +145,8 @@ echo "${UPSTREAM_REF}"
 克隆上游仓库并 checkout 到工作流注入的最新 release tag，安装并且验证
 
 ```shell #test id="peft-install-source" load="upstream_ref>>ref"
-git clone https://github.com/huggingface/peft.git
-cd peft && git checkout <ref>
+git clone --depth 1 --branch <ref> https://github.com/huggingface/peft.git
+cd peft
 uv pip install -e .
 python -c "import peft; print('peft', peft.__version__)"
 ```

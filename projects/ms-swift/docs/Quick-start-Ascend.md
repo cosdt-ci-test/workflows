@@ -151,8 +151,8 @@ echo "${UPSTREAM_REF}"
 克隆上游仓库并 checkout 到工作流注入的最新 release tag，安装并且验证
 
 ```shell #test id="swift-install-source" load="upstream_ref>>ref"
-git clone https://github.com/modelscope/ms-swift.git
-cd ms-swift && git checkout <ref>
+git clone --depth 1 --branch <ref> https://github.com/modelscope/ms-swift.git
+cd ms-swift
 uv pip install -e .
 python -c "import swift; print('ms-swift', swift.__version__)"
 ```

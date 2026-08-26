@@ -2,9 +2,9 @@
 
 在双卡昇腾 NPU 上跑通 [Accelerate](https://github.com/huggingface/accelerate) 的三大核心能力：
 
-- **Adapt training code**（`acc-launch` / `acc-launch-bf16` / `acc-train-single` / `acc-prepare`）：多卡 DDP 训练 + 单卡训练 + 单卡推理三档场景都验证 `Accelerator.prepare` / `Accelerator.backward` 在 NPU 上跑通；
-- **Distributed evaluation**（`acc-infer-multi` / `acc-gather-multi`）：DDP 双进程下 forward-only 推理 + `gather_for_metrics` 真的跨卡 `all_gather`（hccl 后端），而不是退回单进程 identity；
-- **Big Model Inference**（`acc-empty-weights`）：`init_empty_weights` 把大模型骨架以 meta 占位符方式创建，0 显存分配。
+- **训练代码适配**（`acc-launch` / `acc-launch-bf16` / `acc-train-single` / `acc-prepare`）：多卡 DDP 训练 + 单卡训练 + 单卡推理三档场景都验证 `Accelerator.prepare` / `Accelerator.backward` 在 NPU 上跑通；
+- **分布式评估**（`acc-infer-multi` / `acc-gather-multi`）：DDP 双进程下 forward-only 推理 + `gather_for_metrics` 真的跨卡 `all_gather`（hccl 后端），而不是退回单进程 identity；
+- **大模型推理**（`acc-empty-weights`）：`init_empty_weights` 把大模型骨架以 meta 占位符方式创建，0 显存分配。
 
 DDP 训练与跨卡集体通讯都依赖至少 2 张 NPU；单卡 runner 上 `accelerate launch --num_processes 2` 会直接报「visible devices 不够」。
 
@@ -186,7 +186,7 @@ Copy-and-paste the text below in your GitHub issue
 
 ## 训练代码适配
 
-下面把上游 [Quicktour](https://github.com/huggingface/accelerate/blob/main/docs/source/quicktour.md) 里「Adapt training code」一节的训练循环压到最小，目标是验证 `Accelerator.prepare` / `Accelerator.backward` 在 NPU 上跑通。模型只用一个小线性层，但走的是 Accelerate 的全套适配路径。
+下面把上游 [Quicktour](https://github.com/huggingface/accelerate/blob/main/docs/source/quicktour.md) 里「训练代码适配」一节的训练循环压到最小，目标是验证 `Accelerator.prepare` / `Accelerator.backward` 在 NPU 上跑通。模型只用一个小线性层，但走的是 Accelerate 的全套适配路径。
 
 ### 第一步：写最小训练脚本
 
@@ -245,15 +245,13 @@ echo "${PWD}/train_npu.py"
 ASCEND_RT_VISIBLE_DEVICES=0,1 accelerate launch --num_processes 2 --mixed_precision no <path>
 ```
 
-其中 `<path>` 是 Step 1 生成的脚本绝对路径（即 `${PWD}/train_npu.py`）
+其中 `<path>` 是第一步生成的脚本绝对路径（即 `${PWD}/train_npu.py`）
 
 输出结果类似：
 
 ```shell #test-result id="acc-launch" fuzzy='xxx'
 device=npu final_loss=xxx
 ```
-
-> `--num_processes 2 --mixed_precision no` 把 Accelerate 锁到「双卡 DDP、不走 AMP」模式——`Accelerator.prepare(model)` 自动包一层 `DistributedDataParallel`，每张卡拿 64 个样本的子集跑 SGD；`accelerator.device.type` 在两个 rank 上都是 `npu`。多卡请参考上游 [Launch distributed code](https://huggingface.co/docs/accelerate/basic_tutorials/launch) 教程，把 `num_processes` / `num_machines` / `gpu_ids` 等参数填对。
 
 ### 单卡训练
 
@@ -328,11 +326,11 @@ device=npu
 shape=[1, 1]
 ```
 
-`accelerator.prepare(model)` 这一行是 Accelerate 的核心 abstraction——同一份脚本不写一行 `.cuda()` / `.npu()`，能自动适配 CPU / CUDA / NPU / XPU / MPS。distributed 路径下的 `gather_for_metrics` 在下一节「Distributed evaluation」验。
+`accelerator.prepare(model)` 这一行是 Accelerate 的核心 abstraction——同一份脚本不写一行 `.cuda()` / `.npu()`，能自动适配 CPU / CUDA / NPU / XPU / MPS。分布式路径下的 `gather_for_metrics` 在下一节「分布式评估」验。
 
 ### 启动 bf16 混合精度路径
 
-把 Step 1 的 `train_npu.py` 再跑一遍，但把 `--mixed_precision` 从 `no` 切到 `bf16`，验证 Accelerate 的 autocast 包装在 NPU 上不出错。脚本不动一行——Accelerate 自动包 `torch.autocast`（`<path>` 仍是 Step 1 的 `train_npu.py`）：
+把第一步的 `train_npu.py` 再跑一遍，但把 `--mixed_precision` 从 `no` 切到 `bf16`，验证 Accelerate 的 autocast 包装在 NPU 上不出错。脚本不动一行——Accelerate 自动包 `torch.autocast`（`<path>` 仍是第一步的 `train_npu.py`）：
 
 ```shell #test id="acc-launch-bf16" load="script_path>>path"
 ASCEND_RT_VISIBLE_DEVICES=0,1 accelerate launch --num_processes 2 --mixed_precision bf16 <path>
@@ -346,7 +344,7 @@ device=npu final_loss=xxx
 
 ## 分布式评估
 
-把上游 [Quicktour](https://github.com/huggingface/accelerate/blob/main/docs/source/quicktour.md)「Distributed evaluation」一节拆成两块：「Distributed inference」先在 DDP 双进程里跑一次 forward-only 推理（不训练、不算 metric），下一节 `acc-gather-multi` 再加 `gather_for_metrics` 跨卡汇总。
+把上游 [Quicktour](https://github.com/huggingface/accelerate/blob/main/docs/source/quicktour.md)「分布式评估」一节拆成两块：「分布式推理」先在 DDP 双进程里跑一次 forward-only 推理（不训练、不算 metric），下一节 `acc-gather-multi` 再加 `gather_for_metrics` 跨卡汇总。
 
 ### 分布式推理（仅 forward）
 
@@ -389,7 +387,7 @@ ASCEND_RT_VISIBLE_DEVICES=0,1 accelerate launch --num_processes 2 <path>
 world=2 device=npu shape=[3, 1]
 ```
 
-> inference 路径与训练路径（`acc-launch` / `acc-train-single`）的区别是：没有 `loss` / `backward` / `optim.step`。DDP 容器在 inference 时只做 `forward`，梯度同步那一步直接跳过。下一节 `acc-gather-multi` 在这个基础上加 `gather_for_metrics`，把各 rank 的结果汇总到主进程——这才是「Distributed evaluation」的完整语义。
+> inference 路径与训练路径（`acc-launch` / `acc-train-single`）的区别是：没有 `loss` / `backward` / `optim.step`。DDP 容器在 inference 时只做 `forward`，梯度同步那一步直接跳过。下一节 `acc-gather-multi` 在这个基础上加 `gather_for_metrics`，把各 rank 的结果汇总到主进程——这才是「分布式评估」的完整语义。
 
 ### 跨卡 `gather_for_metrics`（DDP 双进程）
 
@@ -426,11 +424,11 @@ device=npu
 gathered=[1, 2, 3, 1, 2, 3]
 ```
 
-> 这条才是真正「跨卡 collective 跑通」的可执行断言——单进程路径下 `gather_for_metrics` 文档化保证退化为 identity，要看 `all_gather` 必须 ≥2 张 NPU。多进程路径（`pad_across_processes` / 跨卡 `gather`）详见上游 [Distributed evaluation](https://huggingface.co/docs/accelerate/basic_tutorials/evaluation) 教程。
+> 这条才是真正「跨卡 collective 跑通」的可执行断言——单进程路径下 `gather_for_metrics` 文档化保证退化为 identity，要看 `all_gather` 必须 ≥2 张 NPU。多进程路径（`pad_across_processes` / 跨卡 `gather`）详见上游 [分布式评估](https://huggingface.co/docs/accelerate/basic_tutorials/evaluation) 教程。
 
 ## 大模型推理
 
-把上游 [Quicktour](https://github.com/huggingface/accelerate/blob/main/docs/source/quicktour.md)「Big Model Inference」一节的「Empty weights initialization」抽出来用最小模型跑一遍。
+把上游 [Quicktour](https://github.com/huggingface/accelerate/blob/main/docs/source/quicktour.md)「大模型推理」一节的「空权重初始化」抽出来用最小模型跑一遍。
 
 ### 空权重初始化
 

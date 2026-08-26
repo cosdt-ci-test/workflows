@@ -258,10 +258,25 @@ xxx output/astronaut_unipc.png
 
 ```shell #test-setup store="sd35_path"
 set -o pipefail
-python -c "from modelscope import snapshot_download; print(snapshot_download('stabilityai/stable-diffusion-3.5-large-turbo'))" | grep '^/' | tail -n 1
+python -c "
+from modelscope import snapshot_download
+print(snapshot_download(
+    'stabilityai/stable-diffusion-3.5-large-turbo',
+    allow_file_pattern=[
+        '*.json', '*.txt', '*.model', '*.tiktoken',
+        'transformer/*', 'vae/*',
+        'text_encoder/*', 'text_encoder_2/*', 'text_encoder_3/*',
+        'tokenizer/*', 'tokenizer_2/*', 'tokenizer_3/*',
+    ],
+    ignore_file_pattern=['*.fp16.*', '*.png', '*.jpg', '*.webp'],
+))" | grep '^/' | tail -n 1
 ```
 
-说明：模型有多个 ~5 GB 级大分片，网络波动时可能部分失败（CI 实测出现过 2/4 分片下载中断，modelscope 抛 `FileDownloadError`）。`set -o pipefail` 让 python 崩溃时管道整体非零退出（不再被 tail 的退出码掩盖），失败会被测试框架立即判红——下一轮轮询的重试机制自会重跑；modelscope 的 snapshot_download 自带断点续传，重跑时已完成的分片不会重下。`grep '^/'` 确保捕获到的只会是路径行。
+说明（三个坑，前两个是真金白银的下载量）：
+
+- **仓库冗余**：ModelScope 仓库 71.6 GB 里只有 ~39 GB 是 diffusers 布局需要的——`sd3.5_large_turbo.safetensors`（16.5 GB，ComfyUI 用的单文件全量权重）和 `text_encoders/`（16.3 GB，ComfyUI 版 T5/CLIP）对 `StableDiffusion3Pipeline` 完全无用，靠 `allow_file_pattern` 只下组件目录。
+- **fp16 重复**：`text_encoder_3/` 等目录同时存有 fp32（`model-*.safetensors`，from_pretrained 默认）和 fp16（`model.fp16-*.safetensors`）两套权重，`ignore_file_pattern=['*.fp16.*']` 再省 ~11 GB——加载时 `dtype=torch.bfloat16` 会从 fp32 转换，不需要 fp16 文件。净下载量 ~28 GB。
+- **失败处理**：`set -o pipefail` 让 python 崩溃时管道整体非零退出（不被 tail 掩盖），失败由测试框架判红、下一轮轮询重跑；modelscope 自带断点续传，已完成的分片不会重下。`grep '^/'` 确保捕获到的只会是路径行。
 
 输出类似：
 

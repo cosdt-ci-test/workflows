@@ -64,10 +64,13 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     contract -> run ``#test-setup`` / ``#test`` in order -> compare against
     ``#test-result``."""
 
-    # 50 min per command: long enough for the ~72 GB SD3.5-large-turbo
-    # snapshot download (first run, the doc's slowest block) plus 8B
-    # pipeline load + 4-step generation; short enough to fail fast on hangs.
-    DEFAULT_COMMAND_TIMEOUT = 3000
+    # 2h per command: the doc's slowest block downloads ~28 GB (SD3.5
+    # component dirs only - the doc's allow/ignore patterns skip the
+    # repo's 33 GB of ComfyUI/fp16 duplicates); at observed ~3.4 MB/s
+    # cluster egress that's ~2.3h worst case, though warm-cache runs
+    # finish in seconds. 8B pipeline load + 4-step generation fit
+    # comfortably in the same budget.
+    DEFAULT_COMMAND_TIMEOUT = 7200
     USER_AGENT = 'cosdt-ci-test/quick-start'  # monitored source is the fork under cosdt-ci-test org
 
     # Local copy of the monitored doc, relative to the test cwd

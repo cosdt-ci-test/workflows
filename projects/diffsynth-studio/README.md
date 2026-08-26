@@ -20,6 +20,6 @@
 无标签、**不看护**的步骤：
 
 - `source set_env.sh` 和 `export PATH`（测试进程在 `prepare_environment` 里做等价的 CANN 注入）
-- `npu-smi info`（设备表每次不同，正文只要求退出码 0）
+- `npu-smi info`（无预期输出说明，CI 不跑）
 
 `schedule` 保持注释。文档监控与测试都走 GitHub Contents API（`ref=${{ github.sha }}`），不走 `raw.githubusercontent.com`。

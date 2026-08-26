@@ -151,8 +151,8 @@ echo "${UPSTREAM_REF}"
 克隆上游仓库并 checkout 到工作流注入的最新 release tag，安装并且验证
 
 ```shell #test id="diffusers-install-source" load="upstream_ref>>ref"
-git clone https://github.com/huggingface/diffusers.git
-cd diffusers && git checkout <ref>
+git clone --depth 1 --branch <ref> https://github.com/huggingface/diffusers.git
+cd diffusers
 uv pip install -e .
 python -c "import diffusers; print('diffusers', diffusers.__version__)"
 ```

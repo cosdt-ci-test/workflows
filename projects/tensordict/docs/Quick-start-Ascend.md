@@ -420,7 +420,7 @@ print('out sum', out.sum().item())
 
 ```shell #test-result id="td-functional"
 out shape torch.Size([2, 4])
-out sum 2.6961772441864014
+out sum 1.3248364925384521
 ```
 
 ### 10. TensorDict for parameter serialization and building datasets — memmap 落盘

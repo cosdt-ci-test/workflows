@@ -1,4 +1,4 @@
-# Quick Start (Ascend NPU)
+# 快速上手（昇腾 NPU）
 
 在双卡昇腾 NPU 上跑通 [Accelerate](https://github.com/huggingface/accelerate) 的三大核心能力：
 
@@ -184,11 +184,11 @@ Copy-and-paste the text below in your GitHub issue
 
 其中 `PyTorch accelerator: NPU` 是 accelerate 探测到 `torch_npu` 后给出的标识；`CANN version` 一行只有在 NPU 环境才会出现。如果 `PyTorch accelerator` 不是 `NPU`，多半是 `torch_npu` 没被 import 到——回到「基础软件」一节检查。
 
-## Adapt training code
+## 训练代码适配
 
 下面把上游 [Quicktour](https://github.com/huggingface/accelerate/blob/main/docs/source/quicktour.md) 里「Adapt training code」一节的训练循环压到最小，目标是验证 `Accelerator.prepare` / `Accelerator.backward` 在 NPU 上跑通。模型只用一个小线性层，但走的是 Accelerate 的全套适配路径。
 
-### Step 1：写最小训练脚本
+### 第一步：写最小训练脚本
 
 保存为 `train_npu.py`：
 
@@ -239,13 +239,13 @@ PY
 echo "${PWD}/train_npu.py"
 ```
 
-### Step 2：用 `accelerate launch` 启动
+### 第二步：用 `accelerate launch` 启动
 
 ```shell #test id="acc-launch" load="script_path>>path"
 ASCEND_RT_VISIBLE_DEVICES=0,1 accelerate launch --num_processes 2 --mixed_precision no <path>
 ```
 
-其中 `<path>` 是 Step 1 生成的脚本绝对路径（即 `${PWD}/train_npu.py`）——CI runner 会在执行时自动把 Step 1 捕获的路径代入；手动照着跑时把它替换为你机器上的实际路径即可。
+其中 `<path>` 是 Step 1 生成的脚本绝对路径（即 `${PWD}/train_npu.py`）
 
 输出结果类似：
 
@@ -296,7 +296,7 @@ device=npu final_loss=xxx
 
 > 这是 `acc-launch` 的单卡对应——同一份训练逻辑，不走 `accelerate launch`、不依赖多卡，CI 单卡 runner 也能跑通完整 backward + optim.step 链路。和 `acc-prepare`（只跑 forward 不算 backward）形成互补。
 
-### Standalone `Accelerator.prepare`（非 distributed）
+### 独立 `Accelerator.prepare`（非分布式）
 
 `accelerate launch` 不上场，直接 `Accelerator()` + `accelerator.prepare(model)` 跑一次 forward，验证 Accelerate 在 NPU 上：
 
@@ -344,11 +344,11 @@ ASCEND_RT_VISIBLE_DEVICES=0,1 accelerate launch --num_processes 2 --mixed_precis
 device=npu final_loss=xxx
 ```
 
-## Distributed evaluation
+## 分布式评估
 
 把上游 [Quicktour](https://github.com/huggingface/accelerate/blob/main/docs/source/quicktour.md)「Distributed evaluation」一节拆成两块：「Distributed inference」先在 DDP 双进程里跑一次 forward-only 推理（不训练、不算 metric），下一节 `acc-gather-multi` 再加 `gather_for_metrics` 跨卡汇总。
 
-### Distributed inference（forward only）
+### 分布式推理（仅 forward）
 
 `accelerate launch --num_processes 2` 拉起双进程，每个 rank 独立 forward 一个本地 batch——没有 loss、没有 backward、没有 `optim.step`。这是 inference 路径与训练路径（`acc-launch`）的关键分界：Accelerate 的 DDP 容器只走 `forward`，不触发梯度同步。
 
@@ -428,11 +428,11 @@ gathered=[1, 2, 3, 1, 2, 3]
 
 > 这条才是真正「跨卡 collective 跑通」的可执行断言——单进程路径下 `gather_for_metrics` 文档化保证退化为 identity，要看 `all_gather` 必须 ≥2 张 NPU。多进程路径（`pad_across_processes` / 跨卡 `gather`）详见上游 [Distributed evaluation](https://huggingface.co/docs/accelerate/basic_tutorials/evaluation) 教程。
 
-## Big Model Inference
+## 大模型推理
 
 把上游 [Quicktour](https://github.com/huggingface/accelerate/blob/main/docs/source/quicktour.md)「Big Model Inference」一节的「Empty weights initialization」抽出来用最小模型跑一遍。
 
-### Empty weights initialization
+### 空权重初始化
 
 ```shell #test id="acc-empty-weights"
 python -c "

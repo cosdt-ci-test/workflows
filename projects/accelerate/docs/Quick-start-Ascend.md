@@ -1,9 +1,9 @@
-# 快速上手（昇腾 NPU）
+# 快速开始（昇腾 NPU）
 
 在双卡昇腾 NPU 上跑通 [Accelerate](https://github.com/huggingface/accelerate) 的三大核心能力：
 
 - **训练代码适配**（`acc-launch` / `acc-launch-bf16` / `acc-train-single` / `acc-prepare`）：多卡 DDP 训练 + 单卡训练 + 单卡推理三档场景都验证 `Accelerator.prepare` / `Accelerator.backward` 在 NPU 上跑通；
-- **分布式评估**（`acc-infer-multi` / `acc-gather-multi`）：DDP 双进程下 forward-only 推理 + `gather_for_metrics` 真的跨卡 `all_gather`（hccl 后端），而不是退回单进程 identity；
+- **分布式评估**（`acc-gather-multi`）：DDP 双进程下 `gather_for_metrics` 真的跨卡 `all_gather`（hccl 后端），而不是退回单进程 identity；
 - **大模型推理**（`acc-empty-weights`）：`init_empty_weights` 把大模型骨架以 meta 占位符方式创建，0 显存分配。
 
 DDP 训练与跨卡集体通讯都依赖至少 2 张 NPU；单卡 runner 上 `accelerate launch --num_processes 2` 会直接报「visible devices 不够」。
@@ -122,6 +122,7 @@ python -c "import accelerate; print('accelerate', accelerate.__version__)"
 accelerate xxx
 ```
 - xxx 表示最新的版本号
+
 <!--
 ```shell #test-setup
 uv pip uninstall accelerate -y
@@ -255,7 +256,7 @@ device=npu final_loss=xxx
 
 ### 单卡训练
 
-`accelerate launch` 不上场，直接 `Accelerator()` + 完整训练循环（forward + `accelerator.backward` + `optim.step`），验证单卡 NPU 上完整训练链路：
+ `Accelerator()` + 完整训练循环（forward + `accelerator.backward` + `optim.step`），验证单卡 NPU 上完整训练链路：
 
 ```shell #test id="acc-train-single"
 python -c "
@@ -286,17 +287,15 @@ print(f'device={accelerator.device.type} final_loss={loss.item():.4f}')
 "
 ```
 
-输出结果如下（与 `acc-launch` 同一行格式；loss 受随机种子影响，用 `fuzzy='xxx'` 兜底）：
+输出结果如下：
 
 ```shell #test-result id="acc-train-single" fuzzy='xxx'
 device=npu final_loss=xxx
 ```
 
-> 这是 `acc-launch` 的单卡对应——同一份训练逻辑，不走 `accelerate launch`、不依赖多卡，CI 单卡 runner 也能跑通完整 backward + optim.step 链路。和 `acc-prepare`（只跑 forward 不算 backward）形成互补。
-
 ### 独立 `Accelerator.prepare`（非分布式）
 
-`accelerate launch` 不上场，直接 `Accelerator()` + `accelerator.prepare(model)` 跑一次 forward，验证 Accelerate 在 NPU 上：
+`Accelerator()` + `accelerator.prepare(model)` 跑一次 forward，验证 Accelerate 在 NPU 上：
 
 1. **设备探测**：`Accelerator()` 自动识别 `torch_npu`、拿到 `device='npu:0'`；
 2. **NPU 放置**：`accelerator.prepare(model)` 在非 distributed 上下文只做 `model.to(self.device)`，权重真在 NPU 上分配；
@@ -326,17 +325,18 @@ device=npu
 shape=[1, 1]
 ```
 
-`accelerator.prepare(model)` 这一行是 Accelerate 的核心 abstraction——同一份脚本不写一行 `.cuda()` / `.npu()`，能自动适配 CPU / CUDA / NPU / XPU / MPS。分布式路径下的 `gather_for_metrics` 在下一节「分布式评估」验。
+`accelerator.prepare(model)` 这一行是 Accelerate 的核心 abstraction——同一份脚本不写一行 `.cuda()` / `.npu()`，能自动适配 CPU / CUDA / NPU / XPU / MPS。
 
 ### 启动 bf16 混合精度路径
 
-把上面的 `train_npu.py` 再跑一遍，但把 `--mixed_precision` 从 `no` 切到 `bf16`，验证 Accelerate 的 autocast 包装在 NPU 上不出错。脚本不动一行——Accelerate 自动包 `torch.autocast`（`<path>` 仍是上面的 `train_npu.py`）：
+把「写最小训练脚本」一节生成的脚本 `train_npu.py` 再跑一遍，但把 `--mixed_precision` 从 `no` 切到 `bf16`，验证 Accelerate 的 autocast 包装在 NPU 运行。：
 
 ```shell #test id="acc-launch-bf16" load="script_path>>path"
 ASCEND_RT_VISIBLE_DEVICES=0,1 accelerate launch --num_processes 2 --mixed_precision bf16 <path>
 ```
+>其中 `<path>` 是上面「写最小训练脚本」一节生成的脚本绝对路径（即 `${PWD}/train_npu.py`）
 
-输出结果如下（与 `acc-launch` 同一行格式；`final_loss` 因为 bf16 精度差异可能与 `acc-launch` 不完全一致，断言只断言「不崩 + 落点是 npu」）：
+输出结果如下：
 
 ```shell #test-result id="acc-launch-bf16" fuzzy='xxx'
 device=npu final_loss=xxx
@@ -344,54 +344,19 @@ device=npu final_loss=xxx
 
 ## 分布式评估
 
-把上游 [Quicktour](https://github.com/huggingface/accelerate/blob/main/docs/source/quicktour.md)「分布式评估」一节拆成两块：「分布式推理」先在 DDP 双进程里跑一次 forward-only 推理（不训练、不算 metric），下一节 `acc-gather-multi` 再加 `gather_for_metrics` 跨卡汇总。
+上游 [Quicktour](https://github.com/huggingface/accelerate/blob/main/docs/source/quicktour.md)「分布式评估」一节的 canonical 循环——先 `prepare(dataloader)`，再在循环里 `forward → gather_for_metrics → metric.add_batch`：
 
-### 分布式推理（仅 forward）
-
-`accelerate launch --num_processes 2` 拉起双进程，每个 rank 独立 forward 一个本地 batch——没有 loss、没有 backward、没有 `optim.step`。这是 inference 路径与训练路径（`acc-launch`）的关键分界：Accelerate 的 DDP 容器只走 `forward`，不触发梯度同步。
-
-注意 `accelerate launch` 只接受脚本文件路径、不支持 `python -c` 内联代码，所以先落盘再启动：
-
-```shell #test-setup store="infer_script_path"
-cat > infer_npu.py <<'PY'
-import torch
-from torch import nn
-from accelerate import Accelerator
-
-accelerator = Accelerator()
-model = nn.Linear(1, 1)
-prepared = accelerator.prepare(model)
-# Forward only — no loss, no backward, no optim.step
-x = torch.tensor([[0.5], [1.0], [-1.0]], device=accelerator.device)
-preds = prepared(x)
-# accelerator.print only emits on the main process, so the #test-result
-# below sees exactly one line regardless of --num_processes.
-accelerator.print(
-    f"world={accelerator.num_processes} "
-    f"device={preds.device.type} "
-    f"shape={list(preds.shape)}"
-)
-PY
-echo "${PWD}/infer_npu.py"
+```python
+validation_dataloader = accelerator.prepare(validation_dataloader)
+for inputs, targets in validation_dataloader:
+    predictions = model(inputs)
+    all_predictions, all_targets = accelerator.gather_for_metrics(
+        (predictions, targets)
+    )
+    metric.add_batch(all_predictions, all_targets)
 ```
 
-```shell #test id="acc-infer-multi" load="infer_script_path>>path"
-ASCEND_RT_VISIBLE_DEVICES=0,1 accelerate launch --num_processes 2 <path>
-```
-
-`<path>` 同样是上方 setup 块捕获的 `${PWD}/infer_npu.py` 绝对路径，由 runner 自动代入；手动跑时替换为实际路径。
-
-输出结果如下（两个 rank 各自 forward 本地 3 个样本，shape 仍是 `[3, 1]`，但 accelerator.print 只让主进程输出，所以 #test-result 只看到一行）：
-
-```shell #test-result id="acc-infer-multi"
-world=2 device=npu shape=[3, 1]
-```
-
-> inference 路径与训练路径（`acc-launch` / `acc-train-single`）的区别是：没有 `loss` / `backward` / `optim.step`。DDP 容器在 inference 时只做 `forward`，梯度同步那一步直接跳过。下一节 `acc-gather-multi` 在这个基础上加 `gather_for_metrics`，把各 rank 的结果汇总到主进程——这才是「分布式评估」的完整语义。
-
-### 跨卡 `gather_for_metrics`（DDP 双进程）
-
-在 `acc-infer-multi` 的基础上加 `gather_for_metrics`，验证它在 NPU 上真的跨卡做 `all_gather`（hccl 后端）而不是退回 identity：
+下面抽 `gather_for_metrics` 这一行用最小可执行断言验它在 NPU 上真的跨卡做 `all_gather`（hccl 后端）而不是退回单进程 identity：
 
 ```shell #test-setup store="gather_script_path"
 cat > gather_npu.py <<'PY'
@@ -424,7 +389,9 @@ device=npu
 gathered=[1, 2, 3, 1, 2, 3]
 ```
 
-> 这条才是真正「跨卡 collective 跑通」的可执行断言——单进程路径下 `gather_for_metrics` 文档化保证退化为 identity，要看 `all_gather` 必须 ≥2 张 NPU。多进程路径（`pad_across_processes` / 跨卡 `gather`）详见上游 [分布式评估](https://huggingface.co/docs/accelerate/basic_tutorials/evaluation) 教程。
+> 这是「跨卡 collective 跑通」的可执行断言——单进程路径下 `gather_for_metrics` 文档化保证退化为 identity，要看 `all_gather` 必须 ≥2 张 NPU。
+>
+> 边缘场景：长度不一致 → `pad_across_processes` 先 pad 再 gather；2D / 3D tensor 字典等复杂对象 → `use_gather_object=True`；数据集末尾样本会被 `DistributedSampler` 复制以补齐 `world_size` 倍数，`gather_for_metrics` 自动剔除重复。详见上游 [分布式评估](https://huggingface.co/docs/accelerate/basic_tutorials/evaluation) 教程。
 
 ## 大模型推理
 

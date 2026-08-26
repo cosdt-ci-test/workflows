@@ -55,11 +55,12 @@ jobs:
       # exact torch stack, and the doc's ``## 安装 vllm-ascend`` section
       # then layers vllm==0.23.0 --no-deps + triton-ascend==3.2.2 --no-deps
       # + vllm-ascend==0.23.0 --no-deps on top without torch interference.
-      # Index strategy for that vllm-ascend install: aliyun as primary
-      # --index-url (vllm / vllm-ascend live there) + cluster-internal
-      # nginx PyPI cache as --extra-index-url fallback (triton-ascend==3.2.2
-      # is a cluster-internal build; public mirrors max out at 3.2.1 on
-      # huaweicloud / 3.2.0 on aliyun / 3.2.0rc2 on pypi.org).
+      # Index strategy: triton-ascend==3.2.2 is a cluster-internal build
+      # not on any public mirror (aliyun 3.2.0 / huawei 3.2.1 / pypi 3.2.0rc2),
+      # so the doc splits the install into two commands — aliyun for the
+      # official vllm + vllm-ascend wheels, cluster-internal nginx cache
+      # for triton-ascend. Putting them in one --index-url command fails
+      # with "No matching distribution found".
       image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
       container_options: >-
         --volume=/data/ci-cache/modelscope/speculators:/root/.cache/modelscope

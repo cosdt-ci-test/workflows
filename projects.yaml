@@ -192,12 +192,3 @@ projects:
     dir: projects/colossalai
     workflows:
       quick_start: .github/workflows/colossalai-quick-start.yml
-  - name: lmcache
-    category: TODO
-    support_level: TODO
-    upstream_repo: LMCache/LMCache-Ascend
-    phase: A
-    runner: linux-aarch64-a2-1
-    dir: projects/lmcache
-    workflows:
-      quick_start: .github/workflows/lmcache-quick-start.yml

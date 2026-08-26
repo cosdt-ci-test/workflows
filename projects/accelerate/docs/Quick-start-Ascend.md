@@ -1,6 +1,6 @@
 # Quick Start (Ascend NPU)
 
-在双卡昇腾 NPU 上跑通 [Accelerate](https://github.com/huggingface/accelerate) 的两个核心能力：`accelerate launch` 启动入口，以及把一个最小训练脚本改造成 `Accelerator` 适配版。DDP 训练 (`acc-launch` / `acc-launch-bf16`) 与跨卡集体通讯 (`acc-gather-multi`) 都依赖至少 2 张 NPU；单卡 runner 上 `accelerate launch --num_processes 2` 会直接报「visible devices 不够」。
+在双卡昇腾 NPU 上跑通 [Accelerate](https://github.com/huggingface/accelerate) 的两个核心能力：`accelerate launch` 启动入口，以及把一个最小训练脚本改造成 `Accelerator` 适配版。
 
 ## 前置条件
 
@@ -47,9 +47,10 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 ```shell #test id="check-py"
 python --version
 ```
+
 输出结果如下：
 ```shell #test-result id="check-py" fuzzy='xxx'
-Python 3.xxx
+Python 3.12.xxx
 ```
 
 检查 torch / torch_npu 是否装好且 NPU 设备可用：
@@ -100,16 +101,37 @@ npu-smi info
 
 ## 安装 accelerate
 
+### 使用 uv 进行安装
+
+通过 PyPI 镜像直接装最新 release 的二进制 wheel：
+
+```shell #test id="acc-install-binary"
+uv pip install --index-url https://mirrors.aliyun.com/pypi/simple accelerate
+python -c "import accelerate; print('accelerate', accelerate.__version__)"
+```
+
+输出结果类似如下：
+
+```shell #test-result id="acc-install-binary" fuzzy='xxx'
+accelerate xxx
+```
+- xxx 表示最新的版本号
+<!--
+```shell #test-setup
+uv pip uninstall accelerate -y
+```
+-->
+
 ### 从源码安装
 
-<!-- 工作流注入的 UPSTREAM_REF（最新 release tag）通过这个隐藏的 #test-setup 捕获并注入到下方 install 命令中；markdown 渲染器会丢掉注释里全部内容，读者看不到这段代码，但 runner 仍然执行它并 store="upstream_ref" -->
+<!-- 工作流注入的 UPSTREAM_REF（最新 release tag）通过这个隐藏的 #test-setup 捕获并注入到下方 install 命令中-->
 <!--
 ```shell #test-setup store="upstream_ref"
 echo "${UPSTREAM_REF}"
 ```
 -->
 
-克隆上游仓库并 checkout 到工作流注入的最新 release tag，安装并且验证：
+克隆上游仓库并 checkout 到最新 release tag，安装并且验证：
 
 ```shell #test id="acc-install-source" load="upstream_ref>>ref"
 git clone --depth 1 --branch <ref> https://github.com/huggingface/accelerate.git
@@ -136,7 +158,7 @@ accelerate xxx
 ASCEND_RT_VISIBLE_DEVICES=0,1 accelerate env
 ```
 
-输出结果类似如下（`accelerate env` 的 stdout 起始段；开头会先打印一个空行，结尾的 `...` 覆盖 `Accelerate default config`——未生成默认配置时值为 `Not found`——以及后续字段）：
+输出结果类似如下：
 
 ```shell #test-result id="acc-env" fuzzy='xxx' fuzzy='...'
 ...
@@ -154,7 +176,7 @@ Copy-and-paste the text below in your GitHub issue
 ...
 ```
 
-其中 `PyTorch accelerator: NPU` 是 accelerate 探测到 `torch_npu` 后给出的标识（`accelerate/utils/environment.py` 里把 `is_npu_available()` 命中时赋值为 `"NPU"`）；`CANN version` 一行只有在 NPU 环境才会出现，CUDA / XPU 等环境会有 `GPU type` / `XPU type` 等行代替。如果 `PyTorch accelerator` 不是 `NPU`，多半是 `torch_npu` 没被 import 到——回到「基础软件」一节检查。
+其中 `PyTorch accelerator: NPU` 是 accelerate 探测到 `torch_npu` 后给出的标识；`CANN version` 一行只有在 NPU 环境才会出现。如果 `PyTorch accelerator` 不是 `NPU`，多半是 `torch_npu` 没被 import 到——回到「基础软件」一节检查。
 
 ### 空权重初始化（Big Model Inference）
 

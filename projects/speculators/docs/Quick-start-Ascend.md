@@ -132,7 +132,17 @@ modelscope=1.37.0
 # `/usr/local/python3.12.13`，跟 `python -c "import ..."` 用的 python 解析到的
 # site-packages 可能不是同一个——前者装好之后 `import triton_ascend` 会
 # ModuleNotFoundError，CI 实测踩过）。
-python -m pip install --index-url https://mirrors.aliyun.com/pypi/simple --no-deps 'vllm==0.23.0' 'triton-ascend==3.2.2' 'vllm-ascend==0.23.0'
+#
+# 索引策略：triton-ascend==3.2.2 是集群内部 build，公开 PyPI mirror 上
+# 不发布（aliyun 最高 3.2.0 / huawei 最高 3.2.1 / pypi.org 最高 3.2.0rc2）。
+# 所以把集群 nginx cache 加为 `--extra-index-url`：aliyun 作 primary 命中
+# vllm + vllm-ascend，集群 cache 作 fallback 命中 triton-ascend==3.2.2。
+# 本地读者跑这一行会卡在 triton-ascend（集群 cache 公网不可达）——见
+# 下面 note 段说明本地替代路径。
+python -m pip install \
+  --index-url https://mirrors.aliyun.com/pypi/simple \
+  --extra-index-url http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple \
+  --no-deps 'vllm==0.23.0' 'triton-ascend==3.2.2' 'vllm-ascend==0.23.0'
 python -c "import importlib.metadata; print(f'vllm={importlib.metadata.version(\"vllm\")}')"
 python -c "import importlib.metadata; print(f'vllm_ascend={importlib.metadata.version(\"vllm-ascend\")}')"
 python -c "import importlib.metadata; print(f'triton_ascend={importlib.metadata.version(\"triton-ascend\")}')"
@@ -151,6 +161,13 @@ triton_ascend=3.2.2
 > vllm-ascend / Triton Ascend 与上游 vLLM / Triton 同步发版（vllm-ascend v0.23.0 ↔ vLLM v0.23.0，Triton Ascend 3.2.2 ↔ Triton 3.2.x）；**别混装不兼容组合**——否则 vllm-ascend 启动时报 `vLLM version mismatch`，或 Triton kernel JIT 编译时找不到 NPU backend。
 >
 > 如果 vllm-ascend 0.23.0 还需要额外的 plugin helper（比如 ascend 私有 helpers、特定 transformers extras），第一次 `import vllm_ascend` 会报 ImportError；按 ImportError 加 pip install 即可，不会污染 torch 栈。
+>
+> **本地（非集群）读者**：`triton-ascend==3.2.2` 是集群内部 build，公开 PyPI mirror 不发布。公开源最高只有 `triton-ascend==3.2.1`（[华为云 ascend 源](https://repo.huaweicloud.com/ascend/repos/pypi)）。本地读这一段要把：
+> 1. 集群 cache 那条 `--extra-index-url` 删掉
+> 2. 加 `--extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi`
+> 3. 把 `triton-ascend==3.2.2` 改成 `triton-ascend==3.2.1`
+>
+> 代价是 vllm-ascend v0.23.0 配 triton-ascend 3.2.1（而非 3.2.2），组合未经 CI 实测；遇到 DFlash proposer 在 NPU 上 JIT 编译失败时，先把 triton-ascend 升到集群 wheel 对应的 3.2.x 再排查。
 
 ## 安装 Speculators
 

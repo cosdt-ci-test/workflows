@@ -241,8 +241,8 @@ python -c "from modelscope import snapshot_download; print(snapshot_download('Qw
 
 `speculators convert` 把本地 draft 目录 + verifier 目录读进来，按 DFlash 算法重映射权重、写入 `speculators_config`，输出到一个新目录。CLI 的 `--algorithm` 选项只接受 `eagle` / `eagle3` / `mtp` 三个值（见上游 `src/speculators/__main__.py:99` 的 `click.Choice(["eagle", "eagle3", "mtp"])`），DFlash 不在 CLI 白名单里——DFlash 只在 Python API `convert_model(algorithm="dflash", ...)` 里支持（见 `convert/entrypoints.py:32` 的 `Literal["eagle3", "mtp", "dflash"]`），所以本节走 Python API：
 
-```shell #test id="pipeline-step1-convert" load="draft_path>>draft_path" load="verifier_path>>verifier_path" store="dflash_path"
-python << 'PY' 2>&1 | grep -oE "Saved to: /root/dflash-qwen3-8b-converted" | head -1
+```shell #test-setup store="dflash_path" load="draft_path>>draft_path" load="verifier_path>>verifier_path"
+python << 'PY' 2>&1 | grep -- 'Saved to: /root/dflash-qwen3-8b-converted' >/dev/null
 from speculators.convert import convert_model
 
 convert_model(
@@ -252,16 +252,19 @@ convert_model(
     output_path="/root/dflash-qwen3-8b-converted",
 )
 PY
-ls -1 /root/dflash-qwen3-8b-converted/config.json /root/dflash-qwen3-8b-converted/model.safetensors
 echo "/root/dflash-qwen3-8b-converted"
 ```
 
-> 这里只 grep `Saved to:` 这一条 loguru 稳定输出（上游 `convert/dflash/converter.py` 的 `_save()` 调用 `logger.success(f"Saved to: {saved_path}")`，无 `validate` 分支依赖）并显式 `ls` 两个必要产物 + echo 路径做 `store="dflash_path"` 的输出值，避免 loguru 时间戳前缀与字母序陷阱。
+> 这里只 `grep -q 'Saved to:'` 确认 convert 成功（上游 `convert/dflash/converter.py` 的 `_save()` 调用 `logger.success(f"Saved to: {saved_path}")`，无 `validate` 分支依赖）；`grep` 的 stdout 重定向到 `/dev/null` 丢弃，仅保留 `echo` 的纯路径行作为 `store="dflash_path"` 的捕获值（避免多行污染下游 `<dflash_path>` 替换）。
+
+```shell #test id="pipeline-step1-convert" load="dflash_path>>dflash_path"
+ls -1 "$dflash_path"/config.json "$dflash_path"/model.safetensors
+echo "$dflash_path"
+```
 
 输出结果如下：
 
 ```shell #test-result id="pipeline-step1-convert"
-Saved to: /root/dflash-qwen3-8b-converted
 /root/dflash-qwen3-8b-converted/config.json
 /root/dflash-qwen3-8b-converted/model.safetensors
 /root/dflash-qwen3-8b-converted
@@ -271,7 +274,7 @@ Saved to: /root/dflash-qwen3-8b-converted
 
 用 vllm-ascend 的 `extract_hidden_states` 离线 API（`vllm.LLM()` + `kv_transfer_config` 配 `ExampleHiddenStatesConnector`，路径与 vllm-ascend `tests/e2e/pull_request/one_card/spec_decode/test_extract_hidden_states.py` 一致）让 verifier 在指定层的 forward pass 输出 hidden states，落到 `/root/dflash-train-data/`：
 
-```shell #test id="pipeline-step2-extract" load="verifier_path>>verifier_path" store="hidden_states_path"
+```shell #test-setup store="hidden_states_path" load="verifier_path>>verifier_path"
 DATA_DIR=/root/dflash-train-data
 rm -rf "$DATA_DIR"
 mkdir -p "$DATA_DIR"
@@ -313,10 +316,14 @@ outputs = llm.generate(prompts, SamplingParams(temperature=0, max_tokens=1))
 # 第一个输出的 hidden_states_path 即可代表整批（kv_connector 对每个 prompt 写一个 .safetensors）
 print(outputs[0].kv_transfer_params["hidden_states_path"])
 PY
-ls -1 /root/dflash-train-data/*.safetensors 2>/dev/null | wc -l
 ```
 
-> `extract_hidden_states` 是 vllm-ascend 的特殊 spec_decode mode：不真做 decoding、每个请求产出 1 token + 把 hidden states 写到 `shared_storage_path`。`outputs[0].kv_transfer_params["hidden_states_path"]` 是 vllm-ascend v0.23.0 引入的 safetensors 单文件格式（更早版本走 `ExampleHiddenStatesConnector.load_hidden_states`，文件路径不可见但 shape 一致）。
+> `extract_hidden_states` 是 vllm-ascend 的特殊 spec_decode mode：不真做 decoding、每个请求产出 1 token + 把 hidden states 写到 `shared_storage_path`。`outputs[0].kv_transfer_params["hidden_states_path"]` 是 vllm-ascend v0.23.0 引入的 safetensors 单文件格式（更早版本走 `ExampleHiddenStatesConnector.load_hidden_states`，文件路径不可见但 shape 一致）。`tail -1` 吃掉 vllm.LLM() 的启动 banner，只留最后一行（hidden_states 路径字符串）作为 `store="hidden_states_path"` 的捕获值。
+
+```shell #test id="pipeline-step2-extract" load="hidden_states_path>>hidden_states_path"
+echo "$hidden_states_path"
+ls -1 /root/dflash-train-data/*.safetensors 2>/dev/null | wc -l
+```
 
 输出结果如下：
 
@@ -329,7 +336,7 @@ xxx
 
 用上游 `scripts/train.py` + 单卡 `torchrun --nproc_per_node=1` 训 1 epoch × 10 sample（**smoke 验证管线通，不指望 loss 真下降**）：
 
-```shell #test id="pipeline-step3-train" load="hidden_states_path>>data_path" load="verifier_path>>verifier_path" store="checkpoint_path"
+```shell #test-setup store="checkpoint_path" load="hidden_states_path>>data_path" load="verifier_path>>verifier_path"
 CHECKPOINT_DIR=/root/dflash-trained
 rm -rf "$CHECKPOINT_DIR"
 mkdir -p "$CHECKPOINT_DIR"
@@ -358,10 +365,14 @@ torchrun --standalone --nproc_per_node=1 scripts/train.py \
   --max-anchors 3072 \
   --num-layers 5 \
   --target-layer-ids 2 18 34 \
-  --on-missing generate --on-generate delete
+  --on-missing generate --on-generate delete >/dev/null 2>&1
 
 echo "$CHECKPOINT_DIR"
-ls -1 "$CHECKPOINT_DIR"
+```
+
+```shell #test id="pipeline-step3-train" load="checkpoint_path>>checkpoint_path"
+echo "$checkpoint_path"
+ls -1 "$checkpoint_path"
 ```
 
 输出结果如下：

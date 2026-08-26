@@ -119,7 +119,7 @@ transformers=xxx peft=xxx modelscope=1.37.0
 
 ## 安装 TRL
 
-### 使用 pip 进行安装
+### 使用 uv 进行安装
 
 ```shell #test id="trl-install-binary"
 uv pip install --index-url https://mirrors.aliyun.com/pypi/simple trl

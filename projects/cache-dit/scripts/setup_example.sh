@@ -22,7 +22,7 @@ fi
 # Install cache-dit and dependencies
 echo "Installing cache-dit and dependencies..."
 pip3 install -U cache-dit
-pip3 install --no-deps torchvision==0.16.0
+pip3 install --no-deps torchvision==0.23.0
 pip3 install einops sentencepiece accelerate
 
 # Install diffusers for parallel support

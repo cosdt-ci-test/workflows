@@ -204,7 +204,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             check=True,
         )
         subprocess.run(
-            ['python', '-m', 'pip', 'install', '--no-deps', 'torchvision==0.16.0'],
+            ['python', '-m', 'pip', 'install', '--no-deps', 'torchvision==0.23.0'],
             check=True,
         )
         subprocess.run(

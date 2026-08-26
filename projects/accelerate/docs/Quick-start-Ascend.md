@@ -1,6 +1,12 @@
-# Quick Start (Ascend NPU)
+# Quick Start（Ascend NPU）
 
-在双卡昇腾 NPU 上跑通 [Accelerate](https://github.com/huggingface/accelerate) 的两个核心能力：`accelerate launch` 启动入口，以及把一个最小训练脚本改造成 `Accelerator` 适配版。DDP 训练 (`acc-launch` / `acc-launch-bf16`) 与跨卡集体通讯 (`acc-gather-multi`) 都依赖至少 2 张 NPU；单卡 runner 上 `accelerate launch --num_processes 2` 会直接报「visible devices 不够」。
+在双卡昇腾 NPU 上跑通 [Accelerate](https://github.com/huggingface/accelerate) 的三大核心能力：
+
+- **训练代码适配**（`acc-launch` / `acc-launch-bf16` / `acc-train-single` / `acc-prepare`）：多卡 DDP 训练（fp32 + bf16）+ 单卡训练 + 单卡推理三档场景都过 `Accelerator.prepare`，训练三档额外走 `Accelerator.backward`；
+- **分布式评估**（`acc-gather-multi`）：DDP 双进程下 `gather_for_metrics` 真的跨卡集合通信（hccl 后端），而不是退回单进程 identity；
+- **大模型推理**（`acc-empty-weights` / `acc-dispatch`）：`init_empty_weights` 把大模型骨架以 meta 占位符方式创建（0 显存），`load_checkpoint_and_dispatch` 真实走一遍权重跨卡分片（不依赖 hub，自建 toy checkpoint）；
+
+DDP 训练与跨卡集合通信都需要至少 2 张 NPU；单卡 runner 上 `accelerate launch --num_processes 2` 会直接报「visible devices 不够」。
 
 ## 前置条件
 
@@ -47,9 +53,10 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 ```shell #test id="check-py"
 python --version
 ```
+
 输出结果如下：
 ```shell #test-result id="check-py" fuzzy='xxx'
-Python 3.xxx
+Python 3.12.xxx
 ```
 
 检查 torch / torch_npu 是否装好且 NPU 设备可用：
@@ -100,16 +107,38 @@ npu-smi info
 
 ## 安装 accelerate
 
+### 使用 uv 进行安装
+
+通过 PyPI 镜像直接装最新 release 的二进制 wheel：
+
+```shell #test id="acc-install-binary"
+uv pip install --index-url https://mirrors.aliyun.com/pypi/simple accelerate
+python -c "import accelerate; print('accelerate', accelerate.__version__)"
+```
+
+输出结果类似如下：
+
+```shell #test-result id="acc-install-binary" fuzzy='xxx'
+accelerate xxx
+```
+- xxx 表示最新的版本号
+
+<!--
+```shell #test-setup
+uv pip uninstall accelerate -y
+```
+-->
+
 ### 从源码安装
 
-<!-- 工作流注入的 UPSTREAM_REF（最新 release tag）通过这个隐藏的 #test-setup 捕获并注入到下方 install 命令中；markdown 渲染器会丢掉注释里全部内容，读者看不到这段代码，但 runner 仍然执行它并 store="upstream_ref" -->
+<!-- 工作流注入的 UPSTREAM_REF（最新 release tag）通过这个隐藏的 #test-setup 捕获并注入到下方 install 命令中-->
 <!--
 ```shell #test-setup store="upstream_ref"
 echo "${UPSTREAM_REF}"
 ```
 -->
 
-克隆上游仓库并 checkout 到工作流注入的最新 release tag，安装并且验证：
+克隆上游仓库并 checkout 到最新 release tag，安装并且验证：
 
 ```shell #test id="acc-install-source" load="upstream_ref>>ref"
 git clone --depth 1 --branch <ref> https://github.com/huggingface/accelerate.git
@@ -136,7 +165,7 @@ accelerate xxx
 ASCEND_RT_VISIBLE_DEVICES=0,1 accelerate env
 ```
 
-输出结果类似如下（`accelerate env` 的 stdout 起始段；开头会先打印一个空行，结尾的 `...` 覆盖 `Accelerate default config`——未生成默认配置时值为 `Not found`——以及后续字段）：
+输出结果类似如下：
 
 ```shell #test-result id="acc-env" fuzzy='xxx' fuzzy='...'
 ...
@@ -154,49 +183,13 @@ Copy-and-paste the text below in your GitHub issue
 ...
 ```
 
-其中 `PyTorch accelerator: NPU` 是 accelerate 探测到 `torch_npu` 后给出的标识（`accelerate/utils/environment.py` 里把 `is_npu_available()` 命中时赋值为 `"NPU"`）；`CANN version` 一行只有在 NPU 环境才会出现，CUDA / XPU 等环境会有 `GPU type` / `XPU type` 等行代替。如果 `PyTorch accelerator` 不是 `NPU`，多半是 `torch_npu` 没被 import 到——回到「基础软件」一节检查。
+其中 `PyTorch accelerator: NPU` 是 accelerate 探测到 `torch_npu` 后给出的标识；`CANN version` 一行只有在 NPU 环境才会出现。如果 `PyTorch accelerator` 不是 `NPU`，多半是 `torch_npu` 没被 import 到——回到「基础软件」一节检查。
 
-### 空权重初始化（Big Model Inference）
+## 训练代码适配
 
-把上游 [Quicktour](https://github.com/huggingface/accelerate/blob/main/docs/source/quicktour.md)「Big Model Inference」一节的 `init_empty_weights` 抽出来用最小模型跑一遍。配置直接 inline 写死，避免再向 HF Hub 拉一个 `from_pretrained` 的 config：
+下面把上游 [Quicktour](https://github.com/huggingface/accelerate/blob/main/docs/source/quicktour.md) 里「训练代码适配」一节的训练循环压到最小，目标是验证 `Accelerator.prepare` / `Accelerator.backward` 在 NPU 上跑通。模型只用一个小线性层，但走的是 Accelerate 的全套适配路径。
 
-```shell #test id="acc-empty-weights"
-python -c "
-from transformers import LlamaConfig, LlamaForCausalLM
-from accelerate import init_empty_weights
-
-# Inline config: 1 层 / 1 head / hidden=64 —— 没有 hub 网络依赖。
-config = LlamaConfig(
-    vocab_size=32,
-    hidden_size=64,
-    intermediate_size=64,
-    num_hidden_layers=1,
-    num_attention_heads=1,
-    max_position_embeddings=64,
-)
-with init_empty_weights():
-    model = LlamaForCausalLM(config)
-n_params = sum(p.numel() for p in model.state_dict().values())
-first_dev = next(model.parameters()).device
-print(f'empty_model_params={n_params}')
-print(f'device={first_dev}')
-"
-```
-
-输出结果如下（参数数固定、device 固定为 meta —— 用 `fuzzy='xxx'` 让版本无关的字段差异不会挂）：
-
-```shell #test-result id="acc-empty-weights" fuzzy='xxx'
-empty_model_params=xxx
-device=meta
-```
-
-`device=meta` 是 `init_empty_weights` 的合同行为：参数不在真实设备上，而是 PyTorch 的 meta 占位符，所以这一步**不占 NPU 显存**，CI 上跑稳。`load_checkpoint_and_dispatch` 这一半需要真权重（Mixtral-8x7B 之类 ~90 GB），CI 不试——文档正文里链接到上游教程。
-
-## 使用样例：最小 `Accelerator` 训练脚本
-
-下面把上游 [Quicktour](https://github.com/huggingface/accelerate/blob/main/docs/source/quicktour.md) 里「Adapt training code」一节的训练循环压到最小，目标是验证 `Accelerator.prepare` / `Accelerator.backward` 在 NPU 上跑通。模型只用一个小线性层，但走的是 Accelerate 的全套适配路径。
-
-### Step 1：写最小训练脚本
+### 写最小训练脚本
 
 保存为 `train_npu.py`：
 
@@ -247,13 +240,13 @@ PY
 echo "${PWD}/train_npu.py"
 ```
 
-### Step 2：用 `accelerate launch` 启动
+### 用 `accelerate launch` 启动
 
 ```shell #test id="acc-launch" load="script_path>>path"
 ASCEND_RT_VISIBLE_DEVICES=0,1 accelerate launch --num_processes 2 --mixed_precision no <path>
 ```
 
-其中 `<path>` 是 Step 1 生成的脚本绝对路径（即 `${PWD}/train_npu.py`）——CI runner 会在执行时自动把 Step 1 捕获的路径代入；手动照着跑时把它替换为你机器上的实际路径即可。
+其中 `<path>` 是上面「写最小训练脚本」一节生成的脚本绝对路径（即 `${PWD}/train_npu.py`）
 
 输出结果类似：
 
@@ -261,11 +254,48 @@ ASCEND_RT_VISIBLE_DEVICES=0,1 accelerate launch --num_processes 2 --mixed_precis
 device=npu final_loss=xxx
 ```
 
-> `--num_processes 2 --mixed_precision no` 把 Accelerate 锁到「双卡 DDP、不走 AMP」模式——`Accelerator.prepare(model)` 自动包一层 `DistributedDataParallel`，每张卡拿 64 个样本的子集跑 SGD；`accelerator.device.type` 在两个 rank 上都是 `npu`。多卡请参考上游 [Launch distributed code](https://huggingface.co/docs/accelerate/basic_tutorials/launch) 教程，把 `num_processes` / `num_machines` / `gpu_ids` 等参数填对。
+### 单卡训练
 
-### Standalone `Accelerator.prepare`（非 distributed）
+ `Accelerator()` + 完整训练循环（forward + `accelerator.backward` + `optim.step`），验证单卡 NPU 上完整训练链路：
 
-`accelerate launch` 不上场，直接 `Accelerator()` + `accelerator.prepare(model)` 跑一次 forward，验证 Accelerate 在 NPU 上：
+```shell #test id="acc-train-single"
+python -c "
+import torch
+from torch import nn
+from torch.utils.data import DataLoader, TensorDataset
+from accelerate import Accelerator
+
+x = torch.linspace(-1.0, 1.0, 64).unsqueeze(1)
+y = 2 * x + 1 + 0.05 * torch.randn_like(x)
+ds = TensorDataset(x, y)
+loader = DataLoader(ds, batch_size=8, shuffle=True)
+model = nn.Linear(1, 1)
+optim = torch.optim.SGD(model.parameters(), lr=0.1)
+
+accelerator = Accelerator()
+model, optim, loader = accelerator.prepare(model, optim, loader)
+loss_fn = nn.MSELoss()
+for step, (xb, yb) in enumerate(loader):
+    preds = model(xb)
+    loss = loss_fn(preds, yb)
+    accelerator.backward(loss)
+    optim.step()
+    optim.zero_grad()
+    if step == 2:
+        break
+print(f'device={accelerator.device.type} final_loss={loss.item():.4f}')
+"
+```
+
+输出结果如下：
+
+```shell #test-result id="acc-train-single" fuzzy='xxx'
+device=npu final_loss=xxx
+```
+
+### 独立 `Accelerator.prepare`
+
+`Accelerator()` + `accelerator.prepare(model)` 跑一次 forward，验证 Accelerate 在 NPU 上：
 
 1. **设备探测**：`Accelerator()` 自动识别 `torch_npu`、拿到 `device='npu:0'`；
 2. **NPU 放置**：`accelerator.prepare(model)` 在非 distributed 上下文只做 `model.to(self.device)`，权重真在 NPU 上分配；
@@ -295,11 +325,38 @@ device=npu
 shape=[1, 1]
 ```
 
-`accelerator.prepare(model)` 这一行是 Accelerate 的核心 abstraction——同一份脚本不写一行 `.cuda()` / `.npu()`，能自动适配 CPU / CUDA / NPU / XPU / MPS。DDP 训练在下一节 `acc-launch` 验，跨卡集体通讯在 `acc-gather-multi` 验。
+`accelerator.prepare(model)` 这一行是 Accelerate 的核心 abstraction——同一份脚本不写一行 `.cuda()` / `.npu()`，能自动适配 CPU / CUDA / NPU / XPU / MPS。
 
-### 跨卡 `gather_for_metrics`（DDP 双进程）
+### 启动 bf16 混合精度路径
 
-把 `gather_for_metrics` 放进 `accelerate launch` 拉起的双进程里跑，验证它在 NPU 上真的跨卡做 `all_gather`（hccl 后端）而不是退回 identity。注意 `accelerate launch` 只接受脚本文件路径、不支持 `python -c` 内联代码（它把第一个参数当作脚本去执行），所以先落盘再启动：
+把「写最小训练脚本」一节生成的脚本 `train_npu.py` 再跑一遍，但把 `--mixed_precision` 从 `no` 切到 `bf16`，验证 Accelerate 的 autocast 包装在 NPU 运行。：
+
+```shell #test id="acc-launch-bf16" load="script_path>>path"
+ASCEND_RT_VISIBLE_DEVICES=0,1 accelerate launch --num_processes 2 --mixed_precision bf16 <path>
+```
+>其中 `<path>` 是上面「写最小训练脚本」一节生成的脚本绝对路径（即 `${PWD}/train_npu.py`）
+
+输出结果如下：
+
+```shell #test-result id="acc-launch-bf16" fuzzy='xxx'
+device=npu final_loss=xxx
+```
+
+## 分布式评估
+
+分布式评估 = 多张 NPU 协同算一个验证集上的指标。`Accelerator()` 起 DDP 后，每个 rank 只看到数据集的 `1/world_size` 子集——必须把各 rank 算出的预测 / 标签汇总到主进程，再算最终 metric；否则算出来的只是「rank 0 看到的 1/N 数据」上的 metric，不是全量数据上的。
+
+```python
+validation_dataloader = accelerator.prepare(validation_dataloader)  # DDP 自动按 rank 切数据
+for inputs, targets in validation_dataloader:                       # 每张卡独立看 1/world_size 子集
+    predictions = model(inputs)                                       # 每张卡独立 forward
+    all_predictions, all_targets = accelerator.gather_for_metrics(   # 跨卡 all_gather 汇总到主进程
+        (predictions, targets)
+    )
+    metric.add_batch(all_predictions, all_targets)                    # 主进程算 metric（accuracy / F1 / ...）
+```
+
+下面抽 `gather_for_metrics` 这一行用最小可执行断言验它在 NPU 上真的跨卡做 `all_gather`（hccl 后端）：
 
 ```shell #test-setup store="gather_script_path"
 cat > gather_npu.py <<'PY'
@@ -322,9 +379,9 @@ echo "${PWD}/gather_npu.py"
 ASCEND_RT_VISIBLE_DEVICES=0,1 accelerate launch --num_processes 2 <path>
 ```
 
-`<path>` 同样是上方 setup 块捕获的 `${PWD}/gather_npu.py` 绝对路径，由 runner 自动代入；手动跑时替换为实际路径。
+>其中 `<path>` 是`echo "${PWD}/gather_npu.py"` 的输出
 
-输出结果如下（两个 rank 都喂 `[1, 2, 3]`，all_gather 沿 dim=0 串成 `[1, 2, 3, 1, 2, 3]`，长度 6 = `world * 3`）：
+输出结果如下：
 
 ```shell #test-result id="acc-gather-multi" fuzzy='...'
 world=2
@@ -332,29 +389,119 @@ device=npu
 gathered=[1, 2, 3, 1, 2, 3]
 ```
 
-> 这条才是真正「跨卡 collective 跑通」的可执行断言——单进程路径下 `gather_for_metrics` 文档化保证退化为 identity，要看 `all_gather` 必须 ≥2 张 NPU。多进程路径（`pad_across_processes` / 跨卡 `gather`）详见上游 [Distributed evaluation](https://huggingface.co/docs/accelerate/basic_tutorials/evaluation) 教程。
+## 大模型推理
 
-### 启动 bf16 混合精度路径
+Accelerate 的大模型推理分两半：先用 [`init_empty_weights`](https://huggingface.co/docs/accelerate/main/en/usage_guides/big_modeling#initializing-an-empty-model) 在 `meta` device 上建空骨架（参数都是 meta 占位符，0 显存），再用 [`load_checkpoint_and_dispatch`](https://huggingface.co/docs/accelerate/main/en/usage_guides/big_modeling#sharding-checkpoints) 把分片权重塞进多张设备。本节两半都覆盖——meta 骨架用 1 层 toy config 验证 0 显存，dispatch 用 20 层 toy checkpoint + 显式 `device_map` 验证权重真分到两张卡上。真实场景（Mixtral-8x7B ~90 GB）跳到上游 [Big model inference](https://huggingface.co/docs/accelerate/concept_guides/big_model_inference) 教程。
 
-把 Step 1 的 `train_npu.py` 再跑一遍，但把 `--mixed_precision` 从 `no` 切到 `bf16`，验证 Accelerate 的 autocast 包装在 NPU 上不出错。脚本不动一行——Accelerate 自动包 `torch.autocast`（`<path>` 仍是 Step 1 的 `train_npu.py`）：
+### init_empty_weights
 
-```shell #test id="acc-launch-bf16" load="script_path>>path"
-ASCEND_RT_VISIBLE_DEVICES=0,1 accelerate launch --num_processes 2 --mixed_precision bf16 <path>
+```shell #test id="acc-empty-weights"
+python -c "
+from transformers import LlamaConfig, LlamaForCausalLM
+from accelerate import init_empty_weights
+
+# Inline config: 1 层 / 1 head / hidden=64 —— 没有 hub 网络依赖。
+config = LlamaConfig(
+    vocab_size=32,
+    hidden_size=64,
+    intermediate_size=64,
+    num_hidden_layers=1,
+    num_attention_heads=1,
+    max_position_embeddings=64,
+)
+with init_empty_weights():
+    model = LlamaForCausalLM(config)
+n_params = sum(p.numel() for p in model.state_dict().values())
+first_dev = next(model.parameters()).device
+print(f'empty_model_params={n_params}')
+print(f'device={first_dev}')
+"
 ```
 
-输出结果如下（与 `acc-launch` 同一行格式；`final_loss` 因为 bf16 精度差异可能与 `acc-launch` 不完全一致，断言只断言「不崩 + 落点是 npu」）：
+输出结果如下（参数数固定、device 固定为 meta —— 用 `fuzzy='xxx'` 让版本无关的字段差异不会挂）：
 
-```shell #test-result id="acc-launch-bf16" fuzzy='xxx'
-device=npu final_loss=xxx
+```shell #test-result id="acc-empty-weights" fuzzy='xxx'
+empty_model_params=xxx
+device=meta
 ```
 
-### Step 3：清理（可选）
+`device=meta` 是 `init_empty_weights` 的合同行为：参数不在真实设备上，而是 PyTorch 的 meta 占位符，所以这一步**不占 NPU 显存**，CI 上跑稳。
 
-玩具脚本 `train_npu.py` 是当前目录下的临时文件——CI 容器是 ephemeral 的，每次跑都是全新环境，不需要清理；如果你是在本地照着文档手动跑，结束时 `rm -f train_npu.py` 即可。
+### load_checkpoint_and_dispatch
 
-## 小贴士
+在 `init_empty_weights` 建好的空骨架上跑 `load_checkpoint_and_dispatch`，验证 Accelerate 在 NPU 上真的把权重分到不同卡——前 10 层放 `npu:0`、后 10 层放 `npu:1`。CI 上不依赖 HF Hub / ModelScope 下载，自建 toy checkpoint：
 
-- 如果你习惯 `torchrun`，Accelerate 也支持 `accelerate launch --use_torchrun` 走 PyTorch 原生弹性启动器。
-- 在多卡机器上想验证 DDP 路径，把 `--num_processes` 调到 `torch.npu.device_count()`，脚本无需改一行——`Accelerator` 会自动包一层分布式容器。
-- 需要 bf16 时把 `--mixed_precision bf16` 加上，并保证 `torch` / `torch_npu` 在昇腾侧支持 bf16 路径（参考 [NPU 最佳实践文档](https://github.com/modelscope/ms-swift/blob/main/docs/source/BestPractices/NPU-support.md)）。
-- 如果只想做单机推理（不训练），`Accelerator.prepare` 同样能用：`model = accelerator.prepare(model)` 会把模型搬到 NPU。
+```shell #test-setup store="dispatch_ckpt"
+python -c "
+import os, torch, gc
+from transformers import LlamaConfig, LlamaForCausalLM
+from accelerate import init_empty_weights
+
+# 20 层 / hidden=512 ≈ 80M 参数 bf16，~160 MB
+config = LlamaConfig(
+    vocab_size=32000, hidden_size=512, intermediate_size=1024,
+    num_hidden_layers=20, num_attention_heads=8, max_position_embeddings=64,
+)
+with init_empty_weights():
+    model = LlamaForCausalLM(config)
+# save_pretrained 需要真实 tensor，先 to_empty 到 CPU + 填随机权重
+model.to_empty(device='cpu')
+with torch.no_grad():
+    for p in model.parameters():
+        p.data = torch.randn(p.shape, device='cpu', dtype=p.dtype) * 0.02
+os.makedirs('/tmp/fake-llama-dispatch', exist_ok=True)
+model.save_pretrained('/tmp/fake-llama-dispatch', safe_serialization=True)
+del model
+gc.collect()
+print('/tmp/fake-llama-dispatch')
+"
+```
+
+```shell #test id="acc-dispatch" load="dispatch_ckpt>>ckpt"
+python -c "
+import torch
+from transformers import LlamaConfig, LlamaForCausalLM
+from accelerate import init_empty_weights, load_checkpoint_and_dispatch
+
+config = LlamaConfig(
+    vocab_size=32000, hidden_size=512, intermediate_size=1024,
+    num_hidden_layers=20, num_attention_heads=8, max_position_embeddings=64,
+)
+# 显式 device_map：前 10 层 + embed 在 npu:0，后 10 层 + norm + lm_head 在 npu:1
+device_map = {'model.embed_tokens': 'npu:0'}
+device_map.update({f'model.layers.{i}': 'npu:0' for i in range(10)})
+device_map.update({f'model.layers.{i}': 'npu:1' for i in range(10, 20)})
+device_map.update({'model.norm': 'npu:1', 'lm_head': 'npu:1'})
+
+with init_empty_weights():
+    skeleton = LlamaForCausalLM(config)
+loaded = load_checkpoint_and_dispatch(
+    skeleton,
+    checkpoint='<ckpt>',
+    device_map=device_map,
+    no_split_module_classes=['LlamaDecoderLayer'],
+)
+
+# 验证：前 / 后层落在不同卡
+dev_first = loaded.model.layers[0].self_attn.q_proj.weight.device
+dev_last = loaded.model.layers[-1].self_attn.q_proj.weight.device
+
+# 跑一次 forward：dispatch hook 自动跨卡转 tensor
+x = torch.tensor([[1, 2, 3]], device=loaded.device)
+out = loaded(input_ids=x).logits
+
+print(f'first_layer_device={dev_first}')
+print(f'last_layer_device={dev_last}')
+print(f'out_device={out.device.type}')
+print(f'out_shape={list(out.shape)}')
+"
+```
+
+输出结果如下：
+
+```shell #test-result id="acc-dispatch"
+first_layer_device=npu:0
+last_layer_device=npu:1
+out_device=npu
+out_shape=[1, 3, 32000]
+```

@@ -2,8 +2,8 @@
 
 在双卡昇腾 NPU 上跑通 [Accelerate](https://github.com/huggingface/accelerate) 的三大核心能力：
 
-- **Adapt training code**（`acc-launch` / `acc-launch-bf16` / `acc-prepare`）：最小训练脚本改造为 `Accelerator` 适配版，验证 `Accelerator.prepare` / `Accelerator.backward` 在 NPU 上跑通；
-- **Distributed evaluation**（`acc-gather-multi`）：DDP 双进程下 `gather_for_metrics` 真的跨卡 `all_gather`（hccl 后端），而不是退回单进程 identity；
+- **Adapt training code**（`acc-launch` / `acc-launch-bf16` / `acc-train-single` / `acc-prepare`）：多卡 DDP 训练 + 单卡训练 + 单卡推理三档场景都验证 `Accelerator.prepare` / `Accelerator.backward` 在 NPU 上跑通；
+- **Distributed evaluation**（`acc-infer-multi` / `acc-gather-multi`）：DDP 双进程下 forward-only 推理 + `gather_for_metrics` 真的跨卡 `all_gather`（hccl 后端），而不是退回单进程 identity；
 - **Big Model Inference**（`acc-empty-weights`）：`init_empty_weights` 把大模型骨架以 meta 占位符方式创建，0 显存分配。
 
 DDP 训练与跨卡集体通讯都依赖至少 2 张 NPU；单卡 runner 上 `accelerate launch --num_processes 2` 会直接报「visible devices 不够」。
@@ -255,6 +255,47 @@ device=npu final_loss=xxx
 
 > `--num_processes 2 --mixed_precision no` 把 Accelerate 锁到「双卡 DDP、不走 AMP」模式——`Accelerator.prepare(model)` 自动包一层 `DistributedDataParallel`，每张卡拿 64 个样本的子集跑 SGD；`accelerator.device.type` 在两个 rank 上都是 `npu`。多卡请参考上游 [Launch distributed code](https://huggingface.co/docs/accelerate/basic_tutorials/launch) 教程，把 `num_processes` / `num_machines` / `gpu_ids` 等参数填对。
 
+### 单卡训练
+
+`accelerate launch` 不上场，直接 `Accelerator()` + 完整训练循环（forward + `accelerator.backward` + `optim.step`），验证单卡 NPU 上完整训练链路：
+
+```shell #test id="acc-train-single"
+python -c "
+import torch
+from torch import nn
+from torch.utils.data import DataLoader, TensorDataset
+from accelerate import Accelerator
+
+x = torch.linspace(-1.0, 1.0, 64).unsqueeze(1)
+y = 2 * x + 1 + 0.05 * torch.randn_like(x)
+ds = TensorDataset(x, y)
+loader = DataLoader(ds, batch_size=8, shuffle=True)
+model = nn.Linear(1, 1)
+optim = torch.optim.SGD(model.parameters(), lr=0.1)
+
+accelerator = Accelerator()
+model, optim, loader = accelerator.prepare(model, optim, loader)
+loss_fn = nn.MSELoss()
+for step, (xb, yb) in enumerate(loader):
+    preds = model(xb)
+    loss = loss_fn(preds, yb)
+    accelerator.backward(loss)
+    optim.step()
+    optim.zero_grad()
+    if step == 2:
+        break
+print(f'device={accelerator.device.type} final_loss={loss.item():.4f}')
+"
+```
+
+输出结果如下（与 `acc-launch` 同一行格式；loss 受随机种子影响，用 `fuzzy='xxx'` 兜底）：
+
+```shell #test-result id="acc-train-single" fuzzy='xxx'
+device=npu final_loss=xxx
+```
+
+> 这是 `acc-launch` 的单卡对应——同一份训练逻辑，不走 `accelerate launch`、不依赖多卡，CI 单卡 runner 也能跑通完整 backward + optim.step 链路。和 `acc-prepare`（只跑 forward 不算 backward）形成互补。
+
 ### Standalone `Accelerator.prepare`（非 distributed）
 
 `accelerate launch` 不上场，直接 `Accelerator()` + `accelerator.prepare(model)` 跑一次 forward，验证 Accelerate 在 NPU 上：
@@ -303,13 +344,56 @@ ASCEND_RT_VISIBLE_DEVICES=0,1 accelerate launch --num_processes 2 --mixed_precis
 device=npu final_loss=xxx
 ```
 
-### Step 3：清理（可选）
-
-玩具脚本 `train_npu.py` 是当前目录下的临时文件——CI 容器是 ephemeral 的，每次跑都是全新环境，不需要清理；如果你是在本地照着文档手动跑，结束时 `rm -f train_npu.py` 即可。
-
 ## Distributed evaluation
 
-把上游 [Quicktour](https://github.com/huggingface/accelerate/blob/main/docs/source/quicktour.md)「Distributed evaluation」一节的 `gather_for_metrics` 抽出来用最小示例跑一遍。在 DDP 双进程里验它在 NPU 上真的跨卡做 `all_gather`（hccl 后端），而不是退回单进程 identity。注意 `accelerate launch` 只接受脚本文件路径、不支持 `python -c` 内联代码（它把第一个参数当作脚本去执行），所以先落盘再启动：
+把上游 [Quicktour](https://github.com/huggingface/accelerate/blob/main/docs/source/quicktour.md)「Distributed evaluation」一节拆成两块：「Distributed inference」先在 DDP 双进程里跑一次 forward-only 推理（不训练、不算 metric），下一节 `acc-gather-multi` 再加 `gather_for_metrics` 跨卡汇总。
+
+### Distributed inference（forward only）
+
+`accelerate launch --num_processes 2` 拉起双进程，每个 rank 独立 forward 一个本地 batch——没有 loss、没有 backward、没有 `optim.step`。这是 inference 路径与训练路径（`acc-launch`）的关键分界：Accelerate 的 DDP 容器只走 `forward`，不触发梯度同步。
+
+注意 `accelerate launch` 只接受脚本文件路径、不支持 `python -c` 内联代码，所以先落盘再启动：
+
+```shell #test-setup store="infer_script_path"
+cat > infer_npu.py <<'PY'
+import torch
+from torch import nn
+from accelerate import Accelerator
+
+accelerator = Accelerator()
+model = nn.Linear(1, 1)
+prepared = accelerator.prepare(model)
+# Forward only — no loss, no backward, no optim.step
+x = torch.tensor([[0.5], [1.0], [-1.0]], device=accelerator.device)
+preds = prepared(x)
+# accelerator.print only emits on the main process, so the #test-result
+# below sees exactly one line regardless of --num_processes.
+accelerator.print(
+    f"world={accelerator.num_processes} "
+    f"device={preds.device.type} "
+    f"shape={list(preds.shape)}"
+)
+PY
+echo "${PWD}/infer_npu.py"
+```
+
+```shell #test id="acc-infer-multi" load="infer_script_path>>path"
+ASCEND_RT_VISIBLE_DEVICES=0,1 accelerate launch --num_processes 2 <path>
+```
+
+`<path>` 同样是上方 setup 块捕获的 `${PWD}/infer_npu.py` 绝对路径，由 runner 自动代入；手动跑时替换为实际路径。
+
+输出结果如下（两个 rank 各自 forward 本地 3 个样本，shape 仍是 `[3, 1]`，但 accelerator.print 只让主进程输出，所以 #test-result 只看到一行）：
+
+```shell #test-result id="acc-infer-multi"
+world=2 device=npu shape=[3, 1]
+```
+
+> inference 路径与训练路径（`acc-launch` / `acc-train-single`）的区别是：没有 `loss` / `backward` / `optim.step`。DDP 容器在 inference 时只做 `forward`，梯度同步那一步直接跳过。下一节 `acc-gather-multi` 在这个基础上加 `gather_for_metrics`，把各 rank 的结果汇总到主进程——这才是「Distributed evaluation」的完整语义。
+
+### 跨卡 `gather_for_metrics`（DDP 双进程）
+
+在 `acc-infer-multi` 的基础上加 `gather_for_metrics`，验证它在 NPU 上真的跨卡做 `all_gather`（hccl 后端）而不是退回 identity：
 
 ```shell #test-setup store="gather_script_path"
 cat > gather_npu.py <<'PY'
@@ -383,10 +467,3 @@ device=meta
 `device=meta` 是 `init_empty_weights` 的合同行为：参数不在真实设备上，而是 PyTorch 的 meta 占位符，所以这一步**不占 NPU 显存**，CI 上跑稳。
 
 > 「Load and dispatch weights」这一半需要真权重（Mixtral-8x7B 之类 ~90 GB），CI 不试——文档正文里链接到上游 [Big model inference](https://huggingface.co/docs/accelerate/concept_guides/big_model_inference) 教程。
-
-## 小贴士
-
-- 如果你习惯 `torchrun`，Accelerate 也支持 `accelerate launch --use_torchrun` 走 PyTorch 原生弹性启动器。
-- 在多卡机器上想验证 DDP 路径，把 `--num_processes` 调到 `torch.npu.device_count()`，脚本无需改一行——`Accelerator` 会自动包一层分布式容器。
-- 需要 bf16 时把 `--mixed_precision bf16` 加上，并保证 `torch` / `torch_npu` 在昇腾侧支持 bf16 路径（参考 [NPU 最佳实践文档](https://github.com/modelscope/ms-swift/blob/main/docs/source/BestPractices/NPU-support.md)）。
-- 如果只想做单机推理（不训练），`Accelerator.prepare` 同样能用：`model = accelerator.prepare(model)` 会把模型搬到 NPU。

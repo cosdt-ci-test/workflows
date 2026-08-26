@@ -355,6 +355,7 @@ deepspeed --num_gpus 1 train_minimal.py 2>&1 | tail -n 20
 ```shell #test-result id="launch-single" fuzzy='...'
 ...
 Quick-start test PASSED
+...
 ```
 
 ### 6.2 多卡启动
@@ -370,6 +371,7 @@ NG=$(python -c "print(2 if int('$NPU_COUNT') >= 2 else 1)"); echo "检测到 $NP
 检测到 ... 张 NPU，将使用 ... 张启动
 ...
 Quick-start test PASSED
+...
 ```
 
 > 提示：多张 NPU 训练时，每个进程都会打印日志，输出会交错在一起，这是正常现象。

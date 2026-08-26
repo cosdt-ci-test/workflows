@@ -53,14 +53,16 @@ jobs:
       # cross-major-version mismatch would silently break every forward
       # pass. Bare CANN lets ``prepare_environment`` probe + install the
       # exact torch stack, and the doc's ``## 安装 vllm-ascend`` section
-      # then layers vllm==0.23.0 --no-deps + triton-ascend==3.2.2 --no-deps
-      # + vllm-ascend==0.23.0 --no-deps on top without torch interference.
-      # Index strategy: triton-ascend==3.2.2 is a cluster-internal build
-      # not on any public mirror (aliyun 3.2.0 / huawei 3.2.1 / pypi 3.2.0rc2),
-      # so the doc splits the install into two commands — aliyun for the
-      # official vllm + vllm-ascend wheels, cluster-internal nginx cache
-      # for triton-ascend. Putting them in one --index-url command fails
-      # with "No matching distribution found".
+      # then layers the official two-step ``pip install vllm==0.23.0`` +
+      # ``pip install --extra-index-url ...huaweicloud.../variant
+      # vllm-ascend==0.23.0`` on top. The second step's ``Requires-Dist:
+      # torch==2.10.0`` / ``torch-npu==2.10.0.post4`` / ``triton-ascend==3.2.2``
+      # pulls the NPU wheel set from huawei ascend and pip will downgrade
+      # torch from vllm's 2.11.0 to vllm-ascend's 2.10.0. CUDA exclusion
+      # list (``_CUDA_CONSTRAINTS`` in the test file) is left in place —
+      # whether it actually trips the vllm 0.23.0 unconditional nvidia deps
+      # (``nvidia-cudnn-frontend`` / ``nvidia-cutlass-dsl[cu13]`` /
+      # ``flashinfer-python``) is left for the CI log to confirm.
       image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
       container_options: >-
         --volume=/data/ci-cache/modelscope/speculators:/root/.cache/modelscope

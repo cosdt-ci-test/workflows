@@ -39,9 +39,10 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | torch | 2.10.0+cpu |
 | torch_npu | 2.10.0.post4 |
 | transformers | 由 `speculators` 透传拉入（>=4.56.1,<5.15.0） |
-| vllm | 0.23.0（`--no-deps` 安装，避免顶掉 torch_npu） |
-| triton-ascend | 3.2.2（`--no-deps` 安装，DFlash proposer JIT 编译依赖） |
-| vllm-ascend | 0.23.0 |
+| vllm | 0.23.0（[官方安装路径](#安装-vllm-ascend)，pip 自动解析 deps） |
+| triton-ascend | 3.2.2（由 vllm-ascend 透传拉入，DFlash proposer JIT 编译依赖） |
+| triton | 3.5.0（由 triton-ascend 透传拉入） |
+| vllm-ascend | 0.23.0（`--extra-index-url` 拉华为 ascend 源取 torch_npu + triton-ascend） |
 | modelscope | 1.37.0 |
 | speculators | 最新 release 的源码/二进制 |
 | draft 模型 | [z-lab/Qwen3-8B-DFlash-b16](https://www.modelscope.cn/models/z-lab/Qwen3-8B-DFlash-b16)（DFlash draft，~1 GB） |
@@ -127,24 +128,21 @@ modelscope=1.37.0
 [vllm-ascend](https://github.com/vllm-project/vllm-ascend) 是 vLLM 在昇腾 NPU 上的官方硬件插件，**Step 2**（`vllm.LLM()` 离线 API 抽 hidden states）+ **Step 4**（`vllm serve --speculative-config` 在线推理）直接 import 它提供的 `ExampleHiddenStatesConnector`（Step 2）和 `dflash` proposer（Step 4）。本文档钉死 **vllm-ascend==v0.23.0**（配套 vLLM v0.23.0 + Triton Ascend 3.2.2）——`extract_hidden_states` 模式与 DFlash proposer 在该版本起对单卡 A2 可见，且 DFlash proposer 在 NPU 上做 kernel JIT 编译依赖 Triton Ascend 3.2.x。CI 走的是 [配套镜像](#本文档示例使用的版本) 的 **bare CANN 9.1.0** 路线（不带 vllm），`prepare_environment` 已经按 [前置条件](#前置条件) 装好了 `torch==2.10.0+cpu` + `torch_npu==2.10.0.post4`，本节负责把 vllm + triton-ascend + vllm-ascend 三个 wheel 在不动 torch 栈的前提下叠上去。**本地读者** 走同一套 pip 命令即可：
 
 ```shell #test id="vllm-ascend-install"
-# 用 `python -m pip` 而非 `uv pip`：保证 wheel 装到当前 `python` 的
-# site-packages（`uv pip install` 在 `UV_SYSTEM_PYTHON=1` 下解析到
-# `/usr/local/python3.12.13`，跟 `python -c "import ..."` 用的 python 解析到的
-# site-packages 可能不是同一个——前者装好之后 `import triton_ascend` 会
-# ModuleNotFoundError，CI 实测踩过）。
-#
-# 分两条命令装：官方 wheel（vllm + vllm-ascend，从 aliyun）和昇腾 wheel
-# （triton-ascend==3.2.2，从集群内部 cache）。triton-ascend==3.2.2 是集群
-# 内部 build，公开 PyPI mirror 不发布（aliyun 最高 3.2.0 / huawei 最高 3.2.1
-# / pypi.org 最高 3.2.0rc2），混在一条命令里走 aliyun --index-url 会被
-# `No matching distribution found` 直接失败。拆开后 aliyun 那条命中 vllm
-# + vllm-ascend，集群 cache 那条单独装 triton-ascend。本地读者替代路径
-# 见下面 note 段。
-python -m pip install --index-url https://mirrors.aliyun.com/pypi/simple --no-deps 'vllm==0.23.0' 'vllm-ascend==0.23.0'
-python -m pip install --index-url http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple --no-deps 'triton-ascend==3.2.2'
+# 官方安装路径（https://docs.vllm.ai/projects/ascend/zh-cn/latest/installation.html）：
+# pip 自己解析 vllm / vllm-ascend / torch_npu / triton-ascend / triton 等
+# 全部 transitive deps，CI 这边只关心 torch 栈不被破坏——具体怎么破坏、
+# 怎么保护，看实际跑下来的 log（vllm 0.23.0 METADATA 把 torch==2.11.0、
+# nvidia-cudnn-frontend、nvidia-cutlass-dsl[cu13]、flashinfer-python 等
+# 钉死成无条件 dep；vllm-ascend 0.23.0 METADATA 反过来硬钉 torch==2.10.0
+# + torch-npu==2.10.0.post4 + triton-ascend==3.2.2；两条命令按顺序跑
+# pip 会在第二步把 torch 降到 2.10.0 NPU 变体）。如果这次跑挂了再回头
+# 加防护（`--no-deps` / 拆命令 / 拉集群 cache）。
+pip install vllm==0.23.0
+pip install --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi/variant vllm-ascend==0.23.0
 python -c "import importlib.metadata; print(f'vllm={importlib.metadata.version(\"vllm\")}')"
 python -c "import importlib.metadata; print(f'vllm_ascend={importlib.metadata.version(\"vllm-ascend\")}')"
 python -c "import importlib.metadata; print(f'triton_ascend={importlib.metadata.version(\"triton-ascend\")}')"
+python -c "import importlib.metadata; print(f'triton={importlib.metadata.version(\"triton\")}')"
 ```
 
 输出结果如下：
@@ -153,19 +151,16 @@ python -c "import importlib.metadata; print(f'triton_ascend={importlib.metadata.
 vllm=0.23.0
 vllm_ascend=0.23.0
 triton_ascend=3.2.2
+triton=3.5.0
 ```
 
-> **三个都 `--no-deps` 的原因**：vllm / vllm-ascend / triton-ascend 的 wheel METADATA 都包含 `Requires-Dist: torch` / `Requires-Dist: triton`（vllm-ascend 因为要给 vllm 注入 NPU 后端，还会显式声明 torch 范围）；NPU 环境下我们已经按 [前置条件](#前置条件) 装好了 `torch==2.10.0+cpu` + `torch_npu==2.10.0.post4`，让它们拉自己原生 torch 会顶掉 torch_npu → `import torch_npu` 直接挂。统一加 `--no-deps` 跳过这三个 wheel 自带的 torch/triton 树，只保留 vllm-ascend 注入 NPU plugin +算子 shim 的二进制部分。
+> **走官方路径而不是 `--no-deps` 的原因**：vllm 0.23.0 的 `provides_extras` 是空 list（无 `[cpu]` / `[cuda]` extras 可挑），67 个 dep 全是硬无条件依赖，其中 `torch==2.11.0` / `nvidia-cudnn-frontend>=1.19.1` / `nvidia-cutlass-dsl[cu13]==4.5.2` / `flashinfer-python==0.6.12` 等会跟我们 [前置条件](#前置条件) 的 torch==2.10.0+cpu + torch_npu==2.10.0.post4 + CUDA exclusion list（[tests/test_quick_start_ascend.py](projects/speculators/tests/test_quick_start_ascend.py) 的 `_CUDA_CONSTRAINTS`）冲突。但官方文档说「vllm-ascend 0.11.0 之后不用配 pip 镜像，且 vllm-ascend 0.23.0 把 torch==2.10.0 / torch-npu==2.10.0.post4 / triton-ascend==3.2.2 全部钉成无条件 dep」——所以让 pip 自己跑两步：第一步 `pip install vllm==0.23.0` 会拉 CUDA torch 2.11 + 一堆 nvidia 库；第二步 `pip install vllm-ascend==0.23.0` 通过 `Requires-Dist: torch==2.10.0` 把 torch 降级到 2.10.0 NPU + 装回 torch_npu + 装回 triton-ascend（间接拉 triton==3.5.0）。**CI 是否真能走通，留给实战验证**——log 里出现 CUDA exclusion / torch 颠簸问题时再回头补 `--no-deps` 或拆命令。
 >
 > vllm-ascend / Triton Ascend 与上游 vLLM / Triton 同步发版（vllm-ascend v0.23.0 ↔ vLLM v0.23.0，Triton Ascend 3.2.2 ↔ Triton 3.2.x）；**别混装不兼容组合**——否则 vllm-ascend 启动时报 `vLLM version mismatch`，或 Triton kernel JIT 编译时找不到 NPU backend。
 >
-> 如果 vllm-ascend 0.23.0 还需要额外的 plugin helper（比如 ascend 私有 helpers、特定 transformers extras），第一次 `import vllm_ascend` 会报 ImportError；按 ImportError 加 pip install 即可，不会污染 torch 栈。
+> 如果 vllm-ascend 0.23.0 还需要额外的 plugin helper（比如 ascend 私有 helpers、特定 transformers extras），第一次 `import vllm_ascend` 会报 ImportError；按 ImportError 加 pip install 即可。
 >
-> **本地（非集群）读者**：`triton-ascend==3.2.2` 是集群内部 build，公开 PyPI mirror 不发布。公开源最高只有 `triton-ascend==3.2.1`（[华为云 ascend 源](https://repo.huaweicloud.com/ascend/repos/pypi)）。本地第二条命令改成：
-> ```shell
-> python -m pip install --index-url https://repo.huaweicloud.com/ascend/repos/pypi --no-deps 'triton-ascend==3.2.1'
-> ```
-> 代价是 vllm-ascend v0.23.0 配 triton-ascend 3.2.1（而非 3.2.2），组合未经 CI 实测；遇到 DFlash proposer 在 NPU 上 JIT 编译失败时，先把 triton-ascend 升到集群 wheel 对应的 3.2.x 再排查。
+> **本地（非集群）读者**：第二条命令的 `--extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi/variant` 在公网可访问，不用改。前提是华为 ascend 源上有 triton-ascend 3.2.2（实测有，vllm-ascend 0.23.0 文档默认这条源）。如果哪天 3.2.2 从公开源撤下，本地只能降到 3.2.1 + 配 vllm-ascend 不兼容组合，先看 NPU 上 DFlash JIT 编译能不能跑通再判断。
 
 ## 安装 Speculators
 

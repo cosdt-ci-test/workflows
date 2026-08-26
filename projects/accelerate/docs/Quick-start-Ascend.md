@@ -1,10 +1,10 @@
-# 快速开始（昇腾 NPU）
+# Quick Start（Ascend NPU）
 
 在双卡昇腾 NPU 上跑通 [Accelerate](https://github.com/huggingface/accelerate) 的三大核心能力：
 
 - **训练代码适配**（`acc-launch` / `acc-launch-bf16` / `acc-train-single` / `acc-prepare`）：多卡 DDP 训练 + 单卡训练 + 单卡推理三档场景都验证 `Accelerator.prepare` / `Accelerator.backward` 在 NPU 上跑通；
 - **分布式评估**（`acc-gather-multi`）：DDP 双进程下 `gather_for_metrics` 真的跨卡 `all_gather`（hccl 后端），而不是退回单进程 identity；
-- **大模型推理**（`acc-empty-weights`）：`init_empty_weights` 把大模型骨架以 meta 占位符方式创建，0 显存分配。
+- **大模型推理**（`acc-empty-weights` / `acc-dispatch`）：`init_empty_weights` 把大模型骨架以 meta 占位符方式创建（0 显存），`load_checkpoint_and_dispatch` 真实走一遍权重跨卡分片（不依赖 hub，自建 toy checkpoint）；
 
 DDP 训练与跨卡集体通讯都依赖至少 2 张 NPU；单卡 runner 上 `accelerate launch --num_processes 2` 会直接报「visible devices 不够」。
 
@@ -391,7 +391,7 @@ gathered=[1, 2, 3, 1, 2, 3]
 
 ## 大模型推理
 
-Accelerate 的大模型推理分两半：先用 [`init_empty_weights`](https://huggingface.co/docs/accelerate/main/en/usage_guides/big_modeling#initializing-an-empty-model) 在 `meta` device 上建空骨架（参数都是 meta 占位符，0 显存），再用 [`load_checkpoint_and_dispatch`](https://huggingface.co/docs/accelerate/main/en/usage_guides/big_modeling#sharding-checkpoints) 把分片权重塞进多张设备。本节只覆盖第一半——meta 占位符 CI 可验；第二半需要真权重（Mixtral-8x7B ~90 GB），跳到上游 [Big model inference](https://huggingface.co/docs/accelerate/concept_guides/big_model_inference) 教程。
+Accelerate 的大模型推理分两半：先用 [`init_empty_weights`](https://huggingface.co/docs/accelerate/main/en/usage_guides/big_modeling#initializing-an-empty-model) 在 `meta` device 上建空骨架（参数都是 meta 占位符，0 显存），再用 [`load_checkpoint_and_dispatch`](https://huggingface.co/docs/accelerate/main/en/usage_guides/big_modeling#sharding-checkpoints) 把分片权重塞进多张设备。本节两半都覆盖——meta 骨架用 1 层 toy config 验证 0 显存，dispatch 用 20 层 toy checkpoint + 显式 `device_map` 验证权重真分到两张卡上。真实场景（Mixtral-8x7B ~90 GB）跳到上游 [Big model inference](https://huggingface.co/docs/accelerate/concept_guides/big_model_inference) 教程。
 
 ### init_empty_weights
 
@@ -426,3 +426,86 @@ device=meta
 ```
 
 `device=meta` 是 `init_empty_weights` 的合同行为：参数不在真实设备上，而是 PyTorch 的 meta 占位符，所以这一步**不占 NPU 显存**，CI 上跑稳。
+
+### load_checkpoint_and_dispatch
+
+在 `init_empty_weights` 建好的空骨架上跑 `load_checkpoint_and_dispatch`，验证 Accelerate 在 NPU 上真的把权重分到不同卡——前 10 层放 `npu:0`、后 10 层放 `npu:1`。CI 上不依赖 HF Hub / ModelScope 下载，自建 toy checkpoint：
+
+```shell #test-setup store="dispatch_ckpt"
+python -c "
+import os, torch, gc
+from transformers import LlamaConfig, LlamaForCausalLM
+from accelerate import init_empty_weights
+
+# 20 层 / hidden=512 ≈ 80M 参数 bf16，~160 MB
+config = LlamaConfig(
+    vocab_size=32000, hidden_size=512, intermediate_size=1024,
+    num_hidden_layers=20, num_attention_heads=8, max_position_embeddings=64,
+)
+with init_empty_weights():
+    model = LlamaForCausalLM(config)
+# save_pretrained 需要真实 tensor，先 to_empty 到 CPU + 填随机权重
+model.to_empty(device='cpu')
+with torch.no_grad():
+    for p in model.parameters():
+        p.data = torch.randn(p.shape, device='cpu', dtype=p.dtype) * 0.02
+os.makedirs('/tmp/fake-llama-dispatch', exist_ok=True)
+model.save_pretrained('/tmp/fake-llama-dispatch', safe_serialization=True)
+del model
+gc.collect()
+print('/tmp/fake-llama-dispatch')
+"
+```
+
+```shell #test id="acc-dispatch" load="dispatch_ckpt>>ckpt"
+python -c "
+import torch
+from transformers import LlamaConfig, LlamaForCausalLM
+from accelerate import init_empty_weights, load_checkpoint_and_dispatch
+
+config = LlamaConfig(
+    vocab_size=32000, hidden_size=512, intermediate_size=1024,
+    num_hidden_layers=20, num_attention_heads=8, max_position_embeddings=64,
+)
+# 显式 device_map：前 10 层 + embed 在 npu:0，后 10 层 + norm + lm_head 在 npu:1
+device_map = {'model.embed_tokens': 'npu:0'}
+device_map.update({f'model.layers.{i}': 'npu:0' for i in range(10)})
+device_map.update({f'model.layers.{i}': 'npu:1' for i in range(10, 20)})
+device_map.update({'model.norm': 'npu:1', 'lm_head': 'npu:1'})
+
+with init_empty_weights():
+    skeleton = LlamaForCausalLM(config)
+loaded = load_checkpoint_and_dispatch(
+    skeleton,
+    checkpoint='<ckpt>',
+    device_map=device_map,
+    no_split_module_classes=['LlamaDecoderLayer'],
+)
+
+# 验证：前 / 后层落在不同卡
+dev_first = loaded.model.layers[0].self_attn.q_proj.weight.device
+dev_last = loaded.model.layers[-1].self_attn.q_proj.weight.device
+
+# 跑一次 forward：dispatch hook 自动跨卡转 tensor
+x = torch.tensor([[1, 2, 3]], device=loaded.device)
+out = loaded(input_ids=x).logits
+
+print(f'first_layer_device={dev_first}')
+print(f'last_layer_device={dev_last}')
+print(f'out_device={out.device.type}')
+print(f'out_shape={list(out.shape)}')
+"
+```
+
+输出结果如下（前 10 层 / 后 10 层明确落到不同卡，dispatch hook 在中间自动把 layer 9 的输出从 npu:0 搬到 npu:1 给 layer 10）：
+
+```shell #test-result id="acc-dispatch"
+first_layer_device=npu:0
+last_layer_device=npu:1
+out_device=npu
+out_shape=[1, 3, 32000]
+```
+
+> 这是「权重真被分到不同 NPU 卡」的可执行断言——`loaded.model.layers[0]` 的权重在 `npu:0`、`loaded.model.layers[-1]` 的权重在 `npu:1`，`forward` 一次能跑通。
+>
+> `device_map` 这里用手写 dict 强制均分；真实场景下用 `device_map="auto"` + `max_memory={0: 'XGB', 1: 'XGB'}`，Accelerate 自己 infer 怎么分。checkpoint 来源不限定 HF Hub——`modelscope.snapshot_download('qwen/Qwen2.5-7B-Instruct')` 或 `huggingface_hub.snapshot_download(...)` 拿到的本地路径都可以喂进来。

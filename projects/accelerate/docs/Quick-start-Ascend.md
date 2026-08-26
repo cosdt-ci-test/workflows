@@ -1,6 +1,12 @@
 # Quick Start (Ascend NPU)
 
-在双卡昇腾 NPU 上跑通 [Accelerate](https://github.com/huggingface/accelerate) 的两个核心能力：`accelerate launch` 启动入口，以及把一个最小训练脚本改造成 `Accelerator` 适配版。
+在双卡昇腾 NPU 上跑通 [Accelerate](https://github.com/huggingface/accelerate) 的三大核心能力：
+
+- **Adapt training code**（`acc-launch` / `acc-launch-bf16` / `acc-prepare`）：最小训练脚本改造为 `Accelerator` 适配版，验证 `Accelerator.prepare` / `Accelerator.backward` 在 NPU 上跑通；
+- **Distributed evaluation**（`acc-gather-multi`）：DDP 双进程下 `gather_for_metrics` 真的跨卡 `all_gather`（hccl 后端），而不是退回单进程 identity；
+- **Big Model Inference**（`acc-empty-weights`）：`init_empty_weights` 把大模型骨架以 meta 占位符方式创建，0 显存分配。
+
+DDP 训练与跨卡集体通讯都依赖至少 2 张 NPU；单卡 runner 上 `accelerate launch --num_processes 2` 会直接报「visible devices 不够」。
 
 ## 前置条件
 
@@ -178,43 +184,7 @@ Copy-and-paste the text below in your GitHub issue
 
 其中 `PyTorch accelerator: NPU` 是 accelerate 探测到 `torch_npu` 后给出的标识；`CANN version` 一行只有在 NPU 环境才会出现。如果 `PyTorch accelerator` 不是 `NPU`，多半是 `torch_npu` 没被 import 到——回到「基础软件」一节检查。
 
-### 空权重初始化（Big Model Inference）
-
-把上游 [Quicktour](https://github.com/huggingface/accelerate/blob/main/docs/source/quicktour.md)「Big Model Inference」一节的 `init_empty_weights` 抽出来用最小模型跑一遍。配置直接 inline 写死，避免再向 HF Hub 拉一个 `from_pretrained` 的 config：
-
-```shell #test id="acc-empty-weights"
-python -c "
-from transformers import LlamaConfig, LlamaForCausalLM
-from accelerate import init_empty_weights
-
-# Inline config: 1 层 / 1 head / hidden=64 —— 没有 hub 网络依赖。
-config = LlamaConfig(
-    vocab_size=32,
-    hidden_size=64,
-    intermediate_size=64,
-    num_hidden_layers=1,
-    num_attention_heads=1,
-    max_position_embeddings=64,
-)
-with init_empty_weights():
-    model = LlamaForCausalLM(config)
-n_params = sum(p.numel() for p in model.state_dict().values())
-first_dev = next(model.parameters()).device
-print(f'empty_model_params={n_params}')
-print(f'device={first_dev}')
-"
-```
-
-输出结果如下（参数数固定、device 固定为 meta —— 用 `fuzzy='xxx'` 让版本无关的字段差异不会挂）：
-
-```shell #test-result id="acc-empty-weights" fuzzy='xxx'
-empty_model_params=xxx
-device=meta
-```
-
-`device=meta` 是 `init_empty_weights` 的合同行为：参数不在真实设备上，而是 PyTorch 的 meta 占位符，所以这一步**不占 NPU 显存**，CI 上跑稳。`load_checkpoint_and_dispatch` 这一半需要真权重（Mixtral-8x7B 之类 ~90 GB），CI 不试——文档正文里链接到上游教程。
-
-## 使用样例：最小 `Accelerator` 训练脚本
+## Adapt training code
 
 下面把上游 [Quicktour](https://github.com/huggingface/accelerate/blob/main/docs/source/quicktour.md) 里「Adapt training code」一节的训练循环压到最小，目标是验证 `Accelerator.prepare` / `Accelerator.backward` 在 NPU 上跑通。模型只用一个小线性层，但走的是 Accelerate 的全套适配路径。
 
@@ -317,11 +287,29 @@ device=npu
 shape=[1, 1]
 ```
 
-`accelerator.prepare(model)` 这一行是 Accelerate 的核心 abstraction——同一份脚本不写一行 `.cuda()` / `.npu()`，能自动适配 CPU / CUDA / NPU / XPU / MPS。DDP 训练在下一节 `acc-launch` 验，跨卡集体通讯在 `acc-gather-multi` 验。
+`accelerator.prepare(model)` 这一行是 Accelerate 的核心 abstraction——同一份脚本不写一行 `.cuda()` / `.npu()`，能自动适配 CPU / CUDA / NPU / XPU / MPS。distributed 路径下的 `gather_for_metrics` 在下一节「Distributed evaluation」验。
 
-### 跨卡 `gather_for_metrics`（DDP 双进程）
+### 启动 bf16 混合精度路径
 
-把 `gather_for_metrics` 放进 `accelerate launch` 拉起的双进程里跑，验证它在 NPU 上真的跨卡做 `all_gather`（hccl 后端）而不是退回 identity。注意 `accelerate launch` 只接受脚本文件路径、不支持 `python -c` 内联代码（它把第一个参数当作脚本去执行），所以先落盘再启动：
+把 Step 1 的 `train_npu.py` 再跑一遍，但把 `--mixed_precision` 从 `no` 切到 `bf16`，验证 Accelerate 的 autocast 包装在 NPU 上不出错。脚本不动一行——Accelerate 自动包 `torch.autocast`（`<path>` 仍是 Step 1 的 `train_npu.py`）：
+
+```shell #test id="acc-launch-bf16" load="script_path>>path"
+ASCEND_RT_VISIBLE_DEVICES=0,1 accelerate launch --num_processes 2 --mixed_precision bf16 <path>
+```
+
+输出结果如下（与 `acc-launch` 同一行格式；`final_loss` 因为 bf16 精度差异可能与 `acc-launch` 不完全一致，断言只断言「不崩 + 落点是 npu」）：
+
+```shell #test-result id="acc-launch-bf16" fuzzy='xxx'
+device=npu final_loss=xxx
+```
+
+### Step 3：清理（可选）
+
+玩具脚本 `train_npu.py` 是当前目录下的临时文件——CI 容器是 ephemeral 的，每次跑都是全新环境，不需要清理；如果你是在本地照着文档手动跑，结束时 `rm -f train_npu.py` 即可。
+
+## Distributed evaluation
+
+把上游 [Quicktour](https://github.com/huggingface/accelerate/blob/main/docs/source/quicktour.md)「Distributed evaluation」一节的 `gather_for_metrics` 抽出来用最小示例跑一遍。在 DDP 双进程里验它在 NPU 上真的跨卡做 `all_gather`（hccl 后端），而不是退回单进程 identity。注意 `accelerate launch` 只接受脚本文件路径、不支持 `python -c` 内联代码（它把第一个参数当作脚本去执行），所以先落盘再启动：
 
 ```shell #test-setup store="gather_script_path"
 cat > gather_npu.py <<'PY'
@@ -356,23 +344,45 @@ gathered=[1, 2, 3, 1, 2, 3]
 
 > 这条才是真正「跨卡 collective 跑通」的可执行断言——单进程路径下 `gather_for_metrics` 文档化保证退化为 identity，要看 `all_gather` 必须 ≥2 张 NPU。多进程路径（`pad_across_processes` / 跨卡 `gather`）详见上游 [Distributed evaluation](https://huggingface.co/docs/accelerate/basic_tutorials/evaluation) 教程。
 
-### 启动 bf16 混合精度路径
+## Big Model Inference
 
-把 Step 1 的 `train_npu.py` 再跑一遍，但把 `--mixed_precision` 从 `no` 切到 `bf16`，验证 Accelerate 的 autocast 包装在 NPU 上不出错。脚本不动一行——Accelerate 自动包 `torch.autocast`（`<path>` 仍是 Step 1 的 `train_npu.py`）：
+把上游 [Quicktour](https://github.com/huggingface/accelerate/blob/main/docs/source/quicktour.md)「Big Model Inference」一节的「Empty weights initialization」抽出来用最小模型跑一遍。
 
-```shell #test id="acc-launch-bf16" load="script_path>>path"
-ASCEND_RT_VISIBLE_DEVICES=0,1 accelerate launch --num_processes 2 --mixed_precision bf16 <path>
+### Empty weights initialization
+
+```shell #test id="acc-empty-weights"
+python -c "
+from transformers import LlamaConfig, LlamaForCausalLM
+from accelerate import init_empty_weights
+
+# Inline config: 1 层 / 1 head / hidden=64 —— 没有 hub 网络依赖。
+config = LlamaConfig(
+    vocab_size=32,
+    hidden_size=64,
+    intermediate_size=64,
+    num_hidden_layers=1,
+    num_attention_heads=1,
+    max_position_embeddings=64,
+)
+with init_empty_weights():
+    model = LlamaForCausalLM(config)
+n_params = sum(p.numel() for p in model.state_dict().values())
+first_dev = next(model.parameters()).device
+print(f'empty_model_params={n_params}')
+print(f'device={first_dev}')
+"
 ```
 
-输出结果如下（与 `acc-launch` 同一行格式；`final_loss` 因为 bf16 精度差异可能与 `acc-launch` 不完全一致，断言只断言「不崩 + 落点是 npu」）：
+输出结果如下（参数数固定、device 固定为 meta —— 用 `fuzzy='xxx'` 让版本无关的字段差异不会挂）：
 
-```shell #test-result id="acc-launch-bf16" fuzzy='xxx'
-device=npu final_loss=xxx
+```shell #test-result id="acc-empty-weights" fuzzy='xxx'
+empty_model_params=xxx
+device=meta
 ```
 
-### Step 3：清理（可选）
+`device=meta` 是 `init_empty_weights` 的合同行为：参数不在真实设备上，而是 PyTorch 的 meta 占位符，所以这一步**不占 NPU 显存**，CI 上跑稳。
 
-玩具脚本 `train_npu.py` 是当前目录下的临时文件——CI 容器是 ephemeral 的，每次跑都是全新环境，不需要清理；如果你是在本地照着文档手动跑，结束时 `rm -f train_npu.py` 即可。
+> 「Load and dispatch weights」这一半需要真权重（Mixtral-8x7B 之类 ~90 GB），CI 不试——文档正文里链接到上游 [Big model inference](https://huggingface.co/docs/accelerate/concept_guides/big_model_inference) 教程。
 
 ## 小贴士
 

@@ -188,7 +188,7 @@ Copy-and-paste the text below in your GitHub issue
 
 下面把上游 [Quicktour](https://github.com/huggingface/accelerate/blob/main/docs/source/quicktour.md) 里「训练代码适配」一节的训练循环压到最小，目标是验证 `Accelerator.prepare` / `Accelerator.backward` 在 NPU 上跑通。模型只用一个小线性层，但走的是 Accelerate 的全套适配路径。
 
-### 第一步：写最小训练脚本
+### 写最小训练脚本
 
 保存为 `train_npu.py`：
 
@@ -239,13 +239,13 @@ PY
 echo "${PWD}/train_npu.py"
 ```
 
-### 第二步：用 `accelerate launch` 启动
+### 用 `accelerate launch` 启动
 
 ```shell #test id="acc-launch" load="script_path>>path"
 ASCEND_RT_VISIBLE_DEVICES=0,1 accelerate launch --num_processes 2 --mixed_precision no <path>
 ```
 
-其中 `<path>` 是第一步生成的脚本绝对路径（即 `${PWD}/train_npu.py`）
+其中 `<path>` 是上面「写最小训练脚本」一节生成的脚本绝对路径（即 `${PWD}/train_npu.py`）
 
 输出结果类似：
 
@@ -330,7 +330,7 @@ shape=[1, 1]
 
 ### 启动 bf16 混合精度路径
 
-把第一步的 `train_npu.py` 再跑一遍，但把 `--mixed_precision` 从 `no` 切到 `bf16`，验证 Accelerate 的 autocast 包装在 NPU 上不出错。脚本不动一行——Accelerate 自动包 `torch.autocast`（`<path>` 仍是第一步的 `train_npu.py`）：
+把上面的 `train_npu.py` 再跑一遍，但把 `--mixed_precision` 从 `no` 切到 `bf16`，验证 Accelerate 的 autocast 包装在 NPU 上不出错。脚本不动一行——Accelerate 自动包 `torch.autocast`（`<path>` 仍是上面的 `train_npu.py`）：
 
 ```shell #test id="acc-launch-bf16" load="script_path>>path"
 ASCEND_RT_VISIBLE_DEVICES=0,1 accelerate launch --num_processes 2 --mixed_precision bf16 <path>

@@ -344,16 +344,18 @@ device=npu final_loss=xxx
 
 ## 分布式评估
 
+分布式评估 = 多张 NPU 协同算一个验证集上的指标。`Accelerator()` 起 DDP 后，每个 rank 只看到数据集的 `1/world_size` 子集——必须把各 rank 算出的预测 / 标签汇总到主进程，再算最终 metric；否则算出来的只是「rank 0 看到的 1/N 数据」上的 metric，不是全量数据上的。
+
 上游 [Quicktour](https://github.com/huggingface/accelerate/blob/main/docs/source/quicktour.md)「分布式评估」一节的 canonical 循环——先 `prepare(dataloader)`，再在循环里 `forward → gather_for_metrics → metric.add_batch`：
 
 ```python
-validation_dataloader = accelerator.prepare(validation_dataloader)
-for inputs, targets in validation_dataloader:
-    predictions = model(inputs)
-    all_predictions, all_targets = accelerator.gather_for_metrics(
+validation_dataloader = accelerator.prepare(validation_dataloader)  # DDP 自动按 rank 切数据
+for inputs, targets in validation_dataloader:                       # 每张卡独立看 1/world_size 子集
+    predictions = model(inputs)                                       # 每张卡独立 forward
+    all_predictions, all_targets = accelerator.gather_for_metrics(   # 跨卡 all_gather 汇总到主进程
         (predictions, targets)
     )
-    metric.add_batch(all_predictions, all_targets)
+    metric.add_batch(all_predictions, all_targets)                    # 主进程算 metric（accuracy / F1 / ...）
 ```
 
 下面抽 `gather_for_metrics` 这一行用最小可执行断言验它在 NPU 上真的跨卡做 `all_gather`（hccl 后端）而不是退回单进程 identity：
@@ -379,9 +381,9 @@ echo "${PWD}/gather_npu.py"
 ASCEND_RT_VISIBLE_DEVICES=0,1 accelerate launch --num_processes 2 <path>
 ```
 
-`<path>` 同样是上方 setup 块捕获的 `${PWD}/gather_npu.py` 绝对路径，由 runner 自动代入；手动跑时替换为实际路径。
+>其中 `<path>` 是`echo "${PWD}/gather_npu.py"` 的输出
 
-输出结果如下（两个 rank 都喂 `[1, 2, 3]`，all_gather 沿 dim=0 串成 `[1, 2, 3, 1, 2, 3]`，长度 6 = `world * 3`）：
+输出结果如下：
 
 ```shell #test-result id="acc-gather-multi" fuzzy='...'
 world=2

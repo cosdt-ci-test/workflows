@@ -103,7 +103,7 @@ tensordict 同时支持 PyPI 二进制安装与 GitHub 源码安装，两条路�
 ### 使用 uv 进行安装（PyPI 二进制）
 
 ```shell #test id="tensordict-install-binary"
-uv pip install --index-url https://mirrors.aliyun.com/pypi/simple --no-deps tensordict
+uv pip install --index-url https://mirrors.aliyun.com/pypi/simple tensordict
 python -c "import tensordict; print('tensordict', tensordict.__version__)"
 ```
 

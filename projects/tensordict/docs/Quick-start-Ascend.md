@@ -100,7 +100,7 @@ count: 1
 
 tensordict 同时支持 PyPI 二进制安装与 GitHub 源码安装，两条路径都把核心模块（`TensorDict` / `TensorDictBase` / `LazyStackedTensorDict` / `MemoryMappedTensor` / `tensorclass` 等）一起打包。
 
-### 使用 uv 进行安装（PyPI 二进制）
+### 使用 uv 进行安装
 
 ```shell #test id="tensordict-install-binary"
 uv pip install --index-url https://mirrors.aliyun.com/pypi/simple tensordict
@@ -141,9 +141,6 @@ echo "${UPSTREAM_REF}"
 ```
 -->
 
-用 `git clone --depth 1 --branch <ref>` 直接浅克隆工作流注入的最新 release tag，安装并且验证。这一步只挂 `--config-settings editable_mode=compat` 一个标志，**不带** `--no-deps`：tensordict 的运行时依赖（`numpy` / `pyvers` / `cloudpickle` / `orjson` ...）需要正常装上，`torch` / `torch_npu` 会被 uv resolver 自动 no-op 掉（已装版本与 aliyun 上的 `torch==2.9.0` 一致），不需要 `--no-deps` 兜底。
-
-- `--config-settings editable_mode=compat` 不可省 —— tensordict 的目录布局是 `<repo>/tensordict/tensordict/__init__.py`，setuptools 默认的 modern editable（`editable_mode=strict`）会把 `_EditableFinder` 追加到 `sys.meta_path` 末尾，但 `PathFinder` 在它之前已经把 `<test-root>/tensordict/`（没有 `__init__.py`）注册成了 namespace package，导致后续 `from tensordict import TensorDict` 报 `unknown location`。legacy editable（`editable_mode=compat`）改用 `.pth` 文件把仓库根目录加进 `sys.path`，`FileFinder` 直接找到真实的 `tensordict/__init__.py`，`PathFinder` 返的就是真实 spec，namespace package 的歧义消失。
 
 ```shell #test id="tensordict-install-source" load="upstream_ref>>ref"
 git clone --depth 1 --branch <ref> https://github.com/pytorch/tensordict.git
@@ -256,7 +253,7 @@ print('keys after del', sorted(td.keys()))
 has next False
 get next None
 get next default missing
-reward tensor([1., 1., 1.])
+reward tensor([1., 1., 1.], device='npu:0')
 keys after set ['action', 'obs', 'reward']
 keys after del ['action', 'reward']
 ```
@@ -310,7 +307,7 @@ print('squeeze shape', td.unsqueeze(0).squeeze(0).shape)
 ```shell #test-result id="td-tensor-like"
 td.shape torch.Size([3])
 td + 1 obs sum 24.0
-td[0] obs tensor([1., 1., 1., 1.])
+td[0] obs tensor([1., 1., 1., 1.], device='npu:0')
 unsqueeze shape torch.Size([1, 3])
 squeeze shape torch.Size([3])
 ```

@@ -137,8 +137,8 @@ modelscope=1.37.0
 # + torch-npu==2.10.0.post4 + triton-ascend==3.2.2；两条命令按顺序跑
 # pip 会在第二步把 torch 降到 2.10.0 NPU 变体）。如果这次跑挂了再回头
 # 加防护（`--no-deps` / 拆命令 / 拉集群 cache）。
-pip install vllm==0.23.0
-pip install --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi/variant vllm-ascend==0.23.0
+pip install --index-url https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple vllm==0.23.0
+pip install --index-url https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi/variant vllm-ascend==0.23.0
 python -c "import importlib.metadata; print(f'vllm={importlib.metadata.version(\"vllm\")}')"
 python -c "import importlib.metadata; print(f'vllm_ascend={importlib.metadata.version(\"vllm-ascend\")}')"
 python -c "import importlib.metadata; print(f'triton_ascend={importlib.metadata.version(\"triton-ascend\")}')"

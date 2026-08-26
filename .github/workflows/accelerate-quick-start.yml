@@ -4,9 +4,8 @@
 # this file only declares what varies per project: schedule,
 # concurrency, runner, container image + options, upstream repo,
 # monitored doc, and the test entry command. The guard loop, cache
-# I/O, state relay and publishing all live in the engine. See
-# docs/design-quickstart-common-template.md for the design and the
-# full input contract.
+# I/O, state relay and publishing all live in the engine. See the
+# engine's `workflow_call.inputs` block for the full input contract.
 #
 # Cache keys (monitor-state-accelerate-*) and artifact names
 # are derived from project=accelerate, not from the workflow name.
@@ -27,11 +26,11 @@ concurrency:
 
 on:
   schedule:
-    # Run every 6 hours: '0 */6 * * *' fires at minute 0 of every
-    # 6th hour (00:00, 06:00, 12:00, 18:00). Cadence is loose enough
+    # Run every 6 hours: '15 */6 * * *' fires at minute 15 of every
+    # 6th hour (00:15, 06:15, 12:15, 18:15). Cadence is loose enough
     # for an upstream that releases monthly (Accelerate), but tight
     # enough that doc fixes propagate within a day.
-    - cron: '0 */6 * * *'
+    - cron: '15 */6 * * *'
   workflow_dispatch:
 
 permissions:

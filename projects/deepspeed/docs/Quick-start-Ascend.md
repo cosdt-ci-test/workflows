@@ -367,7 +367,6 @@ NG=$(python -c "print(2 if int('<NPU_COUNT>') >= 2 else 1)"); echo "检测到 <N
 ```
 
 ```shell #test-result id="launch-multi" fuzzy='...'
-...
 检测到 ... 张 NPU，将使用 ... 张启动
 ...
 Quick-start test PASSED

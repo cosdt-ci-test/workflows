@@ -239,3 +239,12 @@ projects:
     dir: projects/opencv
     workflows:
       quick_start: .github/workflows/opencv-quick-start.yml
+  - name: timm
+    category: 训练加速
+    support_level: 基础支持
+    upstream_repo: huggingface/pytorch-image-models
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/timm
+    workflows:
+      quick_start: .github/workflows/timm-quick-start.yml

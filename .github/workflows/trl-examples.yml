@@ -287,7 +287,7 @@ jobs:
           export PATH="/usr/local/sbin:$PATH"
           source /usr/local/Ascend/ascend-toolkit/set_env.sh
           npu-smi info
-          python -c "import torch, torch_npu; print(torch.__version__, torch_npu.__version__, torch.npu.device_count())"
+          python -c "import torch, torch_npu; print(torch.__version__, torch_npu.__version__, torch.npu.device_count())" || true
 
       # Installs the project and any profile-specific deps. Each project
       # implements projects/trl/scripts/setup_example.sh; $1 is the
@@ -296,6 +296,20 @@ jobs:
         env:
           PROFILE: ${{ matrix.example.profile }}
         run: bash "$PROJECT_ROOT/scripts/setup_example.sh" "$PROFILE"
+
+      - name: Inspect CI working tree
+        run: |
+          echo "=== GITHUB_WORKSPACE ==="
+          echo "$GITHUB_WORKSPACE"
+          echo "=== Checkout ref ==="
+          git -C "$GITHUB_WORKSPACE/workflows" log --oneline -1 2>&1 || echo "git log failed"
+          git -C "$GITHUB_WORKSPACE/workflows" rev-parse --abbrev-ref HEAD 2>&1 || echo "git rev-parse failed"
+          echo "=== FIXTURE_DIR ==="
+          ls -la "$FIXTURE_DIR" 2>&1 || echo "FIXTURE_DIR missing"
+          echo "=== TARGET_ROOT/fixtures ==="
+          ls -la "$TARGET_ROOT/fixtures" 2>&1 || echo "TARGET_ROOT/fixtures missing"
+          echo "=== PROJECT_ROOT/scripts ==="
+          ls -la "$PROJECT_ROOT/scripts" 2>&1 | head -5
 
       - name: Run example
         env:

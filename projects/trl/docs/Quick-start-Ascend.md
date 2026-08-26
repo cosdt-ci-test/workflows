@@ -150,8 +150,8 @@ echo "${UPSTREAM_REF}"
 > 注意：TRL 上游 `examples/` 已改为**目录式**布局（如 `examples/sft_qlora/`、`examples/grpo_wordle/`），每个示例是一个自包含目录，脚本内用 `# /// script` 头声明依赖、在模块 docstring 里写运行命令。昇腾社区旧文档中的 `examples/scripts/sft.py` / `examples/scripts/dpo.py` 这类路径**已过时**，请勿引用。
 
 ```shell #test id="trl-install-source" load="upstream_ref>>ref"
-git clone https://github.com/huggingface/trl.git
-cd trl && git checkout <ref>
+git clone https://github.com/huggingface/trl.git /tmp/trl-src
+cd /tmp/trl-src && git checkout <ref>
 uv pip install -e .
 python -c "import trl; print('trl', trl.__version__)"
 ```

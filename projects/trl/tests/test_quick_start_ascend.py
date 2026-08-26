@@ -11,7 +11,12 @@ Run: ``python -m unittest tests.test_quick_start_ascend -v 2>&1``
 
 Environment variables (injected by GitHub workflow
 ``trl-quick-start.yml``):
-    ``MONITORED_DOC_URL``         Required; raw URL of the document under test.
+    ``MONITORED_DOC_URL``         Used by the engine's monitor step (ubuntu,
+                                  not the NPU runner) for doc hash checking.
+                                  The test's ``pre_process`` reads the doc
+                                  from the local checkout instead, because
+                                  ``raw.githubusercontent.com`` is not
+                                  reachable from the NPU runner's cluster.
     ``UPSTREAM_REF``              Required; bash reads ``$UPSTREAM_REF`` to get
                                   the latest release tag. The value is
                                   captured into ``captures`` via the
@@ -30,6 +35,7 @@ from __future__ import annotations
 import os
 import subprocess
 import unittest
+from pathlib import Path
 
 from workflows.markdown_doc_test_base import MarkdownDocTestBase
 from workflows.modelscope_cache import (
@@ -119,6 +125,36 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     # Path is hard-coded, tied to the GitHub workflow container image
     # (CI_IMAGE).
     _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
+
+    # ----------------------------------------------------------
+    # pre_process: read doc from local checkout instead of fetching
+    # raw.githubusercontent.com — the NPU runner sits behind a cluster
+    # firewall that cannot reach it (known limitation, see
+    # quick-start-template.yml). The checkout step always has the
+    # latest doc for the branch under test, so there is no stale drift.
+    # ----------------------------------------------------------
+
+    def pre_process(self) -> str:
+        """Read ``Quick-start-Ascend.md`` from the local checkout.
+
+        Overrides the base ``MarkdownDocTestBase.pre_process`` which
+        fetches ``MONITORED_DOC_URL`` via ``urllib`` — that endpoint
+        (``raw.githubusercontent.com``) is not reachable from the NPU
+        runner's cluster network. The workflow checkout already places
+        the doc at ``projects/trl/docs/Quick-start-Ascend.md`` relative
+        to this file, so reading it locally is both reliable and always
+        in sync with the branch under test.
+        """
+        doc_path = (
+            Path(__file__).resolve().parent.parent
+            / 'docs'
+            / 'Quick-start-Ascend.md'
+        )
+        if not doc_path.is_file():
+            raise RuntimeError(
+                f'doc not found in local checkout: {doc_path}'
+            )
+        return doc_path.read_text(encoding='utf-8')
 
     # ----------------------------------------------------------
     # prepare_environment: CANN env + CUDA constraints + uv + torch stack probe

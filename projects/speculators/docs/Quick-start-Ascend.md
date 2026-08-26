@@ -127,10 +127,15 @@ modelscope=1.37.0
 [vllm-ascend](https://github.com/vllm-project/vllm-ascend) 是 vLLM 在昇腾 NPU 上的官方硬件插件，**Step 2**（`vllm.LLM()` 离线 API 抽 hidden states）+ **Step 4**（`vllm serve --speculative-config` 在线推理）直接 import 它提供的 `ExampleHiddenStatesConnector`（Step 2）和 `dflash` proposer（Step 4）。本文档钉死 **vllm-ascend==v0.23.0**（配套 vLLM v0.23.0 + Triton Ascend 3.2.2）——`extract_hidden_states` 模式与 DFlash proposer 在该版本起对单卡 A2 可见，且 DFlash proposer 在 NPU 上做 kernel JIT 编译依赖 Triton Ascend 3.2.x。CI 走的是 [配套镜像](#本文档示例使用的版本) 的 **bare CANN 9.1.0** 路线（不带 vllm），`prepare_environment` 已经按 [前置条件](#前置条件) 装好了 `torch==2.10.0+cpu` + `torch_npu==2.10.0.post4`，本节负责把 vllm + triton-ascend + vllm-ascend 三个 wheel 在不动 torch 栈的前提下叠上去。**本地读者** 走同一套 pip 命令即可：
 
 ```shell #test id="vllm-ascend-install"
-uv pip install --index-url https://mirrors.aliyun.com/pypi/simple --no-deps 'vllm==0.23.0' 'triton-ascend==3.2.2' 'vllm-ascend==0.23.0'
-python -c "import vllm; print(f'vllm={vllm.__version__}')"
-python -c "import vllm_ascend; print(f'vllm_ascend={vllm_ascend.__version__}')"
-python -c "import triton_ascend; print(f'triton_ascend={triton_ascend.__version__}')"
+# 用 `python -m pip` 而非 `uv pip`：保证三个 wheel 装到当前 `python` 的
+# site-packages（`uv pip install` 在 `UV_SYSTEM_PYTHON=1` 下解析到
+# `/usr/local/python3.12.13`，跟 `python -c "import ..."` 用的 python 解析到的
+# site-packages 可能不是同一个——前者装好之后 `import triton_ascend` 会
+# ModuleNotFoundError，CI 实测踩过）。
+python -m pip install --index-url https://mirrors.aliyun.com/pypi/simple --no-deps 'vllm==0.23.0' 'triton-ascend==3.2.2' 'vllm-ascend==0.23.0'
+python -c "import importlib.metadata; print(f'vllm={importlib.metadata.version(\"vllm\")}')"
+python -c "import importlib.metadata; print(f'vllm_ascend={importlib.metadata.version(\"vllm-ascend\")}')"
+python -c "import importlib.metadata; print(f'triton_ascend={importlib.metadata.version(\"triton-ascend\")}')"
 ```
 
 输出结果如下：

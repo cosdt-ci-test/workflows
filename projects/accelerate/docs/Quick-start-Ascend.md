@@ -2,11 +2,11 @@
 
 在双卡昇腾 NPU 上跑通 [Accelerate](https://github.com/huggingface/accelerate) 的三大核心能力：
 
-- **训练代码适配**（`acc-launch` / `acc-launch-bf16` / `acc-train-single` / `acc-prepare`）：多卡 DDP 训练 + 单卡训练 + 单卡推理三档场景都验证 `Accelerator.prepare` / `Accelerator.backward` 在 NPU 上跑通；
-- **分布式评估**（`acc-gather-multi`）：DDP 双进程下 `gather_for_metrics` 真的跨卡 `all_gather`（hccl 后端），而不是退回单进程 identity；
+- **训练代码适配**（`acc-launch` / `acc-launch-bf16` / `acc-train-single` / `acc-prepare`）：多卡 DDP 训练（fp32 + bf16）+ 单卡训练 + 单卡推理三档场景都过 `Accelerator.prepare`，训练三档额外走 `Accelerator.backward`；
+- **分布式评估**（`acc-gather-multi`）：DDP 双进程下 `gather_for_metrics` 真的跨卡集合通信（hccl 后端），而不是退回单进程 identity；
 - **大模型推理**（`acc-empty-weights` / `acc-dispatch`）：`init_empty_weights` 把大模型骨架以 meta 占位符方式创建（0 显存），`load_checkpoint_and_dispatch` 真实走一遍权重跨卡分片（不依赖 hub，自建 toy checkpoint）；
 
-DDP 训练与跨卡集体通讯都依赖至少 2 张 NPU；单卡 runner 上 `accelerate launch --num_processes 2` 会直接报「visible devices 不够」。
+DDP 训练与跨卡集合通信都需要至少 2 张 NPU；单卡 runner 上 `accelerate launch --num_processes 2` 会直接报「visible devices 不够」。
 
 ## 前置条件
 
@@ -497,7 +497,7 @@ print(f'out_shape={list(out.shape)}')
 "
 ```
 
-输出结果如下（前 10 层 / 后 10 层明确落到不同卡，dispatch hook 在中间自动把 layer 9 的输出从 npu:0 搬到 npu:1 给 layer 10）：
+输出结果如下：
 
 ```shell #test-result id="acc-dispatch"
 first_layer_device=npu:0
@@ -505,7 +505,3 @@ last_layer_device=npu:1
 out_device=npu
 out_shape=[1, 3, 32000]
 ```
-
-> 这是「权重真被分到不同 NPU 卡」的可执行断言——`loaded.model.layers[0]` 的权重在 `npu:0`、`loaded.model.layers[-1]` 的权重在 `npu:1`，`forward` 一次能跑通。
->
-> `device_map` 这里用手写 dict 强制均分；真实场景下用 `device_map="auto"` + `max_memory={0: 'XGB', 1: 'XGB'}`，Accelerate 自己 infer 怎么分。checkpoint 来源不限定 HF Hub——`modelscope.snapshot_download('qwen/Qwen2.5-7B-Instruct')` 或 `huggingface_hub.snapshot_download(...)` 拿到的本地路径都可以喂进来。

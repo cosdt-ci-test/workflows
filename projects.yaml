@@ -179,10 +179,12 @@ projects:
     dir: projects/slime
     workflows:
       quick_start: .github/workflows/slime-quick-start.yml
-  # include_prerelease=true is wired in the workflow (not the engine
-  # schema) because torchtitan pre-stable marks every release as
-  # prerelease, so /releases/latest 404s on this repo and the engine
-  # falls back to /releases?per_page=20 picking the latest non-draft.
+  # include_prerelease=true used to be wired in the workflow for
+  # torchtitan because every pre-stable release is marked prerelease
+  # and /releases/latest 404s. Now the engine does the fallback
+  # automatically (/releases/latest -> /releases?per_page=20 picking
+  # the latest non-draft -> /tags?per_page=1), so no caller input is
+  # needed and the workflow no longer passes this.
   - name: torchtitan
     category: 训练加速
     support_level: 新兴适配
@@ -201,3 +203,39 @@ projects:
     dir: projects/colossalai
     workflows:
       quick_start: .github/workflows/colossalai-quick-start.yml
+  - name: tensordict
+    category: 训练加速
+    support_level: 基础支持
+    upstream_repo: pytorch/tensordict
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/tensordict
+    workflows:
+      quick_start: .github/workflows/tensordict-quick-start.yml
+  # Ascend/vision ships annotated git tags only (no GitHub Releases
+  # published), so /releases/latest 404s and /releases returns []. The
+  # engine's auto-fallback chain handles this transparently — both
+  # release sources fail, /tags?per_page=1 picks the latest tag. No
+  # caller input is needed.
+  - name: pytorch.vision
+    category: 训练加速
+    support_level: 基础支持
+    upstream_repo: Ascend/vision
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/pytorch.vision
+    workflows:
+      quick_start: .github/workflows/pytorch.vision-quick-start.yml
+  # OpenCV quickstart exercises the Huawei CANN backend (BUILD_HUAWEI_NPU=ON)
+  # via a from-source build against the ascend-toolkit shipped in the
+  # CANN 9.1.0 base image; doc matches the upstream
+  # opencv/opencv wiki Huawei-CANN-Backend install steps to CANN 9.1.0.
+  - name: opencv
+    category: 推理加速
+    support_level: 基础支持
+    upstream_repo: opencv/opencv
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/opencv
+    workflows:
+      quick_start: .github/workflows/opencv-quick-start.yml

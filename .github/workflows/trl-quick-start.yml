@@ -59,14 +59,6 @@ jobs:
       test_runner: '["linux-aarch64-a2-1"]'
       image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
       container_options: >-
-        --privileged --shm-size=64g
-        --device=/dev/davinci0
-        --device=/dev/davinci_manager
-        --device=/dev/devmm_svm
-        --device=/dev/hisi_hdc
-        --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
-        --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
-        --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
         --volume=/data/ci-cache/modelscope/trl:/root/.cache/modelscope
       timeout_minutes: 180
       upstream_repo: huggingface/trl

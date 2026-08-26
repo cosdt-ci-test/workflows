@@ -9,9 +9,15 @@ Document under test: ``projects/diffusers/docs/Quick-start-Ascend.md``
 
 Run: ``python -m unittest tests.test_quick_start_ascend -v 2>&1``
 
-Environment variables (injected by GitHub workflow
-``diffusers-quick-start.yml``):
-    ``MONITORED_DOC_URL``         Required; raw URL of the document under test.
+Environment variables (injected by the quick-start engine workflow
+``quick-start-template.yml``, triggered by ``diffusers-quick-start.yml``):
+    ``MONITORED_DOC_URL``         Fallback doc URL. The doc is normally
+                                  read from the engine's local checkout
+                                  (same file, same commit the monitor
+                                  triggered on); the URL is only fetched
+                                  when the local copy is absent
+                                  (e.g. running the test standalone from
+                                  a bare project dir).
     ``UPSTREAM_REF``              Required; bash reads ``$UPSTREAM_REF`` to get
                                   the latest release tag. The value is
                                   captured into ``captures`` via the
@@ -30,6 +36,7 @@ from __future__ import annotations
 import os
 import subprocess
 import unittest
+from pathlib import Path
 
 from workflows.markdown_doc_test_base import MarkdownDocTestBase
 from workflows.modelscope_cache import (
@@ -40,7 +47,8 @@ from workflows.modelscope_cache import (
 
 
 def _is_truthy(value: str | None) -> bool:
-    """``'true'`` -> True (case-insensitive); anything else (including unset) -> False."""
+    """``'true'`` -> True (case-insensitive, leading/trailing whitespace
+    tolerated); anything else (including unset) -> False."""
     if not value:
         return False
     return value.strip().lower() == 'true'
@@ -56,11 +64,41 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     contract -> run ``#test-setup`` / ``#test`` in order -> compare against
     ``#test-result``."""
 
-    # 50 min per command: long enough for the ~58 GB Qwen-Image snapshot
-    # download (first run, the doc's slowest block) plus 20B pipeline load
-    # + 8-step generation; short enough to fail fast on hangs.
-    DEFAULT_COMMAND_TIMEOUT = 3000
+    # 2h per command: the doc's slowest block downloads ~28 GB (SD3.5
+    # component dirs only - the doc's allow/ignore patterns skip the
+    # repo's 33 GB of ComfyUI/fp16 duplicates); at observed ~3.4 MB/s
+    # cluster egress that's ~2.3h worst case, though warm-cache runs
+    # finish in seconds. 8B pipeline load + 4-step generation fit
+    # comfortably in the same budget.
+    DEFAULT_COMMAND_TIMEOUT = 7200
     USER_AGENT = 'cosdt-ci-test/quick-start'  # monitored source is the fork under cosdt-ci-test org
+
+    # Local copy of the monitored doc, relative to the test cwd
+    # (workflows/projects/diffusers). The engine checks the workflows repo
+    # out next to the project dir, and the monitor triggered this run off
+    # the very commit this checkout holds - same file, zero network.
+    _LOCAL_DOC = Path(__file__).resolve().parents[1] / 'docs' / 'Quick-start-Ascend.md'
+
+    def pre_process(self) -> str:
+        """Read the doc from the engine's local checkout, falling back to
+        ``MONITORED_DOC_URL``.
+
+        Why: raw.githubusercontent.com is not reliably reachable from the
+        NPU runner (cluster firewall; the engine's own monitor step treats
+        a doc-fetch failure as "signal unknown" for the same reason). The
+        base class's fetch-only pre_process makes the whole test suite
+        hinge on that flaky network path, while the very same doc sits on
+        local disk in the checkout the engine just made.
+        """
+        if self._LOCAL_DOC.is_file():
+            self.log(f'pre_process: reading local doc {self._LOCAL_DOC}')
+            return self._LOCAL_DOC.read_text(encoding='utf-8')
+        self.log(
+            f'pre_process: local doc missing ({self._LOCAL_DOC}); '
+            'falling back to MONITORED_DOC_URL fetch'
+        )
+        return super().pre_process()
+
     ERROR_MARKERS = (
         *MarkdownDocTestBase.ERROR_MARKERS,  # generic [ERROR] + Traceback
         'applicaiton exception',  # CANN toolkit emits this typo (sic) in its Python driver
@@ -119,8 +157,8 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     _ASCEND_EXTRA = 'https://repo.huaweicloud.com/ascend/repos/pypi'
 
     # CANN toolkit: source once to get ASCEND_HOME / LD_LIBRARY_PATH etc.
-    # Path is hard-coded, tied to the GitHub workflow container image
-    # (CI_IMAGE).
+    # Path is hard-coded, tied to the container image pinned by the
+    # ``image:`` input of ``diffusers-quick-start.yml``.
     _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
 
     # ----------------------------------------------------------
@@ -131,10 +169,11 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     def prepare_environment(cls) -> None:
         """Install CANN env + CUDA constraints + uv + torch stack probe
         in one go. The remaining dependencies — ``transformers`` /
-        ``accelerate`` / ``modelscope`` (via the doc's ``install-deps``
-        section) and ``diffusers`` (via ``diffusers-install-binary`` /
-        ``diffusers-install-source``) — install themselves in document
-        order inside ``run_template``.
+        ``accelerate`` / ``peft`` / ``modelscope`` (via the doc's
+        dependency ``#test-setup`` block, verified by the
+        ``install-deps`` version print) and ``diffusers`` (via
+        ``diffusers-install-binary`` / ``diffusers-install-source``) —
+        install themselves in document order inside ``run_template``.
 
         Class-level setup: run once per test class, triggered by
         ``setUpClass``. Not the same as ``unittest.TestCase.setUp`` —
@@ -222,7 +261,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         # 5) transformers / accelerate / modelscope / diffusers are NOT
         # installed here: they are the subject of the doc itself and
         # install themselves in document order — the
-        # ``#test-setup`` dependency block (``pip install 'transformers<5.0'
+        # ``#test-setup`` dependency block (``pip install 'transformers>=5.0,<6.0'
         # 'accelerate>=1.0,<2.0' 'modelscope==1.37.0'`` + the
         # ``install-deps`` version print), then the diffusers blocks
         # (``diffusers-install-binary`` / ``diffusers-install-source``).
@@ -233,7 +272,9 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         # runs via a project-isolated host bind mount
         # (/data/ci-cache/modelscope/diffusers at /root/.cache/modelscope;
         # MODELSCOPE_CACHE left unset so the mount point applies) because
-        # Qwen-Image (~58 GB) re-downloaded every trigger is unsustainable.
+        # Qwen-Image-size (~58 GB) re-downloads every trigger are
+        # unsustainable; the doc's current model (SD3.5-large-turbo,
+        # ~72 GB) is even heavier.
         # A persistent cache can hold truncated safetensors from
         # interrupted runs; walk every shard under each model dir and
         # purge it on failure so modelscope re-downloads cleanly on next

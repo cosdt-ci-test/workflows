@@ -228,7 +228,6 @@ PY
 ```
 
 ```shell #test-result id="ckpt-load" fuzzy='...'
-...
 已加载断点，当前训练步数：5
 Checkpoint load PASSED
 ```

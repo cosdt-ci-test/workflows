@@ -1,8 +1,8 @@
 name: transformers-examples
 
 on:
-#  schedule:
-#    - cron: '30 */6 * * *'
+  schedule:
+    - cron: '30 3 * * *'
   workflow_dispatch:
     inputs:
       target_repo:

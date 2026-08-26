@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# Prepare the CI environment for one supported TRL example.
+# $1 is the manifest profile. Unknown profiles fail before any install.
+# TRL is installed from TARGET_ROOT (the upstream checkout under test).
+set -euo pipefail
+
+if [[ $# -lt 1 ]]; then
+  echo "usage: $0 <profile>" >&2
+  exit 2
+fi
+
+PROFILE="$1"
+
+ASCEND_PIP_INDEX=https://repo.huaweicloud.com/ascend/repos/pypi
+FALLBACK_PIP_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
+CLUSTER_PIP_HOST=cache-service.nginx-pypi-cache.svc.cluster.local
+export CLUSTER_PIP_INDEX="http://${CLUSTER_PIP_HOST}/pypi/simple"
+
+pip_ascend() {
+  python -m pip install --extra-index-url "$ASCEND_PIP_INDEX" "$@"
+}
+
+select_pip_index() {
+  # Runners live in mainland China: prefer the cluster pip cache, fall
+  # back to the Tsinghua mirror. The ascend index stays available via
+  # PIP_EXTRA_INDEX_URL (set by the workflow) for torch_npu wheels.
+  if python -c "
+import urllib.error
+import urllib.request
+try:
+    urllib.request.urlopen('${CLUSTER_PIP_INDEX}', timeout=3)
+except urllib.error.HTTPError:
+    pass
+" 2>/dev/null; then
+    export PIP_INDEX_URL="$CLUSTER_PIP_INDEX"
+    export PIP_TRUSTED_HOST="$CLUSTER_PIP_HOST"
+  else
+    export PIP_INDEX_URL="$FALLBACK_PIP_INDEX"
+    unset PIP_TRUSTED_HOST
+  fi
+  echo "pip index: $PIP_INDEX_URL"
+}
+
+ensure_torch_stack() {
+  # The Ascend image normally contains a compatible torch/torch_npu pair.
+  # Reuse it when possible because these wheels are large.
+  if python -c "import torch, torch_npu; print('found torch', torch.__version__, 'torch_npu', torch_npu.__version__)"; then
+    echo "reusing image torch stack"
+    return
+  fi
+  echo "installing torch==2.9.0 torch_npu==2.9.0.post2"
+  pip_ascend torch==2.9.0 torch_npu==2.9.0.post2
+}
+
+setup_peft_lora() {
+  # Covers the small-model LoRA examples (DPO/TPO). Installs TRL from the
+  # target checkout with the peft extra; Pillow is needed by the VLM
+  # processor of dpo_reduce_hallucinations. trackio/kernels from the
+  # upstream dependency headers are skipped because CI passes
+  # --report_to none and the default attention implementation.
+  echo "installing TRL from source at $TARGET_ROOT with peft extra"
+  python -m pip install -e "$TARGET_ROOT[peft]"
+  python -m pip install Pillow
+  python -c "import trl; print('TRL version:', trl.__version__)"
+
+  # Pre-download example model weights from ModelScope (China-reachable)
+  # because runners cannot reach HuggingFace. The returned local snapshot
+  # dirs are exported as env vars for the example (overlay_args in
+  # examples_manifest.yaml reference them via ${VAR}).
+  python -m pip install modelscope
+  python - <<'PY'
+import os
+from modelscope import snapshot_download
+
+MODEL_CACHE = os.environ.get("MODELSCOPE_CACHE", os.path.expanduser("~/.cache/modelscope"))
+mapping = {
+    "DPO_MODEL_PATH": "Qwen/Qwen2.5-VL-3B-Instruct",
+    "TPO_MODEL_PATH": "Qwen/Qwen3-0.6B",
+}
+for env_name, model_id in mapping.items():
+    local = snapshot_download(model_id, cache_dir=MODEL_CACHE)
+    with open(os.environ["GITHUB_ENV"], "a") as fh:
+        fh.write(f"{env_name}={local}\n")
+PY
+}
+
+supported_profiles() {
+  declare -F | awk '/^declare -f setup_/ { sub(/^declare -f setup_/, ""); print }' | paste -sd' ' -
+}
+
+if ! declare -F "setup_${PROFILE}" >/dev/null 2>&1; then
+  echo "unknown profile: ${PROFILE} (supported: $(supported_profiles))" >&2
+  exit 1
+fi
+
+TARGET_ROOT="${TARGET_ROOT:?TARGET_ROOT is required}"
+GITHUB_WORKSPACE="${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is required}"
+GITHUB_ENV="${GITHUB_ENV:?GITHUB_ENV is required}"
+
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
+
+select_pip_index
+python -m pip install -U pip setuptools wheel
+ensure_torch_stack
+
+"setup_${PROFILE}"

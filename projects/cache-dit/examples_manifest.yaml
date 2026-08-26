@@ -1,0 +1,51 @@
+version: 1
+scan:
+  root: examples
+  include_extensions: ['.py']
+  unit: files
+supported:
+  - path: examples/api/run_cache_refresh_flux.py
+    profile: flux
+    runner: linux-aarch64-a2-1
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --model flux
+      - --attn _native_npu
+    timeout_minutes: 60
+  - path: examples/api/run_cache_refresh_wan_2.2.py
+    profile: wan2.2
+    runner: linux-aarch64-a2-1
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --model wan2.2
+      - --attn _native_npu
+    timeout_minutes: 60
+  - path: examples/api/run_steps_mask.py
+    profile: flux
+    runner: linux-aarch64-a2-1
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --attn _native_npu
+      - --steps-mask
+    timeout_minutes: 60
+  - path: examples/api/run_transformer_only.py
+    profile: flux
+    runner: linux-aarch64-a2-1
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --attn _native_npu
+      - --transformer-only
+    timeout_minutes: 60
+unsupported:
+  - examples/ray/*
+  - examples/ptq/*
+  - examples/data/**
+  - examples/configs/**
+  - examples/assets/**
+  - examples/.gitignore
+  - examples/README.md
+  - examples/assets/**

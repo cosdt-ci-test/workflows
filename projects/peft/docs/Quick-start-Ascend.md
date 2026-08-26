@@ -116,7 +116,7 @@ transformers=xxx modelscope=1.37.0
 
 ## 安装 PEFT
 
-### 使用 pip 进行安装
+### 使用 uv 进行安装
 
 ```shell #test id="peft-install-binary"
 uv pip install --index-url https://mirrors.aliyun.com/pypi/simple peft
@@ -145,8 +145,8 @@ echo "${UPSTREAM_REF}"
 克隆上游仓库并 checkout 到工作流注入的最新 release tag，安装并且验证
 
 ```shell #test id="peft-install-source" load="upstream_ref>>ref"
-git clone https://github.com/huggingface/peft.git
-cd peft && git checkout <ref>
+git clone --depth 1 --branch <ref> https://github.com/huggingface/peft.git
+cd peft
 uv pip install -e .
 python -c "import peft; print('peft', peft.__version__)"
 ```
@@ -173,7 +173,7 @@ python -c "from modelscope import snapshot_download; print(snapshot_download('Qw
 
 ### 应用 LoRA 适配器
 
-把基础模型加载到 NPU 上（`bfloat16` 省显存），构造 `LoraConfig` 描述要插入的 LoRA 矩阵（rank=8 / alpha=32 / 自回归 LM 任务），再用 `get_peft_model` 包成 PEFT 模型——底座权重默认冻结，只有新注入的 LoRA 矩阵参与训练。
+把基础模型加载到 NPU 上（`bfloat16` 省显存），构造 `LoraConfig` 描述要插入的 LoRA 矩阵（rank=16 / alpha=32 / 自回归 LM 任务），再用 `get_peft_model` 包成 PEFT 模型——底座权重默认冻结，只有新注入的 LoRA 矩阵参与训练。
 
 ```shell #test id="apply-lora" load="model_path>>model_path"
 python << 'PY'

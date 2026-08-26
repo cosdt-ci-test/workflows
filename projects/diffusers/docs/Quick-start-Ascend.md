@@ -1,7 +1,8 @@
 # Quick Start (Ascend NPU)
 
-在单卡昇腾 NPU 上跑通 Diffusers 文生图全链路：SD 1.5 生成 / 换调度器 / 组件拆解，以及 Qwen-Image 20B 的显存优化（cpu offload vs 全量加载实测对比）。
-使用 `DiffusionPipeline.from_pretrained` 加载文生图管线并生成图像，用 `UniPCMultistepScheduler` 等调度器控制生成速度与质量。
+在单卡昇腾 NPU 上跑通 Diffusers 文生图全链路：SD 1.5 生成 / 换调度器，SD 3.5 Large Turbo（8B MMDiT）的 LoRA 风格加载，以及显存优化（cpu offload vs 全量加载实测对比）。
+
+参考 [Diffusers Quicktour](https://huggingface.co/docs/diffusers/quicktour)：用 `DiffusionPipeline.from_pretrained` 实现文生图，`UniPCMultistepScheduler` 等调度器控制生成速度与质量，`load_lora_weights` 切换生成风格，`enable_model_cpu_offload` 降低显存峰值。
 
 ## 前置条件
 
@@ -36,11 +37,12 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | CANN | 9.1.0 |
 | torch | 2.9.0+cpu |
 | torch_npu | 2.9.0.post2 |
-| transformers | `<5.0` |
+| transformers | `>=5.0,<6.0`（diffusers 0.40+ 依赖 huggingface-hub>=1.23，而 transformers 4.x 要求 hub<1.0，二者冲突；transformers 5.x 起适配 hub 1.x） |
 | accelerate | `>=1.0,<2.0` |
+| peft | `>=0.6` |
 | modelscope | 1.37.0 |
 | diffusers | 最新 release 的源码/二进制 |
-| 模型 | [AI-ModelScope/stable-diffusion-v1-5](https://www.modelscope.cn/models/AI-ModelScope/stable-diffusion-v1-5)（对应 HuggingFace 的 `stable-diffusion-v1-5/stable-diffusion-v1-5`）；显存优化小节用 [Qwen/Qwen-Image](https://www.modelscope.cn/models/Qwen/Qwen-Image)（20B DiT + 7B text encoder，~57 GB，bf16 全量峰值贴近 64 GB HBM 上限） |
+| 模型 | [AI-ModelScope/stable-diffusion-v1-5](https://www.modelscope.cn/models/AI-ModelScope/stable-diffusion-v1-5)；显存优化小节用 [stabilityai/stable-diffusion-3.5-large-turbo](https://www.modelscope.cn/models/stabilityai/stable-diffusion-3.5-large-turbo)（8B MMDiT + 三 text encoder，bf16 全量 ~29 GB）+ LoRA [prithivMLmods/SD3.5-Large-Turbo-HyperRealistic-LoRA](https://www.modelscope.cn/models/prithivMLmods/SD3.5-Large-Turbo-HyperRealistic-LoRA) |
 
 ### 前置安装
 确认能看到 NPU 设备：
@@ -88,24 +90,25 @@ python -c "import torch, torch_npu; print('torch=', torch.__version__); print('t
 
 输出结果如下：
 
-```shell #test-result id="check-torch"
+```shell #test-result id="check-torch" fuzzy='xxx'
 torch= 2.9.0+cpu
 torch_npu= 2.9.0.post2
 is_available: True
-count: 1
+count: xxx
 ```
+- xxx 表示容器内可见的 NPU 数量（本文档所有示例只用 1 张卡，即 device `npu:0`）
 
 > 如果 `import torch_npu` 失败，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查 torch / torch_npu / CANN 三方兼容矩阵。
 
-安装 `transformers` / `accelerate` / `modelscope`：
+安装 `transformers` / `accelerate` / `peft` / `modelscope`：
 
 ```shell #test-setup
-pip install 'transformers<5.0' 'accelerate>=1.0,<2.0' 'modelscope==1.37.0'
+uv pip install 'transformers>=5.0,<6.0' 'accelerate>=1.0,<2.0' 'peft>=0.6' 'modelscope==1.37.0'
 ```
 
 打印安装版本：
 ```shell #test id="install-deps"
-python -c "import transformers, accelerate, modelscope; print('transformers', transformers.__version__); print('accelerate', accelerate.__version__); print('modelscope', modelscope.__version__)"
+python -c "import transformers, accelerate, peft, modelscope; print('transformers', transformers.__version__); print('accelerate', accelerate.__version__); print('peft', peft.__version__); print('modelscope', modelscope.__version__)"
 ```
 
 输出结果如下：
@@ -113,6 +116,7 @@ python -c "import transformers, accelerate, modelscope; print('transformers', tr
 ```shell #test-result id="install-deps" fuzzy='xxx'
 transformers xxx
 accelerate xxx
+peft xxx
 modelscope 1.37.0
 ```
 
@@ -147,8 +151,8 @@ echo "${UPSTREAM_REF}"
 克隆上游仓库并 checkout 到工作流注入的最新 release tag，安装并且验证
 
 ```shell #test id="diffusers-install-source" load="upstream_ref>>ref"
-git clone https://github.com/huggingface/diffusers.git
-cd diffusers && git checkout <ref>
+git clone --depth 1 --branch <ref> https://github.com/huggingface/diffusers.git
+cd diffusers
 uv pip install -e .
 python -c "import diffusers; print('diffusers', diffusers.__version__)"
 ```
@@ -159,18 +163,19 @@ python -c "import diffusers; print('diffusers', diffusers.__version__)"
 ```shell #test-result id="diffusers-install-source" fuzzy='xxx'
 diffusers xxx
 ```
-- xxx 表示最新的版本号
+- xxx 表示最新release的版本号
 
 ## 使用样例
 
-~5 分钟在单卡昇腾 NPU 上跑通 SD 1.5「文生图 → 更换调度器 → 组件拆解」整条链路（不含模型下载时间；想调生成效果可修改 `prompt` / `num_inference_steps` / `guidance_scale`，参数含义与官方 Quicktour 完全一致）。Qwen-Image 显存优化小节见下文。
+~5 分钟在单卡昇腾 NPU 上跑通 SD 1.5「文生图 → 更换调度器」整条链路（不含模型下载时间；想调生成效果可修改 `prompt` / `num_inference_steps` / `guidance_scale`，参数含义与官方 Quicktour 完全一致）。SD 3.5 显存优化小节见下文。
 
 ### 下载基础模型
 
 默认使用 **ModelScope** 进行模型下载。
 
 ```shell #test-setup store="model_path"
-python -c "from modelscope import snapshot_download; print(snapshot_download('AI-ModelScope/stable-diffusion-v1-5'))" | tail -n 1
+set -o pipefail
+python -c "from modelscope import snapshot_download; print(snapshot_download('AI-ModelScope/stable-diffusion-v1-5'))" | grep '^/' | tail -n 1
 ```
 
 输出类似：
@@ -184,9 +189,8 @@ python -c "from modelscope import snapshot_download; print(snapshot_download('AI
 `DiffusionPipeline.from_pretrained` 按模型仓库的 `model_index.json` 自动组装 text_encoder / unet / vae / tokenizer / scheduler，加载后传入 prompt 即可出图：
 
 ```shell #test id="text-to-image" load="model_path>>model_path"
-python << 'PY' 2>&1 | tail -1
-import os
-
+mkdir -p output
+python << 'PY' 2>&1
 import torch
 import torch_npu
 from diffusers import DiffusionPipeline
@@ -197,17 +201,18 @@ pipe = DiffusionPipeline.from_pretrained(
 
 prompt = "a photo of an astronaut riding a horse on mars"
 image = pipe(prompt, num_inference_steps=30).images[0]
-
-os.makedirs("output", exist_ok=True)
 image.save("output/astronaut_rides_horse.png")
-print("saved:", "output/astronaut_rides_horse.png", image.size)
+print("generated:", image.size)
 PY
+ls -l output/astronaut_rides_horse.png | awk '{print $5, $9}'
 ```
 
-输出结果如下：
+输出结果如下（`...` 吞掉加载进度等前导日志，`xxx` 为实际文件字节数）：
 
-```shell #test-result id="text-to-image"
-saved: output/astronaut_rides_horse.png (512, 512)
+```shell #test-result id="text-to-image" fuzzy='xxx' fuzzy='...'
+...
+generated: (512, 512)
+xxx output/astronaut_rides_horse.png
 ```
 
 ### 更换调度器（UniPCMultistepScheduler）
@@ -215,9 +220,8 @@ saved: output/astronaut_rides_horse.png (512, 512)
 调度器决定逐步去噪的算法，直接影响生成速度与质量。用 `UniPCMultistepScheduler.from_config(pipe.scheduler.config)` 复用原调度器配置，即可把 pipeline 热替换为更少步数出图的调度器：
 
 ```shell #test id="swap-scheduler" load="model_path>>model_path"
-python << 'PY' 2>&1 | tail -1
-import os
-
+mkdir -p output
+python << 'PY' 2>&1
 import torch
 import torch_npu
 from diffusers import DiffusionPipeline, UniPCMultistepScheduler
@@ -229,137 +233,182 @@ pipe.scheduler = UniPCMultistepScheduler.from_config(pipe.scheduler.config)
 
 prompt = "a photo of an astronaut riding a horse on mars"
 image = pipe(prompt, num_inference_steps=20).images[0]
-
-os.makedirs("output", exist_ok=True)
 image.save("output/astronaut_unipc.png")
-print("saved:", "output/astronaut_unipc.png", image.size, "via", type(pipe.scheduler).__name__)
+print("generated:", image.size, "via", type(pipe.scheduler).__name__)
 PY
+ls -l output/astronaut_unipc.png | awk '{print $5, $9}'
 ```
 
-输出结果如下：
+输出结果如下（`xxx` 为实际文件字节数）：
 
-```shell #test-result id="swap-scheduler"
-saved: output/astronaut_unipc.png (512, 512) via UniPCMultistepScheduler
+```shell #test-result id="swap-scheduler" fuzzy='xxx' fuzzy='...'
+...
+generated: (512, 512) via UniPCMultistepScheduler
+xxx output/astronaut_unipc.png
 ```
 
-### 拆解 pipeline 组件
+## 大模型显存优化（SD 3.5 Large Turbo）
 
-`DiffusionPipeline` 只是组件的打包器，每个组件都能从各自子目录单独加载（对应 Quicktour 的 Models / Schedulers 一节）：
+上面 SD1.5 的所有组件加起来 ~2 GB，单卡显存放得下，不需要任何优化。但现代扩散模型（SD 3.5 Large Turbo：8B MMDiT + 三个 text encoder，含 T5-XXL，bf16 权重合计 ~29 GB）在 32 GB 显存的卡上全量加载已经放不下或贴着上限，`enable_model_cpu_offload()` 让组件**逐个上下场**——text encoder 编码完搬回 CPU 内存，再请 MMDiT 上 NPU 去噪，最后 VAE 解码——显存峰值从「所有组件之和」降到「最大单个组件」（transformer bf16 ~16 GB）。
 
-```shell #test id="pipeline-components" load="model_path>>model_path"
-python << 'PY' 2>&1 | tail -3
-from diffusers import UNet2DConditionModel, AutoencoderKL, DDPMScheduler
+本节用 SD 3.5 Large Turbo 实测两种加载方式的 NPU 显存峰值对比。
 
-unet = UNet2DConditionModel.from_pretrained("<model_path>", subfolder="unet")
-vae = AutoencoderKL.from_pretrained("<model_path>", subfolder="vae")
-scheduler = DDPMScheduler.from_pretrained("<model_path>", subfolder="scheduler")
-print("unet sample_size:", unet.config.sample_size)
-print("vae latent_channels:", vae.config.latent_channels)
-print("scheduler:", type(scheduler).__name__, scheduler.config.num_train_timesteps)
-PY
+### 下载 SD 3.5 Large Turbo
+
+```shell #test-setup store="sd35_path"
+set -o pipefail
+python -c "
+from modelscope import snapshot_download
+print(snapshot_download(
+    'stabilityai/stable-diffusion-3.5-large-turbo',
+    allow_file_pattern=[
+        '*.json', '*.txt', '*.model', '*.tiktoken',
+        'transformer/*', 'vae/*',
+        'text_encoder/*', 'text_encoder_2/*', 'text_encoder_3/*',
+        'tokenizer/*', 'tokenizer_2/*', 'tokenizer_3/*',
+    ],
+    ignore_file_pattern=['*.fp16.*', '*.png', '*.jpg', '*.webp'],
+))" | grep '^/' | tail -n 1
 ```
 
-输出结果如下：
+说明：
 
-```shell #test-result id="pipeline-components"
-unet sample_size: 64
-vae latent_channels: 4
-scheduler: DDPMScheduler 1000
+- **仓库冗余**：ModelScope 仓库 71.6 GB 里只有 ~39 GB 是 diffusers 布局需要的——`sd3.5_large_turbo.safetensors`（16.5 GB，ComfyUI 用的单文件全量权重）和 `text_encoders/`（16.3 GB，ComfyUI 版 T5/CLIP）对 `StableDiffusion3Pipeline` 完全无用，靠 `allow_file_pattern` 只下组件目录。
+- **fp16 重复**：`text_encoder_3/` 等目录同时存有 fp32（`model-*.safetensors`，from_pretrained 默认）和 fp16（`model.fp16-*.safetensors`）两套权重，`ignore_file_pattern=['*.fp16.*']` 再省 ~11 GB——加载时 `dtype=torch.bfloat16` 会从 fp32 转换，不需要 fp16 文件。净下载量 ~28 GB。
+
+输出类似：
+
+```
+/root/.cache/modelscope/hub/models/stabilityai/stable-diffusion-3.5-large-turbo
 ```
 
-## 大模型显存优化（Qwen-Image 20B）
+### 加载 LoRA
 
-上面 SD1.5 的所有组件加起来 ~2 GB，单卡 64 GB 显存放得下，不需要任何优化。但对应 Quicktour 的 Optimizations 一节：现代扩散模型（如 Qwen-Image 的 20B DiT + 7B text encoder，全量 bf16 权重 ~57 GB）在单卡上放不下时，`enable_model_cpu_offload()` 让组件**逐个上下场**——text encoder 编码完搬回 CPU 内存，再请 DiT 上 NPU 去噪，最后 VAE 解码——显存峰值从「所有组件之和」降到「最大单个组件」。
+LoRA 适配器只往基础模型插入少量可训练参数（本例 ~270 MB 对 8B 的 MMDiT），推理时把 LoRA 权重加载/合并进 transformer 即可切换生成风格。对应 Quicktour 的 LoRA 一节：使用 `load_lora_weights` 加载适配器，prompt 里带上触发词激活风格。
 
-本节用 Qwen-Image 实测两种加载方式的 NPU 显存峰值对比（`torch.npu.max_memory_allocated`，对应 Quicktour 量化小节打印 `torch.cuda.max_memory_allocated` 的做法）：
+先下载 LoRA 权重（同样走 ModelScope，落入持久缓存）：
 
-### 下载 Qwen-Image
-
-Qwen-Image 约 58 GB，首次下载耗时长；CI 使用宿主机持久缓存（容器挂载 `/root/.cache/modelscope`），后续运行直接命中本地文件。持久缓存中可能残留之前中断下载产生的残缺权重文件，测试框架会在下载前做 safetensors 完整性校验，损坏的模型目录会被整体清除并重新下载。
-
-```shell #test-setup store="qwen_image_path"
-python -c "from modelscope import snapshot_download; print(snapshot_download('Qwen/Qwen-Image'))" | tail -n 1
+```shell #test-setup store="lora_path"
+set -o pipefail
+python -c "from modelscope import snapshot_download; print(snapshot_download('prithivMLmods/SD3.5-Large-Turbo-HyperRealistic-LoRA'))" | grep '^/' | tail -n 1
 ```
 
 输出类似：
 
 ```
-/root/.cache/modelscope/hub/models/Qwen/Qwen-Image
+/root/.cache/modelscope/hub/models/prithivMLmods/SD3.5-Large-Turbo-HyperRealistic-LoRA
+```
+
+在 SD 3.5 pipeline 上加载 LoRA 并用触发词生成：
+
+```shell #test id="sd35-lora" load="sd35_path>>sd35_path" load="lora_path>>lora_path"
+mkdir -p output
+python << 'PY' 2>&1
+import torch
+import torch_npu
+from diffusers import StableDiffusion3Pipeline
+
+pipe = StableDiffusion3Pipeline.from_pretrained(
+    "<sd35_path>", dtype=torch.bfloat16,
+)
+pipe.enable_model_cpu_offload()
+pipe.load_lora_weights(
+    "<lora_path>", weight_name="SD3.5-4Step-Large-Turbo-HyperRealistic-LoRA.safetensors",
+)
+
+image = pipe(
+    "hyper realistic close-up photo of a black falcon twist in the air",
+    num_inference_steps=4,
+    guidance_scale=0.0,
+).images[0]
+image.save("output/sd35_lora.png")
+pipe.unload_lora_weights()
+print("generated:", image.size, "lora loaded & unloaded")
+PY
+ls -l output/sd35_lora.png | awk '{print $5, $9}'
+```
+
+输出结果类似（`xxx` 为实际文件字节数）：
+
+```shell #test-result id="sd35-lora" fuzzy='xxx' fuzzy='...'
+...
+generated: (1024, 1024) lora loaded & unloaded
+xxx output/sd35_lora.png
 ```
 
 ### cpu offload 模式生成
 
-`enable_model_cpu_offload()` 之后不要手动 `.to("npu:0")`——offload hook 自己管理组件的进出，手动搬运会和 hook 冲突（对应 Quicktour「Memory usage」一节去掉 `device_map` 的写法）：
-
-```shell #test id="qwen-image-offload" load="qwen_image_path>>qwen_path"
-python << 'PY' 2>&1 | tail -2
+```shell #test id="sd35-offload" load="sd35_path>>sd35_path"
+mkdir -p output
+python << 'PY' 2>&1
 import torch
 import torch_npu
-from diffusers import DiffusionPipeline
+from diffusers import StableDiffusion3Pipeline
 
-pipe = DiffusionPipeline.from_pretrained(
-    "<qwen_path>", dtype=torch.bfloat16,
+pipe = StableDiffusion3Pipeline.from_pretrained(
+    "<sd35_path>", dtype=torch.bfloat16,
 )
 pipe.enable_model_cpu_offload()
 
 image = pipe(
     "a black falcon twist in the air, close-up photo",
-    num_inference_steps=8,
+    num_inference_steps=4,
+    guidance_scale=0.0,
 ).images[0]
-image.save("output/qwen_image_offload.png")
+image.save("output/sd35_offload.png")
 torch.npu.synchronize()
 peak = torch.npu.max_memory_allocated() / 1024**3
-print("saved: output/qwen_image_offload.png", image.size)
+print("generated:", image.size)
 print(f"offload peak NPU memory: {peak:.2f} GB")
 PY
+ls -l output/sd35_offload.png | awk '{print $5, $9}'
 ```
 
-输出结果类似（offload 峰值应明显低于全量权重 57 GB，接近最大的单个组件 transformer ~41 GB）：
+输出结果类似（offload 峰值应接近最大的单个组件 transformer bf16 ~16 GB，远低于全部权重 ~29 GB；`...` 吞掉前导日志，`xxx` 为实际文件字节数 / 显存峰值）：
 
-```shell #test-result id="qwen-image-offload" fuzzy='xxx'
-saved: output/qwen_image_offload.png (1328, 1328)
+```shell #test-result id="sd35-offload" fuzzy='xxx' fuzzy='...'
+...
+generated: (1024, 1024)
 offload peak NPU memory: xxx GB
+xxx output/sd35_offload.png
 ```
 
 ### 全量加载对比
 
-同一模型不带 offload 直接 `.to("npu:0")` 全量驻留显存（64 GB HBM 恰好装得下 57 GB 权重，但已接近上限）：
+同一模型不带 offload 直接 `.to("npu:0")` 全量驻留显存（三个 text encoder + MMDiT 合计 ~29 GB bf16，32 GB 显存放得下但已接近上限）：
 
-```shell #test id="qwen-image-full" load="qwen_image_path>>qwen_path"
-python << 'PY' 2>&1 | tail -2
+```shell #test id="sd35-full" load="sd35_path>>sd35_path"
+mkdir -p output
+python << 'PY' 2>&1
 import torch
 import torch_npu
-from diffusers import DiffusionPipeline
+from diffusers import StableDiffusion3Pipeline
 
-pipe = DiffusionPipeline.from_pretrained(
-    "<qwen_path>", dtype=torch.bfloat16,
+pipe = StableDiffusion3Pipeline.from_pretrained(
+    "<sd35_path>", dtype=torch.bfloat16,
 ).to("npu:0")
 
 image = pipe(
     "a black falcon twist in the air, close-up photo",
-    num_inference_steps=8,
+    num_inference_steps=4,
+    guidance_scale=0.0,
+    height=768,
+    width=768,
 ).images[0]
-image.save("output/qwen_image_full.png")
+image.save("output/sd35_full.png")
 torch.npu.synchronize()
 peak = torch.npu.max_memory_allocated() / 1024**3
-print("saved: output/qwen_image_full.png", image.size)
+print("generated:", image.size)
 print(f"full-load peak NPU memory: {peak:.2f} GB")
 PY
+ls -l output/sd35_full.png | awk '{print $5, $9}'
 ```
 
-输出结果类似（全量峰值 ≈ 全部权重 57 GB 驻留 + 激活）：
+输出结果类似（全量峰值 ≈ 全部权重 ~29 GB 驻留 + 激活；`xxx` 为实际文件字节数 / 显存峰值）：
 
-```shell #test-result id="qwen-image-full" fuzzy='xxx'
-saved: output/qwen_image_full.png (1328, 1328)
+```shell #test-result id="sd35-full" fuzzy='xxx' fuzzy='...'
+...
+generated: (768, 768)
 full-load peak NPU memory: xxx GB
+xxx output/sd35_full.png
 ```
-
-小贴士：
-
-- `safety_checker=None` 跳过 NSFW 安全检查器（可少加载一个 CLIP vision 模型）；需要安全过滤时去掉该参数即可。
-- 昇腾上建议 `dtype=torch.bfloat16`：bf16 数值范围与 fp32 一致，可避开 Stable Diffusion VAE 在 fp16 下可能的 NaN（黑图）问题。
-- 调度器可随时热替换，完整列表见 [Diffusers Schedulers API](https://huggingface.co/docs/diffusers/api/schedulers/overview)；`UniPCMultistepScheduler` 20 步即可接近默认 `PNDMScheduler` 50 步的质量。
-- Quicktour 的 LoRA（`pipe.load_lora_weights(...)`）与量化（bitsandbytes / torchao）小节依赖 CUDA 后端，昇腾上暂不适用；LoRA 权重加载本身与设备无关，可自行尝试。
-- Qwen-Image 的推理步数是 FlowMatch 调度器语义（默认 50 步）；本文档压到 8 步只为控制 CI 时长，追求质量请用默认值。text encoder（Qwen2.5-VL）会截断 prompt 到 `max_sequence_length`（默认 512）。
-- 显存不够全量加载时（比如 32 GB 卡跑 Qwen-Image），把上文全量块换成 offload 块即可；offload 用 CPU 内存换显存，代价是组件来回搬运的额外耗时。
-- 想看 pipeline 内部的逐步去噪循环（Quicktour 的 DiffusionPipeline explained 一节），把 `pipe` 拆成 `text_encoder` / `unet` / `vae` / `scheduler` 手动调用即可，本文档的组件拆解就是它的第一步。

@@ -4,9 +4,8 @@
 # this file only declares what varies per project: schedule,
 # concurrency, runner, container image + options, upstream repo,
 # monitored doc, and the test entry command. The guard loop, cache
-# I/O, state relay and publishing all live in the engine. See
-# docs/design-quickstart-common-template.md for the design and the
-# full input contract.
+# I/O, state relay and publishing all live in the engine. See the
+# engine's `workflow_call.inputs` block for the full input contract.
 
 name: peft-quick-start
 
@@ -24,11 +23,11 @@ concurrency:
 
 on:
   schedule:
-    # Run every 3 hours: '0 */3 * * *' fires at minute 0 of every
-    # 3rd hour (00:00, 03:00, 06:00, ...). GitHub Actions caps
+    # Run every 3 hours: '45 */3 * * *' fires at minute 45 of every
+    # 3rd hour (00:45, 03:45, 06:45, ..., 21:45). GitHub Actions caps
     # schedule at 5 min minimum, so tighter cadences need
     # workflow_dispatch instead.
-    - cron: '0 */3 * * *'
+    - cron: '45 */3 * * *'
   workflow_dispatch:
 
 permissions:
@@ -48,16 +47,8 @@ jobs:
       test_runner: '["linux-aarch64-a2-1"]'
       image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
       container_options: >-
-        --privileged --shm-size=64g
-        --device=/dev/davinci0
-        --device=/dev/davinci_manager
-        --device=/dev/devmm_svm
-        --device=/dev/hisi_hdc
-        --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
-        --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
-        --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
         --volume=/data/ci-cache/modelscope/peft:/root/.cache/modelscope
-      timeout_minutes: 180
+      timeout_minutes: 60
       upstream_repo: huggingface/peft
       # Same URL the legacy workflow monitors: doc-hash state carries
       # over via the shared monitor-state-peft- cache prefix.

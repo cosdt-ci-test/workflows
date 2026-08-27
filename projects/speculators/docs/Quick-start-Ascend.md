@@ -89,29 +89,13 @@ python --version
 Python 3.12.xxx
 ```
 
-安装 `modelscope`：
-
-```shell #test-setup
-pip install 'modelscope==1.37.0'
-```
-
-打印安装版本：
-```shell #test id="install-deps"
-python -c "import modelscope; print(f'modelscope={modelscope.__version__}')"
-```
-
-输出结果如下：
-
-```shell #test-result id="install-deps"
-modelscope=1.37.0
-```
-
-## 安装 vllm-ascend
+#### 安装 vllm-ascend
 
 ```shell #test id="vllm-ascend-install"
-pip install vllm==0.23.0
-pip install \
+uv pip install vllm==0.23.0
+uv pip install \
 --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi vllm-ascend==0.23.0
+
 python -c "import importlib.metadata; print(f'vllm={importlib.metadata.version(\"vllm\")}')"
 python -c "import importlib.metadata; print(f'vllm_ascend={importlib.metadata.version(\"vllm-ascend\")}')"
 python -c "import importlib.metadata; print(f'triton_ascend={importlib.metadata.version(\"triton-ascend\")}')"
@@ -158,6 +142,23 @@ count: 1
 > vllm-ascend / Triton Ascend 与上游 vLLM / Triton 同步发版（vllm-ascend v0.23.0 ↔ vLLM v0.23.0，Triton Ascend 3.2.2 ↔ Triton 3.2.x）；**别混装不兼容组合**——否则 vllm-ascend 启动时报 `vLLM version mismatch`，或 Triton kernel JIT 编译时找不到 NPU backend。
 >
 > 如果 vllm-ascend 0.23.0 还需要额外的 plugin helper（比如 ascend 私有 helpers、特定 transformers extras），第一次 `import vllm_ascend` 会报 ImportError；按 ImportError 加 pip install 即可，不会污染 torch 栈。
+
+#### 安装 modelscope
+
+```shell #test-setup
+uv pip install 'modelscope==1.37.0'
+```
+
+打印安装版本：
+```shell #test id="install-deps"
+python -c "import modelscope; print(f'modelscope={modelscope.__version__}')"
+```
+
+输出结果如下：
+
+```shell #test-result id="install-deps"
+modelscope=1.37.0
+```
 
 ## 安装 Speculators
 

@@ -28,7 +28,13 @@ Scope note: the doc body covers the smoke path for **stock torchvision**
 running under ``torch_npu`` PrivateUse1 dispatch. ``torch`` /
 ``torch_npu`` / ``torchvision`` are all installed by the doc body via
 ``uv pip install`` from Aliyun PyPI mirror / Huawei Cloud ascend pypi
-(versions per [Ascend PyTorch Compatibility 矩阵](https://gitcode.com/Ascend/pytorch/blob/main/COMPATIBILITY.en.md): torch==2.9.0 / torch_npu==2.9.0.post6 / CANN==9.1.0 / torchvision==0.24.0). The doc verifies:
+(versions per [Ascend PyTorch Compatibility 矩阵](https://gitcode.com/Ascend/pytorch/blob/main/COMPATIBILITY.en.md): torch==2.9.0 / torch_npu==2.9.0.post6 / CANN==9.1.0 / torchvision==0.24.0). The source build step additionally
+renames ``torchvision_npu/csrc/ops/npu/npu_decode_video_kernel.{cpp,hpp}``
+to ``*.disabled`` before ``uv pip install -e .`` — that file pulls in
+``<acl/dvpp/hi_dvpp.h>``, which is part of the full CANN toolkit but not
+shipped in the ``cann:9.1.0-910b-ubuntu22.04-py3.12`` base image's
+``torch_npu`` wheel; the smoke path (transforms.v2 on synthetic PIL
+images) does not exercise video decode, so the file is skipped. The doc verifies:
 
 * package + sub-module imports (``torchvision``, ``torchvision.transforms``,
   ``torchvision.transforms.v2``, ``torchvision.io``, ``torchvision.models``)
@@ -85,8 +91,10 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     # Aliyun pytorch-wheels + Huawei Cloud ascend dual-source, then the
     # stock torchvision cpu wheel from Aliyun PyPI mirror, then the
     # Ascend/vision fork source build (C++ compile against torch_npu
-    # on cold cache is ~15 min on a busy runner); 90 min leaves room
-    # for the install + transforms / NPU-dispatch tests that follow.
+    # on cold cache is ~15 min on a busy runner; the doc's source-install
+    # step also renames npu_decode_video_kernel.{cpp,hpp} to *.disabled
+    # so the DVPP header is not required); 90 min leaves room for the
+    # install + transforms / NPU-dispatch tests that follow.
     DEFAULT_COMMAND_TIMEOUT = 5400
 
     # Monitored source is the cosdt-ci-test/workflows fork (this repo):

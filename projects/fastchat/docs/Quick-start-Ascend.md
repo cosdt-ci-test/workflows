@@ -77,8 +77,8 @@ count: 1
 ## 安装 fschat
 
 ```shell #test id="install-fschat"
-python -m pip install "fschat[model_worker]" "transformers<5"
-python -c "import fastchat, transformers; print('fastchat', fastchat.__version__); print('transformers', transformers.__version__)"
+python -m pip install "fschat[model_worker]" "transformers<5" modelscope
+python -c "import fastchat, transformers, modelscope; print('fastchat', fastchat.__version__); print('transformers', transformers.__version__); print('modelscope', modelscope.__version__)"
 ```
 
 输出结果如下（安装日志较长，此处仅展示最后的版本验证输出）：
@@ -86,11 +86,13 @@ python -c "import fastchat, transformers; print('fastchat', fastchat.__version__
 ```shell #test-result id="install-fschat" fuzzy='xxx' fuzzy='...'
 ...fastchat 0.2.36
 transformers xxx
+modelscope xxx
 ...
 ```
 
 > - PyPI 发行名为 `fschat`，安装后的 Python 模块目录为 `fastchat`。
 > - `transformers<5`：fschat 0.2.36 与 transformers 5.x 的 API 不兼容，固定在 4.x 最新版。
+> - `modelscope`：使用 `FASTCHAT_USE_MODELSCOPE=True` 下载模型时必需；FastChat 未将其声明为依赖，需显式安装。
 > - 其余依赖已随 `fschat[model_worker]` 一并解析安装。
 
 ## 非交互式命令行推理（单卡 NPU）

@@ -108,12 +108,11 @@ printf '你好\n __END_OF_A_MESSAGE_47582648__\n __END_OF_A_MESSAGE_47582648__\n
         --max-new-tokens 128
 ```
 
-输出结果如下（ProgrammaticChatIO 输出格式，`xxx` 为模型回复内容）：
+输出结果如下（ProgrammaticChatIO 输出格式；qwen 模板的角色名自带 `<|im_start|>` 标记，`xxx` 为模型回复内容）：
 
 ```shell #test-result id="cli-chat" fuzzy='xxx' fuzzy='...'
-...[!OP:user]: 你好
-[!OP:assistant]: xxx
-...
+...[!OP:<|im_start|>user]: 你好
+...[!OP:<|im_start|>assistant]: xxx...
 ```
 
 > - `FASTCHAT_USE_MODELSCOPE=True`：从 ModelScope 下载模型权重，而不是 HuggingFace Hub；首次运行会下载模型，请耐心等待。

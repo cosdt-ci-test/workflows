@@ -324,6 +324,7 @@ with open("/tmp/last_hidden_path.txt", "w") as _f:
     _f.write(outputs[0].kv_transfer_params["hidden_states_path"])
 PY
 
+python /tmp/extract_hidden.py
 cat /tmp/last_hidden_path.txt
 ```
 

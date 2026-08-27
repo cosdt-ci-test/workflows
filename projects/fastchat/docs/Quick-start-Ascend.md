@@ -77,7 +77,7 @@ count: 1
 ## 安装 fschat
 
 ```shell #test id="install-fschat"
-python -m pip install "fschat[model_worker]"
+uv pip install "fschat[model_worker]"
 python -c "import fschat; print('fschat', fschat.__version__)"
 ```
 

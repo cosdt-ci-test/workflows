@@ -189,6 +189,30 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         that lifecycle hook fires before every test method, which is
         wrong for a one-shot install.
         """
+        # Diagnostic: the doc's install-fschat block kept failing with
+        # "Successfully installed fschat" yet ``import fschat`` raised
+        # ModuleNotFoundError — the wheel landed in a prebuilt conda env
+        # (cann91-py312-fastchat) different from the interpreter the doc
+        # commands resolve to. Print the interpreter + where pip/uv write
+        # so the mismatch is visible in the run log.
+        import shutil
+        import site
+        import sysconfig
+        print(
+            'diag: python=' + sys.executable
+            + ' prefix=' + sys.prefix
+            + ' base_prefix=' + sys.base_prefix
+            + ' purelib=' + sysconfig.get_path('purelib')
+            + ' sites=' + ','.join(site.getsitepackages())
+            + ' pip=' + str(shutil.which('pip'))
+            + ' uv=' + str(shutil.which('uv'))
+            + ' PYTHONHOME=' + os.environ.get('PYTHONHOME', '')
+            + ' CONDA_PREFIX=' + os.environ.get('CONDA_PREFIX', '')
+            + ' VIRTUAL_ENV=' + os.environ.get('VIRTUAL_ENV', '')
+            + ' PATH=' + os.environ.get('PATH', ''),
+            flush=True,
+        )
+
         # 0) CANN env: source set_env.sh and merge the env stream into
         # os.environ
         if os.path.isfile(cls._CANN_SET_ENV):

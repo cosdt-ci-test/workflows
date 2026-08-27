@@ -2,7 +2,7 @@
 
 在单卡昇腾 NPU 上用 FastChat 命令行（CLI）对 `lmsys/vicuna-7b-v1.5` 做**非交互式**推理。
 
-> 本文档聚焦**单卡** NPU（`--device npu`），并从 **ModelScope** 下载模型（设置 `FASTCHAT_USE_MODELSCOPE=True`，绕开 HuggingFace Hub 的网络限制）。CLI 以 **非交互（programmatic）** 方式运行：通过管道把预设输入喂给 stdin，以 `__END_OF_A_MESSAGE_47582648__` 作为一条消息的结束标记，第二条结束标记让 CLI 自动退出——全程无需人工键盘输入。
+> 单卡昇腾 NPU 上非交互式运行 FastChat CLI（`--device npu`），模型经 **ModelScope** 下载（`FASTCHAT_USE_MODELSCOPE=True`）。
 
 ## 前置条件
 

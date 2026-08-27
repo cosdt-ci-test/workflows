@@ -241,7 +241,7 @@ python -c "from modelscope import snapshot_download; print(snapshot_download('Qw
 `speculators convert` 把本地 draft 目录 + verifier 目录读进来，按 DFlash 算法重映射权重、写入 `speculators_config`，输出到一个新目录。CLI 的 `--algorithm` 选项只接受 `eagle` / `eagle3` / `mtp` 三个值（见上游 `src/speculators/__main__.py:99` 的 `click.Choice(["eagle", "eagle3", "mtp"])`），DFlash 不在 CLI 白名单里——DFlash 只在 Python API `convert_model(algorithm="dflash", ...)` 里支持（见 `convert/entrypoints.py:32` 的 `Literal["eagle3", "mtp", "dflash"]`），所以本节走 Python API：
 
 ```shell #test-setup store="dflash_path" load="draft_path>>draft_path" load="verifier_path>>verifier_path"
-python << 'PY' 2>&1 | grep -- 'Saved to: /root/dflash-qwen3-8b-converted' >/dev/null
+python << 'PY'
 from speculators.convert import convert_model
 
 convert_model(
@@ -251,10 +251,12 @@ convert_model(
     output_path="/root/dflash-qwen3-8b-converted",
 )
 PY
+test -f /root/dflash-qwen3-8b-converted/config.json
+test -f /root/dflash-qwen3-8b-converted/model.safetensors
 echo "/root/dflash-qwen3-8b-converted"
 ```
 
-> 这里只 `grep -q 'Saved to:'` 确认 convert 成功（上游 `convert/dflash/converter.py` 的 `_save()` 调用 `logger.success(f"Saved to: {saved_path}")`，无 `validate` 分支依赖）；`grep` 的 stdout 重定向到 `/dev/null` 丢弃，仅保留 `echo` 的纯路径行作为 `store="dflash_path"` 的捕获值（避免多行污染下游 `<dflash_path>` 替换）。下面的 `<dflash_path>` 是测试框架的占位符（`load="dflash_path>>dflash_path"`）：执行 `#test` 块前框架把 `<dflash_path>` 替换成捕获值，bash 看到的命令是路径字面量；不要写 `$dflash_path`，那样 shell 变量在每次 `#test` 都是空、且框架不会做 `$`-展开。
+> 这里**不**再 `python | grep` 过滤输出 —— 那个设计有坑：loguru `logger.success("Saved to: ...")` 写在 stderr，grep 在管道的 stdout 端能匹配；可一旦 convert 抛异常（CI 33049460053 跑出 19.7s 的"快速成功"，但实际 config.json / model.safetensors 都没生成），traceback 走 stderr 也进管道、grep 找不到 "Saved to:" 退出 1，bash 没 `set -e / pipefail`，`echo` 还是照样执行、`dflash_path` 照样被捕获，framework 完全看不到失败。改成：让 python 的 stderr 自由流到框架端（异常 traceback 会触发 `ERROR_MARKERS` 命中，被 `_dump_command_output` 全文 dump），再用两个 `test -f` 显式断言输出文件存在 —— 任何一项失败 `test` 退出 1，整个 setup 块 rc 变 1，框架立即 raise 并把 stderr 一起 dump 出来。`echo` 之后单写一行纯路径，让 `store="dflash_path"` 拿到干净的字符串（避免 `rstrip` 后还带 loguru 的 success 行污染下游 `<dflash_path>` 替换）。下面的 `<dflash_path>` 是测试框架的占位符（`load="dflash_path>>dflash_path"`）：执行 `#test` 块前框架把 `<dflash_path>` 替换成捕获值，bash 看到的命令是路径字面量；不要写 `$dflash_path`，那样 shell 变量在每次 `#test` 都是空、且框架不会做 `$`-展开。
 
 ```shell #test id="pipeline-step1-convert" load="dflash_path>>dflash_path"
 ls -1 <dflash_path>/config.json <dflash_path>/model.safetensors

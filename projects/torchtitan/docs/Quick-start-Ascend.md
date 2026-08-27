@@ -199,7 +199,7 @@ python -c "import torch_npu, runpy; runpy.run_module('torchtitan.train', run_nam
     --training.local-batch-size 1 \
     --training.seq-len 256 \
     --metrics.log-freq 1 \
-    --metrics.disable-color-printing true \
+    --metrics.disable-color-printing \
     --job.dump-folder /tmp/torchtitan-quickstart
 ```
 
@@ -248,7 +248,7 @@ torchrun --nproc_per_node=2 \
     --training.local-batch-size 1 \
     --training.seq-len 256 \
     --metrics.log-freq 1 \
-    --metrics.disable-color-printing true \
+    --metrics.disable-color-printing \
     --job.dump-folder /tmp/torchtitan-quickstart-2card
 ```
 

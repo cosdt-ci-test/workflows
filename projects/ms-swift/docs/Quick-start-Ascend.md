@@ -103,7 +103,7 @@ count: 1
 安装 `transformers` / `peft` / `modelscope`：
 
 ```shell #test-setup
-pip install 'transformers<5.0' 'peft<0.19' 'modelscope==1.37.0'
+uv pip install 'transformers<5.0' 'peft<0.19' 'modelscope==1.37.0'
 ```
 
 打印安装版本：

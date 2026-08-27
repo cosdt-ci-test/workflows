@@ -111,10 +111,6 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     )
     _CONSTRAINTS_FILE = '/tmp/ms_swift_npu_constraints.txt'
 
-    # Cluster-internal nginx PyPI cache + Huawei Cloud ascend dual-source.
-    _CLUSTER_INDEX = 'http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple'
-    _ASCEND_EXTRA = 'https://repo.huaweicloud.com/ascend/repos/pypi'
-
     # CANN toolkit: source once to get ASCEND_HOME / LD_LIBRARY_PATH etc.
     # Path is hard-coded, tied to the GitHub workflow container image
     # (CI_IMAGE).
@@ -200,8 +196,6 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             subprocess.run(
                 [
                     'python', '-m', 'pip', 'install',
-                    '--index-url', cls._CLUSTER_INDEX,
-                    '--extra-index-url', cls._ASCEND_EXTRA,
                     'torch==2.9.0', 'torch_npu==2.9.0.post2',
                 ],
                 check=True,

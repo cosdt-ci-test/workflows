@@ -213,7 +213,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         )
         # Install diffusers for parallel support
         subprocess.run(
-            ['python', '-m', 'pip', 'install', 'git+https://github.com/huggingface/diffusers.git'],
+            ['python', '-m', 'pip', 'install', '-U', 'diffusers'],
             check=True,
         )
 

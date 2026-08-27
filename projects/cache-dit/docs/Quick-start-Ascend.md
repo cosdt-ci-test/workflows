@@ -107,7 +107,7 @@ pip3 install -U cache-dit
 pip3 install --no-deps torchvision==0.23.0
 pip3 install einops sentencepiece accelerate
 # 安装最新 diffusers 支持并行功能
-pip3 install git+https://github.com/huggingface/diffusers.git # or >= 0.36.0
+pip3 install -U diffusers  # 要求 >= 0.36.0（PyPI latest，避免走 github 代理）
 ```
 
 ### 方法二：手动安装 NPU SDK
@@ -162,7 +162,7 @@ pip3 install git+https://github.com/vipshop/cache-dit.git
 **同时安装 diffusers (用于并行支持)**：
 
 ```shell
-pip3 install git+https://github.com/huggingface/diffusers.git # or >= 0.36.0
+pip3 install -U diffusers  # 要求 >= 0.36.0（PyPI latest，避免走 github 代理）
 ```
 
 ## 运行示例

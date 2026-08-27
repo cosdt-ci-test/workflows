@@ -26,7 +26,7 @@ pip3 install --no-deps torchvision==0.23.0
 pip3 install einops sentencepiece accelerate
 
 # Install diffusers for parallel support
-pip3 install git+https://github.com/huggingface/diffusers.git # or >= 0.36.0
+pip3 install -U diffusers  # 要求 >= 0.36.0（PyPI latest，避免走 github 代理）
 
 # Set NPU environment variables
 export ASCEND_RT_VISIBLE_DEVICES="${NPU_DEVICES:-0}"

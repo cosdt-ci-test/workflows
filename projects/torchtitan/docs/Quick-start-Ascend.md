@@ -210,9 +210,11 @@ xxx config.json
 
 `--comm.mode fake_backend` 让 torchtitan 跳过 NCCL/HCCL 集合通信初始化、用 fake process group 跑 1 个 rank 的纯 NPU 计算——验证 toml 配置解析 + 模型搬到 NPU + forward / backward / optimizer 这条**最小**链路，多卡 / 真分布式属于另一个配置面：
 
+> v0.2.2 在 `--comm.mode fake_backend` 分支强制要求 `NGPU=<world_size>` env var（见 `torchtitan/distributed/utils.py:307`），否则 `init_distributed` 直接 `raise ValueError`。fake mode 把 `NGPU` 当 fake world size，不读 `WORLD_SIZE`（那是真分布式路径由 torchrun 注入）。
+
 ```shell #test id="torchtitan-train-debug" load="upstream_ref>>ref" load="ms_tokenizer_path>>ms_tokenizer_path"
 cd torchtitan && git checkout <ref>
-ASCEND_RT_VISIBLE_DEVICES=0 LOCAL_RANK=0 \
+NGPU=1 ASCEND_RT_VISIBLE_DEVICES=0 LOCAL_RANK=0 \
 python -c "import torch_npu, runpy; runpy.run_module('torchtitan.train', run_name='__main__')" \
     --job.config-file ./torchtitan/models/llama3/train_configs/debug_model.toml \
     --model.hf-assets-path <ms_tokenizer_path> \

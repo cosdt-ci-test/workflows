@@ -166,15 +166,15 @@ torchtitan 出厂支持 Llama 3 系列训练。本文档的 `debug_model.toml` �
 下载 Llama 3.2 1B 的 tokenizer 到 ModelScope 缓存——下一个小一点的 Llama，比 Llama 3.1 8B 轻很多；用 `allow_patterns` 只下 tokenizer 相关文件（`config.json` / `tokenizer.json` / `tokenizer.model` / `tokenizer_config.json` / `special_tokens_map.json` / `generation_config.json`，~5 MB），不拉 2.5 GB 权重：
 
 ```shell #test-setup id="modelscope-download-tokenizer" store="ms_tokenizer_path"
-python -c "from modelscope import snapshot_download; print(snapshot_download('LLM-Research/Llama-3.2-1B', allow_patterns=['*.json', '*.model', 'tokenizer*']))"
+python -c "from modelscope import snapshot_download; print(snapshot_download('LLM-Research/Llama-3.2-1B', allow_patterns=['*.json', '*.model', 'tokenizer*']))" | tail -n 1
 ```
 
 > 输出的路径用于后续「单卡训练」和「多卡训练」章节。
 
 验证 tokenizer 真的落盘：
 
-```shell #test id="modelscope-verify-tokenizer" load="ms_tokenizer_path>>MS_TOKENIZER_PATH"
-ls -la "${MS_TOKENIZER_PATH}" | head -10
+```shell #test id="modelscope-verify-tokenizer" load="ms_tokenizer_path>>ms_tokenizer_path"
+ls -la <ms_tokenizer_path> | head -10
 ```
 
 ```shell #test-result id="modelscope-verify-tokenizer" fuzzy='xxx' fuzzy='...'
@@ -186,12 +186,12 @@ xxx config.json
 
 `--comm.mode fake_backend` 让 torchtitan 跳过 NCCL/HCCL 集合通信初始化、用 fake process group 跑 1 个 rank 的纯 NPU 计算——验证 toml 配置解析 + 模型搬到 NPU + forward / backward / optimizer 这条**最小**链路，多卡 / 真分布式属于另一个配置面：
 
-```shell #test id="torchtitan-train-debug" load="upstream_ref>>ref" load="ms_tokenizer_path>>MS_TOKENIZER_PATH"
+```shell #test id="torchtitan-train-debug" load="upstream_ref>>ref" load="ms_tokenizer_path>>ms_tokenizer_path"
 cd torchtitan && git checkout <ref>
 ASCEND_RT_VISIBLE_DEVICES=0 LOCAL_RANK=0 \
 python -c "import torch_npu, runpy; runpy.run_module('torchtitan.train', run_name='__main__')" \
     --job.config_file ./torchtitan/models/llama3/train_configs/debug_model.toml \
-    --tokenizer.path "${MS_TOKENIZER_PATH}" \
+    --tokenizer.path <ms_tokenizer_path> \
     --comm.mode fake_backend \
     --training.steps 1 \
     --training.local_batch_size 1 \
@@ -227,7 +227,7 @@ find /tmp/torchtitan-quickstart -mindepth 1 -maxdepth 3 -printf '%p\n' | head -2
 
 `--comm.mode hierarchical` 走真实 HCCS 集合通信（单机内多卡用 HCCS 做 ring-allreduce），配合 `torchrun --nproc_per_node=2` 起 2 个 rank 的 DDP——验证 collective 初始化 + DDP 梯度同步 + ProcessGroup 销毁这条**真实分布式**链路：
 
-```shell #test id="torchtitan-train-2card" load="upstream_ref>>ref" load="ms_tokenizer_path>>MS_TOKENIZER_PATH"
+```shell #test id="torchtitan-train-2card" load="upstream_ref>>ref" load="ms_tokenizer_path>>ms_tokenizer_path"
 cd torchtitan && git checkout <ref>
 ASCEND_RT_VISIBLE_DEVICES=0,1 \
 PYTORCH_ALLOC_CONF="expandable_segments:True" \
@@ -240,7 +240,7 @@ torchrun --nproc_per_node=2 \
     --tee 3 \
     python -c "import torch_npu, runpy; runpy.run_module('torchtitan.train', run_name='__main__')" \
     --job.config_file ./torchtitan/models/llama3/train_configs/debug_model.toml \
-    --tokenizer.path "${MS_TOKENIZER_PATH}" \
+    --tokenizer.path <ms_tokenizer_path> \
     --comm.mode hierarchical \
     --training.steps 1 \
     --training.local_batch_size 1 \

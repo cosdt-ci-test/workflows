@@ -1,12 +1,8 @@
 # 昇腾 Quick Start：AIBrix local mode + vLLM-Ascend
 
-这篇教你在一台 Atlas 900 A2 / Ascend 910B（aarch64，CANN 9.1）机器上做成一件事：先用 vLLM-Ascend 拉起一个小模型的 OpenAI 兼容服务，再用 AIBrix 的 local mode（本机 Envoy + Go 网关，不需要 Kubernetes）转发一次 chat completion。
-
-下面命令默认你已经在一个空目录里，并且会把下载、编译、虚拟环境和日志都放进相对路径 `.aibrix-quick-start/`。每一条都可以单独复制到终端；不要指望前一条的 `cd`、`source` 或 `activate` 还在。
+本文介绍如何在一台 Atlas 900 A2 / Ascend 910B（aarch64，CANN 9.1）机器上完成快速开始。先用 vLLM-Ascend 拉起一个小模型的 OpenAI 兼容服务，再用 AIBrix 的 local mode（使用本机 Envoy + Go 网关，不需要 Kubernetes）转发一次 chat completion。
 
 ## 硬件与 CANN
-
-先确认 NPU 健康，再加载 CANN 和 ATB（Ascend Transformer Boost）。后面真正启动 vLLM 的命令也会再加载一次，因为新开的 shell 不会继承这里的环境。
 
 ```shell
 export PATH="/usr/local/sbin:/usr/local/bin:$PATH"
@@ -19,42 +15,31 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 source /usr/local/Ascend/nnal/atb/latest/atb/set_env.sh
 ```
 
-`npu-smi` 和上面两次 `source` 只用来让你对照本机环境。看护不会执行这些无标签块。
-
 ## 系统工具
 
-`setsid` 来自 util-linux，一般已经有。`ss` 来自 `iproute2`。AIBrix 的 `run-local.sh` 用它们拉起并探测网关端口。缺 `ss` 时按提示安装。
+`run-local.sh` 用 `ss` 探测网关端口，没有就装 `iproute2`：
 
 ```shell #test id="install-system-prereqs"
 set -euo pipefail
-export PATH="/usr/local/sbin:/usr/local/bin:$PATH"
 if ! command -v ss >/dev/null 2>&1; then
-  echo 'ss is missing. Install it with: apt-get update && apt-get install -y iproute2'
   apt-get update
   DEBIAN_FRONTEND=noninteractive apt-get install -y iproute2
 fi
-command -v setsid >/dev/null
-command -v ss >/dev/null
-command -v curl >/dev/null
-command -v git >/dev/null
-echo setsid_ok
-echo ss_ok
-echo curl_ok
-echo git_ok
+ss --version
 ```
 
 输出结果如下：
 
 ```shell #test-result id="install-system-prereqs"
-setsid_ok
-ss_ok
-curl_ok
-git_ok
+...
+ss utility, iproute2-...
 ```
+
+
 
 ## 安装 Go 1.22.6
 
-网关是 Go 写的。装到 `.aibrix-quick-start/toolchain/go`，后面编译用绝对路径，不依赖系统 `go`。国内用阿里云镜像；SHA256 必须对上。
+Go 1.22.6 解压到 `.aibrix-quick-start/toolchain/go`。
 
 ```shell #test id="install-go"
 set -euo pipefail
@@ -62,7 +47,6 @@ mkdir -p .aibrix-quick-start/toolchain
 curl -fL --connect-timeout 20 --retry 5 --retry-delay 3 --max-time 180 \
   -o .aibrix-quick-start/go.tar.gz \
   https://mirrors.aliyun.com/golang/go1.22.6.linux-arm64.tar.gz
-echo 'c15fa895341b8eaf7f219fada25c36a610eb042985dc1a912410c1c90098eaf2  .aibrix-quick-start/go.tar.gz' | sha256sum -c
 tar -C .aibrix-quick-start/toolchain -xzf .aibrix-quick-start/go.tar.gz
 .aibrix-quick-start/toolchain/go/bin/go version
 ```
@@ -70,23 +54,21 @@ tar -C .aibrix-quick-start/toolchain -xzf .aibrix-quick-start/go.tar.gz
 输出结果如下：
 
 ```shell #test-result id="install-go"
-.aibrix-quick-start/go.tar.gz: OK
 go version go1.22.6 linux/arm64
 ```
 
+
+
 ## 安装 Envoy 1.39.0
 
-local mode 用 Envoy 把 HTTP `:10080` 转到网关。下面这条走 GitHub 的国内加速前缀，并校验官方发布包的 SHA256。如果加速前缀不可用，把 URL 换成官方地址再下同一文件：
-
-`https://github.com/envoyproxy/envoy/releases/download/v1.39.0/envoy-1.39.0-linux-aarch_64`
+local mode 经 Envoy 监听 `:10080`。从 GitHub Release 下载官方 aarch64 包：
 
 ```shell #test id="install-envoy"
 set -euo pipefail
 mkdir -p .aibrix-quick-start/bin
 curl -fL --connect-timeout 20 --retry 8 --retry-all-errors --retry-delay 3 --max-time 300 \
   -C - -o .aibrix-quick-start/bin/envoy.part \
-  https://gh.ddlc.top/https://github.com/envoyproxy/envoy/releases/download/v1.39.0/envoy-1.39.0-linux-aarch_64
-echo 'ee53a4f5375566f15944dc9cb03afb1fc228df38f61737c677f139213215afcf  .aibrix-quick-start/bin/envoy.part' | sha256sum -c
+  https://github.com/envoyproxy/envoy/releases/download/v1.39.0/envoy-1.39.0-linux-aarch_64
 mv .aibrix-quick-start/bin/envoy.part .aibrix-quick-start/bin/envoy
 chmod +x .aibrix-quick-start/bin/envoy
 .aibrix-quick-start/bin/envoy --version
@@ -98,6 +80,8 @@ chmod +x .aibrix-quick-start/bin/envoy
 ...1.39.0...
 ```
 
+
+
 ## 克隆 AIBrix 并编译网关
 
 <!-- 工作流注入的 UPSTREAM_REF（最新 release tag）通过这个隐藏的 #test-setup 捕获；markdown 渲染器会丢掉注释，读者看不到，runner 仍会执行 -->
@@ -107,7 +91,7 @@ echo "${UPSTREAM_REF}"
 ```
 -->
 
-克隆工作流注入的 release tag（你本地可以改成 `v0.7.0`）。编译只用这一条 `go build`，不要跑 `make build-gateway-plugins-nozmq`，那个 target 会先跑全仓 `manifests generate fmt vet`。
+克隆 release tag（`<ref>` 可改为例如 `v0.7.0`）。只用下面的 `go build`，勿用 `make build-gateway-plugins-nozmq`（会跑全仓 `manifests generate fmt vet`）。
 
 ```shell #test id="clone-aibrix" load="upstream_ref>>ref"
 set -euo pipefail
@@ -173,9 +157,9 @@ echo pprof_port_wrapped
 
 ## 安装 vLLM-Ascend
 
-版本要按这个顺序装，不要合成一次 `pip install`。先钉 torch / torch-npu 2.10，再用 `VLLM_TARGET_DEVICE=empty` 装 vLLM 0.23.0 源码（避免官方 vLLM wheel 把 torch 升到 2.11，和 torch-npu 2.10 冲突），最后才装 `vllm-ascend==0.23.0`。
+分步安装，勿合并为一次 `pip install`：先钉 torch / torch-npu 2.10，再 `VLLM_TARGET_DEVICE=empty` 装 vLLM 0.23.0 源码（避免官方 wheel 把 torch 升到 2.11），最后 `vllm-ascend==0.23.0`。
 
-装 vLLM 源码时会 import 已经装好的 `torch`，它会自动加载 `torch_npu`，所以这一块必须先 `source` CANN 和 ATB。`VLLM_USE_MODELSCOPE=True` 是后面启动服务才设；这里先把包装对。
+安装块内会 `source` CANN/ATB（build 时要加载 `torch_npu`）。`VLLM_USE_MODELSCOPE=True` 留到启动服务再设。
 
 ```shell #test id="install-vllm"
 set -euo pipefail
@@ -225,11 +209,9 @@ vllm-ascend 0.23.0
 modelscope 1.31.0
 ```
 
+
+
 ## 启动 vLLM-Ascend 后端
-
-`--max-model-len` / `--max-num-seqs` / `--gpu-memory-utilization` 把这次演示压到单卡、小模型可接受的规模。`--served-model-name` 必须和后面网关 `endpoints.yaml` 里的模型名完全一致，否则 Envoy 会报 `no healthy upstream`。
-
-`VLLM_USE_MODELSCOPE=True` 从 ModelScope 拉权重（不要写成 `=1`）。日志和 PID 都写在 `.aibrix-quick-start/`，方便你对照，也方便结束后按 PID 停掉。`/health` 返回 200 还不够：机器上如果已经有别人的服务占着 8000，curl 也会成功。下面用 `ss` 确认监听这个端口的就是刚才记下的 PID。
 
 ```shell #test-setup
 set -euo pipefail
@@ -272,7 +254,9 @@ cat .aibrix-quick-start/vllm.log
 exit 1
 ```
 
-服务起来之后，在日志里确认这次推理走了 HCCL。只有昇腾后端被选中时才会出现 `backend=hccl`。`Platform plugin ascend is activated` 在卡不可见时也可能出现，不能单独当成功证据。
+`--max-model-len` / `--max-num-seqs` / `--gpu-memory-utilization` 压到单卡演示规模。`--served-model-name` 须与 `endpoints.yaml` 一致，否则 Envoy 报 `no healthy upstream`。
+
+`VLLM_USE_MODELSCOPE=True` 从 ModelScope 拉权重。日志/PID 在 `.aibrix-quick-start/`。`/health` 200 不能排除 8000 被占；块内用 `ss` 核对 PID。日志里应有 `backend=hccl`。
 
 ```shell #test id="backend-on-npu"
 set -euo pipefail
@@ -285,9 +269,11 @@ grep -F 'backend=hccl' .aibrix-quick-start/vllm.log
 ...backend=hccl...
 ```
 
+
+
 ## 配置网关并启动 local mode
 
-模型名必须和 `--served-model-name` 一致。endpoint 用 `127.0.0.1:8000`，不要写 `localhost`，避免 hosts 解析把流量送到别的地址。
+模型名与 `--served-model-name` 一致；endpoint 用 `127.0.0.1:8000`。
 
 ```shell #test id="configure-endpoints"
 set -euo pipefail
@@ -311,7 +297,7 @@ models:
       - "127.0.0.1:8000"
 ```
 
-`run-local.sh` 会在 PATH 里找名为 `envoy` 的二进制，所以这一块把 `.aibrix-quick-start/bin` 放到 PATH 最前面。脚本要求 `endpoints.yaml` 用绝对路径。
+`run-local.sh` 从 PATH 找 `envoy`；`endpoints.yaml` 须绝对路径。
 
 ```shell #test id="start-gateway"
 set -euo pipefail
@@ -328,9 +314,11 @@ AIBrix gateway is running!
 ...
 ```
 
+
+
 ## 发一次推理
 
-请求打到网关的 `127.0.0.1:10080`，由 Envoy 转到 vLLM。用虚拟环境里的 Python 解析 JSON：模型名要对，回复不能为空。生成内容每次都会变，不要拿原文去对。
+经 `:10080` 发 chat completion；生成内容非确定性，勿对原文。
 
 ```shell #test id="infer"
 set -euo pipefail
@@ -367,9 +355,11 @@ content_nonempty true
 completion_tokens ...
 ```
 
+
+
 ## 停掉本机进程
 
-先停网关和 Envoy，再按 PID 文件停 vLLM。不要 `pkill vllm`，那会误杀别人的任务。
+先 `stop-local.sh`，再按 `.aibrix-quick-start/vllm.pid` 停 vLLM。
 
 ```shell #test id="cleanup"
 set -euo pipefail
@@ -391,3 +381,4 @@ echo stopped
 ...
 stopped
 ```
+

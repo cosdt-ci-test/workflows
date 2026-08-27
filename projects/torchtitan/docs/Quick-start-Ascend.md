@@ -179,7 +179,7 @@ torchtitan xxx
 
 ### 下载 tokenizer
 
-torchtitan 出厂支持 Llama 3 系列训练。本文档的单卡用 toy debugmodel（vocab=2048）+ 真 Llama 3 tokenizer（vocab=128256，不真跑 forward 所以 vocab mismatch 不影响）；多卡用上游 8B flavor（vocab=128256 跟 tokenizer 配套，需要拉 ~16 GB 模型权重）。两个章节共用同一个 ModelScope 缓存目录：
+torchtitan 出厂支持 Llama 3 训练。本文档单卡用 toy debugmodel（vocab=2048）+ 真 Llama 3 tokenizer（不跑 forward，vocab mismatch 无影响），多卡用 8B flavor（vocab=128256 配套）。两个章节共用同一份下载：
 
 ```shell #test-setup id="modelscope-download-tokenizer" store="ms_tokenizer_path"
 python -c "from modelscope import snapshot_download; print(snapshot_download('LLM-Research/Meta-Llama-3-8B', allow_patterns=['*.safetensors', '*.json', '*.model', 'tokenizer*']))" | tail -n 1
@@ -242,7 +242,7 @@ python -m torchtitan.train \
 
 ### 多卡训练
 
-用 `torchrun` 起 2 个 rank 跑 8B 真分布式训练（vocab=128256 跟 tokenizer 配套），`--model.flavor 8B` 覆盖 toml 默认 debugmodel。`--training.steps 2` 真跑 2 步 forward + backward + DDP 梯度同步：
+用 torchrun 起 2 个 rank 跑 8B 真分布式训练，`--model.flavor 8B` 覆盖 toml 默认 debugmodel，`--training.steps 2` 真跑 2 步：
 
 ```shell #test id="torchtitan-train-2card" load="upstream_ref>>ref" load="ms_tokenizer_path>>ms_tokenizer_path"
 cd torchtitan && git checkout <ref>

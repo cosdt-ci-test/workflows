@@ -256,7 +256,6 @@ torchrun --nproc_per_node=2 \
     --rdzv_backend c10d \
     --rdzv_endpoint="localhost:0" \
     --local-ranks-filter 0 \
-    --role rank \
     --tee 3 \
     --module torchtitan.train \
     --job.config-file ./torchtitan/models/llama3/train_configs/debug_model.toml \

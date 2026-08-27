@@ -244,7 +244,9 @@ python -m torchtitan.train \
 
 ### 多卡训练
 
-`--comm.mode hierarchical` 走真实 HCCS 集合通信（单机内多卡用 HCCS 做 ring-allreduce），配合 `torchrun --nproc_per_node=2` 起 2 个 rank 的 DDP——验证 collective 初始化 + DDP 梯度同步 + ProcessGroup 销毁这条**真实分布式**链路。多卡场景下 `--checkpoint.create-seed-checkpoint` 不可用（upstream assert `WORLD_SIZE == 1`，见 `torchtitan/train.py:760`），且本 quick-start 不真跑 train_step（理由同上：debugmodel vocab=2048 vs tokenizer vocab=128256 不匹配），所以 train_step 的 while 循环 0 次迭代、save 不触发——本 quick-start 多卡范围只在 stdout 日志层验证 collective 链路：
+`--comm.mode default`（v0.2.2 默认值）走真实 NCCL/HCCL 集合通信，配合 `torchrun --nproc_per_node=2` 起 2 个 rank 的 DDP——验证 collective 初始化 + DDP 梯度同步 + ProcessGroup 销毁这条**真实分布式**链路。多卡场景下 `--checkpoint.create-seed-checkpoint` 不可用（upstream assert `WORLD_SIZE == 1`，见 `torchtitan/train.py:760`），且本 quick-start 不真跑 train_step（理由同上：debugmodel vocab=2048 vs tokenizer vocab=128256 不匹配），所以 train_step 的 while 循环 0 次迭代、save 不触发——本 quick-start 多卡范围只在 stdout 日志层验证 collective 链路：
+
+> v0.2.2 `CommConfig.mode` 是 `Literal["default", "fake_backend", "local_tensor"]`（见 `torchtitan/config/job_config.py:858`），没有 `hierarchical` 这个字面值——`hierarchical` 是 FSDP/EP sharding strategy 维度的概念，跟 `--comm.mode` 是正交两个 namespace，别混淆。
 
 ```shell #test id="torchtitan-train-2card" load="upstream_ref>>ref" load="ms_tokenizer_path>>ms_tokenizer_path"
 cd torchtitan && git checkout <ref>
@@ -260,7 +262,7 @@ torchrun --nproc_per_node=2 \
     --module torchtitan.train \
     --job.config-file ./torchtitan/models/llama3/train_configs/debug_model.toml \
     --model.hf-assets-path <ms_tokenizer_path> \
-    --comm.mode hierarchical \
+    --comm.mode default \
     --training.steps 0 \
     --training.local-batch-size 1 \
     --training.seq-len 256 \

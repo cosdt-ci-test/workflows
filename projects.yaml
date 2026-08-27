@@ -217,15 +217,15 @@ projects:
   # engine's auto-fallback chain handles this transparently — both
   # release sources fail, /tags?per_page=1 picks the latest tag. No
   # caller input is needed.
-  - name: pytorch.vision
+  - name: torch.vision
     category: 训练加速
     support_level: 基础支持
     upstream_repo: Ascend/vision
     phase: A
     runner: linux-aarch64-a2-1
-    dir: projects/pytorch.vision
+    dir: projects/torch.vision
     workflows:
-      quick_start: .github/workflows/pytorch.vision-quick-start.yml
+      quick_start: .github/workflows/torch.vision-quick-start.yml
   # OpenCV quickstart exercises the Huawei CANN backend (BUILD_HUAWEI_NPU=ON)
   # via a from-source build against the ascend-toolkit shipped in the
   # CANN 9.1.0 base image; doc matches the upstream

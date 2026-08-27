@@ -1,6 +1,6 @@
 # Quick Start (Ascend NPU)
 
-在单卡昇腾 NPU 上跑通 `torchvision` 的最小链路：先以 stock `torchvision==0.24.0`（PyPI cpu wheel）路径装一份做快速烟雾测试，再卸载后切到 [Ascend/vision](https://github.com/Ascend/vision) fork 的源码 editable install（覆盖 bridge patch 的 C++ 算子 `deform_conv` / `roi_pool` / cv2 后端 `transform_*` 等），验证 `torchvision.transforms.v2` 的导入与版本，然后把一张合成图走完「PIL → 张量 → NPU 端到端」的烟雾流程。配套版本按 [Ascend PyTorch Compatibility 矩阵](https://gitcode.com/Ascend/pytorch/blob/main/COMPATIBILITY.en.md)：`torch==2.9.0 + torch_npu==2.9.0.post6 + CANN==9.1.0`。
+在单卡昇腾 NPU 上跑通 `torchvision` 的最小链路：从 PyPI 装 stock `torchvision==0.24.0`（linux aarch64 cpu-only wheel，走阿里 PyPI 镜像），验 `torchvision.transforms.v2` 的导入与版本，再把一张合成图走完「PIL → 张量 → NPU 端到端」的烟雾流程。NPU 端的 kernel 命中走 `torch_npu` wheel 自带的 `aten::*` PrivateUse1 dispatch + CPU fallback，无需 [Ascend/vision](https://github.com/Ascend/vision) fork 的 C++ bridge（`deform_conv` / `roi_pool` patch 那些 op 跟 transforms.v2 不沾边）。配套版本按 [Ascend PyTorch Compatibility 矩阵](https://gitcode.com/Ascend/pytorch/blob/main/COMPATIBILITY.en.md)：`torch==2.9.0 + torch_npu==2.9.0.post6 + CANN==9.1.0`。
 
 ## 前置条件
 
@@ -35,7 +35,7 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | CANN | 9.1.0 |
 | torch | 2.9.0+cpu |
 | torch_npu | 2.9.0.post6 |
-| torchvision | 二进制：0.24.0（stock release，cpu wheel 走阿里 PyPI 镜像）；源码：Ascend/vision fork 最新 release tag（`v0.21.0-7.1.0` 形态），C++ 扩展带 NPU 算子注册 |
+| torchvision | 0.24.0（stock release，PyPI linux aarch64 cpu-only wheel，走阿里 PyPI 镜像；fork 不在本文烟雾路径里） |
 | pillow | `>=10.0`（`torchvision.transforms.functional.to_pil_image` 等的运行时依赖） |
 
 ### 前置安装
@@ -139,49 +139,13 @@ python -c "import torchvision; print('torchvision', torchvision.__version__)"
 torchvision xxx
 ```
 
-> 二进制路径只覆盖 Python-level v2 API + `aten::*` NPU dispatch（`torch_npu` wheel 自带），不验 C++ 扩展里 NPU 算子的注册——后者由下面的源码路径验。
-
-### 源码路径（Ascend/vision fork）
-
-为了验 torchvision C++ 扩展**自身**能编出带 NPU 算子的 wheel（bridge patch：`deform_conv` / `roi_pool` / cv2 后端 `transform_*` 等），切到 [Ascend/vision](https://github.com/Ascend/vision) fork 的源码 editable install。框架会自动捕获工作流注入的 `UPSTREAM_REF` 并卸载上一节装的 stock torchvision（这两步对读者隐藏，但保留 `#test-setup` 语义让 doc 测试照样跑通，跟 [ms-swift 模式](projects/ms-swift/docs/Quick-start-Ascend.md)对齐）：
-
-<!-- 
-```shell #test-setup store="upstream_ref"
-echo "${UPSTREAM_REF}"
-```
--->
-
-<!-- 
-```shell #test-setup
-uv pip uninstall torchvision -y
-```
--->
-
-clone fork + editable install。fork 把 `npu_decode_video_kernel.{cpp,hpp}` 挂在 `torchvision_npu/csrc/ops/npu/` 下，默认会被 setup.py 收进 `build_ext` 的源文件列表；这俩文件 `#include <acl/dvpp/hi_dvpp.h>`（CANN 的 Digital Vision Pre-Processing 接口），需要 CANN toolkit 的 dev headers（`$ASCEND_HOME/include/acl/dvpp/`），但 cann:9.1.0-910b 容器里 torch_npu wheel 自带的 `include/third_party/acl/inc/` 只覆盖 ACL 而非 DVPP，编译直接 `fatal error`。本文档的烟雾路径不涉及视频解码，把这俩文件挪走 build 就过：
-
-```shell #test id="vision-install-source" load="upstream_ref>>ref"
-git clone --depth 1 --branch <ref> https://github.com/Ascend/vision.git
-cd vision
-# 把 DVPP 依赖的 decode-video kernel 挪出 build 路径：缺少 $ASCEND_HOME/include/acl/dvpp/hi_dvpp.h
-mv torchvision_npu/csrc/ops/npu/npu_decode_video_kernel.cpp{,.disabled}
-mv torchvision_npu/csrc/ops/npu/npu_decode_video_kernel.hpp{,.disabled}
-uv pip install --no-build-isolation -e .
-python -c "import torchvision; print('torchvision', torchvision.__version__)"
-```
-
-\<ref> 为 Ascend/vision fork 最新 release tag，workflow 通过 `UPSTREAM_REF` 注入。`--no-build-isolation` 是因为 fork 的 `setup.py` 在 build 时 `import torch` / `import torch_npu`，必须复用外层 venv 已经装好的 torch 栈，PEP 517 隔离 venv 拿不到。
-
-打印版本：
-
-```shell #test-result id="vision-install-source" fuzzy='xxx'
-torchvision xxx
-```
-
-> 二进制和源码两条路径**互斥**——运行顺序按 doc 顺序：先 stock wheel，再 fork 源码。下一节 v2 验证跑在 fork 源码装出来的 torchvision 上，验证 `torch_npu` 的 PrivateUse1 dispatch 真被 fork patch 后的 C++ 算子命中（如果只装 stock wheel、未编译 fork，bridge patch 那几个 op 的 NPU 实现就缺失）。
+> 二进制路径只覆盖 Python-level v2 API + `aten::*` NPU dispatch（`torch_npu` wheel 自带），**不验** fork 那边 C++ 扩展的 NPU 算子注册——后者由 [Ascend/vision](https://github.com/Ascend/vision) fork 的 `torchvision_npu.ops` 子包（`deform_conv` / `roi_pool` patch）承担，但本文档的烟雾路径（`transforms.v2.CenterCrop` / `RandomHorizontalFlip` / `Resize` / TVTensor dispatch）不命中这些 op，所以源码 build 没必要：stock cpu wheel 走 `torch_npu` PrivateUse1 dispatch 已经够。
+>
+> 如果后续要把 torchvision 推到 `model.eval().to('npu:0')` 做端到端推理，再单独开一个 fork 路径的 doc（`uv pip install --no-build-isolation -e .` 那个 21 分钟 cold-cache C++ 编译）；那时候也要切到带 DVPP dev headers 的镜像或者像本次调试那样把 `npu_decode_video_kernel.{cpp,hpp}` 挪出 build 路径（CANN base 镜像 `cann:9.1.0-910b-ubuntu22.04-py3.12` 不带 `<acl/dvpp/hi_dvpp.h>`，fork 默认会 `fatal error`）。
 
 ## 验证 transforms.v2
 
-下面 6 节按 torchvision 官方 [Transforms v2 Getting Started](https://docs.pytorch.org/vision/stable/auto_examples/transforms/plot_transforms_getting_started.html) 的章节顺序走，把示例里的 PIL 资产换成合成图（CPU 路径、无网络依赖），每一节都把 transform 输入**显式搬到 NPU**（`img.to('npu:0')`），让 `torch_npu` 注册的 PrivateUse1 dispatch + `aten::*` 的 NPU kernel 真被命中。这 6 节跑在上面的源码路径装出来的 fork 版 torchvision 上，要确认 fork patch 后的 C++ 算子（`F_npu.*` / C++ 端 `nms` / `deform_conv` 等）和 stock 的 Python-level v2 API 都能命中。每一节一个 `#test` 块，跑过即走完整个 v2 API 表面。
+下面 6 节按 torchvision 官方 [Transforms v2 Getting Started](https://docs.pytorch.org/vision/stable/auto_examples/transforms/plot_transforms_getting_started.html) 的章节顺序走，把示例里的 PIL 资产换成合成图（CPU 路径、无网络依赖），每一节都把 transform 输入**显式搬到 NPU**（`img.to('npu:0')`），让 `torch_npu` 注册的 PrivateUse1 dispatch + `aten::*` 的 NPU kernel 真被命中。这 6 节跑在 stock torchvision cpu wheel 上——`transforms.v2` 的 Python-level 调用 + `aten::npu::*` 算子都在 `torch_npu` wheel 自带的 dispatch 表里，不需要 fork patch。每一节一个 `#test` 块，跑过即走完整个 v2 API 表面。
 
 ### Setup
 

@@ -87,13 +87,16 @@ jobs:
       # needed for the doc body's smoke path (transforms.v2 + NPU
       # dispatch on a synthetic PIL image).
       container_options: ''
-      # Doc body does: git clone + uv pip install -r requirements.txt
-      # + uv pip install -e . (compiles torchvision's C++ extensions
-      # against torch_npu) + import checks + transforms.v2 + NPU
-      # dispatch. The C++ compile is the bottleneck on cold cache
-      # (~15 min for the NPU kernels); 90 min leaves room for the
-      # install + compile + all post-install smoke checks.
-      timeout_minutes: 90
+      # Doc body does: uv pip install torch / torch_npu from Aliyun
+      # pytorch-wheels + Huawei Cloud ascend dual-source (torch_npu is
+      # the slowest piece, ~30 min on cold cache), then stock torchvision
+      # cpu wheel from Aliyun PyPI mirror, then 6 transforms.v2 smoke
+      # tests that exercise torch_npu PrivateUse1 dispatch. No source
+      # build — stock cpu wheel + torch_npu PrivateUse1 covers the full
+      # smoke surface (the Ascend/vision fork is a torchvision_npu patch
+      # package whose ops don't intersect transforms.v2). 60 min leaves
+      # room for installs + transforms / NPU-dispatch tests.
+      timeout_minutes: 60
       # Ascend/vision is the fork we actually install from. The doc
       # body references pytorch/vision as the upstream torchvision
       # lineage, but it is NOT what `git clone` points at and it is

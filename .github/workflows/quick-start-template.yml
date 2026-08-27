@@ -1,12 +1,13 @@
 # Quick Start guard engine - the common, reusable part of the quick
 # start guarding pipeline.
 #
-# Design doc: docs/design-quickstart-common-template.md. The guard
-# logic below (monitor / decide / record / publish) is ported verbatim
-# from the legacy single-project workflow ms-swift-quick-start.yml
-# (4ee7f63); only the project-specific values are parameterized as
-# workflow_call inputs. Do not editorialize the bash here - when the
-# guard logic evolves, re-port it from the legacy workflow.
+# The guard logic below (monitor / decide / record / publish) is
+# ported verbatim from the legacy single-project workflow
+# ms-swift-quick-start.yml (4ee7f63); only the project-specific
+# values are parameterized as workflow_call inputs (see the
+# `on.workflow_call.inputs` block below for the full input contract).
+# Do not editorialize the bash here - when the guard logic evolves,
+# re-port it from the legacy workflow.
 #
 # Division of labor:
 #   * The caller (per-project thin trigger, e.g.
@@ -24,10 +25,14 @@
 #     cache version hash (platform / compression differences); only the
 #     test job runs on the project-declared runner inside its container.
 #   * The cluster pip/uv mirror env lives here at test-job level: the
-#     framework bootstrap (src/workflows/__init__.py installs mistune)
-#     runs during test-process import, before any project Python hook
-#     could override env. A project test subclass may still override
-#     these with direct assignment in prepare_environment.
+#     framework dependency (mistune) is installed by the test step's
+#     `python -m pip install 'mistune>=3,<4>'` (see step below), BEFORE
+#     the test process imports. This must be in job env (not in the
+#     test step's `env:` block) because the test-process bootstrap
+#     triggers as soon as `unittest` loads `test_quick_start_ascend`,
+#     before any project Python hook could override it. A project test
+#     subclass may still override PIP_INDEX_URL etc. with direct
+#     assignment in prepare_environment.
 #
 # Test-process env contract (read-only from the test side):
 #   MONITORED_DOC_URL   doc to fetch and execute (inputs.doc_url)
@@ -164,8 +169,10 @@ jobs:
       # back to external mirrors the runner can't reach. These are
       # cluster-level defaults: a project test subclass may override
       # them via direct assignment in prepare_environment (they must
-      # be in job env because the mistune bootstrap runs during test
-      # process import, before any Python hook).
+      # be in job env because the test process's mistune install
+      # (`python -m pip install 'mistune>=3,<4>'` in the test step
+      # below) reads PIP_INDEX_URL before any project Python hook
+      # runs).
       UV_INDEX_URL: "http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple"
       UV_EXTRA_INDEX_URL: "https://repo.huaweicloud.com/ascend/repos/pypi"
       UV_INDEX_STRATEGY: "unsafe-best-match"
@@ -174,6 +181,7 @@ jobs:
       UV_NO_CACHE: "1"
       UV_SYSTEM_PYTHON: "1"
       PIP_INDEX_URL: "http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple"
+      PIP_EXTRA_INDEX_URL: "https://repo.huaweicloud.com/ascend/repos/pypi"
       PIP_TRUSTED_HOST: "cache-service.nginx-pypi-cache.svc.cluster.local"
       PIP_TIMEOUT: "120"
     steps:
@@ -254,8 +262,42 @@ jobs:
           echo "monitor cache: release(id=$last_release_id) doc(hash=$doc_hash) test(result=$test_result error=$test_error)"
 
           # ----- release signal -----
-          curl -fsSL --retry 3 \
-            "$GH_API/repos/${{ env.UPSTREAM_REPO }}/releases/latest" -o /tmp/release.json
+          # Automatic fallback chain — no caller input needed:
+          #   1. /releases/latest          (default path; most upstreams)
+          #   2. /releases?per_page=20     (covers prerelease-only repos, e.g.
+          #                                 torchtitan pre-stable where
+          #                                 /releases/latest 404s because every
+          #                                 release is marked prerelease; picks
+          #                                 most recent non-draft by published_at)
+          #   3. /tags?per_page=1          (covers repos that never publish
+          #                                 GitHub Releases — Ascend/vision is
+          #                                 the canonical case; /releases/latest
+          #                                 404s AND /releases returns [])
+          # Each step normalizes to {id, tag_name} so the downstream .id /
+          # .tag_name reads are uniform across sources. `set -e` is masked
+          # via `|| true` + jq presence checks so a 404 (or an empty body)
+          # at one step falls through cleanly to the next instead of
+          # aborting the whole monitor cycle.
+          : > /tmp/release.json  # start empty; each step either writes or leaves empty
+          if curl -fsSL --retry 3 --max-time 30 \
+              "$GH_API/repos/${{ env.UPSTREAM_REPO }}/releases/latest" -o /tmp/r1.json 2>/dev/null \
+              && jq -e '.tag_name // empty' /tmp/r1.json > /dev/null 2>&1; then
+            mv /tmp/r1.json /tmp/release.json
+            echo "monitor: release source=/releases/latest"
+          elif curl -fsSL --retry 3 --max-time 30 \
+              "$GH_API/repos/${{ env.UPSTREAM_REPO }}/releases?per_page=20" -o /tmp/r2.json 2>/dev/null \
+              && jq -e 'length > 0' /tmp/r2.json > /dev/null 2>&1; then
+            jq -r '[.[] | select(.draft == false)] | sort_by(.published_at) | last | {id: .id, tag_name: .tag_name}' \
+              /tmp/r2.json > /tmp/release.json
+            echo "monitor: release source=/releases?per_page=20 (prerelease fallback)"
+          elif curl -fsSL --retry 3 --max-time 30 \
+              "$GH_API/repos/${{ env.UPSTREAM_REPO }}/tags?per_page=1" -o /tmp/r3.json 2>/dev/null; then
+            jq -r 'if (.[0] // null) != null then {id: .[0].commit.sha, tag_name: .[0].name} else empty end' \
+              /tmp/r3.json > /tmp/release.json
+            echo "monitor: release source=/tags?per_page=1 (tags-only fallback)"
+          else
+            echo "monitor: all three release sources failed; treating as no signal"
+          fi
           CURRENT_RELEASE_ID=$(jq -r '.id // empty' /tmp/release.json)
           CURRENT_RELEASE_TAG=$(jq -r '.tag_name // empty' /tmp/release.json)
 
@@ -354,9 +396,27 @@ jobs:
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             need_to_test="true"
             reason="manual"
-            ref=$(curl -fsSL --max-time 30 "$GH_API/repos/${{ env.UPSTREAM_REPO }}/releases/latest" \
-                   | jq -r '.tag_name // empty')
-            [ -n "$ref" ] || { echo "ERROR: failed to resolve latest upstream release tag"; exit 1; }
+            # Same auto-fallback chain as the monitor step: /releases/latest
+            # -> /releases?per_page=20 -> /tags?per_page=1. Each curl is
+            # guarded with `|| true` + a jq presence check so a 404 or empty
+            # body falls through cleanly. The dispatch path picks `ref`
+            # (the tag_name) directly — no separate SHA lookup is needed
+            # for decision output, so this collapses to three jq
+            # expressions over /tmp/r{1,2,3}.json.
+            ref=""
+            if curl -fsSL --retry 3 --max-time 30 \
+                "$GH_API/repos/${{ env.UPSTREAM_REPO }}/releases/latest" -o /tmp/r1.json 2>/dev/null; then
+              ref=$(jq -r '.tag_name // empty' /tmp/r1.json)
+            fi
+            if [ -z "$ref" ] && curl -fsSL --retry 3 --max-time 30 \
+                "$GH_API/repos/${{ env.UPSTREAM_REPO }}/releases?per_page=20" -o /tmp/r2.json 2>/dev/null; then
+              ref=$(jq -r '[.[] | select(.draft == false)] | sort_by(.published_at) | last | .tag_name // empty' /tmp/r2.json)
+            fi
+            if [ -z "$ref" ] && curl -fsSL --retry 3 --max-time 30 \
+                "$GH_API/repos/${{ env.UPSTREAM_REPO }}/tags?per_page=1" -o /tmp/r3.json 2>/dev/null; then
+              ref=$(jq -r '.[0].name // empty' /tmp/r3.json)
+            fi
+            [ -n "$ref" ] || { echo "ERROR: failed to resolve latest upstream ref (auto-fallback chain exhausted)"; exit 1; }
             echo "monitor decision (manual override): ref=$ref need_to_test=true reason=manual"
           elif [ -f $DECISION_FILE ]; then
             . $DECISION_FILE
@@ -369,6 +429,16 @@ jobs:
             echo "test_ref=$ref" >> "$GITHUB_OUTPUT"
             echo "Monitor fired: reason=$reason ref=$ref"
 
+            # /releases/latest returns .id as the release id (not the
+            # commit SHA); /releases?per_page=20 same. /tags carries the
+            # commit SHA in .commit.sha, but the dispatch path above
+            # doesn't keep that side — and the auto-fallback chain means
+            # the monitor can't tell which source fired. Always doing the
+            # /commits/$ref lookup is one extra API call per fire but
+            # uniformly correct. (Optimization: when /tags fired we
+            # could read .commit.sha directly, but tracking which source
+            # fired across the bash steps would add state for a marginal
+            # saving — not worth it.)
             SHA=$(curl -fsSL "$GH_API/repos/${{ env.UPSTREAM_REPO }}/commits/$ref" \
               | jq -r '.sha // empty')
             [ -z "$SHA" ] && { echo "failed to resolve $ref"; exit 1; }

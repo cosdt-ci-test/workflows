@@ -26,10 +26,10 @@ concurrency:
   cancel-in-progress: false
 
 on:
-  schedule:
+  #schedule:
     # Run every 6 hours: '30 */6 * * *' fires at minute 30 of every
     # 6th hour (00:30, 06:30, 12:30, 18:30).
-    - cron: '30 */6 * * *'
+  #   - cron: '30 */6 * * *'
   workflow_dispatch:
 
 permissions:

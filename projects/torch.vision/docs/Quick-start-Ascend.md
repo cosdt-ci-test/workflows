@@ -157,11 +157,14 @@ uv pip uninstall torchvision -y
 ```
 -->
 
-clone fork + editable install：
+clone fork + editable install。fork 把 `npu_decode_video_kernel.{cpp,hpp}` 挂在 `torchvision_npu/csrc/ops/npu/` 下，默认会被 setup.py 收进 `build_ext` 的源文件列表；这俩文件 `#include <acl/dvpp/hi_dvpp.h>`（CANN 的 Digital Vision Pre-Processing 接口），需要 CANN toolkit 的 dev headers（`$ASCEND_HOME/include/acl/dvpp/`），但 cann:9.1.0-910b 容器里 torch_npu wheel 自带的 `include/third_party/acl/inc/` 只覆盖 ACL 而非 DVPP，编译直接 `fatal error`。本文档的烟雾路径不涉及视频解码，把这俩文件挪走 build 就过：
 
 ```shell #test id="vision-install-source" load="upstream_ref>>ref"
 git clone --depth 1 --branch <ref> https://github.com/Ascend/vision.git
 cd vision
+# 把 DVPP 依赖的 decode-video kernel 挪出 build 路径：缺少 $ASCEND_HOME/include/acl/dvpp/hi_dvpp.h
+mv torchvision_npu/csrc/ops/npu/npu_decode_video_kernel.cpp{,.disabled}
+mv torchvision_npu/csrc/ops/npu/npu_decode_video_kernel.hpp{,.disabled}
 uv pip install --no-build-isolation -e .
 python -c "import torchvision; print('torchvision', torchvision.__version__)"
 ```

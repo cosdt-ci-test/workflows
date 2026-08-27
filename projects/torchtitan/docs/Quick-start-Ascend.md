@@ -192,15 +192,15 @@ xxx config.json
 cd torchtitan && git checkout <ref>
 ASCEND_RT_VISIBLE_DEVICES=0 LOCAL_RANK=0 \
 python -c "import torch_npu, runpy; runpy.run_module('torchtitan.train', run_name='__main__')" \
-    --job.config_file ./torchtitan/models/llama3/train_configs/debug_model.toml \
+    --job.config-file ./torchtitan/models/llama3/train_configs/debug_model.toml \
     --model.hf-assets-path <ms_tokenizer_path> \
     --comm.mode fake_backend \
     --training.steps 1 \
-    --training.local_batch_size 1 \
-    --training.seq_len 256 \
-    --metrics.log_freq 1 \
-    --metrics.disable_color_printing true \
-    --job.dump_folder /tmp/torchtitan-quickstart
+    --training.local-batch-size 1 \
+    --training.seq-len 256 \
+    --metrics.log-freq 1 \
+    --metrics.disable-color-printing true \
+    --job.dump-folder /tmp/torchtitan-quickstart
 ```
 
 输出结果类似如下：
@@ -241,15 +241,15 @@ torchrun --nproc_per_node=2 \
     --role rank \
     --tee 3 \
     python -c "import torch_npu, runpy; runpy.run_module('torchtitan.train', run_name='__main__')" \
-    --job.config_file ./torchtitan/models/llama3/train_configs/debug_model.toml \
+    --job.config-file ./torchtitan/models/llama3/train_configs/debug_model.toml \
     --model.hf-assets-path <ms_tokenizer_path> \
     --comm.mode hierarchical \
     --training.steps 1 \
-    --training.local_batch_size 1 \
-    --training.seq_len 256 \
-    --metrics.log_freq 1 \
-    --metrics.disable_color_printing true \
-    --job.dump_folder /tmp/torchtitan-quickstart-2card
+    --training.local-batch-size 1 \
+    --training.seq-len 256 \
+    --metrics.log-freq 1 \
+    --metrics.disable-color-printing true \
+    --job.dump-folder /tmp/torchtitan-quickstart-2card
 ```
 
 输出结果类似如下：

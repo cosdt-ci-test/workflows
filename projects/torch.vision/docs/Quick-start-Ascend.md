@@ -205,7 +205,16 @@ v2 transform 是 `nn.Module` 风格——单输入单输出。把图搬到 NPU *
 
 ```shell #test id="v2-basics"
 python << 'PY' 2>&1
+import numpy as np
+import torch
+from torchvision import tv_tensors
 from torchvision.transforms import v2
+
+# 复用 v2-setup 的 fixture：每个 #test 跑在独立子进程，img 不能跨块带过来，
+# 这里重建（同一种子 → 同一张图；尺寸 / dtype / TVTensor 类型都对得上）。
+np.random.seed(0)
+arr = (np.random.rand(256, 256, 3) * 255).astype('uint8')
+img = tv_tensors.Image(torch.from_numpy(arr).permute(2, 0, 1))
 
 img_npu = img.to('npu:0')   # 显式搬 NPU；CenterCrop 之后输出也在 NPU
 transform = v2.CenterCrop(size=(224, 224))
@@ -228,9 +237,15 @@ v2 transform 不只处理 image——也支持 BoundingBoxes / Mask / Video / Ke
 
 ```shell #test id="v2-vbmk"
 python << 'PY' 2>&1
+import numpy as np
 import torch
 from torchvision import tv_tensors
 from torchvision.transforms import v2
+
+# 复用 v2-setup 的 fixture（独立子进程，img 不能跨块带过来）
+np.random.seed(0)
+arr = (np.random.rand(256, 256, 3) * 255).astype('uint8')
+img = tv_tensors.Image(torch.from_numpy(arr).permute(2, 0, 1))
 
 H, W = img.shape[-2:]
 boxes = tv_tensors.BoundingBoxes(
@@ -301,9 +316,15 @@ transforms 接受**任意嵌套结构**——单 image、`(img, target)`、dict�
 
 ```shell #test id="v2-input-structure"
 python << 'PY' 2>&1
+import numpy as np
 import torch
 from torchvision import tv_tensors
 from torchvision.transforms import v2
+
+# 复用 v2-setup 的 fixture（独立子进程，img 不能跨块带过来）
+np.random.seed(0)
+arr = (np.random.rand(256, 256, 3) * 255).astype('uint8')
+img = tv_tensors.Image(torch.from_numpy(arr).permute(2, 0, 1))
 
 H, W = img.shape[-2:]
 boxes = tv_tensors.BoundingBoxes(

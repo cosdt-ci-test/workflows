@@ -55,7 +55,7 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 按 [配套镜像](#本文档示例使用的版本) 的 bare CANN 9.1.0 路线，torch + torch_npu 没预装——本节先把它俩装上（CI 走集群 cache + huawei ascend env 默认源，本地读者走 huawei ascend 公网源同样可用）：
 
 ```shell #test-setup
-pip install 'torch==2.10.0' 'torch_npu==2.10.0.post4'
+uv pip install 'torch==2.10.0' 'torch_npu==2.10.0.post4'
 ```
 
 确认能看到 NPU 设备：

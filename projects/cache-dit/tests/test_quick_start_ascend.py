@@ -216,6 +216,10 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             ['python', '-m', 'pip', 'install', '-U', 'diffusers'],
             check=True,
         )
+        subprocess.run(
+            ['python', '-m', 'pip', 'install', 'modelscope'],
+            check=True,
+        )
 
         # Pin cache under a test-scoped subdir outside the bind-mount:
         # the host-side /data/ci-cache persists across CI

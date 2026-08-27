@@ -53,7 +53,7 @@ python -c "import torch, torch_npu; print('torch:', torch.__version__); print('t
 ```
 
 ```shell #test-result id="check-torch" fuzzy='xxx'
-torch: 2.8.0
+torch: 2.8.0+cpu
 torch_npu: 2.8.0.post2
 is_available: True
 count: 1
@@ -228,7 +228,10 @@ print('Available attention backends:', [x for x in dir(cache_dit) if 'attn' in x
 为了验证 Ascend NPU 加速是否真正生效，执行以下实际推理命令。此步骤将生成一张测试图片并验证 NPU 后端是否被激活。
 
 ```shell #test id="npu-function-verification"
-python3 -m cache_dit.generate flux --attn _native_npu \
+export HF_ENDPOINT=https://hf-mirror.com
+export MODELSCOPE_CACHE=/root/.cache/modelscope
+python3 -c "from modelscope import snapshot_download; snapshot_download('AI-ModelScope/FLUX.1-dev', local_dir='/root/.cache/modelscope/cache-dit-flux')"
+python3 -m cache_dit.generate flux --model-path /root/.cache/modelscope/cache-dit-flux --attn _native_npu \
   --prompt "A cat holding a sign that says hello world" \
   --num_inference_steps 10 \
   --height 512 \

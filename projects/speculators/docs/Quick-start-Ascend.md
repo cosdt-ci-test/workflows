@@ -39,9 +39,10 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | torch | 2.10.0+cpu |
 | torch_npu | 2.10.0.post4 |
 | transformers | 由 `speculators` 透传拉入（>=4.56.1,<5.15.0） |
-| vllm | 0.23.0（`--no-deps` 安装，避免顶掉 torch_npu） |
-| triton-ascend | 3.2.2（`--no-deps` 安装，DFlash proposer JIT 编译依赖） |
-| vllm-ascend | 0.23.0 |
+| vllm | 0.23.0（[官方安装路径](#安装-vllm-ascend)，pip 自动解析 deps） |
+| triton-ascend | 3.2.2（由 vllm-ascend 透传拉入，DFlash proposer JIT 编译依赖） |
+| triton | 3.5.0（由 triton-ascend 透传拉入） |
+| vllm-ascend | 0.23.0（`--extra-index-url` 拉华为 ascend 源取 torch_npu + triton-ascend） |
 | modelscope | 1.37.0 |
 | speculators | 最新 release 的源码/二进制 |
 | draft 模型 | [z-lab/Qwen3-8B-DFlash-b16](https://www.modelscope.cn/models/z-lab/Qwen3-8B-DFlash-b16)（DFlash draft，~1 GB） |
@@ -88,6 +89,28 @@ python --version
 Python 3.12.xxx
 ```
 
+#### 安装 vllm-ascend
+
+```shell #test id="vllm-ascend-install"
+uv pip install --index-url https://mirrors.aliyun.com/pypi/simple/ vllm==0.23.0
+uv pip install \
+--extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi vllm-ascend==0.23.0
+
+python -c "import importlib.metadata; print(f'vllm={importlib.metadata.version(\"vllm\")}')"
+python -c "import importlib.metadata; print(f'vllm_ascend={importlib.metadata.version(\"vllm-ascend\")}')"
+python -c "import importlib.metadata; print(f'triton_ascend={importlib.metadata.version(\"triton-ascend\")}')"
+python -c "import importlib.metadata; print(f'triton={importlib.metadata.version(\"triton\")}')"
+```
+
+输出结果如下：
+
+```shell #test-result id="vllm-ascend-install" fuzzy='xxx'
+vllm=0.23.0
+vllm_ascend=0.23.0
+triton_ascend=3.2.2
+triton=3.5.0
+```
+
 检查 NPU 设备运行时可用：
 
 ```shell #test id="check-npu-runtime"
@@ -103,12 +126,10 @@ is_available: True
 count: 1
 ```
 
-> 如果 `import torch_npu` 失败，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查 torch / torch_npu / CANN 三方兼容矩阵。
-
-安装 `modelscope`：
+#### 安装 modelscope
 
 ```shell #test-setup
-pip install 'modelscope==1.37.0'
+uv pip install 'modelscope==1.37.0'
 ```
 
 打印安装版本：
@@ -122,37 +143,12 @@ python -c "import modelscope; print(f'modelscope={modelscope.__version__}')"
 modelscope=1.37.0
 ```
 
-## 安装 vllm-ascend
-
-[vllm-ascend](https://github.com/vllm-project/vllm-ascend) 是 vLLM 在昇腾 NPU 上的官方硬件插件，**Step 2**（`vllm.LLM()` 离线 API 抽 hidden states）+ **Step 4**（`vllm serve --speculative-config` 在线推理）直接 import 它提供的 `ExampleHiddenStatesConnector`（Step 2）和 `dflash` proposer（Step 4）。本文档钉死 **vllm-ascend==v0.23.0**（配套 vLLM v0.23.0 + Triton Ascend 3.2.2）——`extract_hidden_states` 模式与 DFlash proposer 在该版本起对单卡 A2 可见，且 DFlash proposer 在 NPU 上做 kernel JIT 编译依赖 Triton Ascend 3.2.x。CI 走的是 [配套镜像](#本文档示例使用的版本) 的 **bare CANN 9.1.0** 路线（不带 vllm），`prepare_environment` 已经按 [前置条件](#前置条件) 装好了 `torch==2.10.0+cpu` + `torch_npu==2.10.0.post4`，本节负责把 vllm + triton-ascend + vllm-ascend 三个 wheel 在不动 torch 栈的前提下叠上去。**本地读者** 走同一套 pip 命令即可：
-
-```shell #test id="vllm-ascend-install"
-uv pip install --index-url https://mirrors.aliyun.com/pypi/simple --no-deps 'vllm==0.23.0' 'triton-ascend==3.2.2' 'vllm-ascend==0.23.0'
-python -c "import vllm; print(f'vllm={vllm.__version__}')"
-python -c "import vllm_ascend; print(f'vllm_ascend={vllm_ascend.__version__}')"
-python -c "import triton_ascend; print(f'triton_ascend={triton_ascend.__version__}')"
-```
-
-输出结果如下：
-
-```shell #test-result id="vllm-ascend-install" fuzzy='xxx'
-vllm=0.23.0
-vllm_ascend=0.23.0
-triton_ascend=3.2.2
-```
-
-> **三个都 `--no-deps` 的原因**：vllm / vllm-ascend / triton-ascend 的 wheel METADATA 都包含 `Requires-Dist: torch` / `Requires-Dist: triton`（vllm-ascend 因为要给 vllm 注入 NPU 后端，还会显式声明 torch 范围）；NPU 环境下我们已经按 [前置条件](#前置条件) 装好了 `torch==2.10.0+cpu` + `torch_npu==2.10.0.post4`，让它们拉自己原生 torch 会顶掉 torch_npu → `import torch_npu` 直接挂。统一加 `--no-deps` 跳过这三个 wheel 自带的 torch/triton 树，只保留 vllm-ascend 注入 NPU plugin +算子 shim 的二进制部分。
->
-> vllm-ascend / Triton Ascend 与上游 vLLM / Triton 同步发版（vllm-ascend v0.23.0 ↔ vLLM v0.23.0，Triton Ascend 3.2.2 ↔ Triton 3.2.x）；**别混装不兼容组合**——否则 vllm-ascend 启动时报 `vLLM version mismatch`，或 Triton kernel JIT 编译时找不到 NPU backend。
->
-> 如果 vllm-ascend 0.23.0 还需要额外的 plugin helper（比如 ascend 私有 helpers、特定 transformers extras），第一次 `import vllm_ascend` 会报 ImportError；按 ImportError 加 pip install 即可，不会污染 torch 栈。
-
 ## 安装 Speculators
 
 ### 使用 uv 进行安装
 
 ```shell #test id="speculators-install-binary"
-uv pip install --index-url https://mirrors.aliyun.com/pypi/simple speculators
+uv pip install speculators
 speculators --version
 python -c "from importlib.metadata import version; print('speculators', version('speculators'))"
 ```
@@ -241,8 +237,8 @@ python -c "from modelscope import snapshot_download; print(snapshot_download('Qw
 
 `speculators convert` 把本地 draft 目录 + verifier 目录读进来，按 DFlash 算法重映射权重、写入 `speculators_config`，输出到一个新目录。CLI 的 `--algorithm` 选项只接受 `eagle` / `eagle3` / `mtp` 三个值（见上游 `src/speculators/__main__.py:99` 的 `click.Choice(["eagle", "eagle3", "mtp"])`），DFlash 不在 CLI 白名单里——DFlash 只在 Python API `convert_model(algorithm="dflash", ...)` 里支持（见 `convert/entrypoints.py:32` 的 `Literal["eagle3", "mtp", "dflash"]`），所以本节走 Python API：
 
-```shell #test id="pipeline-step1-convert" load="draft_path>>draft_path" load="verifier_path>>verifier_path" store="dflash_path"
-python << 'PY' 2>&1 | grep -oE "Saved to: /root/dflash-qwen3-8b-converted" | head -1
+```shell #test-setup store="dflash_path" load="draft_path>>draft_path" load="verifier_path>>verifier_path"
+python << 'PY'
 from speculators.convert import convert_model
 
 convert_model(
@@ -252,16 +248,21 @@ convert_model(
     output_path="/root/dflash-qwen3-8b-converted",
 )
 PY
-ls -1 /root/dflash-qwen3-8b-converted/config.json /root/dflash-qwen3-8b-converted/model.safetensors
+test -f /root/dflash-qwen3-8b-converted/config.json
+test -f /root/dflash-qwen3-8b-converted/model.safetensors
 echo "/root/dflash-qwen3-8b-converted"
 ```
 
-> 这里只 grep `Saved to:` 这一条 loguru 稳定输出（上游 `convert/dflash/converter.py` 的 `_save()` 调用 `logger.success(f"Saved to: {saved_path}")`，无 `validate` 分支依赖）并显式 `ls` 两个必要产物 + echo 路径做 `store="dflash_path"` 的输出值，避免 loguru 时间戳前缀与字母序陷阱。
+> 这里**不**再 `python | grep` 过滤输出 —— 那个设计有坑：loguru `logger.success("Saved to: ...")` 写在 stderr，grep 在管道的 stdout 端能匹配；可一旦 convert 抛异常（CI 33049460053 跑出 19.7s 的"快速成功"，但实际 config.json / model.safetensors 都没生成），traceback 走 stderr 也进管道、grep 找不到 "Saved to:" 退出 1，bash 没 `set -e / pipefail`，`echo` 还是照样执行、`dflash_path` 照样被捕获，framework 完全看不到失败。改成：让 python 的 stderr 自由流到框架端（异常 traceback 会触发 `ERROR_MARKERS` 命中，被 `_dump_command_output` 全文 dump），再用两个 `test -f` 显式断言输出文件存在 —— 任何一项失败 `test` 退出 1，整个 setup 块 rc 变 1，框架立即 raise 并把 stderr 一起 dump 出来。`echo` 之后单写一行纯路径，让 `store="dflash_path"` 拿到干净的字符串（避免 `rstrip` 后还带 loguru 的 success 行污染下游 `<dflash_path>` 替换）。下面的 `<dflash_path>` 是测试框架的占位符（`load="dflash_path>>dflash_path"`）：执行 `#test` 块前框架把 `<dflash_path>` 替换成捕获值，bash 看到的命令是路径字面量；不要写 `$dflash_path`，那样 shell 变量在每次 `#test` 都是空、且框架不会做 `$`-展开。
+
+```shell #test id="pipeline-step1-convert" load="dflash_path>>dflash_path"
+ls -1 <dflash_path>/config.json <dflash_path>/model.safetensors
+echo <dflash_path>
+```
 
 输出结果如下：
 
 ```shell #test-result id="pipeline-step1-convert"
-Saved to: /root/dflash-qwen3-8b-converted
 /root/dflash-qwen3-8b-converted/config.json
 /root/dflash-qwen3-8b-converted/model.safetensors
 /root/dflash-qwen3-8b-converted
@@ -271,7 +272,7 @@ Saved to: /root/dflash-qwen3-8b-converted
 
 用 vllm-ascend 的 `extract_hidden_states` 离线 API（`vllm.LLM()` + `kv_transfer_config` 配 `ExampleHiddenStatesConnector`，路径与 vllm-ascend `tests/e2e/pull_request/one_card/spec_decode/test_extract_hidden_states.py` 一致）让 verifier 在指定层的 forward pass 输出 hidden states，落到 `/root/dflash-train-data/`：
 
-```shell #test id="pipeline-step2-extract" load="verifier_path>>verifier_path" store="hidden_states_path"
+```shell #test-setup store="hidden_states_path" load="verifier_path>>verifier_path"
 DATA_DIR=/root/dflash-train-data
 rm -rf "$DATA_DIR"
 mkdir -p "$DATA_DIR"
@@ -313,10 +314,14 @@ outputs = llm.generate(prompts, SamplingParams(temperature=0, max_tokens=1))
 # 第一个输出的 hidden_states_path 即可代表整批（kv_connector 对每个 prompt 写一个 .safetensors）
 print(outputs[0].kv_transfer_params["hidden_states_path"])
 PY
-ls -1 /root/dflash-train-data/*.safetensors 2>/dev/null | wc -l
 ```
 
-> `extract_hidden_states` 是 vllm-ascend 的特殊 spec_decode mode：不真做 decoding、每个请求产出 1 token + 把 hidden states 写到 `shared_storage_path`。`outputs[0].kv_transfer_params["hidden_states_path"]` 是 vllm-ascend v0.23.0 引入的 safetensors 单文件格式（更早版本走 `ExampleHiddenStatesConnector.load_hidden_states`，文件路径不可见但 shape 一致）。
+> `extract_hidden_states` 是 vllm-ascend 的特殊 spec_decode mode：不真做 decoding、每个请求产出 1 token + 把 hidden states 写到 `shared_storage_path`。`outputs[0].kv_transfer_params["hidden_states_path"]` 是 vllm-ascend v0.23.0 引入的 safetensors 单文件格式（更早版本走 `ExampleHiddenStatesConnector.load_hidden_states`，文件路径不可见但 shape 一致）。`tail -1` 吃掉 vllm.LLM() 的启动 banner，只留最后一行（hidden_states 路径字符串）作为 `store="hidden_states_path"` 的捕获值。
+
+```shell #test id="pipeline-step2-extract" load="hidden_states_path>>hidden_states_path"
+echo <hidden_states_path>
+ls -1 /root/dflash-train-data/*.safetensors 2>/dev/null | wc -l
+```
 
 输出结果如下：
 
@@ -329,7 +334,7 @@ xxx
 
 用上游 `scripts/train.py` + 单卡 `torchrun --nproc_per_node=1` 训 1 epoch × 10 sample（**smoke 验证管线通，不指望 loss 真下降**）：
 
-```shell #test id="pipeline-step3-train" load="hidden_states_path>>data_path" load="verifier_path>>verifier_path" store="checkpoint_path"
+```shell #test-setup store="checkpoint_path" load="hidden_states_path>>data_path" load="verifier_path>>verifier_path"
 CHECKPOINT_DIR=/root/dflash-trained
 rm -rf "$CHECKPOINT_DIR"
 mkdir -p "$CHECKPOINT_DIR"
@@ -358,10 +363,14 @@ torchrun --standalone --nproc_per_node=1 scripts/train.py \
   --max-anchors 3072 \
   --num-layers 5 \
   --target-layer-ids 2 18 34 \
-  --on-missing generate --on-generate delete
+  --on-missing generate --on-generate delete >/dev/null 2>&1
 
 echo "$CHECKPOINT_DIR"
-ls -1 "$CHECKPOINT_DIR"
+```
+
+```shell #test id="pipeline-step3-train" load="checkpoint_path>>checkpoint_path"
+echo <checkpoint_path>
+ls -1 <checkpoint_path>
 ```
 
 输出结果如下：

@@ -28,7 +28,7 @@ Atlas 900 A2 / A3 训练系列产品或其他兼容的 Ascend NPU，至少有一
 | CANN | 9.1.0 |
 | torch | 2.9.0 |
 | torch_npu | 2.9.0.post2 |
-| transformers | 当前被测试的 checkout |
+| transformers | 最新 release（由 workflow 解析为最新 release tag） |
 | accelerate | 当前稳定版本 |
 | 模型 | `Qwen/Qwen2.5-1.5B` |
 | NPU | Ascend 910B4 × 1 |

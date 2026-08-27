@@ -1,7 +1,7 @@
 """Quick-start-Ascend documentation test: end-to-end case built on top
 of the ``MarkdownDocTestBase`` contract.
 
-Document under test: ``projects/cache-dit/docs/Quick-start-Ascend.md``
+Document under test: ``projects/torchtitan/docs/Quick-start-Ascend.md``
 (follows the ``docs/markdown_doc_test_label.md`` contract: every
 ``shell`` code block carries one of the ``#test`` / ``#test-setup`` /
 ``#test-result`` labels plus ``id=`` / ``store=`` / ``load='x>>y'`` /
@@ -10,7 +10,7 @@ Document under test: ``projects/cache-dit/docs/Quick-start-Ascend.md``
 Run: ``python -m unittest tests.test_quick_start_ascend -v 2>&1``
 
 Environment variables (injected by GitHub workflow
-``cache-dit-quick-start.yml``):
+``torchtitan-quick-start.yml``):
     ``MONITORED_DOC_URL``         Required; raw URL of the document under test.
     ``UPSTREAM_REF``              Required; bash reads ``$UPSTREAM_REF`` to get
                                   the latest release tag. The value is
@@ -30,7 +30,6 @@ from __future__ import annotations
 import os
 import subprocess
 import unittest
-from pathlib import Path
 
 from workflows.markdown_doc_test_base import MarkdownDocTestBase
 
@@ -48,19 +47,54 @@ def _e2e_enabled() -> bool:
 
 
 class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
-    """``Quick-start-Ascend.md`` end-to-end test: fetch doc -> validate
-    contract -> run ``#test-setup`` / ``#test`` in order -> compare against
-    ``#test-result``."""
+    """``Quick-start-Ascend.md`` end-to-end test: fetch doc → validate
+    contract → run ``#test-setup`` / ``#test`` in order → compare against
+    ``#test-result``.
 
-    DEFAULT_COMMAND_TIMEOUT = 1800  # 30 min: long enough for cache-dit generation, short enough to fail fast on hangs
-    USER_AGENT = 'cosdt-ci-test/quick-start'  # monitored source is the fork under cosdt-ci-test org
+    The test subclass itself does not own any ``test_*`` method beyond the
+    template-method entry; the doc body is the spec. ``prepare_environment``
+    makes sure ``torch_npu`` is in place before the framework starts executing
+    doc commands (the doc itself does ``git clone`` + ``uv pip install -r
+    requirements.txt && uv pip install -e . --no-deps`` on a ``<ref>``
+    checkout, but we still probe to fail fast on obviously broken runners).
+    """
+
+    # torchtitan's smallest meaningful command — `python -m torchtitan.train
+    # --job.config_file ./.../debug_model.toml --training.steps 1
+    # --comm.mode fake_backend` — needs to: clone torchtitan (~5 MB
+    # sparse), `uv pip install -r requirements.txt` (torchdata / datasets /
+    # tensorboard / wandb / fsspec / tyro / tokenizers / safetensors /
+    # einops / pillow on v0.2.x; cluster cache resolves most in well under
+    # a minute on a warm runner), `uv pip install -e . --no-deps`, then run
+    # a 1-step fake-backend training that builds the Llama 3 debug model
+    # (~256 dim / 6 layers) on NPU. 22 minutes gives cold-cache room for
+    # the install chain (a torchdata/datasets pair on a cold cluster cache
+    # takes a few minutes) without letting a hung training run block the
+    # queue.
+    DEFAULT_COMMAND_TIMEOUT = 1300
+
+    # Monitored source is the cosdt-ci-test/workflows fork (this repo): the
+    # doc lives at projects/torchtitan/docs/Quick-start-Ascend.md and the
+    # engine sets MONITORED_DOC_URL to the raw.githubusercontent.com URL
+    # for the same path. Upstream torchtitan's quickstart lives at
+    # pytorch/torchtitan/README.md and is referenced from inside the doc
+    # body, but it is NOT the file under test.
+    USER_AGENT = 'cosdt-ci-test/quick-start'
+
+    # Extend the base ERROR_MARKERS with CANN's typo + sentinel so a CANN
+    # failure surfaces a full stderr dump (head/tail by default would hide
+    # the line that names the failure).
     ERROR_MARKERS = (
-        *MarkdownDocTestBase.ERROR_MARKERS,  # generic [ERROR] + Traceback
-        'applicaiton exception',  # CANN toolkit emits this typo (sic) in its Python driver
+        *MarkdownDocTestBase.ERROR_MARKERS,
+        'applicaiton exception',  # CANN toolkit emits this typo (sic)
         'ERR99999',  # CANN sentinel for unrecoverable runtime failure
     )
 
-    # Process-level CUDA exclusion list. Write to /tmp and export; subprocesses inherit parent env.
+    # Process-level CUDA exclusion list. Same rationale as the ms-swift
+    # test: write to /tmp and export, so subprocesses (subprocess.run
+    # inherits parent env by default) see it. torchtitan's transitive
+    # deps (datasets) occasionally pull CUDA-marked wheels if
+    # the resolver sees the cluster cache's CUDA index first.
     _CUDA_CONSTRAINTS = (
         'cuda-toolkit<0',
         'cuda-python<0',
@@ -101,31 +135,39 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         'nvidia-nvjitlink-cu12<0',
         'nvidia-nvtx-cu12<0',
     )
-    _CONSTRAINTS_FILE = '/tmp/cache_dit_npu_constraints.txt'
+    _CONSTRAINTS_FILE = '/tmp/torchtitan_npu_constraints.txt'
 
     # Cluster-internal nginx PyPI cache + Huawei Cloud ascend dual-source.
     _CLUSTER_INDEX = 'http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple'
     _ASCEND_EXTRA = 'https://repo.huaweicloud.com/ascend/repos/pypi'
 
     # CANN toolkit: source once to get ASCEND_HOME / LD_LIBRARY_PATH etc.
-    # Path is hard-coded, tied to the GitHub workflow container image (CI_IMAGE).
+    # Path is hard-coded, tied to the GitHub workflow container image.
     _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
 
     # ----------------------------------------------------------
-    # prepare_environment: CUDA constraints + uv + torch stack probe + cache-dit deps
+    # prepare_environment: CANN env + CUDA constraints + torch stack probe
     # ----------------------------------------------------------
 
     @classmethod
     def prepare_environment(cls) -> None:
-        """Install CANN env + CUDA constraints + uv + torch stack probe
-        + cache-dit dependencies in one go.
+        """Install CANN env + CUDA constraints + torch stack probe.
 
-        Class-level setup: run once per test class, triggered by
-        ``setUpClass``. Not the same as ``unittest.TestCase.setUp`` —
-        that lifecycle hook fires before every test method, which is
-        wrong for a one-shot install.
+        torchtitan itself is intentionally NOT pre-installed here: the doc
+        body runs ``git clone`` + ``uv pip install -r requirements.txt &&
+        uv pip install -e . --no-deps`` against the upstream release tag
+        injected by the workflow, so the test exercises the exact install
+        path users get.
+
+        What this hook does pre-install:
+            * CANN env (so torch_npu is importable);
+            * CUDA exclusion list (so an accidental ``nvidia-cudnn`` pull
+              doesn't shadow the NPU build);
+            * torch / torch_npu, only if the image's pre-installed wheels
+              don't already match the version matrix.
         """
-        # 0) CANN env: source set_env.sh and merge the env stream into os.environ
+        # 0) CANN env: source set_env.sh and merge the env stream into
+        # os.environ
         if os.path.isfile(cls._CANN_SET_ENV):
             merged = subprocess.run(
                 ['bash', '-c', f'source {cls._CANN_SET_ENV} >/dev/null 2>&1; env'],
@@ -136,8 +178,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                     continue
                 key, _, value = line.partition('=')
                 # Don't overwrite envs explicitly injected by the
-                # workflow (jobs.env / steps.env); only fill in CANN
-                # keys that are missing, to avoid conflicts.
+                # workflow; only fill in CANN keys that are missing.
                 os.environ.setdefault(key, value)
             print('setup: sourced CANN env from set_env.sh')
         else:
@@ -151,8 +192,11 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         os.environ['PIP_CONSTRAINT'] = cls._CONSTRAINTS_FILE
         os.environ['UV_CONSTRAINT'] = cls._CONSTRAINTS_FILE
 
-        # 2) uv: the test setup calls ``uv pip install`` which handles
-        # PEP 517 build deps more reliably than pip. Inherit
+        # 2) uv: the doc body's install step is
+        # ``uv pip install -r requirements.txt && uv pip install -e .
+        # --no-deps``, which gives clean stdout (no pip's "Obtaining /
+        # Installing collected packages" preamble) so the #test-result
+        # fuzzy match against ``torchtitan xxx`` isn't polluted. Inherit
         # ``PIP_INDEX_URL`` + ``PIP_TRUSTED_HOST`` from the yml job-level
         # env (cluster cache path + trusted-host).
         subprocess.run(
@@ -163,11 +207,15 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         # 3) torch stack probe: when version matches the image's
         # pre-installed wheels, reuse them to avoid the cluster cache
         # triggering ``+cpu`` resolution.
+        # torchtitan v0.2.1+ imports ``torch.nn.attention.varlen`` (added
+        # in torch 2.10), so the test env must have torch 2.10.0 +
+        # torch_npu 2.10.0.post4. Same matrix validated for speculators
+        # on the same CANN 9.1.0 base image.
         _PROBE_SCRIPT = (
             'import torch, torch_npu\n'
             "raise SystemExit(0 if "
-            "torch.__version__.startswith('2.8.0') "
-            "and torch_npu.__version__.startswith('2.8.0') "
+            "torch.__version__.startswith('2.10.0') "
+            "and torch_npu.__version__.startswith('2.10.0') "
             "else 1)"
         )
         probe = subprocess.run(
@@ -186,49 +234,26 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             )
             print(f'setup: reusing image torch stack ({versions.stdout.strip()})')
         else:
-            print('setup: installing torch==2.8.0 torch_npu==2.8.0.post2')
+            print('setup: installing torch==2.10.0 torch_npu==2.10.0.post4')
             subprocess.run(
                 [
                     'python', '-m', 'pip', 'install',
                     '--index-url', cls._CLUSTER_INDEX,
                     '--extra-index-url', cls._ASCEND_EXTRA,
-                    'torch==2.8.0', 'torch_npu==2.8.0.post2',
+                    'torch==2.10.0', 'torch_npu==2.10.0.post4',
                 ],
                 check=True,
             )
 
-        # 4) cache-dit and dependencies
-        print('setup: installing cache-dit and dependencies...')
-        subprocess.run(
-            ['python', '-m', 'pip', 'install', '-U', 'cache-dit'],
-            check=True,
-        )
-        subprocess.run(
-            ['python', '-m', 'pip', 'install', '--no-deps', 'torchvision==0.23.0'],
-            check=True,
-        )
-        subprocess.run(
-            ['python', '-m', 'pip', 'install', 'einops', 'sentencepiece', 'accelerate'],
-            check=True,
-        )
-        # Install diffusers for parallel support
-        subprocess.run(
-            ['python', '-m', 'pip', 'install', '-U', 'diffusers'],
-            check=True,
-        )
-        subprocess.run(
-            ['python', '-m', 'pip', 'install', 'modelscope'],
-            check=True,
-        )
-
-        # Pin cache under a test-scoped subdir outside the bind-mount:
-        # the host-side /data/ci-cache persists across CI
-        # runs and accumulates stale files that would
-        # otherwise surface here as hash mismatches. This keeps each
-        # run's cache isolated in the container's local fs.
-        os.environ.setdefault(
-            'HOME', str(Path.home())
-        )
+        # 4) torchtitan transitive deps (tyro / tokenizers / safetensors /
+        # datasets / tensorboard / wandb / torchdata / fsspec / einops /
+        # pillow) are all declared in the release's `requirements.txt`. The
+        # doc body's `uv pip install -r requirements.txt` block installs
+        # them itself; pre-installing here would just be a redundant
+        # `uv pip install` on top of that.
+        #
+        # The only doc-time env-setup that's NOT inside requirements.txt
+        # is `uv` itself, which step (2) above already installs.
 
     # ----------------------------------------------------------
     # test entry
@@ -236,8 +261,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        """Run env setup once per test class: CUDA constraints + uv +
-        torch stack + cache-dit + CANN env.
+        """Run env setup once per test class.
 
         ``@unittest.skipIf`` only skips the test *method* — ``setUpClass``
         itself always runs. The ``if _e2e_enabled()`` body guard below is

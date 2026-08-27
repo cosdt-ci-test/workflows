@@ -83,6 +83,13 @@ python --version
 Python 3.12.xxx
 ```
 
+安装 `torch` / `torch_npu`：
+
+```shell #test-setup
+uv pip install -f https://mirrors.aliyun.com/pytorch-wheels/cpu torch==2.9.0
+uv pip install --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi torch_npu==2.9.0.post2
+```
+
 检查 torch / torch_npu 是否装好且 NPU 设备可用：
 
 ```shell #test id="check-torch"
@@ -103,7 +110,7 @@ count: 1
 安装 `transformers` / `peft` / `modelscope`：
 
 ```shell #test-setup
-pip install 'transformers<5.0' 'peft<0.19' 'modelscope==1.37.0'
+uv pip install 'transformers<5.0' 'peft<0.19' 'modelscope==1.37.0'
 ```
 
 打印安装版本：

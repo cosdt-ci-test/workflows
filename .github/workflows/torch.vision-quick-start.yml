@@ -1,0 +1,124 @@
+# torch.vision quick start guard - project thin trigger.
+#
+# Calls the common engine .github/workflows/quick-start-template.yml;
+# this file only declares what varies per project: schedule,
+# concurrency, runner, container image + options, upstream repo,
+# monitored doc, and the test entry command. The guard loop, cache
+# I/O, state relay and publishing all live in the engine. See the
+# engine's `workflow_call.inputs` block for the full input contract.
+#
+# Cache keys (monitor-state-torch.vision-*) and artifact names
+# are derived from project=torch.vision, not from the workflow name.
+# The dot in the project name is allowed by both GitHub cache keys
+# (treated as a literal character) and artifact names (alphanumeric
+# + dot + hyphen + underscore per GitHub's artifact name rules); see
+# https://docs.github.com/en/actions/using-workflows/storing-workflow-data-as-artifacts
+#
+# Upstream: github.com/Ascend/vision (the NPU-aware fork of
+# pytorch/vision). The fork's tags (e.g. v0.21.0-7.1.0) carry the
+# Ascend adapter version alongside the upstream torchvision version.
+# Ascend/vision does NOT publish GitHub Releases — its maintainers
+# push annotated git tags only, so /releases/latest 404s and
+# /releases returns []. The PyPI torchvision wheel is CPU+CUDA only
+# (the doc body never installs it), so polling /releases/latest is
+# both wrong (404s) and irrelevant — this workflow flips the engine
+# to release_source=tags, which hits /tags?per_page=1 and normalizes
+# to the same {id, tag_name} shape.
+#
+# No container devices / volumes: torch_npu auto-registers with the
+# CANN base image, and torchvision transforms run on synthetic PIL
+# images generated in-process — no `modelscope snapshot_download`
+# and no host driver bind-mounts needed. End-to-end
+# `torchvision.models.resnet50().to('npu:0')` is documented as
+# out-of-scope (model-side NPU inference needs Ascend/vision's
+# model zoo, which is a separate effort).
+
+name: torch.vision-quick-start
+
+concurrency:
+  # format() is load-bearing: a '||' between 'manual-' and
+  # github.run_id would short-circuit on the truthy literal and
+  # every dispatch would share one 'manual-' group.
+  group: ${{ github.event_name == 'schedule' && 'torch.vision-quick-start-schedule' || format('manual-{0}', github.run_id) }}
+  # cancel-in-progress: false because (1) a schedule run cancelled
+  # mid-way loses its outcome writeback - the outcome is what makes
+  # the retry mechanism work, and the 'if: always()' guard isn't
+  # enough when the container is being torn down; (2) dispatch runs
+  # already live in unique groups so there's nothing to cancel.
+  cancel-in-progress: false
+
+on:
+  schedule:
+    # Run every 6 hours: '30 */6 * * *' fires at minute 30 of every
+    # 6th hour (00:30, 06:30, 12:30, 18:30). Cadence is loose enough
+    # for an upstream that releases a few times a year (Ascend/vision
+    # tracks pytorch/vision's torchvision releases — roughly one per
+    # quarter as of writing), but tight enough that doc fixes
+    # propagate within a day. Minute 30 (not 0) avoids collisions
+    # with torchtune (0 */6) and torchtitan (0 */6), which share the
+    # same a2-1 runner.
+    - cron: '30 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Job ID rules: alphanumeric + '-' + '_' only, no dots. The
+  # workflow name (line above) and concurrency group string can
+  # still keep the dotted form (those are just string values, not
+  # identifiers), but the jobs:<id> key is parsed as an identifier
+  # by GitHub Actions and rejects the dot with the F8 lint error
+  # 'torch.vision-quick-start' is invalid.
+  torch-vision-quick-start:
+    uses: ./.github/workflows/quick-start-template.yml
+    with:
+      # Namespaces cache keys (monitor-state-torch.vision-*),
+      # artifacts (torch.vision-quick-start-<run_id>) and the test
+      # working dir (workflows/projects/torch.vision).
+      project: torch.vision
+      # Self-hosted NPU runner for the test job only; the engine pins
+      # the cache I/O jobs (restore-cache / publish-and-persist) to
+      # GitHub-hosted ubuntu-latest.
+      test_runner: '["linux-aarch64-a2-1"]'
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+      # Empty: torch_npu auto-registers with the CANN base image; no
+      # /dev/davinci* mounts or /usr/local/Ascend/* bind-mounts are
+      # needed for the doc body's smoke path (transforms.v2 + NPU
+      # dispatch on a synthetic PIL image).
+      container_options: ''
+      # Doc body does: git clone + uv pip install -r requirements.txt
+      # + uv pip install -e . (compiles torchvision's C++ extensions
+      # against torch_npu) + import checks + transforms.v2 + NPU
+      # dispatch. The C++ compile is the bottleneck on cold cache
+      # (~15 min for the NPU kernels); 90 min leaves room for the
+      # install + compile + all post-install smoke checks.
+      timeout_minutes: 90
+      # Ascend/vision is the fork we actually install from. The doc
+      # body references pytorch/vision as the upstream torchvision
+      # lineage, but it is NOT what `git clone` points at and it is
+      # NOT the source of the tag substituted into <ref>.
+      upstream_repo: Ascend/vision
+      # Ascend/vision ships tags only, no GitHub Releases —
+      # /releases/latest 404s and /releases returns []. The engine's
+      # auto-fallback chain handles this transparently: releases
+      # sources fail, /tags?per_page=1 picks the latest annotated tag.
+      # No caller input needed.
+      # Contents API (NOT raw.githubusercontent.com): the engine's
+      # monitor already sends `Authorization: Bearer $GH_TOKEN` +
+      # `Accept: application/vnd.github.raw`, which is exactly the
+      # Contents API contract for raw markdown. The `?ref=${{
+      # github.sha }}` pins the URL to the commit that triggered the
+      # workflow, eliminating the main branch pointer race (raw
+      # URL form would hash whatever main points at *now*, which can
+      # drift between monitor and test fetch on long schedule runs).
+      # `markdown_doc_test_base.py:674-675` already special-cases
+      # `api.github.com` URLs and re-applies the same Accept header
+      # on the test-side fetch.
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/torch.vision/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/torch.vision/docs/Quick-start-Ascend.md
+      # cwd is workflows/projects/torch.vision; env contract (MONITORED_DOC_URL /
+      # UPSTREAM_REF / NPU_READY) is injected by the engine. All project
+      # env prep and installs are in the test subclass's
+      # prepare_environment hook.
+      test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1

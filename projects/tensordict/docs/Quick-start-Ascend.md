@@ -1,6 +1,6 @@
 # Quick Start (Ascend NPU)
 
-在单卡昇腾 NPU 上跑通 [tensordict](https://github.com/pytorch/tensordict) 的核心特性链：安装 tensordict，逐节验证 `TensorDict` 在 NPU 上的 13 个核心入口——基础构造、元数据访问、字典语义、嵌套、类张量运算、上下文管理器、分布式接口、`state_dict` 表示、函数式编程、参数序列化与数据集落盘、`map` 预处理、懒分配（`make_tensordict`）、`@tensorclass` 装饰器——全部跑在 `npu:0` 上，验证 `torch_npu` 路由正确、AP 无回落。
+在单卡昇腾 NPU 上跑通 [tensordict](https://github.com/pytorch/tensordict) 的核心特性链：安装 tensordict，逐节验证 `TensorDict` 在 NPU 上的 13 个核心入口——基础构造、元数据访问、字典语义、嵌套、类张量运算、上下文管理器、分布式接口、`state_dict` 表示、函数式编程、参数序列化与数据集落盘、`map` 预处理、懒分配（`make_tensordict`）、`@tensorclass` 装饰器。
 
 
 ## 前置条件
@@ -114,13 +114,13 @@ tensordict xxx
 ```
 - xxx 表示最新的版本号
 
+### 从源码安装
+
 <!--
 ```shell #test-setup
 uv pip uninstall tensordict -y
 ```
 -->
-
-### 从源码安装
 
 <!--
 ```shell #test-setup store="upstream_ref"
@@ -128,12 +128,11 @@ echo "${UPSTREAM_REF}"
 ```
 -->
 
-用 `git clone --depth 1 --branch <ref>` 直接浅克隆工作流注入的最新 release tag，安装并且验证：
 
 ```shell #test id="tensordict-install-source" load="upstream_ref>>ref"
 git clone --depth 1 --branch <ref> https://github.com/pytorch/tensordict.git
 cd tensordict
-uv pip install -e .
+uv pip install -e . --config-settings editable_mode=compat
 python -c "import tensordict; print('tensordict', tensordict.__version__)"
 ```
 
@@ -228,7 +227,7 @@ print('keys after del', sorted(td.keys()))
 has next False
 get next None
 get next default missing
-reward tensor([1., 1., 1.])
+reward tensor([1., 1., 1.], device='npu:0')
 keys after set ['action', 'obs', 'reward']
 keys after del ['action', 'reward']
 ```
@@ -282,7 +281,7 @@ print('squeeze shape', td.unsqueeze(0).squeeze(0).shape)
 ```shell #test-result id="td-tensor-like"
 td.shape torch.Size([3])
 td + 1 obs sum 24.0
-td[0] obs tensor([1., 1., 1., 1.])
+td[0] obs tensor([1., 1., 1., 1.], device='npu:0')
 unsqueeze shape torch.Size([1, 3])
 squeeze shape torch.Size([3])
 ```
@@ -381,6 +380,7 @@ import torch, torch_npu
 import torch.nn as nn
 from tensordict import TensorDictParams
 torch.manual_seed(42)
+torch.npu.manual_seed(42)
 linear = nn.Linear(3, 4).to('npu:0')
 params = TensorDictParams(linear.state_dict())
 x = torch.randn(2, 3, device='npu:0')
@@ -394,7 +394,7 @@ print('out sum', out.sum().item())
 
 ```shell #test-result id="td-functional"
 out shape torch.Size([2, 4])
-out sum 2.6961772441864014
+out sum 1.3248364925384521
 ```
 
 ### 10. TensorDict for parameter serialization and building datasets — memmap 落盘

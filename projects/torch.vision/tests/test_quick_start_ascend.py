@@ -24,12 +24,11 @@ Environment variables (injected by GitHub workflow
                                   have no ``/dev/davinci*`` device, and the
                                   hard run would fail on ``import torch_npu``.
 
-Scope note: the doc body covers the smoke path for
-[Ascend/vision](https://github.com/Ascend/vision) — the NPU-aware fork
-of ``pytorch/vision``. The PyPI ``torchvision`` wheel is CPU+CUDA only,
-so the doc body does **not** exercise the binary install path; it goes
-straight to source install (``git clone`` + ``uv pip install -e .``)
-against the workflow-injected release tag, then verifies:
+Scope note: the doc body covers the smoke path for **stock torchvision**
+running under ``torch_npu`` PrivateUse1 dispatch. ``torch`` /
+``torch_npu`` / ``torchvision`` are all installed by the doc body via
+``uv pip install`` from Aliyun PyPI mirror / Huawei Cloud ascend pypi
+(versions per [Ascend PyTorch Compatibility 矩阵](https://gitcode.com/Ascend/pytorch/blob/main/COMPATIBILITY.en.md): torch==2.9.0 / torch_npu==2.9.0.post6 / CANN==9.1.0 / torchvision==0.24.0). The doc verifies:
 
 * package + sub-module imports (``torchvision``, ``torchvision.transforms``,
   ``torchvision.transforms.v2``, ``torchvision.io``, ``torchvision.models``)
@@ -72,29 +71,31 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
     The test subclass itself does not own any ``test_*`` method beyond the
     template-method entry; the doc body is the spec. ``prepare_environment``
-    makes sure ``torch_npu`` is importable before the framework starts
-    executing doc commands (the doc body itself does ``git clone`` +
-    ``uv pip install -e .`` against the workflow-injected release tag,
-    and the editable install compiles torchvision's C++ extensions
-    against the NPU-enabled torch — which requires the toolchain to be
-    healthy first).
+    makes sure CANN env is sourced + CUDA exclusion list is written + ``uv``
+    is bootstrapped before the framework starts executing doc commands
+    (the doc body itself installs ``torch`` / ``torch_npu`` from Aliyun
+    pytorch-wheels + Huawei Cloud ascend pypi, then stock torchvision
+    cpu wheel from Aliyun PyPI mirror, then uninstalls stock and
+    ``git clone`` + editable installs the Ascend/vision fork source
+    build, plus pillow + 6 v2 transforms smoke tests that exercise
+    ``torch_npu`` PrivateUse1 dispatch).
     """
 
-    # 90 min per command: source install pulls + compiles torchvision's
-    # C++ extensions (NPU kernels + CPU fallback) on cold cache. The
-    # upstream fork's requirements.txt is light (pillow + numpy + a few
-    # others), so the bottleneck is C++ build time. 90 min leaves room
-    # for a cold build (~15 min on a busy CI runner) + the import /
-    # transforms / NPU-dispatch tests that follow.
+    # 90 min per command: the doc installs torch / torch_npu from the
+    # Aliyun pytorch-wheels + Huawei Cloud ascend dual-source, then the
+    # stock torchvision cpu wheel from Aliyun PyPI mirror, then the
+    # Ascend/vision fork source build (C++ compile against torch_npu
+    # on cold cache is ~15 min on a busy runner); 90 min leaves room
+    # for the install + transforms / NPU-dispatch tests that follow.
     DEFAULT_COMMAND_TIMEOUT = 5400
 
     # Monitored source is the cosdt-ci-test/workflows fork (this repo):
     # the doc lives at projects/torch.vision/docs/Quick-start-Ascend.md
     # and the engine sets MONITORED_DOC_URL to the raw.githubusercontent.com
-    # URL for the same path. Upstream torchvision (pytorch/vision) is
-    # referenced from inside the doc body, but it is NOT the file under
-    # test; the workflow's `upstream_repo` (`Ascend/vision`) is what
-    # /releases/latest is polled against.
+    # URL for the same path. ``upstream_repo`` is Ascend/vision — the
+    # engine polls ``/releases/latest`` against this repo to set
+    # ``UPSTREAM_REF``, which the doc body uses to checkout the fork
+    # in the source install step.
     USER_AGENT = 'cosdt-ci-test/quick-start'
 
     # Extend the base ERROR_MARKERS with CANN's typo + sentinel so a CANN
@@ -155,37 +156,33 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     )
     _CONSTRAINTS_FILE = '/tmp/torch_vision_npu_constraints.txt'
 
-    # Cluster-internal nginx PyPI cache + Huawei Cloud ascend dual-source.
-    _CLUSTER_INDEX = 'http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple'
-    _ASCEND_EXTRA = 'https://repo.huaweicloud.com/ascend/repos/pypi'
-
     # CANN toolkit: source once to get ASCEND_HOME / LD_LIBRARY_PATH etc.
     # Path is hard-coded, tied to the GitHub workflow container image
     # (`image:` input of `torch.vision-quick-start.yml`).
     _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
 
     # ----------------------------------------------------------
-    # prepare_environment: CANN env + CUDA constraints + uv + torch stack probe
+    # prepare_environment: CANN env + CUDA constraints + uv
     # ----------------------------------------------------------
 
     @classmethod
     def prepare_environment(cls) -> None:
-        """Source CANN env + write CUDA exclusion list + install uv + torch stack probe.
+        """Source CANN env + write CUDA exclusion list + install uv.
 
-        The doc's ``## 安装 torchvision`` section is the single source of
-        truth for which package + version gets installed; this class
-        only handles ``torch`` / ``torch_npu`` here (via the cluster
-        cache + Huawei ascend dual-source), the defensive CUDA exclusion
-        list, and the ``uv`` bootstrap. ``torchvision`` itself is built
-        from source by the doc's ``vision-install-source`` block against
-        the workflow-injected release tag — a pre-install here would
-        mask install-block failures (the C++ extension compile against
-        NPU is the whole point of the test).
+        The doc body is the single source of truth for ``torch`` /
+        ``torch_npu`` / ``torchvision`` installs (versions per
+        [COMPATIBILITY.en.md](https://gitcode.com/Ascend/pytorch/blob/main/COMPATIBILITY.en.md)):
+        ``torch`` / ``torch_npu`` via the doc's ``#test-setup`` block
+        (Aliyun pytorch-wheels + Huawei Cloud ascend dual-source);
+        ``torchvision`` via the doc's ``## 安装 torchvision`` block
+        (Aliyun PyPI mirror, stock cpu wheel). This class only owns
+        env-level concerns that aren't doc-visible: CANN env sourcing,
+        defensive CUDA exclusion list, ``uv`` bootstrap.
 
         Class-level setup: run once per test class, triggered by
         ``setUpClass``. Not the same as ``unittest.TestCase.setUp`` —
         that lifecycle hook fires before every test method, which is
-        wrong for a one-shot install.
+        wrong for a one-shot setup.
         """
         # 0) CANN env: source set_env.sh and merge the env stream into
         # os.environ
@@ -214,9 +211,8 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         os.environ['PIP_CONSTRAINT'] = cls._CONSTRAINTS_FILE
         os.environ['UV_CONSTRAINT'] = cls._CONSTRAINTS_FILE
 
-        # 2) uv: the doc body's install step is ``uv pip install -e .``,
-        # which handles PEP 517 build deps + the torchvision C++
-        # extension compile more reliably than pip. Inherit
+        # 2) uv: the doc body's install steps use ``uv pip install``
+        # (torch / torch_npu / pillow / torchvision). Inherit
         # ``PIP_INDEX_URL`` + ``PIP_TRUSTED_HOST`` from the yml job-level
         # env (cluster cache path + trusted-host).
         subprocess.run(
@@ -224,61 +220,16 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             check=True,
         )
 
-        # 3) torch stack probe + install: when version matches the image's
-        # pre-installed wheels, reuse them to avoid the cluster cache
-        # triggering ``+cpu`` resolution. The doc body does NOT install
-        # torch / torch_npu — it only checks they are importable via the
-        # ``check-torch`` block. We probe here so a broken image fails
-        # fast with a clear error instead of waiting for the doc block
-        # to do the import.
-        _PROBE_SCRIPT = (
-            'import torch, torch_npu\n'
-            "raise SystemExit(0 if "
-            "torch.__version__.startswith('2.9.0') "
-            "and torch_npu.__version__.startswith('2.9.0') "
-            "else 1)"
-        )
-        probe = subprocess.run(
-            ['python', '-c', _PROBE_SCRIPT],
-            capture_output=True,
-            check=False,  # probe's success/failure is the branch signal — don't raise
-        )
-        if probe.returncode == 0:
-            _VERSIONS_SCRIPT = (
-                'import torch, torch_npu; '
-                'print(torch.__version__, torch_npu.__version__)'
-            )
-            versions = subprocess.run(
-                ['python', '-c', _VERSIONS_SCRIPT],
-                capture_output=True, text=True, check=True,
-            )
-            print(f'setup: reusing image torch stack ({versions.stdout.strip()})')
-        else:
-            print('setup: installing torch==2.9.0 torch_npu==2.9.0.post2')
-            subprocess.run(
-                [
-                    'python', '-m', 'pip', 'install',
-                    '--index-url', cls._CLUSTER_INDEX,
-                    '--extra-index-url', cls._ASCEND_EXTRA,
-                    'torch==2.9.0', 'torch_npu==2.9.0.post2',
-                ],
-                check=True,
-            )
-
-        # 4) ``torchvision`` is NOT pre-installed here: the doc's
-        # ``## 安装 torchvision`` block ``vision-install-source`` builds
-        # it from source against the workflow-injected release tag via
-        # ``git clone`` + ``uv pip install -e .``. A pre-install here
-        # would mask the install-block's C++ compile against NPU, which
-        # is the smoke test's whole point.
-        #
-        # pillow is installed by the doc body's ``### 前置安装`` block
-        # (`uv pip install 'pillow>=10.0'`); we don't pre-install it here
-        # for the same reason as torchvision — let the doc be the spec.
-        #
-        # numpy comes in transitively as a torchvision requirement;
-        # safetensors is NOT needed (no modelscope snapshot_download in
-        # the doc body — transforms work on synthetic PIL images).
+        # ``torch`` / ``torch_npu`` / ``torchvision`` / ``pillow`` are NOT
+        # pre-installed here: the doc body's ``#test-setup`` /
+        # ``## 安装 torchvision`` blocks are the single source of truth
+        # for which packages get installed, at which source. A pre-install
+        # here would mask install-block failures (the v2 transforms +
+        # NPU dispatch on stock torchvision wheels is the smoke test's
+        # whole point). numpy comes in transitively as a torchvision
+        # requirement; safetensors is NOT needed (no modelscope
+        # snapshot_download in the doc body — transforms work on
+        # synthetic PIL images).
 
     # ----------------------------------------------------------
     # test entry
@@ -286,13 +237,13 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        """Run env setup once per test class: CANN env + CUDA constraints + uv +
-        torch stack.
+        """Run env setup once per test class: CANN env + CUDA constraints + uv.
 
-        ``torchvision`` is NOT installed here — the doc's
-        ``vision-install-source`` block installs it from source against
-        the workflow-injected release tag, so a broken install block
-        fails loudly instead of being masked by a pre-installed copy.
+        ``torch`` / ``torch_npu`` / ``torchvision`` / ``pillow`` are NOT
+        installed here — the doc's ``#test-setup`` blocks install them
+        from Aliyun PyPI mirror / Huawei Cloud ascend pypi, so a broken
+        install block fails loudly instead of being masked by a
+        pre-installed copy.
 
         ``@unittest.skipIf`` only skips the test *method* — ``setUpClass``
         itself always runs. The ``if _e2e_enabled()`` body guard below is

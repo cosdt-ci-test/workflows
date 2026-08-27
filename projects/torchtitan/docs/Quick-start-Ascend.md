@@ -272,11 +272,11 @@ torchrun --nproc_per_node=2 \
 输出结果类似如下：
 
 ```shell #test-result id="torchtitan-train-2card" fuzzy='xxx' fuzzy='...'
-[titan] xxx - root - INFO - Starting job: Llama 3 debug training
+[default0]:[titan] xxx - root - INFO - Starting job: Llama 3 debug training
 ...
-[titan] xxx - root - INFO - Training starts at step xxx
-[titan] xxx - root - INFO - Training completed
-[titan] xxx - root - INFO - Process group destroyed
+[default0]:[titan] xxx - root - INFO - Training starts at step xxx
+[default0]:[titan] xxx - root - INFO - Training completed
+[default0]:[titan] xxx - root - INFO - Process group destroyed
 ```
 
 > 多卡场景下**不验证 `--job.dump-folder` 落盘**：steps=0 不触发 `checkpointer.save`（save 在 while 循环内部，`torchtitan/train.py:680`），且 2-rank sharded checkpoint 的保存需要先解决上游 vocab 限制（fork torchtitan 加 vocab=128256 toy flavor）才跑 forward→save——属于生产训练配置面，超出本 quick-start 范围。

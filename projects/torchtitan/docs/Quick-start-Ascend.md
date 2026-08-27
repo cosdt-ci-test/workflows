@@ -56,6 +56,12 @@ npu-smi info
 | Chip                      | Bus-Id        | AICore(%)   Memory-Usage(MB)  HBM-Usage(MB)        |
 +===========================+===============+====================================================+
 | 5     910B4               | OK            | 89.9        39                0    / 0             |
+| 0                         | 0000:41:00.0  | 0           0    / 0          2922 / 32768         |
++===========================+===============+====================================================+
++---------------------------+---------------+----------------------------------------------------+
+| NPU     Chip              | Process id    | Process name             | Process memory(MB)      |
++===========================+===============+====================================================+
+| No running processes found in NPU 5                                                            |
 +===========================+===============+====================================================+
 ```
 
@@ -89,9 +95,7 @@ count: 2
 
 > 如果 `import torch_npu` 失败，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查 torch / torch_npu / CANN 三方兼容矩阵。
 
-### 安装 modelscope SDK（可选，国内下载用）
-
-本文档的 Step 1 / Step 2 会从 ModelScope 拉 Llama 3 tokenizer，所以前置装一下 modelscope：
+### 安装 modelscope
 
 ```shell #test id="modelscope-install"
 pip install modelscope
@@ -110,8 +114,6 @@ python -c "import modelscope; print('modelscope', modelscope.__version__)"
 ```shell #test-result id="modelscope-import" fuzzy='xxx'
 modelscope xxx
 ```
-
-如果走 HuggingFace 下载（境外通畅），modelscope 不是必需；但本文档默认走 ModelScope 缓存，所以推荐装。
 
 ## 安装 torchtitan
 
@@ -152,7 +154,7 @@ torchtitan 出厂支持 Llama 3 系列训练。本文档的 `debug_model.toml` �
 python -c "from modelscope import snapshot_download; print(snapshot_download('LLM-Research/Llama-3.2-1B', allow_patterns=['*.json', '*.model', 'tokenizer*']))"
 ```
 
-`store="ms_tokenizer_path"` 把路径捕获给 Step 1 / Step 2 用。
+> 输出的路径用于后续「单卡训练」和「多卡训练」章节。
 
 验证 tokenizer 真的落盘：
 
@@ -165,7 +167,7 @@ xxx config.json
 ...
 ```
 
-### Step 1：1 张 NPU 跑 1 步训练
+### 单卡训练
 
 `--comm.mode fake_backend` 让 torchtitan 跳过 NCCL/HCCL 集合通信初始化、用 fake process group 跑 1 个 rank 的纯 NPU 计算——验证 toml 配置解析 + 模型搬到 NPU + forward / backward / optimizer 这条**最小**链路，多卡 / 真分布式属于另一个配置面：
 
@@ -184,7 +186,7 @@ python -c "import torch_npu, runpy; runpy.run_module('torchtitan.train', run_nam
     --job.dump_folder /tmp/torchtitan-quickstart
 ```
 
-输出结果类似如下（torchtitan 训练日志里一定会出现 `[titan] xxx - ...` 前缀 + `Training starts at step` / `Training completed` / `step:  xxx` 几行，验证 `__init__` 的版本号、toml 配置加载和 1 步训练跑通）：
+输出结果类似如下：
 
 ```shell #test-result id="torchtitan-train-debug" fuzzy='xxx' fuzzy='...'
 [titan] xxx - root - INFO - Starting job: Llama 3 debug training
@@ -195,7 +197,7 @@ python -c "import torch_npu, runpy; runpy.run_module('torchtitan.train', run_nam
 [titan] xxx - root - INFO - Process group destroyed
 ```
 
-`torchtitan.train` 训练收尾最后一步是 `torch.distributed.checkpoint.save(...)` 把权重 / optimizer state / tokenizer config 写到 `--job.dump_folder`（子步骤 8）。下面这个 `#test` 块用 `find` 验证 dump 实际落盘——dump 失败 → `find` 无输出 → `#test-result` fuzzy 不命中 → 该 `#test` fail：
+`torchtitan.train` 训练收尾最后一步是 `torch.distributed.checkpoint.save(...)` 把权重 / optimizer state / tokenizer config 写到 `--job.dump_folder`：
 
 ```shell #test id="torchtitan-dump-debug"
 find /tmp/torchtitan-quickstart -mindepth 1 -maxdepth 3 -printf '%p\n' | head -20
@@ -206,7 +208,7 @@ find /tmp/torchtitan-quickstart -mindepth 1 -maxdepth 3 -printf '%p\n' | head -2
 ...
 ```
 
-### Step 2：2 张 NPU 跑 1 步多卡训练
+### 多卡训练
 
 `--comm.mode hierarchical` 走真实 HCCS 集合通信（单机内多卡用 HCCS 做 ring-allreduce），配合 `torchrun --nproc_per_node=2` 起 2 个 rank 的 DDP——验证 collective 初始化 + DDP 梯度同步 + ProcessGroup 销毁这条**真实分布式**链路：
 
@@ -233,7 +235,7 @@ torchrun --nproc_per_node=2 \
     --job.dump_folder /tmp/torchtitan-quickstart-2card
 ```
 
-输出结果类似如下（每个 rank 都会打印一份，框架 fuzzy 匹配命中 1 次即可，验证 collective init + 1 步 DDP 同步跑通）：
+输出结果类似如下：
 
 ```shell #test-result id="torchtitan-train-2card" fuzzy='xxx' fuzzy='...'
 [titan] xxx - root - INFO - Starting job: Llama 3 debug training
@@ -244,7 +246,7 @@ torchrun --nproc_per_node=2 \
 [titan] xxx - root - INFO - Process group destroyed
 ```
 
-`torchtitan.train` 在 DDP 训练收尾后通过 `torch.distributed.checkpoint.save(...)` 把每个 rank 的权重 shard + optimizer state 写到 `--job.dump_folder`（子步骤 8，2 卡会有 2 个 rank 的 shard 文件）。下面这个 `#test` 块用 `find` 验证 dump 实际落盘：
+`torchtitan.train` 在 DDP 训练收尾后通过 `torch.distributed.checkpoint.save(...)` 把每个 rank 的权重 shard + optimizer state 写到 `--job.dump_folder`：
 
 ```shell #test id="torchtitan-dump-2card"
 find /tmp/torchtitan-quickstart-2card -mindepth 1 -maxdepth 3 -printf '%p\n' | head -20

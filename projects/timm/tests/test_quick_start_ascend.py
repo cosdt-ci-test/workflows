@@ -17,12 +17,6 @@ Environment variables (injected by GitHub workflow
                                   from the local checkout instead, because
                                   ``raw.githubusercontent.com`` is not
                                   reachable from the NPU runner's cluster.
-    ``UPSTREAM_REF``              Required; bash reads ``$UPSTREAM_REF`` to get
-                                  the latest release tag. The value is
-                                  captured into ``captures`` via the
-                                  ``#test-setup store="upstream_ref"`` block's
-                                  stdout, then substituted into the doc
-                                  command body where ``<ref>`` appears.
     ``NPU_READY=true``            Required, otherwise the class is skipped.
                                   End-to-end tests only run on the NPU runner:
                                   local dev machines / normal ubuntu runners
@@ -57,21 +51,22 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     contract -> run ``#test-setup`` / ``#test`` in order -> compare against
     ``#test-result``.
 
-    Scope: install (binary + source) + 5 core-chain ``#test`` smoke
-    commands, constructing the model on ``device='npu:0'`` with
+    Scope: install + the ``快速开始`` flow's ``#test``
+    smoke commands, constructing the model on ``device='npu:0'`` with
     ``pretrained=False`` (no weight download). Covers the upstream
-    quickstart in order: list_models / create_model + forward /
-    forward_features / resolve_data_config / create_transform. The doc
-    body explicitly leaves pretrained weight loading out of scope: the
-    NPU runner's cluster firewall cannot reach HuggingFace Hub / GitHub
+    quickstart in order: 导入 torch_npu / 单卡训练 / 模型验证 / 模型推理.
+    The doc body explicitly leaves pretrained weight loading out of scope:
+    the NPU runner's cluster firewall cannot reach HuggingFace Hub / GitHub
     Releases, so every executable block avoids the network.
     """
 
-    # git clone + uv pip install -e . + five #test smoke commands. The
-    # stack is small (torch / torchvision / pyyaml / huggingface_hub /
-    # safetensors, no transformers / modelscope / accelerate on the test
-    # side), so 20 min covers cold cache + first-time wheel pulls for the
-    # doc's own install blocks + the five ~1s smoke commands comfortably.
+    # ``uv pip install timm`` + the four 快速开始 #test smoke
+    # commands (import / train / validate / inference). The stack is small
+    # (torch / torchvision / pyyaml / huggingface_hub / safetensors, no
+    # transformers / modelscope / accelerate on the test side), so 20 min
+    # covers cold cache + first-time wheel pulls for the doc's own install
+    # block + the ~1s smoke commands (incl. a single resnet18 fwd/bwd
+    # train step on npu:0) comfortably.
     DEFAULT_COMMAND_TIMEOUT = 1200
 
     # Monitored source is the cosdt-ci-test/workflows fork (this repo):
@@ -196,7 +191,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         handles ``torch`` / ``torch_npu`` / ``torchvision`` here (via
         the cluster cache + Huawei ascend dual-source). ``timm`` itself
         installs itself in document order via the ``#test`` machinery
-        (``timm-install-binary`` / ``timm-install-source``).
+        (``timm-install-binary``).
 
         ``torchvision==0.24.0`` is the version paired with
         ``torch==2.9.0`` (see ``projects/ms-swift/constraints-npu.txt``).
@@ -242,8 +237,8 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         os.environ['PIP_CONSTRAINT'] = cls._CONSTRAINTS_FILE
         os.environ['UV_CONSTRAINT'] = cls._CONSTRAINTS_FILE
 
-        # 2) uv: the doc's ``timm-install-binary`` / ``timm-install-source``
-        # blocks call ``uv pip install`` which handles PEP 517 build deps
+        # 2) uv: the doc's ``timm-install-binary`` block calls
+        # ``uv pip install`` which handles PEP 517 build deps
         # more reliably than pip. Inherit ``PIP_INDEX_URL`` +
         # ``PIP_TRUSTED_HOST`` from the yml job-level env (cluster cache
         # path + trusted-host).
@@ -301,12 +296,10 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         )
 
         # 5) timm itself is NOT installed here — the doc's
-        # ``## 安装 timm`` blocks ``timm-install-binary`` /
-        # ``timm-install-source`` exercise both binary and source install
-        # paths against the upstream release tag injected by the
-        # workflow, so a broken install block surfaces here as a fuzzy
-        # mismatch against ``timm xxx`` rather than being masked by a
-        # pre-installed copy.
+        # ``## 安装 timm`` block ``timm-install-binary`` installs timm
+        # via ``uv pip install timm``, so a broken install block
+        # surfaces here as a fuzzy mismatch against ``timm xxx`` rather
+        # than being masked by a pre-installed copy.
 
     # ----------------------------------------------------------
     # test entry

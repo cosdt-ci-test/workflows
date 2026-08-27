@@ -92,7 +92,7 @@ Python 3.12.xxx
 #### 安装 vllm-ascend
 
 ```shell #test id="vllm-ascend-install"
-uv pip install vllm==0.23.0
+uv pip install --index-url https://mirrors.aliyun.com/pypi/simple/ vllm==0.23.0
 uv pip install \
 --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi vllm-ascend==0.23.0
 
@@ -127,7 +127,6 @@ count: 1
 ```
 
 > 如果 `import torch_npu` 失败，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查 torch / torch_npu / CANN 三方兼容矩阵。
-
 
 
 #### 安装 modelscope

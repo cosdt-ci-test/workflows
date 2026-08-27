@@ -94,7 +94,11 @@ count: 1
 
 > 如果 `import torch_npu` 失败，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查 torch / torch_npu / CANN 三方兼容矩阵。
 
-检查 `pillow`（`torchvision.transforms.functional` 的 PIL 桥依赖；CANN 镜像默认已有）：
+安装 `pillow`：
+
+```shell #test-setup
+uv pip install 'pillow>=10.0'
+```
 
 打印版本：
 

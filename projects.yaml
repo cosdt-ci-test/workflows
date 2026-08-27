@@ -190,7 +190,7 @@ projects:
     support_level: 新兴适配
     upstream_repo: pytorch/torchtitan
     phase: A
-    runner: linux-aarch64-a2-1
+    runner: linux-aarch64-a2-2
     dir: projects/torchtitan
     workflows:
       quick_start: .github/workflows/torchtitan-quick-start.yml

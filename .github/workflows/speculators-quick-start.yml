@@ -48,21 +48,22 @@ jobs:
       # Bare CANN 9.1.0 image (matches peft / diffusers / most projects).
       # Rationale: the vllm-ascend image (``quay.io/ascend/vllm-ascend:vX.Y.Z``)
       # ships its own torch / torch_npu wheels that don't necessarily line up
-      # with the torch==2.10.0+cpu + torch_npu==2.10.0.post4 the test pins
-      # in ``prepare_environment``; torch_npu is a torch extension and a
+      # with the torch==2.10.0+cpu + torch_npu==2.10.0.post4 the doc's
+      # ``### 前置安装`` block pins; torch_npu is a torch extension and a
       # cross-major-version mismatch would silently break every forward
-      # pass. Bare CANN lets ``prepare_environment`` probe + install the
-      # exact torch stack, and the doc's ``## 安装 vllm-ascend`` section
-      # then layers the official two-step ``pip install vllm==0.23.0`` +
-      # ``pip install --extra-index-url ...huaweicloud.../variant
-      # vllm-ascend==0.23.0`` on top. The second step's ``Requires-Dist:
-      # torch==2.10.0`` / ``torch-npu==2.10.0.post4`` / ``triton-ascend==3.2.2``
-      # pulls the NPU wheel set from huawei ascend and pip will downgrade
-      # torch from vllm's 2.11.0 to vllm-ascend's 2.10.0. CUDA exclusion
-      # list (``_CUDA_CONSTRAINTS`` in the test file) is left in place —
-      # whether it actually trips the vllm 0.23.0 unconditional nvidia deps
-      # (``nvidia-cudnn-frontend`` / ``nvidia-cutlass-dsl[cu13]`` /
-      # ``flashinfer-python``) is left for the CI log to confirm.
+      # pass. Bare CANN lets the doc install the exact torch stack itself
+      # (``prepare_environment`` no longer touches torch). The doc's
+      # ``## 安装 vllm-ascend`` section then layers 4 commands on top, all
+      # with ``--no-deps`` except the last (triton mainline): vllm 0.23.0,
+      # vllm-ascend 0.23.0, triton-ascend 3.2.2, triton 3.5.0. None of
+      # them carry ``--index-url`` / ``--extra-index-url`` — sources come
+      # from job env (``PIP_INDEX_URL`` = cluster-internal nginx cache,
+      # which mirrors full PyPI and carries triton-ascend 3.2.2 too).
+      # ``--no-deps`` is load-bearing: without it pip tries to resolve
+      # vllm's ``torch==2.11.0`` against torch_npu's ``torch==2.10.0``
+      # pin and fails with ResolutionImpossible (CI run 33031352941).
+      # CUDA exclusion list (``_CUDA_CONSTRAINTS``) is left in place as
+      # defence-in-depth but the ``--no-deps`` makes it a no-op.
       image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
       container_options: >-
         --volume=/data/ci-cache/modelscope/speculators:/root/.cache/modelscope

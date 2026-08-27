@@ -132,6 +132,8 @@ triton xxx
 
 ## 安装 torchtitan
 
+> NPU 优化插件层 `cann/torchtitan-npu`（pypi: `0.2.2.post1`）提供 NPU 融合算子、图下沉、AutoFuse、HiFloat8、FSDP 大 EP 切分等生产训练能力——它是 upstream `pytorch/torchtitan` + `ModelConverter` 扩展机制的叠加层，**本 quick-start 不安装它**：Llama 3 debug（dim=256 / 6 层）走原生 SDPA + FlexAttention，不需要这些优化；要训 DeepSeek-V4 / 真实 Llama 3 70B 等大模型再叠加装它。
+
 ### 从源码安装
 
 <!--
@@ -191,7 +193,7 @@ cd torchtitan && git checkout <ref>
 ASCEND_RT_VISIBLE_DEVICES=0 LOCAL_RANK=0 \
 python -c "import torch_npu, runpy; runpy.run_module('torchtitan.train', run_name='__main__')" \
     --job.config_file ./torchtitan/models/llama3/train_configs/debug_model.toml \
-    --tokenizer.path <ms_tokenizer_path> \
+    --model.hf-assets-path <ms_tokenizer_path> \
     --comm.mode fake_backend \
     --training.steps 1 \
     --training.local_batch_size 1 \
@@ -240,7 +242,7 @@ torchrun --nproc_per_node=2 \
     --tee 3 \
     python -c "import torch_npu, runpy; runpy.run_module('torchtitan.train', run_name='__main__')" \
     --job.config_file ./torchtitan/models/llama3/train_configs/debug_model.toml \
-    --tokenizer.path <ms_tokenizer_path> \
+    --model.hf-assets-path <ms_tokenizer_path> \
     --comm.mode hierarchical \
     --training.steps 1 \
     --training.local_batch_size 1 \

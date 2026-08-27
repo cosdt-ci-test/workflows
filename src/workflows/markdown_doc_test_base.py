@@ -55,13 +55,22 @@ class SetupCommand:
     ``hidden=True`` means the setup block sits inside an HTML comment (not rendered on the page), but it still participates in
     execution and the store chain (contract rule 10).
 
-    ``__post_init__`` validates fields at construction time: cmd non-empty, store non-empty string. This is the
-    "immutable contract" — when the runner receives the dataclass, every field is guaranteed valid; no extra defense needed.
+    ``load`` mirrors ``TestCommand.load`` — ``((store_var, local_name), ...)`` pairs for ``<local>``
+    placeholder substitution. ``substitute_placeholders`` runs on ``cmd`` before execution so a setup
+    block can reference earlier captures (e.g. a Step N setup block that needs Step N-1's path).
+    Without this, ``<placeholder>`` strings inside a heredoc body reach bash literally and break
+    downstream tooling — e.g. speculators' ``convert_model(model="<draft_path>")`` would call
+    huggingface_hub with the literal string ``<draft_path>`` and crash on repo-id validation.
+
+    ``__post_init__`` validates fields at construction time: cmd non-empty, store non-empty string,
+    load tuple shape (same contract as TestCommand.load). This is the "immutable contract" — when
+    the runner receives the dataclass, every field is guaranteed valid; no extra defense needed.
     """
 
     cmd: str
     store: str | None
     hidden: bool
+    load: tuple = ()  # ((store_var, local_name), ...)
 
     def __post_init__(self) -> None:
         if not self.cmd:
@@ -72,6 +81,16 @@ class SetupCommand:
             raise LabelSpecError(
                 'SetupCommand.store must be None or a non-empty string'
             )
+        for i, item in enumerate(self.load):
+            if (
+                not isinstance(item, tuple)
+                or len(item) != 2
+                or not all(isinstance(x, str) and x for x in item)
+            ):
+                raise LabelSpecError(
+                    f'SetupCommand.load[{i}] must be a (str, str) tuple; '
+                    f'got {item!r}'
+                )
 
 
 @dataclass(frozen=True)
@@ -550,6 +569,7 @@ class MarkdownDocTestBase(ABC):
                     cmd=p['body'],
                     store=p['store'],
                     hidden=p['hidden'],
+                    load=p['load'],
                 ))
             elif p['label'] == self._LABEL_TEST:
                 commands.append(TestCommand(
@@ -579,7 +599,16 @@ class MarkdownDocTestBase(ABC):
 
     def _run_one(self, cmd, results, env, cwd, timeout, idx):
         if isinstance(cmd, SetupCommand):
-            rc, out, err = self.run_command(cmd.cmd, env, cwd, timeout)
+            # Substitute ``<placeholder>`` from earlier captures BEFORE bash sees the
+            # command — same load= contract as TestCommand. Without this, a setup
+            # block whose heredoc references a prior capture (e.g. speculators'
+            # ``convert_model(model="<draft_path>")``) would call into python with
+            # the literal string ``<draft_path>``, which then trips e.g.
+            # huggingface_hub's repo-id validator and masks the real flow.
+            actual_cmd = self.substitute_placeholders(
+                cmd.cmd, cmd.load, self._captures
+            )
+            rc, out, err = self.run_command(actual_cmd, env, cwd, timeout)
             if rc != 0:
                 raise AssertionError(
                     f'setup command failed (rc={rc}); CMD stderr:\n{err.rstrip() or "(empty)"}'

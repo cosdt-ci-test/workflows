@@ -208,9 +208,11 @@ xxx config.json
 
 ### 单卡训练
 
-`--comm.mode fake_backend` 让 torchtitan 跳过 NCCL/HCCL 集合通信初始化、用 fake process group 跑 1 个 rank 的纯 NPU 计算——验证 toml 配置解析 + 模型搬到 NPU + forward / backward / optimizer 这条**最小**链路，多卡 / 真分布式属于另一个配置面：
+`--comm.mode fake_backend` 让 torchtitan 跳过 NCCL/HCCL 集合通信初始化、用 fake process group 跑 1 个 rank 的纯 NPU 计算——验证 toml 配置解析 + init_distributed + 模型搬到 NPU + dataloader ready 这条**最小**链路（多卡 / 真分布式属于另一个配置面）。用 `--training.steps 0` 让 `should_continue_training()` 直接返回 False、不进 `while` 循环，从而跳过 `train_step` 的实际 forward + backward：
 
 > v0.2.2 在 `--comm.mode fake_backend` 分支强制要求 `NGPU=<world_size>` env var（见 `torchtitan/distributed/utils.py:307`），否则 `init_distributed` 直接 `raise ValueError`。fake mode 把 `NGPU` 当 fake world size，不读 `WORLD_SIZE`（那是真分布式路径由 torchrun 注入）。
+
+> **为什么 `steps=0` 不真跑 train_step**：upstream `debug_model.toml` 的 `flavor = "debugmodel"` 把 `vocab_size` 写死成 **2048**，但本 quick-start 用的真 Llama 3 tokenizer `vocab_size = 128256`——vocab mismatch。`c4_test` 数据集含 `token_id > 2048` 的词，forward 时 `nn.Embedding` gather 越界访问 NPU GM 内存；torch_npu 的 embedding kernel 不做 index bound check，越界 OOB 读不立即抛 `IndexError`，等到 `loss.detach().item()` sync 等 NPU stream 时 NPU 报 `vector core error 0x800000` / `MTE accesses an invalid GM address`，几乎所有 vector core 集体挂。tyro 把 `vocab_size` 当作 `llama3_args` dict 的 key（不在 `Model` config 的 CLI 命名空间），无法用 `--model.vocab-size` CLI override；upstream 也没 vocab=128256 的小 flavor——真跑 train_step 需要 fork torchtitan 添加新 flavor（例如 `dim=256, n_layers=6, n_heads=16, vocab_size=128256`）。本 quick-start 范围是验证 init 链路，不真跑 forward。
 
 ```shell #test id="torchtitan-train-debug" load="upstream_ref>>ref" load="ms_tokenizer_path>>ms_tokenizer_path"
 cd torchtitan && git checkout <ref>
@@ -218,9 +220,8 @@ NGPU=1 ASCEND_RT_VISIBLE_DEVICES=0 LOCAL_RANK=0 \
 python -c "import torch_npu, runpy; runpy.run_module('torchtitan.train', run_name='__main__')" \
     --job.config-file ./torchtitan/models/llama3/train_configs/debug_model.toml \
     --model.hf-assets-path <ms_tokenizer_path> \
-    --model.vocab-size 128256 \
     --comm.mode fake_backend \
-    --training.steps 1 \
+    --training.steps 0 \
     --training.local-batch-size 1 \
     --training.seq-len 256 \
     --metrics.log-freq 1 \
@@ -234,7 +235,6 @@ python -c "import torch_npu, runpy; runpy.run_module('torchtitan.train', run_nam
 [titan] xxx - root - INFO - Starting job: Llama 3 debug training
 ...
 [titan] xxx - root - INFO - Training starts at step xxx
-[titan] xxx - root - INFO - step:  xxx  loss:  xxx...
 [titan] xxx - root - INFO - Training completed
 [titan] xxx - root - INFO - Process group destroyed
 ```
@@ -268,9 +268,8 @@ torchrun --nproc_per_node=2 \
     python -c "import torch_npu, runpy; runpy.run_module('torchtitan.train', run_name='__main__')" \
     --job.config-file ./torchtitan/models/llama3/train_configs/debug_model.toml \
     --model.hf-assets-path <ms_tokenizer_path> \
-    --model.vocab-size 128256 \
     --comm.mode hierarchical \
-    --training.steps 1 \
+    --training.steps 0 \
     --training.local-batch-size 1 \
     --training.seq-len 256 \
     --metrics.log-freq 1 \
@@ -284,7 +283,6 @@ torchrun --nproc_per_node=2 \
 [titan] xxx - root - INFO - Starting job: Llama 3 debug training
 ...
 [titan] xxx - root - INFO - Training starts at step xxx
-[titan] xxx - root - INFO - step:  xxx  loss:  xxx...
 [titan] xxx - root - INFO - Training completed
 [titan] xxx - root - INFO - Process group destroyed
 ```

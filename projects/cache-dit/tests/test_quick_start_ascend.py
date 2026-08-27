@@ -52,7 +52,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     contract -> run ``#test-setup`` / ``#test`` in order -> compare against
     ``#test-result``."""
 
-    DEFAULT_COMMAND_TIMEOUT = 1800  # 30 min: long enough for cache-dit generation, short enough to fail fast on hangs
+    DEFAULT_COMMAND_TIMEOUT = 5400  # 90 min: FLUX.1-dev (~30GB) pulled from ModelScope on first run takes ~45 min; later runs hit the cached copy
     USER_AGENT = 'cosdt-ci-test/quick-start'  # monitored source is the fork under cosdt-ci-test org
     ERROR_MARKERS = (
         *MarkdownDocTestBase.ERROR_MARKERS,  # generic [ERROR] + Traceback

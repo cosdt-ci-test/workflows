@@ -208,15 +208,15 @@ xxx config.json
 
 ### 单卡训练
 
-`--comm.mode fake_backend` 让 torchtitan 跳过 NCCL/HCCL 集合通信初始化、用 fake process group 跑 1 个 rank 的纯 NPU 计算——验证 toml 配置解析 + init_distributed + 模型搬到 NPU + dataloader ready 这条**最小**链路（多卡 / 真分布式属于另一个配置面）。用 `--training.steps 0` 让 `should_continue_training()` 直接返回 False、不进 `while` 循环，从而跳过 `train_step` 的实际 forward + backward：
+`--comm.mode fake_backend` 让 torchtitan 跳过 NCCL/HCCL 集合通信初始化、用 fake process group 跑 1 个 rank 的纯 NPU 计算——验证 toml 配置解析 + init_distributed + 模型搬到 NPU + save 链路这条**最小**路径（多卡 / 真分布式属于另一个配置面）。配 `--checkpoint.create-seed-checkpoint` 让 `main()` 跳过整个 `train()` 循环、只走 `checkpointer.save(curr_step=0, last_step=True)` 把未训练的 state_dict 落 `--job.dump-folder`——既能验证 save 链路，又避开 train_step 的 forward + backward：
 
-> v0.2.2 在 `--comm.mode fake_backend` 分支强制要求 `NGPU=<world_size>` env var（见 `torchtitan/distributed/utils.py:307`），否则 `init_distributed` 直接 `raise ValueError`。fake mode 把 `NGPU` 当 fake world size，不读 `WORLD_SIZE`（那是真分布式路径由 torchrun 注入）。
+> v0.2.2 在 `--comm.mode fake_backend` 分支强制要求 `NGPU=<world_size>` env var（见 `torchtitan/distributed/utils.py:307`），否则 `init_distributed` 直接 `raise ValueError`。fake mode 把 `NGPU` 当 fake world size，不读 `WORLD_SIZE`（那是真分布式路径由 torchrun 注入）。`create-seed-checkpoint` 进一步 assert `WORLD_SIZE == 1`（upstream `torchtitan/train.py:760`），跟 fake backend 单 rank 一致——所以命令里同时 export `NGPU=1 WORLD_SIZE=1`。
 
-> **为什么 `steps=0` 不真跑 train_step**：upstream `debug_model.toml` 的 `flavor = "debugmodel"` 把 `vocab_size` 写死成 **2048**，但本 quick-start 用的真 Llama 3 tokenizer `vocab_size = 128256`——vocab mismatch。`c4_test` 数据集含 `token_id > 2048` 的词，forward 时 `nn.Embedding` gather 越界访问 NPU GM 内存；torch_npu 的 embedding kernel 不做 index bound check，越界 OOB 读不立即抛 `IndexError`，等到 `loss.detach().item()` sync 等 NPU stream 时 NPU 报 `vector core error 0x800000` / `MTE accesses an invalid GM address`，几乎所有 vector core 集体挂。tyro 把 `vocab_size` 当作 `llama3_args` dict 的 key（不在 `Model` config 的 CLI 命名空间），无法用 `--model.vocab-size` CLI override；upstream 也没 vocab=128256 的小 flavor——真跑 train_step 需要 fork torchtitan 添加新 flavor（例如 `dim=256, n_layers=6, n_heads=16, vocab_size=128256`）。本 quick-start 范围是验证 init 链路，不真跑 forward。
+> **为什么不真跑 train_step（forward + backward）**：upstream `debug_model.toml` 的 `flavor = "debugmodel"` 把 `vocab_size` 写死成 **2048**，但本 quick-start 用的真 Llama 3 tokenizer `vocab_size = 128256`——vocab mismatch。`c4_test` 数据集含 `token_id > 2048` 的词，forward 时 `nn.Embedding` gather 越界访问 NPU GM 内存；torch_npu 的 embedding kernel 不做 index bound check，越界 OOB 读不立即抛 `IndexError`，等到 `loss.detach().item()` sync 等 NPU stream 时 NPU 报 `vector core error 0x800000` / `MTE accesses an invalid GM address`，几乎所有 vector core 集体挂。tyro 把 `vocab_size` 当作 `llama3_args` dict 的 key（不在 `Model` config 的 CLI 命名空间），无法用 `--model.vocab-size` CLI override；upstream 也没 vocab=128256 的小 flavor——真跑 train_step 需要 fork torchtitan 添加新 flavor（例如 `dim=256, n_layers=6, n_heads=16, vocab_size=128256`）。`checkpointer.save()` 只走 `model.state_dict()` dump weights、不跑 forward，所以 `--checkpoint.create-seed-checkpoint` 路径天然避开 vocab OOB。
 
 ```shell #test id="torchtitan-train-debug" load="upstream_ref>>ref" load="ms_tokenizer_path>>ms_tokenizer_path"
 cd torchtitan && git checkout <ref>
-NGPU=1 ASCEND_RT_VISIBLE_DEVICES=0 LOCAL_RANK=0 \
+NGPU=1 WORLD_SIZE=1 ASCEND_RT_VISIBLE_DEVICES=0 LOCAL_RANK=0 \
 python -c "import torch_npu, runpy; runpy.run_module('torchtitan.train', run_name='__main__')" \
     --job.config-file ./torchtitan/models/llama3/train_configs/debug_model.toml \
     --model.hf-assets-path <ms_tokenizer_path> \
@@ -226,6 +226,8 @@ python -c "import torch_npu, runpy; runpy.run_module('torchtitan.train', run_nam
     --training.seq-len 256 \
     --metrics.log-freq 1 \
     --metrics.disable-color-printing \
+    --checkpoint.enable \
+    --checkpoint.create-seed-checkpoint \
     --job.dump-folder /tmp/torchtitan-quickstart
 ```
 
@@ -234,12 +236,16 @@ python -c "import torch_npu, runpy; runpy.run_module('torchtitan.train', run_nam
 ```shell #test-result id="torchtitan-train-debug" fuzzy='xxx' fuzzy='...'
 [titan] xxx - root - INFO - Starting job: Llama 3 debug training
 ...
-[titan] xxx - root - INFO - Training starts at step xxx
-[titan] xxx - root - INFO - Training completed
+[titan] xxx - root - INFO - Saving the checkpoint (or staging if async is enabled).
+...
+[titan] xxx - root - INFO - Finished saving the checkpoint (or staging if async is enabled)in xxx seconds.
+...
+[titan] xxx - root - INFO - Created seed checkpoint
+...
 [titan] xxx - root - INFO - Process group destroyed
 ```
 
-`torchtitan.train` 训练收尾最后一步是 `torch.distributed.checkpoint.save(...)` 把权重 / optimizer state / tokenizer config 写到 `--job.dump_folder`：
+`torchtitan.train` 走 `checkpointer.save(curr_step=0, last_step=True)` 把未训练的 Llama 3 debug 模型 state_dict（distributed checkpoint `.distcp` 文件）写到 `--job.dump-folder/checkpoint/step-0/`：
 
 ```shell #test id="torchtitan-dump-debug"
 find /tmp/torchtitan-quickstart -mindepth 1 -maxdepth 3 -printf '%p\n' | head -20
@@ -252,7 +258,7 @@ find /tmp/torchtitan-quickstart -mindepth 1 -maxdepth 3 -printf '%p\n' | head -2
 
 ### 多卡训练
 
-`--comm.mode hierarchical` 走真实 HCCS 集合通信（单机内多卡用 HCCS 做 ring-allreduce），配合 `torchrun --nproc_per_node=2` 起 2 个 rank 的 DDP——验证 collective 初始化 + DDP 梯度同步 + ProcessGroup 销毁这条**真实分布式**链路：
+`--comm.mode hierarchical` 走真实 HCCS 集合通信（单机内多卡用 HCCS 做 ring-allreduce），配合 `torchrun --nproc_per_node=2` 起 2 个 rank 的 DDP——验证 collective 初始化 + DDP 梯度同步 + ProcessGroup 销毁这条**真实分布式**链路。多卡场景下 `--checkpoint.create-seed-checkpoint` 不可用（upstream assert `WORLD_SIZE == 1`，见 `torchtitan/train.py:760`），且本 quick-start 不真跑 train_step（理由同上：debugmodel vocab=2048 vs tokenizer vocab=128256 不匹配），所以 train_step 的 while 循环 0 次迭代、save 不触发——本 quick-start 多卡范围只在 stdout 日志层验证 collective 链路：
 
 ```shell #test id="torchtitan-train-2card" load="upstream_ref>>ref" load="ms_tokenizer_path>>ms_tokenizer_path"
 cd torchtitan && git checkout <ref>
@@ -287,13 +293,4 @@ torchrun --nproc_per_node=2 \
 [titan] xxx - root - INFO - Process group destroyed
 ```
 
-`torchtitan.train` 在 DDP 训练收尾后通过 `torch.distributed.checkpoint.save(...)` 把每个 rank 的权重 shard + optimizer state 写到 `--job.dump_folder`：
-
-```shell #test id="torchtitan-dump-2card"
-find /tmp/torchtitan-quickstart-2card -mindepth 1 -maxdepth 3 -printf '%p\n' | head -20
-```
-
-```shell #test-result id="torchtitan-dump-2card" fuzzy='xxx' fuzzy='...'
-/tmp/torchtitan-quickstart-2card/xxx
-...
-```
+> 多卡场景下**不验证 `--job.dump-folder` 落盘**：steps=0 不触发 `checkpointer.save`（save 在 while 循环内部，`torchtitan/train.py:680`），且 2-rank sharded checkpoint 的保存需要先解决上游 vocab 限制（fork torchtitan 加 vocab=128256 toy flavor）才跑 forward→save——属于生产训练配置面，超出本 quick-start 范围。

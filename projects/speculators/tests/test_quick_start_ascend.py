@@ -119,8 +119,12 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     _CONSTRAINTS_FILE = '/tmp/speculators_npu_constraints.txt'
 
     # Cluster-internal nginx PyPI cache + Huawei Cloud ascend dual-source.
-    _CLUSTER_INDEX = 'http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple'
-    _ASCEND_EXTRA = 'https://repo.huaweicloud.com/ascend/repos/pypi'
+    # Both URLs are exposed as env vars (``PIP_INDEX_URL`` /
+    # ``UV_INDEX_URL`` + ``UV_EXTRA_INDEX_URL``) by the engine template
+    # at .github/workflows/quick-start-template.yml, so individual
+    # ``#test`` blocks don't need to repeat them on the command line —
+    # bare ``pip install`` / ``uv pip install`` already routes through
+    # the cluster cache and falls back to huawei ascend for uv.
 
     # CANN toolkit: source once to get ASCEND_HOME / LD_LIBRARY_PATH etc.
     # Path is hard-coded, tied to the GitHub workflow container image
@@ -136,19 +140,24 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
     @classmethod
     def prepare_environment(cls) -> None:
-        """Source CANN env + write CUDA exclusion list + install uv + torch stack probe
-        + safetensors + purge stale modelscope cache shards.
+        """Source CANN env + write CUDA exclusion list + install uv + safetensors
+        + purge stale modelscope cache shards.
 
         The doc's ``### 前置安装`` and ``## 安装 Speculators`` sections are
         the single source of truth for which packages + versions get
-        installed; this class only handles ``torch`` / ``torch_npu`` here
-        (via the cluster cache + Huawei ascend dual-source), the defensive
-        ``safetensors`` install (speculators depends on it for weight IO
-        and may not be on the CANN base image), and the modelscope cache
-        purge. All other packages — ``modelscope`` (via ``install-deps``)
+        installed — ``torch`` + ``torch_npu`` (the doc's
+        ``install-torch`` #test-setup), ``modelscope`` (via ``install-deps``),
         and ``speculators`` (via ``speculators-install-binary`` /
-        ``speculators-install-source``) — install themselves in document
-        order via the ``#test`` machinery.
+        ``speculators-install-source``) all install themselves in document
+        order via the ``#test`` machinery. This class no longer touches
+        the torch stack — putting it here would mean a torch mismatch
+        (bare CANN image vs doc's pinned 2.10.0+cpu) shows up in
+        ``prepare_environment`` log rather than in the doc's
+        ``check-npu-runtime`` #test where it actually belongs.
+
+        The defensive ``safetensors`` install (speculators depends on
+        it for weight IO and may not be on the CANN base image) and the
+        modelscope cache purge are still done here.
 
         ModelScope cache (``$MODELSCOPE_CACHE`` or its default
         ``~/.cache/modelscope``) is left at its default — the workflow's
@@ -196,43 +205,12 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             check=True,
         )
 
-        # 3) torch stack probe + install: when version matches the image's
-        # pre-installed wheels, reuse them to avoid the cluster cache
-        # triggering ``+cpu`` resolution.
-        _PROBE_SCRIPT = (
-            'import torch, torch_npu\n'
-            "raise SystemExit(0 if "
-            "torch.__version__.startswith('2.10.0') "
-            "and torch_npu.__version__.startswith('2.10.0') "
-            "else 1)"
-        )
-        probe = subprocess.run(
-            ['python', '-c', _PROBE_SCRIPT],
-            capture_output=True,
-            check=False,  # probe's success/failure is the branch signal — don't raise
-        )
-        if probe.returncode == 0:
-            _VERSIONS_SCRIPT = (
-                'import torch, torch_npu; '
-                'print(torch.__version__, torch_npu.__version__)'
-            )
-            versions = subprocess.run(
-                ['python', '-c', _VERSIONS_SCRIPT],
-                capture_output=True, text=True, check=True,
-            )
-            print(f'setup: reusing image torch stack ({versions.stdout.strip()})')
-        else:
-            print('setup: installing torch==2.10.0 torch_npu==2.10.0.post4')
-            subprocess.run(
-                [
-                    'python', '-m', 'pip', 'install',
-                    '--index-url', cls._CLUSTER_INDEX,
-                    '--extra-index-url', cls._ASCEND_EXTRA,
-                    'torch==2.10.0', 'torch_npu==2.10.0.post4',
-                ],
-                check=True,
-            )
-
+        # 3) torch stack: NOT installed here. Lives in the doc's
+        # ``### 前置安装`` #test-setup ``install-torch`` block — putting
+        # the install in this hook would mean a torch version mismatch
+        # shows up in prepare_environment log rather than in the doc's
+        # ``check-npu-runtime`` #test where the mismatch actually matters.
+        #
         # 4) safetensors: speculators reads model weights via
         # safetensors. It's a base dep of speculators (its pyproject
         # lists ``safetensors`` as required), so it ships in once
@@ -249,11 +227,11 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         # the full rationale.
         purge_corrupt_models(resolve_modelscope_cache())
 
-        # 6) modelscope / speculators are installed by the doc's
-        # ``### 前置安装`` block ``install-deps`` (it carries the
-        # install + verify pair itself). This class no longer installs
-        # them — keeping install here on top would just be redundant
-        # ``pip install``-idempotent noise.
+        # 6) modelscope / speculators / torch / torch_npu are installed
+        # by the doc's ``### 前置安装`` block ``install-deps`` (it carries
+        # the install + verify pair itself). This class no longer
+        # installs them — keeping install here on top would just be
+        # redundant ``pip install``-idempotent noise.
         #
         # ``transformers`` is NOT installed here either: it's a base
         # dep of speculators (speculators' pyproject pins
@@ -273,12 +251,12 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         """Run env setup once per test class: CANN env + CUDA constraints
-        + uv + torch stack + safetensors + modelscope cache purge.
+        + uv + safetensors + modelscope cache purge.
 
-        ``modelscope`` / ``speculators`` are NOT installed here: the
-        doc's own labeled blocks install them in document order, so a
-        broken install block fails loudly instead of being masked by a
-        pre-installed copy.
+        ``torch`` / ``torch_npu`` / ``modelscope`` / ``speculators`` are
+        NOT installed here: the doc's own labeled blocks install them in
+        document order, so a broken install block fails loudly instead of
+        being masked by a pre-installed copy.
 
         ModelScope cache is left at its container default so the
         workflow's bind mount at ``/root/.cache/modelscope`` applies.

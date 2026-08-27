@@ -207,11 +207,15 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         # 3) torch stack probe: when version matches the image's
         # pre-installed wheels, reuse them to avoid the cluster cache
         # triggering ``+cpu`` resolution.
+        # torchtitan v0.2.1+ imports ``torch.nn.attention.varlen`` (added
+        # in torch 2.10), so the test env must have torch 2.10.0 +
+        # torch_npu 2.10.0.post4. Same matrix validated for speculators
+        # on the same CANN 9.1.0 base image.
         _PROBE_SCRIPT = (
             'import torch, torch_npu\n'
             "raise SystemExit(0 if "
-            "torch.__version__.startswith('2.9.0') "
-            "and torch_npu.__version__.startswith('2.9.0') "
+            "torch.__version__.startswith('2.10.0') "
+            "and torch_npu.__version__.startswith('2.10.0') "
             "else 1)"
         )
         probe = subprocess.run(
@@ -230,13 +234,13 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             )
             print(f'setup: reusing image torch stack ({versions.stdout.strip()})')
         else:
-            print('setup: installing torch==2.9.0 torch_npu==2.9.0.post2')
+            print('setup: installing torch==2.10.0 torch_npu==2.10.0.post4')
             subprocess.run(
                 [
                     'python', '-m', 'pip', 'install',
                     '--index-url', cls._CLUSTER_INDEX,
                     '--extra-index-url', cls._ASCEND_EXTRA,
-                    'torch==2.9.0', 'torch_npu==2.9.0.post2',
+                    'torch==2.10.0', 'torch_npu==2.10.0.post4',
                 ],
                 check=True,
             )
@@ -246,7 +250,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         # pillow) are all declared in the release's `requirements.txt`. The
         # doc body's `uv pip install -r requirements.txt` block installs
         # them itself; pre-installing here would just be a redundant
-        # `pip install` on top of that.
+        # `uv pip install` on top of that.
         #
         # The only doc-time env-setup that's NOT inside requirements.txt
         # is `uv` itself, which step (2) above already installs.

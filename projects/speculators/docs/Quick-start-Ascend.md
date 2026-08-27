@@ -94,7 +94,7 @@ Python 3.12.xxx
 ```shell #test id="vllm-ascend-install"
 uv pip install --index-url https://mirrors.aliyun.com/pypi/simple/ vllm==0.23.0
 uv pip install \
---extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi vllm-ascend==0.23.0
+--extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi vllm-ascend==0.23.0
 
 python -c "import importlib.metadata; print(f'vllm={importlib.metadata.version(\"vllm\")}')"
 python -c "import importlib.metadata; print(f'vllm_ascend={importlib.metadata.version(\"vllm-ascend\")}')"
@@ -254,11 +254,11 @@ PY
 echo "/root/dflash-qwen3-8b-converted"
 ```
 
-> 这里只 `grep -q 'Saved to:'` 确认 convert 成功（上游 `convert/dflash/converter.py` 的 `_save()` 调用 `logger.success(f"Saved to: {saved_path}")`，无 `validate` 分支依赖）；`grep` 的 stdout 重定向到 `/dev/null` 丢弃，仅保留 `echo` 的纯路径行作为 `store="dflash_path"` 的捕获值（避免多行污染下游 `<dflash_path>` 替换）。
+> 这里只 `grep -q 'Saved to:'` 确认 convert 成功（上游 `convert/dflash/converter.py` 的 `_save()` 调用 `logger.success(f"Saved to: {saved_path}")`，无 `validate` 分支依赖）；`grep` 的 stdout 重定向到 `/dev/null` 丢弃，仅保留 `echo` 的纯路径行作为 `store="dflash_path"` 的捕获值（避免多行污染下游 `<dflash_path>` 替换）。下面的 `<dflash_path>` 是测试框架的占位符（`load="dflash_path>>dflash_path"`）：执行 `#test` 块前框架把 `<dflash_path>` 替换成捕获值，bash 看到的命令是路径字面量；不要写 `$dflash_path`，那样 shell 变量在每次 `#test` 都是空、且框架不会做 `$`-展开。
 
 ```shell #test id="pipeline-step1-convert" load="dflash_path>>dflash_path"
-ls -1 "$dflash_path"/config.json "$dflash_path"/model.safetensors
-echo "$dflash_path"
+ls -1 <dflash_path>/config.json <dflash_path>/model.safetensors
+echo <dflash_path>
 ```
 
 输出结果如下：
@@ -320,7 +320,7 @@ PY
 > `extract_hidden_states` 是 vllm-ascend 的特殊 spec_decode mode：不真做 decoding、每个请求产出 1 token + 把 hidden states 写到 `shared_storage_path`。`outputs[0].kv_transfer_params["hidden_states_path"]` 是 vllm-ascend v0.23.0 引入的 safetensors 单文件格式（更早版本走 `ExampleHiddenStatesConnector.load_hidden_states`，文件路径不可见但 shape 一致）。`tail -1` 吃掉 vllm.LLM() 的启动 banner，只留最后一行（hidden_states 路径字符串）作为 `store="hidden_states_path"` 的捕获值。
 
 ```shell #test id="pipeline-step2-extract" load="hidden_states_path>>hidden_states_path"
-echo "$hidden_states_path"
+echo <hidden_states_path>
 ls -1 /root/dflash-train-data/*.safetensors 2>/dev/null | wc -l
 ```
 
@@ -370,8 +370,8 @@ echo "$CHECKPOINT_DIR"
 ```
 
 ```shell #test id="pipeline-step3-train" load="checkpoint_path>>checkpoint_path"
-echo "$checkpoint_path"
-ls -1 "$checkpoint_path"
+echo <checkpoint_path>
+ls -1 <checkpoint_path>
 ```
 
 输出结果如下：

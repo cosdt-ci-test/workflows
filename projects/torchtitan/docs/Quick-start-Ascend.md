@@ -115,7 +115,7 @@ modelscope xxx
 
 ### 安装triton
 
-torchtitan v0.2.1+ 在 `torchtitan/models/moe/kernels.py` 第 8 行硬编码 `import triton`，pyproject.toml 没声明 triton 依赖（隐式依赖）。`triton-ascend` 在 Huawei ascend 源（显式 `--extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi`，仿 speculators 文档成功模式 —— 比 engine env 里的 `repo.huaweicloud.com` 在 runner 上更可靠），它透传拉入的 plain `triton` 走集群 cache（UV_INDEX_URL）+ 阿里云源（`mirrors.aliyun.com/pypi/simple`）兜底：
+torchtitan v0.2.1+ 在 `torchtitan/models/moe/kernels.py` 第 8 行硬编码 `import triton`，pyproject.toml 没声明 triton 依赖（隐式依赖）。显式指定两个 index URL——与 [speculators 文档](../speculators/docs/Quick-start-Ascend.md) 同一模式：triton-ascend 在 Huawei ascend 源，透传拉入的 plain triton 走阿里云源兜底：
 
 ```shell #test-setup
 uv pip install --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi --extra-index-url https://mirrors.aliyun.com/pypi/simple/ triton-ascend==3.2.2

@@ -257,7 +257,7 @@ torchrun --nproc_per_node=2 \
     --local-ranks-filter 0 \
     --role rank \
     --tee 3 \
-    python -m torchtitan.train \
+    --module torchtitan.train \
     --job.config-file ./torchtitan/models/llama3/train_configs/debug_model.toml \
     --model.hf-assets-path <ms_tokenizer_path> \
     --comm.mode hierarchical \

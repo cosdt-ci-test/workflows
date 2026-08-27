@@ -288,40 +288,47 @@ os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 
 from vllm import LLM, SamplingParams
 
-# Qwen3-8B 有 36 层，抽 [2, 18, 34] 三层（vllm-ascend test_extract_hidden_states
-# DENSE_AUX_HIDDEN_STATE_LAYER_IDS 同值）。注意 target_layer_ids 是
-# draft_model_config.hf_config.eagle_aux_hIDDEN 的字段，不是 CLI flag。
-llm = LLM(
-    model="<verifier_path>",
-    tensor_parallel_size=1,
-    enable_chunked_prefill=False,
-    speculative_config={
-        "method": "extract_hidden_states",
-        "num_speculative_tokens": 1,
-        "draft_model_config": {
-            "hf_config": {
-                "eagle_aux_hidden_state_layer_ids": [2, 18, 34],
-            }
+# 必须把 vllm 调用包进 `if __name__ == "__main__":` —— Python multiprocessing
+# spawn 路径要求：spawn 子进程会重新 import __main__，父进程在 main 模块顶层
+# 还处于 bootstrapping 阶段时就起新进程会被 `_check_not_importing_main()` 拒掉
+# (CI 33061941772)。这是 Python multiprocessing 的标准 idiom，跟 vllm 无关；
+# 但因为我们 spawn 是真实文件（不像 heredoc 的 __main__=<stdin>），这个 guard
+# 才被实际执行。
+if __name__ == "__main__":
+    # Qwen3-8B 有 36 层，抽 [2, 18, 34] 三层（vllm-ascend test_extract_hidden_states
+    # DENSE_AUX_HIDDEN_STATE_LAYER_IDS 同值）。注意 target_layer_ids 是
+    # draft_model_config.hf_config.eagle_aux_hIDDEN 的字段，不是 CLI flag。
+    llm = LLM(
+        model="<verifier_path>",
+        tensor_parallel_size=1,
+        enable_chunked_prefill=False,
+        speculative_config={
+            "method": "extract_hidden_states",
+            "num_speculative_tokens": 1,
+            "draft_model_config": {
+                "hf_config": {
+                    "eagle_aux_hidden_state_layer_ids": [2, 18, 34],
+                }
+            },
         },
-    },
-    kv_transfer_config={
-        "kv_connector": "ExampleHiddenStatesConnector",
-        "kv_role": "kv_producer",
-        "kv_connector_extra_config": {
-            "shared_storage_path": "/root/dflash-train-data",
+        kv_transfer_config={
+            "kv_connector": "ExampleHiddenStatesConnector",
+            "kv_role": "kv_producer",
+            "kv_connector_extra_config": {
+                "shared_storage_path": "/root/dflash-train-data",
+            },
         },
-    },
-)
+    )
 
-prompts = [f"Briefly describe AI topic #{i}." for i in range(10)]
-outputs = llm.generate(prompts, SamplingParams(temperature=0, max_tokens=1))
+    prompts = [f"Briefly describe AI topic #{i}." for i in range(10)]
+    outputs = llm.generate(prompts, SamplingParams(temperature=0, max_tokens=1))
 
-# 第一个输出的 hidden_states_path 即可代表整批（kv_connector 对每个 prompt 写一个 .safetensors）。
-# 写到固定文件而不是 print 出来 —— vllm.LLM() teardown 时往 stdout 写
-# `[ERROR] ... applicaiton exception`（CANN 驱动的 typo 字面量），`tail -1` 抓
-# 到的就是错误行而不是路径；写文件 + cat 让 capture 完全跟 vllm 输出解耦。
-with open("/tmp/last_hidden_path.txt", "w") as _f:
-    _f.write(outputs[0].kv_transfer_params["hidden_states_path"])
+    # 第一个输出的 hidden_states_path 即可代表整批（kv_connector 对每个 prompt 写一个 .safetensors）。
+    # 写到固定文件而不是 print 出来 —— vllm.LLM() teardown 时往 stdout 写
+    # `[ERROR] ... applicaiton exception`（CANN 驱动的 typo 字面量），`tail -1` 抓
+    # 到的就是错误行而不是路径；写文件 + cat 让 capture 完全跟 vllm 输出解耦。
+    with open("/tmp/last_hidden_path.txt", "w") as _f:
+        _f.write(outputs[0].kv_transfer_params["hidden_states_path"])
 PY
 
 python /tmp/extract_hidden.py

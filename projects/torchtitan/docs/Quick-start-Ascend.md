@@ -179,10 +179,10 @@ torchtitan xxx
 
 ### 下载 tokenizer
 
-torchtitan 出厂支持 Llama 3 系列训练。本文档的 `debug_model.toml` 配的是 toy 维度（dim=256 / 6 层 / 16 heads），但用真实 Llama 3 tokenizer。
+torchtitan 出厂支持 Llama 3 系列训练。本文档的单卡用 toy debugmodel（vocab=2048）+ 真 Llama 3 tokenizer（vocab=128256，不真跑 forward 所以 vocab mismatch 不影响）；多卡用上游 8B flavor（vocab=128256 跟 tokenizer 配套，需要拉 ~16 GB 模型权重）。两个章节共用同一个 ModelScope 缓存目录：
 
 ```shell #test-setup id="modelscope-download-tokenizer" store="ms_tokenizer_path"
-python -c "from modelscope import snapshot_download; print(snapshot_download('LLM-Research/Llama-3.2-1B', allow_patterns=['*.json', '*.model', 'tokenizer*']))" | tail -n 1
+python -c "from modelscope import snapshot_download; print(snapshot_download('LLM-Research/Meta-Llama-3-8B', allow_patterns=['*.safetensors', '*.json', '*.model', 'tokenizer*']))" | tail -n 1
 ```
 
 > 输出的路径用于后续「单卡训练」和「多卡训练」章节。
@@ -190,7 +190,7 @@ python -c "from modelscope import snapshot_download; print(snapshot_download('LL
 验证 tokenizer 关键文件都落盘：
 
 ```shell #test id="modelscope-verify-tokenizer" load="ms_tokenizer_path>>ms_tokenizer_path"
-ls -la <ms_tokenizer_path> | head -10
+ls -la <ms_tokenizer_path> | grep -E '\.(json|model)$' | grep -v safetensors
 ```
 
 ```shell #test-result id="modelscope-verify-tokenizer" fuzzy='xxx' fuzzy='...'
@@ -242,7 +242,7 @@ python -m torchtitan.train \
 
 ### 多卡训练
 
-用 `torchrun` 起 2 个 rank 跑真分布式 DDP，验证 collective 初始化、梯度同步、ProcessGroup 销毁这条分布式链路。同样 `--training.steps 0` 跳过实际训练：
+用 `torchrun` 起 2 个 rank 跑 8B 真分布式训练（vocab=128256 跟 tokenizer 配套），`--model.flavor 8B` 覆盖 toml 默认 debugmodel。`--training.steps 2` 真跑 2 步 forward + backward + DDP 梯度同步：
 
 ```shell #test id="torchtitan-train-2card" load="upstream_ref>>ref" load="ms_tokenizer_path>>ms_tokenizer_path"
 cd torchtitan && git checkout <ref>
@@ -255,9 +255,10 @@ torchrun --nproc_per_node=2 \
     --tee 3 \
     --module torchtitan.train \
     --job.config-file ./torchtitan/models/llama3/train_configs/debug_model.toml \
+    --model.flavor 8B \
     --model.hf-assets-path <ms_tokenizer_path> \
     --comm.mode default \
-    --training.steps 0 \
+    --training.steps 2 \
     --training.local-batch-size 1 \
     --training.seq-len 256 \
     --metrics.log-freq 1 \
@@ -271,6 +272,12 @@ torchrun --nproc_per_node=2 \
 [default0]:[titan] xxx - root - INFO - Starting job: Llama 3 debug training
 ...
 [default0]:[titan] xxx - root - INFO - Training starts at step xxx
+...
+[default0]:[titan] xxx - root - INFO - step: xxx
+...
+[default0]:[titan] xxx - root - INFO - step: xxx
+...
+[default0]:[titan] xxx - root - INFO - Sleeping 2 seconds for other ranks to complete
 [default0]:[titan] xxx - root - INFO - Training completed
 [default0]:[titan] xxx - root - INFO - Process group destroyed
 ```

@@ -4,13 +4,16 @@
 
 ## 硬件与 CANN
 
+确认驱动可用、设备可见（`npu-smi` 通常装在 `/usr/local/sbin`）：
+
 ```shell
 export PATH="/usr/local/sbin:/usr/local/bin:$PATH"
 npu-smi info
 ```
 
+加载 CANN 与 ATB 环境，后面的安装和启动步骤都依赖它：
+
 ```shell
-set +u
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 source /usr/local/Ascend/nnal/atb/latest/atb/set_env.sh
 ```
@@ -20,7 +23,6 @@ source /usr/local/Ascend/nnal/atb/latest/atb/set_env.sh
 `run-local.sh` 用 `ss` 探测网关端口，没有就装 `iproute2`：
 
 ```shell #test id="install-system-prereqs"
-set -euo pipefail
 if ! command -v ss >/dev/null 2>&1; then
   apt-get update
   DEBIAN_FRONTEND=noninteractive apt-get install -y iproute2
@@ -31,8 +33,7 @@ ss --version
 输出结果如下：
 
 ```shell #test-result id="install-system-prereqs"
-...
-ss utility, iproute2-...
+...ss utility, iproute2-...
 ```
 
 
@@ -42,7 +43,6 @@ ss utility, iproute2-...
 Go 1.22.6 解压到 `.aibrix-quick-start/toolchain/go`。
 
 ```shell #test id="install-go"
-set -euo pipefail
 mkdir -p .aibrix-quick-start/toolchain
 curl -fL --connect-timeout 20 --retry 5 --retry-delay 3 --max-time 180 \
   -o .aibrix-quick-start/go.tar.gz \
@@ -64,7 +64,6 @@ go version go1.22.6 linux/arm64
 local mode 经 Envoy 监听 `:10080`。从 GitHub Release 下载官方 aarch64 包：
 
 ```shell #test id="install-envoy"
-set -euo pipefail
 mkdir -p .aibrix-quick-start/bin
 curl -fL --connect-timeout 20 --retry 8 --retry-all-errors --retry-delay 3 --max-time 300 \
   -C - -o .aibrix-quick-start/bin/envoy.part \
@@ -94,7 +93,6 @@ echo "${UPSTREAM_REF}"
 克隆 release tag（`<ref>` 可改为例如 `v0.7.0`）。只用下面的 `go build`，勿用 `make build-gateway-plugins-nozmq`（会跑全仓 `manifests generate fmt vet`）。
 
 ```shell #test id="clone-aibrix" load="upstream_ref>>ref"
-set -euo pipefail
 rm -rf .aibrix-quick-start/aibrix
 git clone --depth 1 --branch <ref> https://github.com/vllm-project/aibrix.git .aibrix-quick-start/aibrix
 git -C .aibrix-quick-start/aibrix describe --tags --exact-match
@@ -106,22 +104,23 @@ git -C .aibrix-quick-start/aibrix describe --tags --exact-match
 <ref>
 ```
 
+`GOPROXY` 指向国内代理（直连 `proxy.golang.org` 在大陆网络经常拉不下依赖）；`GOPATH` / `GOCACHE` 落在工作目录内，便于事后整体清理。
+
 ```shell #test id="build-gateway"
-set -euo pipefail
 export GOPROXY=https://goproxy.cn,direct
 export GOPATH="$PWD/.aibrix-quick-start/gopath"
 export GOCACHE="$PWD/.aibrix-quick-start/gocache"
 mkdir -p "$GOPATH" "$GOCACHE"
 cd .aibrix-quick-start/aibrix
 CGO_ENABLED=0 "$PWD/../toolchain/go/bin/go" build -tags=nozmq -o bin/gateway-plugins cmd/plugins/main.go
-test -x bin/gateway-plugins
-echo gateway-plugins_ok
+"$PWD/../toolchain/go/bin/go" version -m bin/gateway-plugins
 ```
 
-输出结果如下：
+输出结果如下（首行是二进制内嵌的 Go 版本，其余为构建信息）：
 
 ```shell #test-result id="build-gateway"
-gateway-plugins_ok
+bin/gateway-plugins: go1.22.6
+...
 ```
 
 <!-- CI/coder 在 127.0.0.1:6060 已被占用时，只给 gateway-plugins 套一层 hosts remap。vLLM 不能进这个 namespace。用户机器上 6060 空闲时这里是 no-op。 -->
@@ -159,41 +158,34 @@ echo pprof_port_wrapped
 
 分步安装，勿合并为一次 `pip install`：先钉 torch / torch-npu 2.10，再 `VLLM_TARGET_DEVICE=empty` 装 vLLM 0.23.0 源码（避免官方 wheel 把 torch 升到 2.11），最后 `vllm-ascend==0.23.0`。
 
-安装块内会 `source` CANN/ATB（build 时要加载 `torch_npu`）。`VLLM_USE_MODELSCOPE=True` 留到启动服务再设。
+本步骤依赖第一节加载的 CANN/ATB 环境（构建 `vllm-ascend` 时会加载 `torch_npu`，找不到 `libhccl.so` 会直接失败）。`VLLM_USE_MODELSCOPE=True` 留到启动服务再设。pip 默认走清华镜像；当前环境已设 `PIP_INDEX_URL` 时沿用已有镜像。
 
 ```shell #test id="install-vllm"
-set -euo pipefail
-set +u
-source /usr/local/Ascend/ascend-toolkit/set_env.sh
-source /usr/local/Ascend/nnal/atb/latest/atb/set_env.sh
-set -euo pipefail
-export PATH="/usr/local/sbin:/usr/local/bin:$PATH"
 python3 -m venv .aibrix-quick-start/venv
-PY="$PWD/.aibrix-quick-start/venv/bin/python"
-"$PY" -m pip install -U pip
-export PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+.aibrix-quick-start/venv/bin/python -m pip install -U pip
+export PIP_INDEX_URL="${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
 export PIP_DEFAULT_TIMEOUT=120
 export PIP_RETRIES=5
-"$PY" -m pip install \
+.aibrix-quick-start/venv/bin/python -m pip install \
   --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi/variant \
   --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi \
   --find-links https://repo.huaweicloud.com/ascend/repos/pypi/triton-ascend/ \
   torch==2.10.0 torch-npu==2.10.0.post4 torchvision==0.25.0 torchaudio==2.10.0 triton-ascend==3.2.2
-"$PY" -m pip install 'cmake>=3.26' nanobind ninja setuptools-rust wheel 'setuptools-scm>=8' 'setuptools>=77,<81'
+.aibrix-quick-start/venv/bin/python -m pip install 'cmake>=3.26' nanobind ninja setuptools-rust wheel 'setuptools-scm>=8' 'setuptools>=77,<81'
 rm -rf .aibrix-quick-start/src/vllm
 git clone --depth 1 --branch v0.23.0 https://github.com/vllm-project/vllm.git .aibrix-quick-start/src/vllm
 export VLLM_TARGET_DEVICE=empty
-"$PY" -m pip install --no-build-isolation -e .aibrix-quick-start/src/vllm
-"$PY" -m pip install grpcio-tools
-export CMAKE_PREFIX_PATH="$("$PY" -m nanobind --cmake_dir)${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
-export Python_EXECUTABLE="$PY"
-export PYTHON_EXECUTABLE="$PY"
-"$PY" -m pip install --no-build-isolation \
+.aibrix-quick-start/venv/bin/python -m pip install --no-build-isolation -e .aibrix-quick-start/src/vllm
+.aibrix-quick-start/venv/bin/python -m pip install grpcio-tools
+export CMAKE_PREFIX_PATH="$(.aibrix-quick-start/venv/bin/python -m nanobind --cmake_dir)${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
+export Python_EXECUTABLE="$PWD/.aibrix-quick-start/venv/bin/python"
+export PYTHON_EXECUTABLE="$PWD/.aibrix-quick-start/venv/bin/python"
+.aibrix-quick-start/venv/bin/python -m pip install --no-build-isolation \
   --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi/variant \
   --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi \
   vllm-ascend==0.23.0
-"$PY" -m pip install modelscope==1.31.0
-"$PY" -c "import importlib.metadata as m
+.aibrix-quick-start/venv/bin/python -m pip install modelscope==1.31.0
+.aibrix-quick-start/venv/bin/python -c "import importlib.metadata as m
 for n in ['torch', 'torch-npu', 'vllm', 'vllm-ascend', 'modelscope']:
     print(n, m.version(n))"
 ```
@@ -213,13 +205,9 @@ modelscope 1.31.0
 
 ## 启动 vLLM-Ascend 后端
 
+后台启动服务、日志落盘，并轮询 `/health` 直到就绪（模型首次运行会从 ModelScope 下载，需等待数分钟）：
+
 ```shell #test-setup
-set -euo pipefail
-set +u
-source /usr/local/Ascend/ascend-toolkit/set_env.sh
-source /usr/local/Ascend/nnal/atb/latest/atb/set_env.sh
-set -euo pipefail
-export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:$PATH"
 export PYTHONUNBUFFERED=1
 export VLLM_USE_MODELSCOPE=True
 mkdir -p .aibrix-quick-start
@@ -244,7 +232,7 @@ for i in $(seq 1 180); do
   if [ -n "${pid}" ] \
       && curl -sf --connect-timeout 2 -- 'http://127.0.0.1:8000/health' >/dev/null \
       && ss -ltnp 'sport = :8000' | grep -q "pid=${pid},"; then
-    echo backend_health_200
+    echo 'vLLM /health OK'
     exit 0
   fi
   sleep 2
@@ -256,10 +244,9 @@ exit 1
 
 `--max-model-len` / `--max-num-seqs` / `--gpu-memory-utilization` 压到单卡演示规模。`--served-model-name` 须与 `endpoints.yaml` 一致，否则 Envoy 报 `no healthy upstream`。
 
-`VLLM_USE_MODELSCOPE=True` 从 ModelScope 拉权重。日志/PID 在 `.aibrix-quick-start/`。`/health` 200 不能排除 8000 被占；块内用 `ss` 核对 PID。日志里应有 `backend=hccl`。
+`VLLM_USE_MODELSCOPE=True` 从 ModelScope 拉权重；`PYTHONUNBUFFERED=1` 让日志实时写入文件，便于观察启动进度。日志/PID 在 `.aibrix-quick-start/`。`/health` 200 不能排除 8000 被占；块内用 `ss` 核对 PID。日志里应有 `backend=hccl`。
 
 ```shell #test id="backend-on-npu"
-set -euo pipefail
 grep -F 'backend=hccl' .aibrix-quick-start/vllm.log
 ```
 
@@ -276,7 +263,6 @@ grep -F 'backend=hccl' .aibrix-quick-start/vllm.log
 模型名与 `--served-model-name` 一致；endpoint 用 `127.0.0.1:8000`。
 
 ```shell #test id="configure-endpoints"
-set -euo pipefail
 cat > .aibrix-quick-start/endpoints.yaml <<'YAML'
 models:
   - name: "Qwen/Qwen2.5-0.5B-Instruct"
@@ -300,7 +286,6 @@ models:
 `run-local.sh` 从 PATH 找 `envoy`；`endpoints.yaml` 须绝对路径。
 
 ```shell #test id="start-gateway"
-set -euo pipefail
 export PATH="$PWD/.aibrix-quick-start/bin:$PATH"
 bash .aibrix-quick-start/aibrix/deployment/local/run-local.sh \
   -e "$PWD/.aibrix-quick-start/endpoints.yaml"
@@ -321,7 +306,6 @@ AIBrix gateway is running!
 经 `:10080` 发 chat completion；生成内容非确定性，勿对原文。
 
 ```shell #test id="infer"
-set -euo pipefail
 .aibrix-quick-start/venv/bin/python - <<'PY'
 import json
 import urllib.request
@@ -361,8 +345,7 @@ completion_tokens ...
 
 先 `stop-local.sh`，再按 `.aibrix-quick-start/vllm.pid` 停 vLLM。
 
-```shell #test id="cleanup"
-set -euo pipefail
+```shell #test-setup
 if [ -x .aibrix-quick-start/aibrix/deployment/local/stop-local.sh ]; then
   bash .aibrix-quick-start/aibrix/deployment/local/stop-local.sh || true
 fi
@@ -372,13 +355,5 @@ if [ -f .aibrix-quick-start/vllm.pid ]; then
     kill "${pid}" 2>/dev/null || true
   fi
 fi
-echo stopped
-```
-
-输出结果如下：
-
-```shell #test-result id="cleanup"
-...
-stopped
 ```
 

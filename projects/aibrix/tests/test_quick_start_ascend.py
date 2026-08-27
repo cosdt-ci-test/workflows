@@ -81,18 +81,25 @@ def cleanup_aibrix_workdir(root: Path) -> None:
 
 
 def _merge_sourced_env(*scripts: str) -> None:
+    """Source the scripts in a child bash and adopt the resulting environment.
+
+    Overwrites (not setdefault): container images may pre-set PATH-like vars
+    (e.g. LD_LIBRARY_PATH), and the CANN additions from set_env.sh must win.
+    The child inherits os.environ, so untouched vars are rewritten with their
+    own values — lossless. ``env -0`` keeps multi-line values in one entry.
+    """
     sourced = ' && '.join(f'source {shlex.quote(script)}' for script in scripts)
     merged = subprocess.run(
-        ['bash', '-c', f'set +u; {{ {sourced}; }} >/dev/null 2>&1; env'],
+        ['bash', '-c', f'set +u; {{ {sourced}; }} >/dev/null 2>&1; env -0'],
         capture_output=True,
         text=True,
         check=True,
     )
-    for line in merged.stdout.splitlines():
-        if '=' not in line:
+    for entry in merged.stdout.split('\0'):
+        if not entry or '=' not in entry:
             continue
-        key, _, value = line.partition('=')
-        os.environ.setdefault(key, value)
+        key, _, value = entry.partition('=')
+        os.environ[key] = value
 
 
 class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
@@ -110,7 +117,9 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
     @classmethod
     def prepare_environment(cls) -> None:
-        path_dirs = '/usr/local/sbin:/usr/local/bin'
+        # /usr/sbin covers `ss` in the vLLM startup health check; the doc no
+        # longer patches PATH inside blocks, so the CI side pins it here.
+        path_dirs = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin'
         current_path = os.environ.get('PATH', '')
         if path_dirs not in current_path:
             os.environ['PATH'] = f'{path_dirs}:{current_path}'
@@ -170,6 +179,33 @@ class TestPostProcessCleanup(unittest.TestCase):
             os.environ.pop('NOISE_FROM_CANN', None)
             os.environ.pop('NOISE_FROM_ATB', None)
             shutil.rmtree(first.parent, ignore_errors=True)
+
+    def test_merge_sourced_env_overwrites_preexisting_value(self) -> None:
+        # Regression: setdefault used to keep stale container values (e.g. a
+        # pre-set LD_LIBRARY_PATH), silently dropping the CANN additions.
+        script = Path(tempfile.mkdtemp(prefix='aibrix-env-')) / 'set_env.sh'
+        script.write_text(
+            'export OVERWRITE_ME="${OVERWRITE_ME}:/from/set_env"\n'
+            'export MULTILINE_VAL="line1\nline2=looks_like_kv"\n',
+            encoding='utf-8',
+        )
+        os.environ['OVERWRITE_ME'] = '/preset'
+        os.environ.pop('MULTILINE_VAL', None)
+        os.environ.pop('line2', None)
+        try:
+            _merge_sourced_env(str(script))
+            self.assertEqual(
+                os.environ.get('OVERWRITE_ME'), '/preset:/from/set_env'
+            )
+            self.assertEqual(
+                os.environ.get('MULTILINE_VAL'), 'line1\nline2=looks_like_kv'
+            )
+            self.assertNotIn('line2', os.environ)
+        finally:
+            os.environ.pop('OVERWRITE_ME', None)
+            os.environ.pop('MULTILINE_VAL', None)
+            os.environ.pop('line2', None)
+            shutil.rmtree(script.parent, ignore_errors=True)
 
     def test_stops_recorded_pid_when_infer_did_not_run(self) -> None:
         root = Path(tempfile.mkdtemp(prefix='aibrix-qs-'))

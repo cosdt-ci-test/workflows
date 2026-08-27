@@ -38,7 +38,8 @@ python3 scripts/bootstrap_manifest.py \
 - `install-vllm`
 - `start-backend`（`#test-setup`，轮询 `/health`）
 - `backend-on-npu`（日志必须含 `backend=hccl`）
-- `configure-endpoints`、`start-gateway`、`infer`、`cleanup`
+- `configure-endpoints`、`start-gateway`、`infer`
+- 停进程收尾块（`#test-setup`，只看退出码，不比对输出）
 
 不看护的无标签块（用户仍应按文档做）：
 

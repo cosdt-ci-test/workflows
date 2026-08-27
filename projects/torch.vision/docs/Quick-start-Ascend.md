@@ -148,7 +148,10 @@ torchvision xxx
 <!-- 
 ```shell #test-setup store="upstream_ref"
 echo "${UPSTREAM_REF}"
+```
+-->
 
+<!-- 
 ```shell #test-setup
 uv pip uninstall torchvision -y
 ```

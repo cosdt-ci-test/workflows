@@ -134,6 +134,28 @@ triton xxx
 
 > NPU 优化插件层 `cann/torchtitan-npu`（pypi: `0.2.2.post1`）提供 NPU 融合算子、图下沉、AutoFuse、HiFloat8、FSDP 大 EP 切分等生产训练能力——它是 upstream `pytorch/torchtitan` + `ModelConverter` 扩展机制的叠加层，**本 quick-start 不安装它**：Llama 3 debug（dim=256 / 6 层）走原生 SDPA + FlexAttention，不需要这些优化；要训 DeepSeek-V4 / 真实 Llama 3 70B 等大模型再叠加装它。
 
+### 通过 pip 安装（二进制 wheel）
+
+torchtitan 上 PyPI 有 `py3-none-any` 的纯 Python wheel（450 KB），不依赖 native build——`uv pip install torchtitan` 直接装最新 stable release，不用管版本号：
+
+```shell #test id="torchtitan-install-binary"
+uv pip install --extra-index-url https://mirrors.aliyun.com/pypi/simple/ torchtitan
+python -c "import torchtitan; print('torchtitan', torchtitan.__version__)"
+```
+
+输出结果类似如下：
+
+```shell #test-result id="torchtitan-install-binary" fuzzy='xxx'
+torchtitan xxx
+```
+- xxx 表示最新的版本号
+
+<!--
+```shell #test-setup
+uv pip uninstall torchtitan -y
+```
+-->
+
 ### 从源码安装
 
 <!--
@@ -188,9 +210,11 @@ xxx config.json
 
 `--comm.mode fake_backend` 让 torchtitan 跳过 NCCL/HCCL 集合通信初始化、用 fake process group 跑 1 个 rank 的纯 NPU 计算——验证 toml 配置解析 + 模型搬到 NPU + forward / backward / optimizer 这条**最小**链路，多卡 / 真分布式属于另一个配置面：
 
+> v0.2.2 在 `--comm.mode fake_backend` 分支强制要求 `NGPU=<world_size>` env var（见 `torchtitan/distributed/utils.py:307`），否则 `init_distributed` 直接 `raise ValueError`。fake mode 把 `NGPU` 当 fake world size，不读 `WORLD_SIZE`（那是真分布式路径由 torchrun 注入）。
+
 ```shell #test id="torchtitan-train-debug" load="upstream_ref>>ref" load="ms_tokenizer_path>>ms_tokenizer_path"
 cd torchtitan && git checkout <ref>
-ASCEND_RT_VISIBLE_DEVICES=0 LOCAL_RANK=0 \
+NGPU=1 ASCEND_RT_VISIBLE_DEVICES=0 LOCAL_RANK=0 \
 python -c "import torch_npu, runpy; runpy.run_module('torchtitan.train', run_name='__main__')" \
     --job.config-file ./torchtitan/models/llama3/train_configs/debug_model.toml \
     --model.hf-assets-path <ms_tokenizer_path> \

@@ -71,53 +71,6 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         'ERR99999',  # CANN sentinel for unrecoverable runtime failure
     )
 
-    # Process-level CUDA exclusion list. Originally written inside the
-    # workflow step as a child-process env passed through to pip / uv /
-    # speculators' own wheel resolver. Moved to the test layer: write to
-    # /tmp and export; subprocesses (subprocess.run inherits parent env
-    # by default) see it the same way.
-    _CUDA_CONSTRAINTS = (
-        'cuda-toolkit<0',
-        'cuda-python<0',
-        'cuda-bindings<0',
-        'cuda-core<0',
-        'cuda-pathfinder<0',
-        'flashinfer-python<0',
-        'nvidia-cublas<0',
-        'nvidia-cuda-runtime<0',
-        'nvidia-cuda-nvrtc<0',
-        'nvidia-cuda-cupti<0',
-        'nvidia-cudnn<0',
-        'nvidia-cudnn-frontend<0',
-        'nvidia-cufft<0',
-        'nvidia-curand<0',
-        'nvidia-cusolver<0',
-        'nvidia-cusparse<0',
-        'nvidia-cutlass-dsl<0',
-        'nvidia-cutlass-dsl-libs-base<0',
-        'nvidia-cutlass-dsl-libs-core<0',
-        'nvidia-cutlass-dsl-libs-cu12<0',
-        'nvidia-ml-py<0',
-        'nvidia-nccl<0',
-        'nvidia-nvjitlink<0',
-        'nvidia-nvtx<0',
-        'nvidia-cublas-cu12<0',
-        'nvidia-cuda-nvdisasm<0',
-        'nvidia-cuda-runtime-cu12<0',
-        'nvidia-cuda-nvrtc-cu12<0',
-        'nvidia-cuda-cupti-cu12<0',
-        'nvidia-cudnn-cu12<0',
-        'nvidia-cufft-cu12<0',
-        'nvidia-curand-cu12<0',
-        'nvidia-cusolver-cu12<0',
-        'nvidia-cusparse-cu12<0',
-        'nvidia-cusparselt-cu12<0',
-        'nvidia-nccl-cu12<0',
-        'nvidia-nvjitlink-cu12<0',
-        'nvidia-nvtx-cu12<0',
-    )
-    _CONSTRAINTS_FILE = '/tmp/speculators_npu_constraints.txt'
-
     # Cluster-internal nginx PyPI cache + Huawei Cloud ascend dual-source.
     # Both URLs are exposed as env vars (``PIP_INDEX_URL`` /
     # ``UV_INDEX_URL`` + ``UV_EXTRA_INDEX_URL``) by the engine template
@@ -132,15 +85,15 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
 
     # ----------------------------------------------------------
-    # prepare_environment: CANN env + CUDA constraints + uv + torch stack probe
-    # + safetensors (transformers / speculators are installed by the doc's
+    # prepare_environment: CANN env + uv + safetensors + modelscope cache purge
+    #  (transformers / speculators are installed by the doc's
     #  `### 前置安装` / `## 安装 Speculators` blocks; HF cache is left at
     #  the container default so the workflow's bind mount applies)
     # ----------------------------------------------------------
 
     @classmethod
     def prepare_environment(cls) -> None:
-        """Source CANN env + write CUDA exclusion list + install uv + safetensors
+        """Source CANN env + install uv + safetensors
         + purge stale modelscope cache shards.
 
         The doc's ``### 前置安装`` and ``## 安装 Speculators`` sections are
@@ -190,13 +143,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 f'setup: skipping CANN env source ({cls._CANN_SET_ENV} not present)'
             )
 
-        # 1) CUDA exclusion list + process-level env
-        with open(cls._CONSTRAINTS_FILE, 'w', encoding='utf-8') as fh:
-            fh.write('\n'.join(cls._CUDA_CONSTRAINTS) + '\n')
-        os.environ['PIP_CONSTRAINT'] = cls._CONSTRAINTS_FILE
-        os.environ['UV_CONSTRAINT'] = cls._CONSTRAINTS_FILE
-
-        # 2) uv: the doc's ``speculators-install-source`` block calls
+        # 1) uv: the doc's ``speculators-install-source`` block calls
         # ``uv pip install -e .`` which handles PEP 517 build deps more
         # reliably than pip. Inherit ``PIP_INDEX_URL`` + ``PIP_TRUSTED_HOST``
         # from the yml job-level env (cluster cache path + trusted-host).
@@ -250,8 +197,8 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        """Run env setup once per test class: CANN env + CUDA constraints
-        + uv + safetensors + modelscope cache purge.
+        """Run env setup once per test class: CANN env + uv + safetensors
+        + modelscope cache purge.
 
         ``torch`` / ``torch_npu`` / ``modelscope`` / ``speculators`` are
         NOT installed here: the doc's own labeled blocks install them in

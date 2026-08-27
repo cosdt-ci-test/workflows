@@ -239,3 +239,16 @@ projects:
     dir: projects/opencv
     workflows:
       quick_start: .github/workflows/opencv-quick-start.yml
+  # FastChat quickstart exercises the native npu device support
+  # (--device npu + torch_npu) with a single-card LLM CLI chat
+  # against a real model weight fetched via ModelScope
+  # (FASTCHAT_USE_MODELSCOPE=True).
+  - name: fastchat
+    category: 推理加速
+    support_level: 新兴适配
+    upstream_repo: lm-sys/FastChat
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/fastchat
+    workflows:
+      quick_start: .github/workflows/fastchat-quick-start.yml

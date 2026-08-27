@@ -277,7 +277,12 @@ DATA_DIR=/root/dflash-train-data
 rm -rf "$DATA_DIR"
 mkdir -p "$DATA_DIR"
 
-python << 'PY' | tail -1
+# 必须先写 .py 文件再 `python /tmp/...py` 跑 —— vllm v1 engine 在 NPU 上走
+# multiprocessing spawn，spawn 子进程 `runpy.run_path(__main__)`，父进程的
+# `__main__` 必须是真实文件路径。`python << 'PY'` 把 stdin 当 `__main__`，spawn
+# 子进程找不到 `<stdin>` 文件直接 FileNotFoundError（CI 33055740901）。`fork`
+# 在 NPU 上会丢 HAI driver context、segfault，所以 spawn 是唯一选项。
+cat > /tmp/extract_hidden.py << 'PY'
 import os
 os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 
@@ -314,6 +319,8 @@ outputs = llm.generate(prompts, SamplingParams(temperature=0, max_tokens=1))
 # 第一个输出的 hidden_states_path 即可代表整批（kv_connector 对每个 prompt 写一个 .safetensors）
 print(outputs[0].kv_transfer_params["hidden_states_path"])
 PY
+
+python /tmp/extract_hidden.py | tail -1
 ```
 
 > `extract_hidden_states` 是 vllm-ascend 的特殊 spec_decode mode：不真做 decoding、每个请求产出 1 token + 把 hidden states 写到 `shared_storage_path`。`outputs[0].kv_transfer_params["hidden_states_path"]` 是 vllm-ascend v0.23.0 引入的 safetensors 单文件格式（更早版本走 `ExampleHiddenStatesConnector.load_hidden_states`，文件路径不可见但 shape 一致）。`tail -1` 吃掉 vllm.LLM() 的启动 banner，只留最后一行（hidden_states 路径字符串）作为 `store="hidden_states_path"` 的捕获值。**这里不写 `2>&1 | tail -1`** —— vllm.LLM() 在 process 退出前会触发 CANN 驱动的 teardown，teardown 走 stderr 写一行 `[ERROR] ... applicaiton exception`（CANN 驱动的 typo 字面量）；合并到管道后 `tail -1` 抓到的就是这串 CANN 错误而不是路径，下游 `<hidden_states_path>` 替换成错误字符串、bash 在 `(` 处 syntax error。stderr 保持流到框架端即可（错误时 framework 会全文 dump 到日志），`tail -1` 只看 python 的 stdout（vllm banner + 最后的 print 路径），路径是 stdout 的最后一行、teardown 噪声全在 stderr。

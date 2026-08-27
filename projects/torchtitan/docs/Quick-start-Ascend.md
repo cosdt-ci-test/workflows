@@ -33,8 +33,7 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | CANN | 9.1.0 |
 | torch | 2.10.0 |
 | torch_npu | 2.10.0.post4 |
-| triton-ascend | 3.2.2（torchtitan v0.2.1+ `torchtitan/models/moe/kernels.py` 的 `@triton.jit` 隐式依赖，Huawei ascend 源） |
-| triton | 3.5.0（由 triton-ascend 透传拉入） |
+| triton | 最新（`uv pip install triton`，满足 torchtitan `moe/kernels.py` 的 `import triton`，Llama 3 训练不走 triton kernel） |
 | modelscope | 最新（`uv pip install modelscope`，不锁版本） |
 | torchtitan | 最新 release（v0.2.x 风格 tyro CLI + toml 配置；最新 tag 由 workflow 注入，见下方 `UPSTREAM_REF`） |
 | 训练配置 | `torchtitan/models/llama3/train_configs/debug_model.toml`（dim=256 / 6 层 / 16 head Llama 3 缩水版） |
@@ -115,21 +114,20 @@ modelscope xxx
 
 ### 安装triton
 
-torchtitan v0.2.1+ 在 `torchtitan/models/moe/kernels.py` 第 8 行硬编码 `import triton`，pyproject.toml 没声明 triton 依赖（隐式依赖）。显式指定两个 index URL——与 [speculators 文档](../speculators/docs/Quick-start-Ascend.md) 同一模式：triton-ascend 在 Huawei ascend 源，透传拉入的 plain triton 走阿里云源兜底：
+torchtitan v0.2.1+ 在 `torchtitan/models/moe/kernels.py` 第 8 行硬编码 `import triton`，pyproject.toml 没声明 triton 依赖（隐式依赖）。**只装 plain `triton` 即可，不需要 `triton-ascend`**——Llama 3 模型（debug_model.toml）走 torch 原生 SDPA + FlexAttention，`moe/kernels.py` 的 `@triton.jit` 装饰器是惰性的，只有真正调用 `_fill_indices_kernel[grid](...)` 时才编译；本 quick start 跑 Llama 3 debug 不触发 MoE kernel，不需要 ascend 后端。triton-ascend 3.2.2 的 wheel 把 `triton/_C/libtriton` 装成单文件而标准 triton 是目录，结构性冲突会让 `triton._C.libtriton.ascend` import 失败。
 
 ```shell #test-setup
-uv pip install --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi --extra-index-url https://mirrors.aliyun.com/pypi/simple/ triton-ascend==3.2.2
+uv pip install --extra-index-url https://mirrors.aliyun.com/pypi/simple/ triton
 ```
 
 打印安装版本：
-```shell #test id="triton-ascend-install"
-python -c "from importlib.metadata import version; print('triton', version('triton')); print('triton-ascend', version('triton-ascend')); "
+```shell #test id="triton-install"
+python -c "from importlib.metadata import version; print('triton', version('triton'))"
 ```
 
 输出结果如下：
-```shell #test-result id="triton-ascend-install" fuzzy='xxx'
+```shell #test-result id="triton-install" fuzzy='xxx'
 triton xxx
-triton-ascend xxx
 ```
 
 ## 安装 torchtitan

@@ -94,7 +94,11 @@ def safetensors_header_ok(path: Path) -> bool:
     """
     from safetensors import safe_open, SafetensorError  # noqa: I001
     try:
-        with safe_open(str(path), framework='pt') as f:
+        # framework='numpy' instead of 'pt': only ``.keys()`` is read so
+        # the framework is a no-op for our use case, but safetensors
+        # 0.8.0 makes ``framework`` required and 'pt' would force
+        # ``import torch`` — bare CANN 9.1.0 image doesn't ship torch.
+        with safe_open(str(path), framework='numpy') as f:
             list(f.keys())  # force header read
     except (SafetensorError, OSError):
         return False

@@ -203,6 +203,16 @@ projects:
     dir: projects/colossalai
     workflows:
       quick_start: .github/workflows/colossalai-quick-start.yml
+  - name: aibrix
+    category: 推理加速
+    support_level: 新兴适配
+    upstream_repo: vllm-project/aibrix
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/aibrix
+    workflows:
+      examples: .github/workflows/aibrix-examples.yml
+      quick_start: .github/workflows/aibrix-quick-start.yml
   - name: tensordict
     category: 训练加速
     support_level: 基础支持

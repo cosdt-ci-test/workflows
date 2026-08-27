@@ -23,9 +23,9 @@
 # No device mounts: the self-hosted NPU runner (`linux-aarch64-a2-1`)
 # auto-passes `/dev/davinci*` into the container via the cluster
 # device-plugin, so container_options stays empty (same convention as
-# tensordict). The doc exercises install + import + 5 core-chain smoke
-# commands (list_models / create_model + forward / forward_features /
-# resolve_data_config / create_transform) all with pretrained=False, so
+# tensordict). The doc exercises install + the 快速开始 flow's
+# four #test smoke commands (import-torch-npu / timm-train /
+# timm-validate / timm-inference) all with pretrained=False, so
 # no weights are downloaded and no read-only Ascend driver bind-mount
 # is needed. check-torch expects `count: 1`.
 
@@ -68,15 +68,13 @@ jobs:
       test_runner: '["linux-aarch64-a2-1"]'
       image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
       container_options: >-
-      # Doc body does: git clone + uv pip install -e . on a <ref>
-      # checkout + five #test smoke commands (timm-list-models /
-      # timm-create-forward / timm-forward-features / timm-data-config /
-      # timm-create-transform). All five construct the model with
-      # pretrained=False on 'npu:0' directly; they run after timm install.
-      # timm's transitive deps (torch / torchvision / pyyaml /
-      # huggingface_hub / safetensors) are small enough that 90 min
-      # covers cold cache + first-time wheel pulls + five ~1s smoke
-      # commands comfortably.
+      # Doc body does: uv pip install timm + four #test smoke commands
+      # (import-torch-npu / timm-train / timm-validate / timm-inference).
+      # All four construct the model with pretrained=False on 'npu:0'
+      # directly; they run after timm install. timm's transitive deps
+      # (torch / torchvision / pyyaml / huggingface_hub / safetensors)
+      # are small enough that 90 min covers cold cache + first-time wheel
+      # pulls + four ~1s smoke commands comfortably.
       timeout_minutes: 90
       upstream_repo: huggingface/pytorch-image-models
       # Raw URL the engine's monitor hashes and the test fetches;
@@ -84,7 +82,6 @@ jobs:
       doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/timm/docs/Quick-start-Ascend.md
       doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/timm/docs/Quick-start-Ascend.md
       # cwd is workflows/projects/timm; env contract (MONITORED_DOC_URL /
-      # UPSTREAM_REF / NPU_READY) is injected by the engine. All project
-      # env prep and installs live in the test subclass's
-      # prepare_environment hook.
+      # NPU_READY) is injected by the engine. All project env prep and
+      # installs live in the test subclass's prepare_environment hook.
       test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1

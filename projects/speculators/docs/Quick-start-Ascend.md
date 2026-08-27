@@ -126,9 +126,6 @@ is_available: True
 count: 1
 ```
 
-> 如果 `import torch_npu` 失败，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查 torch / torch_npu / CANN 三方兼容矩阵。
-
-
 #### 安装 modelscope
 
 ```shell #test-setup

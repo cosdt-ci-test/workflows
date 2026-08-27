@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -379,6 +380,37 @@ class TestFold(unittest.TestCase):
         self.assertEqual(cmd.cmd, 'echo line1\necho line2')
         self.assertEqual(cmd.store, 'abc')
         self.assertFalse(cmd.hidden)
+        # load= defaults to () when omitted — same contract as TestCommand.
+        self.assertEqual(cmd.load, ())
+
+    def test_setup_command_load_parsed(self):
+        """``#test-setup load="x>>y"`` 把 (store, local) 元组传到 SetupCommand.load。
+
+        跟 TestCommand.load 共用一套契约 —— ``_run_one`` 在 SetupCommand 路径
+        调 ``substitute_placeholders(cmd.cmd, cmd.load, captures)`` 把 ``<local>``
+        替换成捕获值。speculators 的 Step 1 ``#test-setup`` 块需要在 heredoc
+        里引用 Step 9/10 捕获的 draft_path / verifier_path（``convert_model(model="<draft_path>")``），
+        没有这条测试锁住，将来谁不小心把 SetupCommand 的 substitute 路径删了，
+        CI 又会回到 19.7s "success" 但 model.safetensors 不存在的坑。
+        """
+        text = (
+            '```shell #test-setup store="dflash_path" load="a>>p" load="b>>q"\n'
+            'echo <p> <q>\n'
+            '```\n'
+        )
+        commands, _ = _parse(text)
+        self.assertEqual(len(commands), 1)
+        cmd = commands[0]
+        self.assertEqual(cmd.store, 'dflash_path')
+        self.assertEqual(cmd.load, (('a', 'p'), ('b', 'q')))
+
+    def test_setup_command_load_rejects_bad_shape(self):
+        """``SetupCommand.__post_init__`` 拒掉非 (str, str) 元组的 load 项。"""
+        with self.assertRaises(LabelSpecError):
+            SetupCommand(
+                cmd='echo x', store='s', hidden=False,
+                load=(('a', 'p'), ('bad',)),  # second item is str, not tuple
+            )
 
     def test_test_command_fields(self):
         text = (
@@ -433,6 +465,50 @@ class TestSubstitutePlaceholders(unittest.TestCase):
             'echo plain', (), {'checkpoint': 'x'},
         )
         self.assertEqual(out, 'echo plain')
+
+
+class TestSetupSubstitution(unittest.TestCase):
+    """``_run_one`` 在 SetupCommand 路径调 ``substitute_placeholders``。
+
+    跟 TestCommand 共用 ``load='x>>y'`` 契约。锁住这条契约 —— 没有它，
+    ``#test-setup`` 块的 heredoc 里 ``<placeholder>`` 会落到 bash / python
+    当字面字符串，下游（如 huggingface_hub ``snapshot_download``）把整串
+    当 repo id 拒掉、错误信息绕一圈才报回原始占位符。
+    """
+
+    def _drive(self, base, cmd, captures):
+        """绕过 ``execute()`` 的 ``self._captures = {}`` 重置,直接喂 _run_one。"""
+        base._captures = dict(captures)
+        base._run_one(cmd, {}, os.environ.copy(), Path.cwd(), 30, 0)
+
+    def test_setup_substitutes_then_runs(self):
+        """``<local>`` 在 bash 跑之前就被替换。"""
+        base = _Bare()
+        cmd = SetupCommand(
+            cmd='echo <p>',
+            store='next',
+            hidden=False,
+            load=(('prev', 'p'),),
+        )
+        self._drive(base, cmd, {'prev': '/root/dflash-qwen3-8b-converted'})
+        # capture 应是 echo 替换后的输出（不含 ``<p>`` 字面）。
+        self.assertEqual(
+            base._captures['next'],
+            '/root/dflash-qwen3-8b-converted',
+        )
+
+    def test_setup_preserves_placeholder_when_store_missing(self):
+        """captures 缺 store_var 时 ``<local>`` 保留字面（不静默替空）。"""
+        base = _Bare()
+        cmd = SetupCommand(
+            cmd='echo PLACEHOLDER_P',  # 避开 bash 解析 < 当 redirect
+            store='next',
+            hidden=False,
+            load=(('prev', 'PLACEHOLDER_P'),),
+        )
+        self._drive(base, cmd, {})
+        # captures 缺 ``prev`` → 占位符保留字面 → echo 原样输出。
+        self.assertEqual(base._captures.get('next'), 'PLACEHOLDER_P')
 
 
 class TestCompareOutput(unittest.TestCase):

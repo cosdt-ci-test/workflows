@@ -277,7 +277,7 @@ DATA_DIR=/root/dflash-train-data
 rm -rf "$DATA_DIR"
 mkdir -p "$DATA_DIR"
 
-python << 'PY' 2>&1 | tail -1
+python << 'PY' | tail -1
 import os
 os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 
@@ -316,7 +316,7 @@ print(outputs[0].kv_transfer_params["hidden_states_path"])
 PY
 ```
 
-> `extract_hidden_states` 是 vllm-ascend 的特殊 spec_decode mode：不真做 decoding、每个请求产出 1 token + 把 hidden states 写到 `shared_storage_path`。`outputs[0].kv_transfer_params["hidden_states_path"]` 是 vllm-ascend v0.23.0 引入的 safetensors 单文件格式（更早版本走 `ExampleHiddenStatesConnector.load_hidden_states`，文件路径不可见但 shape 一致）。`tail -1` 吃掉 vllm.LLM() 的启动 banner，只留最后一行（hidden_states 路径字符串）作为 `store="hidden_states_path"` 的捕获值。
+> `extract_hidden_states` 是 vllm-ascend 的特殊 spec_decode mode：不真做 decoding、每个请求产出 1 token + 把 hidden states 写到 `shared_storage_path`。`outputs[0].kv_transfer_params["hidden_states_path"]` 是 vllm-ascend v0.23.0 引入的 safetensors 单文件格式（更早版本走 `ExampleHiddenStatesConnector.load_hidden_states`，文件路径不可见但 shape 一致）。`tail -1` 吃掉 vllm.LLM() 的启动 banner，只留最后一行（hidden_states 路径字符串）作为 `store="hidden_states_path"` 的捕获值。**这里不写 `2>&1 | tail -1`** —— vllm.LLM() 在 process 退出前会触发 CANN 驱动的 teardown，teardown 走 stderr 写一行 `[ERROR] ... applicaiton exception`（CANN 驱动的 typo 字面量）；合并到管道后 `tail -1` 抓到的就是这串 CANN 错误而不是路径，下游 `<hidden_states_path>` 替换成错误字符串、bash 在 `(` 处 syntax error。stderr 保持流到框架端即可（错误时 framework 会全文 dump 到日志），`tail -1` 只看 python 的 stdout（vllm banner + 最后的 print 路径），路径是 stdout 的最后一行、teardown 噪声全在 stderr。
 
 ```shell #test id="pipeline-step2-extract" load="hidden_states_path>>hidden_states_path"
 echo <hidden_states_path>

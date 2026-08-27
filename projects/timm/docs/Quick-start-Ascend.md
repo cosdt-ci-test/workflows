@@ -8,19 +8,19 @@
 
 - **硬件**：Atlas 900 A2 / A3 或 Ascend 950 系列，已挂载设备。
 - **软件**：已装好 CANN，以及与 CANN 匹配的 `torch` + `torch_npu`（`torch.npu.is_available() == True`）。参考[快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html)与 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch)。
-- **本文档示例版本**：Python 3.12 · CANN 9.1.0 · torch 2.9.0+cpu · torch\_npu 2.9.0.post2 · torchvision 0.24.0 · timm 最新 release。
+- **本文档示例版本**：Python 3.12 · CANN 9.1.0 · torch 2.9.0+cpu · torch_npu 2.9.0.post2 · torchvision 0.24.0 · timm 最新 release。
 
-检查 Python 与 torch / torch\_npu 环境：
+检查 Python 与 torch / torch_npu 环境：
 
-```shell
+```shell #test id="check-py"
 python --version
 ```
 
-```shell
+```shell #test-result id="check-py" fuzzy='xxx'
 Python 3.12.xxx
 ```
 
-```shell
+```shell #test id="check-torch"
 python -c "
 import torch, torch_npu
 print('torch=', torch.__version__)
@@ -30,9 +30,9 @@ print('count:', torch.npu.device_count())
 "
 ```
 
-```shell
-torch= 2.9.0+cpu
-torch_npu= 2.9.0.post2
+```shell #test-result id="check-torch" fuzzy='...'
+torch= ...
+torch_npu= ...
 is_available: True
 count: 1
 ```
@@ -43,7 +43,7 @@ count: 1
 
 timm 依赖 `torch` / `torchvision` / `pyyaml` / `huggingface_hub` / `safetensors`，安装时一并解析。
 
-```shell
+```shell #test id="timm-install-binary"
 uv pip install --index-url https://mirrors.aliyun.com/pypi/simple timm
 python -c "
 import timm
@@ -51,7 +51,7 @@ print('timm', timm.__version__)
 "
 ```
 
-```shell
+```shell #test-result id="timm-install-binary" fuzzy='xxx'
 timm xxx
 ```
 
@@ -59,9 +59,9 @@ timm xxx
 
 在入口脚本（如 timm 仓库的 `train.py` / `validate.py` / `inference.py`）中先 `import torch`，再 `import torch_npu`，即可用 `--device npu` 在 NPU 上训练、验证与推理。下面按官方流程给出完整命令与无需下载数据 / 权重的最小可执行示例。
 
-### 1. 导入 torch\_npu
+### 1. 导入 torch_npu
 
-```shell
+```shell #test id="import-torch-npu"
 python -c "
 import torch
 import torch_npu
@@ -71,7 +71,7 @@ print('x_sum', x.sum().item())
 "
 ```
 
-```shell
+```shell #test-result id="import-torch-npu"
 x_device npu:0
 x_sum 6.0
 ```
@@ -97,7 +97,7 @@ num_npus=1
 
 无需数据的最小训练示例（ResNet-18 完成一次「前向 → 损失 → 反向 → 优化器更新」）：
 
-```shell
+```shell #test id="timm-train"
 python -c "
 import torch, torch_npu, timm
 model = timm.create_model('resnet18', pretrained=False).to('npu:0')
@@ -116,7 +116,7 @@ print('out_shape', tuple(out.shape))
 "
 ```
 
-```shell
+```shell #test-result id="timm-train"
 loss_dtype torch.float32
 loss_device npu:0
 out_shape (4, 1000)
@@ -132,7 +132,7 @@ python validate.py path/to/data --device npu --model path/to/model --batch-size 
 
 无需数据的最小验证示例（eval 前向，`argmax` 对应 `Acc@1`、`topk(5)` 对应 `Acc@5`）：
 
-```shell
+```shell #test id="timm-validate"
 python -c "
 import torch, torch_npu, timm
 model = timm.create_model('resnet18', pretrained=False).to('npu:0')
@@ -148,7 +148,7 @@ print('top5_shape', tuple(top5.shape))
 "
 ```
 
-```shell
+```shell #test-result id="timm-validate"
 out_shape (8, 1000)
 pred_shape (8,)
 top5_shape (8, 5)
@@ -169,7 +169,7 @@ python inference.py ../open_clip/data/ImageNet-1000/val/ \
 
 无需数据的最小推理示例（单张输入，`softmax` 后取 top-5）：
 
-```shell
+```shell #test id="timm-inference"
 python -c "
 import torch, torch_npu, timm
 model = timm.create_model('resnet18', pretrained=False).to('npu:0')
@@ -185,9 +185,8 @@ print('topk_indices_shape', tuple(topk.indices.shape))
 "
 ```
 
-```shell
+```shell #test-result id="timm-inference"
 out_shape (1, 1000)
 topk_values_shape (1, 5)
 topk_indices_shape (1, 5)
 ```
-

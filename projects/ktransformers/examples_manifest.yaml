@@ -1,0 +1,60 @@
+version: 1
+# scan.root is the live example tree of the current product (kt-kernel).
+# The archived original framework under archive/ is not scanned. Its
+# Ascend operators target Atlas 300I A2, and the two *_npu.py unit tests
+# monkeypatch torch_npu APIs, so they cannot prove a 910B run.
+scan:
+  root: kt-kernel/examples
+  include_extensions: ['.py']
+supported: []
+unsupported:
+  # HuggingFace-style helper modules imported by other scripts, not a
+  # user-facing example.
+  - kt-kernel/examples/configuration_deepseek_v3.py
+  - kt-kernel/examples/modeling_deepseek_v3.py
+  - kt-kernel/examples/torch_attention.py
+  # Debug / one-off repro scripts, not a product example.
+  - kt-kernel/examples/repro_llamafile_re.py
+  - kt-kernel/examples/test-debug.py
+  # Compares against local binary dumps (csrc/.../build or debug_*), not
+  # a self-contained runnable example.
+  - kt-kernel/examples/test_softmax.py
+  - kt-kernel/examples/test_apply_rope.py
+  - kt-kernel/examples/test_rope.py
+  - kt-kernel/examples/test_mla_quant.py
+  # Intel AMX CPU kernels (including BF16/FP8/FP4 AMX ops without
+  # "amx" in the filename). aarch64 910B runners do not have AMX.
+  # kt-kernel CMake has no CANN / NPU backend.
+  - kt-kernel/examples/bench_moe_amx_int8.py
+  - kt-kernel/examples/test_awq_moe_amx.py
+  - kt-kernel/examples/test_bf16_moe.py
+  - kt-kernel/examples/test_fp4_moe_amx.py
+  - kt-kernel/examples/test_fp4_moe_v4.py
+  - kt-kernel/examples/test_fp8_moe.py
+  - kt-kernel/examples/test_fp8_perchannel_moe.py
+  - kt-kernel/examples/test_k2_moe_amx.py
+  - kt-kernel/examples/test_k2_write_buffer.py
+  - kt-kernel/examples/test_moe_amx.py
+  - kt-kernel/examples/test_mxfp8_moe_m3.py
+  - kt-kernel/examples/test_write_buffer.py
+  # AVX2 / x86 CPU kernels. Same ISA mismatch, still not NPU.
+  - kt-kernel/examples/test_fp4_moe_avx2.py
+  - kt-kernel/examples/test_mxfp8_moe_avx2.py
+  # Kunpeng KML is a CPU math library, not an Ascend NPU path.
+  - kt-kernel/examples/test_moe_kml.py
+  - kt-kernel/examples/test_deepseekv3.py
+  - kt-kernel/examples/test_deepseekv3_prefill.py
+  - kt-kernel/examples/test_deepseekv3_prefill_speed.py
+  # CPUInfer / llamafile CPU kernels. Several also allocate on CUDA
+  # (device="cuda", torch.cuda.manual_seed_all, flash_attn) before
+  # moving tensors to CPU. None of these select an Ascend device.
+  - kt-kernel/examples/test_linear.py
+  - kt-kernel/examples/test_mlp.py
+  - kt-kernel/examples/test_moe.py
+  - kt-kernel/examples/test_moe_kernel.py
+  - kt-kernel/examples/test_gate.py
+  - kt-kernel/examples/test_attention.py
+  - kt-kernel/examples/test_mla.py
+  - kt-kernel/examples/test_mla_qlen.py
+  - kt-kernel/examples/test_mla_simple.py
+  - kt-kernel/examples/test_mla_torch.py

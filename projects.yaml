@@ -277,3 +277,16 @@ projects:
     dir: projects/fastchat
     workflows:
       quick_start: .github/workflows/fastchat-quick-start.yml
+  # Upstream publishes Atlas 300I A2 NPU tutorials, so this repo does not
+  # add a Quick Start line. The live kt-kernel tree has no CANN backend;
+  # examples_manifest.yaml keeps supported empty and only discovers
+  # kt-kernel/examples via the A-family examples workflow.
+  - name: ktransformers
+    category: 推理加速
+    support_level: 新兴适配
+    upstream_repo: kvcache-ai/ktransformers
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/ktransformers
+    workflows:
+      examples: .github/workflows/ktransformers-examples.yml

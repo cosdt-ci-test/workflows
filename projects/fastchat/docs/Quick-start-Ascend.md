@@ -77,7 +77,7 @@ count: 1
 ## 安装 fschat
 
 ```shell #test id="install-fschat"
-pip install "fschat[model_worker]"
+python -m pip install "fschat[model_worker]"
 python -c "import fschat; print('fschat', fschat.__version__)"
 ```
 
@@ -96,7 +96,7 @@ fschat 0.2.36
 ```shell #test id="cli-chat"
 printf '你好\n __END_OF_A_MESSAGE_47582648__\n __END_OF_A_MESSAGE_47582648__\n' | \
     FASTCHAT_USE_MODELSCOPE=True \
-    python3 -m fastchat.serve.cli \
+    python -m fastchat.serve.cli \
         --model-path Qwen/Qwen2.5-0.5B-Instruct \
         --device npu \
         --style programmatic \

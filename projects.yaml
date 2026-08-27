@@ -248,3 +248,13 @@ projects:
     dir: projects/timm
     workflows:
       quick_start: .github/workflows/timm-quick-start.yml
+  - name: xllm
+    category: 推理加速
+    support_level: 基础支持
+    upstream_repo: xLLM-AI/xllm
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/xllm
+    workflows:
+      examples: .github/workflows/xllm-examples.yml
+      quick_start: .github/workflows/xllm-quick-start.yml

@@ -218,6 +218,7 @@ NGPU=1 ASCEND_RT_VISIBLE_DEVICES=0 LOCAL_RANK=0 \
 python -c "import torch_npu, runpy; runpy.run_module('torchtitan.train', run_name='__main__')" \
     --job.config-file ./torchtitan/models/llama3/train_configs/debug_model.toml \
     --model.hf-assets-path <ms_tokenizer_path> \
+    --model.vocab-size 128256 \
     --comm.mode fake_backend \
     --training.steps 1 \
     --training.local-batch-size 1 \
@@ -267,6 +268,7 @@ torchrun --nproc_per_node=2 \
     python -c "import torch_npu, runpy; runpy.run_module('torchtitan.train', run_name='__main__')" \
     --job.config-file ./torchtitan/models/llama3/train_configs/debug_model.toml \
     --model.hf-assets-path <ms_tokenizer_path> \
+    --model.vocab-size 128256 \
     --comm.mode hierarchical \
     --training.steps 1 \
     --training.local-batch-size 1 \

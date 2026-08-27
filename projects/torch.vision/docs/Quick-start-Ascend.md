@@ -152,7 +152,7 @@ torchvision xxx
 导入 `tv_tensors` + `v2`，合成一张 256×256 RGB 图包成 `tv_tensors.Image`，同时验证 torchvision 顶层包 + 子模块 import OK（解包 + 链接 C++ 扩展）：
 
 ```shell #test id="v2-setup"
-python << 'PY' 2>&1
+python << 'PY'
 import numpy as np
 import torch
 import torch_npu
@@ -204,7 +204,7 @@ npu round-trip: in=(2, 3) on cpu, npu=(2, 3) on npu, back=(2, 3) on cpu
 v2 transform 是 `nn.Module` 风格——单输入单输出。把图搬到 NPU **再**调 transform，让 `CenterCrop` 跑在 NPU 后端（device 透传：CPU 输入 → CPU 输出，NPU 输入 → NPU 输出）：
 
 ```shell #test id="v2-basics"
-python << 'PY' 2>&1
+python << 'PY'
 import numpy as np
 import torch
 from torchvision import tv_tensors
@@ -236,7 +236,7 @@ out: type=Image device=npu shape=(3, 224, 224)
 v2 transform 不只处理 image——也支持 BoundingBoxes / Mask / Video / KeyPoints。一次性把 4 种 TVTensor 塞进 `Compose`，验证 dispatch 链能正确识别每种类型（用 `p=0` 的 `RandomHorizontalFlip` 保证确定性）：
 
 ```shell #test id="v2-vbmk"
-python << 'PY' 2>&1
+python << 'PY'
 import numpy as np
 import torch
 from torchvision import tv_tensors
@@ -288,7 +288,7 @@ keypoints: type=KeyPoints device=cpu shape=(3, 2)
 TVTensor 是 `torch.Tensor` 的子类，原生 tensor 接口（`isinstance(..., torch.Tensor)` / `.sum()` / `torch.*`）都能用。transforms 就是按 TVTensor **类型**做 dispatch：
 
 ```shell #test id="v2-tvtensors"
-python << 'PY' 2>&1
+python << 'PY'
 import torch
 from torchvision import tv_tensors
 
@@ -315,7 +315,7 @@ npu: dtype=torch.uint8 shape=(3, 256, 256) device=npu sum=xxx
 transforms 接受**任意嵌套结构**——单 image、`(img, target)`、dict、嵌套 dict 都行；返回**同结构**。transforms 只看 TVTensor **类型**做 dispatch；外来的 str / int / tuple / dict 原样穿透：
 
 ```shell #test id="v2-input-structure"
-python << 'PY' 2>&1
+python << 'PY'
 import numpy as np
 import torch
 from torchvision import tv_tensors
@@ -359,7 +359,7 @@ passthrough: ('arbitrary', {'structure': '!'})
 自定义 Dataset 的 `__getitem__` 返 `tv_tensors` 后，v2 transform 直接可用——不需要任何胶水代码。下面的合成 `SyntheticDetectionDataset` 复刻 `CocoDetection` 的 `(image, target_dict)` 返回形态：
 
 ```shell #test id="v2-dataset-interop"
-python << 'PY' 2>&1
+python << 'PY'
 import numpy as np
 import torch
 from torchvision import tv_tensors

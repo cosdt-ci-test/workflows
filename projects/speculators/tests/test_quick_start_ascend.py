@@ -231,7 +231,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         # by the doc's ``### 前置安装`` block ``install-deps`` (it carries
         # the install + verify pair itself). This class no longer
         # installs them — keeping install here on top would just be
-        # redundant ``pip install``-idempotent noise.
+        # redundant ``uv pip install``-idempotent noise.
         #
         # ``transformers`` is NOT installed here either: it's a base
         # dep of speculators (speculators' pyproject pins

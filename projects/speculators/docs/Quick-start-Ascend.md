@@ -129,19 +129,6 @@ count: 1
 > 如果 `import torch_npu` 失败，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查 torch / torch_npu / CANN 三方兼容矩阵。
 
 
-> **拆 4 条命令 + 全部 `--no-deps` 的原因**（vllm / vllm-ascend / triton-ascend 三条）：
->
-> 1. **vllm 0.23.0 vs torch_npu 的 torch 版本冲突**：vllm METADATA 钉 `torch==2.11.0`，torch_npu==2.10.0.post4 钉 `torch==2.10.0`，pip 不知道该不该升级 torch，整体图 ResolutionImpossible（CI run 33031352941 实测）。`--no-deps` 让 pip 只装 vllm 本体，torch 链不动。
-> 2. **vllm 0.23.0 METADATA 链到 triton-ascend**：vllm-ascend METADATA 钉 `triton-ascend==3.2.2`，不守的话 `pip install vllm-ascend` 会自动去找 triton-ascend，而 huawei ascend 的 `/variant` 子路径下没有 triton-ascend（只有不带 `/variant` 的 `huaweicloud.com/ascend/repos/pypi/` 才有）。
-> 3. **vllm 0.23.0 的 nvidia deps**：vllm METADATA 无条件要求 `nvidia-cudnn-frontend>=1.19.1` / `nvidia-cutlass-dsl[cu13]==4.5.2` / `flashinfer-python==0.6.12`，这些被 [tests/test_quick_start_ascend.py](projects/speculators/tests/test_quick_start_ascend.py) 的 `_CUDA_CONSTRAINTS` 用 `<0` 全部阻死。`--no-deps` 跳过解析就绕过。
->
-> **triton 主线（4 条命令里最后那条）单独装、不加 `--no-deps`**：triton==3.5.0 METADATA 里**只有 `importlib-metadata`（py<3.10 才要）一条无条件 dep**，干净无 nvidia dep。让 pip 自己解析就能装上。
->
-> **源**：命令里不写 `--index-url` / `--extra-index-url`，CI 走 env `PIP_INDEX_URL=集群 nginx cache`（vllm / vllm-ascend / triton-ascend==3.2.2 / triton 都在里头），本地读者把 `PIP_INDEX_URL` 设成 `https://mirrors.huaweicloud.com/ascend/repos/pypi` + 把 `PIP_EXTRA_INDEX_URL` 设成 `https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple` 兜底普通包即可。
->
-> vllm-ascend / Triton Ascend 与上游 vLLM / Triton 同步发版（vllm-ascend v0.23.0 ↔ vLLM v0.23.0，Triton Ascend 3.2.2 ↔ Triton 3.2.x）；**别混装不兼容组合**——否则 vllm-ascend 启动时报 `vLLM version mismatch`，或 Triton kernel JIT 编译时找不到 NPU backend。
->
-> 如果 vllm-ascend 0.23.0 还需要额外的 plugin helper（比如 ascend 私有 helpers、特定 transformers extras），第一次 `import vllm_ascend` 会报 ImportError；按 ImportError 加 pip install 即可，不会污染 torch 栈。
 
 #### 安装 modelscope
 

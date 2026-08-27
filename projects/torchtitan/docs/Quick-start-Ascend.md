@@ -33,6 +33,8 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | CANN | 9.1.0 |
 | torch | 2.10.0 |
 | torch_npu | 2.10.0.post4 |
+| triton-ascend | 3.2.2（torchtitan v0.2.1+ `torchtitan/models/moe/kernels.py` 的 `@triton.jit` 隐式依赖，Huawei ascend 源） |
+| triton | 3.5.0（由 triton-ascend 透传拉入） |
 | modelscope | 最新（`uv pip install modelscope`，不锁版本） |
 | torchtitan | 最新 release（v0.2.x 风格 tyro CLI + toml 配置；最新 tag 由 workflow 注入，见下方 `UPSTREAM_REF`） |
 | 训练配置 | `torchtitan/models/llama3/train_configs/debug_model.toml`（dim=256 / 6 层 / 16 head Llama 3 缩水版） |
@@ -127,6 +129,12 @@ echo "${UPSTREAM_REF}"
 git clone --depth 1 --branch <ref> https://github.com/pytorch/torchtitan.git
 cd torchtitan
 uv pip install -e .
+# torchtitan v0.2.1+ 在 torchtitan/models/moe/kernels.py 第 8 行硬编码
+# `import triton`，而 pyproject.toml 没声明 triton 依赖（隐式依赖）。
+# NPU 上 `@triton.jit` 需要 triton-ascend 后端，且 triton-ascend 透传拉入
+# plain triton 3.5.0。Huawei ascend 源 (cluster cache miss 时由
+# UV_EXTRA_INDEX_URL 兜底) 提供 triton-ascend 的 cp312+aarch64 wheel。
+uv pip install triton-ascend==3.2.2
 python -c "import torchtitan; print('torchtitan', torchtitan.__version__)"
 ```
 \<ref> 为工作流注入的最新 release tag

@@ -1,6 +1,6 @@
 # Quick Start (Ascend NPU)
 
-在单卡昇腾 NPU 上用 FastChat 命令行（CLI）对 `lmsys/vicuna-7b-v1.5` 做**非交互式**推理。
+在单卡昇腾 NPU 上用 FastChat 命令行（CLI）对 `Qwen/Qwen2.5-0.5B-Instruct` 做**非交互式**推理。
 
 > 单卡昇腾 NPU 上非交互式运行 FastChat CLI（`--device npu`），模型经 **ModelScope** 下载（`FASTCHAT_USE_MODELSCOPE=True`）。
 
@@ -41,7 +41,7 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 | torch_npu | 2.9.0.post2 |
 | transformers | `>=4.31` |
 | fschat | 0.2.36 |
-| 模型 | `lmsys/vicuna-7b-v1.5`（经 ModelScope 下载） |
+| 模型 | `Qwen/Qwen2.5-0.5B-Instruct`（经 ModelScope 下载） |
 
 ## 环境检查
 
@@ -97,7 +97,7 @@ fschat 0.2.36
 printf '你好\n __END_OF_A_MESSAGE_47582648__\n __END_OF_A_MESSAGE_47582648__\n' | \
     FASTCHAT_USE_MODELSCOPE=True \
     python3 -m fastchat.serve.cli \
-        --model-path lmsys/vicuna-7b-v1.5 \
+        --model-path Qwen/Qwen2.5-0.5B-Instruct \
         --device npu \
         --style programmatic \
         --max-new-tokens 128

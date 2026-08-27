@@ -57,13 +57,13 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     ``#test-result``.
 
     Scope: env check + fschat install + a non-interactive single-card NPU
-    CLI chat on ``lmsys/vicuna-7b-v1.5`` (weights downloaded via
+    CLI chat on ``Qwen/Qwen2.5-0.5B-Instruct`` (weights downloaded via
     ModelScope on the first run).
     """
 
-    # 1h: the 7B model weights are downloaded from ModelScope on the first
-    # run plus NPU inference, which needs longer than the 20 min default of
-    # the smaller projects.
+    # 60 min per command: long enough for the ~1 GB Qwen2.5-0.5B
+    # snapshot_download on the first run plus NPU inference, which needs
+    # longer than the 20 min default of the smaller projects.
     DEFAULT_COMMAND_TIMEOUT = 3600
 
     # Monitored source is the cosdt-ci-test/workflows fork (this repo):
@@ -268,8 +268,8 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         # install defensively in case the CANN base ships without it.
         ensure_safetensors()
 
-        # 5) Cache validation: the doc downloads lmsys/vicuna-7b-v1.5 via
-        # ModelScope on the first run. A persistent host-side bind mount
+        # 5) Cache validation: the doc downloads Qwen/Qwen2.5-0.5B-Instruct
+        # via ModelScope on the first run. A persistent host-side bind mount
         # can hold truncated safetensors from interrupted runs; walk every
         # shard under each model dir and purge it on failure. modelscope
         # will re-download cleanly on next access. Implementation lives in

@@ -126,15 +126,15 @@ echo "${UPSTREAM_REF}"
 克隆上游仓库并 checkout 到工作流注入的最新 release tag，安装依赖 + 可编辑安装 + 验证：
 
 ```shell #test id="torchtitan-install-source" load="upstream_ref>>ref"
+# torchtitan v0.2.1+ 在 torchtitan/models/moe/kernels.py 第 8 行硬编码
+# `import triton`，pyproject.toml 没声明 triton 依赖（隐式依赖）。先装：
+#   - triton-ascend 在 Huawei ascend 源（UV_EXTRA_INDEX_URL 兜底）
+#   - triton 由 triton-ascend 透传拉入，但 triton 本身在 PyPI 源（集群
+#     cache miss 时由阿里云源兜底，必须显式指定 --extra-index-url）
+uv pip install --extra-index-url https://mirrors.aliyun.com/pypi/simple/ triton-ascend==3.2.2
 git clone --depth 1 --branch <ref> https://github.com/pytorch/torchtitan.git
 cd torchtitan
 uv pip install -e .
-# torchtitan v0.2.1+ 在 torchtitan/models/moe/kernels.py 第 8 行硬编码
-# `import triton`，而 pyproject.toml 没声明 triton 依赖（隐式依赖）。
-# NPU 上 `@triton.jit` 需要 triton-ascend 后端，且 triton-ascend 透传拉入
-# plain triton 3.5.0。Huawei ascend 源 (cluster cache miss 时由
-# UV_EXTRA_INDEX_URL 兜底) 提供 triton-ascend 的 cp312+aarch64 wheel。
-uv pip install triton-ascend==3.2.2
 python -c "import torchtitan; print('torchtitan', torchtitan.__version__)"
 ```
 \<ref> 为工作流注入的最新 release tag

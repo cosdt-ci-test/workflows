@@ -97,20 +97,16 @@ count: 2
 
 ### 安装 modelscope
 
+```shell #test-setup
+uv pip install modelscope
+```
+
+打印安装版本：
 ```shell #test id="modelscope-install"
-pip install modelscope
-```
-
-```shell #test-result id="modelscope-install" fuzzy='xxx'
-Successfully installed modelscope-xxx
-```
-
-验证装好：
-
-```shell #test id="modelscope-import"
 python -c "import modelscope; print('modelscope', modelscope.__version__)"
 ```
 
+输出结果如下：
 ```shell #test-result id="modelscope-import" fuzzy='xxx'
 modelscope xxx
 ```

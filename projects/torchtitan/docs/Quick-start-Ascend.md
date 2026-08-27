@@ -219,7 +219,7 @@ xxx config.json
 ```shell #test id="torchtitan-train-debug" load="upstream_ref>>ref" load="ms_tokenizer_path>>ms_tokenizer_path"
 cd torchtitan && git checkout <ref>
 NGPU=1 ASCEND_RT_VISIBLE_DEVICES=0 LOCAL_RANK=0 \
-python -c "import torch_npu, runpy; runpy.run_module('torchtitan.train', run_name='__main__')" \
+python -m torchtitan.train \
     --job.config-file ./torchtitan/models/llama3/train_configs/debug_model.toml \
     --model.hf-assets-path <ms_tokenizer_path> \
     --comm.mode fake_backend \
@@ -257,7 +257,7 @@ torchrun --nproc_per_node=2 \
     --local-ranks-filter 0 \
     --role rank \
     --tee 3 \
-    python -c "import torch_npu, runpy; runpy.run_module('torchtitan.train', run_name='__main__')" \
+    python -m torchtitan.train \
     --job.config-file ./torchtitan/models/llama3/train_configs/debug_model.toml \
     --model.hf-assets-path <ms_tokenizer_path> \
     --comm.mode hierarchical \

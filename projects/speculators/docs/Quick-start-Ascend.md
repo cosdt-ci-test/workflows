@@ -52,12 +52,6 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 
 ### 前置安装
 
-按 [配套镜像](#本文档示例使用的版本) 的 bare CANN 9.1.0 路线，torch + torch_npu 没预装——本节先把它俩装上（CI 走集群 cache + huawei ascend env 默认源，本地读者走 huawei ascend 公网源同样可用）：
-
-```shell #test-setup
-uv pip install 'torch==2.10.0' 'torch_npu==2.10.0.post4'
-```
-
 确认能看到 NPU 设备：
 
 ```shell
@@ -95,23 +89,6 @@ python --version
 Python 3.12.xxx
 ```
 
-检查 NPU 设备运行时可用：
-
-```shell #test id="check-npu-runtime"
-python -c "import torch, torch_npu; print(f'torch={torch.__version__}'); print(f'torch_npu={torch_npu.__version__}'); print('is_available:', torch.npu.is_available()); print('count:', torch.npu.device_count())"
-```
-
-输出结果如下：
-
-```shell #test-result id="check-npu-runtime"
-torch=2.10.0+cpu
-torch_npu=2.10.0.post4
-is_available: True
-count: 1
-```
-
-> 如果 `import torch_npu` 失败，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查 torch / torch_npu / CANN 三方兼容矩阵。
-
 安装 `modelscope`：
 
 ```shell #test-setup
@@ -131,36 +108,10 @@ modelscope=1.37.0
 
 ## 安装 vllm-ascend
 
-[vllm-ascend](https://github.com/vllm-project/vllm-ascend) 是 vLLM 在昇腾 NPU 上的官方硬件插件，**Step 2**（`vllm.LLM()` 离线 API 抽 hidden states）+ **Step 4**（`vllm serve --speculative-config` 在线推理）直接 import 它提供的 `ExampleHiddenStatesConnector`（Step 2）和 `dflash` proposer（Step 4）。本文档钉死 **vllm-ascend==v0.23.0**（配套 vLLM v0.23.0 + Triton Ascend 3.2.2）——`extract_hidden_states` 模式与 DFlash proposer 在该版本起对单卡 A2 可见，且 DFlash proposer 在 NPU 上做 kernel JIT 编译依赖 Triton Ascend 3.2.x。CI 走的是 [配套镜像](#本文档示例使用的版本) 的 **bare CANN 9.1.0** 路线（不带 vllm），[前置安装](#前置安装) 段已经装好了 `torch==2.10.0` + `torch_npu==2.10.0.post4`，本节负责把 vllm + triton-ascend + vllm-ascend 三个 wheel 在不动 torch 栈的前提下叠上去。**本地读者** 走同一套 pip 命令即可（pip / uv 的源由各自 `*_INDEX_URL` env 变量控制，跟 CI 一样）：
-
 ```shell #test id="vllm-ascend-install"
-# 官方文档两条命令（https://docs.vllm.ai/projects/ascend/zh-cn/latest/installation.html）
-# 在我们的环境下走不通（CI run 33031352941 实测）：
-#   1. `pip install vllm==0.23.0` 触发 ResolutionImpossible —— vllm 钉 torch==2.11.0，
-#      跟 [前置安装](#前置安装) 的 torch==2.10.0+cpu + torch_npu==2.10.0.post4 钉 torch==2.10.0
-#      冲突，pip 不知道该不该把 torch 升到 2.11.0（升了 torch_npu ABI 断），整套图无法 satisfy。
-#   2. 官方文档那个 `--extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi/variant`
-#      找不到 triton-ascend==3.2.2 —— vllm-ascend 和 triton-ascend 在 huawei ascend 上
-#      分两个子目录：vllm-ascend 在 `/variant/`，triton-ascend 在**不带 `/variant`** 的
-#      `huaweicloud.com/ascend/repos/pypi/`（官方文档漏了 triton-ascend 这条路径）。
-#
-# 所以拆成 4 条命令，每条 `--no-deps` 守住 torch 栈：
-#   - vllm / vllm-ascend / triton-ascend 三个 wheel 自带的 METADATA 都有
-#     强约束（torch / torch-npu / triton-ascend），让 pip 顺着解析就会去碰
-#     已经装好的 torch 栈。
-#   - 不写 `--index-url`：CI 由 workflow yml env（quick-start-template.yml）
-#     设的 `PIP_INDEX_URL=http://cache-service.../pypi/simple` 兜底，集群 cache 是
-#     全 PyPI 镜像（vllm / vllm-ascend / triton-ascend==3.2.2 / triton 都在）；
-#     本地读者把 `PIP_INDEX_URL` 设成 `https://mirrors.huaweicloud.com/ascend/repos/pypi`
-#     + `https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple` 作 fallback 即可，
-#     跟 uv 那边的 `UV_INDEX_URL` / `UV_EXTRA_INDEX_URL` env 变量同理。
-#   - triton 主线单独装：triton==3.5.0 METADATA 里只有 importlib-metadata 一条
-#     无条件 dep（py<3.10 才要），干净无 nvidia dep，所以这一条可以**不**
-#     加 `--no-deps` 让 pip 自己解析。
-pip install --no-deps vllm==0.23.0
-pip install --no-deps vllm-ascend==0.23.0
-pip install --no-deps triton-ascend==3.2.2
-pip install triton==3.5.0
+pip install vllm==0.23.0
+pip install \
+--extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi vllm-ascend==0.23.0
 python -c "import importlib.metadata; print(f'vllm={importlib.metadata.version(\"vllm\")}')"
 python -c "import importlib.metadata; print(f'vllm_ascend={importlib.metadata.version(\"vllm-ascend\")}')"
 python -c "import importlib.metadata; print(f'triton_ascend={importlib.metadata.version(\"triton-ascend\")}')"
@@ -175,6 +126,24 @@ vllm_ascend=0.23.0
 triton_ascend=3.2.2
 triton=3.5.0
 ```
+
+检查 NPU 设备运行时可用：
+
+```shell #test id="check-npu-runtime"
+python -c "import torch, torch_npu; print(f'torch={torch.__version__}'); print(f'torch_npu={torch_npu.__version__}'); print('is_available:', torch.npu.is_available()); print('count:', torch.npu.device_count())"
+```
+
+输出结果如下：
+
+```shell #test-result id="check-npu-runtime"
+torch=2.10.0+cpu
+torch_npu=2.10.0.post4
+is_available: True
+count: 1
+```
+
+> 如果 `import torch_npu` 失败，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查 torch / torch_npu / CANN 三方兼容矩阵。
+
 
 > **拆 4 条命令 + 全部 `--no-deps` 的原因**（vllm / vllm-ascend / triton-ascend 三条）：
 >

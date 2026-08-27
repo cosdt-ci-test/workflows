@@ -252,7 +252,6 @@ python -m torchtitan.train \
 cd torchtitan && git checkout <ref>
 ASCEND_RT_VISIBLE_DEVICES=0,1 \
 PYTORCH_ALLOC_CONF="expandable_segments:True" \
-TORCHFT_LIGHTHOUSE="http://localhost:29510" \
 torchrun --nproc_per_node=2 \
     --rdzv_backend c10d \
     --rdzv_endpoint="localhost:0" \

@@ -102,6 +102,7 @@ printf '你好\n __END_OF_A_MESSAGE_47582648__\n __END_OF_A_MESSAGE_47582648__\n
     FASTCHAT_USE_MODELSCOPE=True \
     python -m fastchat.serve.cli \
         --model-path Qwen/Qwen2.5-0.5B-Instruct \
+        --revision master \
         --device npu \
         --style programmatic \
         --max-new-tokens 128
@@ -116,5 +117,6 @@ printf '你好\n __END_OF_A_MESSAGE_47582648__\n __END_OF_A_MESSAGE_47582648__\n
 ```
 
 > - `FASTCHAT_USE_MODELSCOPE=True`：从 ModelScope 下载模型权重，而不是 HuggingFace Hub；首次运行会下载模型，请耐心等待。
+> - `--revision master`：ModelScope 仓库的默认分支是 `master`，而 FastChat 的 `--revision` 默认值沿用 HuggingFace 惯例的 `main`，需显式指定才能命中 ModelScope 分支。
 > - `--device npu`：使用昇腾 NPU 加速（单卡）。
 > - `--style programmatic`：非交互式输出格式，配合管道输入使用，适合自动化脚本与 CI 验证。

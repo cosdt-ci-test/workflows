@@ -115,21 +115,21 @@ modelscope xxx
 
 ### 安装triton
 
-torchtitan v0.2.1+ 在 `torchtitan/models/moe/kernels.py` 第 8 行硬编码 `import triton`，pyproject.toml 没声明 triton 依赖（隐式依赖）。triton-ascend 在 Huawei ascend 源（`UV_EXTRA_INDEX_URL` 兜底），它透传拉入的 plain triton 在 PyPI 镜像（集群 cache miss 时由阿里云源兜底）：
+torchtitan v0.2.1+ 在 `torchtitan/models/moe/kernels.py` 第 8 行硬编码 `import triton`，pyproject.toml 没声明 triton 依赖（隐式依赖）。`triton-ascend` 在 Huawei ascend 源（显式 `--extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi`，仿 speculators 文档成功模式 —— 比 engine env 里的 `repo.huaweicloud.com` 在 runner 上更可靠），它透传拉入的 plain `triton` 走集群 cache（UV_INDEX_URL）+ 阿里云源（`mirrors.aliyun.com/pypi/simple`）兜底：
 
 ```shell #test-setup
-uv pip install --extra-index-url https://mirrors.aliyun.com/pypi/simple/ triton-ascend==3.2.2
+uv pip install --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi --extra-index-url https://mirrors.aliyun.com/pypi/simple/ triton-ascend==3.2.2
 ```
 
 打印安装版本：
 ```shell #test id="triton-ascend-install"
-python -c "from importlib.metadata import version; print('triton-ascend', version('triton-ascend')); print('triton', version('triton'))"
+python -c "from importlib.metadata import version; print('triton', version('triton')); print('triton-ascend', version('triton-ascend')); "
 ```
 
 输出结果如下：
 ```shell #test-result id="triton-ascend-install" fuzzy='xxx'
-triton-ascend xxx
 triton xxx
+triton-ascend xxx
 ```
 
 ## 安装 torchtitan

@@ -39,7 +39,7 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 | CANN | 9.1.0 |
 | torch | 2.9.0+cpu |
 | torch_npu | 2.9.0.post2 |
-| transformers | `>=4.31` |
+| transformers | `>=4.31, <5` |
 | fschat | 0.2.36 |
 | 模型 | `Qwen/Qwen2.5-0.5B-Instruct`（经 ModelScope 下载） |
 
@@ -77,17 +77,21 @@ count: 1
 ## 安装 fschat
 
 ```shell #test id="install-fschat"
-uv pip install "fschat[model_worker]"
-python -c "import fschat; print('fschat', fschat.__version__)"
+python -m pip install "fschat[model_worker]" "transformers<5"
+python -c "import fastchat; print('fastchat', fastchat.__version__)"
 ```
 
-输出结果如下：
+输出结果如下（安装日志较长，此处仅展示最后的版本验证输出）：
 
-```shell #test-result id="install-fschat"
-fschat 0.2.36
+```shell #test-result id="install-fschat" fuzzy='xxx' fuzzy='...'
+...fastchat 0.2.36
+transformers xxx
+...
 ```
 
-> `transformers>=4.31` 已随 `fschat[model_worker]` 一并解析安装。
+> - PyPI 发行名为 `fschat`，安装后的 Python 模块目录为 `fastchat`。
+> - `transformers<5`：fschat 0.2.36 与 transformers 5.x 的 API 不兼容，固定在 4.x 最新版。
+> - 其余依赖已随 `fschat[model_worker]` 一并解析安装。
 
 ## 非交互式命令行推理（单卡 NPU）
 

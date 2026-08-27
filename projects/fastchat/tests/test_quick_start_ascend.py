@@ -189,45 +189,6 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         that lifecycle hook fires before every test method, which is
         wrong for a one-shot install.
         """
-        # Diagnostic: the doc's install-fschat block kept failing with
-        # "Successfully installed fschat" yet ``import fschat`` raised
-        # ModuleNotFoundError — the wheel landed somewhere the same-shell
-        # ``python`` cannot import (run logs show a cluster-side conda
-        # overlay env cann91-py312-fastchat being prepared before this
-        # class runs). Print the interpreter + where pip/uv write, in
-        # BOTH this process and a fresh bash (the doc-command context),
-        # so the mismatch is visible in the run log.
-        import shutil
-        import site
-        import sys
-        import sysconfig
-        print(
-            'diag[proc]: python=' + sys.executable
-            + ' prefix=' + sys.prefix
-            + ' purelib=' + sysconfig.get_path('purelib')
-            + ' sites=' + ','.join(site.getsitepackages())
-            + ' PYTHONPATH=' + os.environ.get('PYTHONPATH', '')
-            + ' PYTHONHOME=' + os.environ.get('PYTHONHOME', '')
-            + ' CONDA_PREFIX=' + os.environ.get('CONDA_PREFIX', '')
-            + ' VIRTUAL_ENV=' + os.environ.get('VIRTUAL_ENV', ''),
-            flush=True,
-        )
-        _bash_probe = subprocess.run(
-            ['bash', '-c',
-             'echo "diag[bash]: python=$(which -a python | tr \'\\n\' \',\')'
-             ' pip=$(which -a pip | tr \'\\n\' \',\')'
-             ' uv=$(which -a uv | tr \'\\n\' \',\')"'
-             ' && python -c "import sys, site, sysconfig;'
-             ' print(\'diag[bash-py]: exe=\' + sys.executable +'
-             ' \' prefix=\' + sys.prefix +'
-             ' \' purelib=\' + sysconfig.get_path(\'purelib\'))"'
-             ' && env | grep -E "^(PYTHONPATH|PYTHONHOME|CONDA|VIRTUAL_ENV|PIP_|UV_)" | sort'],
-            capture_output=True, text=True, check=False,
-        )
-        print(_bash_probe.stdout, end='', flush=True)
-        if _bash_probe.returncode != 0:
-            print(f'diag[bash] rc={_bash_probe.returncode} err={_bash_probe.stderr!r}', flush=True)
-
         # 0) CANN env: source set_env.sh and merge the env stream into
         # os.environ
         if os.path.isfile(cls._CANN_SET_ENV):

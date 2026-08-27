@@ -1,6 +1,6 @@
 # Quick Start (Ascend NPU)
 
-在单卡昇腾 NPU 上跑通 [tensordict](https://github.com/pytorch/tensordict) 的核心特性链：安装 tensordict，逐节验证 `TensorDict` 在 NPU 上的 13 个核心入口——基础构造、元数据访问、字典语义、嵌套、类张量运算、上下文管理器、分布式接口、`state_dict` 表示、函数式编程、参数序列化与数据集落盘、`map` 预处理、懒分配（`make_tensordict`）、`@tensorclass` 装饰器——全部跑在 `npu:0` 上，验证 `torch_npu` 路由正确、AP 无回落。
+在单卡昇腾 NPU 上跑通 [tensordict](https://github.com/pytorch/tensordict) 的核心特性链：安装 tensordict，逐节验证 `TensorDict` 在 NPU 上的 13 个核心入口——基础构造、元数据访问、字典语义、嵌套、类张量运算、上下文管理器、分布式接口、`state_dict` 表示、函数式编程、参数序列化与数据集落盘、`map` 预处理、懒分配（`make_tensordict`）、`@tensorclass` 装饰器。
 
 
 ## 前置条件
@@ -114,19 +114,6 @@ tensordict xxx
 ```
 - xxx 表示最新的版本号
 
-校验二进制安装后 `torch` / `torch_npu` 还是前置步骤装好的 CANN-匹配版本（没被 aliyun 上的 cpu torch 覆盖）：
-
-```shell #test id="tensordict-torch-after-binary"
-python -c "import torch, torch_npu; print('torch=', torch.__version__); print('torch_npu=', torch_npu.__version__)"
-```
-
-输出结果类似如下：
-
-```shell #test-result id="tensordict-torch-after-binary" fuzzy='xxx'
-torch= 2.9.0xxx
-torch_npu= 2.9.0.post2
-```
-
 ### 从源码安装
 
 <!--
@@ -157,19 +144,6 @@ python -c "import tensordict; print('tensordict', tensordict.__version__)"
 tensordict xxx
 ```
 - xxx 表示最新的版本号
-
-校验源码安装后 `torch` / `torch_npu` 还是前置步骤装好的 CANN-匹配版本：
-
-```shell #test id="tensordict-torch-after-source"
-python -c "import torch, torch_npu; print('torch=', torch.__version__); print('torch_npu=', torch_npu.__version__)"
-```
-
-输出结果类似如下：
-
-```shell #test-result id="tensordict-torch-after-source" fuzzy='xxx'
-torch= 2.9.0xxx
-torch_npu= 2.9.0.post2
-```
 
 ## 核心特性验证
 

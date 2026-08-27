@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
     inputs:
       upstream_ref:
-        description: Ref to test
+        description: Ref to test (empty = latest upstream release tag)
         required: false
-        default: main
+        default: ''
         type: string
 
 concurrency:
@@ -53,8 +53,9 @@ jobs:
       MODELSCOPE_CACHE: /root/.cache/modelscope
       PIP_TIMEOUT: '120'
     steps:
-      # Manual dispatch always tests. Schedule runs compare the local guard
-      # doc hash, latest release id, and main HEAD before spending NPU time.
+      # Manual dispatch always tests the latest release tag (or INPUT_REF).
+      # Schedule runs compare the local guard doc hash and latest release id
+      # before spending NPU time; the resolved ref is the latest release tag.
       - name: Restore state
         if: github.event_name == 'schedule'
         uses: actions/cache/restore@v4
@@ -74,21 +75,26 @@ jobs:
           set -euo pipefail
           mkdir -p .monitor-state
           if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            if [ -n "${INPUT_REF:-}" ]; then
+              echo "test_ref=${INPUT_REF}" >> "$GITHUB_OUTPUT"
+            else
+              tag=$(curl -fsSL --retry 3 "$GH_API/repos/$UPSTREAM_REPO/releases/latest" | jq -r '.tag_name // empty')
+              [ -n "$tag" ] || { echo "ERROR: failed to resolve latest upstream release tag"; exit 1; }
+              echo "test_ref=$tag" >> "$GITHUB_OUTPUT"
+            fi
             echo changed=true >> "$GITHUB_OUTPUT"
-            echo test_ref="${INPUT_REF:-main}" >> "$GITHUB_OUTPUT"
             echo reason=manual >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          release_json=$(curl -fsSL --retry 3 "$GH_API/repos/$UPSTREAM_REPO/releases/latest")
           doc=$(curl -fsSL --retry 3 "$MONITORED_DOC_URL" | sha256sum | cut -d' ' -f1)
-          release=$(curl -fsSL --retry 3 "$GH_API/repos/$UPSTREAM_REPO/releases/latest" | jq -r '.id // empty')
-          commit=$(curl -fsSL --retry 3 "$GH_API/repos/$UPSTREAM_REPO/commits/main" | jq -r '.sha // empty')
-          changed=false; reason=; ref=main
+          release=$(echo "$release_json" | jq -r '.id // empty')
+          release_tag=$(echo "$release_json" | jq -r '.tag_name // empty')
+          changed=false; reason=; ref="$release_tag"
           if [ "$(cat .monitor-state/.doc_hash 2>/dev/null || true)" != "$doc" ]; then changed=true; reason=doc; fi
           if [ "$(cat .monitor-state/.release_id 2>/dev/null || true)" != "$release" ]; then changed=true; reason=release; fi
-          if [ "$(cat .monitor-state/.main_sha 2>/dev/null || true)" != "$commit" ]; then changed=true; reason=commit; fi
           echo "$doc" > .monitor-state/.doc_hash
           echo "$release" > .monitor-state/.release_id
-          echo "$commit" > .monitor-state/.main_sha
           echo changed=$changed >> "$GITHUB_OUTPUT"
           echo test_ref=$ref >> "$GITHUB_OUTPUT"
           echo reason=$reason >> "$GITHUB_OUTPUT"

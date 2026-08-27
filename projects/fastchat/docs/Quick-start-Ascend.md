@@ -78,7 +78,7 @@ count: 1
 
 ```shell #test id="install-fschat"
 python -m pip install "fschat[model_worker]" "transformers<5"
-python -c "import fastchat; print('fastchat', fastchat.__version__)"
+python -c "import fastchat, transformers; print('fastchat', fastchat.__version__); print('transformers', transformers.__version__)"
 ```
 
 输出结果如下（安装日志较长，此处仅展示最后的版本验证输出）：

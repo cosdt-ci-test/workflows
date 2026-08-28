@@ -56,7 +56,7 @@ python -c "import torch, torch_npu; print('torch:', torch.__version__); print('t
 torch: 2.8.0+cpu
 torch_npu: 2.8.0.post2
 is_available: True
-count: 1
+count: 2
 ```
 
 #### 2.3 确认 cache-dit 可导入

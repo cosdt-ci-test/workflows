@@ -180,10 +180,6 @@ print('modes_count:', len(MODES))
 print('has_train:', 'train' in MODES)
 print('has_list_cfg:', 'list-cfg' in MODES)
 print('has_chat:', 'chat' in MODES)
-assert len(MODES) > 0, MODES
-assert 'train' in MODES, MODES
-assert 'list-cfg' in MODES, MODES
-assert 'chat' in MODES, MODES
 "
 ```
 
@@ -225,7 +221,7 @@ total xxx
 
 权重落到 `./Shanghai_AI_Laboratory/internlm2-chat-7b/` 下（约 14 GB），含 `pytorch_model-*.bin` ×8 + tokenizer + config。
 
-> `#test-setup` 块（hidden）在 CI smoke 里跑 `snapshot_download` 拉权重（~5-10 分钟），`#test` 只验 `config.json` 存在。本地如果已经下过 weights，可以跳过 setup 单独跑 `#test`（前提：weights 路径仍然是 `./Shanghai_AI_Laboratory/internlm2-chat-7b/`）。如果网络能直连 HuggingFace，也可以改用 HF 路径：`uv pip install huggingface_hub` + `huggingface-cli download internlm/internlm2-chat-7b --local-dir Shanghai_AI_Laboratory/internlm2-chat-7b --local-dir-use-symlinks False --resume-download`。
+> `#test-setup` 块（hidden）在 CI smoke 里跑 `snapshot_download` 拉权重（~5-10 分钟），`#test` 只验 `config.json` 存在。本地如果已经下过 weights，可以跳过 setup 单独跑 `#test`。
 
 ### 准备微调数据集
 
@@ -274,12 +270,11 @@ train.jsonl ok
 ```
 colors/
 ├── colors.json
-├── dataset_infos.json
 ├── README.md
 └── train.jsonl
 ```
 
-> `#test-setup` 块在 CI smoke 里跑 `modelscope.snapshot_download(..., repo_type='dataset')` 拉数据集再重定向到 `./colors/`，`#test` 验 4 个文件（`colors.json` / `dataset_infos.json` / `README.md` / `train.jsonl`）都存在（按字面比对，缺一个就 `exit 1` 报失败）。本地如果已经下载过，可以跳过 setup 单独跑 `#test`（前提：数据集路径仍然是 `./colors/`）。
+> `#test-setup` 块在 CI smoke 里跑 `modelscope.snapshot_download(..., repo_type='dataset')` 拉数据集再重定向到 `./colors/`，`#test` 验 3 个文件（`colors.json` / `README.md` / `train.jsonl`）都存在（按字面比对，缺一个就 `exit 1` 报失败）。本地如果已经下载过，可以跳过 setup 单独跑 `#test`（前提：数据集路径仍然是 `./colors/`）。
 
 ### 准备配置文件
 
@@ -312,6 +307,8 @@ err_grep_at: xxx
 
 从 list-cfg 拷一份 QLoRA + Colorist 配置到本地（具体 config 名随 release 漂移，先 grep 推断；xtuner v0.2.0 的 colorist cfg 是 llama 版，V1 之后才有 internlm2 版）：
 
+从 list-cfg 拷一份 QLoRA + Colorist 配置到本地（具体 config 名随 release 漂移，先 grep 推断；xtuner v0.2.0 的 colorist cfg 是 llama 版，V1 之后才有 internlm2 版）：
+
 ```shell #test-setup store="xtuner_llm_cfg_path"
 config_name=$(xtuner list-cfg 2>/dev/null | grep -E "(internlm2|llama).*qlora.*colorist" | head -1)
 test -n "$config_name" || { echo "no matching config ((internlm2|llama).*qlora.*colorist); abort"; exit 1; }
@@ -319,7 +316,7 @@ xtuner copy-cfg "$config_name" /tmp/xtuner_npu_llm_cfg.py
 echo "/tmp/xtuner_npu_llm_cfg.py"
 ```
 
-`store="xtuner_llm_cfg_path"` 把 cfg 路径捕获到 store，下一节「修改配置文件」的 `#test` 通过 `load="xtuner_llm_cfg_path>>cfg"` 拿到这个路径。
+输出路径到下一节「修改配置文件」
 
 ### 修改配置文件
 

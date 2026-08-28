@@ -137,18 +137,11 @@ torchvision xxx
 ```
 
 ### 从源码安装
-
-源码路径：[github.com/pytorch/vision](https://github.com/pytorch/vision)。从源码 build 的 torchvision 跟 PyPI wheel 在 NPU 上行为一致（都靠 `torch_npu` PrivateUse1 dispatch）——区别在于：
-
-- **可改源码**：本地改完 `torchvision/csrc/` 立即生效，无需重装 wheel
-- **版本精确锁定**：checkout 到具体 tag / commit，100% 可复现
-- **build 时间**：C++ 扩展编译冷缓存 ~5–10 min（aarch64 + CPU）
-
-先捕获 release tag：
-
+<!-- 获取 release tag：
 ```shell #test-setup store="upstream_ref"
 echo "${UPSTREAM_REF}"
 ```
+-->
 
 克隆上游仓库、安装并验证：
 
@@ -159,7 +152,7 @@ uv pip install -e .
 python -c "import torchvision; print('torchvision', torchvision.__version__)"
 ```
 
-\<ref\> 为 pytorch/vision 最新 release tag，由 workflow 的 `upstream_repo` 字段驱动（默认 `releases` 源，匹配 GitHub Releases API）。
+\<ref\> 为 pytorch/vision 最新 release tag。
 
 输出结果如下：
 
@@ -169,7 +162,7 @@ torchvision xxx
 
 ## transforms v2 入门
 
-用一个**合成的 256×256 RGB 测试图**走一遍 transforms v2 的核心用法。每节都把图搬到 NPU 上跑（`img.to('npu:0')`），用 v2 的 `BoundingBoxes` / `Mask` / `Video` / `KeyPoints` 配合验证 dispatch 链路。
+用一个**合成的 256×256 RGB 测试图**走一遍 transforms v2 的核心用法。每节都把图搬到 NPU 上运行（`img.to('npu:0')`），用 v2 的 `BoundingBoxes` / `Mask` / `Video` / `KeyPoints` 配合验证 dispatch 链路。
 
 > torchvision 源码在 [github.com/pytorch/vision](https://github.com/pytorch/vision)；本文档从 PyPI 拉最新稳定 release wheel，跟官方 [Getting started with transforms v2](https://pytorch.org/vision/stable/transforms/v2/auto_examples/transforms/plot_transforms_getting_started.html) 教程一一对应。
 

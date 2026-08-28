@@ -86,7 +86,7 @@ python -c "import torch, torch_npu; print('torch=', torch.__version__); print('t
 输出结果如下：
 
 ```shell #test-result id="check-torch" fuzzy='xxx'
-torch= 2.9.0xxx
+torch= 2.9.0+cpu
 torch_npu= 2.9.0.post2
 is_available: True
 count: xxx
@@ -296,6 +296,7 @@ echo "lines: $(echo "$out" | wc -l)"
 echo "head_first: $(echo "$out" | head -1)"
 echo "err_lines: $(echo "$err" | wc -l)"
 echo "err_head: $(echo "$err" | head -1)"
+echo "err_grep_at: $(echo "$err" | grep -E "ModuleNotFound|ImportError|Error" | head -1)"
 test -n "$out"
 ```
 
@@ -306,6 +307,7 @@ lines: xxx
 head_first: xxx
 err_lines: xxx
 err_head: xxx
+err_grep_at: xxx
 ```
 
 从 list-cfg 拷一份 QLoRA + Colorist 配置到本地（具体 config 名随 release 漂移，先 grep 推断；xtuner v0.2.0 的 colorist cfg 是 llama 版，V1 之后才有 internlm2 版）：

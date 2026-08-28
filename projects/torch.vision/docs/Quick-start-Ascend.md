@@ -147,11 +147,7 @@ python -c "import torchvision; print('torchvision', torchvision.__version__)"
 torchvision xxx
 ```
 
-> 验证构建产物不依赖 CUDA 库：
-> ```shell
-> ldd /usr/local/python3.12.13/lib/python3.12/site-packages/torchvision/_C.so | grep -E 'cuda|cudart' || echo "no cuda deps OK"
-> ```
-> 应输出 `no cuda deps OK`——若有 `libcudart.so` / `libc10_cuda.so` / `libtorch_cuda.so` 等链接，说明 `FORCE_CUDA=0` 没生效，需要重新构建。
+> 如果 `import torchvision` 报 `RuntimeError: operator torchvision::nms does not exist`，说明 `_C.so` 加载失败——通常是 `FORCE_CUDA=0` 没生效（构建产物仍链 `libcudart.so` / `libc10_cuda.so` / `libtorch_cuda.so`）。先 `pip uninstall torchvision`，确认 `echo $FORCE_CUDA` 输出 `0`，再 `rm -rf vision` 重新 `git clone`。
 
 ## transforms v2 入门
 

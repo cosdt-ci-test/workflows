@@ -189,7 +189,7 @@ assert 'chat' in MODES, MODES
 
 输出结果如下（按字面比对）：
 
-```shell #test-result id="xtuner-cli-modes" disable_fuzzy
+```shell #test-result id="xtuner-cli-modes" fuzzy='xxx'
 modes_count: xxx
 has_train: True
 has_list_cfg: True

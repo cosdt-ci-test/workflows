@@ -255,11 +255,10 @@ ls -la colors/ | head -1
 ```
 
 ```shell #test id="xtuner-pull-dataset"
-for f in colors.json dataset_infos.json README.md train.jsonl; do
+for f in colors.json README.md train.jsonl; do
     test -f "colors/$f" || { echo "MISSING: colors/$f"; exit 1; }
 done
 echo "colors.json ok"
-echo "dataset_infos.json ok"
 echo "README.md ok"
 echo "train.jsonl ok"
 ```
@@ -268,7 +267,6 @@ echo "train.jsonl ok"
 
 ```shell #test-result id="xtuner-pull-dataset" disable_fuzzy
 colors.json ok
-dataset_infos.json ok
 README.md ok
 train.jsonl ok
 ```

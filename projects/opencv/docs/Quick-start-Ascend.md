@@ -167,10 +167,10 @@ cmake -DCMAKE_BUILD_TYPE=RELEASE \
 
 ```shell #test-setup
 cd opencv/build
-make -j2
+make -j1
 ```
 
-> 编译时间受 CPU 核数与是否启用 world 影响：单核 `make` 大约 1.5 小时；8 核并行约 20 分钟。CI runner 内存非常紧，dnn 模板大 TU（matmul / dft / reshape2 / slice2 / pad2 / padding / resize / reduce / recurrent2 layer）`cc1plus` 在 -j8 / -j16 / -j32 下都会被 OOM kill，只有 `-j2` 能稳跑（~1 小时）。
+> 编译时间受 CPU 核数与是否启用 world 影响：单核 `make` 大约 1.5 小时；8 核并行约 20 分钟。CI runner 内存极紧，dnn 模板大 TU（matmul / dft / reshape2 / slice2 / pad2 / padding / resize / reduce / recurrent2 / permute / group_norm / nary_eltwise / if layer）`cc1plus` 在 `-j2`/`-j8`/`-j16`/`-j32` 下都会被 OOM kill，只能走 `-j1`（~1.5–2 小时）。
 
 #### 安装到 /usr/local/opencv-cann
 

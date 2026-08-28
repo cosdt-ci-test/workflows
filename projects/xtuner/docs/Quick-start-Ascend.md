@@ -96,7 +96,7 @@ count: xxx
 
 装 `modelscope`（本文档下载 InternLM2-Chat-7B 权重 + Colorist 数据集要用，ModelScope 国内网络更稳）：
 
-```shell
+```shell #test-setup
 uv pip install modelscope
 ```
 
@@ -189,7 +189,7 @@ assert 'chat' in MODES, MODES
 
 输出结果如下（按字面比对）：
 
-```shell #test-result id="xtuner-cli-modes" disable_fuzzy
+```shell #test-result id="xtuner-cli-modes" fuzzy='xxx'
 modes_count: xxx
 has_train: True
 has_list_cfg: True

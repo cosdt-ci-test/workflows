@@ -171,7 +171,11 @@ python3 -m pip install \
 #    import 链，需要 cbor2 / pyzmq / gguf / compressed-tensors / lm-format-enforcer
 #    / xgrammar / outlines_core / opencv-python-headless 等。pip 装比 uv 稳，
 #    --index-strategy unsafe-best-match 跨 cluster cache + 华为源找 NPU aarch64 wheel。
-python3 -m pip install --quiet -r /root/deps/vllm/requirements/common.txt
+#    `numba` 不是 vllm 必需但 vllm-ascend 0.23.0 `eplb/core/policy/policy_flashlb.py`
+#    顶层 `from numba import njit`（--no-deps 跳过了 transitive 安装，runtime 缺）。
+python3 -m pip install --quiet \
+  -r /root/deps/vllm/requirements/common.txt \
+  numba
 
 # 9. Monkey-patch `vllm.triton_utils.HAS_TRITON = True`（CI 上必做，本地 NPU 上做不做都行）。
 #    Root cause：triton-ascend 3.2.2 自带的 libtriton.so 是 triton 3.2.0 fork，

@@ -405,12 +405,9 @@ checks = [
     ('dataset_format', \"dataset=dict(type=load_dataset, path='json', data_files=dict(train=data_path))\"),
 ]
 for name, expected in checks:
-    needle = (
-        f'{name} = ' + repr(expected)
-        if name != 'dataset_format'
-        else expected
-    )
-    assert needle in text, f'missing patch ({name}): {needle!r}'
+    # needle 用 cfg 里的实际字面量（cfg 字段名是 pretrained_model_name_or_path 不是 model_path，
+    # 不要把 check 名当字段名拼到 needle 里）：
+    assert expected in text, f'missing patch ({name}): {expected!r}'
 print('cfg_patch_ok')
 print(f'model_name= {checks[0][1]}')
 print('data_path= ./colors/train.jsonl')

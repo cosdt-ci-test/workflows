@@ -292,9 +292,12 @@ xtuner list-cfg
 ```
 
 ```shell #test id="xtuner-list-cfg"
-out=$(xtuner list-cfg 2>&1)
+out=$(xtuner list-cfg 2>/dev/null)
+err=$(xtuner list-cfg 2>&1 >/dev/null)
 echo "lines: $(echo "$out" | wc -l)"
 echo "head_first: $(echo "$out" | head -1)"
+echo "err_lines: $(echo "$err" | wc -l)"
+echo "err_head: $(echo "$err" | head -1)"
 test -n "$out"
 ```
 
@@ -303,13 +306,15 @@ test -n "$out"
 ```shell #test-result id="xtuner-list-cfg" fuzzy='xxx'
 lines: xxx
 head_first: xxx
+err_lines: xxx
+err_head: xxx
 ```
 
-从 list-cfg 拷一份 InternLM2-Chat-7B + QLoRA + Colorist 配置到本地（具体 config 名随 release 漂移，先 grep 推断）：
+从 list-cfg 拷一份 QLoRA + Colorist 配置到本地（具体 config 名随 release 漂移，先 grep 推断；xtuner v0.2.0 的 colorist cfg 是 llama 版，V1 之后才有 internlm2 版）：
 
 ```shell #test-setup store="xtuner_llm_cfg_path"
-config_name=$(xtuner list-cfg 2>/dev/null | grep -E "internlm2.*qlora.*colorist" | head -1)
-test -n "$config_name" || { echo "no matching config (internlm2.*qlora.*colorist); abort"; exit 1; }
+config_name=$(xtuner list-cfg 2>/dev/null | grep -E "(internlm2|llama).*qlora.*colorist" | head -1)
+test -n "$config_name" || { echo "no matching config ((internlm2|llama).*qlora.*colorist); abort"; exit 1; }
 xtuner copy-cfg "$config_name" /tmp/xtuner_npu_llm_cfg.py
 echo "/tmp/xtuner_npu_llm_cfg.py"
 ```

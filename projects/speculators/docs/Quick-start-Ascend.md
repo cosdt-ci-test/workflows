@@ -542,7 +542,38 @@ sleep 5  # 给 vllm worker 完全退出 + NPU 释放
 # （triton-ascend 3.2.2 fork 不支持 dflash 用的某个 @triton.jit kernel 的 MLIR op）。
 # 规避：TRITON_INTERPRET=1 让 triton 走 Python interpreter（不调 MLIR 编译），速度慢但能跑通；
 # smoke test 10 samples + 1 epoch 本来也不指望速度。
-TRITON_INTERPRET=1 torchrun --standalone --nproc_per_node=1 scripts/train.py \
+#
+# CI 33213771990: TRITON_INTERPRET=1 又踩新坑——triton-ascend interpreter mode 里
+# driver.active 是 function 不是对象，访问 .profiler 抛 AttributeError。需要把 patch
+# 打进 torchrun worker 进程。torchrun 启动时 PYTHONSTARTUP 会被 worker 忽略；
+# 走 sitecustomize.py：写到 /root/patches/_sitecustomize.py，PYTHONPATH 加进去，
+# python 启动时自动 import 它，注入 triton runtime driver stub。每个 worker
+# 进程 import triton 前都已注入，patch 一定生效。
+mkdir -p /root/patches
+cat > /root/patches/sitecustomize.py << 'SITE'
+import sys as _s
+def _patch_triton():
+    try:
+        import triton
+        from triton.runtime import driver as _drv
+        _active = _drv.active
+        for _name, _stub in (
+            ('profiler', lambda *a, **kw: None),
+            ('get_active_torch_device', lambda: 'npu'),
+            ('set_printf_fifo_size', lambda *a, **kw: None),
+            ('get_current_target', lambda: None),
+            ('utils', type('U', (), {'set_printf_fifo_size': staticmethod(lambda *a, **kw: None)})()),
+        ):
+            if not hasattr(_active, _name):
+                try:
+                    setattr(_active, _name, _stub)
+                except Exception:
+                    pass
+    except Exception as _e:
+        print(f'[sitecustomize] triton patch skipped: {_e}', file=_s.stderr, flush=True)
+_patch_triton()
+SITE
+TRITON_INTERPRET=1 PYTHONPATH=/root/patches:${PYTHONPATH:-} torchrun --standalone --nproc_per_node=1 scripts/train.py \
   --verifier-name-or-path "<verifier_path>" \
   --data-path "<data_path>" \
   --hidden-states-path "$HS_DIR" \

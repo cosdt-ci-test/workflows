@@ -443,7 +443,8 @@ EOF
 
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 export TORCH_NPU_USE_HCCL=1
-xtuner train /tmp/xtuner_npu_smoke_single_cfg.py --work-dir /tmp/xtuner_sft_llm_out_single
+# 直接 python -m xtuner.tools.train 绕开 console_script wrapper shebang 错配（wrapper 启动的 Python 看不到 uv egg-link 把 xtuner 当 namespace package，`from xtuner import cli` ImportError）。
+python -m xtuner.tools.train /tmp/xtuner_npu_smoke_single_cfg.py --work-dir /tmp/xtuner_sft_llm_out_single
 ls -t /tmp/xtuner_sft_llm_out_single/*.pth 2>/dev/null | head -1
 ```
 
@@ -473,7 +474,8 @@ EOF
 
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 export TORCH_NPU_USE_HCCL=1
-NPROC_PER_NODE=2 xtuner train /tmp/xtuner_npu_smoke_multi_cfg.py --work-dir /tmp/xtuner_sft_llm_out_multi
+# 绕开 console_script wrapper shebang 错配（同单卡 setup）
+NPROC_PER_NODE=2 python -m xtuner.tools.train /tmp/xtuner_npu_smoke_multi_cfg.py --work-dir /tmp/xtuner_sft_llm_out_multi
 ls -t /tmp/xtuner_sft_llm_out_multi/*.pth 2>/dev/null | head -1
 ```
 

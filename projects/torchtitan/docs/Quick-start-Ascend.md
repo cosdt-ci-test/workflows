@@ -227,13 +227,8 @@ torchrun --nproc_per_node=1 \
 输出结果类似如下：
 
 ```shell #test-result id="torchtitan-train-debug" fuzzy='xxx' fuzzy='...'
+[titan] xxx - root - INFO - torchtitan version: xxx
 [titan] xxx - root - INFO - Starting job: Llama 3 debug training
-...
-[titan] xxx - root - INFO - Training starts at step xxx
-...
-[titan] xxx - root - INFO - step: xxx
-...
-[titan] xxx - root - INFO - step: xxx
 ...
 [titan] xxx - root - INFO - Sleeping 2 seconds for other ranks to complete
 [titan] xxx - root - INFO - Training completed

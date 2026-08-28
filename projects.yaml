@@ -288,3 +288,13 @@ projects:
     phase: A
     runner: linux-aarch64-a2-1
     dir: projects/ktransformers
+  - name: mooncake
+    category: 推理加速
+    support_level: 新兴适配
+    upstream_repo: kvcache-ai/Mooncake
+    phase: A
+    runner: linux-aarch64-a2-2
+    dir: projects/mooncake
+    workflows:
+      examples: .github/workflows/mooncake-examples.yml
+      quick_start: .github/workflows/mooncake-quick-start.yml

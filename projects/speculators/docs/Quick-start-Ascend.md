@@ -352,6 +352,7 @@ echo <dflash_path>
 之前这步走的是 vllm-ascend 的 `extract_hidden_states` 离线 API 写单文件 .safetensors —— 但 `load_from_disk` 不吃 safetensors、只看 `dataset.save_to_disk()` 写出来的 `.arrow` shards + `dataset_info.json`（CI 33166102161 之后暴露的第二个 bug），同时文件命名 `0-b124ee50.safetensors` 也不对 FileBackend 期望的 `hs_<idx>.safetensors`。干脆切到上游 prepare_data.py + 在线模式（Step 16 起 vllm server 拉 hidden states）。
 
 ```shell #test-setup store="data_path" load="verifier_path>>verifier_path"
+set -euo pipefail
 DATA_DIR=/root/dflash-train-data
 rm -rf "$DATA_DIR"
 mkdir -p "$DATA_DIR"
@@ -359,17 +360,20 @@ mkdir -p "$DATA_DIR"
 # 10 条 chat samples：每条 user + assistant 都填，否则 loss_mask 全 0、prepare_data.py
 # 默认会因 assistant token 不足 raise。smoke 不指望 loss 真下降，只要 chat template +
 # tokenizer 跑通 + arrow + token_freq.pt 都写出来即可
+# 顶层 key 必须是 "conversations"（不是 "messages"），load_and_preprocess_dataset
+# 直接 examples.get("conversations", [])，messages 字段会全部被 silently drop，
+# 末尾 raise "No samples remain after preprocessing"（CI 33172655874 教训）
 cat > /tmp/prompts.jsonl << 'JSONL'
-{"messages":[{"role":"user","content":"Briefly describe AI topic #0."},{"role":"assistant","content":"AI is a field of computer science."}]}
-{"messages":[{"role":"user","content":"Briefly describe AI topic #1."},{"role":"assistant","content":"AI is a field of computer science."}]}
-{"messages":[{"role":"user","content":"Briefly describe AI topic #2."},{"role":"assistant","content":"AI is a field of computer science."}]}
-{"messages":[{"role":"user","content":"Briefly describe AI topic #3."},{"role":"assistant","content":"AI is a field of computer science."}]}
-{"messages":[{"role":"user","content":"Briefly describe AI topic #4."},{"role":"assistant","content":"AI is a field of computer science."}]}
-{"messages":[{"role":"user","content":"Briefly describe AI topic #5."},{"role":"assistant","content":"AI is a field of computer science."}]}
-{"messages":[{"role":"user","content":"Briefly describe AI topic #6."},{"role":"assistant","content":"AI is a field of computer science."}]}
-{"messages":[{"role":"user","content":"Briefly describe AI topic #7."},{"role":"assistant","content":"AI is a field of computer science."}]}
-{"messages":[{"role":"user","content":"Briefly describe AI topic #8."},{"role":"assistant","content":"AI is a field of computer science."}]}
-{"messages":[{"role":"user","content":"Briefly describe AI topic #9."},{"role":"assistant","content":"AI is a field of computer science."}]}
+{"conversations":[{"role":"user","content":"Briefly describe AI topic #0."},{"role":"assistant","content":"AI is a field of computer science."}]}
+{"conversations":[{"role":"user","content":"Briefly describe AI topic #1."},{"role":"assistant","content":"AI is a field of computer science."}]}
+{"conversations":[{"role":"user","content":"Briefly describe AI topic #2."},{"role":"assistant","content":"AI is a field of computer science."}]}
+{"conversations":[{"role":"user","content":"Briefly describe AI topic #3."},{"role":"assistant","content":"AI is a field of computer science."}]}
+{"conversations":[{"role":"user","content":"Briefly describe AI topic #4."},{"role":"assistant","content":"AI is a field of computer science."}]}
+{"conversations":[{"role":"user","content":"Briefly describe AI topic #5."},{"role":"assistant","content":"AI is a field of computer science."}]}
+{"conversations":[{"role":"user","content":"Briefly describe AI topic #6."},{"role":"assistant","content":"AI is a field of computer science."}]}
+{"conversations":[{"role":"user","content":"Briefly describe AI topic #7."},{"role":"assistant","content":"AI is a field of computer science."}]}
+{"conversations":[{"role":"user","content":"Briefly describe AI topic #8."},{"role":"assistant","content":"AI is a field of computer science."}]}
+{"conversations":[{"role":"user","content":"Briefly describe AI topic #9."},{"role":"assistant","content":"AI is a field of computer science."}]}
 JSONL
 
 # 复用 source install 那步 clone 的仓库（cwd 不跨 #test 块，需重新 cd）
@@ -407,6 +411,7 @@ token_freq.pt: ok
 用上游 `scripts/train.py` + 单卡 `torchrun --nproc_per_node=1` 训 1 epoch × 10 sample（**smoke 验证管线通，不指望 loss 真下降**）：
 
 ```shell #test-setup store="checkpoint_path" load="data_path>>data_path" load="verifier_path>>verifier_path"
+set -euo pipefail
 CHECKPOINT_DIR=/root/dflash-trained
 rm -rf "$CHECKPOINT_DIR"
 mkdir -p "$CHECKPOINT_DIR"
@@ -429,11 +434,20 @@ VLLM_TRAIN_PID=$!
 trap "kill $VLLM_TRAIN_PID 2>/dev/null" EXIT
 
 # 等 /health 200（最长 6 min，与 Step 4 同上限；裸 vllm-ascend load Qwen3-8B
-# 实测 3-4 min）
+# 实测 3-4 min）；set -e 模式下循环体用 if 而不是 &&，避免 curl 失败时静默 360s
+VLLM_READY=0
 for i in {1..180}; do
-  curl -sf http://127.0.0.1:8000/health > /dev/null && break
+  if curl -sf http://127.0.0.1:8000/health > /dev/null; then
+    VLLM_READY=1
+    break
+  fi
   sleep 2
 done
+if [ "$VLLM_READY" != "1" ]; then
+  echo "vllm server failed to come up within 6 min; tail of vllm-train.log:"
+  tail -80 /tmp/vllm-train.log
+  exit 1
+fi
 
 # --speculator-type=dflash 由 train.py 从 SpeculatorModel.registry 动态解析；
 # --target-layer-ids 2 18 34 与 launch_vllm.py 一致（两边都内部 append 最后一层 36）；

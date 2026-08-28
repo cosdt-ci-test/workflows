@@ -96,7 +96,7 @@ count: xxx
 
 装 `modelscope`（本文档下载 InternLM2-Chat-7B 权重 + Colorist 数据集要用，ModelScope 国内网络更稳）：
 
-```shell
+```shell #test-setup
 uv pip install modelscope
 ```
 

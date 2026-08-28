@@ -18,7 +18,7 @@ Atlas 900 A2 / A3 训练系列产品或者 Ascend 950 系列产品，并按需�
 
 **配套机器**：
 
-- **机器类型**：Atlas 900 A2 PODc（Ascend 910B4，64 GB × 2）
+- **机器类型**：Atlas 900 A2 PODc（Ascend 910B4，32 GB × 2 — CANN / 驱动预留约 2.5 GB，每张卡 PyTorch 实测可用 ~30 GB）
 - **操作系统**：Ubuntu 22.04
 
 **配套镜像**：
@@ -36,7 +36,7 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | triton | 最新release |
 | modelscope | 最新release |
 | torchtitan | 最新 release |
-| 训练配置 | `torchtitan/models/llama3/train_configs/llama3_8b.toml`（Llama 3 8B 标准结构：dim=4096 / 32 层 / 32 head / 8 kv head） |
+| 训练配置 | 单卡 Step 12：`torchtitan/models/llama3/train_configs/debug_model.toml`（debugmodel：dim=256 / 6 层 / 16 head / vocab 2048，~12 M 参数）；多卡 Step 13：`torchtitan/models/llama3/train_configs/llama3_8b.toml`（Llama 3 8B：dim=4096 / 32 层 / 32 head / 8 kv head，FSDP shard=2 + cpu_offload + 全量 bf16 装得下） |
 
 
 ### 检查前置是否满足
@@ -205,17 +205,14 @@ tokenizer_config.json
 
 ### 单卡训练
 
-用 fake process group 在 1 张 NPU 上跑 8B 模型真跑 2 步，验证配置解析、初始化、加载 tokenizer、build dataloader、forward + backward 整条链路能跑通。8B 模型单卡 64GB 紧巴巴，切 `--training.dtype bfloat16`（JobConfig 的 `dtype` 是 `Literal["bfloat16", "float32"]`）让 params / grads / Adam state 都进 bf16，省掉 fp32 Adam state 那一份 32 GB，单卡 64 GB 装得下：
+用 fake process group 在 1 张 NPU 上跑 `debug_model` 真跑 2 步，验证配置解析、初始化、加载 tokenizer、build dataloader、forward + backward 整条链路能跑通。`debug_model` 是 torchtitan 自带的最小 smoke 配置（dim=256 / 6 层 / 16 head / vocab 2048，~12 M 参数量），用 `debug_model.toml` 即可，单卡 30 GB 完全够装。8B 模型单卡实测装不下（params + grads 在 bf16 下就要 32 GB > 30 GB 可用），需要双卡 FSDP shard=2 才跑得动，详见下一节「多卡训练」：
 
-```shell #test id="torchtitan-train-debug" load="upstream_ref>>ref" load="ms_tokenizer_path>>ms_tokenizer_path"
+```shell #test id="torchtitan-train-debug" load="upstream_ref>>ref"
 cd torchtitan && git checkout <ref>
 NGPU=1 ASCEND_RT_VISIBLE_DEVICES=0 LOCAL_RANK=0 \
 python -m torchtitan.train \
-    --job.config-file ./torchtitan/models/llama3/train_configs/llama3_8b.toml \
-    --model.hf-assets-path <ms_tokenizer_path> \
+    --job.config-file ./torchtitan/models/llama3/train_configs/debug_model.toml \
     --comm.mode fake_backend \
-    --training.dataset c4_test \
-    --training.dtype bfloat16 \
     --training.steps 2 \
     --training.local-batch-size 1 \
     --training.seq-len 256 \
@@ -227,7 +224,7 @@ python -m torchtitan.train \
 输出结果类似如下：
 
 ```shell #test-result id="torchtitan-train-debug" fuzzy='xxx' fuzzy='...'
-[titan] xxx - root - INFO - Starting job: Llama 3 8B training
+[titan] xxx - root - INFO - Starting job: Llama 3 debugmodel training
 ...
 [titan] xxx - root - INFO - Training starts at step xxx
 ...
@@ -242,7 +239,7 @@ python -m torchtitan.train \
 
 ### 多卡训练
 
-用 torchrun 起 2 个 rank 跑 8B 模型真分布式训练，`--training.steps 2` 真跑 2 步。多卡 2×64GB 装 8B 仍然紧张，每张卡还是切 `--training.dtype bfloat16`（同上，单卡 bf16 解析）让 params / grads / Adam state 都进 bf16 节省 ~32 GB optimizer state 副本：
+用 torchrun 起 2 个 rank 跑 8B 模型真分布式训练，`--training.steps 2` 真跑 2 步。`data_parallel_shard_degree = -1` 在双卡下解析成 2，FSDP 把 params / grads / Adam state 都按 shard 分摊，再加 `--training.enable-cpu-offload` 让 FSDP 把 Adam state 卸到 CPU，每张卡 NPU 实测占用 ~16 GB（params 8 GB + grads 8 GB + 激活张量 <1 GB），单卡 30 GB 装得下。再叠 `--training.dtype bfloat16` 把 params / grads / Adam state 全量 bf16，省掉 fp32 Adam state 那 32 GB 副本：
 
 ```shell #test id="torchtitan-train-2card" load="upstream_ref>>ref" load="ms_tokenizer_path>>ms_tokenizer_path"
 cd torchtitan && git checkout <ref>
@@ -259,6 +256,7 @@ torchrun --nproc_per_node=2 \
     --comm.mode default \
     --training.dataset c4_test \
     --training.dtype bfloat16 \
+    --training.enable-cpu-offload \
     --training.steps 2 \
     --training.local-batch-size 1 \
     --training.seq-len 256 \

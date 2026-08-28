@@ -152,7 +152,7 @@ xtuner xxx
 
 ## 导入校验
 
-源码装好后做一次 `importlib.util.find_spec` 烟囱测试，验证顶层包 + 关键入口子模块能被解析（顶层包决定 `import xtuner` 通；`xtuner.entry_point` 决定 CLI 的 `MODES` 常量可读，验下面 CLI 表面检查）：
+源码装好后做一次 `importlib.util.find_spec` 烟囱测试，验证顶层包 + 关键入口子模块能被解析：
 
 ```shell #test id="xtuner-import-check"
 python -c "
@@ -164,14 +164,14 @@ assert all(s is not None for s in specs.values()), specs
 "
 ```
 
-输出结果如下（用 `disable_fuzzy` 关掉默认非贪婪通配，按字面比对 — 任何一个 `MISSING` 都说明源码树装缺了）：
+输出结果如下：
 
 ```shell #test-result id="xtuner-import-check" disable_fuzzy
 xtuner ok
 xtuner.entry_point ok
 ```
 
-CLI 表面 sanity check——`xtuner.entry_point.MODES` 必须非空，且至少包含 `train`（训练入口）、`list-cfg`（下面"准备配置文件"章节要用）、`chat`（下面"与模型对话"章节要用）：
+CLI 表面 sanity check——`xtuner.entry_point.MODES` 必须非空，且至少包含 `train`、`list-cfg`、`chat`：
 
 ```shell #test id="xtuner-cli-modes"
 python -c "
@@ -194,11 +194,11 @@ has_chat: True
 
 ## LLM 大模型微调
 
-本文档的训练入口是 `xtuner train <config>`（基于 mmengine runner）。下面 7 个章节按 [xtuner legacy 快速上手模板](https://xtuner.readthedocs.io/zh-cn/latest/legacy/get_started/quickstart.html) 的顺序展开，每个章节都挂一个 `#test` 块做烟囱测试 —— CI smoke 不跑完整 5 epoch 训练 / 14 GB 模型合并，只验证该章节关键命令能通。
+本文档的训练入口是 `xtuner train <config>`（基于 mmengine runner）。下面按 [xtuner legacy 快速上手模板](https://xtuner.readthedocs.io/zh-cn/latest/legacy/get_started/quickstart.html) 的顺序展开，每个章节都挂一个 `#test` 块做烟囱测试。
 
 ### 准备模型权重
 
-在微调模型前，要先拉一份 InternLM2-Chat-7B 的权重。`modelscope` SDK 已在[前置安装](#前置安装)章节装好。ModelScope 在国内网络上更稳（避免 HF 直连被墙）。
+在微调模型前，要先拉一份 InternLM2-Chat-7B 的权重。`modelscope` SDK 已在[前置安装](#前置安装)章节装好。
 
 下载 InternLM2-Chat-7B 权重（约 14 GB，落到 `./Shanghai_AI_Laboratory/internlm2-chat-7b/`）：
 
@@ -225,7 +225,7 @@ total xxx
 
 ### 准备微调数据集
 
-Colorist 数据集：根据颜色描述给 16 进制颜色编码的指令微调集，几 MB 大小。ModelScope SDK 直接拉（拉到默认 `cache_dir/datasets/fanqiNO1/colors/<revision>/`，再 `shutil.copytree` 重定向到 `./colors/`，这样下游 cfg 的 `data_path = './colors/train.jsonl'` 不用改）：
+Colorist 数据集：根据颜色描述给 16 进制颜色编码的指令微调集，几 MB：
 
 ```shell #test-setup
 python -c "
@@ -307,8 +307,6 @@ err_grep_at: xxx
 
 从 list-cfg 拷一份 QLoRA + Colorist 配置到本地（具体 config 名随 release 漂移，先 grep 推断；xtuner v0.2.0 的 colorist cfg 是 llama 版，V1 之后才有 internlm2 版）：
 
-从 list-cfg 拷一份 QLoRA + Colorist 配置到本地（具体 config 名随 release 漂移，先 grep 推断；xtuner v0.2.0 的 colorist cfg 是 llama 版，V1 之后才有 internlm2 版）：
-
 ```shell #test-setup store="xtuner_llm_cfg_path"
 config_name=$(xtuner list-cfg 2>/dev/null | grep -E "(internlm2|llama).*qlora.*colorist" | head -1)
 test -n "$config_name" || { echo "no matching config ((internlm2|llama).*qlora.*colorist); abort"; exit 1; }
@@ -362,7 +360,7 @@ prompt_template= PROMPT_TEMPLATE.xxx
 
 ### 启动微调
 
-参考模板给的单卡 + 多卡启动方式。CI smoke 不跑完整 5 epoch × 144 step = 720 step（耗时 ~45-60 分钟），而是在 cfg 末尾追加 `train_cfg = dict(max_epochs=1)` + `train_dataloader = dict(dataset=dict(samples_per_epoch=5))` 把训练压到 5 step（耗时 ~30 秒 - 1 分钟），跑通就视为该章节 smoke 通过。
+参考模板给的单卡 + 多卡启动方式。下面两个章节用 5 step smoke 验证。
 
 #### 单卡（5 step smoke）
 
@@ -434,19 +432,9 @@ xtuner train /tmp/xtuner_npu_llm_cfg.py --work-dir /tmp/xtuner_sft_llm_out
 NPROC_PER_NODE=${GPU_NUM} xtuner train /tmp/xtuner_npu_llm_cfg.py --work-dir /tmp/xtuner_sft_llm_out
 ```
 
-> 训练日志会逐 step 打印 `Iter(train) [N/5] lr: ... time: ... loss: ...`（smoke）或 `[N/720]`（完整），跟模板给的样本格式一致：
->
-> ```
-> mmengine - INFO - Iter(train) [ 10/720]  lr: 9.0001e-05  eta: 0:31:46  time: 2.6851  data_time: 0.0077  memory: 12762  loss: 2.6900
-> ```
->
-> `xtuner train` 入口对应 `xtuner.engine.runner`，device 由 `xtuner/utils/device.py` 自动检测（CPU / CUDA / NPU），不需要手动传 `device='npu'`；多卡走 NCCL，NPU 上靠 `TORCH_NPU_USE_HCCL=1` 让 torch_npu 接管。
->
-> 两个 `#test-setup` 在 cfg 末尾追加 `train_cfg = dict(max_epochs=1)` + `train_dataloader = dict(dataset=dict(samples_per_epoch=5))` 把训练压到 5 step（Python 后定义覆盖先定义，兼容模板原版的 `max_epochs=5` + `samples_per_epoch=None`）。`#test` 验 5 step 训练成功跑通 + 产出 `.pth`（具体文件名如 `iter_5.pth` 随 xtuner release 漂移，doc 不写死）。完整 720 step 训练在 CI smoke 上跑不到，本地按需手动跑上面的 `xtuner train /tmp/xtuner_npu_llm_cfg.py` 命令。多卡 smoke 需要 2 卡 runner（`linux-aarch64-a2-2`），单卡 runner 上跑会因 NCCL/HCCL init 失败而 MISMATCH。
-
 ### 模型转换 + LoRA 合并
 
-训练产物是 QLoRA 的 `.pth`（只含 adapter 参数），要转 HuggingFace 格式再合并到 base。CI smoke 不真跑转换（依赖 .pth，前面 5 step 训练已跑），只烟囱测 `xtuner convert` 的两个子命令 `pth_to_hf` 和 `merge` 都可用：
+训练产物是 QLoRA 的 `.pth`（只含 adapter 参数），要转 HuggingFace 格式再合并到 base。下面烟囱测 `xtuner convert` 的两个子命令 `pth_to_hf` 和 `merge` 都可用：
 
 ```shell #test id="xtuner-convert-help"
 out=$(xtuner convert --help 2>&1)
@@ -487,7 +475,7 @@ xtuner convert merge ./Shanghai_AI_Laboratory/internlm2-chat-7b \
 
 ### 与模型对话
 
-合并完权重后，可以直接用 `xtuner chat` 跟模型对话。CI smoke 不真跑交互式 chat（依赖 stdin + 模型推理），只烟囱测 `xtuner chat --help` 退出码 0 + 关键参数 `--adapter` / `--prompt-template` / `--system-template` 都存在：
+合并完权重后，可以直接用 `xtuner chat` 跟模型对话。下面烟囱测 `xtuner chat --help` 退出码 0 + 关键参数 `--adapter` / `--prompt-template` / `--system-template` 都存在：
 
 ```shell #test id="xtuner-chat-help"
 out=$(xtuner chat --help 2>&1)

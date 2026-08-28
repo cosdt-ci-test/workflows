@@ -157,7 +157,9 @@ projects:
     support_level: 基础支持
     upstream_repo: InternLM/xtuner
     phase: A
-    runner: linux-aarch64-a2-1
+    # 2-card runner so the multi-card smoke in docs/Quick-start-Ascend.md
+    # can run `NPROC_PER_NODE=2 xtuner train ...` end-to-end.
+    runner: linux-aarch64-a2-2
     dir: projects/xtuner
     workflows:
       quick_start: .github/workflows/xtuner-quick-start.yml

@@ -10,18 +10,20 @@
 # Cache keys (monitor-state-xtuner-*) and artifact names are derived
 # from project=xtuner, not from the workflow name.
 #
-# No device mounts: the self-hosted NPU runner (`linux-aarch64-a2-1`)
-# auto-passes `/dev/davinci*` into the container via the cluster
+# No device mounts: the self-hosted NPU runner (`linux-aarch64-a2-2`,
+# 2-card) auto-passes `/dev/davinci*` into the container via the cluster
 # device-plugin, so container_options stays empty. Same convention
 # used by torchtune / slime / tensordict / pytorch.vision / accelerate /
-# ray / torchtitan. The 8 projects that still ship a full
-# `--device=/dev/davinci0` block (bitsandbytes / cache-dit /
-# colossalai / deepspeed / llama.cpp / onnxruntime / trl /
-# whisper.cpp) keep that block for the read-only Ascend driver
-# bind-mounts the test wants; xtuner does not need those.
-# Single-rank HCCL still talks to itself via davinci_manager +
-# devmm_svm + hisi_hdc control devices, but those are device-plugin
-# passthroughs too. check-torch expects `count: 1`.
+# ray / torchtitan / transformers / diffusers / mooncake.
+# The 8 projects that still ship a full `--device=/dev/davinci0` block
+# (bitsandbytes / cache-dit / colossalai / deepspeed / llama.cpp /
+# onnxruntime / trl / whisper.cpp) keep that block for the read-only
+# Ascend driver bind-mounts the test wants; xtuner does not need those.
+# Multi-rank HCCL (xtuner's multi-card smoke uses `NPROC_PER_NODE=2`)
+# talks across cards via davinci_manager + devmm_svm + hisi_hdc control
+# devices, which are device-plugin passthroughs too. check-torch on
+# this 2-card runner uses `count: 2`; the multi-card smoke step is what
+# actually exercises both cards, single-card steps leave one card idle.
 #
 # No modelscope cache bind-mount: the doc's LLM + MLLM SFT examples
 # use the upstream ``examples/v1/config/sft_qwen3_tiny.py`` model +
@@ -66,8 +68,11 @@ jobs:
       project: xtuner
       # Self-hosted NPU runner for the test job only; the engine pins
       # the cache I/O jobs (restore-cache / publish-and-persist) to
-      # GitHub-hosted ubuntu-latest.
-      test_runner: '["linux-aarch64-a2-1"]'
+      # GitHub-hosted ubuntu-latest. 2-card label (linux-aarch64-a2-2)
+      # is required because xtuner's multi-card smoke step issues
+      # `NPROC_PER_NODE=2 xtuner train ...`; a 1-card label would
+      # HCCL-init-fail on rank-1's `torch.distributed.init_process_group`.
+      test_runner: '["linux-aarch64-a2-2"]'
       image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
       container_options: >-
       # Doc body does: git clone + ``uv pip install --no-deps -e .`` +

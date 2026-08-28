@@ -534,6 +534,9 @@ sleep 5  # 给 vllm worker 完全退出 + NPU 释放
 # 必 echo 末尾诊断（哪怕 0 错误也给 framework 看到 train.log 末尾）；用 || true 屏蔽 set -e，
 # 失败时下文统一 cat /tmp/train.log + 抛 exit 1，避免 CI 33177074202 那种 torchrun 静默崩 →
 # set -e 中断 → bash stderr=0B → framework 只看到 rc=1 + 0B stderr
+#
+# CI 33204897792: framework 把 50KB+ 的 cat /tmp/train.log 截断成末行（只剩 resource_tracker warning），
+# 看不到真错。所以从 train.log grep 出 Traceback/Error 关键行 echo 到 bash stdout，确保 framework 能看到
 torchrun --standalone --nproc_per_node=1 scripts/train.py \
   --verifier-name-or-path "<verifier_path>" \
   --data-path "<data_path>" \
@@ -550,17 +553,19 @@ torchrun --standalone --nproc_per_node=1 scripts/train.py \
   --on-missing raise >/tmp/train.log 2>&1 || TRAIN_RC=$?
 TRAIN_RC=${TRAIN_RC:-0}
 
-echo "=== train.log tail (last 80 lines) ==="
-tail -80 /tmp/train.log
-
-if [ "$TRAIN_RC" -ne 0 ]; then
-  echo "=== train.py failed (rc=$TRAIN_RC); full train.log ==="
-  cat /tmp/train.log
+# framework tail 截断让 50KB 日志只剩末行 → 把关键错误先 echo 出来
+if [ "$TRAIN_RC" -ne 0 ] || ! grep -qE "Saved|epoch.*[0-9]+|loss=" /tmp/train.log 2>/dev/null; then
+  echo "=== train.py 关键错误行（framework 截断前的过滤版） ==="
+  grep -nE "Traceback|Error|raise |Exception|FAILED|out of memory|OOM|RuntimeError|ValueError|FileNotFoundError|ConnectionError|KeyError|AttributeError|TypeError" /tmp/train.log | head -30
+  echo "=== train.log tail (last 30 lines, raw) ==="
+  tail -30 /tmp/train.log
+  echo "=== train.py failed (rc=$TRAIN_RC); exit ==="
   exit 1
 fi
+
 if ! test -f "$CHECKPOINT_DIR/config.json" || ! test -f "$CHECKPOINT_DIR/model.safetensors"; then
-  echo "=== train.py rc=0 但 checkpoint 缺失（config.json / model.safetensors）; full train.log ==="
-  cat /tmp/train.log
+  echo "=== train.py rc=0 但 checkpoint 缺失（config.json / model.safetensors）; train.log tail ==="
+  tail -50 /tmp/train.log
   exit 1
 fi
 

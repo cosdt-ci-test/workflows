@@ -264,8 +264,11 @@ echo "${UPSTREAM_REF}"
 克隆上游仓库并 checkout 到工作流注入的最新 release tag，安装并且验证：
 
 ```shell #test id="speculators-install-source" load="upstream_ref>>ref"
-git clone --depth 1 --branch <ref> https://github.com/vllm-project/speculators.git
-cd speculators
+# 显式 clone 到绝对路径：测试进程 cwd 是 workflows/projects/speculators（engine
+# working-directory 钉死），相对 clone 会落到 <cwd>/speculators；Step 16 #test-setup
+# 的 `cd /root/speculators` 拿不到这个目录、整个 train.py 链就静默失败
+git clone --depth 1 --branch <ref> https://github.com/vllm-project/speculators.git /root/speculators
+cd /root/speculators
 uv pip install -e .
 speculators --version
 python -c "from importlib.metadata import version; print('speculators', version('speculators'))"

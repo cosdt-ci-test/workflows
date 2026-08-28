@@ -119,6 +119,18 @@ git clone --depth 1 --branch <ref> https://github.com/opencv/opencv_contrib.git
 
 > `<ref>` 为工作流注入的最新 release tag。
 
+#### 桥接 OpenCV 5.0.0 与 CANN 9.1.0 的 layout 差
+
+mainline 5.0.0 的 `OpenCVFindCANN.cmake` 假设库在 `${CANN_INSTALL_DIR}/{acllib,lib64,compiler/lib64}/` 下，但 CANN 9.1.0 实际把 ACL/AOE/GE 库都装在 `${CANN_INSTALL_DIR}/aarch64-linux/lib64/`。补三个软链让 cmake 找得到：
+
+```shell #test-setup
+ln -sfn /usr/local/Ascend/cann-9.1.0/aarch64-linux /usr/local/Ascend/cann-9.1.0/acllib
+ln -sfn /usr/local/Ascend/cann-9.1.0/aarch64-linux/lib64 /usr/local/Ascend/cann-9.1.0/lib64
+ln -sfn /usr/local/Ascend/cann-9.1.0/aarch64-linux/lib64 /usr/local/Ascend/cann-9.1.0/compiler/lib64
+```
+
+> 后续版本（OpenCV 5.0.1+ / CANN 9.2+）若 `OpenCVFindCANN.cmake` 把搜索路径加进 `aarch64-linux/lib64/`，这步可以删。镜像自带 `ascend-toolkit/latest -> cann-9.1.0` 时，把上面三行里的 `cann-9.1.0` 改成 `ascend-toolkit/latest` 也可以。
+
 #### CMake 配置：开启 WITH_CANN
 
 mainline 5.0.0 里 CANN 后端的开关变量是 `WITH_CANN`（不是 `BUILD_CANN`，后者不存在），通过环境变量 `ASCEND_TOOLKIT_HOME` 指向 `ascend-toolkit` 安装根目录（也可用 `-DCANN_INSTALL_DIR=...` 直接覆盖）——这一步与 [OpenCV Huawei CANN Backend wiki](https://github.com/opencv/opencv/wiki/Huawei-CANN-Backend) 的 Step 3 一致：

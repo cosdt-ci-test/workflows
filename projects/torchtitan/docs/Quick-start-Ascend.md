@@ -179,8 +179,6 @@ torchtitan xxx
 
 ### 下载 tokenizer
 
-torchtitan 出厂支持 Llama 3 训练。本文档单卡用 toy debugmodel（vocab=2048）+ 真 Llama 3 tokenizer（不跑 forward，vocab mismatch 无影响），多卡用 8B flavor（vocab=128256 配套）。两个章节共用同一份下载：
-
 ```shell #test-setup id="modelscope-download-tokenizer" store="ms_tokenizer_path"
 python -c "from modelscope import snapshot_download; print(snapshot_download('LLM-Research/Meta-Llama-3-8B', allow_patterns=['*.safetensors', '*.json', '*.model', 'tokenizer*']))" | tail -n 1
 ```
@@ -263,6 +261,7 @@ torchrun --nproc_per_node=2 \
     --training.seq-len 256 \
     --metrics.log-freq 1 \
     --metrics.disable-color-printing \
+    --parallelism.enable-cpu-offload true \
     --job.dump-folder /tmp/torchtitan-quickstart-2card
 ```
 

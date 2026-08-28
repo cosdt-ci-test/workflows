@@ -205,7 +205,7 @@ tokenizer_config.json
 
 ### 单卡训练
 
-用 fake process group 在 1 张 NPU 上跑 8B 模型真跑 2 步，验证配置解析、初始化、加载 tokenizer、build dataloader、forward + backward 整条链路能跑通。8B 模型单卡 64GB 紧巴巴，加 `--training.enable-cpu-offload`（bool flag）把 optimizer state 卸到 CPU：
+用 fake process group 在 1 张 NPU 上跑 8B 模型真跑 2 步，验证配置解析、初始化、加载 tokenizer、build dataloader、forward + backward 整条链路能跑通。8B 模型单卡 64GB 紧巴巴，切 `--training.dtype bfloat16`（JobConfig 的 `dtype` 是 `Literal["bfloat16", "float32"]`）让 params / grads / Adam state 都进 bf16，省掉 fp32 Adam state 那一份 32 GB，单卡 64 GB 装得下：
 
 ```shell #test id="torchtitan-train-debug" load="upstream_ref>>ref" load="ms_tokenizer_path>>ms_tokenizer_path"
 cd torchtitan && git checkout <ref>
@@ -215,12 +215,12 @@ python -m torchtitan.train \
     --model.hf-assets-path <ms_tokenizer_path> \
     --comm.mode fake_backend \
     --training.dataset c4_test \
+    --training.dtype bfloat16 \
     --training.steps 2 \
     --training.local-batch-size 1 \
     --training.seq-len 256 \
     --metrics.log-freq 1 \
     --metrics.disable-color-printing \
-    --training.enable-cpu-offload \
     --job.dump-folder /tmp/torchtitan-quickstart
 ```
 
@@ -242,7 +242,7 @@ python -m torchtitan.train \
 
 ### 多卡训练
 
-用 torchrun 起 2 个 rank 跑 8B 模型真分布式训练，`--training.steps 2` 真跑 2 步。多卡 2×64GB 装 8B 仍然紧张，加 `--training.enable-cpu-offload`（bool flag）把 optimizer state 卸到 CPU：
+用 torchrun 起 2 个 rank 跑 8B 模型真分布式训练，`--training.steps 2` 真跑 2 步。多卡 2×64GB 装 8B 仍然紧张，每张卡还是切 `--training.dtype bfloat16`（同上，单卡 bf16 解析）让 params / grads / Adam state 都进 bf16 节省 ~32 GB optimizer state 副本：
 
 ```shell #test id="torchtitan-train-2card" load="upstream_ref>>ref" load="ms_tokenizer_path>>ms_tokenizer_path"
 cd torchtitan && git checkout <ref>
@@ -258,12 +258,12 @@ torchrun --nproc_per_node=2 \
     --model.hf-assets-path <ms_tokenizer_path> \
     --comm.mode default \
     --training.dataset c4_test \
+    --training.dtype bfloat16 \
     --training.steps 2 \
     --training.local-batch-size 1 \
     --training.seq-len 256 \
     --metrics.log-freq 1 \
     --metrics.disable-color-printing \
-    --training.enable-cpu-offload \
     --job.dump-folder /tmp/torchtitan-quickstart-2card
 ```
 

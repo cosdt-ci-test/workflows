@@ -161,7 +161,11 @@ echo "${UPSTREAM_REF}"
 ```shell #test id="torchtune-install-source" load="upstream_ref>>ref"
 git clone --depth 1 --branch <ref> https://github.com/meta-pytorch/torchtune.git
 cd torchtune
-uv pip install -e .
+# 非 editable 安装：uv 的 `pip install -e .` (PEP 660) 会把 torchtune 当
+# namespace package 加载，导致 `torchtune.__file__` 为 None，进而使
+# torchtune/_cli/cp.py:15 的 `Path(torchtune.__file__).parent.parent` 抛
+# TypeError，`tune --help` 等所有 CLI 调用都炸。新手 quick-start 不需要 hot-reload。
+uv pip install .
 python -c "import torchtune; print('torchtune', torchtune.__version__)"
 ```
 

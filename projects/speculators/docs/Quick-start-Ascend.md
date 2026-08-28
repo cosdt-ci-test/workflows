@@ -434,7 +434,8 @@ setsid nohup python scripts/launch_vllm.py "<verifier_path>" \
   --target-layer-ids 2 18 34 \
   --hidden-states-path "$HS_DIR" \
   -- \
-  --gpu-memory-utilization 0.3 \
+  --gpu-memory-utilization 0.5 \
+  --max-model-len 2048 \
   > /tmp/vllm-train.log 2>&1 < /dev/null &
 VLLM_TRAIN_PID=$!
 VLLM_PGID=$(ps -o pgid= -p "$VLLM_TRAIN_PID" | tr -d ' ')

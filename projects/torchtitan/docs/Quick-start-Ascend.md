@@ -192,7 +192,13 @@ ls <ms_tokenizer_path>
 ```
 
 ```shell #test-result id="modelscope-verify-tokenizer" fuzzy='...' 
-config.json configuration.json generation_config.json original special_tokens_map.json tokenizer.json tokenizer_config.json
+config.json
+configuration.json
+generation_config.json
+original
+special_tokens_map.json
+tokenizer.json
+tokenizer_config.json
 ```
 
 文件名是 Llama 3 tokenizer 必备文件，确认 snapshot_download 命中正确。

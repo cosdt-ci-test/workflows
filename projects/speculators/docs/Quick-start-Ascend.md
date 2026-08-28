@@ -212,9 +212,11 @@ python -c "
 import vllm.triton_utils
 vllm.triton_utils.HAS_TRITON = True
 import vllm_ascend.ops.triton.linearnorm.split_qkv_rmsnorm_rope
+import numba
 import torch
 print('HAS_TRITON:', vllm.triton_utils.HAS_TRITON)
 print('qkv_rmsnorm_rope op:', torch.ops.vllm.qkv_rmsnorm_rope)
+print('numba:', numba.__version__)
 "
 
 python -c "import importlib.metadata; print(f'vllm={importlib.metadata.version(\"vllm\")}')"
@@ -229,6 +231,7 @@ python -c "import importlib.metadata; print(f'triton={importlib.metadata.version
 xxx
 HAS_TRITON: True
 qkv_rmsnorm_rope op: vllm.qkv_rmsnorm_rope
+numba: xxx
 vllm=0.23.0+empty
 vllm_ascend=0.23.0
 triton_ascend=3.2.2

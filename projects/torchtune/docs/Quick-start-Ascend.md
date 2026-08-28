@@ -108,7 +108,9 @@ count: 1
 
 ```shell #test-setup
 uv pip install 'modelscope==1.37.0'
-uv pip install torchao
+# torchao>=0.18 把 NF4Tensor 挪到 torchao.prototype.dtypes，torchtune v0.6.1 的
+# `from torchao.dtypes.nf4tensor import NF4Tensor` (common_utils.py:19) 就 import 不到了。
+uv pip install 'torchao<0.18'
 ```
 
 打印安装版本：

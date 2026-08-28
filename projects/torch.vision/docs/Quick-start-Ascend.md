@@ -407,21 +407,21 @@ import torch
 from torchvision import tv_tensors
 
 img_dp = tv_tensors.Image(torch.randint(0, 256, (3, 256, 256), dtype=torch.uint8))
-print(f"isinstance Tensor: {isinstance(img_dp, torch.Tensor)}")
-print(f"cpu: dtype={img_dp.dtype} shape={tuple(img_dp.shape)} sum={int(img_dp.sum())}")
+print(f"{isinstance(img_dp, torch.Tensor) = }")
+print(f"{img_dp.dtype = }, {img_dp.shape = }, {img_dp.sum() = }")
 img_npu = img_dp.to('npu:0')   # .to 走 torch_npu 的 PrivateUse1 dispatch；TVTensor 子类化不被打断
-print(f"isinstance Tensor (npu): {isinstance(img_npu, torch.Tensor)}")
-print(f"npu: dtype={img_npu.dtype} shape={tuple(img_npu.shape)} device={img_npu.device.type} sum={int(img_npu.sum().cpu())}")
+print(f"{isinstance(img_npu, torch.Tensor) = }")
+print(f"{img_npu.dtype = }, {img_npu.shape = }, {img_npu.device.type = }, {img_npu.sum().cpu() = }")
 PY
 ```
 
 输出结果如下（CPU 段和 NPU 段都验证——TVTensor 在 NPU 上仍是 `torch.Tensor` 子类，`aten::sum` 走 `torch_npu` NPU kernel 后 `.cpu()` 把标量搬回来；`sum` 是 uint8 在 [0, 255] 范围内随机累加的结果，`xxx` 抹平）：
 
 ```shell #test-result id="v2-tvtensors" fuzzy='xxx'
-isinstance Tensor: True
-cpu: dtype=torch.uint8 shape=(3, 256, 256) sum=xxx
-isinstance Tensor (npu): True
-npu: dtype=torch.uint8 shape=(3, 256, 256) device=npu sum=xxx
+isinstance(img_dp, torch.Tensor) = True
+img_dp.dtype = torch.uint8, img_dp.shape = torch.Size([3, 256, 256]), img_dp.sum() = tensor(xxx)
+isinstance(img_npu, torch.Tensor) = True
+img_npu.dtype = torch.uint8, img_npu.shape = torch.Size([3, 256, 256]), img_npu.device.type = 'npu', img_npu.sum().cpu() = tensor(xxx)
 ```
 
 ### What do I pass as input?

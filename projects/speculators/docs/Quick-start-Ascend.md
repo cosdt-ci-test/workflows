@@ -39,9 +39,9 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | torch | 2.10.0+cpu |
 | torch_npu | 2.10.0.post4 |
 | transformers | 由 `speculators` 透传拉入（>=4.56.1,<5.15.0） |
-| vllm | 0.23.0（[官方安装路径](#安装-vllm-ascend)，pip 自动解析 deps） |
-| triton-ascend | 3.2.2（由 vllm-ascend 透传拉入，DFlash proposer JIT 编译依赖） |
-| triton | 3.5.0（由 triton-ascend 透传拉入） |
+| vllm | 0.23.0（[源码 build](#安装-vllm-ascend)：`VLLM_TARGET_DEVICE=empty` 跳过 CUDA kernel 编译，仅注册 `torch.ops.vllm` schema） |
+| triton-ascend | 3.2.2（华为 ascend 源 + `--find-links` 拿 270 MB aarch64 wheel，DFlash proposer JIT 编译依赖） |
+| triton | 3.5.0（由 triton-ascend==3.2.2 的 METADATA 钉死，源码 build 装的主线 triton 需先卸掉再重装） |
 | vllm-ascend | 0.23.0（`--extra-index-url` 拉华为 ascend 源 + `.../variant` 子路径取 NPU variant wheel，详见下方「[安装 vllm-ascend](#安装-vllm-ascend)」小节） |
 | modelscope | 1.37.0 |
 | speculators | 最新 release 的源码/二进制 |
@@ -91,26 +91,85 @@ Python 3.12.xxx
 
 #### 安装 vllm-ascend
 
+PyPI `vllm==0.23.0` 的 aarch64 wheel 是 **CUDA-only build**（`vllm/_C.abi3.so` 链接 `libcuda.so.1` / `libcudart.so.13`，`vllm/cumem_allocator.abi3.so` 是 CUDA memory allocator，`vllm_flash_attn/_vllm_fa3_C.abi3.so` 内含 `__cudaLaunchKernel`），NPU 上无法用，且其 METADATA 钉 `torch==2.11.0+cpu` 与前置的 `torch==2.10.0+cpu` 冲突。所以本节从源码 build vllm：`VLLM_TARGET_DEVICE=empty` 跳过 CUDA kernel 编译、只注册 `torch.ops.vllm` schema 占位，运行时由 vllm-ascend 通过 `vllm.platform_plugins` entry point 把 NPU fused op 注入 `torch.ops.vllm` namespace。
+
+第一步先把 torch 栈装上（CANN bare 镜像不预装）：
+
+```shell #test id="install-torch"
+# torch-npu==2.10.0.post4 只在 /variant 子路径（PEP 708 variant index），不在
+# 根 /repos/pypi 索引里；uv 默认只在第一个找到的索引上搜版本，需要
+# unsafe-best-match 让它跨索引找
+export UV_INDEX_STRATEGY=unsafe-best-match
+
+# --system：CANN bare 镜像是 system Python（不是 venv），uv 默认拒绝非 venv；
+# 后面所有 uv pip install / uninstall 也都用 --system
+uv pip install --system \
+  --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi \
+  --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi/variant \
+  --find-links https://repo.huaweicloud.com/ascend/repos/pypi/triton-ascend/ \
+  torch==2.10.0 torch-npu==2.10.0.post4 torchvision==0.25.0 torchaudio==2.10.0
+
+python -c "import torch, torch_npu; print(f'torch={torch.__version__}'); print(f'torch_npu={torch_npu.__version__}'); print('is_available:', torch.npu.is_available()); print('count:', torch.npu.device_count())"
+```
+
+输出结果如下：
+
+```shell #test-result id="install-torch"
+torch=2.10.0+cpu
+torch_npu=2.10.0.post4
+is_available: True
+count: 1
+```
+
+然后源码 build vllm + 装 vllm-ascend + triton-ascend：
+
 ```shell #test id="vllm-ascend-install"
-uv pip install vllm==0.23.0
-uv pip install \
+# 1. vllm 源码 build 依赖（cmake / ninja / pybind11 / setuptools-scm）。
+#    --system 同上一节，CANN bare 镜像是 system Python
+uv pip install --system "cmake>=3.26" pyyaml nanobind ninja setuptools-rust wheel \
+  "setuptools-scm>=8" "setuptools>=77,<81"
+
+# 2. 加载 CANN env（vllm 源码编译时链接 libascendcl / libatb 需要；
+#    torch_npu import 也依赖 libhccl.so / libascendcl.so，必须 source）
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
+
+# 3. clone vllm v0.23.0 源码到 /root/deps/vllm
+mkdir -p /root/deps
+git clone --depth 1 --branch v0.23.0 \
+  https://github.com/vllm-project/vllm.git /root/deps/vllm
+
+# 4. 源码 build：VLLM_TARGET_DEVICE=empty 跳过 CUDA kernel 编译
+#    --no-deps：vllm 0.23.0 pyproject 钉 torch==2.11.0+cpu，与前置 torch==2.10.0+cpu 冲突
+#    --no-build-isolation：复用环境已装的 torch==2.10.0+cpu，不重新拉 build-time deps
+VLLM_TARGET_DEVICE=empty uv pip install --system --no-deps --no-build-isolation \
+  -e /root/deps/vllm
+
+# 5. 卸 vllm 装的主线 triton（vllm 拉的是 CUDA 优化版，NPU 上 DFlash JIT 跑不了）。
+#    这里改用 python3 -m pip uninstall：uv 在 system Python 模式下需要 --system，
+#    且 uv 在大 wheel + 多 transitive deps 下偶尔会卡在 unpack 阶段
+python3 -m pip uninstall -y triton
+
+# 6. 装 vllm-ascend==0.23.0 NPU variant wheel（/variant 子路径拿 aarch64 NPU build）。
+#    改用 python3 -m pip：同上，uv 偶尔会卡在 unpack 阶段；pip install --no-deps
+#    配合 --extra-index-url 拉 NPU variant wheel
+python3 -m pip install --no-deps \
   --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi \
   --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi/variant \
   vllm-ascend==0.23.0
+
+# 7. 装 triton-ascend==3.2.2：DFlash proposer JIT 编译依赖
+#    它的 METADATA 钉 triton==3.5.0（同时拉回主线 triton），装上即可
+python3 -m pip install \
+  --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi \
+  --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi/variant \
+  --find-links https://repo.huaweicloud.com/ascend/repos/pypi/triton-ascend/ \
+  triton-ascend==3.2.2
 
 python -c "import importlib.metadata; print(f'vllm={importlib.metadata.version(\"vllm\")}')"
 python -c "import importlib.metadata; print(f'vllm_ascend={importlib.metadata.version(\"vllm-ascend\")}')"
 python -c "import importlib.metadata; print(f'triton_ascend={importlib.metadata.version(\"triton-ascend\")}')"
 python -c "import importlib.metadata; print(f'triton={importlib.metadata.version(\"triton\")}')"
 ```
-
-> 两个 `--extra-index-url` 必须都挂，缺一就翻车：
-> - 第一个 `.../repos/pypi`（**不带** `/variant`）：是普通 PEP 503 simple index，里面有 `triton-ascend==3.2.2` / `torch-npu==2.10.0.post4` 等 vllm-ascend 的依赖 wheel。pip 把这个 URL 当 simple index 根，直接 GET `<url>/triton-ascend/`。
-> - 第二个 `.../repos/pypi/variant`：挂的是 Huawei ascend 的 **wheelnext variant provider**，里面 `vllm-ascend-0.23.0-variants.json` 声明了 `-aarch64-910b` / `-aarch64-a3` / `-aarch64-950` / `-aarch64-310p` 几个 NPU 变体 wheel。pip 解析时调 `huawei_ascend_variant_provider` 插件，按 `platform_machine=aarch64` + `npu-smi` 检测出来的 NPU 类型挑出匹配的 wheel（例如 Atlas 900 A2 910B4 上拿到 `vllm_ascend-0.23.0-cp312-cp312-manylinux_2_34_aarch64-910b.whl`）。
->
-> 漏挂任一个的故障表现：
-> - 只挂第一个：`/repos/pypi/vllm-ascend/` 是 404（vllm-ascend 不在这个 index 里），pip 报"could not find a version that satisfies the requirement vllm-ascend==0.23.0"。即便 cluster nginx PyPI 缓存里有同名包命中绕过了这一步，也只能拿到无 variant provider 的 wheel，NPU 类型不对、kernel register 走错路径，最终 `qkv_rmsnorm_rope` / `split_qkv_rmsnorm_rope` 之类 NPU fused op `AttributeError`。
-> - 只挂第二个：`/repos/pypi/variant/triton-ascend/` 是 404（triton-ascend 不在 variant index 里），vllm-ascend 装到一半报 `No matching distribution found for triton-ascend==3.2.2 (from vllm-ascend==0.23.0)`。
 
 输出结果如下：
 

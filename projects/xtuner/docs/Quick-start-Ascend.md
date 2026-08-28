@@ -353,22 +353,31 @@ print(save_path)
 # 用 Python str.replace 而非 sed：xtuner cfg 用双引号 ("...")，sed 单引号 pattern 不会匹配；
 # 走 Python 字面量替换最稳，避免引号/escape/竖线 delimiter 误伤 cfg 里其他内容。
 python -c "
+import re
 path = '<cfg>'
 with open(path) as f:
     text = f.read()
-replacements = [
-    ('pretrained_model_name_or_path = \"internlm/internlm2-7b\"',
-     \"pretrained_model_name_or_path = './Shanghai_AI_Laboratory/internlm2-chat-7b'\"),
-    ('data_path = \"burkelibbey/colors\"',
-     \"data_path = './colors/train.jsonl'\"),
-    ('prompt_template = PROMPT_TEMPLATE.default',
-     'prompt_template = PROMPT_TEMPLATE.internlm2_chat'),
-    ('dataset=dict(type=load_dataset, path=data_path)',
-     \"dataset=dict(type=load_dataset, path='json', data_files=dict(train=data_path))\"),
-]
-for old, new in replacements:
-    assert old in text, f'patch source not found: {old!r}'
-    text = text.replace(old, new)
+# 4 处 patch：
+#   pretrained_model_name_or_path 用 regex 同时覆盖 7b/20b 两种 cfg（xtuner v0.2.0 的 colorist cfg 是
+#   llama 版，V1 之后才有 internlm2 版；不同 size 的 HF 模型名不一样，自动取 size 后缀）
+text, n = re.subn(
+    r'pretrained_model_name_or_path = \"internlm/internlm2-(\d+b)\"',
+    r\"pretrained_model_name_or_path = './Shanghai_AI_Laboratory/internlm2-chat-\1'\",
+    text,
+)
+assert n == 1, f'pretrained_model_name_or_path patch applied {n} times (expected 1)'
+old = 'data_path = \"burkelibbey/colors\"'
+new = \"data_path = './colors/train.jsonl'\"
+assert old in text, f'patch source not found: {old!r}'
+text = text.replace(old, new)
+old = 'prompt_template = PROMPT_TEMPLATE.default'
+new = 'prompt_template = PROMPT_TEMPLATE.internlm2_chat'
+assert old in text, f'patch source not found: {old!r}'
+text = text.replace(old, new)
+old = 'dataset=dict(type=load_dataset, path=data_path)'
+new = \"dataset=dict(type=load_dataset, path='json', data_files=dict(train=data_path))\"
+assert old in text, f'patch source not found: {old!r}'
+text = text.replace(old, new)
 with open(path, 'w') as f:
     f.write(text)
 print(path)
@@ -383,20 +392,27 @@ print(path)
 # `RuntimeError: operator torchvision::nms does not exist`。smoke 只验 patch + 语法足矣。
 python -c "
 import py_compile
+import re
 py_compile.compile('<cfg>', doraise=True)
 print('cfg_compiles_ok')
 with open('<cfg>') as f:
     text = f.read()
 checks = [
-    'pretrained_model_name_or_path = ' + repr('./Shanghai_AI_Laboratory/internlm2-chat-7b'),
-    'data_path = ' + repr('./colors/train.jsonl'),
-    'prompt_template = PROMPT_TEMPLATE.internlm2_chat',
-    \"dataset=dict(type=load_dataset, path='json', data_files=dict(train=data_path))\",
+    # model size 后缀随 cfg 选型而变（7b/20b），用 regex 兼容两种：
+    ('model_path', re.search(r\"pretrained_model_name_or_path = '(.+/internlm2-chat-\d+b)'\", text).group(1)),
+    ('data_path', './colors/train.jsonl'),
+    ('prompt_template', 'PROMPT_TEMPLATE.internlm2_chat'),
+    ('dataset_format', \"dataset=dict(type=load_dataset, path='json', data_files=dict(train=data_path))\"),
 ]
-for needle in checks:
-    assert needle in text, f'missing patch: {needle!r}'
+for name, expected in checks:
+    needle = (
+        f'{name} = ' + repr(expected)
+        if name != 'dataset_format'
+        else expected
+    )
+    assert needle in text, f'missing patch ({name}): {needle!r}'
 print('cfg_patch_ok')
-print('model_name= ./Shanghai_AI_Laboratory/internlm2-chat-7b')
+print(f'model_name= {checks[0][1]}')
 print('data_path= ./colors/train.jsonl')
 print('prompt_template= PROMPT_TEMPLATE.internlm2_chat')
 "

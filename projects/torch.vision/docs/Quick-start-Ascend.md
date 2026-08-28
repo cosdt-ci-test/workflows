@@ -470,7 +470,10 @@ out_target['this_is_ignored'] = ('arbitrary', {'structure': '!'})
 
 ### Transforms and Datasets intercompatibility
 
-自定义 Dataset 的 `__getitem__` 返 `tv_tensors` 后，v2 transform 直接可用——不需要任何胶水代码。下面的合成 `SyntheticDetectionDataset` 复刻 `CocoDetection` 的 `(image, target_dict)` 返回形态：
+Dataset 输出跟 transform 输入对齐有两种方式：
+
+- **内置数据集**：图像分类用 dataset 自带的 `transform=` 参数（如 `ImageNet(..., transform=transforms)`）；检测 / 分割类 v1 dataset（如 `CocoDetection`）默认不返 TVTensor，需要 `torchvision.datasets.wrap_dataset_for_transforms_v2(dataset)` 二次包一层（**本文烟雾路径无网络 / 不下 COCO val2017，所以不展开示例**）。
+- **自定义 Dataset**：在 `__getitem__` 里把对象转成对应 TVTensor 类（或 subclass），下游 v2 transform 就能直接 dispatch。下面用合成的 `SyntheticDetectionDataset` 模拟 `CocoDetection` 的 `(image, target_dict)` 返回形态：
 
 ```shell #test id="v2-dataset-interop"
 python << 'PY'
@@ -495,19 +498,24 @@ class SyntheticDetectionDataset:
 dataset = SyntheticDetectionDataset()
 transforms = v2.Compose([v2.Resize(size=(128, 128))])
 img, target = dataset[0]
+# 验 dataset 输出就是 dispatchable TVTensor（boxes 带 format / canvas_size metadata）
+print(f"{type(img).__name__ = }, {tuple(img.shape) = }")
+print(f"{type(target['boxes']).__name__ = }, {tuple(target['boxes'].shape) = }, {target['boxes'].format.name = }, {tuple(target['boxes'].canvas_size) = }")
 img_npu, target_npu = transforms(img.to('npu:0'), target)
-print(f"img: type={type(img_npu).__name__} device={img_npu.device.type} shape={tuple(img_npu.shape)}")
-print(f"boxes: type={type(target_npu['boxes']).__name__} shape={tuple(target_npu['boxes'].shape)}")
+print(f"after resize → {type(img_npu).__name__ = }, {img_npu.device.type = }, {tuple(img_npu.shape) = }")
+print(f"after resize → {type(target_npu['boxes']).__name__ = }, {tuple(target_npu['boxes'].shape) = }, {target_npu['boxes'].format.name = }, {tuple(target_npu['boxes'].canvas_size) = }")
 print(f"labels: {target_npu['labels'].tolist()}")
 print(f"len(dataset): {len(dataset)}")
 PY
 ```
 
-输出结果如下：
+输出结果如下（dataset `[0]` 直接返 TVTensor（带 `format="XYXY"` + `canvas_size=(256, 256)`），下游 v2 Compose 不用任何胶水代码就能 dispatch——`Resize` 把 `canvas_size` 重映射到 `(128, 128)`，shape 由 `(3, 256, 256)` → `(3, 128, 128)`）：
 
 ```shell #test-result id="v2-dataset-interop"
-img: type=Image device=npu shape=(3, 128, 128)
-boxes: type=BoundingBoxes shape=(2, 4)
+type(img).__name__ = 'Image', tuple(img.shape) = (3, 256, 256)
+type(target['boxes']).__name__ = 'BoundingBoxes', tuple(target['boxes'].shape) = (2, 4), target['boxes'].format.name = 'XYXY', tuple(target['boxes'].canvas_size) = (256, 256)
+after resize → type(img_npu).__name__ = 'Image', img_npu.device.type = 'npu', tuple(img_npu.shape) = (3, 128, 128)
+after resize → type(target_npu['boxes']).__name__ = 'BoundingBoxes', tuple(target_npu['boxes'].shape) = (2, 4), target_npu['boxes'].format.name = 'XYXY', tuple(target_npu['boxes'].canvas_size) = (128, 128)
 labels: [0, 0]
 len(dataset): 2
 ```

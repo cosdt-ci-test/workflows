@@ -191,12 +191,16 @@ python3 -m pip install --quiet -r /root/deps/vllm/requirements/common.txt
 #    修法：写一个 sitecustomize.py 到 site-packages，让 Python 启动时（spawn 子
 #    进程也会触发）强制把 HAS_TRITON 设回 True，import 链继续往下走、qkv_rmsnorm_rope
 #    op 正常注册。CI container 是 throw-away 的，这个 patch 文件只在 container 内
-#    有效，不会污染镜像。
-mkdir -p /usr/local/python3.12.13/lib/python3.12/site-packages/_force_triton_ascend
-touch /usr/local/python3.12.13/lib/python3.12/site-packages/_force_triton_ascend/__init__.py
+#    有效，不会污染镜像。try/except 包一层是因为 sitecustomize.py 在每个 Python 启
+#    动时都跑（包括 test runner 自身在 vllm 安装前），不能让它抛 ImportError 把整
+#    个 Python 启动干崩 —— 此时 vllm 还没装，import 自然失败，except 把异常吞掉，
+#    等 vllm 装好后下一次 sitecustomize.py 加载就生效。
 cat > /usr/local/python3.12.13/lib/python3.12/site-packages/sitecustomize.py << 'PY'
-import vllm.triton_utils
-vllm.triton_utils.HAS_TRITON = True
+try:
+    import vllm.triton_utils
+    vllm.triton_utils.HAS_TRITON = True
+except Exception:
+    pass
 PY
 
 # 验证 qkv_rmsnorm_rope op 注册成功

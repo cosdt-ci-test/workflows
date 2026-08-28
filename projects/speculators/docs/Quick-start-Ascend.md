@@ -419,38 +419,37 @@ mkdir -p "$CHECKPOINT_DIR"
 # 复用 source install 那步 clone 的 speculators 仓库（cwd 不跨 #test 块，需重新 cd）
 cd /root/speculators
 
-# 在线模式：先起 vllm server（spec=extract_hidden_states），train.py 通过
-# --vllm-endpoint 按需拉 hidden states。FileBackend 把 generate 出来的临时文件落
-# $HS_DIR，--on-generate delete 让 dataloader 用完即删避免撑爆
+# 离线模式（时间分片替代物理拆 GPU）：先起 vllm 一次性 generate 10 条 hidden_states
+# 落 $HS_DIR/hs_<idx>.safetensors，杀 vllm 释放 64 GB NPU，再 train.py 离线读 cache。
+# 上游 canonical `examples/train/dflash_qwen3_8b_sharegpt_online_5k.sh` 是 4x H100
+# 用 CUDA_VISIBLE_DEVICES 把 vllm 2 GPU + train 2 GPU 物理拆开；我们单 NPU 64 GB
+# 装不下 vllm 16 GB 权重 + KV + train draft 模型 + optimizer 32x padding 激活并发跑
+# （CI 33177074202 → 33193836422 三轮调参 0.9/0.3/0.5 都翻车：OOM / KV cache 不够 /
+# 同样 KV cache 不够）。杀 vllm 后 train 拿满 64 GB 完全够。
 HS_DIR=/tmp/hs-train
 rm -rf "$HS_DIR"
 mkdir -p "$HS_DIR"
 
-# setsid 把 vllm server 丢到独立 session + process group，后面 kill -- -$PGID
-# 才能连带杀掉 vllm fork 出的 worker 子进程，避免 torchrun 跑完 wait 还卡住、
-# trap 退到 stop-container 步骤把 job timeout 顶到 15min+（CI 33174490852 的
-# Stop containers hang 现象；普通 kill $VLLM_TRAIN_PID 只杀 launcher，worker 残留）
+# setsid 让 vllm 跑在独立 session + process group，cleanup 用 kill -- -$PGID 整组杀
 setsid nohup python scripts/launch_vllm.py "<verifier_path>" \
   --target-layer-ids 2 18 34 \
   --hidden-states-path "$HS_DIR" \
   -- \
-  --gpu-memory-utilization 0.5 \
-  --max-model-len 2048 \
-  > /tmp/vllm-train.log 2>&1 < /dev/null &
-VLLM_TRAIN_PID=$!
-VLLM_PGID=$(ps -o pgid= -p "$VLLM_TRAIN_PID" | tr -d ' ')
-# 兜底 cleanup：trap + 主动 kill，都用 SIGKILL 整组；pkill -f 兜住 worker 名变了的情况
-cleanup_vllm() {
-  kill -- -"$VLLM_PGID" 2>/dev/null || true
+  --gpu-memory-utilization 0.9 \
+  --max-model-len 4096 \
+  > /tmp/vllm-gen.log 2>&1 < /dev/null &
+VLLM_GEN_PID=$!
+VLLM_GEN_PGID=$(ps -o pgid= -p "$VLLM_GEN_PID" | tr -d ' ')
+cleanup_vllm_gen() {
+  kill -- -"$VLLM_GEN_PGID" 2>/dev/null || true
   sleep 2
-  kill -9 -- -"$VLLM_PGID" 2>/dev/null || true
+  kill -9 -- -"$VLLM_GEN_PGID" 2>/dev/null || true
   pkill -9 -f "scripts/launch_vllm.py" 2>/dev/null || true
   pkill -9 -f "vllm.entrypoints.cli" 2>/dev/null || true
 }
-trap cleanup_vllm EXIT
+trap cleanup_vllm_gen EXIT
 
-# 等 /health 200（最长 6 min，与 Step 4 同上限；裸 vllm-ascend load Qwen3-8B
-# 实测 3-4 min）；set -e 模式下循环体用 if 而不是 &&，避免 curl 失败时静默 360s
+# 等 /health 200（最长 6 min，裸 vllm-ascend load Qwen3-8B 实测 3-4 min）
 VLLM_READY=0
 for i in {1..180}; do
   if curl -sf http://127.0.0.1:8000/health > /dev/null; then
@@ -460,23 +459,44 @@ for i in {1..180}; do
   sleep 2
 done
 if [ "$VLLM_READY" != "1" ]; then
-  echo "vllm server failed to come up within 6 min; tail of vllm-train.log:"
-  tail -80 /tmp/vllm-train.log
-  cleanup_vllm
+  echo "vllm server failed to come up within 6 min; tail of vllm-gen.log:"
+  tail -80 /tmp/vllm-gen.log
+  cleanup_vllm_gen
   exit 1
 fi
 
-# --speculator-type=dflash 由 train.py 从 SpeculatorModel.registry 动态解析；
-# --target-layer-ids 2 18 34 与 launch_vllm.py 一致（两边都内部 append 最后一层 36）；
-# --on-missing generate 让 dataloader 找 vllm 拉 hidden_states（cache 没文件就 fallback 到 endpoint）
-# stderr 重定向到 /tmp/train.log，否则 ERROR_MARKERS 抓不到训练错误（CI 33166102161 silent fail 教训）
-# 用 `|| true` 屏蔽 set -e：失败时下文统一 cat /tmp/train.log + 抛 exit 1，避免 CI 33177074202
-# 那种 torchrun 静默崩 → set -e 中断 → bash 整个 stderr 为空 → framework 只看到 rc=1 + 0B
-# stderr 的情况（之前 280s 跑完才发现 vllm fork 的 train worker 提前 crash，0 字节诊断）
+# 用上游 data_generation_offline.py 把 10 条 hidden_states 写 $HS_DIR（hs_<idx>.safetensors
+# 命名正好对 FileBackend cache 契约），vllm 释放全部 NPU 后给 train 留出 64 GB 完整空间
+python scripts/data_generation_offline.py \
+  --model "<verifier_path>" \
+  --preprocessed-data "<data_path>" \
+  --output "$HS_DIR" \
+  --max-samples 10 \
+  --concurrency 4 \
+  --validate-outputs >/tmp/hs-gen.log 2>&1 || HS_RC=$?
+HS_RC=${HS_RC:-0}
+tail -30 /tmp/hs-gen.log
+
+HS_COUNT=$(ls -1 "$HS_DIR"/hs_*.safetensors 2>/dev/null | wc -l)
+if [ "$HS_RC" -ne 0 ] || [ "$HS_COUNT" -ne 10 ]; then
+  echo "=== data_generation_offline.py failed (rc=$HS_RC, hs_count=$HS_COUNT/10); full log ==="
+  cat /tmp/hs-gen.log
+  cleanup_vllm_gen
+  exit 1
+fi
+
+# 杀 vllm 释放 NPU 内存给 train.py
+cleanup_vllm_gen
+sleep 5  # 给 vllm worker 完全退出 + NPU 释放
+
+# 离线训练：--on-missing error 强制走 FileBackend 读 $HS_DIR 缓存，不再起 vllm endpoint；
+# 显式不带 --vllm-endpoint，避免 dataloader 误以为有 server 可问。stderr 重定向到 /tmp/train.log
+# 必 echo 末尾诊断（哪怕 0 错误也给 framework 看到 train.log 末尾）；用 || true 屏蔽 set -e，
+# 失败时下文统一 cat /tmp/train.log + 抛 exit 1，避免 CI 33177074202 那种 torchrun 静默崩 →
+# set -e 中断 → bash stderr=0B → framework 只看到 rc=1 + 0B stderr
 torchrun --standalone --nproc_per_node=1 scripts/train.py \
   --verifier-name-or-path "<verifier_path>" \
   --data-path "<data_path>" \
-  --vllm-endpoint "http://127.0.0.1:8000/v1" \
   --hidden-states-path "$HS_DIR" \
   --save-path "$CHECKPOINT_DIR" \
   --draft-vocab-size 32000 \
@@ -487,28 +507,22 @@ torchrun --standalone --nproc_per_node=1 scripts/train.py \
   --max-anchors 3072 \
   --num-layers 5 \
   --target-layer-ids 2 18 34 \
-  --on-missing generate --on-generate delete >/tmp/train.log 2>&1 || TRAIN_RC=$?
+  --on-missing error >/tmp/train.log 2>&1 || TRAIN_RC=$?
 TRAIN_RC=${TRAIN_RC:-0}
 
-# 必 echo 末尾诊断（哪怕 0 错误也给 framework 看到 train.log 末尾）
 echo "=== train.log tail (last 80 lines) ==="
 tail -80 /tmp/train.log
 
 if [ "$TRAIN_RC" -ne 0 ]; then
   echo "=== train.py failed (rc=$TRAIN_RC); full train.log ==="
   cat /tmp/train.log
-  cleanup_vllm
   exit 1
 fi
 if ! test -f "$CHECKPOINT_DIR/config.json" || ! test -f "$CHECKPOINT_DIR/model.safetensors"; then
   echo "=== train.py rc=0 但 checkpoint 缺失（config.json / model.safetensors）; full train.log ==="
   cat /tmp/train.log
-  cleanup_vllm
   exit 1
 fi
-
-# 主动停 vllm（不依赖 trap，因为 trap 是兜底）
-cleanup_vllm
 
 echo "$CHECKPOINT_DIR"
 ```

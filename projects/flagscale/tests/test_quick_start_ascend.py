@@ -5,17 +5,12 @@ Document under test: ``projects/flagscale/docs/Quick-start-Ascend.md``.
 
 from __future__ import annotations
 
-import importlib.util
 import os
 import subprocess
 import unittest
+from pathlib import Path
 
 from workflows.markdown_doc_test_base import MarkdownDocTestBase
-from workflows.modelscope_cache import (
-    ensure_safetensors,
-    purge_corrupt_models,
-    resolve_modelscope_cache,
-)
 
 
 def _is_truthy(value: str | None) -> bool:
@@ -39,14 +34,10 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     )
     _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
     _ATB_SET_ENV = '/usr/local/Ascend/nnal/atb/set_env.sh'
+    _SRC = Path(__file__).resolve().parents[3] / 'src'
 
     @classmethod
     def prepare_environment(cls) -> None:
-        path_dirs = '/usr/local/sbin:/usr/local/bin'
-        current_path = os.environ.get('PATH', '')
-        if path_dirs not in current_path:
-            os.environ['PATH'] = f'{path_dirs}:{current_path}'
-
         source_cmd = f'source {cls._CANN_SET_ENV} >/dev/null 2>&1'
         if os.path.isfile(cls._ATB_SET_ENV):
             # ATB set_env.sh reads unbound ZSH_VERSION; nounset would abort.
@@ -60,20 +51,25 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 if '=' not in line:
                     continue
                 key, _, value = line.partition('=')
-                os.environ.setdefault(key, value)
+                os.environ[key] = value
             print('setup: sourced CANN toolkit and ATB env')
         else:
             print(
                 f'setup: skipping CANN env source ({cls._CANN_SET_ENV} not present)'
             )
 
-        ensure_safetensors()
-        # safetensors framework='pt' imports torch. The image has none
-        # until the user-visible install-torch fence.
-        if importlib.util.find_spec('torch') is None:
-            print('setup: skip cache purge (torch not installed yet)')
-        else:
-            purge_corrupt_models(resolve_modelscope_cache())
+        path_dirs = '/usr/local/sbin:/usr/local/bin'
+        current_path = os.environ.get('PATH', '')
+        if path_dirs not in current_path:
+            os.environ['PATH'] = f'{path_dirs}:{current_path}'
+
+        os.environ['PYTHONNOUSERSITE'] = '1'
+        src = str(cls._SRC)
+        pythonpath = os.environ.get('PYTHONPATH', '')
+        if src not in pythonpath.split(':'):
+            os.environ['PYTHONPATH'] = (
+                src if not pythonpath else f'{src}:{pythonpath}'
+            )
 
     @classmethod
     def setUpClass(cls) -> None:

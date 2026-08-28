@@ -20,9 +20,10 @@
 - 生成 CUDA 屏蔽约束并安装 `torch==2.10.0` / `torch-npu==2.10.0.post4` / `triton-ascend==3.2.2`，断言 `npu_available True`
 - 源码安装 vLLM 0.20.2（克隆到 `vllm-src`）以及 `import vllm.LLM` 需要的 Python 依赖，断言 `vllm 0.20.2`
 - 源码安装 `vllm-ascend` `v0.20.2rc1`（克隆到 `vllm-ascend-src`，`SOC_VERSION=Ascend910B4`），断言版本
-- 安装 FlagGems `v5.3.0`（`--no-deps --no-build-isolation`）与 `vllm-plugin-FL` commit `53adefb26`
+- 安装 FlagGems `v5.3.0`（`--no-deps --no-build-isolation`）与 `vllm-plugin-FL` `v0.2.1`
 - 按 `$UPSTREAM_REF` 克隆 FlagScale 并 `pip install --no-build-isolation --no-deps -e ./FlagScale`，再装 Hydra / typer
 - 平台探测：`VLLM_PLUGINS=fl` 时 `device_type npu`、`dist_backend hccl`、`PlatformFL`
+- 从 ModelScope 下载 Qwen2.5-0.5B（可见 `#test-setup store="model_path"`）。推理前有隐藏 `#test-setup` 清理持久卷上截断的 safetensors
 - 离线 `flagscale inference` 对 Qwen2.5-0.5B 做 TP=2 短生成。工作负载块的预期输出含 `Platform plugin fl is activated`、`NPU compatibility enabled`、`backend=hccl` 与 `output.outputs[0].text=`
 
 无标签、**不看护**的步骤：

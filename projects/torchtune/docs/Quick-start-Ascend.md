@@ -108,9 +108,12 @@ count: 1
 
 ```shell #test-setup
 uv pip install 'modelscope==1.37.0'
-# torchao>=0.18 把 NF4Tensor 挪到 torchao.prototype.dtypes，torchtune v0.6.1 的
-# `from torchao.dtypes.nf4tensor import NF4Tensor` (common_utils.py:19) 就 import 不到了。
-uv pip install 'torchao<0.18'
+# torchao 两个 API 在新版都改了位置/签名，torchtune v0.6.1 都没跟上：
+#   * 0.18 起 NF4Tensor 挪到 torchao.prototype.dtypes，
+#     `torchtune.modules.common_utils:19` 的 `from torchao.dtypes.nf4tensor import NF4Tensor` 炸；
+#   * 0.16 起 `int4_weight_only()` 函数被 class-based 的 `Int4WeightOnlyConfig` 取代，
+#     `torchtune` 内部还在用老 API。所以 pin 在最后一个两个 import 都 OK 的 0.15 系列。
+uv pip install 'torchao<0.16'
 ```
 
 打印安装版本：

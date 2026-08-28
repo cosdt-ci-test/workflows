@@ -321,6 +321,7 @@ test -n "$config_name" || { echo "no matching config ((internlm2|llama).*qlora.*
 # 直接调 main() 然后 echo save_dir 路径会被 Step 18 当文件读，触发 IsADirectoryError。
 # 改用 Python 自己算 actual file path 并只 print 这一行（setup 抓 stdout 当 store）：
 python -c "
+import os
 import os.path as osp
 import shutil
 from xtuner.configs import cfgs_name_path
@@ -328,7 +329,7 @@ from xtuner.tools.copy_cfg import add_copy_suffix
 config_path = cfgs_name_path['$config_name']
 save_dir = '/tmp/xtuner_npu_llm_cfg.py'
 save_path = osp.join(save_dir, add_copy_suffix(osp.basename(config_path)))
-osp.makedirs(save_dir, exist_ok=True)
+os.makedirs(save_dir, exist_ok=True)
 shutil.copyfile(config_path, save_path)
 print(save_path)
 "

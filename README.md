@@ -2,7 +2,7 @@
 
 workflows的开发、测试仓。被看护的项目各自有一条 example 流水线和 一条 quick-start 流水线；项目专属的清单、fixture 放在 `projects/<项目名>/`。
 
-已接入 [ms-swift](projects/ms-swift/)（样板）、[llama.cpp](projects/llama.cpp/)（example 看护跑 `examples/simple`，Quick Start 看护跑本仓文档。两条流水线的轮询都还未开）和 [whisper.cpp](projects/whisper.cpp/)（example 看护跑 cli / bench / quantize / parakeet-quantize / parakeet-cli / test-cmake / vad-speech-segments / addon.node / server，Quick Start 看护跑本仓文档；两条流水线的轮询都还未开）。设计说明见 [docs/guarding-examples.md](docs/guarding-examples.md)。
+已接入 [ms-swift](projects/ms-swift/)（样板）、[llama.cpp](projects/llama.cpp/)、[whisper.cpp](projects/whisper.cpp/) 和 [mooncake](projects/mooncake/)（example 看护跑 Ascend Direct 双卡传输例程，Quick Start 看护跑本仓文档；两条流水线的轮询都还未开）。设计说明见 [docs/guarding-examples.md](docs/guarding-examples.md)。
 
 ## 目录
 

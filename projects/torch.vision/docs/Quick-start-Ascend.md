@@ -250,6 +250,52 @@ out: type=Image device=npu shape=(3, 224, 224)
 npu vs cpu sum match: True
 ```
 
+### Image classification pipeline
+
+官方教程的 ImageNet 经典 pipeline：`Compose` 把 `RandomResizedCrop` + `RandomHorizontalFlip` + `ToDtype(float32, scale=True)` + `Normalize` 串起来——这跟 `v2-basics` / `v2-randomcrop` 单算子不同，**整条 pipeline 都要在 NPU 上跑通**才能算 smoke。`torch.manual_seed` 锁定 crop / flip 随机性（这俩都是 `torch.*_uniform_` / `torch.rand` RNG，跟 PIL `random` 模块无关，因为这里是 tensor 输入路径）；float 值用 `fuzzy='xxx'` 抹平（NPU `interpolate` / `aten::div` 跟 CPU 可能有 ULP 级精度差）：
+
+```shell #test id="v2-classification"
+python << 'PY'
+import numpy as np
+import torch
+from torchvision import tv_tensors
+from torchvision.transforms import v2
+
+# 复用 v2-setup 的 fixture（独立子进程，img 不能跨块带过来）
+np.random.seed(1)
+arr = (np.random.rand(256, 256, 3) * 255).astype('uint8')
+img = tv_tensors.Image(torch.from_numpy(arr).permute(2, 0, 1))
+
+# 锁定 crop / flip RNG——RandomResizedCrop 的 area / aspect_ratio / (i, j)
+# 跟 RandomHorizontalFlip 的 p<0.5 都走 torch RNG
+torch.manual_seed(1)
+
+img_npu = img.to('npu:0')
+transforms = v2.Compose([
+    v2.RandomResizedCrop(size=(224, 224), antialias=True),
+    v2.RandomHorizontalFlip(p=0.5),
+    v2.ToDtype(torch.float32, scale=True),
+    v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+])
+out = transforms(img_npu)
+print(f"in:  type={type(img_npu).__name__} device={img_npu.device.type} dtype={img_npu.dtype} shape={tuple(img_npu.shape)}")
+print(f"out: type={type(out).__name__} device={out.device.type} dtype={out.dtype} shape={tuple(out.shape)}")
+# 归一化后值大致落在 [-2.12, 2.64]（mean=0.485/std=0.229 时 1/255≈0.004 → (1-0.485)/0.229≈2.25，
+# (0-0.485)/0.229≈-2.12）。打印 min/mean/max/sum 验 pipeline 完整性；用 abs(x)<100 兜底检查浮点未爆
+print(f"out stats: min={float(out.min().cpu()):.4f} mean={float(out.mean().cpu()):.4f} max={float(out.max().cpu()):.4f}")
+print(f"out finite: {torch.isfinite(out).all().item()}")
+PY
+```
+
+输出结果如下（`fuzzy='xxx'` 抹平 NPU/CPU interpolate / div 浮点精度差——shape / dtype / finite 这三个离散属性必须在 NPU 上跟 CPU 路径完全一致）：
+
+```shell #test-result id="v2-classification" fuzzy='xxx'
+in:  type=Image device=npu dtype=torch.uint8 shape=(3, 256, 256)
+out: type=Image device=npu dtype=torch.float32 shape=(3, 224, 224)
+out stats: min=xxx mean=xxx max=xxx
+out finite: True
+```
+
 ### Videos, boxes, masks, keypoints
 
 v2 transform 不只处理 image——也支持 BoundingBoxes / Mask / Video / KeyPoints。一次性把 4 种 TVTensor 塞进 `Compose`，验证 dispatch 链能正确识别每种类型（用 `p=0` 的 `RandomHorizontalFlip` 保证确定性）：

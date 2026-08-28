@@ -82,14 +82,14 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     is bootstrapped before the framework starts executing doc commands
     (the doc body itself installs ``torch`` / ``torch_npu`` from Aliyun
     pytorch-wheels + Huawei Cloud ascend pypi, then stock torchvision
-    cpu wheel from Aliyun PyPI mirror, then 7 v2 transforms smoke tests
+    cpu wheel from Aliyun PyPI mirror, then 8 v2 transforms smoke tests
     that exercise ``torch_npu`` PrivateUse1 dispatch — no Ascend/vision
     fork source build, see module docstring).
     """
 
     # 60 min per command: the doc installs torch / torch_npu from the
     # Aliyun pytorch-wheels + Huawei Cloud ascend dual-source, then the
-    # stock torchvision cpu wheel from Aliyun PyPI mirror, then 7 v2
+    # stock torchvision cpu wheel from Aliyun PyPI mirror, then 8 v2
     # transforms smoke tests on NPU. The torch_npu wheel is the slowest
     # piece (~30 min cold cache on a busy runner); 60 min leaves room
     # for the installs + transforms / NPU-dispatch tests.

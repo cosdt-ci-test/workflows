@@ -90,7 +90,7 @@ jobs:
       # Doc body does: uv pip install torch / torch_npu from Aliyun
       # pytorch-wheels + Huawei Cloud ascend dual-source (torch_npu is
       # the slowest piece, ~30 min on cold cache), then stock torchvision
-      # cpu wheel from Aliyun PyPI mirror, then 7 transforms.v2 smoke
+      # cpu wheel from Aliyun PyPI mirror, then 8 transforms.v2 smoke
       # tests that exercise torch_npu PrivateUse1 dispatch. No source
       # build — stock cpu wheel + torch_npu PrivateUse1 covers the full
       # smoke surface (the Ascend/vision fork is a torchvision_npu patch

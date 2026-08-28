@@ -33,9 +33,9 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | CANN | 9.1.0 |
 | torch | 2.10.0 |
 | torch_npu | 2.10.0.post4 |
-| triton | 最新（`uv pip install triton`，满足 torchtitan `moe/kernels.py` 的 `import triton`，Llama 3 训练不走 triton kernel） |
-| modelscope | 最新（`uv pip install modelscope`，不锁版本） |
-| torchtitan | 最新 release（v0.2.x 风格 tyro CLI + toml 配置；最新 tag 由 workflow 注入，见下方 `UPSTREAM_REF`） |
+| triton | 最新release |
+| modelscope | 最新release |
+| torchtitan | 最新 release |
 | 训练配置 | `torchtitan/models/llama3/train_configs/debug_model.toml`（dim=256 / 6 层 / 16 head Llama 3 缩水版） |
 
 

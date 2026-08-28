@@ -188,29 +188,30 @@ python -c "from modelscope import snapshot_download; print(snapshot_download('LL
 验证 tokenizer 关键文件都落盘：
 
 ```shell #test id="modelscope-verify-tokenizer" load="ms_tokenizer_path>>ms_tokenizer_path"
-ls -la <ms_tokenizer_path> | head -10
+ls <ms_tokenizer_path>
 ```
 
-```shell #test-result id="modelscope-verify-tokenizer" fuzzy='xxx' fuzzy='...'
-xxx xxx xxx xxx xxx config.json
+```shell #test-result id="modelscope-verify-tokenizer" fuzzy='...' 
+config.json
 ...
-xxx xxx xxx xxx xxx generation_config.json
+configuration.json
 ...
-xxx xxx xxx xxx xxx special_tokens_map.json
+generation_config.json
 ...
-xxx xxx xxx xxx xxx tokenizer.json
+original
 ...
-xxx xxx xxx xxx xxx tokenizer_config.json
+special_tokens_map.json
 ...
-xxx xxx xxx xxx xxx tokenizer.model
+tokenizer.json
 ...
+tokenizer_config.json
 ```
 
-`xxx` 匹配 `ls -la` 的元信息列，文件名是 Llama 3 tokenizer 必备文件，确认 snapshot_download 命中正确。
+文件名是 Llama 3 tokenizer 必备文件，确认 snapshot_download 命中正确。
 
 ### 单卡训练
 
-用 fake process group 在 1 张 NPU 上跑 debugmodel，验证配置解析、初始化、加载 tokenizer、build dataloader、`trainer.train()` 整条链路能跑通。`--training.steps 0` 让训练循环直接退出，跳过实际 forward / backward：
+用 fake process group 在 1 张 NPU 上跑 debugmodel 真跑 2 步，验证配置解析、初始化、加载 tokenizer、build dataloader、forward + backward 整条链路能跑通：
 
 ```shell #test id="torchtitan-train-debug" load="upstream_ref>>ref" load="ms_tokenizer_path>>ms_tokenizer_path"
 cd torchtitan && git checkout <ref>
@@ -219,7 +220,7 @@ python -m torchtitan.train \
     --job.config-file ./torchtitan/models/llama3/train_configs/debug_model.toml \
     --model.hf-assets-path <ms_tokenizer_path> \
     --comm.mode fake_backend \
-    --training.steps 0 \
+    --training.steps 2 \
     --training.local-batch-size 1 \
     --training.seq-len 256 \
     --metrics.log-freq 1 \
@@ -233,6 +234,11 @@ python -m torchtitan.train \
 [titan] xxx - root - INFO - Starting job: Llama 3 debug training
 ...
 [titan] xxx - root - INFO - Training starts at step xxx
+...
+[titan] xxx - root - INFO - step: xxx
+...
+[titan] xxx - root - INFO - step: xxx
+...
 [titan] xxx - root - INFO - Sleeping 2 seconds for other ranks to complete
 [titan] xxx - root - INFO - Training completed
 [titan] xxx - root - INFO - Process group destroyed
@@ -240,7 +246,7 @@ python -m torchtitan.train \
 
 ### 多卡训练
 
-用 torchrun 起 2 个 rank 跑 debugmodel 真分布式训练，`--training.steps 0` 跳过实际训练：
+用 torchrun 起 2 个 rank 跑 debugmodel 真分布式训练，`--training.steps 2` 真跑 2 步：
 
 ```shell #test id="torchtitan-train-2card" load="upstream_ref>>ref" load="ms_tokenizer_path>>ms_tokenizer_path"
 cd torchtitan && git checkout <ref>
@@ -255,7 +261,7 @@ torchrun --nproc_per_node=2 \
     --job.config-file ./torchtitan/models/llama3/train_configs/debug_model.toml \
     --model.hf-assets-path <ms_tokenizer_path> \
     --comm.mode default \
-    --training.steps 0 \
+    --training.steps 2 \
     --training.local-batch-size 1 \
     --training.seq-len 256 \
     --metrics.log-freq 1 \
@@ -269,6 +275,12 @@ torchrun --nproc_per_node=2 \
 [default0]:[titan] xxx - root - INFO - Starting job: Llama 3 debug training
 ...
 [default0]:[titan] xxx - root - INFO - Training starts at step xxx
+...
+[default0]:[titan] xxx - root - INFO - step: xxx
+...
+[default0]:[titan] xxx - root - INFO - step: xxx
+...
+[default0]:[titan] xxx - root - INFO - Sleeping 2 seconds for other ranks to complete
 [default0]:[titan] xxx - root - INFO - Training completed
 [default0]:[titan] xxx - root - INFO - Process group destroyed
 ```

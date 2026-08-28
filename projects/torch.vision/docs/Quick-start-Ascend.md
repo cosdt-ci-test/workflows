@@ -296,6 +296,55 @@ out stats: min=xxx mean=xxx max=xxx
 out finite: True
 ```
 
+### Object detection with bounding boxes
+
+官方教程 detection 段：训练阶段把 `BoundingBoxes` 跟 `Image` 一起塞进 Compose。Compose 内 3 个算子：`RandomResizedCrop`（NPU 端 resize + crop + 重映射 box 坐标）+ `RandomPhotometricDistort(p=1)`（NPU 端颜色 jitter 链：brightness / contrast / saturation / hue / channel permute）+ `RandomHorizontalFlip(p=1)`（永远翻，box 同步翻）。boxes 留在 CPU（坐标运算不需要 NPU kernel；这是 v2 的标准用法，跟 `v2-vbmk` 一致）。`torch.manual_seed` 锁定 crop / photometric / flip 的 RNG（都是 `torch.rand` / `torch.randperm` / `torch.empty.uniform_`）：
+
+```shell #test id="v2-detection"
+python << 'PY'
+import numpy as np
+import torch
+from torchvision import tv_tensors
+from torchvision.transforms import v2
+
+# 复用 v2-setup 的 fixture（独立子进程，img 不能跨块带过来）
+np.random.seed(1)
+arr = (np.random.rand(256, 256, 3) * 255).astype('uint8')
+img = tv_tensors.Image(torch.from_numpy(arr).permute(2, 0, 1))
+H, W = img.shape[-2:]
+boxes = tv_tensors.BoundingBoxes(
+    [[15, 10, 370, 510], [275, 340, 510, 510], [130, 345, 210, 425]],
+    format="XYXY", canvas_size=(H, W))
+
+torch.manual_seed(1)
+
+img_npu = img.to('npu:0')
+transforms = v2.Compose([
+    v2.RandomResizedCrop(size=(224, 224), antialias=True),
+    v2.RandomPhotometricDistort(p=1),
+    v2.RandomHorizontalFlip(p=1),
+])
+out_img, out_boxes = transforms(img_npu, boxes)
+print(f"in_img: type={type(img_npu).__name__} device={img_npu.device.type} dtype={img_npu.dtype} shape={tuple(img_npu.shape)}")
+print(f"in_boxes: type={type(boxes).__name__} format={boxes.format.name if hasattr(boxes.format, 'name') else boxes.format} canvas_size={tuple(boxes.canvas_size)} shape={tuple(boxes.shape)}")
+print(f"out_img: type={type(out_img).__name__} device={out_img.device.type} dtype={out_img.dtype} shape={tuple(out_img.shape)}")
+print(f"out_boxes: type={type(out_boxes).__name__} format={out_boxes.format.name if hasattr(out_boxes.format, 'name') else out_boxes.format} canvas_size={tuple(out_boxes.canvas_size)} shape={tuple(out_boxes.shape)}")
+print(f"out_img finite: {torch.isfinite(out_img.float()).all().item()}")  # uint8 finite 永远 True；用 .float() cast 是为防 photometric jitter 链路里某一步意外产 NaN/Inf
+print(f"out_boxes min/max: {int(out_boxes.min())}/{int(out_boxes.max())}")  # box 坐标被 RandomResizedCrop 重映射 + flip 翻过来，应仍在 [0, 224] 范围内（clip 由 v2 自动做）
+PY
+```
+
+输出结果如下（crop / photometric / flip 三个 RNG 都用 `torch.manual_seed(1)` 锁定，所以离散属性（device / dtype / format / canvas_size）必须严格一致；浮点型走 `fuzzy='xxx'`）：
+
+```shell #test-result id="v2-detection" fuzzy='xxx'
+in_img: type=Image device=npu dtype=torch.uint8 shape=(3, 256, 256)
+in_boxes: type=BoundingBoxes format=XYXY canvas_size=(256, 256) shape=(3, 4)
+out_img: type=Image device=npu dtype=torch.uint8 shape=(3, 224, 224)
+out_boxes: type=BoundingBoxes format=XYXY canvas_size=(224, 224) shape=(3, 4)
+out_img finite: True
+out_boxes min/max: xxx
+```
+
 ### Videos, boxes, masks, keypoints
 
 v2 transform 不只处理 image——也支持 BoundingBoxes / Mask / Video / KeyPoints。一次性把 4 种 TVTensor 塞进 `Compose`，验证 dispatch 链能正确识别每种类型（用 `p=0` 的 `RandomHorizontalFlip` 保证确定性）：

@@ -34,8 +34,8 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | --- | --- |
 | Python | 3.12 |
 | CANN | 9.1.0 |
-| torch | 2.9.0+cpu |
-| torch_npu | 2.9.0.post2 |
+| torch | 2.11.0+cpu |
+| torch_npu | 2.11.0 |
 | torchtune | 最新 release 的源码/二进制 |
 | modelscope | 1.37.0 |
 | 模型 | [Qwen/Qwen2.5-0.5B-Instruct](https://www.modelscope.cn/models/Qwen/Qwen2.5-0.5B-Instruct) |
@@ -80,6 +80,13 @@ python --version
 Python 3.12.xxx
 ```
 
+对齐上游 pin 装 `torch` / `torch_npu`：
+
+```shell #test-setup
+uv pip install -f https://mirrors.aliyun.com/pytorch-wheels/cpu torch==2.11.0
+uv pip install --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi torch_npu==2.11.0
+```
+
 检查 torch / torch_npu 是否装好且 NPU 设备可用：
 
 ```shell #test id="check-torch"
@@ -89,8 +96,8 @@ python -c "import torch, torch_npu; print('torch=', torch.__version__); print('t
 输出结果如下：
 
 ```shell #test-result id="check-torch" fuzzy='xxx'
-torch= 2.9.0+cpu
-torch_npu= 2.9.0.post2
+torch= 2.11.0+cpu
+torch_npu= 2.11.0
 is_available: True
 count: 1
 ```
@@ -101,18 +108,20 @@ count: 1
 
 ```shell #test-setup
 uv pip install 'modelscope==1.37.0'
+uv pip install torchao
 ```
 
 打印安装版本：
 
 ```shell #test id="install-deps"
-python -c "import modelscope; print('modelscope', modelscope.__version__)"
+python -c "import modelscope, torchao; print('modelscope', modelscope.__version__); print('torchao', torchao.__version__)"
 ```
 
 输出结果如下：
 
 ```shell #test-result id="install-deps" fuzzy='xxx'
 modelscope xxx
+torchao xxx
 ```
 
 ## 安装 torchtune

@@ -34,8 +34,8 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | --- | --- |
 | Python | 3.12 |
 | CANN | 9.1.0 |
-| torch | 2.9.0+cpu |
-| torch_npu | 2.9.0.post2 |
+| torch | 2.11.0+cpu |
+| torch_npu | 2.11.0 |
 | xtuner | GitHub 最新 release tag（运行时由引擎解析，doc 不写死具体值） |
 
 ### 前置安装
@@ -77,6 +77,13 @@ python --version
 Python 3.12.xxx
 ```
 
+对齐上游 pin 装 `torch` / `torch_npu`：
+
+```shell #test-setup
+uv pip install -f https://mirrors.aliyun.com/pytorch-wheels/cpu torch==2.11.0
+uv pip install --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi torch_npu==2.11.0
+```
+
 检查 torch / torch_npu 是否装好且 NPU 设备可用：
 
 ```shell #test id="check-torch"
@@ -86,8 +93,8 @@ python -c "import torch, torch_npu; print('torch=', torch.__version__); print('t
 输出结果如下：
 
 ```shell #test-result id="check-torch" fuzzy='xxx'
-torch= 2.9.0+cpu
-torch_npu= 2.9.0.post2
+torch= 2.11.0+cpu
+torch_npu= 2.11.0
 is_available: True
 count: xxx
 ```
@@ -279,10 +286,6 @@ colors/
 ### 准备配置文件
 
 XTuner 自带大量开箱即用的 config：
-
-```shell
-xtuner list-cfg
-```
 
 ```shell #test id="xtuner-list-cfg"
 out=$(xtuner list-cfg 2>/dev/null)

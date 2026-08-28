@@ -204,7 +204,7 @@ PY
 输出结果如下：
 
 ```shell #test-result id="v2-setup" fuzzy='xxx'
-type(img) = <class 'torchvision.tv_tensors.Image'>, img.dtype = torch.uint8, img.shape = torch.Size([3, 256, 256])
+type(img) = <class 'torchvision.tv_tensors._image.Image'>, img.dtype = torch.uint8, img.shape = torch.Size([3, 256, 256])
 decode_image.__module__ = 'torchvision.io.image'
 npu_available: True
 npu_count: xxx

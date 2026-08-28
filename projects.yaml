@@ -277,3 +277,14 @@ projects:
     dir: projects/fastchat
     workflows:
       quick_start: .github/workflows/fastchat-quick-start.yml
+  # Pointer doc at docs/Quick-start-Ascend.md (no #test). Do not add a
+  # Quick Start workflow: upstream tutorials target Atlas 300I A2.
+  # The live kt-kernel tree has no CANN backend; examples_manifest.yaml
+  # keeps supported empty, so there is no examples workflow either.
+  - name: ktransformers
+    category: 推理加速
+    support_level: 基础支持
+    upstream_repo: kvcache-ai/ktransformers
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/ktransformers

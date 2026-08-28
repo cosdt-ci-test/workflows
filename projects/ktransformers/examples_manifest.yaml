@@ -14,14 +14,19 @@ unsupported:
   - kt-kernel/examples/modeling_deepseek_v3.py
   - kt-kernel/examples/torch_attention.py
   # Debug / one-off repro scripts, not a product example.
+  # repro_llamafile_re.py additionally requires a GGUF weights dir via
+  # WEIGHT_PATH; test-debug.py imports AMX-only classes (x86).
   - kt-kernel/examples/repro_llamafile_re.py
   - kt-kernel/examples/test-debug.py
-  # Compares against local binary dumps (csrc/.../build or debug_*), not
-  # a self-contained runnable example.
+  # Actively load local binary dumps (csrc/.../build or ./debug_*) and
+  # compare against them; not self-contained runnable examples.
   - kt-kernel/examples/test_softmax.py
-  - kt-kernel/examples/test_apply_rope.py
   - kt-kernel/examples/test_rope.py
   - kt-kernel/examples/test_mla_quant.py
+  # Unfinished snippet: only defines helper functions and exits without
+  # executing anything. A green run would prove nothing (false green by
+  # construction).
+  - kt-kernel/examples/test_apply_rope.py
   # Intel AMX CPU kernels (including BF16/FP8/FP4 AMX ops without
   # "amx" in the filename). aarch64 910B runners do not have AMX.
   # kt-kernel CMake has no CANN / NPU backend.
@@ -40,21 +45,58 @@ unsupported:
   # AVX2 / x86 CPU kernels. Same ISA mismatch, still not NPU.
   - kt-kernel/examples/test_fp4_moe_avx2.py
   - kt-kernel/examples/test_mxfp8_moe_avx2.py
-  # Kunpeng KML is a CPU math library, not an Ascend NPU path.
+  # Stale upstream: the KMLInt8_MOE / KMLInt4_MOE classes these scripts
+  # call are no longer exported by kt_kernel_ext on current main, so
+  # they fail with AttributeError on any platform. The deepseekv3 trio
+  # additionally hardcodes local full-model weights
+  # (/home/bd/models/DeepSeek-R1 safetensors + DeepSeek-R1-BF16 GGUF,
+  # ~700GB) that CI cannot provide.
   - kt-kernel/examples/test_moe_kml.py
   - kt-kernel/examples/test_deepseekv3.py
   - kt-kernel/examples/test_deepseekv3_prefill.py
   - kt-kernel/examples/test_deepseekv3_prefill_speed.py
-  # CPUInfer / llamafile CPU kernels. Several also allocate on CUDA
-  # (device="cuda", torch.cuda.manual_seed_all, flash_attn) before
-  # moving tensors to CPU. None of these select an Ascend device.
+  # Stale upstream: linear.Linear and mlp.MLP are commented out in
+  # ext_bindings.cpp, so both fail with AttributeError everywhere.
+  # They also create weights with device="cuda" before moving to CPU.
   - kt-kernel/examples/test_linear.py
   - kt-kernel/examples/test_mlp.py
+  # llamafile MOE (moe.MOE) is buildable on aarch64, but the script
+  # hardcodes device="cuda" for weight creation with no CLI override.
   - kt-kernel/examples/test_moe.py
-  - kt-kernel/examples/test_moe_kernel.py
-  - kt-kernel/examples/test_gate.py
+  # Hard NVIDIA dependency: imports flash_attn and moves tensors to
+  # "cuda" for the reference attention.
   - kt-kernel/examples/test_attention.py
+  # Hardcode local full-model GGUF (/home/bd/models/DeepSeek-R1-BF16),
+  # both forced via `if use_real_weights := True:`; test_mla.py also
+  # actively loads ./debug/*.bin dumps. Their MLA_F32/F16/QUAN_F32
+  # classes are additionally unbuildable since the KML deletion.
   - kt-kernel/examples/test_mla.py
   - kt-kernel/examples/test_mla_qlen.py
-  - kt-kernel/examples/test_mla_simple.py
+  # Stale upstream: calls kt_kernel_ext.mla.MLA, which current
+  # ext_bindings.cpp no longer exports (only MLA_F16/F32/QUAN_F32 under
+  # aarch64+KML+CPU_MLA). AttributeError on current main.
   - kt-kernel/examples/test_mla_torch.py
+  # Pure-torch MLA reference: never imports kt_kernel, has no assert.
+  # Runnable on aarch64 but exercises no product code, so a green run
+  # guards nothing about ktransformers.
+  - kt-kernel/examples/test_mla_simple.py
+  # Closest to runnable on aarch64: pure-CPU scripts with live asserts
+  # (their CUDA references are no-op seeds; test_gate.py's dump
+  # comparisons are dead code behind an early return). But they need
+  # gate.MoEGate / moe.Int8_KERNEL_MOE. MoEGate is bound only under
+  # __aarch64__ && CPU_USE_KML && KTRANSFORMERS_CPU_MLA and its header
+  # include is aarch64+KML-only, so it exists on no platform today.
+  # Int8_KERNEL_MOE is bound under USE_MOE_KERNEL, but the la/
+  # dispatch layer only extern-declares the s8s8s32 mat-kernel symbols
+  # and the sole in-tree implementation is AOCL (x86); on aarch64 the
+  # deleted KML backend was the only one. Worse, api/common.h
+  # force-defines CPU_USE_KML on __aarch64__, so a MOE_KERNEL=ON build
+  # pulls in the removed operators/kml headers and does not compile.
+  # Upstream deleted the KML sources (operators/kml in f854d03b
+  # 2025-11-03; moe_kernel/mat_kernel/kml_kernel in 53f6a6d6
+  # 2025-12-11), leaving the CMake flags dangling, and PyPI ships
+  # x86_64-only wheels. Not buildable on current main. Re-check if
+  # upstream lands a non-KML aarch64 mat-kernel backend, restores KML,
+  # or publishes aarch64 wheels.
+  - kt-kernel/examples/test_gate.py
+  - kt-kernel/examples/test_moe_kernel.py

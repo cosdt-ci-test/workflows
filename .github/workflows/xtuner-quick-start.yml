@@ -1,0 +1,134 @@
+# xtuner quick start guard - project thin trigger.
+#
+# Calls the common engine .github/workflows/quick-start-template.yml;
+# this file only declares what varies per project: schedule,
+# concurrency, runner, container image + options, upstream repo,
+# monitored doc, and the test entry command. The guard loop, cache
+# I/O, state relay and publishing all live in the engine. See the
+# engine's `workflow_call.inputs` block for the full input contract.
+#
+# Cache keys (monitor-state-xtuner-*) and artifact names are derived
+# from project=xtuner, not from the workflow name.
+#
+# No device mounts: the self-hosted NPU runner (`linux-aarch64-a2-2`,
+# 2-card) auto-passes `/dev/davinci*` into the container via the cluster
+# device-plugin, so container_options stays empty. Same convention
+# used by torchtune / slime / tensordict / pytorch.vision / accelerate /
+# ray / torchtitan / transformers / diffusers / mooncake.
+# The 8 projects that still ship a full `--device=/dev/davinci0` block
+# (bitsandbytes / cache-dit / colossalai / deepspeed / llama.cpp /
+# onnxruntime / trl / whisper.cpp) keep that block for the read-only
+# Ascend driver bind-mounts the test wants; xtuner does not need those.
+# Multi-rank HCCL (xtuner's multi-card smoke uses `NPROC_PER_NODE=2`)
+# talks across cards via davinci_manager + devmm_svm + hisi_hdc control
+# devices, which are device-plugin passthroughs too. check-torch on
+# this 2-card runner uses `count: 2`; the multi-card smoke step is what
+# actually exercises both cards, single-card steps leave one card idle.
+#
+# No modelscope cache bind-mount: the doc's LLM + MLLM SFT examples
+# use the upstream ``examples/v1/config/sft_qwen3_tiny.py`` model +
+# ``tests/resource/openai_sft.jsonl`` / ``tests/resource/mllm_sft_*``
+# datasets, all shipped in the xtuner source tree after `git clone`
+# — no HF / ModelScope model download, no extra cache binding.
+
+name: xtuner-quick-start
+
+concurrency:
+  # format() is load-bearing: a '||' between 'manual-' and
+  # github.run_id would short-circuit on the truthy literal and
+  # every dispatch would share one 'manual-' group.
+  group: ${{ github.event_name == 'schedule' && 'xtuner-quick-start-schedule' || format('manual-{0}', github.run_id) }}
+  # cancel-in-progress: false because (1) a schedule run cancelled
+  # mid-way loses its outcome writeback - the outcome is what makes
+  # the retry mechanism work, and the 'if: always()' guard isn't
+  # enough when the container is being torn down; (2) dispatch runs
+  # already live in unique groups so there's nothing to cancel.
+  cancel-in-progress: false
+
+on:
+  schedule:
+    # Run every 6 hours: '30 */6 * * *' fires at minute 30 of every
+    # 6th hour (00:30, 06:30, 12:30, 18:30). Cadence is loose enough
+    # for an upstream that releases every few months (xtuner: v0.2.0
+    # on the legacy line, v1.0.1 still marked prerelease on the V1
+    # line), but tight enough that doc fixes propagate within a day.
+    - cron: '30 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  xtuner-quick-start:
+    uses: ./.github/workflows/quick-start-template.yml
+    with:
+      # Namespaces cache keys (monitor-state-xtuner-*), artifacts
+      # (xtuner-quick-start-<run_id>) and the test working dir
+      # (workflows/projects/xtuner).
+      project: xtuner
+      # Self-hosted NPU runner for the test job only; the engine pins
+      # the cache I/O jobs (restore-cache / publish-and-persist) to
+      # GitHub-hosted ubuntu-latest. 2-card label (linux-aarch64-a2-2)
+      # is required because xtuner's multi-card smoke step issues
+      # `NPROC_PER_NODE=2 xtuner train ...`; a 1-card label would
+      # HCCL-init-fail on rank-1's `torch.distributed.init_process_group`.
+      test_runner: '["linux-aarch64-a2-2"]'
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+      container_options: >-
+      # Doc body does: git clone + ``uv pip install --no-deps -e .`` +
+      # manual install of v1.0.1 runtime deps + version print + 5-path
+      # ``importlib.util.find_spec`` smoke (xtuner + xtuner.dataset +
+      # xtuner.model + xtuner.engine + xtuner.v1) + ``MODES`` tuple
+      # assertion + LLM SFT ``torchrun xtuner/v1/train/cli/sft.py
+      # --config ... --work-dir ...`` (3 steps, dist_backend="npu:hccl")
+      # + MLLM SFT ``torchrun ... --config ...`` (3 steps,
+      # dist_backend="npu:hccl"). ``--no-deps`` skips xtuner's hard
+      # pin ``bitsandbytes==0.45.0`` which has no aarch64 wheel (PyPI
+      # ships only manylinux_2_24_x86_64 + win_amd64 at 0.45.0); the
+      # smoke + training paths don't touch bitsandbytes so dropping
+      # it is safe. Cold-cache install of v1.0.1 deps ~ 5 min; the
+      # two 3-step SFT runs add ~3 min total on the tiny configs
+      # (Qwen3 num_hidden_layers=3 hidden_size=512 for LLM,
+      # Intern-S1 tiny for MLLM). 90 min leaves room for git clone +
+      # first-time wheel downloads + the import smoke + MODES check +
+      # the two SFT runs.
+      timeout_minutes: 90
+      upstream_repo: InternLM/xtuner
+      # xtuner's latest stable on GitHub Releases is v0.2.0 (2025-07-11);
+      # v1.0.0rc0 (2025-11-18) and v1.0.1 (2026-05-15) are both marked
+      # prerelease. Engine's fallback chain (/releases/latest -> /releases
+      # -> /tags) prefers stable releases, so UPSTREAM_REF resolves to
+      # v0.2.0 — that's what this guard pins. To test the V1 SFT path on
+      # the doc side, the doc's xtuner-install-source step pins the ref
+      # the engine resolves, and the LLM/MLLM SFT configs gate on
+      # the installed xtuner.version.__version__.
+      # GitHub Contents API URL (NOT raw.githubusercontent.com):
+      #   * Engine's monitor hashes via `Authorization: Bearer $GH_TOKEN`
+      #     + `Accept: application/vnd.github.raw`, which is the
+      #     Contents API contract for raw markdown. raw URLs ignore
+      #     those headers (different auth surface), so the engine would
+      #     hash an unauthenticated blob and miss doc edits. API URL
+      #     is the only form where the monitor + test-side fetches both
+      #     line up with the same Authorization + Accept.
+      #   * `markdown_doc_test_base.py:674-675` already special-cases
+      #     `api.github.com` URLs and re-applies the same Accept header
+      #     on the test-side fetch (MONITORED_DOC_URL), so the test
+      #     inherits the same authenticated contract.
+      # Note: the earlier comment on this block claimed raw URLs are
+      # firewalled off the NPU runner — peft on the same runner pool
+      # (linux-aarch64-a2-1, 8/25 09:39Z schedule run 32833152965) has
+      # been green on a raw URL for months, so raw URLs are reachable
+      # from the NPU runner. The reason this file uses api is the
+      # auth-header alignment above, NOT firewall reachability.
+      # `?ref=${{ github.sha }}` pins the doc fetch to whichever ref
+      # fired the run (branch tip on `pull_request`, merge commit on
+      # `push`, default branch tip on `schedule`); without it dispatch
+      # from a non-default branch fetches `main` and branch-side doc
+      # edits can't be tested.
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/xtuner/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/xtuner/docs/Quick-start-Ascend.md
+      # cwd is workflows/projects/xtuner; env contract (MONITORED_DOC_URL /
+      # UPSTREAM_REF / NPU_READY) is injected by the engine. All project
+      # env prep and installs live in the test subclass's
+      # prepare_environment hook.
+      test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1

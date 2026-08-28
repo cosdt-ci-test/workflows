@@ -1,6 +1,6 @@
 # Quick Start (Ascend NPU)
 
-在单卡昇腾 NPU 上跑通 `torchvision` 的最小链路：从 PyPI 装 stock `torchvision==0.24.0`（linux aarch64 cpu-only wheel，走阿里 PyPI 镜像），验 `torchvision.transforms.v2` 的导入与版本，再把一张合成图走完「PIL → 张量 → NPU 端到端」的烟雾流程。NPU 端的 kernel 命中走 `torch_npu` wheel 自带的 `aten::*` PrivateUse1 dispatch + CPU fallback，无需 [Ascend/vision](https://github.com/Ascend/vision) fork 的 C++ bridge（`deform_conv` / `roi_pool` patch 那些 op 跟 transforms.v2 不沾边）。配套版本按 [Ascend PyTorch Compatibility 矩阵](https://gitcode.com/Ascend/pytorch/blob/main/COMPATIBILITY.en.md)：`torch==2.9.0 + torch_npu==2.9.0.post6 + CANN==9.1.0`。
+在昇腾 NPU 上跑通 `torchvision` 的最小链路。
 
 ## 前置条件
 
@@ -14,7 +14,6 @@ Atlas 900 A2 / A3 训练系列产品或者 Ascend 950 系列产品，并按需�
 
 - 可用的 Python 环境
 - 可用的 CANN（参考[快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html)）
-- `torch` + `torch_npu` + `torchvision` **由本文档用 `uv pip install` 显式装**，不依赖 image 预装。配套版本按 [Ascend PyTorch Compatibility 矩阵](https://gitcode.com/Ascend/pytorch/blob/main/COMPATIBILITY.en.md)：`torch==2.9.0 + torch_npu==2.9.0.post6 + CANN==9.1.0` 是 CANN 9.1.0 的推荐组合（per table 行 `2.9.0.post6 / v2.9.0-26.1.0 / 2.9.0 / CANN 9.1.0`）
 
 ### 本文档示例使用的版本
 
@@ -35,7 +34,7 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | CANN | 9.1.0 |
 | torch | 2.9.0+cpu |
 | torch_npu | 2.9.0.post6 |
-| torchvision | 0.24.0（stock release，PyPI linux aarch64 cpu-only wheel，走阿里 PyPI 镜像；fork 不在本文烟雾路径里） |
+| torchvision | 最新 release（**必须源码构建** `FORCE_CUDA=0`——torchvision ≥0.23 停止发布 CPU-only wheel，PyPI 上的 linux wheel 都链 `libcudart.so`，跟 torch_npu 不兼容；CPU-only 构建产出的 `_C.so` 只链 `libc10_cpu` / `libtorch_cpu`，跟 torch_npu 完全兼容） |
 | pillow | `>=10.0`（`torchvision.transforms.functional.to_pil_image` 等的运行时依赖） |
 
 ### 前置安装
@@ -90,10 +89,10 @@ uv pip install --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi 
 python -c "import torch, torch_npu; print('torch=', torch.__version__); print('torch_npu=', torch_npu.__version__); print('is_available:', torch.npu.is_available()); print('count:', torch.npu.device_count())"
 ```
 
-输出结果如下（`count: 1` 表示本机可见一张卡，下文示例只用 `npu:0`）：
+输出结果如下：
 
 ```shell #test-result id="check-torch" fuzzy='xxx'
-torch= 2.9.0xxx
+torch= 2.9.0+cpu
 torch_npu= 2.9.0.post6
 is_available: True
 count: 1
@@ -121,35 +120,44 @@ Pillow xxx
 
 ## 安装 torchvision
 
-### 二进制路径（stock）
+torchvision ≥0.23 不再发布 CPU-only wheel——PyPI 上的 linux aarch64 / x86_64 wheel 全部链接 `libcudart.so`，跟 `torch_npu`（替换 torch CUDA backend）不兼容。所以必须**从源码构建**，强制 `FORCE_CUDA=0` 让构建脚本跳过 CUDA 依赖，产出的 `_C.so` 只链 `libc10_cpu` / `libtorch_cpu`，跟 torch_npu 完全兼容。
 
-stock torchvision 从阿里 PyPI 镜像装（0.22+ 的 torchvision 在 PyPI 上的 linux aarch64 wheel 本身就是 cpu-only）：
+构建工具依赖（g++ / make / cmake / git）已在基础镜像里，无需额外安装。
 
-```shell #test-setup id="stock-torchvision-install"
-uv pip install torchvision==0.24.0 -i https://mirrors.aliyun.com/pypi/simple/
+<!-- 获取 release tag：
+```shell #test-setup store="upstream_ref"
+echo "${UPSTREAM_REF}"
 ```
+-->
 
-打印版本：
+克隆上游仓库、`FORCE_CUDA=0` 源码构建并验证：
 
-```shell #test id="stock-torchvision-check"
+```shell #test id="stock-torchvision-source" load="upstream_ref>>ref"
+git clone --depth 1 --branch <ref> https://github.com/pytorch/vision.git
+cd vision
+FORCE_CUDA=0 uv pip install -e . --no-build-isolation
 python -c "import torchvision; print('torchvision', torchvision.__version__)"
 ```
 
-```shell #test-result id="stock-torchvision-check" fuzzy='xxx'
+\<ref\> 为 pytorch/vision 最新 release tag。
+
+输出结果如下：
+
+```shell #test-result id="stock-torchvision-source" fuzzy='xxx'
 torchvision xxx
 ```
 
-> 二进制路径只覆盖 Python-level v2 API + `aten::*` NPU dispatch（`torch_npu` wheel 自带），**不验** fork 那边 C++ 扩展的 NPU 算子注册——后者由 [Ascend/vision](https://github.com/Ascend/vision) fork 的 `torchvision_npu.ops` 子包（`deform_conv` / `roi_pool` patch）承担，但本文档的烟雾路径（`transforms.v2.CenterCrop` / `RandomHorizontalFlip` / `Resize` / TVTensor dispatch）不命中这些 op，所以源码 build 没必要：stock cpu wheel 走 `torch_npu` PrivateUse1 dispatch 已经够。
->
-> 如果后续要把 torchvision 推到 `model.eval().to('npu:0')` 做端到端推理，再单独开一个 fork 路径的 doc（`uv pip install --no-build-isolation -e .` 那个 21 分钟 cold-cache C++ 编译）；那时候也要切到带 DVPP dev headers 的镜像或者像本次调试那样把 `npu_decode_video_kernel.{cpp,hpp}` 挪出 build 路径（CANN base 镜像 `cann:9.1.0-910b-ubuntu22.04-py3.12` 不带 `<acl/dvpp/hi_dvpp.h>`，fork 默认会 `fatal error`）。
+## transforms v2 入门
 
-## 验证 transforms.v2
+用一个**合成的 256×256 RGB 测试图**走一遍 transforms v2 的核心用法。每节都把图搬到 NPU 上运行（`img.to('npu:0')`），用 v2 的 `BoundingBoxes` / `Mask` / `Video` / `KeyPoints` 配合验证 dispatch 链路。
 
-下面 6 节按 torchvision 官方 [Transforms v2 Getting Started](https://docs.pytorch.org/vision/stable/auto_examples/transforms/plot_transforms_getting_started.html) 的章节顺序走，把示例里的 PIL 资产换成合成图（CPU 路径、无网络依赖），每一节都把 transform 输入**显式搬到 NPU**（`img.to('npu:0')`），让 `torch_npu` 注册的 PrivateUse1 dispatch + `aten::*` 的 NPU kernel 真被命中。这 6 节跑在 stock torchvision cpu wheel 上——`transforms.v2` 的 Python-level 调用 + `aten::npu::*` 算子都在 `torch_npu` wheel 自带的 dispatch 表里，不需要 fork patch。每一节一个 `#test` 块，跑过即走完整个 v2 API 表面。
+### 导入包 + 检查 NPU + 合成测试图
 
-### Setup
+**确认环境就绪**：
 
-导入 `tv_tensors` + `v2`，合成一张 256×256 RGB 图包成 `tv_tensors.Image`，同时验证 torchvision 顶层包 + 子模块 import OK（解包 + 链接 C++ 扩展）：
+- `torch_npu` 装好且能看到 NPU 设备
+- `tv_tensors` 跟 `torchvision.io` 的链路通
+- 把 numpy 数组装进 `tv_tensors.Image`——这是后面所有 transform 的入口数据类型
 
 ```shell #test id="v2-setup"
 python << 'PY'
@@ -157,25 +165,25 @@ import numpy as np
 import torch
 import torch_npu
 import torchvision
-import torchvision.transforms as T
-import torchvision.transforms.v2 as T2
-import torchvision.io as IO
-import torchvision.models as M
+from torchvision.transforms import v2
+from torchvision.io import decode_image
 from torchvision import tv_tensors
 
-torch.manual_seed(0)
-np.random.seed(0)
+# 固定随机种子，后面每节的合成图都用同一颗种子，结果可复现
+torch.manual_seed(1)
+np.random.seed(1)
 
-# 1) 合成 3x256x256 RGB 图（CPU 路径，无网络依赖）
+# 合成 256×256 RGB 图：CPU 路径、零网络依赖
+# （官方教程用的是 github.com/pytorch/vision gallery 里的 astronaut.jpg，
+#  那边要 git clone 整个仓库，本烟雾路径跳过）
 arr = (np.random.rand(256, 256, 3) * 255).astype('uint8')
 img = tv_tensors.Image(torch.from_numpy(arr).permute(2, 0, 1))
-print(f"torchvision: {torchvision.__version__}")
-print(f"transforms: {T.__name__}")
-print(f"transforms.v2: {T2.__name__}")
-print(f"io: {IO.__name__}")
-print(f"models: {M.__name__}")
-print(f"img: type={type(img).__name__} dtype={img.dtype} shape={tuple(img.shape)}")
-# 2) 验证 torch_npu NPU dispatch：is_available + device_count + cpu→npu→cpu round-trip
+print(f"{type(img) = }, {img.dtype = }, {img.shape = }")
+# torchvision.io.decode_image 走 libjpeg-turbo 入口（不是 Pillow），
+# 这里只是验 import 通，不需要真去解码文件
+print(f"{decode_image.__module__ = }")
+
+# 验证 NPU：先看有没有设备，再做一次最简 cpu → npu → cpu 往返
 print(f"npu_available: {torch.npu.is_available()}")
 print(f"npu_count: {torch.npu.device_count()}")
 x = torch.zeros(2, 3)
@@ -185,23 +193,19 @@ print(f"npu round-trip: in={tuple(x.shape)} on {x.device.type}, npu={tuple(x_npu
 PY
 ```
 
-输出结果如下（`tv_tensors.Image` 把 `(H, W, C)` numpy 转 `(C, H, W)` uint8 张量；`torchvision` 行用 `xxx` 抹平 patch 版本后缀；第 2) 段验证 `torch_npu` 注册 + `aten::to` NPU kernel 双向通）：
+输出结果如下：
 
 ```shell #test-result id="v2-setup" fuzzy='xxx'
-torchvision: xxx
-transforms: torchvision.transforms
-transforms.v2: torchvision.transforms.v2
-io: torchvision.io
-models: torchvision.models
-img: type=Image dtype=torch.uint8 shape=(3, 256, 256)
+type(img) = <class 'torchvision.tv_tensors._image.Image'>, img.dtype = torch.uint8, img.shape = torch.Size([3, 256, 256])
+decode_image.__module__ = 'torchvision.io.image'
 npu_available: True
 npu_count: xxx
 npu round-trip: in=(2, 3) on cpu, npu=(2, 3) on npu, back=(2, 3) on cpu
 ```
 
-### The basics
+### 单 transform——实例化、调用、看输出
 
-v2 transform 是 `nn.Module` 风格——单输入单输出。把图搬到 NPU **再**调 transform，让 `CenterCrop` 跑在 NPU 后端（device 透传：CPU 输入 → CPU 输出，NPU 输入 → NPU 输出）：
+v2 transform 用起来跟普通 `nn.Module` 一样：**实例化一次，可以反复调用**。跑最简单的 `CenterCrop`：
 
 ```shell #test id="v2-basics"
 python << 'PY'
@@ -210,13 +214,13 @@ import torch
 from torchvision import tv_tensors
 from torchvision.transforms import v2
 
-# 复用 v2-setup 的 fixture：每个 #test 跑在独立子进程，img 不能跨块带过来，
-# 这里重建（同一种子 → 同一张图；尺寸 / dtype / TVTensor 类型都对得上）。
+# 跟第 0 步一样的合成图
 np.random.seed(0)
 arr = (np.random.rand(256, 256, 3) * 255).astype('uint8')
 img = tv_tensors.Image(torch.from_numpy(arr).permute(2, 0, 1))
 
-img_npu = img.to('npu:0')   # 显式搬 NPU；CenterCrop 之后输出也在 NPU
+# 把图搬到 NPU——transform 在哪个 device 上跑由输入 tensor 决定
+img_npu = img.to('npu:0')
 transform = v2.CenterCrop(size=(224, 224))
 out = transform(img_npu)
 print(f"in:  type={type(img_npu).__name__} device={img_npu.device.type} shape={tuple(img_npu.shape)}")
@@ -224,16 +228,147 @@ print(f"out: type={type(out).__name__} device={out.device.type} shape={tuple(out
 PY
 ```
 
-输出结果如下（`device.type` 在 torch 2.x + torch_npu 上稳定为 `npu`；完整 `device` 字符串可能打印 `npu:0` 或 `privateuseone:0`，不影响）：
+输出结果如下：
 
 ```shell #test-result id="v2-basics"
 in:  type=Image device=npu shape=(3, 256, 256)
 out: type=Image device=npu shape=(3, 224, 224)
 ```
 
-### Videos, boxes, masks, keypoints
+### 随机裁剪——验证 NPU 输出跟 CPU 一致
 
-v2 transform 不只处理 image——也支持 BoundingBoxes / Mask / Video / KeyPoints。一次性把 4 种 TVTensor 塞进 `Compose`，验证 dispatch 链能正确识别每种类型（用 `p=0` 的 `RandomHorizontalFlip` 保证确定性）：
+`RandomCrop` 默认 input 必须 ≥ output，否则要 pad。这里 256 ≥ 224，offset 恒为 `(0, 0)`——**这条路径是确定的**，只在 NPU 上跑一次验形状：
+
+```shell #test id="v2-randomcrop"
+python << 'PY'
+import numpy as np
+import torch
+from torchvision import tv_tensors
+from torchvision.transforms import v2
+
+np.random.seed(1)
+arr = (np.random.rand(256, 256, 3) * 255).astype('uint8')
+img = tv_tensors.Image(torch.from_numpy(arr).permute(2, 0, 1))
+
+# NPU 端 crop
+img_npu = img.to('npu:0')
+out = v2.RandomCrop(size=(224, 224))(img_npu)
+print(f"in:  type={type(img_npu).__name__} device={img_npu.device.type} shape={tuple(img_npu.shape)}")
+print(f"out: type={type(out).__name__} device={out.device.type} shape={tuple(out.shape)}")
+PY
+```
+
+输出结果如下：
+
+```shell #test-result id="v2-randomcrop"
+in:  type=Image device=npu shape=(3, 256, 256)
+out: type=Image device=npu shape=(3, 224, 224)
+```
+
+### 用 `Compose` 串起多个 transform——分类任务的预处理流水线
+
+单 transform 容易验；**多个串起来**才是真实训练场景。`Compose` 把一组 transform 按顺序作用在输入上。ImageNet 训练的经典 pipeline：
+
+1. `RandomResizedCrop` — 随机切一块再 resize 到目标尺寸
+2. `RandomHorizontalFlip(p=0.5)` — 一半概率水平翻转
+3. `ToDtype(float32, scale=True)` — uint8 → float32，顺便除以 255
+4. `Normalize(mean, std)` — 用 ImageNet 均值 / 方差归一化
+
+```shell #test id="v2-classification"
+python << 'PY'
+import numpy as np
+import torch
+from torchvision import tv_tensors
+from torchvision.transforms import v2
+
+np.random.seed(1)
+arr = (np.random.rand(256, 256, 3) * 255).astype('uint8')
+img = tv_tensors.Image(torch.from_numpy(arr).permute(2, 0, 1))
+
+# 锁定 crop / flip 的随机性——这两步都走 torch 的 RNG
+torch.manual_seed(1)
+
+img_npu = img.to('npu:0')
+transforms = v2.Compose([
+    v2.RandomResizedCrop(size=(224, 224), antialias=True),
+    v2.RandomHorizontalFlip(p=0.5),
+    v2.ToDtype(torch.float32, scale=True),
+    v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+])
+out = transforms(img_npu)
+print(f"in:  type={type(img_npu).__name__} device={img_npu.device.type} dtype={img_npu.dtype} shape={tuple(img_npu.shape)}")
+print(f"out: type={type(out).__name__} device={out.device.type} dtype={out.dtype} shape={tuple(out.shape)}")
+# 归一化后值大致落在 [-2.12, 2.64]——mean=0.485/std=0.229 推算：
+#   (1 - 0.485) / 0.229 ≈ 2.25   (像素最大值的归一化结果)
+#   (0 - 0.485) / 0.229 ≈ -2.12  (像素最小值的归一化结果)
+print(f"out stats: min={float(out.min().cpu()):.4f} mean={float(out.mean().cpu()):.4f} max={float(out.max().cpu()):.4f}")
+print(f"out finite: {torch.isfinite(out).all().item()}")  # 兜底检查：cast / div 路径没有 NaN/Inf
+PY
+```
+
+输出结果如下：
+
+```shell #test-result id="v2-classification" fuzzy='xxx'
+in:  type=Image device=npu dtype=torch.uint8 shape=(3, 256, 256)
+out: type=Image device=npu dtype=torch.float32 shape=(3, 224, 224)
+out stats: min=xxx mean=xxx max=xxx
+out finite: True
+```
+
+### 检测任务——把标注框跟图像一起 transform
+
+分类只处理图像；**检测任务**还要同时处理标注框（bounding box）。v2 用 `BoundingBoxes` TVTensor 表达标注框——形状 `(N, 4)`，带 `format`（坐标格式：`XYXY` / `CXCYWH` 等）跟 `canvas_size`（图像尺寸）两个 metadata：
+
+```shell #test id="v2-detection"
+python << 'PY'
+import numpy as np
+import torch
+from torchvision import tv_tensors
+from torchvision.transforms import v2
+
+np.random.seed(1)
+arr = (np.random.rand(256, 256, 3) * 255).astype('uint8')
+img = tv_tensors.Image(torch.from_numpy(arr).permute(2, 0, 1))
+H, W = img.shape[-2:]
+# 3 个检测框：XYXY = (x1, y1, x2, y2)
+boxes = tv_tensors.BoundingBoxes(
+    [[15, 10, 370, 510], [275, 340, 510, 510], [130, 345, 210, 425]],
+    format="XYXY", canvas_size=(H, W))
+
+torch.manual_seed(1)
+
+img_npu = img.to('npu:0')
+# 图像上 NPU；box 坐标留在 CPU——坐标是几个数字，搬到 NPU 没收益反而慢
+transforms = v2.Compose([
+    v2.RandomResizedCrop(size=(224, 224), antialias=True),   # crop 后 box 跟着重映射
+    v2.RandomPhotometricDistort(p=1),                          # 颜色 jitter 链：亮度/对比度/饱和度/色相
+    v2.RandomHorizontalFlip(p=1),                              # 永远翻，box 同步翻
+])
+out_img, out_boxes = transforms(img_npu, boxes)
+fmt = lambda b: b.format.name if hasattr(b.format, 'name') else b.format
+print(f"in_img: type={type(img_npu).__name__} device={img_npu.device.type} dtype={img_npu.dtype} shape={tuple(img_npu.shape)}")
+print(f"in_boxes: type={type(boxes).__name__} format={fmt(boxes)} canvas_size={tuple(boxes.canvas_size)} shape={tuple(boxes.shape)}")
+print(f"out_img: type={type(out_img).__name__} device={out_img.device.type} dtype={out_img.dtype} shape={tuple(out_img.shape)}")
+print(f"out_boxes: type={type(out_boxes).__name__} format={fmt(out_boxes)} canvas_size={tuple(out_boxes.canvas_size)} shape={tuple(out_boxes.shape)}")
+print(f"out_img finite: {torch.isfinite(out_img.float()).all().item()}")  # photometric 链路里某一步意外产 NaN/Inf？
+print(f"out_boxes min/max: {int(out_boxes.min())}/{int(out_boxes.max())}")  # crop + flip 后坐标应仍在 [0, 224]
+PY
+```
+
+输出结果如下：
+
+```shell #test-result id="v2-detection" fuzzy='xxx'
+in_img: type=Image device=npu dtype=torch.uint8 shape=(3, 256, 256)
+in_boxes: type=BoundingBoxes format=XYXY canvas_size=(256, 256) shape=(3, 4)
+out_img: type=Image device=npu dtype=torch.uint8 shape=(3, 224, 224)
+out_boxes: type=BoundingBoxes format=XYXY canvas_size=(224, 224) shape=(3, 4)
+out_img finite: True
+out_boxes min/max: xxx
+```
+
+### 多类型输入——一次 transform 处理多种数据
+
+v2 不只能 transform image——一次调用可以塞 5 种 TVTensor（Image + BoundingBoxes + Mask + Video + KeyPoints），transform 内部按**类型**分别 dispatch：
 
 ```shell #test id="v2-vbmk"
 python << 'PY'
@@ -242,28 +377,26 @@ import torch
 from torchvision import tv_tensors
 from torchvision.transforms import v2
 
-# 复用 v2-setup 的 fixture（独立子进程，img 不能跨块带过来）
 np.random.seed(0)
 arr = (np.random.rand(256, 256, 3) * 255).astype('uint8')
 img = tv_tensors.Image(torch.from_numpy(arr).permute(2, 0, 1))
-
 H, W = img.shape[-2:]
+
 boxes = tv_tensors.BoundingBoxes(
     [[15, 10, 370, 510], [275, 340, 510, 510], [130, 345, 210, 425]],
     format="XYXY", canvas_size=(H, W))
-mask = tv_tensors.Mask(torch.zeros((1, H, W), dtype=torch.uint8))
-video = tv_tensors.Video(torch.randint(0, 256, (3, 3, 32, 32), dtype=torch.uint8))
+mask = tv_tensors.Mask(torch.zeros((1, H, W), dtype=torch.uint8))           # 分割 mask
+video = tv_tensors.Video(torch.randint(0, 256, (3, 3, 32, 32), dtype=torch.uint8))  # (T, C, H, W)
 keypoints = tv_tensors.KeyPoints(
     torch.tensor([[100, 100], [200, 200], [50, 150]]),
-    canvas_size=(H, W))
+    canvas_size=(H, W))                                                     # 关键点
 
-# 显式搬 NPU；坐标型 TVTensor（boxes / keypoints）保持 CPU，
-# 这是 v2 的标准用法——坐标无需 NPU 计算
+# p=0 保证确定性：这次不验证"翻得对不对"，只验证"5 种类型都正确 dispatch 了"
 img_npu = img.to('npu:0')
 mask_npu = mask.to('npu:0')
 video_npu = video.to('npu:0')
-transforms = v2.Compose([v2.RandomHorizontalFlip(p=0)])
-out_img, out_boxes, out_mask, out_video, out_kp = transforms(
+# box / keypoints 留 CPU——坐标无需 NPU 计算
+out_img, out_boxes, out_mask, out_video, out_kp = v2.RandomHorizontalFlip(p=0)(
     img_npu, boxes, mask_npu, video_npu, keypoints)
 print(f"img: type={type(out_img).__name__} device={out_img.device.type} shape={tuple(out_img.shape)}")
 print(f"boxes: type={type(out_boxes).__name__} device={out_boxes.device.type} shape={tuple(out_boxes.shape)}")
@@ -283,9 +416,13 @@ video: type=Video device=npu shape=(3, 3, 32, 32)
 keypoints: type=KeyPoints device=cpu shape=(3, 2)
 ```
 
-### What are TVTensors?
+### 什么是 TVTensor？——`torch.Tensor` 的"带类型"子类
 
-TVTensor 是 `torch.Tensor` 的子类，原生 tensor 接口（`isinstance(..., torch.Tensor)` / `.sum()` / `torch.*`）都能用。transforms 就是按 TVTensor **类型**做 dispatch：
+`Image` / `BoundingBoxes` / `Mask` / `Video` / `KeyPoints` 都是 **`torch.Tensor` 的子类**。换句话说：
+
+- `isinstance(img_dp, torch.Tensor)` 永远为 `True`
+- 所有原生 tensor 接口（`.sum()` / `.to(...)` / `torch.cat(...)` / `tensor.shape`）都能用
+- **transforms 就是按这个子类类型做 dispatch 的**——这正是为什么 `BoundingBoxes` 能跟 `Image` 一起 transform
 
 ```shell #test id="v2-tvtensors"
 python << 'PY'
@@ -293,26 +430,26 @@ import torch
 from torchvision import tv_tensors
 
 img_dp = tv_tensors.Image(torch.randint(0, 256, (3, 256, 256), dtype=torch.uint8))
-print(f"isinstance Tensor: {isinstance(img_dp, torch.Tensor)}")
-print(f"cpu: dtype={img_dp.dtype} shape={tuple(img_dp.shape)} sum={int(img_dp.sum())}")
-img_npu = img_dp.to('npu:0')   # .to 走 torch_npu 的 PrivateUse1 dispatch；TVTensor 子类化不被打断
-print(f"isinstance Tensor (npu): {isinstance(img_npu, torch.Tensor)}")
-print(f"npu: dtype={img_npu.dtype} shape={tuple(img_npu.shape)} device={img_npu.device.type} sum={int(img_npu.sum().cpu())}")
+print(f"{isinstance(img_dp, torch.Tensor) = }")
+print(f"{img_dp.dtype = }, {img_dp.shape = }, {img_dp.sum() = }")
+img_npu = img_dp.to('npu:0')   # TVTensor 子类化不被打断，搬到 NPU 后仍然是 tv_tensors.Image
+print(f"{isinstance(img_npu, torch.Tensor) = }")
+print(f"{img_npu.dtype = }, {img_npu.shape = }, {img_npu.device.type = }, {img_npu.sum().cpu() = }")
 PY
 ```
 
-输出结果如下（CPU 段和 NPU 段都验证——TVTensor 在 NPU 上仍是 `torch.Tensor` 子类，`aten::sum` 走 `torch_npu` NPU kernel 后 `.cpu()` 把标量搬回来；`sum` 是 uint8 在 [0, 255] 范围内随机累加的结果，`xxx` 抹平）：
+输出结果如下：
 
 ```shell #test-result id="v2-tvtensors" fuzzy='xxx'
-isinstance Tensor: True
-cpu: dtype=torch.uint8 shape=(3, 256, 256) sum=xxx
-isinstance Tensor (npu): True
-npu: dtype=torch.uint8 shape=(3, 256, 256) device=npu sum=xxx
+isinstance(img_dp, torch.Tensor) = True
+img_dp.dtype = torch.uint8, img_dp.shape = torch.Size([3, 256, 256]), img_dp.sum() = tensor(xxx)
+isinstance(img_npu, torch.Tensor) = True
+img_npu.dtype = torch.uint8, img_npu.shape = torch.Size([3, 256, 256]), img_npu.device.type = 'npu', img_npu.sum().cpu() = tensor(xxx)
 ```
 
-### What do I pass as input?
+### transform 不挑剔输入——任意嵌套结构都能传
 
-transforms 接受**任意嵌套结构**——单 image、`(img, target)`、dict、嵌套 dict 都行；返回**同结构**。transforms 只看 TVTensor **类型**做 dispatch；外来的 str / int / tuple / dict 原样穿透：
+`transforms` 只看 TVTensor **类型**做 dispatch，外来的 str / int / tuple / dict 原样穿透。所以你可以传任意嵌套结构——单 image、`(img, target)` 元组、dict、嵌套 dict——返回**同结构**：
 
 ```shell #test id="v2-input-structure"
 python << 'PY'
@@ -321,42 +458,41 @@ import torch
 from torchvision import tv_tensors
 from torchvision.transforms import v2
 
-# 复用 v2-setup 的 fixture（独立子进程，img 不能跨块带过来）
 np.random.seed(0)
 arr = (np.random.rand(256, 256, 3) * 255).astype('uint8')
 img = tv_tensors.Image(torch.from_numpy(arr).permute(2, 0, 1))
-
 H, W = img.shape[-2:]
 boxes = tv_tensors.BoundingBoxes(
     [[15, 10, 370, 510], [275, 340, 510, 510], [130, 345, 210, 425]],
     format="XYXY", canvas_size=(H, W))
+
+# 经典检测 dataset 形态：image + target dict
 target = {
-    "boxes": boxes,
-    "labels": torch.arange(boxes.shape[0]),  # 纯 Tensor，不是 TVTensor → 穿透
-    "this_is_ignored": ("arbitrary", {"structure": "!"}),  # 外来对象 → 穿透
+    "boxes": boxes,                                  # TVTensor → 会被 transform
+    "labels": torch.arange(boxes.shape[0]),           # 普通 Tensor → 穿透（原样返回）
+    "this_is_ignored": ("arbitrary", {"structure": "!"}),  # 任意对象 → 穿透
 }
-transforms = v2.Compose([v2.Resize(size=(128, 128))])
 img_npu = img.to('npu:0')
-out_img, out_target = transforms(img_npu, target)
-print(f"img device: {out_img.device.type}, target type: {type(out_target).__name__}")
-print(f"boxes shape: {tuple(out_target['boxes'].shape)}")
-print(f"labels: {out_target['labels'].tolist()}")
-print(f"passthrough: {out_target['this_is_ignored']}")
+out_img, out_target = v2.Compose([v2.Resize(size=(128, 128))])(img_npu, target)
+print(f"{out_img.device.type = }, {type(out_target).__name__ = }")
+print(f"{out_target['boxes'].shape = }, {out_target['boxes'].format.name = }, {tuple(out_target['boxes'].canvas_size) = }")
+print(f"{out_target['labels'].tolist() = }")
+print(f"{out_target['this_is_ignored'] = }")
 PY
 ```
 
-输出结果如下（labels 是 `torch.arange(3)`，3 个 box 顺序标 0/1/2；Resize 不改变 box 数也不改变 labels 数值）：
+输出结果如下：
 
 ```shell #test-result id="v2-input-structure"
-img device: npu, target type: dict
-boxes shape: (3, 4)
-labels: [0, 1, 2]
-passthrough: ('arbitrary', {'structure': '!'})
+out_img.device.type = 'npu', type(out_target).__name__ = 'dict'
+out_target['boxes'].shape = torch.Size([3, 4]), out_target['boxes'].format.name = 'XYXY', tuple(out_target['boxes'].canvas_size) = (128, 128)
+out_target['labels'].tolist() = [0, 1, 2]
+out_target['this_is_ignored'] = ('arbitrary', {'structure': '!'})
 ```
 
-### Transforms and Datasets intercompatibility
+### 跟自定义 Dataset 配合——`__getitem__` 返 TVTensor 即可
 
-自定义 Dataset 的 `__getitem__` 返 `tv_tensors` 后，v2 transform 直接可用——不需要任何胶水代码。下面的合成 `SyntheticDetectionDataset` 复刻 `CocoDetection` 的 `(image, target_dict)` 返回形态：
+你只要保证自定义 Dataset 的 `__getitem__` 返回**已经是 TVTensor**的对象，v2 transform 就能直接用：
 
 ```shell #test id="v2-dataset-interop"
 python << 'PY'
@@ -366,7 +502,7 @@ from torchvision import tv_tensors
 from torchvision.transforms import v2
 
 class SyntheticDetectionDataset:
-    """无网络依赖的合成检测数据集；__getitem__ 返 tv_tensors。"""
+    """模拟 CocoDetection 的 (image, target_dict) 形态，无网络依赖。"""
     def __len__(self):
         return 2
     def __getitem__(self, idx):
@@ -379,11 +515,14 @@ class SyntheticDetectionDataset:
         return img, {"boxes": boxes, "labels": torch.zeros(2, dtype=torch.int64)}
 
 dataset = SyntheticDetectionDataset()
-transforms = v2.Compose([v2.Resize(size=(128, 128))])
 img, target = dataset[0]
-img_npu, target_npu = transforms(img.to('npu:0'), target)
-print(f"img: type={type(img_npu).__name__} device={img_npu.device.type} shape={tuple(img_npu.shape)}")
-print(f"boxes: type={type(target_npu['boxes']).__name__} shape={tuple(target_npu['boxes'].shape)}")
+# 先看一眼 dataset 直接返什么——TVTensor + 完整 metadata
+print(f"{type(img).__name__ = }, {tuple(img.shape) = }")
+print(f"{type(target['boxes']).__name__ = }, {tuple(target['boxes'].shape) = }, {target['boxes'].format.name = }, {tuple(target['boxes'].canvas_size) = }")
+# 然后正常过 Compose
+img_npu, target_npu = v2.Compose([v2.Resize(size=(128, 128))])(img.to('npu:0'), target)
+print(f"after resize → {type(img_npu).__name__ = }, {img_npu.device.type = }, {tuple(img_npu.shape) = }")
+print(f"after resize → {type(target_npu['boxes']).__name__ = }, {tuple(target_npu['boxes'].shape) = }, {target_npu['boxes'].format.name = }, {tuple(target_npu['boxes'].canvas_size) = }")
 print(f"labels: {target_npu['labels'].tolist()}")
 print(f"len(dataset): {len(dataset)}")
 PY
@@ -392,9 +531,10 @@ PY
 输出结果如下：
 
 ```shell #test-result id="v2-dataset-interop"
-img: type=Image device=npu shape=(3, 128, 128)
-boxes: type=BoundingBoxes shape=(2, 4)
+type(img).__name__ = 'Image', tuple(img.shape) = (3, 256, 256)
+type(target['boxes']).__name__ = 'BoundingBoxes', tuple(target['boxes'].shape) = (2, 4), target['boxes'].format.name = 'XYXY', tuple(target['boxes'].canvas_size) = (256, 256)
+after resize → type(img_npu).__name__ = 'Image', img_npu.device.type = 'npu', tuple(img_npu.shape) = (3, 128, 128)
+after resize → type(target_npu['boxes']).__name__ = 'BoundingBoxes', tuple(target_npu['boxes'].shape) = (2, 4), target_npu['boxes'].format.name = 'XYXY', tuple(target_npu['boxes'].canvas_size) = (128, 128)
 labels: [0, 0]
 len(dataset): 2
 ```
-

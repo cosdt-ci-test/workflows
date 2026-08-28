@@ -1,8 +1,6 @@
 # Quick Start (Ascend NPU)
 
-在单卡昇腾 NPU 上用 vllm-ascend v0.23.0（配套 vLLM v0.23.0）跑 [Speculators](https://github.com/vllm-project/speculators) 的完整端到端链路：把第三方 speculative decoding draft 模型（DFlash）转换成标准 `speculators` 格式、用 vllm-ascend 抽训练数据、torchrun 训 draft 模型、最后 `vllm serve` 把训好的 draft 挂上做推理 smoke。一个示例覆盖上游 README 列出的全部 4 个核心场景（Standardized Format / Offline Data Gen / Draft Training / Seamless vLLM Integration）。
-
-本文档沿用上游 `convert/entrypoints.py` 里 DFlash + Qwen3-8B 这一组合做端到端验证：`speculators convert` 把 `z-lab/Qwen3-8B-DFlash-b16` 转换为标准 `speculators` 格式——这一步也是上游 `examples/train/dflash_*` / `examples/evaluate/` 里所有训练与评估流程的前置。
+在单卡昇腾 NPU 上用 vllm-ascend v0.23.0（配套 vLLM v0.23.0）跑 [Speculators](https://github.com/vllm-project/speculators) 的完整端到端链路：把第三方 speculative decoding draft 模型（DFlash）转换成标准 `speculators` 格式、用 vllm-ascend 抽训练数据、torchrun 训 draft 模型、最后 `vllm serve` 把训好的 draft 挂上做推理 smoke。。
 
 ## 前置条件
 
@@ -39,16 +37,14 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | torch | 2.10.0+cpu |
 | torch_npu | 2.10.0.post4 |
 | transformers | 由 `speculators` 透传拉入（>=4.56.1,<5.15.0） |
-| vllm | 0.23.0（[官方安装路径](#安装-vllm-ascend)，pip 自动解析 deps） |
-| triton-ascend | 3.2.2（由 vllm-ascend 透传拉入，DFlash proposer JIT 编译依赖） |
-| triton | 3.5.0（由 triton-ascend 透传拉入） |
+| vllm | 0.23.0（[源码 build](#安装-vllm-ascend)：`VLLM_TARGET_DEVICE=empty` 跳过 CUDA kernel 编译，仅注册 `torch.ops.vllm` schema） |
+| triton-ascend | 3.2.2|
+| triton | 3.5.0 |
 | vllm-ascend | 0.23.0（`--extra-index-url` 拉华为 ascend 源 + `.../variant` 子路径取 NPU variant wheel，详见下方「[安装 vllm-ascend](#安装-vllm-ascend)」小节） |
 | modelscope | 1.37.0 |
 | speculators | 最新 release 的源码/二进制 |
-| draft 模型 | [z-lab/Qwen3-8B-DFlash-b16](https://www.modelscope.cn/models/z-lab/Qwen3-8B-DFlash-b16)（DFlash draft，~1 GB） |
-| verifier | [Qwen/Qwen3-8B](https://www.modelscope.cn/models/Qwen/Qwen3-8B)（~16 GB） |
-
-> Speculators 的训练与 vLLM-Ascend 部署链路（`examples/train/`、`vllm-ascend serve --speculative-config`）需要 vllm-ascend ≥ v0.23.0（对应 vLLM v0.23.0），低于此版本 `extract_hidden_states` 模式与 DFlash proposer 不可用；本文档用单卡 Atlas 900 A2 PODc（Ascend 910B4）做 smoke 验证，**不验证**多卡 DFlash 训练并行（vllm-ascend 的 spec_decode E2E 跑在 `four_card/` 路径）。
+| draft 模型 | [z-lab/Qwen3-8B-DFlash-b16] |
+| verifier | [Qwen/Qwen3-8B] |
 
 ### 前置安装
 
@@ -91,12 +87,97 @@ Python 3.12.xxx
 
 #### 安装 vllm-ascend
 
-```shell #test id="vllm-ascend-install"
-uv pip install vllm==0.23.0
+PyPI `vllm==0.23.0` 的 aarch64 wheel 是 **CUDA-only build**，NPU 上无法用，且其 METADATA 钉 `torch==2.11.0+cpu` 与前置的 `torch==2.10.0+cpu` 冲突。所以本节从源码 build vllm：`VLLM_TARGET_DEVICE=empty` 跳过 CUDA kernel 编译、只注册 `torch.ops.vllm` schema 占位，运行时由 vllm-ascend 通过 `vllm.platform_plugins` entry point 把 NPU fused op 注入 `torch.ops.vllm` namespace。
+
+第一步先把 torch 栈装上：
+
+```shell #test id="install-torch"
+uv pip install -f https://mirrors.aliyun.com/pytorch-wheels/cpu torch==2.10.0
 uv pip install \
+  --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
+  --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi/variant \
+  --find-links https://repo.huaweicloud.com/ascend/repos/pypi/triton-ascend/ \
+  torch==2.10.0 torch-npu==2.10.0.post4 torchvision==0.25.0 torchaudio==2.10.0
+
+python -c "import torch, torch_npu; print(f'torch={torch.__version__}'); print(f'torch_npu={torch_npu.__version__}'); print('is_available:', torch.npu.is_available()); print('count:', torch.npu.device_count())"
+```
+
+输出结果如下：
+
+```shell #test-result id="install-torch"
+torch=2.10.0+cpu
+torch_npu=2.10.0.post4
+is_available: True
+count: 1
+```
+
+然后源码 build vllm + 装 vllm-ascend + triton-ascend：
+
+```shell #test id="vllm-ascend-install"
+# 1. vllm 源码 build 依赖（cmake / ninja / pybind11 / setuptools-scm）。
+uv pip install --system "cmake>=3.26" pyyaml nanobind ninja setuptools-rust wheel \
+  "setuptools-scm>=8" "setuptools>=77,<81"
+
+# 2. 加载 CANN env（vllm 源码编译时链接 libascendcl / libatb 需要；
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
+
+# 3. clone vllm v0.23.0 源码到 /root/deps/vllm
+mkdir -p /root/deps
+git clone --depth 1 --branch v0.23.0 \
+  https://github.com/vllm-project/vllm.git /root/deps/vllm
+
+# 4. 源码 build：--no-deps/--no-build-isolation 跳过 vllm 0.23.0 钉的 torch==2.11.0+cpu（与 torch==2.10.0 冲突），
+#    VLLM_TARGET_DEVICE=empty 只注册 torch.ops.vllm schema、跳过 CUDA kernel 编译
+VLLM_TARGET_DEVICE=empty uv pip install --system --no-deps --no-build-isolation \
+  -e /root/deps/vllm
+
+# 5. 卸 vllm 装的主线 triton（CUDA 优化版，NPU 上 DFlash JIT 跑不了）
+python3 -m pip uninstall -y triton
+
+# 6. 装 vllm-ascend NPU variant wheel（/variant 子路径拿 aarch64 build）
+python3 -m pip install --no-deps \
   --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi \
   --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi/variant \
   vllm-ascend==0.23.0
+
+# 7. 装 triton-ascend==3.2.2（DFlash proposer JIT 编译依赖）
+python3 -m pip install \
+  --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi \
+  --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi/variant \
+  --find-links https://repo.huaweicloud.com/ascend/repos/pypi/triton-ascend/ \
+  triton-ascend==3.2.2
+
+# 8. 补 vllm runtime deps：VLLM_TARGET_DEVICE=empty 跳过了 install-time 解析（避免 torch 冲突），
+#    但 `from vllm.config import ...` 仍需要 cbor2/pyzmq/xgrammar/opencv-python-headless 等；
+#    numba 是 vllm-ascend 0.23.0 policy_flashlb 顶层 `from numba import njit` 的硬依赖（--no-deps 漏装）
+python3 -m pip install --quiet \
+  -r /root/deps/vllm/requirements/common.txt \
+  numba
+
+# 9. Monkey-patch vllm.triton_utils.HAS_TRITON = True：triton-ascend 3.2.2 的 libtriton.so
+#    是 3.2.0 fork、不带 nvidia/amd symbol，主线 triton import 链触发 ImportError 把
+#    HAS_TRITON 强制改回 False，导致 qkv_rmsnorm_rope op 不注册、QKNormRopeFusionPass
+#    抛 AttributeError（CI 33140922182）。sitecustomize.py 装 site-packages，try/except
+#    避免 Python 启动时 vllm 还没装就抛异常
+cat > /usr/local/python3.12.13/lib/python3.12/site-packages/sitecustomize.py << 'PY'
+try:
+    import vllm.triton_utils
+    vllm.triton_utils.HAS_TRITON = True
+except Exception:
+    pass
+PY
+
+# 验证 qkv_rmsnorm_rope op 注册成功
+python -c "
+import vllm.triton_utils
+vllm.triton_utils.HAS_TRITON = True
+import vllm_ascend.ops.triton.linearnorm.split_qkv_rmsnorm_rope
+import numba
+import torch
+print('HAS_TRITON:', vllm.triton_utils.HAS_TRITON)
+print('qkv_rmsnorm_rope op:', torch.ops.vllm.qkv_rmsnorm_rope)
+print('numba:', numba.__version__)
+"
 
 python -c "import importlib.metadata; print(f'vllm={importlib.metadata.version(\"vllm\")}')"
 python -c "import importlib.metadata; print(f'vllm_ascend={importlib.metadata.version(\"vllm-ascend\")}')"
@@ -104,18 +185,14 @@ python -c "import importlib.metadata; print(f'triton_ascend={importlib.metadata.
 python -c "import importlib.metadata; print(f'triton={importlib.metadata.version(\"triton\")}')"
 ```
 
-> 两个 `--extra-index-url` 必须都挂，缺一就翻车：
-> - 第一个 `.../repos/pypi`（**不带** `/variant`）：是普通 PEP 503 simple index，里面有 `triton-ascend==3.2.2` / `torch-npu==2.10.0.post4` 等 vllm-ascend 的依赖 wheel。pip 把这个 URL 当 simple index 根，直接 GET `<url>/triton-ascend/`。
-> - 第二个 `.../repos/pypi/variant`：挂的是 Huawei ascend 的 **wheelnext variant provider**，里面 `vllm-ascend-0.23.0-variants.json` 声明了 `-aarch64-910b` / `-aarch64-a3` / `-aarch64-950` / `-aarch64-310p` 几个 NPU 变体 wheel。pip 解析时调 `huawei_ascend_variant_provider` 插件，按 `platform_machine=aarch64` + `npu-smi` 检测出来的 NPU 类型挑出匹配的 wheel（例如 Atlas 900 A2 910B4 上拿到 `vllm_ascend-0.23.0-cp312-cp312-manylinux_2_34_aarch64-910b.whl`）。
->
-> 漏挂任一个的故障表现：
-> - 只挂第一个：`/repos/pypi/vllm-ascend/` 是 404（vllm-ascend 不在这个 index 里），pip 报"could not find a version that satisfies the requirement vllm-ascend==0.23.0"。即便 cluster nginx PyPI 缓存里有同名包命中绕过了这一步，也只能拿到无 variant provider 的 wheel，NPU 类型不对、kernel register 走错路径，最终 `qkv_rmsnorm_rope` / `split_qkv_rmsnorm_rope` 之类 NPU fused op `AttributeError`。
-> - 只挂第二个：`/repos/pypi/variant/triton-ascend/` 是 404（triton-ascend 不在 variant index 里），vllm-ascend 装到一半报 `No matching distribution found for triton-ascend==3.2.2 (from vllm-ascend==0.23.0)`。
-
 输出结果如下：
 
 ```shell #test-result id="vllm-ascend-install" fuzzy='xxx'
-vllm=0.23.0
+xxx
+HAS_TRITON: True
+qkv_rmsnorm_rope op: vllm.qkv_rmsnorm_rope
+numba: xxx
+vllm=0.23.0+empty
 vllm_ascend=0.23.0
 triton_ascend=3.2.2
 triton=3.5.0
@@ -206,19 +283,6 @@ speculators xxx
 
 ## 完整链路：convert → 训练数据生成 → 训练 → 部署（4 个核心场景端到端示例）
 
-上游 README 列出的 4 个核心场景里，本文档用 vllm-ascend v0.23.0 + 单卡 A2 串行跑全：
-
-| # | 核心场景 | 本节验证 | 依赖 |
-| --- | --- | --- | --- |
-| 1 | Offline Training Data Generation using vLLM-Ascend | ✅ Step 2 | vllm-ascend `extract_hidden_states` method（离线 `LLM()` API + `ExampleHiddenStatesConnector`） |
-| 2 | Draft Model Training Support | ✅ Step 3 | 上游 `scripts/train.py` + 单卡 torchrun |
-| 3 | **Standardized, Extensible Format**（HF 兼容 schema + 转换工具） | ✅ Step 1 | `convert_model(algorithm="dflash")` Python API |
-| 4 | Seamless vLLM-Ascend Integration | ✅ Step 4 | `vllm-ascend serve --speculative-config '{"method":"dflash",...}'` + curl smoke |
-
-4 步以 store/load 串成一个 pipeline，前一步产物是后一步输入。Step 2 走 vllm 离线 `LLM()` API（无需 HTTP server），Step 3 走 torchrun 离线训练（直接读 Step 2 落盘的 hidden states），Step 4 才是 vllm-ascend 在线 serve + 真实推理 smoke——单卡 A2 上把 vllm 与 train 串行化规避「两者不能同卡跑」的硬件约束。
-
-上游 `examples/` 下分三类入口：`convert/`（格式转换，CPU/NPU 都可跑）、`train/`（在线/离线训练，需要 vllm-ascend NPU 后端）、`evaluate/`（基于 vllm-ascend 服务的人评测）。`convert/entrypoints.py:convert_model` 文档块给出的 DFlash 配方对应 Step 1；上游 `examples/train/dflash_qwen3_8b_sharegpt_online_5k.sh` 完整脚本（prepare_data → launch_vllm → torchrun train）对应 Step 1 → 2 → 3 → 4 的完整组合，本文在单卡约束下做了样本量（5k → 10）与并行度（4 卡 vllm 分离 → 1 卡串行）两处缩量。
-
 ### 前置：下载 draft 与 verifier
 
 默认使用 **ModelScope** 进行模型下载（draft + verifier 都在 ModelScope 上有完整镜像）。持久缓存中可能残留之前中断下载产生的残缺权重文件，测试框架会在下载前做 safetensors 完整性校验，损坏的模型目录会被整体清除并重新下载。
@@ -287,11 +351,6 @@ DATA_DIR=/root/dflash-train-data
 rm -rf "$DATA_DIR"
 mkdir -p "$DATA_DIR"
 
-# 必须先写 .py 文件再 `python /tmp/...py` 跑 —— vllm v1 engine 在 NPU 上走
-# multiprocessing spawn，spawn 子进程 `runpy.run_path(__main__)`，父进程的
-# `__main__` 必须是真实文件路径。`python << 'PY'` 把 stdin 当 `__main__`，spawn
-# 子进程找不到 `<stdin>` 文件直接 FileNotFoundError（CI 33055740901）。`fork`
-# 在 NPU 上会丢 HAI driver context、segfault，所以 spawn 是唯一选项。
 cat > /tmp/extract_hidden.py << 'PY'
 import os
 os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
@@ -341,7 +400,10 @@ if __name__ == "__main__":
         _f.write(outputs[0].kv_transfer_params["hidden_states_path"])
 PY
 
-python /tmp/extract_hidden.py
+# 把 vllm 的 INFO/WARNING 全部丢到日志文件，不进 stdout —— 否则
+# `store="hidden_states_path"` 会捕获到 vllm INFO + 路径混合多行内容，
+# 下游 `echo <hidden_states_path>` 替换后 bash 把每行当命令（CI 33160459424）。
+python /tmp/extract_hidden.py > /tmp/extract.log 2>&1
 cat /tmp/last_hidden_path.txt
 ```
 
@@ -491,14 +553,3 @@ verifier architectures: ['Qwen3ForCausalLM']
 proposal type: greedy
 proposal speculative_tokens: 5
 ```
-
-小贴士：
-
-- 4 个核心场景在 vllm-ascend v0.23.0 上端到端串成一条 pipeline；Step 1 → 2 → 3 → 4 产物链：`/root/dflash-qwen3-8b-converted/`（convert 标准格式） → `/root/dflash-train-data/*.safetensors`（训练数据） → `/root/dflash-trained/`（训出的 draft） → chat completion JSON（推理 smoke）。
-- Step 1 + Step 4 是 vllm-ascend 真在 GPU 上干活的环节，Step 2 走 vllm 离线 API、Step 3 走 torchrun 离线训练；单卡约束下「vllm serve 与 train 不能同时跑」通过 Step 2 用离线 API + Step 4 才起 vllm serve 来规避。
-- `--validate-device <device>` 在 DFlash 分支下只用作「是否跑校验」的布尔开关，**设备字符串本身被丢弃**（`entrypoints.py` 把 `validate_device is not None` 透传给 `DFlashConverter.convert(validate=...)`），DFlash 的 `_validate` 是纯 CPU 的 `DFlashDraftModel.from_pretrained(...)` + NaN 检查，没有 GPU / NPU 计算。本文档跳过校验——CLI `dflash` 不在白名单里、Python API 校验与转换解耦，「能保存到目录」已是充分信号。
-- vllm-ascend 的 DFlash proposer 受 `npu_fused_infer_attention_score` 算子 16 token 单次上限约束，`(num_speculative_tokens + 1) ≤ 15`（vllm-ascend docs `feature_guide/speculative_decoding.md` "Common Configuration" 段），Step 4 传 5 是安全值。
-- 上游 `examples/train/dflash_qwen3_8b_sharegpt_online_5k.sh` 是 5k sample × 5 epochs × 4 卡 H100 训 25 min 的脚本，本文 smoke 在 1-card A2 上做了 (5k→10 samples) × (5→1 epoch) × (4 卡并行→1 卡串行) 三处缩量；**Step 3 的 smoke 不验证训练效果**（10 sample × 1 epoch 噪声大于信号），只验证「管线通 + 训出的 checkpoint 形态是 vllm-ascend DFlash proposer 能吃的」。
-- `VerifierConfig.name_or_path` 接受 HF Hub repo id、本地路径或 ModelScope repo id；离线场景下预先用 `modelscope.snapshot_download` 缓存到本地再传入本地路径即可避免外网拉取。`architectures` 是必填字段（pydantic 无默认），既可手动给（见上方代码示例），也可调 `VerifierConfig.from_pretrained("<verifier_path>")` 让 transformers 从 verifier 的 `config.json` 自动读出。
-- `TokenProposalConfig` 是 draft 阶段的 token 提议策略配置基类（pydantic + registry），与具体 speculative decoding 算法（DFlash / EAGLE-3）解耦——v0.7.0.1 唯一已注册的 proposal 是 `GreedyTokenProposalConfig`（`speculators.proposals.greedy`），DFlash 的 convert 路径也是用 greedy 做 token 提议；切换算法只需换 config，对应代码逻辑不必改动。
-- 本文档选 DFlash + Qwen3-8B 而非上游 README 给的 EAGLE-3 + Llama-3.1：前者两个 repo 都在 ModelScope 上（HTTP 200）且非 gated；后者 verifier `meta-llama/Meta-Llama-3.1-8B-Instruct` 在 HF 上 gated（需 HF_TOKEN），且 MS 上没有（HTTP 404），走不了 peft / diffusers 同款的 ModelScope 缓存通道。

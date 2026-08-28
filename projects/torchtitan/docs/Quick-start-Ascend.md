@@ -18,7 +18,7 @@ Atlas 900 A2 / A3 训练系列产品或者 Ascend 950 系列产品，并按需�
 
 **配套机器**：
 
-- **机器类型**：Atlas 900 A2 PODc（Ascend 910B4，64 GB × 2）
+- **机器类型**：Atlas 900 A2 PODc（Ascend 910B4，32 GB × 2 — CANN / 驱动预留约 2.5 GB，每张卡 PyTorch 实测可用 ~30 GB）
 - **操作系统**：Ubuntu 22.04
 
 **配套镜像**：
@@ -33,10 +33,10 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | CANN | 9.1.0 |
 | torch | 2.10.0 |
 | torch_npu | 2.10.0.post4 |
-| triton | 最新（`uv pip install triton`，满足 torchtitan `moe/kernels.py` 的 `import triton`，Llama 3 训练不走 triton kernel） |
-| modelscope | 最新（`uv pip install modelscope`，不锁版本） |
-| torchtitan | 最新 release（v0.2.x 风格 tyro CLI + toml 配置；最新 tag 由 workflow 注入，见下方 `UPSTREAM_REF`） |
-| 训练配置 | `torchtitan/models/llama3/train_configs/debug_model.toml`（dim=256 / 6 层 / 16 head Llama 3 缩水版） |
+| triton | 最新release |
+| modelscope | 最新release |
+| torchtitan | 最新 release |
+| 训练配置 | 单卡 Step 12：`torchtitan/models/llama3/train_configs/debug_model.toml`（debugmodel：dim=256 / 6 层 / 16 head / vocab 2048，~6 M 参数）；多卡 Step 13：`torchtitan/models/llama3/train_configs/llama3_8b.toml`（Llama 3 8B：dim=4096 / 32 层 / 32 head / 8 kv head，FSDP shard=2 + cpu_offload + 全量 bf16 装得下） |
 
 
 ### 检查前置是否满足
@@ -179,10 +179,8 @@ torchtitan xxx
 
 ### 下载 tokenizer
 
-torchtitan 出厂支持 Llama 3 训练。本文档单卡用 toy debugmodel（vocab=2048）+ 真 Llama 3 tokenizer（不跑 forward，vocab mismatch 无影响），多卡用 8B flavor（vocab=128256 配套）。两个章节共用同一份下载：
-
 ```shell #test-setup id="modelscope-download-tokenizer" store="ms_tokenizer_path"
-python -c "from modelscope import snapshot_download; print(snapshot_download('LLM-Research/Meta-Llama-3-8B', allow_patterns=['*.safetensors', '*.json', '*.model', 'tokenizer*']))" | tail -n 1
+python -c "from modelscope import snapshot_download; print(snapshot_download('LLM-Research/Llama-3.2-1B', allow_patterns=['*.json', '*.model', 'tokenizer*']))" | tail -n 1
 ```
 
 > 输出的路径用于后续「单卡训练」和「多卡训练」章节。
@@ -190,38 +188,35 @@ python -c "from modelscope import snapshot_download; print(snapshot_download('LL
 验证 tokenizer 关键文件都落盘：
 
 ```shell #test id="modelscope-verify-tokenizer" load="ms_tokenizer_path>>ms_tokenizer_path"
-ls -la <ms_tokenizer_path> | grep -E '\.(json|model)$' | grep -v safetensors
+ls <ms_tokenizer_path>
 ```
 
-```shell #test-result id="modelscope-verify-tokenizer" fuzzy='xxx' fuzzy='...'
-xxx xxx xxx xxx xxx config.json
-...
-xxx xxx xxx xxx xxx generation_config.json
-...
-xxx xxx xxx xxx xxx special_tokens_map.json
-...
-xxx xxx xxx xxx xxx tokenizer.json
-...
-xxx xxx xxx xxx xxx tokenizer_config.json
-...
-xxx xxx xxx xxx xxx tokenizer.model
-...
+```shell #test-result id="modelscope-verify-tokenizer" fuzzy='...' 
+config.json
+configuration.json
+generation_config.json
+original
+special_tokens_map.json
+tokenizer.json
+tokenizer_config.json
 ```
 
-`xxx` 匹配 `ls -la` 的元信息列，文件名是 Llama 3 tokenizer 必备文件，确认 snapshot_download 命中正确。
+文件名是 Llama 3 tokenizer 必备文件，确认 snapshot_download 命中正确。
 
 ### 单卡训练
 
-用 fake process group 在 1 张 NPU 上跑最简训练，验证配置解析、初始化、加载 tokenizer、build dataloader、`trainer.train()` 整条链路能跑通。`--training.steps 0` 让训练循环直接退出，跳过实际 forward / backward：
+用 `torchrun --nproc_per_node=1` 在 1 张 NPU 上跑 `debug_model` 真跑 2 步，验证配置解析、初始化、加载 tokenizer、build dataloader、forward + backward 整条链路能跑通。`debug_model` 是 torchtitan 自带的最小 smoke 配置（dim=256 / 6 层 / 16 head / vocab 2048，~6 M 参数量），用 `debug_model.toml` 即可，单卡 30 GB 完全够装。走真实 HCCL backend（`--comm.mode default`）让 c10d 把 `npu` 路由到 `hccl`，1-rank 下所有集合通信都是 self-barrier，不会真的有跨卡流量；不要用 `--comm.mode fake_backend` —— 它只注册 `fake` PG，v0.2.2 在 step 1 之后调 `set_pg_timeouts` → `torch.distributed.barrier(device_ids=[npu:0])` 时会因 `default_device_backend_map["npu"]="hccl"` 但当前 PG 是 `fake` 抛 `RuntimeError: No backend type associated with device type npu`。8B 模型单卡实测装不下（params + grads 在 bf16 下就要 32 GB > 30 GB 可用），需要双卡 FSDP shard=2 才跑得动，详见下一节「多卡训练」：
 
-```shell #test id="torchtitan-train-debug" load="upstream_ref>>ref" load="ms_tokenizer_path>>ms_tokenizer_path"
+```shell #test id="torchtitan-train-debug" load="upstream_ref>>ref"
 cd torchtitan && git checkout <ref>
-NGPU=1 ASCEND_RT_VISIBLE_DEVICES=0 LOCAL_RANK=0 \
-python -m torchtitan.train \
+ASCEND_RT_VISIBLE_DEVICES=0 \
+torchrun --nproc_per_node=1 \
+    --rdzv_backend c10d \
+    --rdzv_endpoint="localhost:0" \
+    --module torchtitan.train \
     --job.config-file ./torchtitan/models/llama3/train_configs/debug_model.toml \
-    --model.hf-assets-path <ms_tokenizer_path> \
-    --comm.mode fake_backend \
-    --training.steps 0 \
+    --comm.mode default \
+    --training.steps 2 \
     --training.local-batch-size 1 \
     --training.seq-len 256 \
     --metrics.log-freq 1 \
@@ -232,9 +227,9 @@ python -m torchtitan.train \
 输出结果类似如下：
 
 ```shell #test-result id="torchtitan-train-debug" fuzzy='xxx' fuzzy='...'
+[titan] xxx - root - INFO - torchtitan version: xxx
 [titan] xxx - root - INFO - Starting job: Llama 3 debug training
 ...
-[titan] xxx - root - INFO - Training starts at step xxx
 [titan] xxx - root - INFO - Sleeping 2 seconds for other ranks to complete
 [titan] xxx - root - INFO - Training completed
 [titan] xxx - root - INFO - Process group destroyed
@@ -242,7 +237,7 @@ python -m torchtitan.train \
 
 ### 多卡训练
 
-用 torchrun 起 2 个 rank 跑 8B 真分布式训练，`--model.flavor 8B` 覆盖 toml 默认 debugmodel，`--training.steps 2` 真跑 2 步：
+用 torchrun 起 2 个 rank 跑 8B 模型真分布式训练，`--training.steps 2` 真跑 2 步。`data_parallel_shard_degree = -1` 在双卡下解析成 2，FSDP 把 params / grads / Adam state 都按 shard 分摊，再加 `--training.enable-cpu-offload` 让 FSDP 把 Adam state 卸到 CPU，每张卡 NPU 实测占用 ~16 GB（params 8 GB + grads 8 GB + 激活张量 <1 GB），单卡 30 GB 装得下。再叠 `--training.dtype bfloat16` 把 params / grads / Adam state 全量 bf16，省掉 fp32 Adam state 那 32 GB 副本：
 
 ```shell #test id="torchtitan-train-2card" load="upstream_ref>>ref" load="ms_tokenizer_path>>ms_tokenizer_path"
 cd torchtitan && git checkout <ref>
@@ -254,10 +249,12 @@ torchrun --nproc_per_node=2 \
     --local-ranks-filter 0 \
     --tee 3 \
     --module torchtitan.train \
-    --job.config-file ./torchtitan/models/llama3/train_configs/debug_model.toml \
-    --model.flavor 8B \
+    --job.config-file ./torchtitan/models/llama3/train_configs/llama3_8b.toml \
     --model.hf-assets-path <ms_tokenizer_path> \
     --comm.mode default \
+    --training.dataset c4_test \
+    --training.dtype bfloat16 \
+    --training.enable-cpu-offload \
     --training.steps 2 \
     --training.local-batch-size 1 \
     --training.seq-len 256 \
@@ -269,7 +266,7 @@ torchrun --nproc_per_node=2 \
 输出结果类似如下：
 
 ```shell #test-result id="torchtitan-train-2card" fuzzy='xxx' fuzzy='...'
-[default0]:[titan] xxx - root - INFO - Starting job: Llama 3 debug training
+[default0]:[titan] xxx - root - INFO - Starting job: Llama 3 8B training
 ...
 [default0]:[titan] xxx - root - INFO - Training starts at step xxx
 ...

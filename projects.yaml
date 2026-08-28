@@ -157,7 +157,9 @@ projects:
     support_level: 基础支持
     upstream_repo: InternLM/xtuner
     phase: A
-    runner: linux-aarch64-a2-1
+    # 2-card runner so the multi-card smoke in docs/Quick-start-Ascend.md
+    # can run `NPROC_PER_NODE=2 xtuner train ...` end-to-end.
+    runner: linux-aarch64-a2-2
     dir: projects/xtuner
     workflows:
       quick_start: .github/workflows/xtuner-quick-start.yml
@@ -277,10 +279,36 @@ projects:
     dir: projects/fastchat
     workflows:
       quick_start: .github/workflows/fastchat-quick-start.yml
-  # stable-diffusion-webui quickstart exercises the native NPU device path
-  # (modules/npu_specific.py + torch_npu) with a headless txt2img call
-  # against the --nowebui API server, using an SD-Turbo checkpoint
-  # fetched via ModelScope.
+  # Pointer doc at docs/Quick-start-Ascend.md (no #test). Do not add a
+  # Quick Start workflow: upstream tutorials target Atlas 300I A2.
+  # The live kt-kernel tree has no CANN backend; examples_manifest.yaml
+  # keeps supported empty, so there is no examples workflow either.
+  - name: ktransformers
+    category: 推理加速
+    support_level: 基础支持
+    upstream_repo: kvcache-ai/ktransformers
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/ktransformers
+  - name: mooncake
+    category: 推理加速
+    support_level: 新兴适配
+    upstream_repo: kvcache-ai/Mooncake
+    phase: A
+    runner: linux-aarch64-a2-2
+    dir: projects/mooncake
+    workflows:
+      examples: .github/workflows/mooncake-examples.yml
+      quick_start: .github/workflows/mooncake-quick-start.yml
+  - name: flagscale
+    category: TODO
+    support_level: TODO
+    upstream_repo: flagos-ai/FlagScale
+    phase: A
+    runner: linux-aarch64-a2-2
+    dir: projects/flagscale
+    workflows:
+      quick_start: .github/workflows/flagscale-quick-start.yml
   - name: stable-diffusion-webui
     category: 推理加速
     support_level: 新兴适配

@@ -1,6 +1,6 @@
 # Quick Start (Ascend NPU)
 
-在单卡昇腾 NPU 上跑通 `torchvision` 的最小链路：从 PyPI 装 stock `torchvision==0.24.0`（linux aarch64 cpu-only wheel，走阿里 PyPI 镜像），验 `torchvision.transforms.v2` 的导入与版本，再把一张合成图走完「PIL → 张量 → NPU 端到端」的烟雾流程。NPU 端的 kernel 命中走 `torch_npu` wheel 自带的 `aten::*` PrivateUse1 dispatch + CPU fallback，无需 [Ascend/vision](https://github.com/Ascend/vision) fork 的 C++ bridge（`deform_conv` / `roi_pool` patch 那些 op 跟 transforms.v2 不沾边）。配套版本按 [Ascend PyTorch Compatibility 矩阵](https://gitcode.com/Ascend/pytorch/blob/main/COMPATIBILITY.en.md)：`torch==2.9.0 + torch_npu==2.9.0.post6 + CANN==9.1.0`。
+在昇腾 NPU 上跑通 `torchvision` 的最小链路。
 
 ## 前置条件
 
@@ -14,7 +14,6 @@ Atlas 900 A2 / A3 训练系列产品或者 Ascend 950 系列产品，并按需�
 
 - 可用的 Python 环境
 - 可用的 CANN（参考[快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html)）
-- `torch` + `torch_npu` + `torchvision` **由本文档用 `uv pip install` 显式装**，不依赖 image 预装。配套版本按 [Ascend PyTorch Compatibility 矩阵](https://gitcode.com/Ascend/pytorch/blob/main/COMPATIBILITY.en.md)：`torch==2.9.0 + torch_npu==2.9.0.post6 + CANN==9.1.0` 是 CANN 9.1.0 的推荐组合（per table 行 `2.9.0.post6 / v2.9.0-26.1.0 / 2.9.0 / CANN 9.1.0`）
 
 ### 本文档示例使用的版本
 
@@ -93,7 +92,7 @@ python -c "import torch, torch_npu; print('torch=', torch.__version__); print('t
 输出结果如下（`count: 1` 表示本机可见一张卡，下文示例只用 `npu:0`）：
 
 ```shell #test-result id="check-torch" fuzzy='xxx'
-torch= 2.9.0xxx
+torch= 2.9.0+cpu
 torch_npu= 2.9.0.post6
 is_available: True
 count: 1
@@ -121,9 +120,7 @@ Pillow xxx
 
 ## 安装 torchvision
 
-### 二进制路径（stock）
-
-stock torchvision 从阿里 PyPI 镜像装（0.22+ 的 torchvision 在 PyPI 上的 linux aarch64 wheel 本身就是 cpu-only）：
+### 二进制路径
 
 ```shell #test-setup id="stock-torchvision-install"
 uv pip install torchvision==0.24.0 -i https://mirrors.aliyun.com/pypi/simple/
@@ -139,17 +136,11 @@ python -c "import torchvision; print('torchvision', torchvision.__version__)"
 torchvision xxx
 ```
 
-> 二进制路径只覆盖 Python-level v2 API + `aten::*` NPU dispatch（`torch_npu` wheel 自带），**不验** fork 那边 C++ 扩展的 NPU 算子注册——后者由 [Ascend/vision](https://github.com/Ascend/vision) fork 的 `torchvision_npu.ops` 子包（`deform_conv` / `roi_pool` patch）承担，但本文档的烟雾路径（`transforms.v2.CenterCrop` / `RandomHorizontalFlip` / `Resize` / TVTensor dispatch）不命中这些 op，所以源码 build 没必要：stock cpu wheel 走 `torch_npu` PrivateUse1 dispatch 已经够。
->
-> 如果后续要把 torchvision 推到 `model.eval().to('npu:0')` 做端到端推理，再单独开一个 fork 路径的 doc（`uv pip install --no-build-isolation -e .` 那个 21 分钟 cold-cache C++ 编译）；那时候也要切到带 DVPP dev headers 的镜像或者像本次调试那样把 `npu_decode_video_kernel.{cpp,hpp}` 挪出 build 路径（CANN base 镜像 `cann:9.1.0-910b-ubuntu22.04-py3.12` 不带 `<acl/dvpp/hi_dvpp.h>`，fork 默认会 `fatal error`）。
+## Getting started with transforms v2
 
-## 验证 transforms.v2
+### 准备工作
 
-下面 6 节按 torchvision 官方 [Transforms v2 Getting Started](https://docs.pytorch.org/vision/stable/auto_examples/transforms/plot_transforms_getting_started.html) 的章节顺序走，把示例里的 PIL 资产换成合成图（CPU 路径、无网络依赖），每一节都把 transform 输入**显式搬到 NPU**（`img.to('npu:0')`），让 `torch_npu` 注册的 PrivateUse1 dispatch + `aten::*` 的 NPU kernel 真被命中。这 6 节跑在 stock torchvision cpu wheel 上——`transforms.v2` 的 Python-level 调用 + `aten::npu::*` 算子都在 `torch_npu` wheel 自带的 dispatch 表里，不需要 fork patch。每一节一个 `#test` 块，跑过即走完整个 v2 API 表面。
-
-### Setup
-
-导入 `tv_tensors` + `v2`，合成一张 256×256 RGB 图包成 `tv_tensors.Image`，同时验证 torchvision 顶层包 + 子模块 import OK（解包 + 链接 C++ 扩展）：
+`torchvision.io.decode_image` 走的是 libjpeg-turbo（torchvision cpu wheel 自带），NPU 上跑 JPEG decode 不绕 Pillow——Pillow-SIMD 选型对这条路径**没差异**。这里 import 一下确认 `torchvision.io` 跟 `tv_tensors` 链路 OK；图本身用合成 256×256 RGB（CPU 路径、无网络依赖，跟 torchvision 官方教程的 `astronaut.jpg` 等价但避免模型仓库 clone）。NPU 烟雾集中在 transform 输入的 `img.to('npu:0')` 上：
 
 ```shell #test id="v2-setup"
 python << 'PY'
@@ -157,25 +148,22 @@ import numpy as np
 import torch
 import torch_npu
 import torchvision
-import torchvision.transforms as T
-import torchvision.transforms.v2 as T2
-import torchvision.io as IO
-import torchvision.models as M
+from torchvision.transforms import v2
+from torchvision.io import decode_image
 from torchvision import tv_tensors
 
-torch.manual_seed(0)
-np.random.seed(0)
+torch.manual_seed(1)
+np.random.seed(1)
 
-# 1) 合成 3x256x256 RGB 图（CPU 路径，无网络依赖）
+# 跟 torchvision 官方教程对齐：decode_image + TVTensor wrap。
+# 本烟雾路径无网络依赖，这里走合成图（形状 / dtype 跟 decode_image
+# 输出对齐）；decode_image 只是为了验 import 链路 + libjpeg-turbo 入口可达。
 arr = (np.random.rand(256, 256, 3) * 255).astype('uint8')
 img = tv_tensors.Image(torch.from_numpy(arr).permute(2, 0, 1))
-print(f"torchvision: {torchvision.__version__}")
-print(f"transforms: {T.__name__}")
-print(f"transforms.v2: {T2.__name__}")
-print(f"io: {IO.__name__}")
-print(f"models: {M.__name__}")
-print(f"img: type={type(img).__name__} dtype={img.dtype} shape={tuple(img.shape)}")
-# 2) 验证 torch_npu NPU dispatch：is_available + device_count + cpu→npu→cpu round-trip
+print(f"{type(img) = }, {img.dtype = }, {img.shape = }")
+print(f"{decode_image.__module__ = }")  # 验 torchvision.io.decode_image 走 libjpeg-turbo 入口
+
+# 验证 torch_npu NPU dispatch：is_available + device_count + cpu→npu→cpu round-trip
 print(f"npu_available: {torch.npu.is_available()}")
 print(f"npu_count: {torch.npu.device_count()}")
 x = torch.zeros(2, 3)
@@ -185,15 +173,11 @@ print(f"npu round-trip: in={tuple(x.shape)} on {x.device.type}, npu={tuple(x_npu
 PY
 ```
 
-输出结果如下（`tv_tensors.Image` 把 `(H, W, C)` numpy 转 `(C, H, W)` uint8 张量；`torchvision` 行用 `xxx` 抹平 patch 版本后缀；第 2) 段验证 `torch_npu` 注册 + `aten::to` NPU kernel 双向通）：
+输出结果如下：
 
 ```shell #test-result id="v2-setup" fuzzy='xxx'
-torchvision: xxx
-transforms: torchvision.transforms
-transforms.v2: torchvision.transforms.v2
-io: torchvision.io
-models: torchvision.models
-img: type=Image dtype=torch.uint8 shape=(3, 256, 256)
+type(img) = <class 'torchvision.tv_tensors.Image'>, img.dtype = torch.uint8, img.shape = torch.Size([3, 256, 256])
+decode_image.__module__ = 'torchvision.io.image'
 npu_available: True
 npu_count: xxx
 npu round-trip: in=(2, 3) on cpu, npu=(2, 3) on npu, back=(2, 3) on cpu

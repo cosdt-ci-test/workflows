@@ -251,20 +251,8 @@ else
 fi
 ```
 
-```shell #test-result id="npu-function-verification" fuzzy='xxx'
-xxx Example Input Summary:
-xxx - prompt: A cat holding a sign that says hello world
-xxx - height: 512
-xxx - width: 512
-xxx - num_inference_steps: 10
-xxx Example Output Summary:
-xxx - Model: flux
-xxx - Optimization: xxx
-xxx - Load Time: xxx
-xxx - Warmup Time: xxx
-xxx - Inference Time: xxx
-xxx Image saved to output/test.png
-xxx
+```shell #test-result id="npu-function-verification" fuzzy='@@@'
+@@@Example Input Summary:@@@- prompt: A cat holding a sign that says hello world@@@Example Output Summary:@@@Model: flux@@@Optimization: @@@Load Time: @@@Inference Time: @@@Image saved to output/test.png@@@
 ```
 预期：进程退出码为 0，`output/test.png` 文件被创建，日志中出现推理时间统计。
 

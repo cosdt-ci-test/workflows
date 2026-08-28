@@ -119,6 +119,32 @@ git clone --depth 1 --branch <ref> https://github.com/opencv/opencv_contrib.git
 
 > `<ref>` 为工作流注入的最新 release tag。
 
+#### 修补 OpenCV 5.0.0 CANN backend 的 MatShape 签名不匹配
+
+OpenCV 5.0.0 把 `cv::MatShape` 从 `std::vector<int>` 的别名改成了一个独立 struct（mat.hpp:106，加了 layout / dims 等字段），但 `modules/dnn/src/op_cann.{hpp,cpp}` 里的 `CannConstOp` 构造函数仍按老签名 `const std::vector<int>& shape` 写，导致 `dnn` 模板里 `std::make_shared<CannConstOp>(..., shape(w_mat), ...)`（convolution_layer.cpp:703 等 20+ 处）编译报 `no known conversion for argument 3 from 'cv::MatShape' to 'const std::vector<int>&'`。
+
+把构造函数第三参数改成 `const cv::MatShape&` 即可——`MatShape` 自身提供了 `begin()` / `end()`（mat.hpp:142-145），`.cpp` 里 `std::vector<int64_t> shape_{shape.begin(), shape.end()};` 不需要改。等 5.0.1 / 主仓把 CANN backend 重命名到 contrib 后这步可删。
+
+```shell #test-setup
+python3 - <<'PY'
+import pathlib
+old = 'const std::vector<int>& shape, const std::string& name'
+new = 'const cv::MatShape& shape, const std::string& name'
+for rel in ['opencv/modules/dnn/src/op_cann.hpp',
+            'opencv/modules/dnn/src/op_cann.cpp']:
+    p = pathlib.Path(rel)
+    s = p.read_text()
+    assert old in s, f'{rel}: pattern not found'
+    p.write_text(s.replace(old, new))
+    print(f'{rel}: patched ({s.count(old)} occurrence)')
+PY
+grep -c 'const cv::MatShape& shape, const std::string& name' \
+  opencv/modules/dnn/src/op_cann.hpp \
+  opencv/modules/dnn/src/op_cann.cpp
+```
+
+预期：`patched (1 occurrence)` 两行各输出一次（hpp 改声明、cpp 改定义），`grep -c` 各输出 1。Python 而非 sed：`&` 在 sed 替换串里代表匹配文本，转义 `\&` 在 GNU/BSD sed 行为不一致，换 Python 避免踩坑。
+
 #### 桥接 OpenCV 5.0.0 与 CANN 9.1.0 的 layout 差
 
 mainline 5.0.0 的 `OpenCVFindCANN.cmake` 假设库在 `${CANN_INSTALL_DIR}/{acllib,lib64,compiler/lib64}/` 下，但 CANN 9.1.0 实际把 ACL/AOE/GE 库都装在 `${CANN_INSTALL_DIR}/aarch64-linux/lib64/`。补三个软链让 cmake 找得到：

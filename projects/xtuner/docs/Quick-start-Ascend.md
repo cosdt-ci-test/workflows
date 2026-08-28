@@ -350,11 +350,29 @@ print(save_path)
 #   PART 3 Dataset & Dataloader
 #     train_dataset = process_hf_dataset(dataset=dict(type=load_dataset, path='json',
 #                                                     data_files=dict(train=data_path)), ...)
-sed -i "s|pretrained_model_name_or_path = 'internlm/internlm2-7b'|pretrained_model_name_or_path = './Shanghai_AI_Laboratory/internlm2-chat-7b'|" <cfg>
-sed -i "s|data_path = 'burkelibbey/colors'|data_path = './colors/train.jsonl'|" <cfg>
-sed -i "s|prompt_template = PROMPT_TEMPLATE.default|prompt_template = PROMPT_TEMPLATE.internlm2_chat|" <cfg>
-sed -i "s|dataset=dict(type=load_dataset, path=data_path)|dataset=dict(type=load_dataset, path='json', data_files=dict(train=data_path))|" <cfg>
-echo "<cfg>"
+# 用 Python str.replace 而非 sed：xtuner cfg 用双引号 ("...")，sed 单引号 pattern 不会匹配；
+# 走 Python 字面量替换最稳，避免引号/escape/竖线 delimiter 误伤 cfg 里其他内容。
+python -c "
+path = '<cfg>'
+with open(path) as f:
+    text = f.read()
+replacements = [
+    ('pretrained_model_name_or_path = \"internlm/internlm2-7b\"',
+     \"pretrained_model_name_or_path = './Shanghai_AI_Laboratory/internlm2-chat-7b'\"),
+    ('data_path = \"burkelibbey/colors\"',
+     \"data_path = './colors/train.jsonl'\"),
+    ('prompt_template = PROMPT_TEMPLATE.default',
+     'prompt_template = PROMPT_TEMPLATE.internlm2_chat'),
+    ('dataset=dict(type=load_dataset, path=data_path)',
+     \"dataset=dict(type=load_dataset, path='json', data_files=dict(train=data_path))\"),
+]
+for old, new in replacements:
+    assert old in text, f'patch source not found: {old!r}'
+    text = text.replace(old, new)
+with open(path, 'w') as f:
+    f.write(text)
+print(path)
+"
 ```
 
 ```shell #test id="xtuner-patch-cfg" load="xtuner_llm_cfg_path>>cfg"

@@ -440,12 +440,19 @@ setsid nohup python scripts/launch_vllm.py "<verifier_path>" \
   > /tmp/vllm-gen.log 2>&1 < /dev/null &
 VLLM_GEN_PID=$!
 VLLM_GEN_PGID=$(ps -o pgid= -p "$VLLM_GEN_PID" | tr -d ' ')
+# 注意：不能用 `pkill -f "scripts/launch_vllm.py"` ——bash 子进程 cmdline 也含这串、
+# 会把 bash 一起 -9 自杀（CI 33196117621 教训：cleanup 调 pkill → bash 收 SIGKILL →
+# rc=-9 + stderr=0B，看不到任何诊断）。所有 cleanup 必须走 $VLLM_GEN_PID 或更
+# 具体的固定字符串（不含本脚本 cmdline 内容）
 cleanup_vllm_gen() {
+  # 先 SIGTERM 整 vllm 进程组（包括 vllm fork 的 worker 子进程）
   kill -- -"$VLLM_GEN_PGID" 2>/dev/null || true
-  sleep 2
-  kill -9 -- -"$VLLM_GEN_PGID" 2>/dev/null || true
-  pkill -9 -f "scripts/launch_vllm.py" 2>/dev/null || true
-  pkill -9 -f "vllm.entrypoints.cli" 2>/dev/null || true
+  # 兜底 SIGKILL launcher + engine 子进程（用 launcher 实际 PID，绕开 cmdline 匹配）
+  for _pid in $(pgrep -P "$VLLM_GEN_PID" 2>/dev/null) "$VLLM_GEN_PID"; do
+    kill -9 "$_pid" 2>/dev/null || true
+  done
+  # 最后兜底用绝对固定字符串（vllm 框架内部 module 路径，bash cmdline 不会有）
+  pkill -9 -x "vllm" 2>/dev/null || true
 }
 trap cleanup_vllm_gen EXIT
 

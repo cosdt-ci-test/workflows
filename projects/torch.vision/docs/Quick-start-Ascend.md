@@ -34,7 +34,7 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | CANN | 9.1.0 |
 | torch | 2.9.0+cpu |
 | torch_npu | 2.9.0.post6 |
-| torchvision | 0.24.0（stock release，PyPI linux aarch64 cpu-only wheel，走阿里 PyPI 镜像；fork 不在本文烟雾路径里） |
+| torchvision | 最新版（不 pin 版本号，让 pip 跟 `torch==2.9.0` 解析 PyPI linux aarch64 cpu-only wheel，走阿里 PyPI 镜像） |
 | pillow | `>=10.0`（`torchvision.transforms.functional.to_pil_image` 等的运行时依赖） |
 
 ### 前置安装
@@ -123,7 +123,7 @@ Pillow xxx
 ### 二进制路径
 
 ```shell #test-setup id="stock-torchvision-install"
-uv pip install torchvision==0.24.0 -i https://mirrors.aliyun.com/pypi/simple/
+uv pip install torchvision -i https://mirrors.aliyun.com/pypi/simple/
 ```
 
 打印版本：
@@ -138,13 +138,13 @@ torchvision xxx
 
 ## transforms v2 入门
 
-下面 9 节用一个**合成的 256×256 RGB 测试图**走一遍 transforms v2 的核心用法。每节都把图搬到 NPU 上跑（`img.to('npu:0')`），用 v2 的 `BoundingBoxes` / `Mask` / `Video` / `KeyPoints` 配合验证 dispatch 链路。**没有真实数据集 / 模型 checkpoint 依赖**——纯 CPU / NPU 算子烟雾，整段 5 分钟内跑完。
+用一个**合成的 256×256 RGB 测试图**走一遍 transforms v2 的核心用法。每节都把图搬到 NPU 上跑（`img.to('npu:0')`），用 v2 的 `BoundingBoxes` / `Mask` / `Video` / `KeyPoints` 配合验证 dispatch 链路。
 
-> torchvision 源码在 [github.com/pytorch/vision](https://github.com/pytorch/vision)；本文档对应 stock 0.24.0 release wheel，跟官方 [Getting started with transforms v2](https://pytorch.org/vision/stable/transforms/v2/auto_examples/transforms/plot_transforms_getting_started.html) 教程一一对应。
+> torchvision 源码在 [github.com/pytorch/vision](https://github.com/pytorch/vision)；本文档从 PyPI 拉最新稳定 release wheel，跟官方 [Getting started with transforms v2](https://pytorch.org/vision/stable/transforms/v2/auto_examples/transforms/plot_transforms_getting_started.html) 教程一一对应。
 
-### 第 0 步：导入包 + 检查 NPU + 合成测试图
+### 导入包 + 检查 NPU + 合成测试图
 
-第一次接触 v2？这一节先让你**确认环境就绪**：
+**确认环境就绪**：
 
 - `torch_npu` 装好且能看到 NPU 设备
 - `tv_tensors` 跟 `torchvision.io` 的链路通
@@ -184,7 +184,7 @@ print(f"npu round-trip: in={tuple(x.shape)} on {x.device.type}, npu={tuple(x_npu
 PY
 ```
 
-输出结果如下（`type(img)` 显示是 `tv_tensors.Image` 而不是普通 `torch.Tensor`——这一点很关键：**transforms 就是按这个类型做 dispatch 的**，后面的章节会反复用到）：
+输出结果如下：
 
 ```shell #test-result id="v2-setup" fuzzy='xxx'
 type(img) = <class 'torchvision.tv_tensors.Image'>, img.dtype = torch.uint8, img.shape = torch.Size([3, 256, 256])

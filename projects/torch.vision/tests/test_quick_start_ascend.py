@@ -29,7 +29,7 @@ Scope note: the doc body covers the smoke path for **stock torchvision**
 running under ``torch_npu`` PrivateUse1 dispatch. ``torch`` /
 ``torch_npu`` / ``torchvision`` are all installed by the doc body via
 ``uv pip install`` from Aliyun PyPI mirror / Huawei Cloud ascend pypi
-(versions per [Ascend PyTorch Compatibility 矩阵](https://gitcode.com/Ascend/pytorch/blob/main/COMPATIBILITY.en.md): torch==2.9.0 / torch_npu==2.9.0.post6 / CANN==9.1.0 / torchvision==0.24.0). No Ascend/vision fork source build: the fork is a
+(versions per [Ascend PyTorch Compatibility 矩阵](https://gitcode.com/Ascend/pytorch/blob/main/COMPATIBILITY.en.md): torch==2.9.0 / torch_npu==2.9.0.post6 / CANN==9.1.0; torchvision unconstrained, pip 跟 `torch==2.9.0` 解析 PyPI linux aarch64 cpu-only wheel 最新版). No Ascend/vision fork source build: the fork is a
 ``torchvision_npu`` patch package whose ops (``deform_conv`` / ``roi_pool``)
 are not exercised by the transforms.v2 smoke path, and its ``csrc`` includes
 a ``npu_decode_video_kernel.{cpp,hpp}`` that needs CANN DVPP dev headers not

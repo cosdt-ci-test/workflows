@@ -66,6 +66,19 @@ supported_profiles() {
   declare -F | awk '/^declare -f setup_/ { sub(/^declare -f setup_/, ""); print }' | paste -sd' ' -
 }
 
+# Ensure the example model is present; reuse the mounted CI cache when
+# available, otherwise pull it from ModelScope (idempotent).
+ensure_model() {
+  local model_dir="/root/.cache/modelscope/Qwen2-7B-Instruct"
+  if [ -d "$model_dir" ] && [ -n "$(ls -A "$model_dir" 2>/dev/null)" ]; then
+    echo "model already cached at $model_dir; skipping download"
+    return
+  fi
+  echo "downloading Qwen2-7B-Instruct via modelscope to $model_dir"
+  python -m pip install -q modelscope 2>/dev/null || true
+  python -c "from modelscope import snapshot_download; snapshot_download('Qwen/Qwen2-7B-Instruct', local_dir='$model_dir')"
+}
+
 if ! declare -F "setup_${PROFILE}" >/dev/null 2>&1; then
   echo "unknown profile: ${PROFILE} (supported: $(supported_profiles))" >&2
   exit 1
@@ -87,3 +100,13 @@ python -c "import torch, torch_npu; print('torch:', torch.__version__, 'torch_np
 npu-smi info
 
 "setup_${PROFILE}"
+
+# Default profile: the xllm dev image ships xllm pre-installed, so we only
+# verify the import (never build here) and make sure the example model is
+# cached. `examples/` lives in the checked-out target tree; run_example.sh
+# does `cd "$TARGET_ROOT"` so it is importable without extra PYTHONPATH.
+setup_default() {
+  echo "profile=default: xllm is pre-installed in the image; verifying import"
+  python -c "import xllm; print('xllm:', xllm.__version__)"
+  ensure_model
+}

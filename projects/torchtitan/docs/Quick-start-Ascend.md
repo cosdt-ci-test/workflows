@@ -209,6 +209,7 @@ tokenizer_config.json
 
 ```shell #test id="torchtitan-train-debug" load="upstream_ref>>ref" load="ms_tokenizer_path>>ms_tokenizer_path"
 cd torchtitan && git checkout <ref>
+HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
 NGPU=1 ASCEND_RT_VISIBLE_DEVICES=0 LOCAL_RANK=0 \
 python -m torchtitan.train \
     --job.config-file ./torchtitan/models/llama3/train_configs/llama3_8b.toml \
@@ -245,6 +246,7 @@ python -m torchtitan.train \
 
 ```shell #test id="torchtitan-train-2card" load="upstream_ref>>ref" load="ms_tokenizer_path>>ms_tokenizer_path"
 cd torchtitan && git checkout <ref>
+HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
 ASCEND_RT_VISIBLE_DEVICES=0,1 \
 PYTORCH_ALLOC_CONF="expandable_segments:True" \
 torchrun --nproc_per_node=2 \

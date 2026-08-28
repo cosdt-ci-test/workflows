@@ -537,10 +537,13 @@ xtuner convert merge ./Shanghai_AI_Laboratory/internlm2-chat-7b \
 ```shell #test id="xtuner-chat-help"
 # 不能直接 xtuner chat --help —— chat.py 顶层 import peft + transformers，触发 torchvision chain
 # 在 NPU image 挂。改成检查 chat.py 文件存在 + 关键参数在源码里有定义：
+# 注：xtuner 是 egg-link/namespace 装的，`xtuner.__file__` 是 None；从 xtuner.entry_point.__file__
+# （regular module，.py 文件路径）推导：
 python -c "
 import os.path as osp
-import xtuner
-chat_path = osp.join(osp.dirname(xtuner.__file__), 'tools', 'chat.py')
+import xtuner.entry_point
+xtuner_dir = osp.dirname(osp.dirname(xtuner.entry_point.__file__))
+chat_path = osp.join(xtuner_dir, 'tools', 'chat.py')
 with open(chat_path) as f:
     src = f.read()
 print('chat_script_exists: ' + str(osp.exists(chat_path)))

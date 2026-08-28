@@ -73,10 +73,15 @@ jobs:
       # cache pulls.
       timeout_minutes: 240
       upstream_repo: opencv/opencv
-      # Same URL the legacy workflow monitors: doc-hash state carries
-      # over via the shared monitor-state-opencv- cache prefix.
-      doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/opencv/docs/Quick-start-Ascend.md
-      doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/opencv/docs/Quick-start-Ascend.md
+      # `?ref=${{ github.sha }}` so test fetches THIS branch's doc, not main.
+      # Without the ref pin, the Contents API returns main's doc and the
+      # hdc-side doc fixes (Debug+j2 / a2-4 runner / fuzzy fix) are
+      # invisible to the runner — the test re-runs main's failing recipe
+      # and we get the same OOM every dispatch. Same fix as
+      # speculators (8e04823) and torchtune (b11069f); once hdc merges
+      # into main, the SHA auto-resolves to main HEAD on schedule runs.
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/opencv/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/opencv/docs/Quick-start-Ascend.md
       # cwd is workflows/projects/opencv; env contract (MONITORED_DOC_URL /
       # UPSTREAM_REF / NPU_READY) is injected by the engine. All project
       # env prep and installs live in the test subclass's

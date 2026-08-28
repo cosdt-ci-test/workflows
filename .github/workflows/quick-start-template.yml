@@ -474,7 +474,29 @@ jobs:
           # pip's own resolver. Inherits PIP_INDEX_URL /
           # PIP_TRUSTED_HOST from job env (cluster cache + trusted-host).
           python -m pip install 'mistune>=3,<4'
-          ${{ inputs.test_command }}
+          ${{ inputs.test_command }} 2>&1 | tee /tmp/_test_runner.log
+
+      # Capture the test runner's stdout/stderr as an artifact. The
+      # GitHub Actions step log (visible via ``gh run view --log``) expires
+      # within minutes of run completion, which makes it impossible to
+      # debug a failure that surfaces only after the run finishes (the
+      # Speculators case: 25-35 min vllm source build + 5-7 min LLM()
+      # offline inference + the test framework's ``_dump_command_output``
+      # only fires on the failing block). Persisting the runner log +
+      # any framework-side dumps as an artifact gives a 90-day window
+      # to diagnose. ``if: always()`` so success runs also keep the log
+      # for golden-output regression checks; ``if-no-files-found: warn``
+      # because on a fast-pass the runner's stdout may be empty.
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ inputs.project }}-quick-start-logs-${{ github.run_id }}
+          path: |
+            /tmp/_test_runner.log
+            /tmp/.test_*.log
+            workflows/.monitor-state/.test-runner.log
+          if-no-files-found: warn
 
       # Schedule + need_to_test - dispatch forces need_to_test=true
       # but must not mutate monitor state (otherwise it would clobber

@@ -556,19 +556,33 @@ def _patch_triton():
     try:
         import triton
         from triton.runtime import driver as _drv
-        _active = _drv.active
+        # driver.active 本身可能是 callable，必须 () 拿到 Driver 实例——
+        # 之前直接 _drv.active 拿到 function，给它 setattr('profiler', ...) 后
+        # 调用方 _drv.active.profiler 仍走 getter 拿到的 Driver 上没这个属性（CI 33218177472 教训）
+        try:
+            _active = _drv.active()
+        except TypeError:
+            _active = _drv.active
+        if not hasattr(_active, 'profiler'):
+            try:
+                _active.profiler = lambda *a, **kw: None
+            except Exception as _e:
+                print(f'[sitecustomize] profiler stub failed: {_e}', file=_s.stderr, flush=True)
+        if not hasattr(_active, 'utils') or not hasattr(getattr(_active, 'utils', None), 'set_printf_fifo_size'):
+            try:
+                _active.utils = type('U', (), {'set_printf_fifo_size': staticmethod(lambda *a, **kw: None)})()
+            except Exception as _e:
+                print(f'[sitecustomize] utils stub failed: {_e}', file=_s.stderr, flush=True)
         for _name, _stub in (
-            ('profiler', lambda *a, **kw: None),
             ('get_active_torch_device', lambda: 'npu'),
             ('set_printf_fifo_size', lambda *a, **kw: None),
             ('get_current_target', lambda: None),
-            ('utils', type('U', (), {'set_printf_fifo_size': staticmethod(lambda *a, **kw: None)})()),
         ):
             if not hasattr(_active, _name):
                 try:
                     setattr(_active, _name, _stub)
-                except Exception:
-                    pass
+                except Exception as _e:
+                    print(f'[sitecustomize] {_name} stub failed: {_e}', file=_s.stderr, flush=True)
     except Exception as _e:
         print(f'[sitecustomize] triton patch skipped: {_e}', file=_s.stderr, flush=True)
 _patch_triton()

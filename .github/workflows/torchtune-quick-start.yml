@@ -95,7 +95,11 @@ jobs:
       # This same problem hits the other 9 quick-start projects in
       # this repo; torchtune is the first to flip — once green, port
       # the same `doc_url:` rewrite to the rest.
-      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/torchtune/docs/Quick-start-Ascend.md
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/torchtune/docs/Quick-start-Ascend.md?ref=hdc
+      # ^ `?ref=hdc` so test fetches this branch's doc, not main. The Contents
+      # API without ?ref= returns the default branch; without this pin the
+      # hdc-side doc fix is invisible to the runner and we re-run main's
+      # failure. Remove the ?ref=hdc once hdc merges into main.
       doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/torchtune/docs/Quick-start-Ascend.md
       # cwd is workflows/projects/torchtune; env contract (MONITORED_DOC_URL /
       # UPSTREAM_REF / NPU_READY) is injected by the engine. All project

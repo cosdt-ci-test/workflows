@@ -542,7 +542,7 @@ xtuner convert merge ./Shanghai_AI_Laboratory/internlm2-chat-7b \
 python -c "
 import os.path as osp
 import xtuner.entry_point
-xtuner_dir = osp.dirname(osp.dirname(xtuner.entry_point.__file__))
+xtuner_dir = osp.dirname(xtuner.entry_point.__file__)
 chat_path = osp.join(xtuner_dir, 'tools', 'chat.py')
 with open(chat_path) as f:
     src = f.read()

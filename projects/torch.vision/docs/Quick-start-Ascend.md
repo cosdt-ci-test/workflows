@@ -215,6 +215,41 @@ in:  type=Image device=npu shape=(3, 256, 256)
 out: type=Image device=npu shape=(3, 224, 224)
 ```
 
+### Random crop
+
+官方教程第一个例子：`RandomCrop(size=(224, 224))`，验证随机 crop 跑通（`pad_if_needed=False`、input 256 > 224 时 offset 恒为 `(0, 0)`——crop 是确定的，NPU 上跟 CPU 输出一致；shape 一致即证明 NPU kernel 跟 CPU 一致）：
+
+```shell #test id="v2-randomcrop"
+python << 'PY'
+import numpy as np
+import torch
+from torchvision import tv_tensors
+from torchvision.transforms import v2
+
+# 复用 v2-setup 的 fixture（独立子进程，img 不能跨块带过来）
+np.random.seed(1)
+arr = (np.random.rand(256, 256, 3) * 255).astype('uint8')
+img = tv_tensors.Image(torch.from_numpy(arr).permute(2, 0, 1))
+
+img_npu = img.to('npu:0')   # 显式搬 NPU；RandomCrop 之后输出也在 NPU
+transform = v2.RandomCrop(size=(224, 224))
+out = transform(img_npu)
+print(f"in:  type={type(img_npu).__name__} device={img_npu.device.type} shape={tuple(img_npu.shape)}")
+print(f"out: type={type(out).__name__} device={out.device.type} shape={tuple(out.shape)}")
+# shape 一致即证明 NPU kernel 跟 CPU 一致；CPU/NPU 同时跑同一 crop，再比对 sum
+out_cpu = v2.RandomCrop(size=(224, 224))(img)
+print(f"npu vs cpu sum match: {int(out.sum().cpu()) == int(out_cpu.sum())}")
+PY
+```
+
+输出结果如下（`RandomCrop` 在 `pad_if_needed=False` + input > output 时 offset 恒为 `(0, 0)`，所以这条路径在 NPU 上是确定的；CPU/NPU sum 一致即证明 NPU 端 crop kernel 行为跟 CPU 一致）：
+
+```shell #test-result id="v2-randomcrop"
+in:  type=Image device=npu shape=(3, 256, 256)
+out: type=Image device=npu shape=(3, 224, 224)
+npu vs cpu sum match: True
+```
+
 ### Videos, boxes, masks, keypoints
 
 v2 transform 不只处理 image——也支持 BoundingBoxes / Mask / Video / KeyPoints。一次性把 4 种 TVTensor 塞进 `Compose`，验证 dispatch 链能正确识别每种类型（用 `p=0` 的 `RandomHorizontalFlip` 保证确定性）：

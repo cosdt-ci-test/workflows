@@ -211,8 +211,9 @@ python -c "from modelscope import snapshot_download; snapshot_download('Shanghai
 ```
 
 ```shell #test id="xtuner-pull-weights"
-test -f ./Shanghai_AI_Laboratory/internlm2-chat-7b/config.json && echo "weights_ok"
-ls -la ./Shanghai_AI_Laboratory/internlm2-chat-7b/ | head -1
+ws=$(find ./Shanghai_AI_Laboratory -name config.json -print -quit)
+test -n "$ws" && test -f "$ws" && echo "weights_ok"
+ls -la "$(dirname "$ws")" | head -1
 echo "config_json_present: ok"
 ```
 

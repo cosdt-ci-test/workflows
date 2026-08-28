@@ -77,8 +77,7 @@ jobs:
       # exercise real HCCS collective. Same runner, two configs.
       test_runner: '["linux-aarch64-a2-2"]'
       image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-      container_options: >-
-        --volume=/data/ci-cache/modelscope/torchtitan:/root/.cache/modelscope
+      container_options: ''
       # Doc body does: git clone + uv pip install -r requirements.txt +
       # uv pip install -e . --no-deps + a 1-step llama3_debugmodel run
       # under --comm.mode fake_backend (Step 1, single card) +

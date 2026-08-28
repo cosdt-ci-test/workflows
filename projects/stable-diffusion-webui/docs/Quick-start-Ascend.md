@@ -100,38 +100,24 @@ HEAD xxx
 
 ## 安装依赖
 
+stable-diffusion-webui 的依赖 pin 为 py3.10 时代版本（部分包没有 cp312 wheel），因此用 `uv` 建一个**独立的 py3.10 venv**（`uv` 会自动托管下载 CPython 3.10），所有安装与运行都走该 venv：
+
 ```shell #test-setup
-python -m pip install modelscope
+uv venv --python 3.10 /tmp/sd-webui-venv
+/tmp/sd-webui-venv/bin/python -m pip install modelscope
+/tmp/sd-webui-venv/bin/python -m pip install torch==2.9.0 torchvision
+/tmp/sd-webui-venv/bin/python -m pip install torch_npu==2.9.0.post2
 cd stable-diffusion-webui
-python - <<'PY'
-import pathlib
-p = pathlib.Path('requirements_versions.txt')
-overrides = {
-    'torch==': None, 'torchvision==': None, 'torchaudio==': None,
-    'transformers==': 'transformers>=4.41,<5',
-    'tokenizers==': 'tokenizers>=0.19,<0.21',
-    'scipy==': 'scipy>=1.11.4',
-    'Pillow==': 'Pillow>=10.4',
-}
-lines = []
-for ln in p.read_text().splitlines():
-    key = next((k for k in overrides if ln.startswith(k)), None)
-    if key is None:
-        lines.append(ln)
-    elif overrides[key]:
-        lines.append(overrides[key])
-p.write_text('\n'.join(lines) + '\n')
-print('requirements_versions.txt aligned with py3.12 + torch 2.9 NPU env')
-PY
-python -m pip install -r requirements.txt
+/tmp/sd-webui-venv/bin/python -m pip install -r requirements.txt
 ```
 
-> 上游 pin 针对 py3.10 时代：`tokenizers` 旧版无 cp312 wheel 且源码构建需 Rust；`torch==` 若保留会把镜像的 torch 2.9 + torch_npu 降级覆盖。因此在安装前把个别 pin 对齐到本环境（torch 栈由镜像提供、transformers 放宽到 4.4x、scipy/Pillow 升到有 cp312 wheel 的版本），其余 pin 保持不变。
+> - `torch==2.9.0` + `torch_npu==2.9.0.post2` 与本机 CANN 9.1 配套，且均有 py3.10 wheel；`torch_npu` 来自华为云昇腾源（流水线已注入 extra index）。
+> - `requirements.txt` 按上游原样安装，不做任何 pin 改动。
 
 验证依赖可用：
 
 ```shell #test id="install-deps"
-python -c "import modelscope, gradio, fastapi; print('deps ok')"
+/tmp/sd-webui-venv/bin/python -c "import modelscope, gradio, fastapi; print('deps ok')"
 ```
 
 输出结果如下：
@@ -145,7 +131,7 @@ deps ok
 ## 下载模型
 
 ```shell #test-setup store="model_dir"
-python -c "from modelscope import snapshot_download; print(snapshot_download('AI-ModelScope/sd-turbo', revision='master'))" | tail -n 1
+/tmp/sd-webui-venv/bin/python -c "from modelscope import snapshot_download; print(snapshot_download('AI-ModelScope/sd-turbo', revision='master'))" | tail -n 1
 ```
 
 > `tail -n 1` 过滤下载进度输出，仅保留模型目录路径；sd-turbo 为 1 步采样的蒸馏模型，下载约 3.4GB，首次运行请耐心等待。
@@ -156,7 +142,7 @@ python -c "from modelscope import snapshot_download; print(snapshot_download('AI
 
 ```shell #test-setup store="api_pid" load="model_dir>>ckpt"
 cd stable-diffusion-webui
-nohup python launch.py --nowebui --skip-torch-cuda-test --no-half --ckpt <ckpt> --port 7861 > /tmp/sdwebui.log 2>&1 &
+nohup /tmp/sd-webui-venv/bin/python launch.py --nowebui --skip-torch-cuda-test --no-half --ckpt <ckpt> --port 7861 > /tmp/sdwebui.log 2>&1 &
 echo $!
 ```
 

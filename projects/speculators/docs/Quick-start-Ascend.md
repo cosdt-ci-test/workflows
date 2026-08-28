@@ -1,8 +1,6 @@
 # Quick Start (Ascend NPU)
 
-在单卡昇腾 NPU 上用 vllm-ascend v0.23.0（配套 vLLM v0.23.0）跑 [Speculators](https://github.com/vllm-project/speculators) 的完整端到端链路：把第三方 speculative decoding draft 模型（DFlash）转换成标准 `speculators` 格式、用 vllm-ascend 抽训练数据、torchrun 训 draft 模型、最后 `vllm serve` 把训好的 draft 挂上做推理 smoke。一个示例覆盖上游 README 列出的全部 4 个核心场景（Standardized Format / Offline Data Gen / Draft Training / Seamless vLLM Integration）。
-
-本文档沿用上游 `convert/entrypoints.py` 里 DFlash + Qwen3-8B 这一组合做端到端验证：`speculators convert` 把 `z-lab/Qwen3-8B-DFlash-b16` 转换为标准 `speculators` 格式——这一步也是上游 `examples/train/dflash_*` / `examples/evaluate/` 里所有训练与评估流程的前置。
+在单卡昇腾 NPU 上用 vllm-ascend v0.23.0（配套 vLLM v0.23.0）跑 [Speculators](https://github.com/vllm-project/speculators) 的完整端到端链路：把第三方 speculative decoding draft 模型（DFlash）转换成标准 `speculators` 格式、用 vllm-ascend 抽训练数据、torchrun 训 draft 模型、最后 `vllm serve` 把训好的 draft 挂上做推理 smoke。。
 
 ## 前置条件
 
@@ -40,15 +38,13 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | torch_npu | 2.10.0.post4 |
 | transformers | 由 `speculators` 透传拉入（>=4.56.1,<5.15.0） |
 | vllm | 0.23.0（[源码 build](#安装-vllm-ascend)：`VLLM_TARGET_DEVICE=empty` 跳过 CUDA kernel 编译，仅注册 `torch.ops.vllm` schema） |
-| triton-ascend | 3.2.2（华为 ascend 源 + `--find-links` 拿 270 MB aarch64 wheel，DFlash proposer JIT 编译依赖） |
-| triton | 3.5.0（由 triton-ascend==3.2.2 的 METADATA 钉死，源码 build 装的主线 triton 需先卸掉再重装） |
+| triton-ascend | 3.2.2|
+| triton | 3.5.0 |
 | vllm-ascend | 0.23.0（`--extra-index-url` 拉华为 ascend 源 + `.../variant` 子路径取 NPU variant wheel，详见下方「[安装 vllm-ascend](#安装-vllm-ascend)」小节） |
 | modelscope | 1.37.0 |
 | speculators | 最新 release 的源码/二进制 |
-| draft 模型 | [z-lab/Qwen3-8B-DFlash-b16](https://www.modelscope.cn/models/z-lab/Qwen3-8B-DFlash-b16)（DFlash draft，~1 GB） |
-| verifier | [Qwen/Qwen3-8B](https://www.modelscope.cn/models/Qwen/Qwen3-8B)（~16 GB） |
-
-> Speculators 的训练与 vLLM-Ascend 部署链路（`examples/train/`、`vllm-ascend serve --speculative-config`）需要 vllm-ascend ≥ v0.23.0（对应 vLLM v0.23.0），低于此版本 `extract_hidden_states` 模式与 DFlash proposer 不可用；本文档用单卡 Atlas 900 A2 PODc（Ascend 910B4）做 smoke 验证，**不验证**多卡 DFlash 训练并行（vllm-ascend 的 spec_decode E2E 跑在 `four_card/` 路径）。
+| draft 模型 | [z-lab/Qwen3-8B-DFlash-b16] |
+| verifier | [Qwen/Qwen3-8B] |
 
 ### 前置安装
 
@@ -91,9 +87,9 @@ Python 3.12.xxx
 
 #### 安装 vllm-ascend
 
-PyPI `vllm==0.23.0` 的 aarch64 wheel 是 **CUDA-only build**（`vllm/_C.abi3.so` 链接 `libcuda.so.1` / `libcudart.so.13`，`vllm/cumem_allocator.abi3.so` 是 CUDA memory allocator，`vllm_flash_attn/_vllm_fa3_C.abi3.so` 内含 `__cudaLaunchKernel`），NPU 上无法用，且其 METADATA 钉 `torch==2.11.0+cpu` 与前置的 `torch==2.10.0+cpu` 冲突。所以本节从源码 build vllm：`VLLM_TARGET_DEVICE=empty` 跳过 CUDA kernel 编译、只注册 `torch.ops.vllm` schema 占位，运行时由 vllm-ascend 通过 `vllm.platform_plugins` entry point 把 NPU fused op 注入 `torch.ops.vllm` namespace。
+PyPI `vllm==0.23.0` 的 aarch64 wheel 是 **CUDA-only build**，NPU 上无法用，且其 METADATA 钉 `torch==2.11.0+cpu` 与前置的 `torch==2.10.0+cpu` 冲突。所以本节从源码 build vllm：`VLLM_TARGET_DEVICE=empty` 跳过 CUDA kernel 编译、只注册 `torch.ops.vllm` schema 占位，运行时由 vllm-ascend 通过 `vllm.platform_plugins` entry point 把 NPU fused op 注入 `torch.ops.vllm` namespace。
 
-第一步先把 torch 栈装上（CANN bare 镜像不预装）：
+第一步先把 torch 栈装上：
 
 ```shell #test id="install-torch"
 # torch-npu==2.10.0.post4 只在 /variant 子路径（PEP 708 variant index），不在
@@ -458,7 +454,10 @@ if __name__ == "__main__":
         _f.write(outputs[0].kv_transfer_params["hidden_states_path"])
 PY
 
-python /tmp/extract_hidden.py
+# 把 vllm 的 INFO/WARNING 全部丢到日志文件，不进 stdout —— 否则
+# `store="hidden_states_path"` 会捕获到 vllm INFO + 路径混合多行内容，
+# 下游 `echo <hidden_states_path>` 替换后 bash 把每行当命令（CI 33160459424）。
+python /tmp/extract_hidden.py > /tmp/extract.log 2>&1
 cat /tmp/last_hidden_path.txt
 ```
 

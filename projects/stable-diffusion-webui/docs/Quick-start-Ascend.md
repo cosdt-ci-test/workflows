@@ -100,13 +100,33 @@ HEAD xxx
 
 ## 安装依赖
 
-<!--
 ```shell #test-setup
 python -m pip install modelscope
 cd stable-diffusion-webui
+python - <<'PY'
+import pathlib
+p = pathlib.Path('requirements_versions.txt')
+overrides = {
+    'torch==': None, 'torchvision==': None, 'torchaudio==': None,
+    'transformers==': 'transformers>=4.41,<5',
+    'tokenizers==': 'tokenizers>=0.19,<0.21',
+    'scipy==': 'scipy>=1.11.4',
+    'Pillow==': 'Pillow>=10.4',
+}
+lines = []
+for ln in p.read_text().splitlines():
+    key = next((k for k in overrides if ln.startswith(k)), None)
+    if key is None:
+        lines.append(ln)
+    elif overrides[key]:
+        lines.append(overrides[key])
+p.write_text('\n'.join(lines) + '\n')
+print('requirements_versions.txt aligned with py3.12 + torch 2.9 NPU env')
+PY
 python -m pip install -r requirements.txt
 ```
--->
+
+> 上游 pin 针对 py3.10 时代：`tokenizers` 旧版无 cp312 wheel 且源码构建需 Rust；`torch==` 若保留会把镜像的 torch 2.9 + torch_npu 降级覆盖。因此在安装前把个别 pin 对齐到本环境（torch 栈由镜像提供、transformers 放宽到 4.4x、scipy/Pillow 升到有 cp312 wheel 的版本），其余 pin 保持不变。
 
 验证依赖可用：
 

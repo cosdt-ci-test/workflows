@@ -103,7 +103,7 @@ HEAD xxx
 stable-diffusion-webui 的依赖 pin 为 py3.10 时代版本（部分包没有 cp312 wheel），因此用 `uv` 建一个**独立的 py3.10 venv**（`uv` 会自动托管下载 CPython 3.10），所有安装与运行都走该 venv：
 
 ```shell #test-setup
-uv venv --python 3.10 /tmp/sd-webui-venv
+uv venv --python 3.10 --seed /tmp/sd-webui-venv
 /tmp/sd-webui-venv/bin/python -m pip install modelscope
 /tmp/sd-webui-venv/bin/python -m pip install torch==2.9.0 torchvision
 /tmp/sd-webui-venv/bin/python -m pip install torch_npu==2.9.0.post2
@@ -111,6 +111,7 @@ cd stable-diffusion-webui
 /tmp/sd-webui-venv/bin/python -m pip install -r requirements.txt
 ```
 
+> - `uv venv` 创建的 venv 默认不含 pip，`--seed` 会预装 pip；`uv` 会自动托管下载 CPython 3.10。
 > - `torch==2.9.0` + `torch_npu==2.9.0.post2` 与本机 CANN 9.1 配套，且均有 py3.10 wheel；`torch_npu` 来自华为云昇腾源（流水线已注入 extra index）。
 > - `requirements.txt` 按上游原样安装，不做任何 pin 改动。
 

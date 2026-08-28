@@ -317,12 +317,15 @@ match = next((n for n in names if re.search(r'(internlm2|llama).*qlora.*colorist
 print(match)
 ")
 test -n "$config_name" || { echo "no matching config ((internlm2|llama).*qlora.*colorist); abort"; exit 1; }
+# redirect copy_cfg.main() 的 print 到 /dev/null（它会 print `Copy to <path>`，
+# setup 把 echo 之外的 stdout 也当 store 抓会污染成 multi-line，让 Step 18 的
+# Config.fromfile 拿到多行字符串就 SyntaxError）
 python -c "
 import sys
 from xtuner.tools import copy_cfg
 sys.argv = ['copy_cfg', '$config_name', '/tmp/xtuner_npu_llm_cfg.py']
 copy_cfg.main()
-"
+" >/dev/null
 echo "/tmp/xtuner_npu_llm_cfg.py"
 ```
 

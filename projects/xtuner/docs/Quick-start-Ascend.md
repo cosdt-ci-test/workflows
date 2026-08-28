@@ -108,7 +108,7 @@ xtuner 同时支持 PyPI 二进制安装与源码安装。
 
 ```shell #test id="xtuner-install-binary"
 uv pip install --index-url https://mirrors.aliyun.com/pypi/simple --no-deps xtuner
-uv pip install 'mmengine==0.11.0rc2' 'transformers==5.2.0' 'peft>=0.14.0' 'datasets>=3.2.0,<4.0.0' einops loguru openpyxl 'scikit-image' scipy SentencePiece tiktoken transformers_stream_generator cyclopts 'opencv-python-headless<=4.12.0.88' timm pyarrow pydantic tensorboard xxhash imageio 'py-libnuma' GitPython
+uv pip install 'mmengine==0.10.6' 'transformers==4.48.0' 'peft>=0.14.0' 'datasets>=3.2.0,<4.0.0' einops loguru openpyxl 'scikit-image' scipy SentencePiece tiktoken transformers_stream_generator cyclopts 'opencv-python-headless<=4.12.0.88' timm pyarrow pydantic tensorboard xxhash imageio 'py-libnuma' GitPython
 python -c "import xtuner; from xtuner.version import __version__; print('xtuner', __version__)"
 ```
 
@@ -139,7 +139,7 @@ echo "${UPSTREAM_REF}"
 git clone --depth 1 --branch <ref> https://github.com/InternLM/xtuner.git
 cd xtuner
 uv pip install --no-deps -e .
-uv pip install 'mmengine==0.11.0rc2' 'transformers==5.2.0' 'peft>=0.14.0' 'datasets>=3.2.0,<4.0.0' einops loguru openpyxl 'scikit-image' scipy SentencePiece tiktoken transformers_stream_generator cyclopts 'opencv-python-headless<=4.12.0.88' timm pyarrow pydantic tensorboard xxhash imageio 'py-libnuma' GitPython
+uv pip install 'mmengine==0.10.6' 'transformers==4.48.0' 'peft>=0.14.0' 'datasets>=3.2.0,<4.0.0' einops loguru openpyxl 'scikit-image' scipy SentencePiece tiktoken transformers_stream_generator cyclopts 'opencv-python-headless<=4.12.0.88' timm pyarrow pydantic tensorboard xxhash imageio 'py-libnuma' GitPython
 python -c "import xtuner; from xtuner.version import __version__; print('xtuner', __version__)"
 ```
 \<ref> 为安装的最新的 release tag。
@@ -214,7 +214,6 @@ python -c "from modelscope import snapshot_download; snapshot_download('Shanghai
 ws=$(find ./Shanghai_AI_Laboratory -name config.json -print -quit)
 test -n "$ws" && test -f "$ws" && echo "weights_ok"
 ls -la "$(dirname "$ws")" | head -1
-echo "config_json_present: ok"
 ```
 
 输出结果类似：
@@ -222,7 +221,6 @@ echo "config_json_present: ok"
 ```shell #test-result id="xtuner-pull-weights" fuzzy='xxx'
 weights_ok
 total xxx
-config_json_present: ok
 ```
 
 权重落到 `./Shanghai_AI_Laboratory/internlm2-chat-7b/` 下（约 14 GB），含 `pytorch_model-*.bin` ×8 + tokenizer + config。

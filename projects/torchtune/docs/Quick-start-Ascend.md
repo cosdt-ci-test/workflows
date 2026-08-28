@@ -80,6 +80,13 @@ python --version
 Python 3.12.xxx
 ```
 
+对齐上游 pin 装 `torch` / `torch_npu`：
+
+```shell #test-setup
+uv pip install -f https://mirrors.aliyun.com/pytorch-wheels/cpu torch==2.11.0
+uv pip install --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi torch_npu==2.11.0
+```
+
 检查 torch / torch_npu 是否装好且 NPU 设备可用：
 
 ```shell #test id="check-torch"
@@ -100,8 +107,6 @@ count: 1
 安装 `modelscope`（用于走 ModelScope 镜像下载底座模型）+ `torchao`：
 
 ```shell #test-setup
-uv pip install -f https://mirrors.aliyun.com/pytorch-wheels/cpu torch==2.11.0
-uv pip install --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi torch_npu==2.11.0
 uv pip install 'modelscope==1.37.0'
 uv pip install torchao
 ```

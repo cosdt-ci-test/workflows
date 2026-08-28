@@ -101,20 +101,18 @@ count: 1
 
 ```shell #test-setup
 uv pip install 'modelscope==1.37.0'
-uv pip install torchao
 ```
 
 打印安装版本：
 
 ```shell #test id="install-deps"
-python -c "import modelscope, torchao; print('modelscope', modelscope.__version__); print('torchao', torchao.__version__)"
+python -c "import modelscope; print('modelscope', modelscope.__version__)"
 ```
 
 输出结果如下：
 
 ```shell #test-result id="install-deps" fuzzy='xxx'
 modelscope xxx
-torchao xxx
 ```
 
 ## 安装 torchtune

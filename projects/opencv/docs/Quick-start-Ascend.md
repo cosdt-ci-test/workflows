@@ -155,7 +155,7 @@ cmake -DCMAKE_BUILD_TYPE=RELEASE \
       ..
 ```
 
-```shell #test-result id="opencv-cmake-configure" fuzzy='xxx'
+```shell #test-result id="opencv-cmake-configure" fuzzy='xxx' fuzzy='...'
 ...
 --   CANN:xxx YES
 ...

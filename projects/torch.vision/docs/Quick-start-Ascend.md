@@ -452,20 +452,20 @@ target = {
 transforms = v2.Compose([v2.Resize(size=(128, 128))])
 img_npu = img.to('npu:0')
 out_img, out_target = transforms(img_npu, target)
-print(f"img device: {out_img.device.type}, target type: {type(out_target).__name__}")
-print(f"boxes shape: {tuple(out_target['boxes'].shape)}")
-print(f"labels: {out_target['labels'].tolist()}")
-print(f"passthrough: {out_target['this_is_ignored']}")
+print(f"{out_img.device.type = }, {type(out_target).__name__ = }")
+print(f"{out_target['boxes'].shape = }, {out_target['boxes'].format.name = }, {tuple(out_target['boxes'].canvas_size) = }")
+print(f"{out_target['labels'].tolist() = }")
+print(f"{out_target['this_is_ignored'] = }")
 PY
 ```
 
-输出结果如下（labels 是 `torch.arange(3)`，3 个 box 顺序标 0/1/2；Resize 不改变 box 数也不改变 labels 数值）：
+输出结果如下（labels 是 `torch.arange(3)`，3 个 box 顺序标 0/1/2；`Resize` 不改变 box 数也不改变 labels 数值；`format="XYXY"` 跟 `canvas_size=(128, 128)` 由 v2 dispatch 自动保留在 `BoundingBoxes` metadata 里）：
 
 ```shell #test-result id="v2-input-structure"
-img device: npu, target type: dict
-boxes shape: (3, 4)
-labels: [0, 1, 2]
-passthrough: ('arbitrary', {'structure': '!'})
+out_img.device.type = 'npu', type(out_target).__name__ = 'dict'
+out_target['boxes'].shape = torch.Size([3, 4]), out_target['boxes'].format.name = 'XYXY', tuple(out_target['boxes'].canvas_size) = (128, 128)
+out_target['labels'].tolist() = [0, 1, 2]
+out_target['this_is_ignored'] = ('arbitrary', {'structure': '!'})
 ```
 
 ### Transforms and Datasets intercompatibility

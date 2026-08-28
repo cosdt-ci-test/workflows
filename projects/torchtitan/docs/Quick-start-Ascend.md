@@ -205,7 +205,7 @@ tokenizer_config.json
 
 ### 单卡训练
 
-用 fake process group 在 1 张 NPU 上跑 8B 模型真跑 2 步，验证配置解析、初始化、加载 tokenizer、build dataloader、forward + backward 整条链路能跑通。8B 模型单卡 64GB 紧巴巴，加 `--parallelism.enable-cpu-offload true` 把 optimizer state 卸到 CPU：
+用 fake process group 在 1 张 NPU 上跑 8B 模型真跑 2 步，验证配置解析、初始化、加载 tokenizer、build dataloader、forward + backward 整条链路能跑通。8B 模型单卡 64GB 紧巴巴，加 `--training.enable-cpu-offload true` 把 optimizer state 卸到 CPU：
 
 ```shell #test id="torchtitan-train-debug" load="upstream_ref>>ref" load="ms_tokenizer_path>>ms_tokenizer_path"
 cd torchtitan && git checkout <ref>
@@ -219,7 +219,7 @@ python -m torchtitan.train \
     --training.seq-len 256 \
     --metrics.log-freq 1 \
     --metrics.disable-color-printing \
-    --parallelism.enable-cpu-offload true \
+    --training.enable-cpu-offload true \
     --job.dump-folder /tmp/torchtitan-quickstart
 ```
 
@@ -241,7 +241,7 @@ python -m torchtitan.train \
 
 ### 多卡训练
 
-用 torchrun 起 2 个 rank 跑 8B 模型真分布式训练，`--training.steps 2` 真跑 2 步。多卡 2×64GB 装 8B 仍然紧张，加 `--parallelism.enable-cpu-offload true` 把 optimizer state 卸到 CPU：
+用 torchrun 起 2 个 rank 跑 8B 模型真分布式训练，`--training.steps 2` 真跑 2 步。多卡 2×64GB 装 8B 仍然紧张，加 `--training.enable-cpu-offload true` 把 optimizer state 卸到 CPU：
 
 ```shell #test id="torchtitan-train-2card" load="upstream_ref>>ref" load="ms_tokenizer_path>>ms_tokenizer_path"
 cd torchtitan && git checkout <ref>
@@ -261,7 +261,7 @@ torchrun --nproc_per_node=2 \
     --training.seq-len 256 \
     --metrics.log-freq 1 \
     --metrics.disable-color-printing \
-    --parallelism.enable-cpu-offload true \
+    --training.enable-cpu-offload true \
     --job.dump-folder /tmp/torchtitan-quickstart-2card
 ```
 

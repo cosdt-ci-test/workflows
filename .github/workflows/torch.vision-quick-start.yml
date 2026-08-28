@@ -14,16 +14,15 @@
 # + dot + hyphen + underscore per GitHub's artifact name rules); see
 # https://docs.github.com/en/actions/using-workflows/storing-workflow-data-as-artifacts
 #
-# Upstream: github.com/Ascend/vision (the NPU-aware fork of
-# pytorch/vision). The fork's tags (e.g. v0.21.0-7.1.0) carry the
-# Ascend adapter version alongside the upstream torchvision version.
-# Ascend/vision does NOT publish GitHub Releases — its maintainers
-# push annotated git tags only, so /releases/latest 404s and
-# /releases returns []. The PyPI torchvision wheel is CPU+CUDA only
-# (the doc body never installs it), so polling /releases/latest is
-# both wrong (404s) and irrelevant — this workflow flips the engine
-# to release_source=tags, which hits /tags?per_page=1 and normalizes
-# to the same {id, tag_name} shape.
+# Upstream: github.com/pytorch/vision. The doc installs torchvision
+# two ways: (1) `uv pip install torchvision -i ...` pulls the latest
+# PyPI release matching torch==2.9.0 — canonical stock wheel path;
+# (2) the source build section `git clone`s pytorch/vision at the
+# latest release tag (`<ref>`) and runs `uv pip install -e .`,
+# mirroring ms-swift's source build pattern. pytorch/vision
+# publishes GitHub Releases (e.g. v0.24.0) so the engine's default
+# release_source=releases works — no special source=tags override
+# needed.
 #
 # No container devices / volumes: torch_npu auto-registers with the
 # CANN base image, and torchvision transforms run on synthetic PIL
@@ -90,7 +89,7 @@ jobs:
       # Doc body does: uv pip install torch / torch_npu from Aliyun
       # pytorch-wheels + Huawei Cloud ascend dual-source (torch_npu is
       # the slowest piece, ~30 min on cold cache), then stock torchvision
-      # cpu wheel from Aliyun PyPI mirror, then 6 transforms.v2 smoke
+      # cpu wheel from Aliyun PyPI mirror, then 9 transforms.v2 smoke
       # tests that exercise torch_npu PrivateUse1 dispatch. No source
       # build — stock cpu wheel + torch_npu PrivateUse1 covers the full
       # smoke surface (the Ascend/vision fork is a torchvision_npu patch
@@ -101,12 +100,12 @@ jobs:
       # body references pytorch/vision as the upstream torchvision
       # lineage, but it is NOT what `git clone` points at and it is
       # NOT the source of the tag substituted into <ref>.
-      upstream_repo: Ascend/vision
-      # Ascend/vision ships tags only, no GitHub Releases —
-      # /releases/latest 404s and /releases returns []. The engine's
-      # auto-fallback chain handles this transparently: releases
-      # sources fail, /tags?per_page=1 picks the latest annotated tag.
-      # No caller input needed.
+      upstream_repo: pytorch/vision
+      # pytorch/vision ships GitHub Releases (e.g. v0.24.0), so the
+      # engine's default release_source=releases works out of the box.
+      # UPSTREAM_REF is the latest release tag, substituted into the
+      # source build's `<ref>` placeholder via #test-setup store +
+      # #test load='upstream_ref>>ref'.
       # Contents API (NOT raw.githubusercontent.com): the engine's
       # monitor already sends `Authorization: Bearer $GH_TOKEN` +
       # `Accept: application/vnd.github.raw`, which is exactly the

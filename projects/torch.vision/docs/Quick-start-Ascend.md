@@ -89,7 +89,7 @@ uv pip install --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi 
 python -c "import torch, torch_npu; print('torch=', torch.__version__); print('torch_npu=', torch_npu.__version__); print('is_available:', torch.npu.is_available()); print('count:', torch.npu.device_count())"
 ```
 
-输出结果如下（`count: 1` 表示本机可见一张卡，下文示例只用 `npu:0`）：
+输出结果如下：
 
 ```shell #test-result id="check-torch" fuzzy='xxx'
 torch= 2.9.0+cpu
@@ -147,13 +147,9 @@ python -c "import torchvision; print('torchvision', torchvision.__version__)"
 torchvision xxx
 ```
 
-> 如果 `import torchvision` 报 `RuntimeError: operator torchvision::nms does not exist`，说明 `_C.so` 加载失败——通常是 `FORCE_CUDA=0` 没生效（构建产物仍链 `libcudart.so` / `libc10_cuda.so` / `libtorch_cuda.so`）。先 `pip uninstall torchvision`，确认 `echo $FORCE_CUDA` 输出 `0`，再 `rm -rf vision` 重新 `git clone`。
-
 ## transforms v2 入门
 
 用一个**合成的 256×256 RGB 测试图**走一遍 transforms v2 的核心用法。每节都把图搬到 NPU 上运行（`img.to('npu:0')`），用 v2 的 `BoundingBoxes` / `Mask` / `Video` / `KeyPoints` 配合验证 dispatch 链路。
-
-> torchvision 源码在 [github.com/pytorch/vision](https://github.com/pytorch/vision)；本文档走 `FORCE_CUDA=0` 源码构建路径（避开 PyPI wheel 链 `libcudart.so` 的问题），跟官方 [Getting started with transforms v2](https://pytorch.org/vision/stable/transforms/v2/auto_examples/transforms/plot_transforms_getting_started.html) 教程一一对应。
 
 ### 导入包 + 检查 NPU + 合成测试图
 

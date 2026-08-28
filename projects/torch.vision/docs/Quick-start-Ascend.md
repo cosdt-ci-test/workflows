@@ -136,6 +136,37 @@ python -c "import torchvision; print('torchvision', torchvision.__version__)"
 torchvision xxx
 ```
 
+### 从源码安装
+
+源码路径：[github.com/pytorch/vision](https://github.com/pytorch/vision)。从源码 build 的 torchvision 跟 PyPI wheel 在 NPU 上行为一致（都靠 `torch_npu` PrivateUse1 dispatch）——区别在于：
+
+- **可改源码**：本地改完 `torchvision/csrc/` 立即生效，无需重装 wheel
+- **版本精确锁定**：checkout 到具体 tag / commit，100% 可复现
+- **build 时间**：C++ 扩展编译冷缓存 ~5–10 min（aarch64 + CPU）
+
+先捕获 release tag：
+
+```shell #test-setup store="upstream_ref"
+echo "${UPSTREAM_REF}"
+```
+
+克隆上游仓库、安装并验证：
+
+```shell #test id="stock-torchvision-source" load="upstream_ref>>ref"
+git clone --depth 1 --branch <ref> https://github.com/pytorch/vision.git
+cd vision
+uv pip install -e .
+python -c "import torchvision; print('torchvision', torchvision.__version__)"
+```
+
+\<ref\> 为 pytorch/vision 最新 release tag，由 workflow 的 `upstream_repo` 字段驱动（默认 `releases` 源，匹配 GitHub Releases API）。
+
+输出结果如下：
+
+```shell #test-result id="stock-torchvision-source" fuzzy='xxx'
+torchvision xxx
+```
+
 ## transforms v2 入门
 
 用一个**合成的 256×256 RGB 测试图**走一遍 transforms v2 的核心用法。每节都把图搬到 NPU 上跑（`img.to('npu:0')`），用 v2 的 `BoundingBoxes` / `Mask` / `Video` / `KeyPoints` 配合验证 dispatch 链路。
@@ -194,9 +225,9 @@ npu_count: xxx
 npu round-trip: in=(2, 3) on cpu, npu=(2, 3) on npu, back=(2, 3) on cpu
 ```
 
-### 第 1 步：单 transform——实例化、调用、看输出
+### 单 transform——实例化、调用、看输出
 
-v2 transform 用起来跟普通 `nn.Module` 一样：**实例化一次，可以反复调用**。这一节跑最简单的 `CenterCrop`：
+v2 transform 用起来跟普通 `nn.Module` 一样：**实例化一次，可以反复调用**。跑最简单的 `CenterCrop`：
 
 ```shell #test id="v2-basics"
 python << 'PY'
@@ -219,14 +250,14 @@ print(f"out: type={type(out).__name__} device={out.device.type} shape={tuple(out
 PY
 ```
 
-输出结果如下（**device 透传**：CPU 输入 → CPU 输出，NPU 输入 → NPU 输出；`CenterCrop` 在 NPU 后端跑）：
+输出结果如下：
 
 ```shell #test-result id="v2-basics"
 in:  type=Image device=npu shape=(3, 256, 256)
 out: type=Image device=npu shape=(3, 224, 224)
 ```
 
-### 第 2 步：随机裁剪——验证 NPU 输出跟 CPU 一致
+### 随机裁剪——验证 NPU 输出跟 CPU 一致
 
 `RandomCrop` 默认 input 必须 ≥ output，否则要 pad。这里 256 ≥ 224，offset 恒为 `(0, 0)`——**这条路径是确定的**，所以可以直接拿 CPU 结果跟 NPU 比对：
 
@@ -252,7 +283,7 @@ print(f"npu vs cpu sum match: {int(out.sum().cpu()) == int(out_cpu.sum())}")
 PY
 ```
 
-输出结果如下（**sum 一致 = NPU crop kernel 跟 CPU crop kernel 行为一致**——这是 NPU 上跑图像算子的核心 smoke 标准）：
+输出结果如下：
 
 ```shell #test-result id="v2-randomcrop"
 in:  type=Image device=npu shape=(3, 256, 256)
@@ -260,7 +291,7 @@ out: type=Image device=npu shape=(3, 224, 224)
 npu vs cpu sum match: True
 ```
 
-### 第 3 步：用 `Compose` 串起多个 transform——分类任务的预处理流水线
+### 用 `Compose` 串起多个 transform——分类任务的预处理流水线
 
 单 transform 容易验；**多个串起来**才是真实训练场景。`Compose` 把一组 transform 按顺序作用在输入上。ImageNet 训练的经典 pipeline：
 
@@ -301,7 +332,7 @@ print(f"out finite: {torch.isfinite(out).all().item()}")  # 兜底检查：cast 
 PY
 ```
 
-输出结果如下（shape / dtype / finite 这三个离散属性必须严格一致——它们证明 NPU 上整条 pipeline 跑通；具体浮点值跟 CPU 可能有 ULP 级精度差，用 `xxx` 抹平）：
+输出结果如下：
 
 ```shell #test-result id="v2-classification" fuzzy='xxx'
 in:  type=Image device=npu dtype=torch.uint8 shape=(3, 256, 256)
@@ -310,7 +341,7 @@ out stats: min=xxx mean=xxx max=xxx
 out finite: True
 ```
 
-### 第 4 步：检测任务——把标注框跟图像一起 transform
+### 检测任务——把标注框跟图像一起 transform
 
 分类只处理图像；**检测任务**还要同时处理标注框（bounding box）。v2 用 `BoundingBoxes` TVTensor 表达标注框——形状 `(N, 4)`，带 `format`（坐标格式：`XYXY` / `CXCYWH` 等）跟 `canvas_size`（图像尺寸）两个 metadata：
 
@@ -350,7 +381,7 @@ print(f"out_boxes min/max: {int(out_boxes.min())}/{int(out_boxes.max())}")  # cr
 PY
 ```
 
-输出结果如下（`RandomResizedCrop` 把 `canvas_size` 从 `(256, 256)` 重映射到 `(224, 224)`——v2 自动处理 box 坐标的缩放 / 平移 / 翻转；`format="XYXY"` 保持不变，v2 不做格式转换）：
+输出结果如下：
 
 ```shell #test-result id="v2-detection" fuzzy='xxx'
 in_img: type=Image device=npu dtype=torch.uint8 shape=(3, 256, 256)
@@ -361,7 +392,7 @@ out_img finite: True
 out_boxes min/max: xxx
 ```
 
-### 第 5 步：多类型输入——一次 transform 处理多种数据
+### 多类型输入——一次 transform 处理多种数据
 
 v2 不只能 transform image——一次调用可以塞 5 种 TVTensor（Image + BoundingBoxes + Mask + Video + KeyPoints），transform 内部按**类型**分别 dispatch：
 
@@ -401,7 +432,7 @@ print(f"keypoints: type={type(out_kp).__name__} device={out_kp.device.type} shap
 PY
 ```
 
-输出结果如下（box / keypoints 留 CPU 输出，img / mask / video 在 NPU 上输出——**device 透传规则**贯穿整个 pipeline）：
+输出结果如下：
 
 ```shell #test-result id="v2-vbmk"
 img: type=Image device=npu shape=(3, 256, 256)
@@ -411,7 +442,7 @@ video: type=Video device=npu shape=(3, 3, 32, 32)
 keypoints: type=KeyPoints device=cpu shape=(3, 2)
 ```
 
-### 第 6 步：什么是 TVTensor？——`torch.Tensor` 的"带类型"子类
+### 什么是 TVTensor？——`torch.Tensor` 的"带类型"子类
 
 `Image` / `BoundingBoxes` / `Mask` / `Video` / `KeyPoints` 都是 **`torch.Tensor` 的子类**。换句话说：
 
@@ -433,7 +464,7 @@ print(f"{img_npu.dtype = }, {img_npu.shape = }, {img_npu.device.type = }, {img_n
 PY
 ```
 
-输出结果如下（`aten::sum` 走 `torch_npu` NPU kernel 后 `.cpu()` 把标量搬回来——既验了 TVTensor 子类化、又验了 NPU 端 sum kernel）：
+输出结果如下：
 
 ```shell #test-result id="v2-tvtensors" fuzzy='xxx'
 isinstance(img_dp, torch.Tensor) = True
@@ -442,7 +473,7 @@ isinstance(img_npu, torch.Tensor) = True
 img_npu.dtype = torch.uint8, img_npu.shape = torch.Size([3, 256, 256]), img_npu.device.type = 'npu', img_npu.sum().cpu() = tensor(xxx)
 ```
 
-### 第 7 步：transform 不挑剔输入——任意嵌套结构都能传
+### transform 不挑剔输入——任意嵌套结构都能传
 
 `transforms` 只看 TVTensor **类型**做 dispatch，外来的 str / int / tuple / dict 原样穿透。所以你可以传任意嵌套结构——单 image、`(img, target)` 元组、dict、嵌套 dict——返回**同结构**：
 
@@ -476,7 +507,7 @@ print(f"{out_target['this_is_ignored'] = }")
 PY
 ```
 
-输出结果如下（`Resize` 把 `canvas_size` 从 `(256, 256)` 重映射到 `(128, 128)`，`format` 不变，`labels` 跟 `this_is_ignored` 原样回来——证明 passthrough 路径正确）：
+输出结果如下：
 
 ```shell #test-result id="v2-input-structure"
 out_img.device.type = 'npu', type(out_target).__name__ = 'dict'
@@ -485,9 +516,9 @@ out_target['labels'].tolist() = [0, 1, 2]
 out_target['this_is_ignored'] = ('arbitrary', {'structure': '!'})
 ```
 
-### 第 8 步：跟自定义 Dataset 配合——`__getitem__` 返 TVTensor 即可
+### 跟自定义 Dataset 配合——`__getitem__` 返 TVTensor 即可
 
-你只要保证自定义 Dataset 的 `__getitem__` 返回**已经是 TVTensor**的对象，v2 transform 就能直接用，不需要任何胶水代码：
+你只要保证自定义 Dataset 的 `__getitem__` 返回**已经是 TVTensor**的对象，v2 transform 就能直接用：
 
 ```shell #test id="v2-dataset-interop"
 python << 'PY'
@@ -523,7 +554,7 @@ print(f"len(dataset): {len(dataset)}")
 PY
 ```
 
-输出结果如下（dataset `[0]` 直接返 dispatchable TVTensor——`Resize` 把 `canvas_size` 从 `(256, 256)` 重映射到 `(128, 128)`，证明 dataset 输出跟 transform 输入天然对齐）：
+输出结果如下：
 
 ```shell #test-result id="v2-dataset-interop"
 type(img).__name__ = 'Image', tuple(img.shape) = (3, 256, 256)
@@ -533,6 +564,3 @@ after resize → type(target_npu['boxes']).__name__ = 'BoundingBoxes', tuple(tar
 labels: [0, 0]
 len(dataset): 2
 ```
-
-> **真实 `CocoDetection` / `wrap_dataset_for_transforms_v2` 没在本文展开**——COCO val2017 ~1 GB 下载 + 解压需要 ~25 min 冷缓存，超出本烟雾路径范围。torchvision 内置数据集分两类：(1) 图像分类用 dataset 自带的 `transform=` 参数（如 `ImageNet(..., transform=transforms)`）；(2) 旧版检测 / 分割 dataset（如 `CocoDetection`）默认不返 TVTensor，需要 `torchvision.datasets.wrap_dataset_for_transforms_v2(dataset)` 二次包一层。
-

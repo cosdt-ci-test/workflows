@@ -27,14 +27,20 @@ Environment variables (injected by GitHub workflow
 
 Scope note: the doc body covers the smoke path for **stock torchvision**
 running under ``torch_npu`` PrivateUse1 dispatch. ``torch`` /
-``torch_npu`` / ``torchvision`` are all installed by the doc body via
-``uv pip install`` from Aliyun PyPI mirror / Huawei Cloud ascend pypi
-(versions per [Ascend PyTorch Compatibility 矩阵](https://gitcode.com/Ascend/pytorch/blob/main/COMPATIBILITY.en.md): torch==2.9.0 / torch_npu==2.9.0.post6 / CANN==9.1.0; torchvision unconstrained, pip 跟 `torch==2.9.0` 解析 PyPI linux aarch64 cpu-only wheel 最新版). No Ascend/vision fork source build: the fork is a
-``torchvision_npu`` patch package whose ops (``deform_conv`` / ``roi_pool``)
-are not exercised by the transforms.v2 smoke path, and its ``csrc`` includes
-a ``npu_decode_video_kernel.{cpp,hpp}`` that needs CANN DVPP dev headers not
-present in the ``cann:9.1.0-910b-ubuntu22.04-py3.12`` base image. Stock cpu
-wheel + ``torch_npu`` PrivateUse1 dispatch covers the full smoke surface.
+``torch_npu`` are installed by the doc body via ``uv pip install`` from
+Aliyun PyPI mirror / Huawei Cloud ascend pypi
+(versions per [Ascend PyTorch Compatibility 矩阵](https://gitcode.com/Ascend/pytorch/blob/main/COMPATIBILITY.en.md): torch==2.9.0 / torch_npu==2.9.0.post6 / CANN==9.1.0).
+``torchvision`` is installed two ways: (1) **binary path** — `uv pip install
+torchvision` from Aliyun PyPI mirror (unconstrained, pip resolves latest
+compatible with torch==2.9.0); (2) **source build** — `git clone
+github.com/pytorch/vision` at the latest release tag + `uv pip install -e .`,
+mirroring ms-swift's source build pattern. Both paths install the **same**
+stock torchvision; the source build is for users who need exact-version
+reproducibility or want to modify torchvision source. No Ascend/vision fork
+build: the fork is a ``torchvision_npu`` patch package whose ops
+(``deform_conv`` / ``roi_pool``) are not exercised by the transforms.v2 smoke
+path, and its ``csrc`` includes a ``npu_decode_video_kernel.{cpp,hpp}`` that
+needs CANN DVPP dev headers not present in the base image.
 The doc verifies:
 
 * package + sub-module imports (``torchvision``, ``torchvision.transforms``,

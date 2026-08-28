@@ -20,7 +20,7 @@ Atlas 900 A2 训练系列产品或者 Ascend 910B 系列产品，并按需完成
 
 **配套镜像**：
 
-quay.io/jd_xllm/xllm-ai:xllm-dev-a2-arm-cann9-20260605
+quay.nju.edu.cn/jd_xllm/xllm-ai:xllm-dev-a2-arm-cann9-20260605
 
 **软件版本**：
 

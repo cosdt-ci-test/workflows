@@ -328,11 +328,9 @@ ASCEND_RT_VISIBLE_DEVICES=0 tune run lora_finetune_single_device \
 输出结果如下：
 
 ```shell #test-result id="torchtune-train" fuzzy='xxx' fuzzy='...'
-xxx
-...
-Step 1 | loss:xxx lr:xxx tokens_per_second_per_gpu:xxx 
-Step 2 | loss:xxx lr:xxx tokens_per_second_per_gpu:xxx 
-Step 3 | loss:xxx lr:xxx tokens_per_second_per_gpu:xxx 
+Step 1 | loss:xxx lr:xxx tokens_per_second_per_gpu:xxx
+Step 2 | loss:xxx lr:xxx tokens_per_second_per_gpu:xxx
+Step 3 | loss:xxx lr:xxx tokens_per_second_per_gpu:xxx
 ...
 ```
 

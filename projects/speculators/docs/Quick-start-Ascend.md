@@ -496,7 +496,8 @@ fi
 cleanup_vllm_gen
 sleep 5  # 给 vllm worker 完全退出 + NPU 释放
 
-# 离线训练：--on-missing error 强制走 FileBackend 读 $HS_DIR 缓存，不再起 vllm endpoint；
+# 离线训练：--on-missing raise 强制走 FileBackend 读 $HS_DIR 缓存，不再起 vllm endpoint；
+# （train.py 的 argparse choices 是 generate/skip/warn/raise，没有 error；CI 33201184782 教训）
 # 显式不带 --vllm-endpoint，避免 dataloader 误以为有 server 可问。stderr 重定向到 /tmp/train.log
 # 必 echo 末尾诊断（哪怕 0 错误也给 framework 看到 train.log 末尾）；用 || true 屏蔽 set -e，
 # 失败时下文统一 cat /tmp/train.log + 抛 exit 1，避免 CI 33177074202 那种 torchrun 静默崩 →
@@ -514,7 +515,7 @@ torchrun --standalone --nproc_per_node=1 scripts/train.py \
   --max-anchors 3072 \
   --num-layers 5 \
   --target-layer-ids 2 18 34 \
-  --on-missing error >/tmp/train.log 2>&1 || TRAIN_RC=$?
+  --on-missing raise >/tmp/train.log 2>&1 || TRAIN_RC=$?
 TRAIN_RC=${TRAIN_RC:-0}
 
 echo "=== train.log tail (last 80 lines) ==="

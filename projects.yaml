@@ -277,3 +277,16 @@ projects:
     dir: projects/fastchat
     workflows:
       quick_start: .github/workflows/fastchat-quick-start.yml
+  # stable-diffusion-webui quickstart exercises the native NPU device path
+  # (modules/npu_specific.py + torch_npu) with a headless txt2img call
+  # against the --nowebui API server, using an SD-Turbo checkpoint
+  # fetched via ModelScope.
+  - name: stable-diffusion-webui
+    category: 推理加速
+    support_level: 新兴适配
+    upstream_repo: AUTOMATIC1111/stable-diffusion-webui
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/stable-diffusion-webui
+    workflows:
+      quick_start: .github/workflows/stable-diffusion-webui-quick-start.yml

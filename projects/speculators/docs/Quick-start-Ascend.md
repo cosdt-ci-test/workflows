@@ -291,24 +291,33 @@ speculators xxx
 默认使用 **ModelScope** 进行模型下载（draft + verifier 都在 ModelScope 上有完整镜像）。持久缓存中可能残留之前中断下载产生的残缺权重文件，测试框架会在下载前做 safetensors 完整性校验，损坏的模型目录会被整体清除并重新下载。
 
 ```shell #test-setup store="draft_path"
-# modelscope 偶发 500 风暴 → 3 次重试 + 失败 fallback HuggingFace；2>/dev/null 把 torch_npu
-# 启动期写 stdout 的 [ERROR] 噪声丢进黑洞，避免被 | tail -n 1 误捕成 draft_path（CI 33203340773）
+# modelscope 偶发 500 风暴 → 5 次重试 + 失败 fallback HuggingFace；不写 2>/dev/null 让
+# 异常 traceback 走 stderr 暴露真实失败原因（CI 33219656302 静默返回 1B 空路径就是因为
+# 异常被黑洞吞了——下游 convert_model 拿 model="" 报 No config.json found at .）。
+# sys.stdout = _buf 重定向只屏蔽 import/snapshot_download 期间的 stdout 噪声，
+# 不会污染最终 print() 的 path。
 python -c "
 import sys, time, io
 _buf = io.StringIO(); _real = sys.stdout; sys.stdout = _buf
+_err = sys.stderr
 def _get(mid):
+    last_err = None
     for src in ('modelscope', 'huggingface_hub'):
-        for i in range(3):
+        for i in range(5):
             try:
                 m = __import__(src, fromlist=['snapshot_download'])
                 p = m.snapshot_download(mid)
                 if p: return p
-            except Exception:
-                time.sleep(15 * (i + 1))
+            except Exception as e:
+                last_err = f'{src}[try {i+1}]: {type(e).__name__}: {str(e)[:300]}'
+                _err.write(f'[download] {last_err}\n'); _err.flush()
+                time.sleep(10 * (i + 1))
+    _err.write(f'[download] ALL ATTEMPTS FAILED for {mid}; last error: {last_err}\n')
+    _err.flush()
     return ''
 sys.stdout = _real
 print(_get('z-lab/Qwen3-8B-DFlash-b16'))
-" 2>/dev/null | tail -n 1
+" | tail -n 1
 ```
 
 输出类似：
@@ -318,22 +327,29 @@ print(_get('z-lab/Qwen3-8B-DFlash-b16'))
 ```
 
 ```shell #test-setup store="verifier_path"
+# 同 draft_path：异常走 stderr 暴露真实失败原因
 python -c "
 import sys, time, io
 _buf = io.StringIO(); _real = sys.stdout; sys.stdout = _buf
+_err = sys.stderr
 def _get(mid):
+    last_err = None
     for src in ('modelscope', 'huggingface_hub'):
-        for i in range(3):
+        for i in range(5):
             try:
                 m = __import__(src, fromlist=['snapshot_download'])
                 p = m.snapshot_download(mid)
                 if p: return p
-            except Exception:
-                time.sleep(15 * (i + 1))
+            except Exception as e:
+                last_err = f'{src}[try {i+1}]: {type(e).__name__}: {str(e)[:300]}'
+                _err.write(f'[download] {last_err}\n'); _err.flush()
+                time.sleep(10 * (i + 1))
+    _err.write(f'[download] ALL ATTEMPTS FAILED for {mid}; last error: {last_err}\n')
+    _err.flush()
     return ''
 sys.stdout = _real
 print(_get('Qwen/Qwen3-8B'))
-" 2>/dev/null | tail -n 1
+" | tail -n 1
 ```
 
 输出类似：

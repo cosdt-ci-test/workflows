@@ -230,13 +230,24 @@ print('Available attention backends:', [x for x in dir(cache_dit) if 'attn' in x
 ```shell #test id="npu-function-verification"
 export HF_ENDPOINT=https://hf-mirror.com
 export MODELSCOPE_CACHE=/root/.cache/modelscope
+export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 python3 -c "from modelscope import snapshot_download; snapshot_download('AI-ModelScope/FLUX.1-dev', local_dir='/root/.cache/modelscope/cache-dit-flux')"
-python3 -m cache_dit.generate flux --model-path /root/.cache/modelscope/cache-dit-flux --attn _native_npu \
-  --prompt "A cat holding a sign that says hello world" \
-  --num_inference_steps 10 \
-  --height 512 \
-  --width 512 \
-  --save-path output/test.png
+NPU_COUNT=$(python3 -c "import os, torch; v=os.environ.get('ASCEND_RT_VISIBLE_DEVICES'); print(len([x for x in v.split(',') if x != '']) if v else torch.npu.device_count())")
+if [ "${NPU_COUNT}" -ge 2 ]; then
+  torchrun --nproc_per_node=2 -m cache_dit.generate flux --model-path /root/.cache/modelscope/cache-dit-flux --parallel tp --attn _native_npu \
+    --prompt "A cat holding a sign that says hello world" \
+    --num_inference_steps 10 \
+    --height 512 \
+    --width 512 \
+    --save-path output/test.png
+else
+  python3 -m cache_dit.generate flux --model-path /root/.cache/modelscope/cache-dit-flux --attn _native_npu --cpu-offload \
+    --prompt "A cat holding a sign that says hello world" \
+    --num_inference_steps 10 \
+    --height 512 \
+    --width 512 \
+    --save-path output/test.png
+fi
 ```
 
 ```shell #test-result id="npu-function-verification" fuzzy='xxx'

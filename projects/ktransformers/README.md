@@ -4,12 +4,9 @@
 
 上游默认分支是 `main`。上游没有昇腾 CI。本仓先走阶段 A。
 
-本仓**不**写 Quick Start 线。上游已经发布昇腾教程：
+用户向的昇腾入口在 [docs/Quick-start-Ascend.md](docs/Quick-start-Ascend.md)，只指向上游官方教程，**没有** `#test` 标签。本仓**不**接 Quick Start 流水线：不要增加 `*-quick-start.yml`，也不要在 `projects.yaml` 里写 `quick_start`。接上共享引擎会空跑通过（无标签块全部跳过）。
 
-- [doc/zh/DeepseekR1_V3_tutorial_zh_for_Ascend_NPU.md](https://github.com/kvcache-ai/ktransformers/blob/main/doc/zh/DeepseekR1_V3_tutorial_zh_for_Ascend_NPU.md)
-- [doc/zh/Qwen3-MoE_tutorial_zh_for_Ascend_NPU.md](https://github.com/kvcache-ai/ktransformers/blob/main/doc/zh/Qwen3-MoE_tutorial_zh_for_Ascend_NPU.md)
-
-这两篇写明支持的 NPU 是 **Atlas 300I A2**，镜像和 CANN 也按 300I A2 / CANN 8.3 来。本仓 runner 是 910B。不在本仓再写一份对着 910B 的 Quick Start，避免和上游教程打架。
+上游教程写明支持的 NPU 是 **Atlas 300I A2**。本仓 runner 是 910B，不能按那两篇的字面步骤做看护。
 
 ## 绿灯含义
 

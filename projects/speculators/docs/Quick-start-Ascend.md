@@ -165,6 +165,50 @@ python3 -m pip install \
   --find-links https://repo.huaweicloud.com/ascend/repos/pypi/triton-ascend/ \
   triton-ascend==3.2.2
 
+# 8. 装齐 vllm runtime deps（57 个包）。
+#    VLLM_TARGET_DEVICE=empty 跳过了 install-time deps 解析（避免装 torch==2.11.0
+#    与 torch==2.10.0 冲突），但运行时 `from vllm.config import ...` 会触发整条
+#    import 链，需要 cbor2 / pyzmq / gguf / compressed-tensors / lm-format-enforcer
+#    / xgrammar / outlines_core / opencv-python-headless 等。pip 装比 uv 稳，
+#    --index-strategy unsafe-best-match 跨 cluster cache + 华为源找 NPU aarch64 wheel。
+python3 -m pip install --quiet -r /root/deps/vllm/requirements/common.txt
+
+# 9. Monkey-patch `vllm.triton_utils.HAS_TRITON = True`（CI 上必做，本地 NPU 上做不做都行）。
+#    Root cause：triton-ascend 3.2.2 自带的 libtriton.so 是 triton 3.2.0 fork，
+#    只编了 ascend backend，没编 nvidia/amd symbol（`import triton._C.libtriton`
+#    后 dir() 看到 ['ascend', 'buffer_ir', 'interpreter', 'ir', 'llvm', 'passes']，
+#    没有 amd / nvidia）。vllm 0.23.0 `vllm/triton_utils/importing.py:17` 的
+#    `HAS_TRITON = find_spec("triton") is not None` 后续 try 块里
+#    `from triton.backends import backends` 会触发 triton 主线 wheel 的 import 链，
+#    最终某个 submodule `from triton._C.libtriton import amd` —— ImportError 后
+#    HAS_TRITON 被强制设回 False。
+#    后果：`vllm_ascend/ops/__init__.py:19` 的 `if HAS_TRITON:` 跳过
+#    `import vllm_ascend.ops.triton.linearnorm.split_qkv_rmsnorm_rope`，
+#    `qkv_rmsnorm_rope` 这个 op 不会被注册到 `torch.ops.vllm` namespace。
+#    Step 2 `vllm.LLM()` 跑 `QKNormRopeFusionPass`（head_dim=128 的 attention
+#    layer 命中）时 fusion pattern 调 `torch.ops.vllm.qkv_rmsnorm_rope()` 就
+#    AttributeError（CI run 33140922182）。
+#    修法：写一个 sitecustomize.py 到 site-packages，让 Python 启动时（spawn 子
+#    进程也会触发）强制把 HAS_TRITON 设回 True，import 链继续往下走、qkv_rmsnorm_rope
+#    op 正常注册。CI container 是 throw-away 的，这个 patch 文件只在 container 内
+#    有效，不会污染镜像。
+mkdir -p /usr/local/python3.12.13/lib/python3.12/site-packages/_force_triton_ascend
+touch /usr/local/python3.12.13/lib/python3.12/site-packages/_force_triton_ascend/__init__.py
+cat > /usr/local/python3.12.13/lib/python3.12/site-packages/sitecustomize.py << 'PY'
+import vllm.triton_utils
+vllm.triton_utils.HAS_TRITON = True
+PY
+
+# 验证 qkv_rmsnorm_rope op 注册成功
+python -c "
+import vllm.triton_utils
+vllm.triton_utils.HAS_TRITON = True
+import vllm_ascend.ops.triton.linearnorm.split_qkv_rmsnorm_rope
+import torch
+print('HAS_TRITON:', vllm.triton_utils.HAS_TRITON)
+print('qkv_rmsnorm_rope op:', torch.ops.vllm.qkv_rmsnorm_rope)
+"
+
 python -c "import importlib.metadata; print(f'vllm={importlib.metadata.version(\"vllm\")}')"
 python -c "import importlib.metadata; print(f'vllm_ascend={importlib.metadata.version(\"vllm-ascend\")}')"
 python -c "import importlib.metadata; print(f'triton_ascend={importlib.metadata.version(\"triton-ascend\")}')"

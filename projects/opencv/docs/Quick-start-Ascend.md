@@ -123,27 +123,52 @@ git clone --depth 1 --branch <ref> https://github.com/opencv/opencv_contrib.git
 
 OpenCV 5.0.0 把 `cv::MatShape` 从 `std::vector<int>` 的别名改成了一个独立 struct（mat.hpp:106，加了 layout / dims 等字段），但 `modules/dnn/src/op_cann.{hpp,cpp}` 里的 `CannConstOp` 构造函数仍按老签名 `const std::vector<int>& shape` 写，导致 `dnn` 模板里 `std::make_shared<CannConstOp>(..., shape(w_mat), ...)`（convolution_layer.cpp:703 等 20+ 处）编译报 `no known conversion for argument 3 from 'cv::MatShape' to 'const std::vector<int>&'`。
 
-把构造函数第三参数改成 `const cv::MatShape&` 即可——`MatShape` 自身提供了 `begin()` / `end()`（mat.hpp:142-145），`.cpp` 里 `std::vector<int64_t> shape_{shape.begin(), shape.end()};` 不需要改。等 5.0.1 / 主仓把 CANN backend 重命名到 contrib 后这步可删。
+把构造函数第三参数改成 `const cv::MatShape&` 即可——`MatShape` 自身提供了 `begin()` / `end()`（mat.hpp:142-145），`.cpp` 里 `std::vector<int64_t> shape_{shape.begin(), shape.end()};` 不需要改。
+
+但只改一个签名还不够——`batch_norm_layer.cpp:383` / `elementwise_layers.cpp:652,2815` / `slice_layer.cpp:691,739` 等几处用本地 `std::vector<int> shape_{...}` 然后传给 `CannConstOp`，会再报反向错误 `no known conversion for argument 3 from 'std::vector<int>' to 'const cv::MatShape&'`。最干净的修复是加一个转发构造函数：第二签名接受 `const std::vector<int>&`，在初始化列表里构造 `cv::MatShape(shape)` 后委托给主构造，避免改 4 个 layer 文件里的局部变量类型。
+
+等 5.0.1 / 主仓把 CANN backend 重命名到 contrib 后这步可删。
 
 ```shell #test-setup
 python3 - <<'PY'
 import pathlib
+# (a) 主构造：std::vector<int>& → cv::MatShape&
 old = 'const std::vector<int>& shape, const std::string& name'
 new = 'const cv::MatShape& shape, const std::string& name'
 for rel in ['opencv/modules/dnn/src/op_cann.hpp',
             'opencv/modules/dnn/src/op_cann.cpp']:
-    p = pathlib.Path(rel)
-    s = p.read_text()
+    p = pathlib.Path(rel); s = p.read_text()
     assert old in s, f'{rel}: pattern not found'
     p.write_text(s.replace(old, new))
-    print(f'{rel}: patched ({s.count(old)} occurrence)')
+    print(f'(a) {rel}: {s.count(old)} occurrence(s) -> MatShape&')
+
+# (b) hpp 加 vector<int> 转发重载声明
+hp = pathlib.Path('opencv/modules/dnn/src/op_cann.hpp')
+hs = hp.read_text()
+decl_old = 'CannConstOp(const uint8_t* data, const int dtype, const cv::MatShape& shape, const std::string& name);'
+decl_new = (decl_old
+            + '\n        CannConstOp(const uint8_t* data, const int dtype, const std::vector<int>& shape, const std::string& name);')
+assert decl_old in hs and decl_new.splitlines()[1] not in hs, 'hpp decl already patched'
+hp.write_text(hs.replace(decl_old, decl_new, 1))
+print('(b) op_cann.hpp: +1 std::vector<int>& overload decl')
+
+# (c) cpp 加 vector<int> 转发构造函数（委托给 MatShape 主构造）
+cp = pathlib.Path('opencv/modules/dnn/src/op_cann.cpp')
+cs = cp.read_text()
+anchor = 'op_ = std::make_shared<ge::op::Const>(name);\n    op_->set_attr_value(*ge_tensor);\n}\n'
+deleg = ('\nCannConstOp::CannConstOp(const uint8_t* data, const int dtype, const std::vector<int>& shape, const std::string& name)\n'
+         '    : CannConstOp(data, dtype, cv::MatShape(shape), name) {}\n')
+assert anchor in cs and deleg.strip() not in cs, 'cpp delegating ctor already patched or anchor missing'
+cp.write_text(cs.replace(anchor, anchor + deleg, 1))
+print('(c) op_cann.cpp: +1 std::vector<int>& delegating ctor')
 PY
-grep -c 'const cv::MatShape& shape, const std::string& name' \
+echo '---grep verify:'
+grep -n 'CannConstOp(const uint8_t\* data, const int dtype,' \
   opencv/modules/dnn/src/op_cann.hpp \
   opencv/modules/dnn/src/op_cann.cpp
 ```
 
-预期：`patched (1 occurrence)` 两行各输出一次（hpp 改声明、cpp 改定义），`grep -c` 各输出 1。Python 而非 sed：`&` 在 sed 替换串里代表匹配文本，转义 `\&` 在 GNU/BSD sed 行为不一致，换 Python 避免踩坑。
+预期：步骤 (a) 两行各输出 `1 occurrence(s) -> MatShape&`，步骤 (b) +1 decl，步骤 (c) +1 delegating ctor；最后 `grep` 在 hpp 看到 2 行构造声明、cpp 看到 2 个构造函数定义。Python 而非 sed：`&` 在 sed 替换串里代表匹配文本，转义 `\&` 在 GNU/BSD sed 行为不一致，换 Python 避免踩坑。
 
 #### 桥接 OpenCV 5.0.0 与 CANN 9.1.0 的 layout 差
 

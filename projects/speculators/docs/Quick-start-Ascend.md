@@ -327,7 +327,7 @@ test -f /root/dflash-qwen3-8b-converted/model.safetensors
 echo "/root/dflash-qwen3-8b-converted"
 ```
 
-> 这里**不**再 `python | grep` 过滤输出 —— 那个设计有坑：loguru `logger.success("Saved to: ...")` 写在 stderr，grep 在管道的 stdout 端能匹配；可一旦 convert 抛异常（CI 33049460053 跑出 19.7s 的"快速成功"，但实际 config.json / model.safetensors 都没生成），traceback 走 stderr 也进管道、grep 找不到 "Saved to:" 退出 1，bash 没 `set -e / pipefail`，`echo` 还是照样执行、`dflash_path` 照样被捕获，framework 完全看不到失败。改成：让 python 的 stderr 自由流到框架端（异常 traceback 会触发 `ERROR_MARKERS` 命中，被 `_dump_command_output` 全文 dump），再用两个 `test -f` 显式断言输出文件存在 —— 任何一项失败 `test` 退出 1，整个 setup 块 rc 变 1，框架立即 raise 并把 stderr 一起 dump 出来。`echo` 之后单写一行纯路径，让 `store="dflash_path"` 拿到干净的字符串（避免 `rstrip` 后还带 loguru 的 success 行污染下游 `<dflash_path>` 替换）。下面的 `<dflash_path>` 是测试框架的占位符（`load="dflash_path>>dflash_path"`）：执行 `#test` 块前框架把 `<dflash_path>` 替换成捕获值，bash 看到的命令是路径字面量；不要写 `$dflash_path`，那样 shell 变量在每次 `#test` 都是空、且框架不会做 `$`-展开。
+> `python | grep "Saved to"` 看似省事，但 convert 抛异常时 traceback 也走 stderr 进 grep、grep 找不到退出 1，bash 没 `set -e / pipefail` 所以 `dflash_path` 仍被捕获、framework 看不到失败。改成：python 的 stderr 自由流出（异常 traceback 命中 `ERROR_MARKERS`），两个 `test -f` 显式断言 config.json / model.safetensors 存在，最后 `echo` 单写一行纯路径让 store 拿到干净字符串。下面的 `<dflash_path>` 是测试框架占位符（`load="dflash_path>>dflash_path"`），不要写 `$dflash_path`（shell 变量跨 #test 不保留）。
 
 ```shell #test id="pipeline-step1-convert" load="dflash_path>>dflash_path"
 ls -1 <dflash_path>/config.json <dflash_path>/model.safetensors
@@ -358,15 +358,11 @@ os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 from vllm import LLM, SamplingParams
 
 # 必须把 vllm 调用包进 `if __name__ == "__main__":` —— Python multiprocessing
-# spawn 路径要求：spawn 子进程会重新 import __main__，父进程在 main 模块顶层
-# 还处于 bootstrapping 阶段时就起新进程会被 `_check_not_importing_main()` 拒掉
-# (CI 33061941772)。这是 Python multiprocessing 的标准 idiom，跟 vllm 无关；
-# 但因为我们 spawn 是真实文件（不像 heredoc 的 __main__=<stdin>），这个 guard
-# 才被实际执行。
+# spawn 路径要求：spawn 子进程重新 import __main__，父进程顶层还在 bootstrap 时
+# 起新进程会被 `_check_not_importing_main()` 拒掉
 if __name__ == "__main__":
-    # Qwen3-8B 有 36 层，抽 [2, 18, 34] 三层（vllm-ascend test_extract_hidden_states
-    # DENSE_AUX_HIDDEN_STATE_LAYER_IDS 同值）。注意 target_layer_ids 是
-    # draft_model_config.hf_config.eagle_aux_hIDDEN 的字段，不是 CLI flag。
+    # Qwen3-8B 有 36 层，抽 [2, 18, 34] 三层（vllm-ascend test_extract_hidden_states 同值）；
+    # eagle_aux_hidden_state_layer_ids 是 draft_model_config.hf_config 字段，不是 CLI flag
     llm = LLM(
         model="<verifier_path>",
         tensor_parallel_size=1,
@@ -400,14 +396,13 @@ if __name__ == "__main__":
         _f.write(outputs[0].kv_transfer_params["hidden_states_path"])
 PY
 
-# 把 vllm 的 INFO/WARNING 全部丢到日志文件，不进 stdout —— 否则
-# `store="hidden_states_path"` 会捕获到 vllm INFO + 路径混合多行内容，
-# 下游 `echo <hidden_states_path>` 替换后 bash 把每行当命令（CI 33160459424）。
+# 把 vllm 的 INFO/WARNING 丢到日志文件，否则 `store="hidden_states_path"` 会捕获到
+# vllm INFO + 路径混合多行，下游 `echo <hidden_states_path>` 替换后 bash 把每行当命令
 python /tmp/extract_hidden.py > /tmp/extract.log 2>&1
 cat /tmp/last_hidden_path.txt
 ```
 
-> `extract_hidden_states` 是 vllm-ascend 的特殊 spec_decode mode：不真做 decoding、每个请求产出 1 token + 把 hidden states 写到 `shared_storage_path`。`outputs[0].kv_transfer_params["hidden_states_path"]` 是 vllm-ascend v0.23.0 引入的 safetensors 单文件格式（更早版本走 `ExampleHiddenStatesConnector.load_hidden_states`，文件路径不可见但 shape 一致）。**不靠 `tail -1` / 管道抓路径** —— vllm.LLM() 在 process 退出前会触发 CANN 驱动 teardown，teardown **同时**往 stdout 和 stderr 写一行 `[ERROR] ... applicaiton exception`（CANN 驱动的 typo 字面量），不管 `2>&1` 拼不拼、`tail -1` 抓到的都是错误行而不是 print 出来的路径（CI 33058568104 验证：去掉 `2>&1` 后 stdout 仍有 100B 的 `[ERROR] ...`）。改成 python 端把路径写到 `/tmp/last_hidden_path.txt`，bash 端 `cat` 那个固定文件 —— capture 完全跟 vllm 的 stdout / stderr 输出解耦，只看一个我们自己能控制内容的文件。
+> `extract_hidden_states` 是 vllm-ascend 的特殊 spec_decode mode：不真做 decoding、每个请求产出 1 token + 把 hidden states 写到 `shared_storage_path`。`outputs[0].kv_transfer_params["hidden_states_path"]` 是 vllm-ascend v0.23.0 引入的 safetensors 单文件格式。**不靠 `tail -1` 抓路径** —— vllm.LLM() 退出前 CANN 驱动 teardown 同时往 stdout 和 stderr 写一行 `[ERROR] applicaiton exception`（CANN typo 字面量），`tail -1` 抓到的都是错误行。改成 python 端把路径写到固定文件 `/tmp/last_hidden_path.txt`，capture 完全跟 vllm 输出解耦。
 
 ```shell #test id="pipeline-step2-extract" load="hidden_states_path>>hidden_states_path"
 echo <hidden_states_path>
@@ -433,14 +428,9 @@ mkdir -p "$CHECKPOINT_DIR"
 # 复用 source install 那步 clone 的 speculators 仓库（cwd 不跨 #test 块，需重新 cd）
 cd /root/speculators
 
-# 单卡 A2 上 torchrun --nproc_per_node=1 等价纯 python，多卡并行需要 ≥4 张 davinci
-# （vllm-ascend spec_decode E2E 跑在 four_card/）。
-# --speculator-type=dflash 由 train.py 从 SpeculatorModel.registry 动态解析
-# （v0.7.0.1 注册了 DFlashDraftModel + Eagle3DraftModel + MTPDraftModel +
-# PEagleDraftModel + DSparkDraftModel，见 models/__init__.py）。
-# --target-layer-ids 2 18 34 必须与 Step 2 一致。
-# --on-missing generate --on-generate delete 是 online 训练模式标志（隐藏状态缺时
-# 在线补，补完删原文件）；smoke 场景下 hidden_states 已落盘，这个分支不触发。
+# --speculator-type=dflash 由 train.py 从 SpeculatorModel.registry 动态解析；
+# --target-layer-ids 2 18 34 必须与 Step 2 extract 一致；
+# --on-missing generate --on-generate delete 是 online 模式标志（smoke 下 hidden_states 已落盘，不触发）
 torchrun --standalone --nproc_per_node=1 scripts/train.py \
   --verifier-name-or-path "<verifier_path>" \
   --data-path "<data_path>" \
@@ -477,9 +467,8 @@ model.safetensors
 把 Step 3 训出的 checkpoint 喂给 `vllm-ascend serve --speculative-config`，做一次 chat completion smoke：
 
 ```shell #test id="pipeline-step4-serve" load="checkpoint_path>>draft_model" load="verifier_path>>verifier_path"
-# 注意：vllm-ascend 的 (num_speculative_tokens + 1) ≤ 15 受
-# npu_fused_infer_attention_score 算子限制（vllm-ascend docs
-# speculative_decoding.md "Common Configuration" 段）；传 5 留余量。
+# num_speculative_tokens=5：vllm-ascend 限制 (num_speculative_tokens + 1) ≤ 15（受
+# npu_fused_infer_attention_score 算子约束），5 留余量
 nohup vllm serve "<verifier_path>" \
   --host 127.0.0.1 --port 8000 \
   --gpu-memory-utilization 0.85 \
@@ -494,7 +483,7 @@ for i in {1..180}; do
   sleep 2
 done
 
-# 8-token completion smoke；返回 JSON shape 不可逐字预测，用 fuzzy
+# 8-token completion smoke（JSON 不可逐字预测，用 fuzzy）
 curl -sS http://127.0.0.1:8000/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{"model":"Qwen/Qwen3-8B","messages":[{"role":"user","content":"Hello"}],"max_tokens":8}'
@@ -519,19 +508,14 @@ python << 'PY'
 from speculators import VerifierConfig
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 
-# VerifierConfig.architectures 是必填字段（pydantic Field 无默认），直接
-# ``VerifierConfig(name_or_path=...)`` 会触发 ValidationError。这里直接
-# 给出 Qwen3 的 architecture tag，或者调 ``VerifierConfig.from_pretrained(
-# "<verifier_path>")`` 让 transformers 自动从 verifier 的 config.json 读。
+# VerifierConfig.architectures 是 pydantic 必填字段，直接 VerifierConfig(name_or_path=...)
+# 会触发 ValidationError；显式传 architectures 或调 VerifierConfig.from_pretrained(...)
 verifier = VerifierConfig(
     name_or_path="<verifier_path>",
     architectures=["Qwen3ForCausalLM"],
 )
-# TokenProposalConfig 是 pydantic 的 registry 基类（base.py），唯一已注册
-# 的 proposal_type 是 ``greedy``（见 proposals/__init__.py 唯一 import 的
-# GreedyTokenProposalConfig + auto_package="speculators.proposals" +
-# registry_auto_discovery=True）。DFlash 在 convert_model 路径里也是用
-# greedy 做 token 提议，因此这里实例化 GreedyTokenProposalConfig。
+# TokenProposalConfig 是 pydantic registry 基类，唯一已注册的 proposal_type 是
+# greedy；DFlash convert_model 路径里也是用 greedy
 proposal = GreedyTokenProposalConfig(
     proposal_type="greedy",
     speculative_tokens=5,

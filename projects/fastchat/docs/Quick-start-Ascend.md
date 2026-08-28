@@ -39,7 +39,7 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 | CANN | 9.1.0 |
 | torch | 2.9.0+cpu |
 | torch_npu | 2.9.0.post2 |
-| transformers | `>=4.31` |
+| transformers | `>=4.31, <5` |
 | fschat | 0.2.36 |
 | 模型 | `Qwen/Qwen2.5-0.5B-Instruct`（经 ModelScope 下载） |
 
@@ -77,17 +77,23 @@ count: 1
 ## 安装 fschat
 
 ```shell #test id="install-fschat"
-pip install "fschat[model_worker]"
-python -c "import fschat; print('fschat', fschat.__version__)"
+python -m pip install "fschat[model_worker]" "transformers<5" modelscope
+python -c "import fastchat, transformers, modelscope; print('fastchat', fastchat.__version__); print('transformers', transformers.__version__); print('modelscope', modelscope.__version__)"
 ```
 
-输出结果如下：
+输出结果如下（安装日志较长，此处仅展示最后的版本验证输出）：
 
-```shell #test-result id="install-fschat"
-fschat 0.2.36
+```shell #test-result id="install-fschat" fuzzy='xxx' fuzzy='...'
+...fastchat 0.2.36
+transformers xxx
+modelscope xxx
+...
 ```
 
-> `transformers>=4.31` 已随 `fschat[model_worker]` 一并解析安装。
+> - PyPI 发行名为 `fschat`，安装后的 Python 模块目录为 `fastchat`。
+> - `transformers<5`：fschat 0.2.36 与 transformers 5.x 的 API 不兼容，固定在 4.x 最新版。
+> - `modelscope`：使用 `FASTCHAT_USE_MODELSCOPE=True` 下载模型时必需；FastChat 未将其声明为依赖，需显式安装。
+> - 其余依赖已随 `fschat[model_worker]` 一并解析安装。
 
 ## 非交互式命令行推理（单卡 NPU）
 
@@ -96,21 +102,22 @@ fschat 0.2.36
 ```shell #test id="cli-chat"
 printf '你好\n __END_OF_A_MESSAGE_47582648__\n __END_OF_A_MESSAGE_47582648__\n' | \
     FASTCHAT_USE_MODELSCOPE=True \
-    python3 -m fastchat.serve.cli \
+    python -m fastchat.serve.cli \
         --model-path Qwen/Qwen2.5-0.5B-Instruct \
+        --revision master \
         --device npu \
         --style programmatic \
         --max-new-tokens 128
 ```
 
-输出结果如下（ProgrammaticChatIO 输出格式，`xxx` 为模型回复内容）：
+输出结果如下（ProgrammaticChatIO 输出格式；qwen 模板的角色名自带 `<|im_start|>` 标记，`xxx` 为模型回复内容）：
 
 ```shell #test-result id="cli-chat" fuzzy='xxx' fuzzy='...'
-...[!OP:user]: 你好
-[!OP:assistant]: xxx
-...
+...[!OP:<|im_start|>user]: 你好
+...[!OP:<|im_start|>assistant]: xxx...
 ```
 
 > - `FASTCHAT_USE_MODELSCOPE=True`：从 ModelScope 下载模型权重，而不是 HuggingFace Hub；首次运行会下载模型，请耐心等待。
+> - `--revision master`：ModelScope 仓库的默认分支是 `master`，而 FastChat 的 `--revision` 默认值沿用 HuggingFace 惯例的 `main`，需显式指定才能命中 ModelScope 分支。
 > - `--device npu`：使用昇腾 NPU 加速（单卡）。
 > - `--style programmatic`：非交互式输出格式，配合管道输入使用，适合自动化脚本与 CI 验证。

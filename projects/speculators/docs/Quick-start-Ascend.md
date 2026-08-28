@@ -291,7 +291,24 @@ speculators xxx
 默认使用 **ModelScope** 进行模型下载（draft + verifier 都在 ModelScope 上有完整镜像）。持久缓存中可能残留之前中断下载产生的残缺权重文件，测试框架会在下载前做 safetensors 完整性校验，损坏的模型目录会被整体清除并重新下载。
 
 ```shell #test-setup store="draft_path"
-python -c "from modelscope import snapshot_download; print(snapshot_download('z-lab/Qwen3-8B-DFlash-b16'))" | tail -n 1
+# modelscope 偶发 500 风暴 → 3 次重试 + 失败 fallback HuggingFace；2>/dev/null 把 torch_npu
+# 启动期写 stdout 的 [ERROR] 噪声丢进黑洞，避免被 | tail -n 1 误捕成 draft_path（CI 33203340773）
+python -c "
+import sys, time, io
+_buf = io.StringIO(); _real = sys.stdout; sys.stdout = _buf
+def _get(mid):
+    for src in ('modelscope', 'huggingface_hub'):
+        for i in range(3):
+            try:
+                m = __import__(src, fromlist=['snapshot_download'])
+                p = m.snapshot_download(mid)
+                if p: return p
+            except Exception:
+                time.sleep(15 * (i + 1))
+    return ''
+sys.stdout = _real
+print(_get('z-lab/Qwen3-8B-DFlash-b16'))
+" 2>/dev/null | tail -n 1
 ```
 
 输出类似：
@@ -301,7 +318,22 @@ python -c "from modelscope import snapshot_download; print(snapshot_download('z-
 ```
 
 ```shell #test-setup store="verifier_path"
-python -c "from modelscope import snapshot_download; print(snapshot_download('Qwen/Qwen3-8B'))" | tail -n 1
+python -c "
+import sys, time, io
+_buf = io.StringIO(); _real = sys.stdout; sys.stdout = _buf
+def _get(mid):
+    for src in ('modelscope', 'huggingface_hub'):
+        for i in range(3):
+            try:
+                m = __import__(src, fromlist=['snapshot_download'])
+                p = m.snapshot_download(mid)
+                if p: return p
+            except Exception:
+                time.sleep(15 * (i + 1))
+    return ''
+sys.stdout = _real
+print(_get('Qwen/Qwen3-8B'))
+" 2>/dev/null | tail -n 1
 ```
 
 输出类似：

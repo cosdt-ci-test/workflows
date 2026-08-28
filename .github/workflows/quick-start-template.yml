@@ -416,6 +416,23 @@ jobs:
                 "$GH_API/repos/${{ env.UPSTREAM_REPO }}/tags?per_page=1" -o /tmp/r3.json 2>/dev/null; then
               ref=$(jq -r '.[0].name // empty' /tmp/r3.json)
             fi
+            # 4th fallback for upstreams that publish no GitHub Releases
+            # AND no tags (sgl-project/SpecForge is the canonical case —
+            # API returns 404 for /releases/latest, [] for /releases, and
+            # [] for /tags). /commits/HEAD resolves to the tip of the
+            # default branch (no hardcoded branch name — works for `main`,
+            # `master`, or any custom default). The test code uses the SHA
+            # as the <ref> in `git clone --branch <ref>`, so a commit SHA
+            # works as a clone ref. Schedule path intentionally stops at
+            # the 3-tier chain: a tagless upstream has no real "release
+            # signal" to track, and a noisy commit-sha diff would fire on
+            # every push; dispatch is a manual override so a single extra
+            # API call at dispatch time is acceptable.
+            if [ -z "$ref" ] && curl -fsSL --retry 3 --max-time 30 \
+                "$GH_API/repos/${{ env.UPSTREAM_REPO }}/commits/HEAD" -o /tmp/r4.json 2>/dev/null; then
+              ref=$(jq -r '.sha // empty' /tmp/r4.json)
+              echo "monitor: ref source=/commits/HEAD (tagless upstream, default-branch HEAD sha)"
+            fi
             [ -n "$ref" ] || { echo "ERROR: failed to resolve latest upstream ref (auto-fallback chain exhausted)"; exit 1; }
             echo "monitor decision (manual override): ref=$ref need_to_test=true reason=manual"
           elif [ -f $DECISION_FILE ]; then

@@ -81,4 +81,4 @@ jobs:
       # UPSTREAM_REF / NPU_READY) is injected by the engine. All project
       # env prep and installs live in the test subclass's
       # prepare_environment hook.
-      test_command: PYTHONPATH=/__w/workflows/workflows/src:$PYTHONPATH python -m unittest tests.test_quick_start_ascend -v 2>&1
+      test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1

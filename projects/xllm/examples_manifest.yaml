@@ -7,7 +7,7 @@ supported:
     profile: default
     runner: linux-aarch64-a2-1
     npu_devices: '0'
-    image: quay.io/jd_xllm/xllm-ai:xllm-dev-a2-arm-cann9-20260605
+    image: quay.nju.edu.cn/jd_xllm/xllm-ai:xllm-dev-a2-arm-cann9-20260605
     overlay_args:
       - --model /root/.cache/modelscope/Qwen2-7B-Instruct
       - --max_tokens 10
@@ -16,7 +16,7 @@ supported:
     profile: default
     runner: linux-aarch64-a2-1
     npu_devices: '0'
-    image: quay.io/jd_xllm/xllm-ai:xllm-dev-a2-arm-cann9-20260605
+    image: quay.nju.edu.cn/jd_xllm/xllm-ai:xllm-dev-a2-arm-cann9-20260605
     overlay_args:
       - --model /root/.cache/modelscope/Qwen2-7B-Instruct
       - --max_tokens 10
@@ -25,7 +25,7 @@ supported:
     profile: default
     runner: linux-aarch64-a2-1
     npu_devices: '0'
-    image: quay.io/jd_xllm/xllm-ai:xllm-dev-a2-arm-cann9-20260605
+    image: quay.nju.edu.cn/jd_xllm/xllm-ai:xllm-dev-a2-arm-cann9-20260605
     overlay_args:
       - --model /root/.cache/modelscope/Qwen2-7B-Instruct
       - --max_tokens 10
@@ -34,7 +34,7 @@ supported:
     profile: default
     runner: linux-aarch64-a2-1
     npu_devices: '0'
-    image: quay.io/jd_xllm/xllm-ai:xllm-dev-a2-arm-cann9-20260605
+    image: quay.nju.edu.cn/jd_xllm/xllm-ai:xllm-dev-a2-arm-cann9-20260605
     overlay_args:
       - --model /root/.cache/modelscope/Qwen2-7B-Instruct
       - --max_tokens 10
@@ -43,7 +43,7 @@ supported:
     profile: default
     runner: linux-aarch64-a2-1
     npu_devices: '0'
-    image: quay.io/jd_xllm/xllm-ai:xllm-dev-a2-arm-cann9-20260605
+    image: quay.nju.edu.cn/jd_xllm/xllm-ai:xllm-dev-a2-arm-cann9-20260605
     overlay_args:
       - --model /root/.cache/modelscope/Qwen2-7B-Instruct
       - --max_tokens 10

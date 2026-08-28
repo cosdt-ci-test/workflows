@@ -47,7 +47,7 @@ jobs:
       # the cache I/O jobs (restore-cache / publish-and-persist) to
       # GitHub-hosted ubuntu-latest.
       test_runner: '["linux-aarch64-a2-1"]'
-      image: quay.io/jd_xllm/xllm-ai:xllm-dev-a2-arm-cann9-20260605
+      image: quay.nju.edu.cn/jd_xllm/xllm-ai:xllm-dev-a2-arm-cann9-20260605
       container_options: >-
         --volume=/data/ci-cache/models:/export/home/models
         --volume=/data/ci-cache/modelscope/xllm:/root/.cache/modelscope

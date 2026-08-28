@@ -106,4 +106,4 @@ cd "$TARGET_ROOT"
 export FIXTURE_DIR CI_OUTPUT_DIR ASCEND_RT_VISIBLE_DEVICES="${ASCEND_RT_VISIBLE_DEVICES:-0}"
 # Source CANN env in the same shell that runs the example
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
-bash "$EXAMPLE_PATH" "${EXTRA_ARGS[@]}"
+python "$EXAMPLE_PATH" "${EXTRA_ARGS[@]}"

@@ -104,7 +104,7 @@ xllm version: xxx
 使用单卡 NPU 运行生成示例（最大生成 10 token，快速验证链路）：
 
 ```shell #test id="generate"
-ASCEND_RT_VISIBLE_DEVICES=0 python -m examples.generate --model /export/home/models/Qwen2-7B-Instruct --max_tokens 10
+ASCEND_RT_VISIBLE_DEVICES=0 python -m examples.generate --model /root/.cache/modelscope/Qwen2-7B-Instruct --max_tokens 10
 ```
 
 输出结果如下：
@@ -118,12 +118,12 @@ Prompt: 'The future of AI is', Generated text: 'xxx'
 llm finished
 ```
 
-> 注意：模型路径 `/export/home/models/Qwen2-7B-Instruct` 需要在运行环境中存在。CI 环境会预先下载模型到该路径。
+> 注意：模型路径 `/root/.cache/modelscope/Qwen2-7B-Instruct` 是 CI 环境通过 ModelScope 预先下载的目录（挂载自 CI 缓存 `/data/ci-cache/modelscope/xllm`）。本地运行时请用 `modelscope` 自行下载该模型到对应目录。
 
 ## Beam Search 生成示例
 
 ```shell #test id="generate-beam"
-ASCEND_RT_VISIBLE_DEVICES=0 python -m examples.generate_beam_search --model /export/home/models/Qwen2-7B-Instruct --max_tokens 10
+ASCEND_RT_VISIBLE_DEVICES=0 python -m examples.generate_beam_search --model /root/.cache/modelscope/Qwen2-7B-Instruct --max_tokens 10
 ```
 
 输出结果如下：
@@ -136,7 +136,7 @@ Prompt: 'Hello, my name is', Generated text: 'xxx'
 ## Embedding 生成示例
 
 ```shell #test id="generate-embedding"
-ASCEND_RT_VISIBLE_DEVICES=0 python -m examples.generate_embedding --model /export/home/models/Qwen2-7B-Instruct
+ASCEND_RT_VISIBLE_DEVICES=0 python -m examples.generate_embedding --model /root/.cache/modelscope/Qwen2-7B-Instruct
 ```
 
 输出结果如下：
@@ -149,7 +149,7 @@ Embedding shape: xxx
 ## VLM 示例（如果模型支持）
 
 ```shell #test id="generate-vlm"
-ASCEND_RT_VISIBLE_DEVICES=0 python -m examples.generate_vlm --model /export/home/models/Qwen2-7B-Instruct --max_tokens 10
+ASCEND_RT_VISIBLE_DEVICES=0 python -m examples.generate_vlm --model /root/.cache/modelscope/Qwen2-7B-Instruct --max_tokens 10
 ```
 
 输出结果如下：
@@ -162,7 +162,7 @@ Prompt: 'xxx', Generated text: 'xxx'
 ## Sample 示例
 
 ```shell #test id="sample"
-ASCEND_RT_VISIBLE_DEVICES=0 python -m examples.sample --model /export/home/models/Qwen2-7B-Instruct --max_tokens 10
+ASCEND_RT_VISIBLE_DEVICES=0 python -m examples.sample --model /root/.cache/modelscope/Qwen2-7B-Instruct --max_tokens 10
 ```
 
 输出结果如下：

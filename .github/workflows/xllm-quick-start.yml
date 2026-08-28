@@ -50,7 +50,8 @@ jobs:
       image: quay.io/jd_xllm/xllm-ai:xllm-dev-a2-arm-cann9-20260605
       container_options: >-
         --volume=/data/ci-cache/models:/export/home/models
-      timeout_minutes: 60
+        --volume=/data/ci-cache/modelscope/xllm:/root/.cache/modelscope
+      timeout_minutes: 180
       upstream_repo: xLLM-AI/xllm
       # Doc URL points to the quick start doc in this repo (cosdt-ci-test/workflows).
       # The monitor hashes it and the test fetches the same URL.
@@ -60,4 +61,4 @@ jobs:
       # UPSTREAM_REF / NPU_READY) is injected by the engine. All project
       # env prep and installs live in the test subclass's
       # prepare_environment hook.
-      test_command: PYTHONPATH=/__w/workflows/workflows/src:$PYTHONPATH python -m unittest tests.test_quick_start_ascend -v 2>&1
+      test_command: PYTHONPATH=/__w/workflows/workflows/src:/tmp/xllm-ai:$PYTHONPATH python -m unittest tests.test_quick_start_ascend -v 2>&1

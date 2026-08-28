@@ -130,11 +130,50 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 check=True,
             )
 
-        # 2) Verify xllm is available
+        # 2) Verify xllm is available (image pre-installs it; never build here)
         subprocess.run(
             ['python', '-c', 'import xllm; print("xllm:", xllm.__version__)'],
             check=True,
         )
+
+        # 3) Clone xllm source tree (no build) so the `examples` package is
+        # importable for `python -m examples.generate`. setup.py does NOT ship
+        # `examples`, so we must provide the repo on PYTHONPATH.
+        xllm_src = '/tmp/xllm-ai'
+        if not os.path.isdir(xllm_src):
+            upstream_ref = os.environ.get('UPSTREAM_REF') or 'main'
+            print(f'setup: cloning xllm@{upstream_ref} to {xllm_src}')
+            subprocess.run(
+                [
+                    'git', 'clone', '--depth', '1', '--branch', upstream_ref,
+                    'https://github.com/xLLM-AI/xllm.git', xllm_src,
+                ],
+                check=True,
+            )
+        # Make `examples` importable in every doc-run subprocess.
+        os.environ['PYTHONPATH'] = xllm_src + os.pathsep + os.environ.get('PYTHONPATH', '')
+
+        # 4) Download the example model once into the mounted CI cache.
+        model_dir = '/root/.cache/modelscope/Qwen2-7B-Instruct'
+        if os.path.isdir(model_dir) and any(os.scandir(model_dir)):
+            print(f'setup: model already cached at {model_dir}; skipping download')
+        else:
+            print(f'setup: downloading Qwen2-7B-Instruct to {model_dir}')
+            subprocess.run(
+                [
+                    'python', '-m', 'pip', 'install', '-q', 'modelscope',
+                ],
+                check=False,
+            )
+            subprocess.run(
+                [
+                    'python', '-c',
+                    "from modelscope import snapshot_download; "
+                    "snapshot_download('Qwen/Qwen2-7B-Instruct', "
+                    f"local_dir='{model_dir}')",
+                ],
+                check=True,
+            )
 
     # ----------------------------------------------------------
     # test entry

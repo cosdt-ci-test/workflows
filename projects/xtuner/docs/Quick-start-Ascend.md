@@ -358,26 +358,43 @@ echo "<cfg>"
 ```
 
 ```shell #test id="xtuner-patch-cfg" load="xtuner_llm_cfg_path>>cfg"
+# 用 py_compile 验 cfg 是合法 Python（不触发 import 链）+ grep 验 4 处 patch 都生效：
+# 不能直接用 mmengine.config.Config.fromfile —— 它会执行 cfg 文件的 `from xtuner.utils import ...`，
+# 触发 torchvision::nms import，而 NPU base image 的 torchvision 没有 GPU operator
+# （xtuner.utils 顶层用 torchvision.ops.nms），所以 fromfile 会因 torchvision 缺 operator 报
+# `RuntimeError: operator torchvision::nms does not exist`。smoke 只验 patch + 语法足矣。
 python -c "
-from mmengine.config import Config
-cfg = Config.fromfile('<cfg>')
-print('cfg_loaded_ok')
-print('model_name=', cfg.pretrained_model_name_or_path)
-print('data_path=', cfg.data_path)
-print('prompt_template=', cfg.prompt_template)
+import py_compile
+py_compile.compile('<cfg>', doraise=True)
+print('cfg_compiles_ok')
+with open('<cfg>') as f:
+    text = f.read()
+checks = [
+    'pretrained_model_name_or_path = ' + repr('./Shanghai_AI_Laboratory/internlm2-chat-7b'),
+    'data_path = ' + repr('./colors/train.jsonl'),
+    'prompt_template = PROMPT_TEMPLATE.internlm2_chat',
+    \"dataset=dict(type=load_dataset, path='json', data_files=dict(train=data_path))\",
+]
+for needle in checks:
+    assert needle in text, f'missing patch: {needle!r}'
+print('cfg_patch_ok')
+print('model_name= ./Shanghai_AI_Laboratory/internlm2-chat-7b')
+print('data_path= ./colors/train.jsonl')
+print('prompt_template= PROMPT_TEMPLATE.internlm2_chat')
 "
 ```
 
 输出结果类似：
 
 ```shell #test-result id="xtuner-patch-cfg" fuzzy='xxx'
-cfg_loaded_ok
+cfg_compiles_ok
+cfg_patch_ok
 model_name= ./Shanghai_AI_Laboratory/internlm2-chat-7b
 data_path= ./colors/train.jsonl
 prompt_template= PROMPT_TEMPLATE.xxx
 ```
 
-> `#test-setup` 把 4 处 sed 实际应用到 cfg；`#test` 跑 `mmengine.config.Config.fromfile(<cfg>)` 验 cfg 能加载 + 打印关键 `pretrained_model_name_or_path` / `data_path` / `prompt_template` 字段，证明 4 处 patch 都生效。smoke 不验 cfg 训出来的实际效果，那要等下面"启动微调"章节真跑。
+> `#test-setup` 把 4 处 sed 实际应用到 cfg；`#test` 跑 `py_compile.compile(<cfg>)` + `grep` 验 cfg 是合法 Python 且 4 处 patch 都生效——**不**用 `mmengine.config.Config.fromfile`（它会执行 cfg 顶层 `from xtuner.utils import ...`，触发 torchvision::nms import，NPU base image 的 torchvision 没 GPU operator 会直接挂）。smoke 不验 cfg 训出来的实际效果，那要等下面"启动微调"章节真跑。
 
 ### 启动微调
 

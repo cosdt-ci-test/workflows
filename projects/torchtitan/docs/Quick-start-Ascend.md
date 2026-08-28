@@ -36,7 +36,7 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | triton | 最新release |
 | modelscope | 最新release |
 | torchtitan | 最新 release |
-| 训练配置 | `torchtitan/models/llama3/train_configs/debug_model.toml`（dim=256 / 6 层 / 16 head Llama 3 缩水版） |
+| 训练配置 | `torchtitan/models/llama3/train_configs/llama3_8b.toml`（Llama 3 8B 标准结构：dim=4096 / 32 层 / 32 head / 8 kv head） |
 
 
 ### 检查前置是否满足
@@ -205,13 +205,13 @@ tokenizer_config.json
 
 ### 单卡训练
 
-用 fake process group 在 1 张 NPU 上跑 debugmodel 真跑 2 步，验证配置解析、初始化、加载 tokenizer、build dataloader、forward + backward 整条链路能跑通：
+用 fake process group 在 1 张 NPU 上跑 8B 模型真跑 2 步，验证配置解析、初始化、加载 tokenizer、build dataloader、forward + backward 整条链路能跑通。8B 模型单卡 64GB 紧巴巴，加 `--parallelism.enable-cpu-offload true` 把 optimizer state 卸到 CPU：
 
 ```shell #test id="torchtitan-train-debug" load="upstream_ref>>ref" load="ms_tokenizer_path>>ms_tokenizer_path"
 cd torchtitan && git checkout <ref>
 NGPU=1 ASCEND_RT_VISIBLE_DEVICES=0 LOCAL_RANK=0 \
 python -m torchtitan.train \
-    --job.config-file ./torchtitan/models/llama3/train_configs/debug_model.toml \
+    --job.config-file ./torchtitan/models/llama3/train_configs/llama3_8b.toml \
     --model.hf-assets-path <ms_tokenizer_path> \
     --comm.mode fake_backend \
     --training.steps 2 \
@@ -219,13 +219,14 @@ python -m torchtitan.train \
     --training.seq-len 256 \
     --metrics.log-freq 1 \
     --metrics.disable-color-printing \
+    --parallelism.enable-cpu-offload true \
     --job.dump-folder /tmp/torchtitan-quickstart
 ```
 
 输出结果类似如下：
 
 ```shell #test-result id="torchtitan-train-debug" fuzzy='xxx' fuzzy='...'
-[titan] xxx - root - INFO - Starting job: Llama 3 debug training
+[titan] xxx - root - INFO - Starting job: Llama 3 8B training
 ...
 [titan] xxx - root - INFO - Training starts at step xxx
 ...
@@ -240,7 +241,7 @@ python -m torchtitan.train \
 
 ### 多卡训练
 
-用 torchrun 起 2 个 rank 跑 debugmodel 真分布式训练，`--training.steps 2` 真跑 2 步：
+用 torchrun 起 2 个 rank 跑 8B 模型真分布式训练，`--training.steps 2` 真跑 2 步。多卡 2×64GB 装 8B 仍然紧张，加 `--parallelism.enable-cpu-offload true` 把 optimizer state 卸到 CPU：
 
 ```shell #test id="torchtitan-train-2card" load="upstream_ref>>ref" load="ms_tokenizer_path>>ms_tokenizer_path"
 cd torchtitan && git checkout <ref>
@@ -252,7 +253,7 @@ torchrun --nproc_per_node=2 \
     --local-ranks-filter 0 \
     --tee 3 \
     --module torchtitan.train \
-    --job.config-file ./torchtitan/models/llama3/train_configs/debug_model.toml \
+    --job.config-file ./torchtitan/models/llama3/train_configs/llama3_8b.toml \
     --model.hf-assets-path <ms_tokenizer_path> \
     --comm.mode default \
     --training.steps 2 \
@@ -260,13 +261,14 @@ torchrun --nproc_per_node=2 \
     --training.seq-len 256 \
     --metrics.log-freq 1 \
     --metrics.disable-color-printing \
+    --parallelism.enable-cpu-offload true \
     --job.dump-folder /tmp/torchtitan-quickstart-2card
 ```
 
 输出结果类似如下：
 
 ```shell #test-result id="torchtitan-train-2card" fuzzy='xxx' fuzzy='...'
-[default0]:[titan] xxx - root - INFO - Starting job: Llama 3 debug training
+[default0]:[titan] xxx - root - INFO - Starting job: Llama 3 8B training
 ...
 [default0]:[titan] xxx - root - INFO - Training starts at step xxx
 ...

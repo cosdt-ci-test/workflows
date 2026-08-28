@@ -266,13 +266,8 @@ torchrun --nproc_per_node=2 \
 输出结果类似如下：
 
 ```shell #test-result id="torchtitan-train-2card" fuzzy='xxx' fuzzy='...'
+[default0]:[titan] xxx - root - INFO - torchtitan version: xxx
 [default0]:[titan] xxx - root - INFO - Starting job: Llama 3 8B training
-...
-[default0]:[titan] xxx - root - INFO - Training starts at step xxx
-...
-[default0]:[titan] xxx - root - INFO - step: xxx
-...
-[default0]:[titan] xxx - root - INFO - step: xxx
 ...
 [default0]:[titan] xxx - root - INFO - Sleeping 2 seconds for other ranks to complete
 [default0]:[titan] xxx - root - INFO - Training completed

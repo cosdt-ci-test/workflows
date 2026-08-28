@@ -34,7 +34,7 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | CANN | 9.1.0 |
 | torch | 2.9.0+cpu |
 | torch_npu | 2.9.0.post6 |
-| torchvision | 最新版（不 pin 版本号，让 pip 跟 `torch==2.9.0` 解析 PyPI linux aarch64 cpu-only wheel，走阿里 PyPI 镜像） |
+| torchvision | 最新 release（**必须源码构建** `FORCE_CUDA=0`——torchvision ≥0.23 停止发布 CPU-only wheel，PyPI 上的 linux wheel 都链 `libcudart.so`，跟 torch_npu 不兼容；CPU-only 构建产出的 `_C.so` 只链 `libc10_cpu` / `libtorch_cpu`，跟 torch_npu 完全兼容） |
 | pillow | `>=10.0`（`torchvision.transforms.functional.to_pil_image` 等的运行时依赖） |
 
 ### 前置安装
@@ -120,35 +120,22 @@ Pillow xxx
 
 ## 安装 torchvision
 
-### 二进制路径
+torchvision ≥0.23 不再发布 CPU-only wheel——PyPI 上的 linux aarch64 / x86_64 wheel 全部链接 `libcudart.so`，跟 `torch_npu`（替换 torch CUDA backend）不兼容。所以必须**从源码构建**，强制 `FORCE_CUDA=0` 让构建脚本跳过 CUDA 依赖，产出的 `_C.so` 只链 `libc10_cpu` / `libtorch_cpu`，跟 torch_npu 完全兼容。
 
-```shell #test-setup id="stock-torchvision-install"
-uv pip install torchvision -i https://mirrors.aliyun.com/pypi/simple/
-```
+构建工具依赖（g++ / make / cmake / git）已在基础镜像里，无需额外安装。
 
-打印版本：
-
-```shell #test id="stock-torchvision-check"
-python -c "import torchvision; print('torchvision', torchvision.__version__)"
-```
-
-```shell #test-result id="stock-torchvision-check" fuzzy='xxx'
-torchvision xxx
-```
-
-### 从源码安装
 <!-- 获取 release tag：
 ```shell #test-setup store="upstream_ref"
 echo "${UPSTREAM_REF}"
 ```
 -->
 
-克隆上游仓库、安装并验证：
+克隆上游仓库、`FORCE_CUDA=0` 源码构建并验证：
 
 ```shell #test id="stock-torchvision-source" load="upstream_ref>>ref"
 git clone --depth 1 --branch <ref> https://github.com/pytorch/vision.git
 cd vision
-uv pip install -e .
+FORCE_CUDA=0 uv pip install -e . --no-build-isolation
 python -c "import torchvision; print('torchvision', torchvision.__version__)"
 ```
 
@@ -160,11 +147,17 @@ python -c "import torchvision; print('torchvision', torchvision.__version__)"
 torchvision xxx
 ```
 
+> 验证构建产物不依赖 CUDA 库：
+> ```shell
+> ldd /usr/local/python3.12.13/lib/python3.12/site-packages/torchvision/_C.so | grep -E 'cuda|cudart' || echo "no cuda deps OK"
+> ```
+> 应输出 `no cuda deps OK`——若有 `libcudart.so` / `libc10_cuda.so` / `libtorch_cuda.so` 等链接，说明 `FORCE_CUDA=0` 没生效，需要重新构建。
+
 ## transforms v2 入门
 
 用一个**合成的 256×256 RGB 测试图**走一遍 transforms v2 的核心用法。每节都把图搬到 NPU 上运行（`img.to('npu:0')`），用 v2 的 `BoundingBoxes` / `Mask` / `Video` / `KeyPoints` 配合验证 dispatch 链路。
 
-> torchvision 源码在 [github.com/pytorch/vision](https://github.com/pytorch/vision)；本文档从 PyPI 拉最新稳定 release wheel，跟官方 [Getting started with transforms v2](https://pytorch.org/vision/stable/transforms/v2/auto_examples/transforms/plot_transforms_getting_started.html) 教程一一对应。
+> torchvision 源码在 [github.com/pytorch/vision](https://github.com/pytorch/vision)；本文档走 `FORCE_CUDA=0` 源码构建路径（避开 PyPI wheel 链 `libcudart.so` 的问题），跟官方 [Getting started with transforms v2](https://pytorch.org/vision/stable/transforms/v2/auto_examples/transforms/plot_transforms_getting_started.html) 教程一一对应。
 
 ### 导入包 + 检查 NPU + 合成测试图
 

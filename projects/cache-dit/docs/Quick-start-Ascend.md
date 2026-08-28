@@ -233,6 +233,7 @@ export MODELSCOPE_CACHE=/root/.cache/modelscope
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 python3 -c "from modelscope import snapshot_download; snapshot_download('AI-ModelScope/FLUX.1-dev', local_dir='/root/.cache/modelscope/cache-dit-flux')"
 NPU_COUNT=$(python3 -c "import os, torch; v=os.environ.get('ASCEND_RT_VISIBLE_DEVICES'); print(len([x for x in v.split(',') if x != '']) if v else torch.npu.device_count())")
+mkdir -p output
 if [ "${NPU_COUNT}" -ge 2 ]; then
   torchrun --nproc_per_node=2 -m cache_dit.generate flux --model-path /root/.cache/modelscope/cache-dit-flux --parallel tp --attn _native_npu \
     --prompt "A cat holding a sign that says hello world" \
@@ -258,10 +259,10 @@ fi
 [INFO] - num_inference_steps: 10
 [INFO] Example Output Summary:
 [INFO] - Model: flux
-[INFO] - Optimization: C0_Q0_NONE_Ulysses1
-[INFO] Load Time: 0.56s
-[INFO] Warmup Time: 5.23s
-[INFO] Inference Time: 2.18s
+[INFO] - Optimization: xxx
+[INFO] Load Time: xxx
+[INFO] Warmup Time: xxx
+[INFO] Inference Time: xxx
 [INFO] Image saved to output/test.png
 ```
 预期：进程退出码为 0，`output/test.png` 文件被创建，日志中出现推理时间统计。

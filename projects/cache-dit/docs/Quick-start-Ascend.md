@@ -252,18 +252,19 @@ fi
 ```
 
 ```shell #test-result id="npu-function-verification" fuzzy='xxx'
-[INFO] Example Input Summary:
-[INFO] - prompt: A cat holding a sign that says hello world
-[INFO] - height: 512
-[INFO] - width: 512
-[INFO] - num_inference_steps: 10
-[INFO] Example Output Summary:
-[INFO] - Model: flux
-[INFO] - Optimization: xxx
-[INFO] Load Time: xxx
-[INFO] Warmup Time: xxx
-[INFO] Inference Time: xxx
-[INFO] Image saved to output/test.png
+xxx Example Input Summary:
+xxx - prompt: A cat holding a sign that says hello world
+xxx - height: 512
+xxx - width: 512
+xxx - num_inference_steps: 10
+xxx Example Output Summary:
+xxx - Model: flux
+xxx - Optimization: xxx
+xxx - Load Time: xxx
+xxx - Warmup Time: xxx
+xxx - Inference Time: xxx
+xxx Image saved to output/test.png
+xxx
 ```
 预期：进程退出码为 0，`output/test.png` 文件被创建，日志中出现推理时间统计。
 
@@ -278,7 +279,7 @@ print('Available attention backends:', [x for x in dir(cache_dit) if 'attn' in x
 ```
 
 ```shell #test-result id="check-attn-backend" fuzzy='xxx'
-Available attention backends: [_native_npu, ...]
+Available attention backends: xxx_native_npu
 ```
 预期：输出列表中包含 `_native_npu`。
 

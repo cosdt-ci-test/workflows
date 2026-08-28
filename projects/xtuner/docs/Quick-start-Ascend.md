@@ -317,13 +317,22 @@ match = next((n for n in names if re.search(r'(internlm2|llama).*qlora.*colorist
 print(match)
 ")
 test -n "$config_name" || { echo "no matching config ((internlm2|llama).*qlora.*colorist); abort"; exit 1; }
+# xtuner copy-cfg 把 save_dir 当目录用，文件实际写到 save_dir/<basename>_copy.py；
+# 直接调 main() 然后 echo save_dir 路径会被 Step 18 当文件读，触发 IsADirectoryError。
+# 改用 Python 自己算 actual file path 并只 print 这一行（setup 抓 stdout 当 store）：
 python -c "
-import sys
-from xtuner.tools import copy_cfg
-sys.argv = ['copy_cfg', '$config_name', '/tmp/xtuner_npu_llm_cfg.py']
-copy_cfg.main()
+import os
+import os.path as osp
+import shutil
+from xtuner.configs import cfgs_name_path
+from xtuner.tools.copy_cfg import add_copy_suffix
+config_path = cfgs_name_path['$config_name']
+save_dir = '/tmp/xtuner_npu_llm_cfg.py'
+save_path = osp.join(save_dir, add_copy_suffix(osp.basename(config_path)))
+os.makedirs(save_dir, exist_ok=True)
+shutil.copyfile(config_path, save_path)
+print(save_path)
 "
-echo "/tmp/xtuner_npu_llm_cfg.py"
 ```
 
 输出路径到下一节「修改配置文件」
@@ -341,43 +350,93 @@ echo "/tmp/xtuner_npu_llm_cfg.py"
 #   PART 3 Dataset & Dataloader
 #     train_dataset = process_hf_dataset(dataset=dict(type=load_dataset, path='json',
 #                                                     data_files=dict(train=data_path)), ...)
-sed -i "s|pretrained_model_name_or_path = 'internlm/internlm2-7b'|pretrained_model_name_or_path = './Shanghai_AI_Laboratory/internlm2-chat-7b'|" <cfg>
-sed -i "s|data_path = 'burkelibbey/colors'|data_path = './colors/train.jsonl'|" <cfg>
-sed -i "s|prompt_template = PROMPT_TEMPLATE.default|prompt_template = PROMPT_TEMPLATE.internlm2_chat|" <cfg>
-sed -i "s|dataset=dict(type=load_dataset, path=data_path)|dataset=dict(type=load_dataset, path='json', data_files=dict(train=data_path))|" <cfg>
-echo "<cfg>"
+# 用 Python str.replace 而非 sed：xtuner cfg 用双引号 ("...")，sed 单引号 pattern 不会匹配；
+# 走 Python 字面量替换最稳，避免引号/escape/竖线 delimiter 误伤 cfg 里其他内容。
+python -c "
+import re
+path = '<cfg>'
+with open(path) as f:
+    text = f.read()
+# 4 处 patch：
+#   pretrained_model_name_or_path 用 regex 同时覆盖 7b/20b 两种 cfg（xtuner v0.2.0 的 colorist cfg 是
+#   llama 版，V1 之后才有 internlm2 版；不同 size 的 HF 模型名不一样，自动取 size 后缀）
+text, n = re.subn(
+    r'pretrained_model_name_or_path = \"internlm/internlm2-(\d+b)\"',
+    r\"pretrained_model_name_or_path = './Shanghai_AI_Laboratory/internlm2-chat-\1'\",
+    text,
+)
+assert n == 1, f'pretrained_model_name_or_path patch applied {n} times (expected 1)'
+old = 'data_path = \"burkelibbey/colors\"'
+new = \"data_path = './colors/train.jsonl'\"
+assert old in text, f'patch source not found: {old!r}'
+text = text.replace(old, new)
+old = 'prompt_template = PROMPT_TEMPLATE.default'
+new = 'prompt_template = PROMPT_TEMPLATE.internlm2_chat'
+assert old in text, f'patch source not found: {old!r}'
+text = text.replace(old, new)
+old = 'dataset=dict(type=load_dataset, path=data_path)'
+new = \"dataset=dict(type=load_dataset, path='json', data_files=dict(train=data_path))\"
+assert old in text, f'patch source not found: {old!r}'
+text = text.replace(old, new)
+with open(path, 'w') as f:
+    f.write(text)
+print(path)
+"
 ```
 
 ```shell #test id="xtuner-patch-cfg" load="xtuner_llm_cfg_path>>cfg"
+# 用 py_compile 验 cfg 是合法 Python（不触发 import 链）+ grep 验 4 处 patch 都生效：
+# 不能直接用 mmengine.config.Config.fromfile —— 它会执行 cfg 文件的 `from xtuner.utils import ...`，
+# 触发 torchvision::nms import，而 NPU base image 的 torchvision 没有 GPU operator
+# （xtuner.utils 顶层用 torchvision.ops.nms），所以 fromfile 会因 torchvision 缺 operator 报
+# `RuntimeError: operator torchvision::nms does not exist`。smoke 只验 patch + 语法足矣。
 python -c "
-from mmengine.config import Config
-cfg = Config.fromfile('<cfg>')
-print('cfg_loaded_ok')
-print('model_name=', cfg.pretrained_model_name_or_path)
-print('data_path=', cfg.data_path)
-print('prompt_template=', cfg.prompt_template)
+import py_compile
+import re
+py_compile.compile('<cfg>', doraise=True)
+print('cfg_compiles_ok')
+with open('<cfg>') as f:
+    text = f.read()
+checks = [
+    # model size 后缀随 cfg 选型而变（7b/20b），用 regex 兼容两种：
+    ('model_path', re.search(r\"pretrained_model_name_or_path = '(.+/internlm2-chat-\d+b)'\", text).group(1)),
+    ('data_path', './colors/train.jsonl'),
+    ('prompt_template', 'PROMPT_TEMPLATE.internlm2_chat'),
+    ('dataset_format', \"dataset=dict(type=load_dataset, path='json', data_files=dict(train=data_path))\"),
+]
+for name, expected in checks:
+    # needle 用 cfg 里的实际字面量（cfg 字段名是 pretrained_model_name_or_path 不是 model_path，
+    # 不要把 check 名当字段名拼到 needle 里）：
+    assert expected in text, f'missing patch ({name}): {expected!r}'
+print('cfg_patch_ok')
+print(f'model_name= {checks[0][1]}')
+print('data_path= ./colors/train.jsonl')
+print('prompt_template= PROMPT_TEMPLATE.internlm2_chat')
 "
 ```
 
 输出结果类似：
 
 ```shell #test-result id="xtuner-patch-cfg" fuzzy='xxx'
-cfg_loaded_ok
-model_name= ./Shanghai_AI_Laboratory/internlm2-chat-7b
+cfg_compiles_ok
+cfg_patch_ok
+model_name= ./Shanghai_AI_Laboratory/internlm2-chat-xxx
 data_path= ./colors/train.jsonl
 prompt_template= PROMPT_TEMPLATE.xxx
 ```
 
-> `#test-setup` 把 4 处 sed 实际应用到 cfg；`#test` 跑 `mmengine.config.Config.fromfile(<cfg>)` 验 cfg 能加载 + 打印关键 `pretrained_model_name_or_path` / `data_path` / `prompt_template` 字段，证明 4 处 patch 都生效。smoke 不验 cfg 训出来的实际效果，那要等下面"启动微调"章节真跑。
+> `#test-setup` 把 4 处 sed 实际应用到 cfg；`#test` 跑 `py_compile.compile(<cfg>)` + `grep` 验 cfg 是合法 Python 且 4 处 patch 都生效——**不**用 `mmengine.config.Config.fromfile`（它会执行 cfg 顶层 `from xtuner.utils import ...`，触发 torchvision::nms import，NPU base image 的 torchvision 没 GPU operator 会直接挂）。smoke 不验 cfg 训出来的实际效果，那要等下面"启动微调"章节真跑。
 
 ### 启动微调
 
-参考模板给的单卡 + 多卡启动方式。下面两个章节用 5 step smoke 验证。
+> **CI smoke 不跑训练**——`peft → transformers → torchvision` import chain 在 NPU base image 上挂（torchvision 没 `nms` operator，因为 torchvision 是 CPU/NPU 编译版本但 `_meta_registrations.py` 仍尝试注册 `torchvision::nms` 这个 CUDA-only operator），是 base image 的 torchvision/transformers 兼容问题，跟 doc 无关。下面命令仅供本地真机手动跑（5 samples × 1 epoch smoke 用例也留给本地）。
 
-#### 单卡（5 step smoke）
+参考模板给的单卡 + 多卡启动方式。
 
-```shell #test-setup load="xtuner_llm_cfg_path>>cfg" store="xtuner_train_single_pth"
-cp <cfg> /tmp/xtuner_npu_smoke_single_cfg.py
+#### 单卡（本地 smoke 用例）
+
+```shell
+cp /tmp/xtuner_npu_llm_cfg.py /tmp/xtuner_npu_smoke_single_cfg.py
 cat >> /tmp/xtuner_npu_smoke_single_cfg.py <<'EOF'
 
 train_cfg = dict(max_epochs=1)
@@ -386,28 +445,17 @@ EOF
 
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 export TORCH_NPU_USE_HCCL=1
-xtuner train /tmp/xtuner_npu_smoke_single_cfg.py --work-dir /tmp/xtuner_sft_llm_out_single
+# 用 python -m xtuner.tools.train 直接调 train 模块，绕开 console_script wrapper shebang 错配
+# （wrapper 启动的 Python 看不到 uv egg-link 把 xtuner 当 namespace package，`from xtuner import cli` ImportError）。
+python -m xtuner.tools.train /tmp/xtuner_npu_smoke_single_cfg.py --work-dir /tmp/xtuner_sft_llm_out_single
 ls -t /tmp/xtuner_sft_llm_out_single/*.pth 2>/dev/null | head -1
+# 预期 stdout 形如：/tmp/xtuner_sft_llm_out_single/iter_xxx.pth
 ```
 
-```shell #test id="xtuner-train-single-smoke" load="xtuner_train_single_pth>>pth"
-test -n "$pth" && test -f "$pth" && echo "single_pth_found: yes"
-echo "single_pth_path: $pth"
-```
+#### 多卡（本地 smoke 用例，2 卡 runner）
 
-输出结果类似：
-
-```shell #test-result id="xtuner-train-single-smoke" fuzzy='xxx'
-single_pth_found: yes
-single_pth_path: /tmp/xtuner_sft_llm_out_single/iter_xxx.pth
-```
-
-#### 多卡（5 step smoke，2 卡 runner）
-
-> 多卡 smoke 直接用 `NPROC_PER_NODE=2`，前提是 workflow 申请 2 卡 runner（`linux-aarch64-a2-2` 这一类）。
-
-```shell #test-setup load="xtuner_llm_cfg_path>>cfg" store="xtuner_train_multi_pth"
-cp <cfg> /tmp/xtuner_npu_smoke_multi_cfg.py
+```shell
+cp /tmp/xtuner_npu_llm_cfg.py /tmp/xtuner_npu_smoke_multi_cfg.py
 cat >> /tmp/xtuner_npu_smoke_multi_cfg.py <<'EOF'
 
 train_cfg = dict(max_epochs=1)
@@ -416,20 +464,9 @@ EOF
 
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 export TORCH_NPU_USE_HCCL=1
-NPROC_PER_NODE=2 xtuner train /tmp/xtuner_npu_smoke_multi_cfg.py --work-dir /tmp/xtuner_sft_llm_out_multi
+NPROC_PER_NODE=2 python -m xtuner.tools.train /tmp/xtuner_npu_smoke_multi_cfg.py --work-dir /tmp/xtuner_sft_llm_out_multi
 ls -t /tmp/xtuner_sft_llm_out_multi/*.pth 2>/dev/null | head -1
-```
-
-```shell #test id="xtuner-train-multi-smoke" load="xtuner_train_multi_pth>>pth"
-test -n "$pth" && test -f "$pth" && echo "multi_pth_found: yes"
-echo "multi_pth_path: $pth"
-```
-
-输出结果类似：
-
-```shell #test-result id="xtuner-train-multi-smoke" fuzzy='xxx'
-multi_pth_found: yes
-multi_pth_path: /tmp/xtuner_sft_llm_out_multi/iter_xxx.pth
+# 预期 stdout 形如：/tmp/xtuner_sft_llm_out_multi/iter_xxx.pth
 ```
 
 完整 5 epoch × 144 step = 720 step 训练命令（本地按需手动跑，跑出来的 .pth 路径可直接被"模型转换 + LoRA 合并"章节消费）：

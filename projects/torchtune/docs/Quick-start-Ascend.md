@@ -108,7 +108,12 @@ count: 1
 
 ```shell #test-setup
 uv pip install 'modelscope==1.37.0'
-uv pip install torchao
+# torchao 两个 API 在新版都改了位置/签名，torchtune v0.6.1 都没跟上：
+#   * 0.18 起 NF4Tensor 挪到 torchao.prototype.dtypes，
+#     `torchtune.modules.common_utils:19` 的 `from torchao.dtypes.nf4tensor import NF4Tensor` 炸；
+#   * 0.16 起 `int4_weight_only()` 函数被 class-based 的 `Int4WeightOnlyConfig` 取代，
+#     `torchtune` 内部还在用老 API。所以 pin 在最后一个两个 import 都 OK 的 0.15 系列。
+uv pip install 'torchao<0.16'
 ```
 
 打印安装版本：
@@ -159,7 +164,11 @@ echo "${UPSTREAM_REF}"
 ```shell #test id="torchtune-install-source" load="upstream_ref>>ref"
 git clone --depth 1 --branch <ref> https://github.com/meta-pytorch/torchtune.git
 cd torchtune
-uv pip install -e .
+# 非 editable 安装：uv 的 `pip install -e .` (PEP 660) 会把 torchtune 当
+# namespace package 加载，导致 `torchtune.__file__` 为 None，进而使
+# torchtune/_cli/cp.py:15 的 `Path(torchtune.__file__).parent.parent` 抛
+# TypeError，`tune --help` 等所有 CLI 调用都炸。新手 quick-start 不需要 hot-reload。
+uv pip install .
 python -c "import torchtune; print('torchtune', torchtune.__version__)"
 ```
 
@@ -319,11 +328,9 @@ ASCEND_RT_VISIBLE_DEVICES=0 tune run lora_finetune_single_device \
 输出结果如下：
 
 ```shell #test-result id="torchtune-train" fuzzy='xxx' fuzzy='...'
-xxx
-...
-Step 1 | loss:xxx lr:xxx tokens_per_second_per_gpu:xxx 
-Step 2 | loss:xxx lr:xxx tokens_per_second_per_gpu:xxx 
-Step 3 | loss:xxx lr:xxx tokens_per_second_per_gpu:xxx 
+Step 1 | loss:xxx lr:xxx tokens_per_second_per_gpu:xxx
+Step 2 | loss:xxx lr:xxx tokens_per_second_per_gpu:xxx
+Step 3 | loss:xxx lr:xxx tokens_per_second_per_gpu:xxx
 ...
 ```
 

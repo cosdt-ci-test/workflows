@@ -537,7 +537,12 @@ sleep 5  # 给 vllm worker 完全退出 + NPU 释放
 #
 # CI 33204897792: framework 把 50KB+ 的 cat /tmp/train.log 截断成末行（只剩 resource_tracker warning），
 # 看不到真错。所以从 train.log grep 出 Traceback/Error 关键行 echo 到 bash stdout，确保 framework 能看到
-torchrun --standalone --nproc_per_node=1 scripts/train.py \
+#
+# CI 33211943169: train.py 跑到 dflash 训练 step 1 触发 triton.compiler.errors.MLIRCompilationError
+# （triton-ascend 3.2.2 fork 不支持 dflash 用的某个 @triton.jit kernel 的 MLIR op）。
+# 规避：TRITON_INTERPRET=1 让 triton 走 Python interpreter（不调 MLIR 编译），速度慢但能跑通；
+# smoke test 10 samples + 1 epoch 本来也不指望速度。
+TRITON_INTERPRET=1 torchrun --standalone --nproc_per_node=1 scripts/train.py \
   --verifier-name-or-path "<verifier_path>" \
   --data-path "<data_path>" \
   --hidden-states-path "$HS_DIR" \

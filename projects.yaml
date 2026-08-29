@@ -360,3 +360,16 @@ projects:
     dir: projects/llm-d
     workflows:
       quick_start: .github/workflows/llm-d-quick-start.yml
+  # lm-evaluation-harness quickstart exercises the native NPU device path
+  # (HFLM --device npu:0, PR #1886) with a single-card arc_easy eval run
+  # (--limit 10) on a Qwen2.5-0.5B checkpoint fetched via ModelScope;
+  # datasets are served through HF_ENDPOINT=https://hf-mirror.com.
+  - name: lm-evaluation-harness
+    category: 推理加速
+    support_level: 新兴适配
+    upstream_repo: EleutherAI/lm-evaluation-harness
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/lm-evaluation-harness
+    workflows:
+      quick_start: .github/workflows/lm-evaluation-harness-quick-start.yml

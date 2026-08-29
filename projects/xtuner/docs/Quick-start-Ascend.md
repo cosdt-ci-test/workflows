@@ -85,7 +85,7 @@ Python 3.12.xxx
 
 ```shell #test-setup
 uv pip install -f https://mirrors.aliyun.com/pytorch-wheels/cpu torch==2.11.0
-uv pip install --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi torch_npu==2.11.0
+uv pip install --extra-index-url https://mirrors.aliyun.com/pypi/simple torch_npu==2.11.0
 ```
 
 检查 torch / torch_npu 是否装好且 NPU 设备可用：
@@ -119,7 +119,8 @@ xtuner 同时支持 PyPI 二进制安装与源码安装。
 
 ```shell #test id="xtuner-install-binary"
 uv pip install --index-url https://mirrors.aliyun.com/pypi/simple --no-deps xtuner
-uv pip install 'mmengine==0.10.6' 'transformers==4.48.0' 'peft>=0.14.0' 'datasets>=3.2.0,<4.0.0' einops loguru openpyxl 'scikit-image' scipy SentencePiece tiktoken transformers_stream_generator cyclopts 'opencv-python-headless<=4.12.0.88' timm pyarrow pydantic tensorboard xxhash imageio 'py-libnuma' GitPython
+# xtuner 核心依赖（来自 requirements/runtime.txt，扣掉 torch/torchvision/bitsandbytes 这 3 个 NPU 不可用的）
+uv pip install 'datasets>=3.2.0,<4.0.0' einops loguru 'mmengine==0.10.6' openpyxl 'peft>=0.14.0' 'scikit-image' scipy SentencePiece tiktoken 'transformers==4.48.0' transformers_stream_generator
 python -c "import xtuner; from xtuner.version import __version__; print('xtuner', __version__)"
 ```
 
@@ -150,7 +151,9 @@ echo "${UPSTREAM_REF}"
 git clone --depth 1 --branch <ref> https://github.com/InternLM/xtuner.git
 cd xtuner
 uv pip install --no-deps -e .
-uv pip install 'mmengine==0.10.6' 'transformers==4.48.0' 'peft>=0.14.0' 'datasets>=3.2.0,<4.0.0' einops loguru openpyxl 'scikit-image' scipy SentencePiece tiktoken transformers_stream_generator cyclopts 'opencv-python-headless<=4.12.0.88' timm pyarrow pydantic tensorboard xxhash imageio 'py-libnuma' GitPython
+# 直接从 xtuner 的 runtime.txt 里扣掉 3 个 NPU 不可用的，剩下的全交给 uv
+grep -vE '^(torch|torchvision|bitsandbytes)$' requirements/runtime.txt \
+    | uv pip install -r /dev/stdin
 python -c "import xtuner; from xtuner.version import __version__; print('xtuner', __version__)"
 ```
 \<ref> 为安装的最新的 release tag。
@@ -208,30 +211,41 @@ has_chat: True
 
 ### 准备模型权重
 
-在微调模型前，要先拉一份 InternLM2-Chat-7B 的权重。`modelscope` SDK 已在[前置安装](#前置安装)章节装好。
-
-下载 InternLM2-Chat-7B 权重（约 14 GB，落到 `./Shanghai_AI_Laboratory/internlm2-chat-7b/`）：
+下载 InternLM2-Chat-7B 权重：
 
 ```shell #test-setup
 python -c "from modelscope import snapshot_download; snapshot_download('Shanghai_AI_Laboratory/internlm2-chat-7b', cache_dir='./Shanghai_AI_Laboratory')"
 ```
 
+检查是否有对应的文件：
 ```shell #test id="xtuner-pull-weights"
 ws=$(find ./Shanghai_AI_Laboratory -name config.json -print -quit)
 test -n "$ws" && test -f "$ws" && echo "weights_ok"
-ls -la "$(dirname "$ws")" | head -1
+ls "$(dirname "$ws")" | grep -E '\.(safetensors|json|model|py)$' | sort
 ```
 
 输出结果类似：
 
-```shell #test-result id="xtuner-pull-weights" fuzzy='xxx'
+```shell #test-result id="xtuner-pull-weights"
 weights_ok
-total xxx
+config.json
+configuration.json
+configuration_internlm2.py
+generation_config.json
+model-00001-of-00008.safetensors
+model-00002-of-00008.safetensors
+model-00003-of-00008.safetensors
+model-00004-of-00008.safetensors
+model-00005-of-00008.safetensors
+model-00006-of-00008.safetensors
+model-00007-of-00008.safetensors
+model-00008-of-00008.safetensors
+tokenization_internlm2.py
+tokenizer.model
+tokenizer_config.json
 ```
 
-权重落到 `./Shanghai_AI_Laboratory/internlm2-chat-7b/` 下（约 14 GB），含 `pytorch_model-*.bin` ×8 + tokenizer + config。
-
-> `#test-setup` 块（hidden）在 CI smoke 里跑 `snapshot_download` 拉权重（~5-10 分钟），`#test` 只验 `config.json` 存在。本地如果已经下过 weights，可以跳过 setup 单独跑 `#test`。
+权重落到 `./Shanghai_AI_Laboratory/internlm2-chat-7b/` 下（约 14 GB），含 `model-*-of-00008.safetensors` ×8 + tokenizer + config。
 
 ### 准备微调数据集
 
@@ -277,7 +291,6 @@ colors/
 └── train.jsonl
 ```
 
-> `#test-setup` 块在 CI smoke 里跑 `modelscope.snapshot_download(..., repo_type='dataset')` 拉数据集再重定向到 `./colors/`，`#test` 验 3 个文件（`colors.json` / `README.md` / `train.jsonl`）都存在（按字面比对，缺一个就 `exit 1` 报失败）。本地如果已经下载过，可以跳过 setup 单独跑 `#test`（前提：数据集路径仍然是 `./colors/`）。
 
 ### 准备配置文件
 

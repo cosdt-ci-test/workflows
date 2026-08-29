@@ -591,7 +591,12 @@ from . import nn, optim, functional, autograd, cextension
 # `_validate_bnb_cuda_backend_availability()` → `torch.cuda.is_available()` 必须 True
 # （NPU base image 没 CUDA，RuntimeError "CUDA is required but not available for
 # bitsandbytes"）。设 multi_backend 走 multi-platform 分支绕开 CUDA check。
+# supported_torch_devices：`_validate_bnb_multi_backend_availability()` 取
+# `getattr(bnb, "supported_torch_devices", set())` 与 `available_devices = {'cpu','npu'}`
+# 求交集；空集就 RuntimeError "None of the available devices ... are supported by the
+# bitsandbytes version"。这里塞 cpu + npu，让交集非空通过检查。
 features = {"multi_backend"}
+supported_torch_devices = {"cpu", "npu"}
 PYEOF
 for sub in nn optim functional autograd cextension; do
 cat > /tmp/bitsandbytes_stub/bitsandbytes/${sub}/__init__.py <<'PYEOF'
@@ -773,7 +778,12 @@ from . import nn, optim, functional, autograd, cextension
 # `_validate_bnb_cuda_backend_availability()` → `torch.cuda.is_available()` 必须 True
 # （NPU base image 没 CUDA，RuntimeError "CUDA is required but not available for
 # bitsandbytes"）。设 multi_backend 走 multi-platform 分支绕开 CUDA check。
+# supported_torch_devices：`_validate_bnb_multi_backend_availability()` 取
+# `getattr(bnb, "supported_torch_devices", set())` 与 `available_devices = {'cpu','npu'}`
+# 求交集；空集就 RuntimeError "None of the available devices ... are supported by the
+# bitsandbytes version"。这里塞 cpu + npu，让交集非空通过检查。
 features = {"multi_backend"}
+supported_torch_devices = {"cpu", "npu"}
 PYEOF
 for sub in nn optim functional autograd cextension; do
 cat > /tmp/bitsandbytes_stub/bitsandbytes/${sub}/__init__.py <<'PYEOF'

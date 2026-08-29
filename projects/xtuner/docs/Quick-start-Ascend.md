@@ -212,8 +212,13 @@ has_chat: True
 
 下载 InternLM2-Chat-7B 权重（约 14 GB，落到 `./Shanghai_AI_Laboratory/internlm2-chat-7b/`）：
 
-```shell #test-setup
-python -c "from modelscope import snapshot_download; snapshot_download('Shanghai_AI_Laboratory/internlm2-chat-7b', cache_dir='./Shanghai_AI_Laboratory')"
+```shell #test-setup store="xtuner_weights_path"
+# modelscope snapshot_download 返回的路径是 `<cache_dir>/<namespace>/<name>` 结构，对
+# `cache_dir=./Shanghai_AI_Laboratory` + `Shanghai_AI_Laboratory/internlm2-chat-7b` 实际落到
+# `./Shanghai_AI_Laboratory/Shanghai_AI_Laboratory/internlm2-chat-7b/`。硬编码
+# `./Shanghai_AI_Laboratory/internlm2-chat-7b` 会让 xtuner.tools.train 找不到 weights。把
+# 返回值 print 出来，store 给 patch 用真实路径：
+python -c "from modelscope import snapshot_download; print(snapshot_download('Shanghai_AI_Laboratory/internlm2-chat-7b', cache_dir='./Shanghai_AI_Laboratory'))"
 ```
 
 ```shell #test id="xtuner-pull-weights"
@@ -351,10 +356,10 @@ print(save_path)
 
 拷出来的 config 跟模板原版完全一致，按模板的 4 处修改规则调整（详见 [legacy quickstart 模板的"修改配置文件"小节](https://xtuner.readthedocs.io/zh-cn/latest/legacy/get_started/quickstart.html)）。`<cfg>` 是上一节「准备配置文件」store 出来的 cfg 绝对路径：
 
-```shell #test-setup load="xtuner_llm_cfg_path>>cfg" store="xtuner_llm_cfg_path"
+```shell #test-setup load="xtuner_llm_cfg_path>>cfg xtuner_weights_path>>weights_dir" store="xtuner_llm_cfg_path"
 # 把模板里那 4 处 patch 应用到 copy-cfg 出来的 config 上：
 #   PART 1 Settings
-#     pretrained_model_name_or_path = './Shanghai_AI_Laboratory/internlm2-chat-7b'
+#     pretrained_model_name_or_path = '<weights_dir>'   # pull-weights store 出来的真实路径
 #     data_path = './colors/train.jsonl'
 #     prompt_template = PROMPT_TEMPLATE.internlm2_chat
 #   PART 3 Dataset & Dataloader
@@ -365,14 +370,17 @@ print(save_path)
 python -c "
 import re
 path = '<cfg>'
+weights_dir = '<weights_dir>'
 with open(path) as f:
     text = f.read()
 # 4 处 patch：
-#   pretrained_model_name_or_path 用 regex 同时覆盖 7b/20b 两种 cfg（xtuner v0.2.0 的 colorist cfg 是
-#   llama 版，V1 之后才有 internlm2 版；不同 size 的 HF 模型名不一样，自动取 size 后缀）
+#   pretrained_model_name_or_path：直接替换成 pull-weights store 出来的真实路径（modelscope
+#   返回的 cache 路径，含 <cache_dir>/<namespace>/<name>，跟 cfg 模板里的 HF repo_id 不
+#   同结构；旧代码硬编码 ./Shanghai_AI_Laboratory/internlm2-chat-Xb，文件实际落在更深的
+#   目录里，xtuner.tools.train 进 transformers.hub.cached_file 报 OSError path_or_model_id）
 text, n = re.subn(
-    r'pretrained_model_name_or_path = \"internlm/internlm(?:2|-chat)-(\d+b)\"',
-    r\"pretrained_model_name_or_path = './Shanghai_AI_Laboratory/internlm2-chat-\1'\",
+    r'pretrained_model_name_or_path = \"internlm/internlm(?:2|-chat)-\d+b\"',
+    f"pretrained_model_name_or_path = {weights_dir!r}",
     text,
 )
 assert n == 1, f'pretrained_model_name_or_path patch applied {n} times (expected 1)'
@@ -401,7 +409,7 @@ print(path)
 "
 ```
 
-```shell #test id="xtuner-patch-cfg" load="xtuner_llm_cfg_path>>cfg"
+```shell #test id="xtuner-patch-cfg" load="xtuner_llm_cfg_path>>cfg xtuner_weights_path>>weights_dir"
 # 用 py_compile 验 cfg 是合法 Python（不触发 import 链）+ grep 验 4 处 patch 都生效：
 # 不能直接用 mmengine.config.Config.fromfile —— 它会执行 cfg 文件的 `from xtuner.utils import ...`，
 # 触发 torchvision::nms import，而 NPU base image 的 torchvision 没有 GPU operator
@@ -414,19 +422,22 @@ py_compile.compile('<cfg>', doraise=True)
 print('cfg_compiles_ok')
 with open('<cfg>') as f:
     text = f.read()
+# weights_dir 是 pull-weights store 出来的 modelscope cache 路径（形如
+# ./Shanghai_AI_Laboratory/Shanghai_AI_Laboratory/internlm2-chat-7b）。patch 把 cfg 里
+# 的 HF repo_id 替成这条路径：
+weights_dir = '<weights_dir>'
 checks = [
-    # model size 后缀随 cfg 选型而变（7b/20b），用 regex 兼容两种：
-    ('model_path', re.search(r\"pretrained_model_name_or_path = '(.+/internlm2-chat-\d+b)'\", text).group(1)),
+    # 用 cfg 里实际的权重路径字面量 grep（cfg 字段名是 pretrained_model_name_or_path 不是 model_path，
+    # 不要把 check 名当字段名拼到 needle 里）：
+    ('model_path', f\"pretrained_model_name_or_path = '{weights_dir}'\"),
     ('data_path', './colors/train.jsonl'),
     ('prompt_template', 'PROMPT_TEMPLATE.internlm2_chat'),
     ('dataset_format', \"dataset=dict(type=load_dataset, path='json', data_files=dict(train=data_path))\"),
 ]
 for name, expected in checks:
-    # needle 用 cfg 里的实际字面量（cfg 字段名是 pretrained_model_name_or_path 不是 model_path，
-    # 不要把 check 名当字段名拼到 needle 里）：
     assert expected in text, f'missing patch ({name}): {expected!r}'
 print('cfg_patch_ok')
-print(f'model_name= {checks[0][1]}')
+print(f'model_name= {weights_dir}')
 print('data_path= ./colors/train.jsonl')
 print('prompt_template= PROMPT_TEMPLATE.internlm2_chat')
 "

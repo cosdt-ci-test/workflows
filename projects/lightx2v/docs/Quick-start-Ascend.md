@@ -253,8 +253,23 @@ uv pip install --no-deps -v .
 ```
 
 ```shell #test-setup id="lightx2v-install-deps"
-# LightX2V 直接依赖（除上面 stub 的三个外）：triton / gguf / pyzmq 等
-uv pip install triton gguf pyzmq
+# LightX2V 直接依赖（除上面 stub 的三个外），从 pyproject.toml 同步过来。
+# 故意不写 `uv pip install .` 重做依赖解析：之前已经 --no-deps 把 lightx2v 装上,
+# 再用 constraint 列表一次装齐其余 deps;CUDA 排除清单(_CUDA_CONSTRAINTS)
+# 通过 PIP_CONSTRAINT/UV_CONSTRAINT 已在 process env,自动屏蔽 nvidia-* / cuda-* 等。
+# 例外的三个 stub:
+#   - opencv-python → stub cv2(/tmp/stubs/cv2)
+#   - decord        → stub decord(/tmp/stubs/decord)
+#   - torchaudio    → stub torchaudio(/tmp/stubs/torchaudio),torchada 仍是 NPU 版
+# torch + torch_npu 在 step 4 check-torch 已装 2.9.0,这里不重复
+uv pip install \
+    numpy scipy diffusers transformers tokenizers tqdm accelerate safetensors \
+    imageio imageio-ffmpeg einops loguru omegaconf peft \
+    swanlab qtorch 'comfy-kitchen>=0.2.15' ftfy gradio \
+    aiohttp pydantic prometheus-client gguf fastapi uvicorn PyJWT requests \
+    aio-pika 'asyncpg>=0.27.0' 'aioboto3>=12.0.0' \
+    'alibabacloud_dypnsapi20170525==1.2.2' 'redis==6.4.0' tos \
+    av 'torchada>=0.1.10'
 ```
 
 ```shell #test id="lightx2v-install-verify"

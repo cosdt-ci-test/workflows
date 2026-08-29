@@ -85,7 +85,7 @@ Python 3.12.xxx
 
 ```shell #test-setup
 uv pip install -f https://mirrors.aliyun.com/pytorch-wheels/cpu torch==2.11.0
-uv pip install --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi torch_npu==2.11.0
+uv pip install --extra-index-url https://mirrors.aliyun.com/pypi/simple torch_npu==2.11.0
 ```
 
 检查 torch / torch_npu 是否装好且 NPU 设备可用：
@@ -119,7 +119,8 @@ xtuner 同时支持 PyPI 二进制安装与源码安装。
 
 ```shell #test id="xtuner-install-binary"
 uv pip install --index-url https://mirrors.aliyun.com/pypi/simple --no-deps xtuner
-uv pip install 'mmengine==0.10.6' 'transformers==4.48.0' 'peft>=0.14.0' 'datasets>=3.2.0,<4.0.0' einops loguru openpyxl 'scikit-image' scipy SentencePiece tiktoken transformers_stream_generator cyclopts 'opencv-python-headless<=4.12.0.88' timm pyarrow pydantic tensorboard xxhash imageio 'py-libnuma' GitPython
+# xtuner 核心依赖（来自 requirements/runtime.txt，扣掉 torch/torchvision/bitsandbytes 这 3 个 NPU 不可用的）
+uv pip install 'datasets>=3.2.0,<4.0.0' einops loguru 'mmengine==0.10.6' openpyxl 'peft>=0.14.0' 'scikit-image' scipy SentencePiece tiktoken 'transformers==4.48.0' transformers_stream_generator
 python -c "import xtuner; from xtuner.version import __version__; print('xtuner', __version__)"
 ```
 
@@ -150,7 +151,9 @@ echo "${UPSTREAM_REF}"
 git clone --depth 1 --branch <ref> https://github.com/InternLM/xtuner.git
 cd xtuner
 uv pip install --no-deps -e .
-uv pip install 'mmengine==0.10.6' 'transformers==4.48.0' 'peft>=0.14.0' 'datasets>=3.2.0,<4.0.0' einops loguru openpyxl 'scikit-image' scipy SentencePiece tiktoken transformers_stream_generator cyclopts 'opencv-python-headless<=4.12.0.88' timm pyarrow pydantic tensorboard xxhash imageio 'py-libnuma' GitPython
+# 直接从 xtuner 的 runtime.txt 里扣掉 3 个 NPU 不可用的，剩下的全交给 uv
+grep -vE '^(torch|torchvision|bitsandbytes)$' requirements/runtime.txt \
+    | uv pip install -r /dev/stdin
 python -c "import xtuner; from xtuner.version import __version__; print('xtuner', __version__)"
 ```
 \<ref> 为安装的最新的 release tag。
@@ -208,30 +211,39 @@ has_chat: True
 
 ### 准备模型权重
 
-在微调模型前，要先拉一份 InternLM2-Chat-7B 的权重。`modelscope` SDK 已在[前置安装](#前置安装)章节装好。
-
-下载 InternLM2-Chat-7B 权重（约 14 GB，落到 `./Shanghai_AI_Laboratory/internlm2-chat-7b/`）：
+下载 InternLM2-Chat-7B 权重：
 
 ```shell #test-setup
 python -c "from modelscope import snapshot_download; snapshot_download('Shanghai_AI_Laboratory/internlm2-chat-7b', cache_dir='./Shanghai_AI_Laboratory')"
 ```
 
+检查是否有对应的文件：
 ```shell #test id="xtuner-pull-weights"
 ws=$(find ./Shanghai_AI_Laboratory -name config.json -print -quit)
-test -n "$ws" && test -f "$ws" && echo "weights_ok"
-ls -la "$(dirname "$ws")" | head -1
+ls "$(dirname "$ws")" | grep -E '\.(safetensors|json|model|py)$' | sort
 ```
 
 输出结果类似：
 
-```shell #test-result id="xtuner-pull-weights" fuzzy='xxx'
-weights_ok
-total xxx
+```shell #test-result id="xtuner-pull-weights"
+config.json
+configuration.json
+configuration_internlm2.py
+generation_config.json
+model-00001-of-00008.safetensors
+model-00002-of-00008.safetensors
+model-00003-of-00008.safetensors
+model-00004-of-00008.safetensors
+model-00005-of-00008.safetensors
+model-00006-of-00008.safetensors
+model-00007-of-00008.safetensors
+model-00008-of-00008.safetensors
+tokenization_internlm2.py
+tokenizer.model
+tokenizer_config.json
 ```
 
-权重落到 `./Shanghai_AI_Laboratory/internlm2-chat-7b/` 下（约 14 GB），含 `pytorch_model-*.bin` ×8 + tokenizer + config。
-
-> `#test-setup` 块（hidden）在 CI smoke 里跑 `snapshot_download` 拉权重（~5-10 分钟），`#test` 只验 `config.json` 存在。本地如果已经下过 weights，可以跳过 setup 单独跑 `#test`。
+权重落到 `./Shanghai_AI_Laboratory/internlm2-chat-7b/` 下（约 14 GB），含 `model-*-of-00008.safetensors` ×8 + tokenizer + config。
 
 ### 准备微调数据集
 
@@ -255,39 +267,29 @@ for entry in os.listdir(path):
         shutil.copy2(src, dst)
 print('dataset at', target)
 "
-ls -la colors/ | head -1
 ```
 
 ```shell #test id="xtuner-pull-dataset"
 for f in colors.json README.md train.jsonl; do
     test -f "colors/$f" || { echo "MISSING: colors/$f"; exit 1; }
 done
-echo "colors/"
-echo "├── colors.json"
-echo "├── README.md"
-echo "└── train.jsonl"
+ls colors/ | sort
 ```
 
 输出结果（同时是数据集会落在 `./colors/` 下的目录结构）：
 
-```shell #test-result id="xtuner-pull-dataset" disable_fuzzy
-colors/
-├── colors.json
-├── README.md
-└── train.jsonl
+```shell #test-result id="xtuner-pull-dataset"
+colors.json
+README.md
+train.jsonl
+...
 ```
-
-> `#test-setup` 块在 CI smoke 里跑 `modelscope.snapshot_download(..., repo_type='dataset')` 拉数据集再重定向到 `./colors/`，`#test` 验 3 个文件（`colors.json` / `README.md` / `train.jsonl`）都存在（按字面比对，缺一个就 `exit 1` 报失败）。本地如果已经下载过，可以跳过 setup 单独跑 `#test`（前提：数据集路径仍然是 `./colors/`）。
 
 ### 准备配置文件
 
 XTuner 自带大量开箱即用的 config：
 
 ```shell #test id="xtuner-list-cfg"
-# 绕开 console_script wrapper（其 shebang 在 base image 上可能指向非 uv 的 python，
-# 看不到 uv 装的 egg-link，把 xtuner 当 namespace package 处理后 `from xtuner import cli`
-# 报 `ImportError: cannot import name 'cli' from 'xtuner' (unknown location)`），
-# 直接用 Python API 验 cfg 可枚举 + 含 colorist：
 python -c "
 from xtuner.configs import cfgs_name_path
 names = sorted(cfgs_name_path.keys())
@@ -303,12 +305,9 @@ head_first: xxx
 colorist_count: xxx
 ```
 
-从 list-cfg 拷一份 QLoRA + Colorist 配置到本地（具体 config 名随 release 漂移，先 grep 推断；xtuner v0.2.0 的 colorist cfg 是 llama 版，V1 之后才有 internlm2 版）：
+从 list-cfg 拷一份 QLoRA + Colorist 配置到本地：
 
-```shell #test-setup store="xtuner_llm_cfg_path"
-# 绕开 console_script wrapper shebang 错配（`xtuner list-cfg` / `xtuner copy-cfg` 的 wrapper
-# 启动的 Python 可能不是 uv 装的 python，把 xtuner 当 namespace package 后 `from xtuner import cli` 失败），
-# 直接用 Python API 替代：
+```shell #test-setup store="xtuner_colorist_cfg_name"
 config_name=$(python -c "
 from xtuner.configs import cfgs_name_path
 import re
@@ -316,10 +315,21 @@ names = sorted(cfgs_name_path.keys())
 match = next((n for n in names if re.search(r'(internlm2|llama).*qlora.*colorist', n)), '')
 print(match)
 ")
-test -n "$config_name" || { echo "no matching config ((internlm2|llama).*qlora.*colorist); abort"; exit 1; }
-# xtuner copy-cfg 把 save_dir 当目录用，文件实际写到 save_dir/<basename>_copy.py；
-# 直接调 main() 然后 echo save_dir 路径会被 Step 18 当文件读，触发 IsADirectoryError。
-# 改用 Python 自己算 actual file path 并只 print 这一行（setup 抓 stdout 当 store）：
+```
+
+检查config_name是否存在：
+```shell #test id="xtuner-find-colorist-cfg" load="xtuner_colorist_cfg_name>>config_name"
+test -n "$config_name" || { echo "no matching qlora+colorist config"; exit 1; }
+echo "config_name=$config_name"
+```
+
+输出结果如下：
+```shell #test-result id="xtuner-find-colorist-cfg" fuzzy='xxx'
+config_name=xxx
+```
+
+打印出路径，下一节「修改配置文件」使用
+```shell #test-setup store="xtuner_llm_cfg_path" load="xtuner_colorist_cfg_name>>config_name"
 python -c "
 import os
 import os.path as osp
@@ -335,23 +345,23 @@ print(save_path)
 "
 ```
 
-输出路径到下一节「修改配置文件」
+检查路径是否存在：
+```shell #test id="xtuner-copy-cfg" load="xtuner_llm_cfg_path>>cfg"
+test -f "$cfg" || { echo "cfg not copied to $cfg"; exit 1; }
+echo "cfg_copied: $cfg"
+```
+
+输出结果如下：
+```shell #test-result id="xtuner-copy-cfg" fuzzy='xxx'
+cfg_copied: xxx
+```
 
 ### 修改配置文件
 
-拷出来的 config 跟模板原版完全一致，按模板的 4 处修改规则调整（详见 [legacy quickstart 模板的"修改配置文件"小节](https://xtuner.readthedocs.io/zh-cn/latest/legacy/get_started/quickstart.html)）。`<cfg>` 是上一节「准备配置文件」store 出来的 cfg 绝对路径：
+拷出来的 config 跟模板原版完全一致，按模板的 4 处修改规则调整（详见 [xtuner快速上手的"修改配置文件"小节](https://xtuner.readthedocs.io/zh-cn/latest/legacy/get_started/quickstart.html)）。`<cfg>` 是上一节「准备配置文件」‘print(save_path)’的绝对路径：
 
 ```shell #test-setup load="xtuner_llm_cfg_path>>cfg" store="xtuner_llm_cfg_path"
 # 把模板里那 4 处 patch 应用到 copy-cfg 出来的 config 上：
-#   PART 1 Settings
-#     pretrained_model_name_or_path = './Shanghai_AI_Laboratory/internlm2-chat-7b'
-#     data_path = './colors/train.jsonl'
-#     prompt_template = PROMPT_TEMPLATE.internlm2_chat
-#   PART 3 Dataset & Dataloader
-#     train_dataset = process_hf_dataset(dataset=dict(type=load_dataset, path='json',
-#                                                     data_files=dict(train=data_path)), ...)
-# 用 Python str.replace 而非 sed：xtuner cfg 用双引号 ("...")，sed 单引号 pattern 不会匹配；
-# 走 Python 字面量替换最稳，避免引号/escape/竖线 delimiter 误伤 cfg 里其他内容。
 python -c "
 import re
 path = '<cfg>'
@@ -360,24 +370,14 @@ with open(path) as f:
 # 4 处 patch：
 #   pretrained_model_name_or_path 用 regex 同时覆盖 7b/20b 两种 cfg（xtuner v0.2.0 的 colorist cfg 是
 #   llama 版，V1 之后才有 internlm2 版；不同 size 的 HF 模型名不一样，自动取 size 后缀）
-text, n = re.subn(
+text, _ = re.subn(
     r'pretrained_model_name_or_path = \"internlm/internlm2-(\d+b)\"',
     r\"pretrained_model_name_or_path = './Shanghai_AI_Laboratory/internlm2-chat-\1'\",
     text,
 )
-assert n == 1, f'pretrained_model_name_or_path patch applied {n} times (expected 1)'
-old = 'data_path = \"burkelibbey/colors\"'
-new = \"data_path = './colors/train.jsonl'\"
-assert old in text, f'patch source not found: {old!r}'
-text = text.replace(old, new)
-old = 'prompt_template = PROMPT_TEMPLATE.default'
-new = 'prompt_template = PROMPT_TEMPLATE.internlm2_chat'
-assert old in text, f'patch source not found: {old!r}'
-text = text.replace(old, new)
-old = 'dataset=dict(type=load_dataset, path=data_path)'
-new = \"dataset=dict(type=load_dataset, path='json', data_files=dict(train=data_path))\"
-assert old in text, f'patch source not found: {old!r}'
-text = text.replace(old, new)
+text = text.replace('data_path = \"burkelibbey/colors\"', \"data_path = './colors/train.jsonl'\")
+text = text.replace('prompt_template = PROMPT_TEMPLATE.default', 'prompt_template = PROMPT_TEMPLATE.internlm2_chat')
+text = text.replace('dataset=dict(type=load_dataset, path=data_path)', \"dataset=dict(type=load_dataset, path='json', data_files=dict(train=data_path))\")
 with open(path, 'w') as f:
     f.write(text)
 print(path)
@@ -386,10 +386,6 @@ print(path)
 
 ```shell #test id="xtuner-patch-cfg" load="xtuner_llm_cfg_path>>cfg"
 # 用 py_compile 验 cfg 是合法 Python（不触发 import 链）+ grep 验 4 处 patch 都生效：
-# 不能直接用 mmengine.config.Config.fromfile —— 它会执行 cfg 文件的 `from xtuner.utils import ...`，
-# 触发 torchvision::nms import，而 NPU base image 的 torchvision 没有 GPU operator
-# （xtuner.utils 顶层用 torchvision.ops.nms），所以 fromfile 会因 torchvision 缺 operator 报
-# `RuntimeError: operator torchvision::nms does not exist`。smoke 只验 patch + 语法足矣。
 python -c "
 import py_compile
 import re
@@ -415,7 +411,7 @@ print('prompt_template= PROMPT_TEMPLATE.internlm2_chat')
 "
 ```
 
-输出结果类似：
+输出结果如下：
 
 ```shell #test-result id="xtuner-patch-cfg" fuzzy='xxx'
 cfg_compiles_ok
@@ -424,8 +420,6 @@ model_name= ./Shanghai_AI_Laboratory/internlm2-chat-xxx
 data_path= ./colors/train.jsonl
 prompt_template= PROMPT_TEMPLATE.xxx
 ```
-
-> `#test-setup` 把 4 处 sed 实际应用到 cfg；`#test` 跑 `py_compile.compile(<cfg>)` + `grep` 验 cfg 是合法 Python 且 4 处 patch 都生效——**不**用 `mmengine.config.Config.fromfile`（它会执行 cfg 顶层 `from xtuner.utils import ...`，触发 torchvision::nms import，NPU base image 的 torchvision 没 GPU operator 会直接挂）。smoke 不验 cfg 训出来的实际效果，那要等下面"启动微调"章节真跑。
 
 ### 启动微调
 

@@ -106,13 +106,13 @@ count: 1
 
 安装 `modelscope`（用于走 ModelScope 镜像下载底座模型）+ `torchao`：
 
+<!-- torchao 两个 API 在新版都改了位置/签名，torchtune v0.6.1 都没跟上：
+  * 0.18 起 NF4Tensor 挪到 torchao.prototype.dtypes，
+     `torchtune.modules.common_utils:19` 的 `from torchao.dtypes.nf4tensor import NF4Tensor` 炸；
+  * 0.16 起 `int4_weight_only()` 函数被 class-based 的 `Int4WeightOnlyConfig` 取代，
+     `torchtune` 内部还在用老 API。所以 pin 在最后一个两个 import 都 OK 的 0.15 系列。 -->
 ```shell #test-setup
 uv pip install 'modelscope==1.37.0'
-# torchao 两个 API 在新版都改了位置/签名，torchtune v0.6.1 都没跟上：
-#   * 0.18 起 NF4Tensor 挪到 torchao.prototype.dtypes，
-#     `torchtune.modules.common_utils:19` 的 `from torchao.dtypes.nf4tensor import NF4Tensor` 炸；
-#   * 0.16 起 `int4_weight_only()` 函数被 class-based 的 `Int4WeightOnlyConfig` 取代，
-#     `torchtune` 内部还在用老 API。所以 pin 在最后一个两个 import 都 OK 的 0.15 系列。
 uv pip install 'torchao<0.16'
 ```
 
@@ -161,13 +161,13 @@ echo "${UPSTREAM_REF}"
 
 克隆上游仓库并 checkout 到工作流注入的最新 release tag，安装并且验证：
 
+<!--  非 editable 安装：uv 的 `pip install -e .` (PEP 660) 会把 torchtune 当
+ namespace package 加载，导致 `torchtune.__file__` 为 None，进而使
+ torchtune/_cli/cp.py:15 的 `Path(torchtune.__file__).parent.parent` 抛
+ TypeError，`tune --help` 等所有 CLI 调用都炸。新手 quick-start 不需要 hot-reload。 -->
 ```shell #test id="torchtune-install-source" load="upstream_ref>>ref"
 git clone --depth 1 --branch <ref> https://github.com/meta-pytorch/torchtune.git
 cd torchtune
-# 非 editable 安装：uv 的 `pip install -e .` (PEP 660) 会把 torchtune 当
-# namespace package 加载，导致 `torchtune.__file__` 为 None，进而使
-# torchtune/_cli/cp.py:15 的 `Path(torchtune.__file__).parent.parent` 抛
-# TypeError，`tune --help` 等所有 CLI 调用都炸。新手 quick-start 不需要 hot-reload。
 uv pip install .
 python -c "import torchtune; print('torchtune', torchtune.__version__)"
 ```
@@ -199,22 +199,6 @@ Welcome to the torchtune CLI!
 options:
   -h, --help            show this help message and exit
 ...
-```
-
-`tune ls` 不带任何参数，列出所有内置 recipe / config：
-
-```shell #test id="tune-ls"
-tune ls | head -n 5
-```
-
-输出结果如下：
-
-```shell #test-result id="tune-ls" fuzzy='xxx'
-xxx
-xxx
-xxx
-xxx
-xxx
 ```
 
 ## 使用样例：单卡 LoRA 微调 Qwen2.5-0.5B

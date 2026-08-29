@@ -213,8 +213,26 @@ specforge train --help
 输出结果类似如下：
 
 ```shell #test-result id="specforge-train-help"
-usage: specforge train [-h] -c CONFIG [--role {auto,all,producer,consumer,both}] [--node-rank NODE_RANK] [--plan] [overrides ...]
-...
+usage: specforge train [-h] -c CONFIG
+                       [--role {auto,all,producer,consumer,both}]
+                       [--node-rank NODE_RANK] [--plan]
+                       [overrides ...]
+
+positional arguments:
+  overrides             dotted overrides, e.g. training.learning_rate=1e-4
+
+options:
+  -h, --help            show this help message and exit
+  -c CONFIG, --config CONFIG
+                        YAML or JSON run config
+  --role {auto,all,producer,consumer,both}
+                        launch selection (default: offline local all or
+                        online/disaggregated producer+consumer)
+  --node-rank NODE_RANK
+                        node-local rank for an explicit multi-node trainer
+                        launch
+  --plan                print the resolved process plan without starting
+                        workers
 ```
 
 ## 端到端 smoke：1 步训练

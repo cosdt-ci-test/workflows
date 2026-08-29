@@ -68,8 +68,12 @@ uv pip install --extra-index-url https://mirrors.aliyun.com/pypi/simple torch_np
 # specforge 的依赖（无 CUDA 哨兵，正常装）
 uv pip install transformers==5.8.1 datasets tqdm accelerate huggingface-hub numpy openai-harmony pydantic psutil pyyaml safetensors requests tensorboard typing-extensions wandb yunchang fastapi uvicorn aiohttp pyzmq python-multipart
 # sglang 0.5.14 上游 requires_dist 里非 CUDA-only 项；里头 quack-kernels 自己带 nvidia-cutlass-dsl<0 哨兵，
-# torch / numpy / pydantic / 等基础 dep 已经装好，整批 --no-deps 装
-uv pip install --no-deps orjson anthropic apache-tvm-ffi av blobfile build compressed-tensors decord2 distro easydict einops gguf interegular IPython kernels llguidance mistral_common msgspec ninja openai outlines packaging partial_json_parser pillow prometheus-client py-spy pybase64 quack-kernels scipy sentencepiece setproctitle sgl-deep-gemm starlette triton
+# torch / numpy / pydantic / 等基础 dep 已经装好，整批 --no-deps 装。IPython 单独再装（不带 --no-deps）：
+# specforge 的 scripts/apply_sglang_spec_capture_patch.sh 里 `python -c "import sglang; print(sglang.__version__)"`
+# 会触发 sglang.__init__ → sglang.lang → IPython → traitlets 这条 import 链，
+# 而 traitlets 是 IPython 的硬依赖，不在 sglang 自己的 requires_dist 里、也不会被 --no-deps 拉进来。
+uv pip install --no-deps orjson anthropic apache-tvm-ffi av blobfile build compressed-tensors decord2 distro easydict einops gguf interegular kernels llguidance mistral_common msgspec ninja openai outlines packaging partial_json_parser pillow prometheus-client py-spy pybase64 quack-kernels scipy sentencepiece setproctitle sgl-deep-gemm starlette triton
+uv pip install IPython
 # sglang wheel 本身 --no-deps 装（cluster 镜像把它的 Requires-Dist cuda-python 改成 <0 哨兵，绕开解析）
 uv pip install --no-deps --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi sglang==0.5.14
 # torchvision stub：sglang srt/utils/common.py line 92 `from torchvision.io import decode_jpeg` 在 import sglang 时硬依赖，
@@ -113,9 +117,17 @@ count: 4
 
 ```shell #test-setup
 uv pip install 'modelscope==1.37.0'
-# mooncake-transfer-engine 是 specforge 在线训练里 specforge runtime 的 client 端。
-# master server 二进制（mooncake_master）从仓库 release tarball 拿；smoke 直接跑仓内构建好的二进制。
-uv pip install --no-deps 'mooncake-transfer-engine @ https://github.com/kvcache-ai/Mooncake/archive/refs/heads/main.tar.gz#subdirectory=mooncake-wheel'
+# mooncake-transfer-engine 是 specforge 在线训练里 specforge runtime 的 client 端；
+# master server 二进制（mooncake_master / mooncake_client / transfer_engine_bench）必须
+# 随 wheel 一起分发。main 分支的 mooncake-wheel/ setup.py 只编译 _fast_copy 扩展，
+# 不带那三个预编译二进制 → mooncake_master 启动后 execv 找不到 binary，bind 失败，
+# smoke 30s 后 nc -z 35551 全部 timeout。所以从 release tarball 拿预编译的 wheel。
+#
+# 用 aliyun pypi 镜像拉：直连 GitHub release 在集群网络下不稳（run 33254357756
+# 90 min timeout），而 aliyun 镜像里 aarch64 cp312 的 0.3.10 wheel 是一样的 pre-built
+# 内容。specforge 没 pin mooncake 版本，0.3.10 / 0.3.13 在 store.setup() / client API 上
+# 字段一致（global_segment_size / local_buffer_size / metadata_server 都在），smoke 行为不变。
+uv pip install --index-url https://mirrors.aliyun.com/pypi/simple 'mooncake-transfer-engine==0.3.10'
 ```
 
 打印安装版本：

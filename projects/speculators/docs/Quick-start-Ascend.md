@@ -87,19 +87,39 @@ Python 3.12.xxx
 
 #### 安装 vllm-ascend
 
-PyPI `vllm==0.23.0` 的 aarch64 wheel 是 **CUDA-only build**，NPU 上无法用，且其 METADATA 钉 `torch==2.11.0+cpu` 与前置的 `torch==2.10.0+cpu` 冲突。所以本节从源码 build vllm：`VLLM_TARGET_DEVICE=empty` 跳过 CUDA kernel 编译、只注册 `torch.ops.vllm` schema 占位，运行时由 vllm-ascend 通过 `vllm.platform_plugins` entry point 把 NPU fused op 注入 `torch.ops.vllm` namespace。
+安装系统依赖项并配置 pip 镜像：
+```shell #test-setup
+# Using apt-get with mirror
+sed -i 's|ports.ubuntu.com|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list
+apt-get update -y && apt-get install -y gcc g++ cmake ninja-build libnuma-dev wget git curl jq
+```
+
+安装 Python 构建后端和原生构建工具（vllm 源码 build 需要 `cmake>=3.26` + ninja + setuptools-scm；
+apt 装的 system cmake 是 Ubuntu 22.04 自带 3.22.2，对 vllm 太旧，靠 pip 的 `cmake` 提供 shim）：
+```shell #test-setup
+uv pip install --system \
+  "setuptools>=77,<81" "setuptools-scm>=8" wheel \
+  "cmake>=3.26" ninja nanobind pyyaml
+```
 
 第一步先把 torch 栈装上：
 
 ```shell #test id="install-torch"
-uv pip install -f https://mirrors.aliyun.com/pytorch-wheels/cpu torch==2.10.0
-uv pip install \
-  --extra-index-url https://mirrors.aliyun.com/pypi/simple \
+uv pip install --system -f https://mirrors.aliyun.com/pytorch-wheels/cpu \
+  torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0
+
+uv pip install --system \
+  --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi \
   --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi/variant \
   --find-links https://repo.huaweicloud.com/ascend/repos/pypi/triton-ascend/ \
-  torch==2.10.0 torch-npu==2.10.0.post4 torchvision==0.25.0 torchaudio==2.10.0
+  torch-npu==2.10.0.post4
 
-python -c "import torch, torch_npu; print(f'torch={torch.__version__}'); print(f'torch_npu={torch_npu.__version__}'); print('is_available:', torch.npu.is_available()); print('count:', torch.npu.device_count())"
+uv pip install --system \
+  --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi \
+  --find-links https://repo.huaweicloud.com/ascend/repos/pypi/triton-ascend/ \
+  triton-ascend==3.2.2
+
+python -c "import torch, torch_npu, torchvision, torchaudio; print(f'torch={torch.__version__}'); print(f'torch_npu={torch_npu.__version__}'); print(f'torchvision={torchvision.__version__}'); print(f'torchaudio={torchaudio.__version__}'); print('is_available:', torch.npu.is_available()); print('count:', torch.npu.device_count())"
 ```
 
 输出结果如下：
@@ -107,67 +127,46 @@ python -c "import torch, torch_npu; print(f'torch={torch.__version__}'); print(f
 ```shell #test-result id="install-torch" fuzzy='xxx'
 torch=2.10.0+cpu
 torch_npu=2.10.0.post4
+torchvision=0.25.0+cpu
+torchaudio=2.10.0+cpu
 is_available: True
 count: xxx
 ```
 
-然后源码 build vllm + 装 vllm-ascend + triton-ascend：
+然后源码 build vllm + 装 vllm-ascend：
 
 ```shell #test id="vllm-ascend-install"
-# 1. vllm 源码 build 依赖（cmake / ninja / pybind11 / setuptools-scm）。
-uv pip install --system "cmake>=3.26" pyyaml nanobind ninja setuptools-rust wheel \
-  "setuptools-scm>=8" "setuptools>=77,<81"
-
-# 2. 加载 CANN env（vllm 源码编译时链接 libascendcl / libatb 需要；
+# 加载 CANN env（vllm 源码编译时链接 libascendcl / libatb 需要；
+# 不 source 的话 cmake 找不到 AscendCL/include，CANN_INCLUDE_DIRS 空、build 挂）
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 
-# 3. clone vllm v0.23.0 源码到 /root/deps/vllm
+# clone vllm v0.23.0 源码到 /root/deps/vllm
 mkdir -p /root/deps
-git clone --depth 1 --branch v0.23.0 \
-  https://github.com/vllm-project/vllm.git /root/deps/vllm
+git clone --depth 1 --branch v0.23.0 https://github.com/vllm-project/vllm.git /root/deps/vllm
+# clone vllm-ascend v0.23.0 源拿到 requirements/requirements.txt（--no-deps 后靠它补 transitive）
+git clone --depth 1 --branch v0.23.0 https://github.com/vllm-project/vllm-ascend.git /root/deps/vllm-ascend
 
-# 4. 源码 build：--no-deps/--no-build-isolation 跳过 vllm 0.23.0 钉的 torch==2.11.0+cpu（与 torch==2.10.0 冲突），
-#    VLLM_TARGET_DEVICE=empty 只注册 torch.ops.vllm schema、跳过 CUDA kernel 编译
-VLLM_TARGET_DEVICE=empty uv pip install --system --no-deps --no-build-isolation \
+#  源码 build：VLLM_TARGET_DEVICE=empty 跳过 CUDA kernel 编译、只注册 torch.ops.vllm schema
+VLLM_TARGET_DEVICE=empty uv pip install --system \
   -e /root/deps/vllm
 
-# 5. 卸 vllm 装的主线 triton（CUDA 优化版，NPU 上 DFlash JIT 跑不了）
-python3 -m pip uninstall -y triton
-
-# 6. 装 vllm-ascend NPU variant wheel（/variant 子路径拿 aarch64 build）
-python3 -m pip install --no-deps \
+# 装 vllm-ascend NPU variant wheel（/variant 子路径拿 aarch64 build）
+uv pip install --system --no-deps \
   --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi \
   --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi/variant \
   vllm-ascend==0.23.0
 
-# 7. 装 triton-ascend==3.2.2（DFlash proposer JIT 编译依赖）
-python3 -m pip install \
+# 补 vllm-ascend runtime deps：上一步 --no-deps 跳过了 transitive 解析，
+# 但 vllm_ascend 模块 import 时会 import pyyaml / packaging / torch_npu 等；
+# 用源仓 requirements/requirements.txt 比手列更跟版本对齐；
+# numba 是 vllm-ascend 0.23.0 policy_flashlb 顶层 `from numba import njit` 的硬依赖（requirements 没列）
+uv pip install --system \
   --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi \
   --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi/variant \
-  --find-links https://repo.huaweicloud.com/ascend/repos/pypi/triton-ascend/ \
-  triton-ascend==3.2.2
-
-# 8. 补 vllm runtime deps：VLLM_TARGET_DEVICE=empty 跳过了 install-time 解析（避免 torch 冲突），
-#    但 `from vllm.config import ...` 仍需要 cbor2/pyzmq/xgrammar/opencv-python-headless 等；
-#    numba 是 vllm-ascend 0.23.0 policy_flashlb 顶层 `from numba import njit` 的硬依赖（--no-deps 漏装）
-python3 -m pip install --quiet \
-  -r /root/deps/vllm/requirements/common.txt \
+  -r /root/deps/vllm-ascend/requirements/requirements.txt \
   numba
 
-# 9. Monkey-patch vllm.triton_utils.HAS_TRITON = True：triton-ascend 3.2.2 的 libtriton.so
-#    是 3.2.0 fork、不带 nvidia/amd symbol，主线 triton import 链触发 ImportError 把
-#    HAS_TRITON 强制改回 False，导致 qkv_rmsnorm_rope op 不注册、QKNormRopeFusionPass
-#    抛 AttributeError（CI 33140922182）。sitecustomize.py 装 site-packages，try/except
-#    避免 Python 启动时 vllm 还没装就抛异常
-cat > /usr/local/python3.12.13/lib/python3.12/site-packages/sitecustomize.py << 'PY'
-try:
-    import vllm.triton_utils
-    vllm.triton_utils.HAS_TRITON = True
-except Exception:
-    pass
-PY
-
-# 验证 qkv_rmsnorm_rope op 注册成功
+# 验证版本
 python -c "
 import vllm.triton_utils
 vllm.triton_utils.HAS_TRITON = True

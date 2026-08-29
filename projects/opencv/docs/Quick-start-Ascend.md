@@ -201,6 +201,77 @@ grep -n 'cv::MatShape(1, &\|cv::MatShape(1, &_bias_front)' \
 
 预期：步骤 (a) 两行各 `1 occurrence(s) -> MatShape&`；(b) hpp +1 decl；(c) cpp +1 delegating ctor；(d) 2 个 assignment 各修复。最后 `grep` 第一组在 hpp 看到 2 行构造声明、cpp 看到 2 个构造函数定义；第二组在 gemm_layer.cpp:534 和 matmul_layer.cpp:516 各 1 行。Python 而非 sed：`&` 在 sed 替换串里代表匹配文本，转义 `\&` 在 GNU/BSD sed 行为不一致，换 Python 避免踩坑。
 
+#### 修补 all_ops.h 头文件爆炸（aarch64 链接 R_AARCH64_CALL26 溢出）
+
+CI 33244401262 在 `make` 编完 dnn 全部 252 个 TU 后死在最后一步链接：`libopencv_dnn.so` 报 `relocation truncated to fit: R_AARCH64_CALL26 against symbol google::protobuf::Arena::...`。根因不在 protobuf：`modules/dnn/src/op_cann.hpp` include 了 CANN 全量 op 头 `built-in/op_proto/inc/all_ops.h`（~1500 个 op 类），而这个头经 `net_impl.hpp` 被 200+ 个 dnn TU 引入。每个 `REG_OP` 宏在**每个**包含它的 TU 里展开成 file-local 注册 lambda（局部符号，链接器无法跨 TU 去重）加 ~134KB 静态初始化代码——`-O0` 不做死代码消除，200 TU × 1500 op × ~1.7KB ≈ 500MB 不可去重的 .text（实测 `ld -r` 合并后 516MB；同一份源码不带 CANN 头只有 21MB）。aarch64 `BL` 指令跳转范围 ±128MB，protobuf 弱内联函数与静态库成员在如此巨大的 .text 里间距轻松超限，链接必炸。上游 CI 用 Release(-O3) 构建，未用到的注册 lambda 被优化器全部消除，从未踩到；Debug(-O0) + aarch64 是本看护独有的组合。
+
+修法：`op_cann.hpp` 把 `all_ops.h` 换成 `array_ops.h`（只定义 op_cann.hpp 自身用到的 `ge::op::Const/Data/Identity/Reshape/Unsqueeze`，68 个 op），再给 23 个真正实例化 op 类的 layer TU 按需插窄头——每个文件只包含自己用到的那类 op（conv → `nn_calculation_ops`、激活 → `nonlinear_fuc_ops`、pooling → `nn_pooling_ops`……op→头文件的映射用 `grep -l "REG_OP(\<op\)" /usr/local/Ascend/cann-9.1.0/opp/built-in/op_proto/inc/*.h` 枚举，同一个 op 挑 op 数最少的头）。实测 dnn .text 从 516MB 降到 47MB（仍有 20 万个 op 注册符号，运行时注册完整），链接通过；每个 TU 预处理体积缩水约八成，cc1plus 内存压力同步下降——graph_fusion 大 TU 不再是 OOM 高危。这个补丁值得报给 opencv 上游（op_cann.hpp 不该 include all_ops.h），等上游修复后可删。
+
+```shell #test-setup
+python3 - <<'PY'
+import pathlib
+
+# (e) op_cann.hpp: all_ops.h (~1500 ops) -> array_ops.h (68 ops)
+hpp = pathlib.Path('opencv/modules/dnn/src/op_cann.hpp')
+s = hpp.read_text()
+old = '''#ifdef CANN_VERSION_BELOW_6_3_ALPHA002
+    #include "op_proto/built-in/inc/all_ops.h" // ge::Conv2D, ...
+#else
+    #include "built-in/op_proto/inc/all_ops.h" // ge::Conv2D, ...
+#endif'''
+new = '''#ifdef CANN_VERSION_BELOW_6_3_ALPHA002
+    #include "op_proto/built-in/inc/array_ops.h" // ge::op::Const/Data/Identity/Reshape/Unsqueeze
+#else
+    #include "built-in/op_proto/inc/array_ops.h" // ge::op::Const/Data/Identity/Reshape/Unsqueeze
+#endif'''
+assert old in s, 'op_cann.hpp: all_ops include block not found'
+hpp.write_text(s.replace(old, new, 1))
+print('(e) op_cann.hpp: all_ops.h -> array_ops.h')
+
+# (f) 每个 layer TU 按需插入窄 op 头（只含该文件实例化的 op 类）
+INSERTS = {
+    'layers/batch_norm_layer.cpp': ['nn_batch_norm_ops'],
+    'layers/concat_layer.cpp': ['split_combination_ops'],
+    'layers/convolution_layer.cpp': ['nn_calculation_ops'],
+    'layers/deconvolution_layer.cpp': ['nn_calculation_ops'],
+    'layers/depth_space_ops_layer.cpp': ['transformation_ops'],
+    'layers/elementwise_layers.cpp': ['nonlinear_fuc_ops', 'elewise_calculation_ops'],
+    'layers/eltwise_layer.cpp': ['elewise_calculation_ops'],
+    'layers/flatten_layer.cpp': ['transformation_ops'],
+    'layers/fully_connected_layer.cpp': ['matrix_calculation_ops'],
+    'layers/gemm_layer.cpp': ['matrix_calculation_ops'],
+    'layers/instance_norm_layer.cpp': ['nn_norm_ops'],
+    'layers/layer_norm.cpp': ['nn_norm_ops'],
+    'layers/lrn_layer.cpp': ['nn_norm_ops'],
+    'layers/matmul_layer.cpp': ['matrix_calculation_ops'],
+    'layers/nary_eltwise_layers.cpp': ['elewise_calculation_ops'],
+    'layers/padding_layer.cpp': ['pad_ops'],
+    'layers/permute_layer.cpp': ['transformation_ops'],
+    'layers/pooling_layer.cpp': ['nn_pooling_ops'],
+    'layers/reduce_layer.cpp': ['reduce_ops'],
+    'layers/resize2_layer.cpp': ['image_ops'],
+    'layers/resize_layer.cpp': ['image_ops'],
+    'layers/slice_layer.cpp': ['split_combination_ops', 'selection_ops'],
+    'layers/softmax_layer.cpp': ['nn_norm_ops'],
+}
+ANCHOR = '#include "../op_cann.hpp"'
+for rel, headers in INSERTS.items():
+    p = pathlib.Path('opencv/modules/dnn/src') / rel
+    s = p.read_text()
+    assert ANCHOR in s, f'{rel}: op_cann.hpp include not found'
+    assert 'built-in/op_proto/inc/' not in s, f'{rel}: already patched'
+    block = ANCHOR + '\n' + '\n'.join(
+        f'#include "built-in/op_proto/inc/{h}.h"' for h in headers)
+    p.write_text(s.replace(ANCHOR, block, 1))
+    print(f'(f) {rel}: +{len(headers)} narrow header(s)')
+PY
+echo '---grep verify:'
+grep -rn 'op_proto/inc/array_ops.h' opencv/modules/dnn/src/op_cann.hpp
+grep -rc 'built-in/op_proto/inc/' opencv/modules/dnn/src/layers/*.cpp | grep -v ':0' | wc -l
+```
+
+预期：(e) 1 行替换；(f) 23 个文件各 +1~2 个窄头。最后 grep 第一组在 op_cann.hpp 看到 1 行 array_ops；第二组输出 23（插入窄头的 layer 文件数）。`net_cann.cpp` 用的 `ge::op::Data`、`op_cann.cpp` 用的 `ge::op::Const`、blank/const/reshape layer 用的 `Identity/Const/Reshape/Unsqueeze` 都已由 op_cann.hpp 里的 array_ops.h 覆盖，不用单独加。
+
 #### 桥接 OpenCV 5.0.0 与 CANN 9.1.0 的 layout 差
 
 mainline 5.0.0 的 `OpenCVFindCANN.cmake` 假设库在 `${CANN_INSTALL_DIR}/{acllib,lib64,compiler/lib64}/` 下，但 CANN 9.1.0 实际把 ACL/AOE/GE 库都装在 `${CANN_INSTALL_DIR}/aarch64-linux/lib64/`。补三个软链让 cmake 找得到：
@@ -231,11 +302,12 @@ cmake -DCMAKE_BUILD_TYPE=Debug \
       -DOPENCV_BUILD_TEST_MODULES_LIST=cannops \
       -DINSTALL_TESTS=ON \
       -DBUILD_PERF_TESTS=OFF \
+      -DBUILD_LIST=core,imgproc,imgcodecs,videoio,dnn,python3,cannops,ts \
       -DBUILD_opencv_python3=ON \
       -DBUILD_opencv_python_bindings_generator=ON \
+      -DPYTHON_INCLUDE_DIR=/usr/local/python3.12.13/include/python3.12 \
+      -DPYTHON_LIBRARY=/usr/local/python3.12.13/lib/libpython3.12.so \
       -DOPENCV_ENABLE_NONFREE=OFF \
-      -DBUILD_opencv_xfeatures2d=OFF \
-      -DBUILD_opencv_face=OFF \
       -DOPENCV_DOWNLOAD_MIRROR_ID=gitcode \
       -DOPENCV_EXTRA_MODULES_PATH=../../opencv_contrib/modules \
       ..
@@ -247,39 +319,40 @@ cmake -DCMAKE_BUILD_TYPE=Debug \
 ...
 ```
 
-预期：`CANN: ... YES` 这一行出现在 cmake summary 段——这正是 wiki 上 Step 4（Verification）所要求的"先看 CMake 报告"步骤。`OPENCV_DOWNLOAD_MIRROR_ID=gitcode` 让主仓 cmake configure 阶段拉 ADE / IPPICV / TBB / xfeatures2d 数据 / 字体 / wechat_qrcode 模型时走 gitcode.net 镜像（中国大陆可达）。两个测试相关开关：`OPENCV_BUILD_TEST_MODULES_LIST=cannops` 让 `BUILD_TESTS=ON` 只构建 cannops 一个模块的测试二进制（否则全仓 ~15 个模块、每个几十个 test TU 的 accuracy tests 都会进默认构建目标，`make` 多花 ~40 分钟）；`INSTALL_TESTS=ON` 把测试二进制装进 `CMAKE_INSTALL_PREFIX/bin`（OpenCV 默认**不**安装 opencv_test_*，不打开这个开关 `/usr/local/opencv-cann/bin/opencv_test_cannops` 不会存在）。
+预期：`CANN: ... YES` 这一行出现在 cmake summary 段——这正是 wiki 上 Step 4（Verification）所要求的"先看 CMake 报告"步骤。`OPENCV_DOWNLOAD_MIRROR_ID=gitcode` 让主仓 cmake configure 阶段拉 ADE / IPPICV / TBB / xfeatures2d 数据 / 字体 / wechat_qrcode 模型时走 gitcode.net 镜像（中国大陆可达）。
 
-#### 编译
+`BUILD_LIST` 把全模块 + ~35 个 contrib 模块砍到 8 个——quickstart 只用到 imwrite/imread/resize/cvtColor/putText/VideoWriter（core+imgproc+imgcodecs+videoio）、dnn、python 绑定和 cannops 测试。注意 `ts` 必须在列表里：它是 `opencv_test_cannops` 的测试框架依赖，被 BUILD_LIST 白名单排除时 cannops 的 `ocv_add_accuracy_tests` 建不出测试目标，`opencv_contrib/modules/cannops/CMakeLists.txt:23` 的 `ocv_target_link_libraries(opencv_test_cannops ...)` 直接报 `invalid target`。`ts` 不进列表时 xfeatures2d / face 等 contrib 模块自然被剔除，不再需要单独的 `BUILD_opencv_xfeatures2d=OFF`。
+
+`PYTHON_INCLUDE_DIR` / `PYTHON_LIBRARY` 这对参数是必须的：镜像的 Python 3.12.13 是源码装在 `/usr/local/python3.12.13` 的，cmake 老式 `find_package(PythonLibs)` 不搜这里，不传这对参数 python3 模块会**静默**落进 summary 的 `Unavailable: ... python3 ...` 一行——装出来的 `/usr/local/opencv-cann` 下没有 `lib/python3.12/site-packages`，后面 quickstart 的 `import cv2` 必挂。别只盯 `CANN: YES` 那一行。
+
+两个测试相关开关：`OPENCV_BUILD_TEST_MODULES_LIST=cannops` 让 `BUILD_TESTS=ON` 只构建 cannops 一个模块的测试二进制（否则全仓 ~15 个模块、每个几十个 test TU 的 accuracy tests 都会进默认构建目标，`make` 多花 ~40 分钟）；`INSTALL_TESTS=ON` 把测试二进制装进 `CMAKE_INSTALL_PREFIX/bin`（OpenCV 默认**不**安装 opencv_test_*，不打开这个开关 `/usr/local/opencv-cann/bin/opencv_test_cannops` 不会存在）。
+
+#### 编译并安装到 /usr/local/opencv-cann
+
+> **必须用一条 `make install -j2` 走完构建+安装，不要先 `make` 再 `make install` 分两次跑。** cannops 的 AscendC kernel 走 CANN `ascendc.cmake` 的 ExternalProject（`BUILD_ALWAYS TRUE`），其中 `merge_obj_text.sh` 对 m200 内核 `.o` 做**原地** ld.lld 合并（`-o` 与输入同路径）且无防重入保护：第一次跑把 bisheng 产出的 REL 转成 EXEC，第二次再喂给 `ld.lld` 就报 `unknown file type`。`make` 和 `make install` 各触发一次 EP build（自定义目标永远视为过期），两次必炸——本仓在 CANN 镜像里实测 `make -j2 && make install` 100% 复现 `ld.lld: ...m200_obj... unknown file type`，单次 `make install -j2` 则一遍过。
+>
+> CI runner 内存极紧，dnn 模板大 TU（matmul / dft / reshape2 / slice2 / pad2 / padding / resize / reduce / recurrent2 / permute / group_norm / nary_eltwise / if / shape / split2 / transpose layer）`cc1plus` 在 `-O3` 下会被 OOM kill，所以 cmake 走 `Debug`（`-O0 -g`）砍优化内存、再 `-j2` 限制并行度（上面 all_ops.h 修补之后每个 dnn TU 预处理体积缩水约八成，内存压力进一步下降）。`BUILD_LIST` 砍模块 + 窄头修补双管齐下后，`-j2` 全量构建+安装约 15 分钟（本地 CANN 镜像 arm64 实测 607s build + ~200s install；CI runner 核慢一些预计 40–70 分钟）。
 
 ```shell #test-setup
 cd opencv/build
-make -j2
-```
-
-> 编译时间受 CPU 核数与是否启用 world 影响：单核 `make` 大约 1.5 小时；8 核并行约 20 分钟。CI runner 内存极紧，dnn 模板大 TU（matmul / dft / reshape2 / slice2 / pad2 / padding / resize / reduce / recurrent2 / permute / group_norm / nary_eltwise / if / shape / split2 / transpose layer）`cc1plus` 在 `-O3` 下会被 OOM kill，所以 cmake 走 `Debug`（`-O0 -g`）砍优化内存、再 `-j2` 限制并行度（~90–120 分钟；`OPENCV_BUILD_TEST_MODULES_LIST=cannops` 已把其余模块的 accuracy tests 从默认构建目标剔除）。
-
-#### 安装到 /usr/local/opencv-cann
-
-```shell #test-setup
-cd opencv/build
-make install
+make install -j2
 ```
 
 #### 校验二进制 + CANN 后端可用性
 
-跑 OpenCV 自带的 versioninfo 和 test_dnn 列测试，确认 CANN 后端被识别：
+跑 OpenCV 自带的 versioninfo 和 cannops 测试列举，确认二进制可执行且测试用例在列：
 
 ```shell #test id="opencv-verify-build"
 /usr/local/opencv-cann/bin/opencv_version
 /usr/local/opencv-cann/bin/opencv_test_cannops --gtest_list_tests 2>&1 | head -n 20
 ```
 
-```shell #test-result id="opencv-verify-build" fuzzy='xxx' fuzzy='...'
+```shell #test-result id="opencv-verify-build" fuzzy='xxx'
+5.0.0
 xxx
-CANNxxx...
 ```
 
-预期：versioninfo 第一行打印 OpenCV 版本号；`opencv_test_cannops --gtest_list_tests` 输出中包含至少一条 `CANN` 前缀的测试用例（mainline 5.0.0 把 CANN 单元测试放在 contrib `cannops` 模块的 `opencv_test_cannops` 二进制里，主仓 `opencv_test_dnn` 已不再带 `*HUAWEI*` 用例）。
+预期：versioninfo 第一行打印 `5.0.0`；`opencv_test_cannops --gtest_list_tests` 列出 cannops 模块的 gtest 套件（`CORE.` / `CVT_COLOR.` / `ELEMENTWISE_OP.` / `AscendMat.` / `ASCENDC_KERNEL.`，来自 contrib `modules/cannops/test/`）。注意套件名**没有** `CANN` 前缀——不要按直觉写成 `CANNxxx`（mainline 5.0.0 的 CANN 后端单元测试在这个 `opencv_test_cannops` 二进制里，主仓 `opencv_test_dnn` 已不带 `*HUAWEI*` 用例）。
 
 #### 跑一遍 CANN 单元测试
 

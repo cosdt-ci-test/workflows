@@ -212,8 +212,13 @@ has_chat: True
 
 下载 InternLM2-Chat-7B 权重（约 14 GB，落到 `./Shanghai_AI_Laboratory/internlm2-chat-7b/`）：
 
-```shell #test-setup
-python -c "from modelscope import snapshot_download; snapshot_download('Shanghai_AI_Laboratory/internlm2-chat-7b', cache_dir='./Shanghai_AI_Laboratory')"
+```shell #test-setup store="xtuner_weights_path"
+# modelscope snapshot_download 返回的路径是 `<cache_dir>/<namespace>/<name>` 结构，对
+# `cache_dir=./Shanghai_AI_Laboratory` + `Shanghai_AI_Laboratory/internlm2-chat-7b` 实际落到
+# `./Shanghai_AI_Laboratory/Shanghai_AI_Laboratory/internlm2-chat-7b/`。硬编码
+# `./Shanghai_AI_Laboratory/internlm2-chat-7b` 会让 xtuner.tools.train 找不到 weights。把
+# 返回值 print 出来，store 给 patch 用真实路径：
+python -c "from modelscope import snapshot_download; print(snapshot_download('Shanghai_AI_Laboratory/internlm2-chat-7b', cache_dir='./Shanghai_AI_Laboratory'))"
 ```
 
 ```shell #test id="xtuner-pull-weights"
@@ -315,9 +320,15 @@ import re
 names = sorted(cfgs_name_path.keys())
 # 优先选 7b：本文档的 pull-weights 只下 7b（Shanghai_AI_Laboratory/internlm2-chat-7b），
 # 而 sorted+next 的 ASCII 序 '2' < '7'，20b 会抢在 7b 前面，把 patch 后的 model_path 指向
-# 不存在的 -20b/ 目录训不动。优先 7b，没有再退到任何匹配项
-match = next((n for n in names if re.search(r'(internlm2|llama).*qlora.*colorist.*7b', n)),
-             next((n for n in names if re.search(r'(internlm2|llama).*qlora.*colorist', n)), ''))
+# 不存在的 -20b/ 目录训不动。三层 fallback：
+#   1. internlm_chat_7b.*qlora.*colorist —— exact match doc 实际下的 chat-7b
+#   2. .*_7b.*qlora.*colorist —— 任何 _7b_ qlora colorist（internlm2_7b base / llama2_7b 等）
+#   3. (internlm2|llama).*qlora.*colorist —— 任何 qlora colorist，最后兜底
+# 注意不能用 `colorist.*7b` 收尾：cfg name 形如 `internlm2_7b_qlora_colorist_e5`，size token 在
+# 开头（7b / 20b），`7b` 不会出现在 `colorist` 后面；之前那条 regex 命中 0 个，fallback 必拿 20b。
+match = next((n for n in names if re.search(r'internlm_chat_7b.*qlora.*colorist', n)),
+             next((n for n in names if re.search(r'.*_7b.*qlora.*colorist', n)),
+                   next((n for n in names if re.search(r'(internlm2|llama).*qlora.*colorist', n)), '')))
 print(match)
 ")
 test -n "$config_name" || { echo "no matching config ((internlm2|llama).*qlora.*colorist); abort"; exit 1; }
@@ -345,10 +356,10 @@ print(save_path)
 
 拷出来的 config 跟模板原版完全一致，按模板的 4 处修改规则调整（详见 [legacy quickstart 模板的"修改配置文件"小节](https://xtuner.readthedocs.io/zh-cn/latest/legacy/get_started/quickstart.html)）。`<cfg>` 是上一节「准备配置文件」store 出来的 cfg 绝对路径：
 
-```shell #test-setup load="xtuner_llm_cfg_path>>cfg" store="xtuner_llm_cfg_path"
+```shell #test-setup load="xtuner_llm_cfg_path>>cfg" load="xtuner_weights_path>>weights_dir" store="xtuner_llm_cfg_path"
 # 把模板里那 4 处 patch 应用到 copy-cfg 出来的 config 上：
 #   PART 1 Settings
-#     pretrained_model_name_or_path = './Shanghai_AI_Laboratory/internlm2-chat-7b'
+#     pretrained_model_name_or_path = '<weights_dir>'   # pull-weights store 出来的真实路径
 #     data_path = './colors/train.jsonl'
 #     prompt_template = PROMPT_TEMPLATE.internlm2_chat
 #   PART 3 Dataset & Dataloader
@@ -359,14 +370,17 @@ print(save_path)
 python -c "
 import re
 path = '<cfg>'
+weights_dir = '<weights_dir>'
 with open(path) as f:
     text = f.read()
 # 4 处 patch：
-#   pretrained_model_name_or_path 用 regex 同时覆盖 7b/20b 两种 cfg（xtuner v0.2.0 的 colorist cfg 是
-#   llama 版，V1 之后才有 internlm2 版；不同 size 的 HF 模型名不一样，自动取 size 后缀）
+#   pretrained_model_name_or_path：直接替换成 pull-weights store 出来的真实路径（modelscope
+#   返回的 cache 路径，含 <cache_dir>/<namespace>/<name>，跟 cfg 模板里的 HF repo_id 不
+#   同结构；旧代码硬编码 ./Shanghai_AI_Laboratory/internlm2-chat-Xb，文件实际落在更深的
+#   目录里，xtuner.tools.train 进 transformers.hub.cached_file 报 OSError path_or_model_id）
 text, n = re.subn(
-    r'pretrained_model_name_or_path = \"internlm/internlm2-(\d+b)\"',
-    r\"pretrained_model_name_or_path = './Shanghai_AI_Laboratory/internlm2-chat-\1'\",
+    r'pretrained_model_name_or_path = \"internlm/internlm(?:2|-chat)-\d+b\"',
+    f\"pretrained_model_name_or_path = {weights_dir!r}\",
     text,
 )
 assert n == 1, f'pretrained_model_name_or_path patch applied {n} times (expected 1)'
@@ -376,8 +390,15 @@ assert old in text, f'patch source not found: {old!r}'
 text = text.replace(old, new)
 old = 'prompt_template = PROMPT_TEMPLATE.default'
 new = 'prompt_template = PROMPT_TEMPLATE.internlm2_chat'
-assert old in text, f'patch source not found: {old!r}'
-text = text.replace(old, new)
+# 兼容两种 cfg：base cfg（internlm2_7b）源是 default；chat cfg（internlm_chat_7b）
+# 源是 internlm_chat（InternLM v1 的 chat 模板，v0.2.0 chat cfg 仍用）。model 是
+# InternLM2-Chat-7B，应该用 internlm2_chat。两路源任一命中就改：
+if old in text:
+    text = text.replace(old, new)
+elif 'prompt_template = PROMPT_TEMPLATE.internlm_chat' in text:
+    text = text.replace('prompt_template = PROMPT_TEMPLATE.internlm_chat', new)
+else:
+    raise AssertionError(f'patch source not found: {old!r} or PROMPT_TEMPLATE.internlm_chat')
 old = 'dataset=dict(type=load_dataset, path=data_path)'
 new = \"dataset=dict(type=load_dataset, path='json', data_files=dict(train=data_path))\"
 assert old in text, f'patch source not found: {old!r}'
@@ -388,7 +409,7 @@ print(path)
 "
 ```
 
-```shell #test id="xtuner-patch-cfg" load="xtuner_llm_cfg_path>>cfg"
+```shell #test id="xtuner-patch-cfg" load="xtuner_llm_cfg_path>>cfg" load="xtuner_weights_path>>weights_dir"
 # 用 py_compile 验 cfg 是合法 Python（不触发 import 链）+ grep 验 4 处 patch 都生效：
 # 不能直接用 mmengine.config.Config.fromfile —— 它会执行 cfg 文件的 `from xtuner.utils import ...`，
 # 触发 torchvision::nms import，而 NPU base image 的 torchvision 没有 GPU operator
@@ -401,19 +422,22 @@ py_compile.compile('<cfg>', doraise=True)
 print('cfg_compiles_ok')
 with open('<cfg>') as f:
     text = f.read()
+# weights_dir 是 pull-weights store 出来的 modelscope cache 路径（形如
+# ./Shanghai_AI_Laboratory/Shanghai_AI_Laboratory/internlm2-chat-7b）。patch 把 cfg 里
+# 的 HF repo_id 替成这条路径：
+weights_dir = '<weights_dir>'
 checks = [
-    # model size 后缀随 cfg 选型而变（7b/20b），用 regex 兼容两种：
-    ('model_path', re.search(r\"pretrained_model_name_or_path = '(.+/internlm2-chat-\d+b)'\", text).group(1)),
+    # 用 cfg 里实际的权重路径字面量 grep（cfg 字段名是 pretrained_model_name_or_path 不是 model_path，
+    # 不要把 check 名当字段名拼到 needle 里）：
+    ('model_path', f\"pretrained_model_name_or_path = '{weights_dir}'\"),
     ('data_path', './colors/train.jsonl'),
     ('prompt_template', 'PROMPT_TEMPLATE.internlm2_chat'),
     ('dataset_format', \"dataset=dict(type=load_dataset, path='json', data_files=dict(train=data_path))\"),
 ]
 for name, expected in checks:
-    # needle 用 cfg 里的实际字面量（cfg 字段名是 pretrained_model_name_or_path 不是 model_path，
-    # 不要把 check 名当字段名拼到 needle 里）：
     assert expected in text, f'missing patch ({name}): {expected!r}'
 print('cfg_patch_ok')
-print(f'model_name= {checks[0][1]}')
+print(f'model_name= {weights_dir}')
 print('data_path= ./colors/train.jsonl')
 print('prompt_template= PROMPT_TEMPLATE.internlm2_chat')
 "
@@ -424,7 +448,7 @@ print('prompt_template= PROMPT_TEMPLATE.internlm2_chat')
 ```shell #test-result id="xtuner-patch-cfg" fuzzy='xxx'
 cfg_compiles_ok
 cfg_patch_ok
-model_name= ./Shanghai_AI_Laboratory/internlm2-chat-xxx
+model_name= xxx-internlm2-chat-xxx
 data_path= ./colors/train.jsonl
 prompt_template= PROMPT_TEMPLATE.xxx
 ```
@@ -452,6 +476,8 @@ prompt_template= PROMPT_TEMPLATE.xxx
 # 引发 ValueError）。5 iter smoke 不真正做可视化，stub 够用。
 mkdir -p /tmp/cv2_stub/cv2
 cat > /tmp/cv2_stub/cv2/__init__.py <<'PYEOF'
+__version__ = "4.12.0"
+
 def imread(*args, **kwargs):
     return None
 
@@ -476,6 +502,7 @@ PYEOF
 # 注意：merge-setup 后面也会建同名 stub——这里先建好让 smoke setup 立即能用。
 mkdir -p /tmp/torchvision_stub/torchvision/ops /tmp/torchvision_stub/torchvision/transforms
 cat > /tmp/torchvision_stub/torchvision/__init__.py <<'PYEOF'
+__version__ = "0.24.0"
 PYEOF
 cat > /tmp/torchvision_stub/torchvision/ops/__init__.py <<'PYEOF'
 def nms(*args, **kwargs):
@@ -603,6 +630,8 @@ xxx (训前 assistant 回复——5 iter 没训出什么，可能是空 / 乱码
 # sitecustomize-injected ModuleType (find_spec raises on __spec__ is None).
 mkdir -p /tmp/cv2_stub/cv2
 cat > /tmp/cv2_stub/cv2/__init__.py <<'PYEOF'
+__version__ = "4.12.0"
+
 def imread(*args, **kwargs):
     return None
 
@@ -623,6 +652,7 @@ PYEOF
 # image_utils → torchvision.transforms，site-packages torchvision 缺 C++ op 挂）。
 mkdir -p /tmp/torchvision_stub/torchvision/ops /tmp/torchvision_stub/torchvision/transforms
 cat > /tmp/torchvision_stub/torchvision/__init__.py <<'PYEOF'
+__version__ = "0.24.0"
 PYEOF
 cat > /tmp/torchvision_stub/torchvision/ops/__init__.py <<'PYEOF'
 def nms(*args, **kwargs):
@@ -762,6 +792,7 @@ CI smoke 真跑 `pth_to_hf` + `merge`：
 # `RuntimeError: operator torchvision::nms does not exist`）。
 mkdir -p /tmp/torchvision_stub/torchvision/ops /tmp/torchvision_stub/torchvision/transforms
 cat > /tmp/torchvision_stub/torchvision/__init__.py <<'PYEOF'
+__version__ = "0.24.0"
 PYEOF
 cat > /tmp/torchvision_stub/torchvision/ops/__init__.py <<'PYEOF'
 def nms(*args, **kwargs):

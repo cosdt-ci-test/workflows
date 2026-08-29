@@ -123,22 +123,23 @@ python -c "import modelscope; print('modelscope=', modelscope.__version__)"
 modelscope= 1.37.0
 ```
 
-### （aarch64 机器）打 cv2 / decord / torchaudio 三个 stub
+### （aarch64 机器）打 cv2 / decord / torchaudio / triton 四个 stub
 
-仅 aarch64 镜像（如华为云 C76 容器）需要这一步。x86_64 镜像有现成 wheel,直接 `uv pip install opencv-python decord torchaudio` 就行,跳到下一节。
+仅 aarch64 镜像（如华为云 C76 容器）需要这一步。x86_64 镜像有现成 wheel,直接 `uv pip install opencv-python decord torchaudio triton` 就行,跳到下一节。
 
-LightX2V 在 import 时会触发这三个模块：
+LightX2V 在 import 时会触发这些模块：
 
 | 模块 | 触发链 | aarch64 症状 |
 | --- | --- | --- |
 | `cv2` | `lightx2v.models.video_encoders` 顶层 import | `ImportError: libxcb.so.1`（base image 缺 GUI X11 lib,headless 变体也救不回来） |
 | `decord` | 视频解码 | PyPI 没 aarch64 wheel |
 | `torchaudio` | 跟着 `torch` 一起装到 2.11.0 | `OSError: Could not load ..._torchaudio.abi3.so`（编的是 torch CUDA,跟 torch_npu 不兼容） |
+| `triton` | `lightx2v.common.ops.attn.kernels.sla_kernel` 顶层 `import triton` | triton 3.x 没 aarch64 wheel,2.x 多数发行版缺关键 aarch64 build;sla_kernel 是 CUDA sparse-linear-attn 路径,NPU 走 `torchada` 不真用,但 import 仍要可解析 |
 
-策略：源码 `--no-deps` 安装时跳过这三个依赖,然后在 site-packages 里塞同名的 stub 包（`PYTHONPATH` 优先,`sys.modules` 命中空 stub,真 .so 不会被加载）。LightX2V 不真正做 GUI / 视频解码 / 音频 IO,空 stub 够用。
+策略：源码 `--no-deps` 安装时跳过这四个依赖,然后在 site-packages 里塞同名的 stub 包（`PYTHONPATH` 优先,`sys.modules` 命中空 stub,真 .so 不会被加载）。LightX2V 不真正做 GUI / 视频解码 / 音频 IO / triton JIT（slack_kernel 只在 CUDA 路径跑,NPU 不触发）,空 stub 够用。
 
 ```shell #test-setup
-mkdir -p /tmp/stubs/cv2 /tmp/stubs/decord /tmp/stubs/torchaudio
+mkdir -p /tmp/stubs/cv2 /tmp/stubs/decord /tmp/stubs/torchaudio /tmp/stubs/triton
 ```
 
 ```shell #test-setup
@@ -159,6 +160,9 @@ CAP_PROP_FRAME_COUNT = 7
 CAP_PROP_FPS = 5
 
 def _stub(*a, **kw): raise NotImplementedError("cv2 stub on aarch64")
+class _Stub:
+    def __getattr__(self, name): return _Stub()
+    def __call__(self, *a, **k): return _Stub()
 VideoCapture = type("VideoCapture", (), {"__init__": lambda s,*a,**k: None, "read": _stub, "isOpened": lambda s: False, "release": lambda s: None})
 VideoWriter = type("VideoWriter", (), {"__init__": lambda s,*a,**k: None, "write": _stub, "release": lambda s: None})
 imread = imwrite = resize = cvtColor = _stub
@@ -184,19 +188,33 @@ PY
 ```
 
 ```shell #test-setup
-# 装 LightX2V 时跳过三个 stub 依赖（具体名字以 setup.py / pyproject.toml 为准,
+# triton stub: sla_kernel 只在模块顶层 `import triton`,attr 访问不在 import 时发生。
+# 给一个空 package + 全 attr __getattr__ 返 _Stub,NPU 走 torchada 不真用 triton。
+cat > /tmp/stubs/triton/__init__.py <<'PY'
+class _Stub:
+    def __getattr__(self, name): return _Stub()
+    def __call__(self, *a, **k): return _Stub()
+import sys as _s
+_s.modules[__name__].__getattr__ = lambda n: _Stub()
+PY
+```
+
+```shell #test-setup
+# 装 LightX2V 时跳过四个 stub 依赖（具体名字以 setup.py / pyproject.toml 为准,
 # 找不到时一个个 --no-deps 单独装也能绕过）。PYTHONPATH 在每条 python 命令前 export。
-echo "stubs ready at /tmp/stubs/{cv2,decord,torchaudio}"
-ls /tmp/stubs/cv2/__init__.py /tmp/stubs/decord/__init__.py /tmp/stubs/torchaudio/__init__.py
+echo "stubs ready at /tmp/stubs/{cv2,decord,torchaudio,triton}"
+ls /tmp/stubs/cv2/__init__.py /tmp/stubs/decord/__init__.py /tmp/stubs/torchaudio/__init__.py /tmp/stubs/triton/__init__.py
 ```
 
 ```shell #test id="stubs-verify"
 export PYTHONPATH=/tmp/stubs:$PYTHONPATH
 python -c "
-import cv2, decord, torchaudio
-print('cv2.INTER_LINEAR=', cv2.INTER_LINEAR, 'cv2.COLOR_BGR2RGB=', cv2.COLOR_BGR2RGB)
+import cv2, decord, torchaudio, triton
+print('cv2.INTER_LINEAR=', cv2.INTER_LINEAR)
+print('cv2.COLOR_BGR2RGB=', cv2.COLOR_BGR2RGB)
 print('decord.VideoReader=', decord.VideoReader)
 print('torchaudio.load=', torchaudio.load)
+print('triton.__version__=', getattr(triton, '__version__', 'no version attr'))
 "
 ```
 
@@ -205,6 +223,7 @@ cv2.INTER_LINEAR= xxx
 cv2.COLOR_BGR2RGB= xxx
 decord.VideoReader= xxx
 torchaudio.load= xxx
+triton.__version__= xxx
 ```
 
 ## 安装 LightX2V
@@ -249,14 +268,30 @@ uv pip install --no-deps -v .
 ```
 
 ```shell #test-setup id="lightx2v-install-deps"
-# LightX2V 直接依赖（除上面 stub 的三个外）：triton / gguf / pyzmq 等
-uv pip install triton gguf pyzmq
+# LightX2V 直接依赖（除上面 stub 的三个外），从 pyproject.toml 同步过来。
+# 故意不写 `uv pip install .` 重做依赖解析：之前已经 --no-deps 把 lightx2v 装上,
+# 再用 constraint 列表一次装齐其余 deps;CUDA 排除清单(_CUDA_CONSTRAINTS)
+# 通过 PIP_CONSTRAINT/UV_CONSTRAINT 已在 process env,自动屏蔽 nvidia-* / cuda-* 等。
+# 例外的三个 stub:
+#   - opencv-python → stub cv2(/tmp/stubs/cv2)
+#   - decord        → stub decord(/tmp/stubs/decord)
+#   - torchaudio    → stub torchaudio(/tmp/stubs/torchaudio),torchada 仍是 NPU 版
+# torch + torch_npu 在 step 4 check-torch 已装 2.9.0,这里不重复
+uv pip install \
+    numpy scipy diffusers transformers tokenizers tqdm accelerate safetensors \
+    imageio imageio-ffmpeg einops loguru omegaconf peft \
+    swanlab qtorch 'comfy-kitchen>=0.2.15' ftfy gradio \
+    aiohttp pydantic prometheus-client gguf fastapi uvicorn PyJWT requests \
+    aio-pika 'asyncpg>=0.27.0' 'aioboto3>=12.0.0' \
+    'alibabacloud_dypnsapi20170525==1.2.2' 'redis==6.4.0' tos \
+    av 'torchada>=0.1.10'
 ```
 
 ```shell #test id="lightx2v-install-verify"
 export PROJECT_ROOT=${PROJECT_ROOT:-/home/coder/work/lightx2v-test}
 cd "$PROJECT_ROOT/src"
 export PYTHONPATH=/tmp/stubs:$PYTHONPATH  # aarch64 才需要,x86_64 跳过
+export PLATFORM=ascend_npu              # lightx2v import 时 read env 选后端,默认 cuda
 python -c "
 import lightx2v
 spec = __import__('importlib.util').util.find_spec('lightx2v')

@@ -148,7 +148,7 @@ deps ok
 cd stable-diffusion-webui
 export GIT_CONFIG_NOSYSTEM=1
 export STABLE_DIFFUSION_REPO=https://github.com/w-e-w/stablediffusion.git
-nohup /tmp/sd-webui-venv/bin/python launch.py --nowebui --skip-torch-cuda-test --no-half --ckpt <ckpt> --port 7861 > /tmp/sdwebui.log 2>&1 &
+nohup /tmp/sd-webui-venv/bin/python launch.py --nowebui --skip-torch-cuda-test --no-half --ckpt <ckpt>/sd_turbo.safetensors --port 7861 > /tmp/sdwebui.log 2>&1 &
 echo $!
 ```
 
@@ -157,7 +157,7 @@ echo $!
 - `--nowebui`：API 模式（FastAPI，默认端口 7861），无 Gradio 界面，适合自动化与 CI。
 - `--skip-torch-cuda-test`：允许非 CUDA 设备（NPU）。
 - `--no-half`：禁用 fp16（NPU 稳定优先）。
-- `--ckpt <目录>`：sd-turbo 为 diffusers 目录格式，直接指向 ModelScope 下载目录。
+- `--ckpt <目录>/sd_turbo.safetensors`：A1111 的 checkpoint 加载器需要**单文件** .safetensors；ModelScope 快照根目录提供了合并后的 `sd_turbo.safetensors`（其余为 diffusers 分片格式），此处指向该单文件。
 - 设备选择由 `modules/npu_specific.py` 自动完成（检测到 torch_npu 即用 npu:0）。
 
 等待 API 就绪：

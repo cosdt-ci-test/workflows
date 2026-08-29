@@ -1,6 +1,6 @@
 # Quick Start (Ascend NPU)
 
-在 4 卡昇腾 NPU 上把 [SpecForge](https://github.com/sgl-project/SpecForge) 端到端跑通：`pip install specforge` 满足上游 `pyproject.toml` 钉死的 `torch==2.11.0` / `sglang==0.5.14`，从 ModelScope 拉 `Qwen/Qwen3.5-4B`，起 `mooncake_master` + SGLang capture server + `specforge train` 三件套，跑 1 步训练作为 smoke。完整训练链路（多步 + 优化参数 + 排错指南）在文末[完整训练链路](#完整训练链路)章节展开，CI smoke 是它的小型化版本。
+在 4 卡昇腾 NPU 上把 [SpecForge](https://github.com/sgl-project/SpecForge) 端到端跑通：`pip install specforge` 满足上游 `pyproject.toml` 钉死的 `torch==2.11.0` / `sglang==0.5.14`，从 ModelScope 拉 `Qwen/Qwen3.5-4B`，起 `mooncake_master` + SGLang capture server + `specforge train` 三件套，跑 1 步训练作为 smoke。
 
 ## 前置条件
 

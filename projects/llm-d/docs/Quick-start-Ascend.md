@@ -11,9 +11,9 @@ flowchart LR
     Envoy -->|"转发 :8000"| VLLM["vLLM worker（vllm-ascend）"]
 ```
 
-- **vLLM worker** 真正跑模型。昇腾上装的是 [vllm-ascend](https://github.com/vllm-project/vllm-ascend)，不是 NVIDIA 版 vLLM。
-- **EPP**（Endpoint Picker）根据本地 `endpoints.yaml` 选 worker。它和加速器无关，从 [llm-d-router](https://github.com/llm-d/llm-d-router) 源码构建。
-- **Envoy** 接收客户端请求，先问 EPP，再转到选中的 worker。用官方 Linux ARM64 二进制，不需要 Docker。
+- **vLLM worker** 真正跑模型。
+- **EPP**（Endpoint Picker）根据本地 `endpoints.yaml` 选 worker。
+- **Envoy** 接收客户端请求，先问 EPP，再转到选中的 worker。
 
 本文基于上游 [no-kubernetes-deployment](https://github.com/llm-d/llm-d/tree/v0.9.0/guides/no-kubernetes-deployment) 指南，把 model server 换成 vllm-ascend，并把模型换成适合单卡验证的 `Qwen/Qwen3-0.6B`。上游其余 Kubernetes 指南在这里**不会**用到。
 
@@ -36,12 +36,11 @@ Atlas **800T** / **900 A2** 训练系列（Ascend **910B**）。本文示例为*
 | CANN | toolkit 9.1.0，并且可以 `source /usr/local/Ascend/ascend-toolkit/set_env.sh` |
 | NNAL | 并且可以 `source /usr/local/Ascend/nnal/atb/set_env.sh`。vLLM-Ascend 会加载 ATB，只 source CANN 不够 |
 | Python | 3.12 |
-| 包管理 | `pip`（下面用 `python -m pip`） |
 | 网络 | 能访问华为云 PyPI、ModelScope、`goproxy.cn`，以及 GitHub Release（Envoy 二进制） |
 
 **配套机器**：Atlas 900 A2（Ascend 910B4）。**配套镜像**：`swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12`。
 
-**本文钉死的版本**
+**版本要求**
 
 | 组件 | 版本 |
 | --- | --- |
@@ -90,11 +89,7 @@ npu-smi info
 
 ## 安装 vLLM Ascend
 
-按插件文档的顺序装。先装 `vllm==0.23.0`。`vllm-ascend` 的 wheel **不会**自动带上 vLLM 本体。再用昇腾 `variant` 源装插件，并钉死 `modelscope==1.37.1`。`VLLM_USE_MODELSCOPE=true` 只切换下载后端，不会替你装 ModelScope。不钉版本时 pip 会装到 1.39.x，在 vLLM 0.23 里会报 `KeyError: 'Type'`。
-
 `torch` 2.10 会顺带装上社区版 CUDA Triton。那个包没有昇腾后端，第一次推理会报 `TypeError: 'function' object is not subscriptable`。所以最后再装一次 `vllm-ascend==0.23.0` 要求的 `triton-ascend==3.2.2`，覆盖那个目录。必须放在最后，并且加 `--force-reinstall --no-deps`：前面两步会把社区版 Triton 的文件盖回来，但 pip 仍认为 `triton-ascend` 已经装过，不加强制重装就会跳过。
-
-`--no-cache-dir` 避免 pip cache 再占一份磁盘。冷安装大约 7 GB，需要一些时间。
 
 ```shell #test id="install"
 python -m pip install --no-cache-dir \
@@ -125,90 +120,130 @@ triton-ascend 3.2.2
 
 ## 构建 EPP
 
-EPP 来自 `llm-d-router` 的 `cmd/epp`。上游 `make build-epp` 会起 builder 容器。没有 Docker 时，用 Go 1.26.6 直接 `go build`。`go.mod` 精确要求这个版本。国内用 `goproxy.cn`。Go 工具链缓存在 `/root/.cache/cosdt-ci-test/llm-d/go/`，编好的 EPP 缓存在 `/root/.cache/cosdt-ci-test/llm-d/epp/v0.10.0/epp`，第二次不必重新下 GitHub、不必重新编译。直连 GitHub 不稳定时，克隆用 HTTP/1.1 并重试三次。
+EPP 来自 `llm-d-router` 的 `cmd/epp`。`make build-epp` 会起 builder 容器。没有 Docker 时，用 Go 1.26.6 直接 `go build`。`go.mod` 精确要求这个版本。国内用 `goproxy.cn`。
 
+<!--
 ```shell #test-setup
 set -euo pipefail
-url='https://golang.google.cn/dl/go1.26.6.linux-arm64.tar.gz'
-cache='/root/.cache/cosdt-ci-test/llm-d/go/go1.26.6.linux-arm64.tar.gz'
-mkdir -p "$(dirname "$cache")" /root/llm-d /root/llm-d/bin
-if [ ! -f "$cache" ]; then
-  tmp="$cache.part"
-  ok=0
-  for _ in 1 2 3; do
-    if curl -fL --connect-timeout 30 --max-time 600 -o "$tmp" "$url"; then
-      mv "$tmp" "$cache"
-      ok=1
-      break
+ci='/root/.cache/cosdt-ci-test/llm-d'
+go_tar="$ci/go/go1.26.6.linux-arm64.tar.gz"
+sum='d0507e9e9d7fe012aae570108cbd76c15de879e17130ab8cb90d4d7445cb1f2e'
+mkdir -p /root/llm-d/bin
+if [ -f "$go_tar" ]; then
+  if echo "$sum  $go_tar" | sha256sum -c >/dev/null 2>&1; then
+    if ! /root/llm-d/go/bin/go version 2>/dev/null | grep -q 'go1.26.6'; then
+      rm -rf /root/llm-d/go
+      tar -C /root/llm-d -xzf "$go_tar"
     fi
+  else
+    rm -f "$go_tar"
+  fi
+fi
+if [ -x "$ci/epp/v0.10.0/epp" ] && [ -s "$ci/epp/v0.10.0/epp" ]; then
+  cp -a "$ci/epp/v0.10.0/epp" /root/llm-d/bin/epp
+fi
+```
+-->
+
+```shell #test-setup
+mkdir -p /root/llm-d/bin
+if ! /root/llm-d/go/bin/go version 2>/dev/null | grep -q 'go1.26.6'; then
+  url='https://golang.google.cn/dl/go1.26.6.linux-arm64.tar.gz'
+  for _ in 1 2 3; do
+    curl -fL --connect-timeout 30 --max-time 600 -o /root/llm-d/go1.26.6.linux-arm64.tar.gz.part "$url" && mv /root/llm-d/go1.26.6.linux-arm64.tar.gz.part /root/llm-d/go1.26.6.linux-arm64.tar.gz && break
     sleep 5
   done
-  test "$ok" = 1
-fi
-if ! /root/llm-d/go/bin/go version 2>/dev/null | grep -q 'go1.26.6'; then
   rm -rf /root/llm-d/go
-  tar -C /root/llm-d -xzf "$cache"
+  tar -C /root/llm-d -xzf /root/llm-d/go1.26.6.linux-arm64.tar.gz
 fi
 export GOROOT=/root/llm-d/go
 export GOPATH=/root/llm-d/gopath
 export GOPROXY=https://goproxy.cn,direct
 export PATH="$GOROOT/bin:$PATH"
 mkdir -p "$GOPATH"
-epp_cache='/root/.cache/cosdt-ci-test/llm-d/epp/v0.10.0/epp'
-mkdir -p "$(dirname "$epp_cache")"
-if [ ! -x "$epp_cache" ]; then
+if [ ! -x /root/llm-d/bin/epp ]; then
   rm -rf /root/llm-d/llm-d-router
-  ok=0
   for _ in 1 2 3; do
-    if GIT_TERMINAL_PROMPT=0 GIT_HTTP_VERSION=HTTP/1.1 git clone --depth 1 --branch v0.10.0 https://github.com/llm-d/llm-d-router /root/llm-d/llm-d-router; then
-      ok=1
-      break
-    fi
+    GIT_TERMINAL_PROMPT=0 GIT_HTTP_VERSION=HTTP/1.1 git clone --depth 1 --branch v0.10.0 https://github.com/llm-d/llm-d-router /root/llm-d/llm-d-router && break
     rm -rf /root/llm-d/llm-d-router
     sleep 5
   done
-  test "$ok" = 1
   cd /root/llm-d/llm-d-router
-  go build -o "$epp_cache" ./cmd/epp
+  go build -o /root/llm-d/bin/epp ./cmd/epp
 fi
-cp -a "$epp_cache" /root/llm-d/bin/epp
+/root/llm-d/go/bin/go version
 test -x /root/llm-d/bin/epp
 /root/llm-d/bin/epp --help >/dev/null
-/root/llm-d/go/bin/go version
 ```
+
+<!--
+```shell #test-setup
+set -euo pipefail
+ci='/root/.cache/cosdt-ci-test/llm-d'
+sum='d0507e9e9d7fe012aae570108cbd76c15de879e17130ab8cb90d4d7445cb1f2e'
+mkdir -p "$ci/go" "$ci/epp/v0.10.0"
+if [ -f /root/llm-d/go1.26.6.linux-arm64.tar.gz ]; then
+  echo "$sum  /root/llm-d/go1.26.6.linux-arm64.tar.gz" | sha256sum -c
+  cp -a /root/llm-d/go1.26.6.linux-arm64.tar.gz "$ci/go/go1.26.6.linux-arm64.tar.gz.part"
+  mv "$ci/go/go1.26.6.linux-arm64.tar.gz.part" "$ci/go/go1.26.6.linux-arm64.tar.gz"
+elif [ -f "$ci/go/go1.26.6.linux-arm64.tar.gz" ]; then
+  echo "$sum  $ci/go/go1.26.6.linux-arm64.tar.gz" | sha256sum -c
+fi
+test -x /root/llm-d/bin/epp
+cp -a /root/llm-d/bin/epp "$ci/epp/v0.10.0/epp.part"
+mv "$ci/epp/v0.10.0/epp.part" "$ci/epp/v0.10.0/epp"
+```
+-->
 
 ---
 
 ## 获取 Envoy
 
-Envoy v1.33.2 官方 Release 直接提供 Linux ARM64 二进制，不需要 Docker，也不需要从源码编译。先查缓存 `/root/.cache/cosdt-ci-test/llm-d/envoy/1.33.2/envoy`。没有再下载，校验 SHA256 后再用。下载总超时给到 1800 秒，国内直连 GitHub Release 可能很慢。
+Envoy v1.33.2 官方 Release 直接提供 Linux ARM64 二进制，不需要 Docker，也不需要从源码编译。下载总超时给到 1800 秒，国内直连 GitHub Release 可能很慢。
 
+<!--
 ```shell #test-setup
 set -euo pipefail
-url='https://github.com/envoyproxy/envoy/releases/download/v1.33.2/envoy-1.33.2-linux-aarch_64'
-cache='/root/.cache/cosdt-ci-test/llm-d/envoy/1.33.2/envoy'
+ci='/root/.cache/cosdt-ci-test/llm-d'
+cached="$ci/envoy/1.33.2/envoy"
 sum='81ec3689a82122eff0ca680c48176f4d351b6f9881a79cc9d9078a6fb4b0b6a8'
-mkdir -p "$(dirname "$cache")" /root/llm-d/bin
-if [ ! -x "$cache" ]; then
-  tmp="$cache.part"
-  ok=0
+mkdir -p /root/llm-d/bin
+if [ -f "$cached" ]; then
+  if echo "$sum  $cached" | sha256sum -c >/dev/null 2>&1; then
+    cp -a "$cached" /root/llm-d/bin/envoy
+    chmod 0755 /root/llm-d/bin/envoy
+  else
+    rm -f "$cached"
+  fi
+fi
+```
+-->
+
+```shell #test-setup
+mkdir -p /root/llm-d/bin
+if [ ! -x /root/llm-d/bin/envoy ]; then
+  url='https://github.com/envoyproxy/envoy/releases/download/v1.33.2/envoy-1.33.2-linux-aarch_64'
   for _ in 1 2 3; do
-    if curl -fL --connect-timeout 30 --max-time 1800 -o "$tmp" "$url"; then
-      echo "$sum  $tmp" | sha256sum -c
-      chmod 0755 "$tmp"
-      mv "$tmp" "$cache"
-      ok=1
-      break
-    fi
+    curl -fL --connect-timeout 30 --max-time 1800 -o /root/llm-d/bin/envoy.part "$url" && chmod 0755 /root/llm-d/bin/envoy.part && mv /root/llm-d/bin/envoy.part /root/llm-d/bin/envoy && break
     sleep 5
   done
-  test "$ok" = 1
 fi
-cp -a "$cache" /root/llm-d/bin/envoy
 /root/llm-d/bin/envoy --version
 ```
 
-输出里应含 `1.33.2`。若缓存未命中且 GitHub Release 不可达，停下来查网络，不要改去抽 Docker 镜像或从源码编 Envoy。
+<!--
+```shell #test-setup
+set -euo pipefail
+ci='/root/.cache/cosdt-ci-test/llm-d'
+sum='81ec3689a82122eff0ca680c48176f4d351b6f9881a79cc9d9078a6fb4b0b6a8'
+echo "$sum  /root/llm-d/bin/envoy" | sha256sum -c
+mkdir -p "$ci/envoy/1.33.2"
+cp -a /root/llm-d/bin/envoy "$ci/envoy/1.33.2/envoy.part"
+mv "$ci/envoy/1.33.2/envoy.part" "$ci/envoy/1.33.2/envoy"
+```
+-->
+
+输出里应含 `1.33.2`。若 GitHub Release 不可达，停下来查网络，不要改去抽 Docker 镜像或从源码编 Envoy。
 
 ---
 
@@ -216,50 +251,77 @@ cp -a "$cache" /root/llm-d/bin/envoy
 
 克隆 llm-d 仓，只取 no-kubernetes 指南里的三份 YAML。默认 EPP 去读 `/etc/epp/endpoints.yaml`，默认模型是 `Qwen/Qwen3-32B`。单机验证改成工作目录里的绝对路径，以及 `Qwen/Qwen3-0.6B`。`address` 必须是字面 IPv4，file-discovery **不会**解析主机名。
 
-这三份 YAML 缓存在 `/root/.cache/cosdt-ci-test/llm-d/guides/<tag>/`，第二次不必重新克隆。直连 GitHub 不稳定时，克隆用 HTTP/1.1 并重试三次。
 
 将下面克隆命令里的 `<ref>` 换成你要用的 llm-d **Release tag**（例如 `v0.9.0`）。
 <!--
 ```shell #test-setup store="upstream_ref"
-echo "${UPSTREAM_REF}"
+set -euo pipefail
+ref="${UPSTREAM_REF-}"
+printf '%s\n' "$ref" | grep -Eq '^[A-Za-z0-9._/-]+$'
+printf '%s\n' "$ref"
+```
+-->
+
+<!--
+```shell #test-setup
+set -euo pipefail
+ci='/root/.cache/cosdt-ci-test/llm-d'
+guide="$ci/guides/${UPSTREAM_REF}"
+dest='/root/llm-d/src/guides/no-kubernetes-deployment'
+if [ -s "$guide/config.yaml" ] && [ -s "$guide/endpoints.yaml" ] && [ -s "$guide/envoy.yaml" ]; then
+  if grep -q '/etc/epp/endpoints.yaml' "$guide/config.yaml" \
+    && grep -q 'Qwen/Qwen3-32B' "$guide/endpoints.yaml" \
+    && grep -q '8081' "$guide/envoy.yaml"; then
+    mkdir -p "$dest/router/epp" "$dest/router/envoy"
+    cp -a "$guide/config.yaml" "$dest/router/epp/config.yaml"
+    cp -a "$guide/endpoints.yaml" "$dest/router/epp/endpoints.yaml"
+    cp -a "$guide/envoy.yaml" "$dest/router/envoy/envoy.yaml"
+  else
+    rm -rf "$guide"
+  fi
+fi
 ```
 -->
 
 ```shell #test id="prepare-config" load="upstream_ref>>ref"
-set -euo pipefail
 mkdir -p /root/llm-d
-guide_cache='/root/.cache/cosdt-ci-test/llm-d/guides/<ref>'
-mkdir -p "$guide_cache"
-if [ ! -f "$guide_cache/config.yaml" ] || [ ! -f "$guide_cache/endpoints.yaml" ] || [ ! -f "$guide_cache/envoy.yaml" ]; then
+if [ ! -f /root/llm-d/src/guides/no-kubernetes-deployment/router/epp/config.yaml ]; then
   rm -rf /root/llm-d/src
-  ok=0
   for _ in 1 2 3; do
-    if GIT_TERMINAL_PROMPT=0 GIT_HTTP_VERSION=HTTP/1.1 git clone --depth 1 --branch <ref> https://github.com/llm-d/llm-d /root/llm-d/src; then
-      ok=1
-      break
-    fi
+    GIT_TERMINAL_PROMPT=0 GIT_HTTP_VERSION=HTTP/1.1 git clone --depth 1 --branch '<ref>' https://github.com/llm-d/llm-d /root/llm-d/src && break
     rm -rf /root/llm-d/src
     sleep 5
   done
-  test "$ok" = 1
-  cp /root/llm-d/src/guides/no-kubernetes-deployment/router/epp/config.yaml "$guide_cache/config.yaml"
-  cp /root/llm-d/src/guides/no-kubernetes-deployment/router/epp/endpoints.yaml "$guide_cache/endpoints.yaml"
-  cp /root/llm-d/src/guides/no-kubernetes-deployment/router/envoy/envoy.yaml "$guide_cache/envoy.yaml"
 fi
-cp "$guide_cache/config.yaml" /root/llm-d/config.yaml
-cp "$guide_cache/endpoints.yaml" /root/llm-d/endpoints.yaml
-cp "$guide_cache/envoy.yaml" /root/llm-d/envoy.yaml
+cp /root/llm-d/src/guides/no-kubernetes-deployment/router/epp/config.yaml /root/llm-d/config.yaml
+cp /root/llm-d/src/guides/no-kubernetes-deployment/router/epp/endpoints.yaml /root/llm-d/endpoints.yaml
+cp /root/llm-d/src/guides/no-kubernetes-deployment/router/envoy/envoy.yaml /root/llm-d/envoy.yaml
 sed -i 's|/etc/epp/endpoints.yaml|/root/llm-d/endpoints.yaml|' /root/llm-d/config.yaml
 sed -i 's|Qwen/Qwen3-32B|Qwen/Qwen3-0.6B|' /root/llm-d/endpoints.yaml
-grep -q '/root/llm-d/endpoints.yaml' /root/llm-d/config.yaml
-grep -q 'Qwen/Qwen3-0.6B' /root/llm-d/endpoints.yaml
-echo config-ready
+grep '/root/llm-d/endpoints.yaml' /root/llm-d/config.yaml
+grep 'Qwen/Qwen3-0.6B' /root/llm-d/endpoints.yaml
 ```
+
+<!--
+```shell #test-setup
+set -euo pipefail
+ci='/root/.cache/cosdt-ci-test/llm-d'
+src='/root/llm-d/src/guides/no-kubernetes-deployment'
+guide="$ci/guides/${UPSTREAM_REF}"
+mkdir -p "$guide"
+cp -a "$src/router/epp/config.yaml" "$guide/config.yaml.part"
+mv "$guide/config.yaml.part" "$guide/config.yaml"
+cp -a "$src/router/epp/endpoints.yaml" "$guide/endpoints.yaml.part"
+mv "$guide/endpoints.yaml.part" "$guide/endpoints.yaml"
+cp -a "$src/router/envoy/envoy.yaml" "$guide/envoy.yaml.part"
+mv "$guide/envoy.yaml.part" "$guide/envoy.yaml"
+```
+-->
 
 输出结果如下：
 
 ```shell #test-result id="prepare-config"
-config-ready
+.../root/llm-d/endpoints.yaml...Qwen/Qwen3-0.6B...
 ```
 
 ---
@@ -276,7 +338,6 @@ config-ready
 export PATH=/usr/local/sbin:/usr/local/bin:$PATH
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 source /usr/local/Ascend/nnal/atb/set_env.sh
-set -euo pipefail
 mkdir -p /root/llm-d
 export VLLM_USE_MODELSCOPE=true
 export ASCEND_RT_VISIBLE_DEVICES=0
@@ -292,31 +353,33 @@ s.close()
 raise SystemExit(0 if r == 0 else 1)
 PY
 }
-if [ -f /root/llm-d/vllm.pid ] && kill -0 "$(cat /root/llm-d/vllm.pid)" 2>/dev/null; then
+vllm_alive() {
+  [ -f /root/llm-d/vllm.pid ] || return 1
+  pid=$(cat /root/llm-d/vllm.pid)
+  kill -0 "$pid" 2>/dev/null || return 1
+  tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -q vllm
+}
+if vllm_alive; then
   echo 'vllm already running'
 else
   if port_busy 8000; then
     echo 'port 8000 is already in use by another process' >&2
     exit 1
   fi
-  setsid nohup vllm serve Qwen/Qwen3-0.6B \
-    --host 127.0.0.1 \
-    --port 8000 \
-    --served-model-name Qwen/Qwen3-0.6B \
-    --max-model-len 2048 \
-    --max-num-seqs 4 \
-    --gpu-memory-utilization 0.3 \
-    --trust-remote-code \
-    --enforce-eager \
-    >/root/llm-d/vllm.log 2>&1 &
-  echo $! > /root/llm-d/vllm.pid
+  setsid -f sh -c 'echo $$ > /root/llm-d/vllm.pid; exec vllm serve Qwen/Qwen3-0.6B --host 127.0.0.1 --port 8000 --served-model-name Qwen/Qwen3-0.6B --max-model-len 2048 --max-num-seqs 4 --gpu-memory-utilization 0.3 --trust-remote-code --enforce-eager >/root/llm-d/vllm.log 2>&1'
 fi
 python - <<'PY'
 import os, sys, time, urllib.request
-pid = int(open('/root/llm-d/vllm.pid', encoding='utf-8').read().strip())
 deadline = time.time() + 2400
 last = ''
+pid = None
 while time.time() < deadline:
+    if pid is None:
+        try:
+            pid = int(open('/root/llm-d/vllm.pid', encoding='utf-8').read().strip())
+        except (OSError, ValueError):
+            time.sleep(0.2)
+            continue
     try:
         os.kill(pid, 0)
     except OSError:
@@ -352,7 +415,6 @@ PY
 `--pool-name` 和 `--pool-namespace` 在 file-discovery 模式下不是 Kubernetes 对象，只出现在指标和日志里。`--secure-serving=false` 因为 Envoy 和 EPP 同机，不走 TLS。
 
 ```shell #test-setup
-set -euo pipefail
 mkdir -p /root/llm-d
 port_busy() {
   python - "$1" <<'PY'
@@ -365,31 +427,33 @@ s.close()
 raise SystemExit(0 if r == 0 else 1)
 PY
 }
-if [ -f /root/llm-d/epp.pid ] && kill -0 "$(cat /root/llm-d/epp.pid)" 2>/dev/null; then
+epp_alive() {
+  [ -f /root/llm-d/epp.pid ] || return 1
+  pid=$(cat /root/llm-d/epp.pid)
+  kill -0 "$pid" 2>/dev/null || return 1
+  tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -q /root/llm-d/bin/epp
+}
+if epp_alive; then
   echo 'epp already running'
 else
   if port_busy 9002 || port_busy 9003 || port_busy 9090; then
     echo 'EPP ports 9002/9003/9090 are already in use' >&2
     exit 1
   fi
-  setsid nohup /root/llm-d/bin/epp \
-    --config-file=/root/llm-d/config.yaml \
-    --pool-name=file-discovery \
-    --pool-namespace=default \
-    --grpc-port=9002 \
-    --grpc-health-port=9003 \
-    --metrics-port=9090 \
-    --secure-serving=false \
-    --v=2 \
-    >/root/llm-d/epp.log 2>&1 &
-  echo $! > /root/llm-d/epp.pid
+  setsid -f sh -c 'echo $$ > /root/llm-d/epp.pid; exec /root/llm-d/bin/epp --config-file=/root/llm-d/config.yaml --pool-name=file-discovery --pool-namespace=default --grpc-port=9002 --grpc-health-port=9003 --metrics-port=9090 --secure-serving=false --v=2 >/root/llm-d/epp.log 2>&1'
 fi
 python - <<'PY'
 import os, sys, time, urllib.request
-pid = int(open('/root/llm-d/epp.pid', encoding='utf-8').read().strip())
 deadline = time.time() + 120
 last = ''
+pid = None
 while time.time() < deadline:
+    if pid is None:
+        try:
+            pid = int(open('/root/llm-d/epp.pid', encoding='utf-8').read().strip())
+        except (OSError, ValueError):
+            time.sleep(0.2)
+            continue
     try:
         os.kill(pid, 0)
     except OSError:
@@ -419,10 +483,9 @@ PY
 
 配置里的入口是 `0.0.0.0:8081`，管理口是 `127.0.0.1:19000`。`--concurrency 2` 对单卡验证够用。
 
-Envoy 会在启动它的那个 shell 退出时跟着退出（日志里会出现 `caught ENVOY_SIGTERM`），下一节对 8081 的请求就会被拒绝。所以这里用 `setsid -f` 先 fork 再 `exec` Envoy，让它过继给系统 init，当前命令结束后进程还在。vLLM 和 EPP 没有这个行为，仍用上一节的 `setsid nohup ... &`。
+三个进程都会在启动它们的那个 shell 退出时被当成该停机。所以这里用 `setsid -f` 先 fork 再 `exec`，让进程过继给系统 init，当前命令结束后还在。
 
 ```shell #test-setup
-set -euo pipefail
 mkdir -p /root/llm-d
 port_busy() {
   python - "$1" <<'PY'
@@ -435,7 +498,13 @@ s.close()
 raise SystemExit(0 if r == 0 else 1)
 PY
 }
-if [ -f /root/llm-d/envoy.pid ] && kill -0 "$(cat /root/llm-d/envoy.pid)" 2>/dev/null; then
+envoy_alive() {
+  [ -f /root/llm-d/envoy.pid ] || return 1
+  pid=$(cat /root/llm-d/envoy.pid)
+  kill -0 "$pid" 2>/dev/null || return 1
+  tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -q envoy
+}
+if envoy_alive; then
   echo 'envoy already running'
 else
   if port_busy 8081 || port_busy 19000; then
@@ -519,20 +588,28 @@ grep -m1 'backend=hccl' /root/llm-d/vllm.log
 
 ## 清理
 
-只读取本任务写下的 PID 文件，结束对应进程组。不要 `pkill -f vllm` / `pkill -f epp` / `pkill -f envoy`。
+只读取本任务写下的 PID 文件。先看 `/proc/<pid>/cmdline` 是不是自己的进程，再结束对应进程组。对不上就丢掉这个文件。不要 `pkill -f vllm` / `pkill -f epp` / `pkill -f envoy`。
 
 ```shell #test-setup
-set -euo pipefail
 stop_one() {
   local f="$1"
+  local needle="$2"
   if [ ! -f "$f" ]; then
     return 0
   fi
   local pid
   pid=$(cat "$f")
-  if [ -z "$pid" ]; then
+  if [ -z "$pid" ] || [ ! -r "/proc/$pid/cmdline" ]; then
+    rm -f "$f"
     return 0
   fi
+  case "$(tr '\0' ' ' < "/proc/$pid/cmdline")" in
+    *"$needle"*) ;;
+    *)
+      rm -f "$f"
+      return 0
+      ;;
+  esac
   if kill -0 "$pid" 2>/dev/null; then
     kill -- -"$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
     for _ in $(seq 1 50); do
@@ -543,11 +620,11 @@ stop_one() {
       kill -9 -- -"$pid" 2>/dev/null || kill -9 "$pid" 2>/dev/null || true
     fi
   fi
+  rm -f "$f"
 }
-stop_one /root/llm-d/envoy.pid
-stop_one /root/llm-d/epp.pid
-stop_one /root/llm-d/vllm.pid
-echo cleaned
+stop_one /root/llm-d/envoy.pid envoy
+stop_one /root/llm-d/epp.pid /root/llm-d/bin/epp
+stop_one /root/llm-d/vllm.pid vllm
 ```
 
 ---
@@ -559,9 +636,9 @@ echo cleaned
 | `libatb.so` / `_register_atb_extensions` | 没有 source NNAL | 在**同一段**命令里 `source /usr/local/Ascend/nnal/atb/set_env.sh` |
 | `KeyError: 'Type'` 或 ModelScope repository 无效 | ModelScope 版本太新 | 钉 `modelscope==1.37.1`，不要无版本安装 |
 | `/v1/models` 是 200，但模型名不是 `Qwen/Qwen3-0.6B` | 8000 端口上是别人的 vLLM | 不要占用别人的端口。停掉**自己 PID 文件**里的进程后换端口或换机器 |
-| 启动命令挂住、一直不返回 | 后台进程没把日志重定向到文件，管道写端没关 | vLLM / EPP 用本文的 `setsid nohup ... >log 2>&1 &` |
-| 启动块一结束 Envoy 就退出，日志有 `caught ENVOY_SIGTERM`，`curl :8081` 连接拒绝 | Envoy 把父进程退出当成停机 | 用本文的 `setsid -f sh -c 'echo $$ > pid; exec envoy ...'`，不要 `setsid nohup envoy &` |
+| 启动命令挂住、一直不返回 | 后台进程没把日志重定向到文件，管道写端没关 | 三个进程都用本文的 `setsid -f sh -c 'echo $$ > pid; exec ... >log 2>&1'` |
+| 启动块一结束进程就退出，日志有 `caught ENVOY_SIGTERM`，`curl :8081` 连接拒绝 | 进程把父 shell 退出当成停机 | 用本文的 `setsid -f sh -c 'echo $$ > pid; exec ...'`，不要 `setsid nohup ... &` |
 | `npu-smi: command not found` | 不在默认 `PATH` | `export PATH=/usr/local/sbin:/usr/local/bin:$PATH` |
 | Envoy 返回 503 | EPP 未就绪，或 `endpoints.yaml` 里的地址不是 `127.0.0.1` | `curl http://127.0.0.1:9090/metrics`，并确认 endpoints 是字面 IPv4 |
-| `git clone` GitHub 443 超时或 `HTTP2 framing layer` | 国内直连 GitHub 不稳定 | 用本文的 HTTP/1.1 + 三次重试；Go / EPP / YAML 命中 `/root/.cache/cosdt-ci-test/llm-d/` 后不必再克隆 |
+| `git clone` GitHub 443 超时或 `HTTP2 framing layer` | 国内直连 GitHub 不稳定 | 用本文的 HTTP/1.1 + 三次重试 |
 | 第一次推理 `TypeError: 'function' object is not subscriptable` | 社区版 CUDA Triton 覆盖了昇腾后端 | 在 vllm-ascend 之后用 `--force-reinstall --no-deps` 再装 `triton-ascend==3.2.2` |

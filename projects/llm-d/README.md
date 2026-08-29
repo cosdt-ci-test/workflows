@@ -23,6 +23,8 @@
 - 文档开头的 `source` CANN / NNAL 与 `export PATH`。测试进程在 `prepare_environment` 里做等价注入，并且覆盖写回 `os.environ`。缺脚本直接失败。
 - 上游 Kubernetes quickstart 及其余 guides。ARC pod 没有集群。
 
-清理只读 `/root/llm-d/envoy.pid`、`/root/llm-d/epp.pid`、`/root/llm-d/vllm.pid`，并按这个顺序停进程组。不要 `pkill`。
+清理只读 `/root/llm-d/envoy.pid`、`/root/llm-d/epp.pid`、`/root/llm-d/vllm.pid`，核对 `/proc/<pid>/cmdline` 仍是自己的进程后再停进程组。不要 `pkill`。
+
+用户可见命令只往 `/root/llm-d` 安装（`go/`、`bin/epp`、`bin/envoy`、源码树里的三份 YAML），没有单独的缓存目录。跨 run 复用只在隐藏 `#test-setup` 和 workflow 挂载里：宿主机 `/root/.cache/cosdt-ci-test/llm-d` 挂到容器内同一路径；可见块执行前把校验过的 Go / EPP / Envoy / YAML 预置进工作目录，成功后再写回。渲染页上的命令看不到这条路径。Go 与 Envoy 的哈希也只在隐藏块里。
 
 `schedule` 保持注释。`doc_url` 走 GitHub Contents API（`ref=${{ github.sha }}`），不走 `raw.githubusercontent.com`。

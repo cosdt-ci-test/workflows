@@ -104,11 +104,11 @@ python -c "import torch, torch_npu; print(f'torch={torch.__version__}'); print(f
 
 输出结果如下：
 
-```shell #test-result id="install-torch"
+```shell #test-result id="install-torch" fuzzy='xxx'
 torch=2.10.0+cpu
 torch_npu=2.10.0.post4
 is_available: True
-count: 1
+count: xxx
 ```
 
 然后源码 build vllm + 装 vllm-ascend + triton-ascend：
@@ -206,11 +206,11 @@ python -c "import torch, torch_npu; print(f'torch={torch.__version__}'); print(f
 
 输出结果如下：
 
-```shell #test-result id="check-npu-runtime"
+```shell #test-result id="check-npu-runtime" fuzzy='xxx'
 torch=2.10.0+cpu
 torch_npu=2.10.0.post4
 is_available: True
-count: 1
+count: xxx
 ```
 
 #### 安装 modelscope

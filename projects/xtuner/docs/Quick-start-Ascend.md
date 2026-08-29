@@ -285,7 +285,6 @@ train.jsonl
 ...
 ```
 
-
 ### 准备配置文件
 
 XTuner 自带大量开箱即用的 config：
@@ -318,19 +317,19 @@ print(match)
 ")
 ```
 
+检查config_name是否存在：
 ```shell #test id="xtuner-find-colorist-cfg" load="xtuner_colorist_cfg_name>>config_name"
 test -n "$config_name" || { echo "no matching qlora+colorist config"; exit 1; }
 echo "config_name=$config_name"
 ```
 
+输出结果如下：
 ```shell #test-result id="xtuner-find-colorist-cfg" fuzzy='xxx'
 config_name=xxx
 ```
 
+打印出路径，下一节「修改配置文件」使用
 ```shell #test-setup store="xtuner_llm_cfg_path" load="xtuner_colorist_cfg_name>>config_name"
-# xtuner copy-cfg 把 save_dir 当目录用，文件实际写到 save_dir/<basename>_copy.py；
-# 直接调 main() 然后 echo save_dir 路径会被 Step 18 当文件读，触发 IsADirectoryError。
-# 改用 Python 自己算 actual file path 并只 print 这一行（setup 抓 stdout 当 store）：
 python -c "
 import os
 import os.path as osp
@@ -346,20 +345,20 @@ print(save_path)
 "
 ```
 
+检查路径是否存在：
 ```shell #test id="xtuner-copy-cfg" load="xtuner_llm_cfg_path>>cfg"
 test -f "$cfg" || { echo "cfg not copied to $cfg"; exit 1; }
 echo "cfg_copied: $cfg"
 ```
 
+输出结果如下：
 ```shell #test-result id="xtuner-copy-cfg" fuzzy='xxx'
 cfg_copied: xxx
 ```
 
-输出路径到下一节「修改配置文件」
-
 ### 修改配置文件
 
-拷出来的 config 跟模板原版完全一致，按模板的 4 处修改规则调整（详见 [xtuner快速上手的"修改配置文件"小节](https://xtuner.readthedocs.io/zh-cn/latest/legacy/get_started/quickstart.html)）。`<cfg>` 是上一节「准备配置文件」store 出来的 cfg 绝对路径：
+拷出来的 config 跟模板原版完全一致，按模板的 4 处修改规则调整（详见 [xtuner快速上手的"修改配置文件"小节](https://xtuner.readthedocs.io/zh-cn/latest/legacy/get_started/quickstart.html)）。`<cfg>` 是上一节「准备配置文件」‘print(save_path)’的绝对路径：
 
 ```shell #test-setup load="xtuner_llm_cfg_path>>cfg" store="xtuner_llm_cfg_path"
 # 把模板里那 4 处 patch 应用到 copy-cfg 出来的 config 上：
@@ -371,24 +370,14 @@ with open(path) as f:
 # 4 处 patch：
 #   pretrained_model_name_or_path 用 regex 同时覆盖 7b/20b 两种 cfg（xtuner v0.2.0 的 colorist cfg 是
 #   llama 版，V1 之后才有 internlm2 版；不同 size 的 HF 模型名不一样，自动取 size 后缀）
-text, n = re.subn(
+text, _ = re.subn(
     r'pretrained_model_name_or_path = \"internlm/internlm2-(\d+b)\"',
     r\"pretrained_model_name_or_path = './Shanghai_AI_Laboratory/internlm2-chat-\1'\",
     text,
 )
-assert n == 1, f'pretrained_model_name_or_path patch applied {n} times (expected 1)'
-old = 'data_path = \"burkelibbey/colors\"'
-new = \"data_path = './colors/train.jsonl'\"
-assert old in text, f'patch source not found: {old!r}'
-text = text.replace(old, new)
-old = 'prompt_template = PROMPT_TEMPLATE.default'
-new = 'prompt_template = PROMPT_TEMPLATE.internlm2_chat'
-assert old in text, f'patch source not found: {old!r}'
-text = text.replace(old, new)
-old = 'dataset=dict(type=load_dataset, path=data_path)'
-new = \"dataset=dict(type=load_dataset, path='json', data_files=dict(train=data_path))\"
-assert old in text, f'patch source not found: {old!r}'
-text = text.replace(old, new)
+text = text.replace('data_path = \"burkelibbey/colors\"', \"data_path = './colors/train.jsonl'\")
+text = text.replace('prompt_template = PROMPT_TEMPLATE.default', 'prompt_template = PROMPT_TEMPLATE.internlm2_chat')
+text = text.replace('dataset=dict(type=load_dataset, path=data_path)', \"dataset=dict(type=load_dataset, path='json', data_files=dict(train=data_path))\")
 with open(path, 'w') as f:
     f.write(text)
 print(path)
@@ -397,10 +386,6 @@ print(path)
 
 ```shell #test id="xtuner-patch-cfg" load="xtuner_llm_cfg_path>>cfg"
 # 用 py_compile 验 cfg 是合法 Python（不触发 import 链）+ grep 验 4 处 patch 都生效：
-# 不能直接用 mmengine.config.Config.fromfile —— 它会执行 cfg 文件的 `from xtuner.utils import ...`，
-# 触发 torchvision::nms import，而 NPU base image 的 torchvision 没有 GPU operator
-# （xtuner.utils 顶层用 torchvision.ops.nms），所以 fromfile 会因 torchvision 缺 operator 报
-# `RuntimeError: operator torchvision::nms does not exist`。smoke 只验 patch + 语法足矣。
 python -c "
 import py_compile
 import re
@@ -435,8 +420,6 @@ model_name= ./Shanghai_AI_Laboratory/internlm2-chat-xxx
 data_path= ./colors/train.jsonl
 prompt_template= PROMPT_TEMPLATE.xxx
 ```
-
-> `#test-setup` 把 4 处 sed 实际应用到 cfg；`#test` 跑 `py_compile.compile(<cfg>)` + `grep` 验 cfg 是合法 Python 且 4 处 patch 都生效——**不**用 `mmengine.config.Config.fromfile`（它会执行 cfg 顶层 `from xtuner.utils import ...`，触发 torchvision::nms import，NPU base image 的 torchvision 没 GPU operator 会直接挂）。smoke 不验 cfg 训出来的实际效果，那要等下面"启动微调"章节真跑。
 
 ### 启动微调
 

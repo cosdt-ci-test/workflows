@@ -382,8 +382,15 @@ assert old in text, f'patch source not found: {old!r}'
 text = text.replace(old, new)
 old = 'prompt_template = PROMPT_TEMPLATE.default'
 new = 'prompt_template = PROMPT_TEMPLATE.internlm2_chat'
-assert old in text, f'patch source not found: {old!r}'
-text = text.replace(old, new)
+# 兼容两种 cfg：base cfg（internlm2_7b）源是 default；chat cfg（internlm_chat_7b）
+# 源是 internlm_chat（InternLM v1 的 chat 模板，v0.2.0 chat cfg 仍用）。model 是
+# InternLM2-Chat-7B，应该用 internlm2_chat。两路源任一命中就改：
+if old in text:
+    text = text.replace(old, new)
+elif 'prompt_template = PROMPT_TEMPLATE.internlm_chat' in text:
+    text = text.replace('prompt_template = PROMPT_TEMPLATE.internlm_chat', new)
+else:
+    raise AssertionError(f'patch source not found: {old!r} or PROMPT_TEMPLATE.internlm_chat')
 old = 'dataset=dict(type=load_dataset, path=data_path)'
 new = \"dataset=dict(type=load_dataset, path='json', data_files=dict(train=data_path))\"
 assert old in text, f'patch source not found: {old!r}'

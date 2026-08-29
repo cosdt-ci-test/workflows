@@ -169,6 +169,11 @@ fixes = [
     ('opencv/modules/dnn/src/layers/gemm_layer.cpp',
      '            shape_C = std::vector<int>{dim};',
      '            shape_C = cv::MatShape(1, &dim);'),
+    # matmul_layer.cpp:515 也用了 bias_shape.front()（在 if 条件里 != 1），先
+    # 把 .front() 全部换成 [0]，再修赋值那一行。
+    ('opencv/modules/dnn/src/layers/matmul_layer.cpp',
+     '                if (real_ndims_C == 1 && bias_shape.front() != 1) {',
+     '                if (real_ndims_C == 1 && bias_shape[0] != 1) {'),
     ('opencv/modules/dnn/src/layers/matmul_layer.cpp',
      '                    bias_shape = std::vector<int>{bias_shape.front()};',
      '                    int _bias_val = bias_shape[0]; bias_shape = cv::MatShape(1, &_bias_val);'),

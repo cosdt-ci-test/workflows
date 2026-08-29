@@ -121,9 +121,13 @@ uv pip install 'modelscope==1.37.0'
 # master server 二进制（mooncake_master / mooncake_client / transfer_engine_bench）必须
 # 随 wheel 一起分发。main 分支的 mooncake-wheel/ setup.py 只编译 _fast_copy 扩展，
 # 不带那三个预编译二进制 → mooncake_master 启动后 execv 找不到 binary，bind 失败，
-# smoke 30s 后 nc -z 35551 全部 timeout。所以从 release tarball 拿预编译的 wheel：
-# aarch64 + cp312（CI image 是 py3.12，runner 是 aarch64）。
-uv pip install 'mooncake-transfer-engine @ https://github.com/kvcache-ai/Mooncake/releases/download/v0.3.13/mooncake_transfer_engine-0.3.13-cp312-cp312-manylinux_2_28_aarch64.whl'
+# smoke 30s 后 nc -z 35551 全部 timeout。所以从 release tarball 拿预编译的 wheel。
+#
+# 用 aliyun pypi 镜像拉：直连 GitHub release 在集群网络下不稳（run 33254357756
+# 90 min timeout），而 aliyun 镜像里 aarch64 cp312 的 0.3.10 wheel 是一样的 pre-built
+# 内容。specforge 没 pin mooncake 版本，0.3.10 / 0.3.13 在 store.setup() / client API 上
+# 字段一致（global_segment_size / local_buffer_size / metadata_server 都在），smoke 行为不变。
+uv pip install --index-url https://mirrors.aliyun.com/pypi/simple 'mooncake-transfer-engine==0.3.10'
 ```
 
 打印安装版本：

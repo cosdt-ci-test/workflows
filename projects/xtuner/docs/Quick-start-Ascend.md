@@ -586,6 +586,12 @@ mkdir -p /tmp/bitsandbytes_stub/bitsandbytes/nn /tmp/bitsandbytes_stub/bitsandby
 cat > /tmp/bitsandbytes_stub/bitsandbytes/__init__.py <<'PYEOF'
 __version__ = "0.46.1"
 from . import nn, optim, functional, autograd, cextension
+# features = {"multi_backend"}：transformers 4.48 的 validate_bnb_backend_availability()
+# 经 `getattr(bnb, "features", set())` 检查 multi_backend 是否在 features 里；没有就调
+# `_validate_bnb_cuda_backend_availability()` → `torch.cuda.is_available()` 必须 True
+# （NPU base image 没 CUDA，RuntimeError "CUDA is required but not available for
+# bitsandbytes"）。设 multi_backend 走 multi-platform 分支绕开 CUDA check。
+features = {"multi_backend"}
 PYEOF
 for sub in nn optim functional autograd cextension; do
 cat > /tmp/bitsandbytes_stub/bitsandbytes/${sub}/__init__.py <<'PYEOF'
@@ -762,6 +768,12 @@ mkdir -p /tmp/bitsandbytes_stub/bitsandbytes/nn /tmp/bitsandbytes_stub/bitsandby
 cat > /tmp/bitsandbytes_stub/bitsandbytes/__init__.py <<'PYEOF'
 __version__ = "0.46.1"
 from . import nn, optim, functional, autograd, cextension
+# features = {"multi_backend"}：transformers 4.48 的 validate_bnb_backend_availability()
+# 经 `getattr(bnb, "features", set())` 检查 multi_backend 是否在 features 里；没有就调
+# `_validate_bnb_cuda_backend_availability()` → `torch.cuda.is_available()` 必须 True
+# （NPU base image 没 CUDA，RuntimeError "CUDA is required but not available for
+# bitsandbytes"）。设 multi_backend 走 multi-platform 分支绕开 CUDA check。
+features = {"multi_backend"}
 PYEOF
 for sub in nn optim functional autograd cextension; do
 cat > /tmp/bitsandbytes_stub/bitsandbytes/${sub}/__init__.py <<'PYEOF'

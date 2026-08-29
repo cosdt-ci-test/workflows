@@ -82,12 +82,18 @@ uv pip install --no-deps --extra-index-url https://repo.huaweicloud.com/ascend/r
 # 让 import 通过；decode_jpeg 不会被调用。另外 sglang.srt.configs.__init__ 直接 `from sglang.srt.configs.deepseekvl2 import DeepseekVL2Config`，
 # deepseekvl2.py 顶部 `from torchvision.io import ImageReadMode`（PIL.ImageMode 风格 enum）→ run 33263935680
 # 在 launch_server 启动早期就报 `ImportError: cannot import name 'ImageReadMode'`，把 ImageReadMode 也补上。
+# 再加 torchvision.transforms.InterpolationMode（run 33265261220）：sglang.launch_server → server_args
+# → configs/__init__ → deepseekvl2.py 顶部 `from transformers import (...)` → transformers 内部
+# image_utils.py:55 `from torchvision.transforms import InterpolationMode` → ModuleNotFoundError →
+# transformers 的 AutoProcessor lazy loader 报"Could not import module 'AutoProcessor'"（实际根因是 torchvision.transforms）。
 python - <<'PY'
 import os, site
 sp = site.getsitepackages()[0]
 pkg = os.path.join(sp, 'torchvision')
 io = os.path.join(pkg, 'io')
+tx = os.path.join(pkg, 'transforms')
 os.makedirs(io, exist_ok=True)
+os.makedirs(tx, exist_ok=True)
 open(os.path.join(pkg, '__init__.py'), 'w').close()
 open(os.path.join(io, '__init__.py'), 'w').write(
     'class ImageReadMode:\n'
@@ -100,6 +106,16 @@ open(os.path.join(io, '__init__.py'), 'w').write(
     '\n'
     'def decode_image(*args, **kwargs):\n'
     '    raise NotImplementedError("torchvision stub: not used in this text-only smoke")\n'
+)
+open(os.path.join(tx, '__init__.py'), 'w').write(
+    'class InterpolationMode:\n'
+    '    NEAREST = "nearest"\n'
+    '    NEAREST_EXACT = "nearest-exact"\n'
+    '    BILINEAR = "bilinear"\n'
+    '    BICUBIC = "bicubic"\n'
+    '    BOX = "box"\n'
+    '    HAMMING = "hamming"\n'
+    '    LANCZOS = "lanczos"\n'
 )
 print(f'torchvision stub installed at {pkg}')
 PY

@@ -301,10 +301,19 @@ else
 fi
 ASCEND_PATCH=$(ls patches/sglang/*/spec-capture-ascend-mount.patch 2>/dev/null | head -1 || true)
 if [[ -n "$ASCEND_PATCH" ]]; then
-    SGLANG_DIR=$(python -c "import sglang, os; print(os.path.dirname(os.path.dirname(sglang.__file__)))")
+    # Resolve site-packages path WITHOUT `import sglang`: sglang.__init__
+    # pulls in sglang.lang → IPython → traitlets, and traitlets is missing
+    # (sglang was --no-deps installed + traitlets isn't in our manual deps
+    # list). importlib.util.find_spec() only locates the spec without
+    # executing the module body.
+    SGLANG_DIR=$(python -c "import importlib.util, os; print(os.path.dirname(os.path.dirname(importlib.util.find_spec('sglang').origin)))")
     echo "smoke: applying ascend companion patch ($ASCEND_PATCH)"
+    # Use BSD `patch -p2` (matches SpecForge's own apply_sglang_spec_capture_patch.sh),
+    # not `git apply`: the sglang wheel install has no .git/ in site-packages,
+    # so git apply would fail with "not a git repository". -p2 strips a/ + python/
+    # from the diff path, landing at $SGLANG_DIR/sglang/srt/spec_capture_sink.py.
     pushd "$SGLANG_DIR" >/dev/null
-    git apply "$OLDPWD/$ASCEND_PATCH" 2>&1 || echo "smoke: ascend patch already applied (ok)"
+    patch -p2 --batch -N < "$OLDPWD/$ASCEND_PATCH" 2>&1 || echo "smoke: ascend patch already applied (ok)"
     popd >/dev/null
 fi
 popd >/dev/null

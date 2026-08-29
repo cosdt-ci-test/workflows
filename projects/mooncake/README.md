@@ -19,7 +19,7 @@
   - `ascend-direct`：`cmake -DUSE_ASCEND_DIRECT=ON`，只编 `basename($EXEC)`。`run_example.sh` 先起 target（NPU 0），从日志解析 `listening on <IP>:<port>`，再起 initiator（NPU 1）。initiator 退出后再杀掉 target。HIXL 需要 `/etc/hccn.conf`（setup 缺文件即失败；workflow 从宿主机只读挂入）。日志必须有 `Success to initialize adxl engine`、`Test completed:`，以及 `npu:<logicid>` 或 `mem type:device`（device buffer 登记）。`Failed to install Ascend transport`、`getTransferStatus FAILED` 或 `Sync data transfer timeout` 判红。上游 initiator 在 FAILED/TIMEOUT 时仍会打印 `Test completed:` 并 `return 0`，所以必须扫这些失败串。**绿灯 = 这次 Ascend Direct 写传输在两张 NPU 之间跑完，不是二进制编过了。** `--protocol` 在该 `.cpp` 里声明了但运行时不用，传输后端是编译期 `USE_ASCEND_DIRECT`。不要把 `--mode` / `--segment_id` 写进 `overlay_args`。
   - overlay 只压规模：`--block_iteration=1 --batch_size=2 --block_size=16384`。默认 `block_iteration=10` 会按 2 的幂放大块，CI 里不合适。
   - 二进制默认 `local_server_name` 是实验室 IP。脚本强制 `127.0.0.1`。
-- 编译依赖用 `apt-get` 装 glog / gflags / ibverbs 等；镜像已有 cmake / g++，不再为编译器 `apt-get`。examples 管线（`setup_example.sh`）不改 `/etc/apt/sources.list`；quick-start doc 管线（`docs/Quick-start-Ascend.md`）在每次重建的测试容器里临时 sed 成阿里云 `ubuntu-ports`（原生 `ports.ubuntu.com` 在国内 runner 上拉索引极慢）。`extern/pybind11` 在 setup 里 `submodule update`，失败则按目标仓 gitlink SHA 从 `ghfast.top` 拉同一份 commit，对不上就失败。
+- 编译依赖用 `apt-get` 装 glog / gflags / ibverbs 等；镜像已有 cmake / g++，不再为编译器 `apt-get`。不改 `/etc/apt/sources.list`。`extern/pybind11` 在 setup 里 `submodule update`，失败则按目标仓 gitlink SHA 从 `ghfast.top` 拉同一份 commit，对不上就失败。
 
 重新生成清单会**整文件覆盖** `--output` 指向的 yaml。生成器不会合并已填好的 `profile` / `exec` / `overlay_args`。
 

@@ -310,7 +310,7 @@ projects:
   # + multi-card inference.
   - name: xdit
     category: 推理加速
-    support_level: 基础支持
+    support_level: 新兴适配
     upstream_repo: xdit-project/xDiT
     phase: A
     runner: linux-aarch64-a2-2

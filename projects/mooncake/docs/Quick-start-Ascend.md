@@ -61,10 +61,9 @@ npu-smi info
 
 ## 3. 安装编译依赖
 
-下列包提供 Transfer Engine 链接所需的头文件与库。镜像基于原生 `ubuntu:22.04`（arm64），apt 默认源是海外的 `ports.ubuntu.com`，国内机器上先换成阿里云的 arm64 ports 归档再装：
+下列包提供 Transfer Engine 链接所需的头文件与库。
 
 ```shell #test id="deps"
-sed -i 's|http://ports.ubuntu.com/ubuntu-ports/|https://mirrors.aliyun.com/ubuntu-ports/|g' /etc/apt/sources.list
 apt-get update
 apt-get install -y --no-install-recommends \
     build-essential cmake git pkg-config \

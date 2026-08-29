@@ -109,16 +109,26 @@ apt-get update -qq && apt-get install -y -qq --no-install-recommends libgl1 libg
 stable-diffusion-webui 的依赖 pin 为 py3.10 时代版本（部分包没有 cp312 wheel），因此用 `uv` 建一个**独立的 py3.10 venv**（`uv` 会自动托管下载 CPython 3.10），所有安装与运行都走该 venv：
 
 ```shell #test-setup
-uv venv --python 3.10 --seed /tmp/sd-webui-venv
-/tmp/sd-webui-venv/bin/python -m pip install modelscope
-/tmp/sd-webui-venv/bin/python -m pip install torch==2.9.0 torchvision
-/tmp/sd-webui-venv/bin/python -m pip install torch_npu==2.9.0.post2
-cd stable-diffusion-webui
-/tmp/sd-webui-venv/bin/python -m pip install -r requirements.txt
-/tmp/sd-webui-venv/bin/python -m pip install "setuptools<81" wheel
-/tmp/sd-webui-venv/bin/python -m pip install --no-build-isolation "https://github.com/openai/CLIP/archive/d50d76daa670286dd6cacf3bcd80b5e4823fc8e1.zip"
+if /tmp/sd-webui-venv/bin/python -c "
+import torch, torch_npu, modelscope, gradio, fastapi
+assert torch.__version__.startswith('2.9.0')
+assert torch_npu.__version__.startswith('2.9.0')
+" 2>/dev/null; then
+  echo "venv ready (cached), skipping install"
+else
+  rm -rf /tmp/sd-webui-venv
+  uv venv --python 3.10 --seed /tmp/sd-webui-venv
+  /tmp/sd-webui-venv/bin/python -m pip install modelscope
+  /tmp/sd-webui-venv/bin/python -m pip install torch==2.9.0 torchvision
+  /tmp/sd-webui-venv/bin/python -m pip install torch_npu==2.9.0.post2
+  cd stable-diffusion-webui
+  /tmp/sd-webui-venv/bin/python -m pip install -r requirements.txt
+  /tmp/sd-webui-venv/bin/python -m pip install "setuptools<81" wheel
+  /tmp/sd-webui-venv/bin/python -m pip install --no-build-isolation "https://github.com/openai/CLIP/archive/d50d76daa670286dd6cacf3bcd80b5e4823fc8e1.zip"
+fi
 ```
 
+> - venv 由流水线 bind-mount 持久化在宿主机，二次运行经 import + 版本校验通过后直接复用（`venv ready`），校验不过（首次运行 / venv 损坏 / 版本不匹配）时自动原地重建。
 > - `uv venv` 创建的 venv 默认不含 pip，`--seed` 会预装 pip；`uv` 会自动托管下载 CPython 3.10。
 > - 旧版 CLIP 的 `setup.py` 依赖 `pkg_resources`（新版 setuptools 已移除），因此预装 `setuptools<81` 后用 `--no-build-isolation` 从源码安装；launch.py 检测到 `clip` 已装会自动跳过自身的 github zip 安装。
 > - `torch==2.9.0` + `torch_npu==2.9.0.post2` 与本机 CANN 9.1 配套，且均有 py3.10 wheel；`torch_npu` 来自华为云昇腾源（流水线已注入 extra index）。

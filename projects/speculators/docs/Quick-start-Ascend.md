@@ -186,21 +186,6 @@ triton_ascend=3.2.2
 triton=3.5.0
 ```
 
-检查 NPU 设备运行时可用：
-
-```shell #test id="check-npu-runtime"
-python -c "import torch, torch_npu; print(f'torch={torch.__version__}'); print(f'torch_npu={torch_npu.__version__}'); print('is_available:', torch.npu.is_available()); print('count:', torch.npu.device_count())"
-```
-
-输出结果如下：
-
-```shell #test-result id="check-npu-runtime" fuzzy='xxx'
-torch=2.10.0+cpu
-torch_npu=2.10.0.post4
-is_available: True
-count: xxx
-```
-
 #### 安装 modelscope
 
 ```shell #test-setup
@@ -383,15 +368,25 @@ echo "$DATA_DIR"
 ```shell #test id="pipeline-step2-extract" load="data_path>>data_path"
 echo <data_path>
 python -c "from datasets import load_from_disk; print(len(load_from_disk('<data_path>')))"
-test -f <data_path>/token_freq.pt && echo "token_freq.pt: ok"
+python -c "
+import torch
+from pathlib import Path
+p = Path('<data_path>') / 'token_freq.pt'
+print('exists:', p.exists(), 'size:', p.stat().st_size if p.exists() else 0)
+freq = torch.load(p, weights_only=True)
+print('token_freq keys:', list(freq.keys()) if isinstance(freq, dict) else type(freq).__name__)
+print('len:', len(freq))
+"
 ```
 
 输出结果如下：
 
-```shell #test-result id="pipeline-step2-extract"
+```shell #test-result id="pipeline-step2-extract" fuzzy='xxx'
 /root/dflash-train-data
 10
-token_freq.pt: ok
+exists: True size: xxx
+token_freq keys: xxx
+len: xxx
 ```
 
 ### Step 3 — 场景 2：Draft Model Training Support

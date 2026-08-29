@@ -515,17 +515,6 @@ xxx (训前 user 输入，未训 colorist)
 xxx (训前 assistant 回复——5 iter 没训出什么，可能是空 / 乱码 / 长串 loss)
 ```
 
-完整 5 epoch × 144 step = 720 step 训练命令（本地按需手动跑，跑出来的 .pth 路径可直接被"模型转换 + LoRA 合并"章节消费）：
-
-```shell
-# 单卡（src CANN env 是必需的，不 source torch_npu 找不到 libhccl.so）
-source /usr/local/Ascend/ascend-toolkit/set_env.sh
-export TORCH_NPU_USE_HCCL=1
-xtuner train /tmp/xtuner_npu_llm_cfg.py --work-dir /tmp/xtuner_sft_llm_out
-
-# 多卡（xtuner.train 内置 torchrun 集成，按需调整 NPROC_PER_NODE）
-NPROC_PER_NODE=${GPU_NUM} xtuner train /tmp/xtuner_npu_llm_cfg.py --work-dir /tmp/xtuner_sft_llm_out
-```
 
 ### 模型转换 + LoRA 合并
 
@@ -602,25 +591,6 @@ ls -t "$merged_dir"/*.safetensors 2>/dev/null | head -3
 /tmp/xtuner_sft_llm_out_single/merged/model-xxx.safetensors
 /tmp/xtuner_sft_llm_out_single/merged/model-xxx.safetensors
 /tmp/xtuner_sft_llm_out_single/merged/model.safetensors.index.json
-```
-
-完整 5 epoch 训完再跑的 `pth_to_hf` + `merge` 流程（本地按需手动跑，跟 smoke 路径等价——去掉 5 epoch 训练这一步就是 smoke）：
-
-```shell
-# 创建存放 hf 格式参数的目录
-mkdir -p /tmp/xtuner_sft_llm_out/iter_720_hf
-
-# pth → hf
-xtuner convert pth_to_hf /tmp/xtuner_npu_llm_cfg.py \
-    /tmp/xtuner_sft_llm_out/iter_720.pth \
-    /tmp/xtuner_sft_llm_out/iter_720_hf
-
-# 合并 LoRA adapter 到 base
-mkdir -p /tmp/xtuner_sft_llm_out/merged
-xtuner convert merge ./Shanghai_AI_Laboratory/internlm2-chat-7b \
-    /tmp/xtuner_sft_llm_out/iter_720_hf \
-    /tmp/xtuner_sft_llm_out/merged \
-    --max-shard-size 2GB
 ```
 
 ### 与模型对话
@@ -715,25 +685,6 @@ Load LLM from ./Shanghai_AI_Laboratory/internlm2-chat-7b
 Load adapter from /tmp/xtuner_sft_llm_out_single/iter_xxx_hf
 xxx (InternLM2-7B + LoRA adapter 对中文颜色描述的回复；smoke 不验证具体色号)
 Log: Exit!
-```
-
-完整 5 epoch 训完再跑 chat 的命令（本地按需手动跑，跟 smoke 路径等价——去掉 5 epoch 训练这一步就是 smoke）：
-
-合并后的完整模型对话：
-
-```shell
-xtuner chat /tmp/xtuner_sft_llm_out/merged \
-    --prompt-template internlm2_chat \
-    --system-template colorist
-```
-
-也可以不合并、只跟 LLM + LoRA adapter 直接对话：
-
-```shell
-xtuner chat ./Shanghai_AI_Laboratory/internlm2-chat-7b \
-    --adapter /tmp/xtuner_sft_llm_out/iter_720_hf \
-    --prompt-template internlm2_chat \
-    --system-template colorist
 ```
 
 交互示例（训练前模型 → 训练后模型的输出变化）：

@@ -344,6 +344,46 @@ grep -n 'ownExecStream' opencv_contrib/modules/cannops/src/cann_call.cpp | head 
 
 预期：打印 `(g) ... patched`，grep 看到 4 行 `ownExecStream`。原逻辑对 NULL 流走 `aclrtSynchronizeStream(NULL)`（同样依赖 legacy 语义），新逻辑显式建流 + 同步 + 销毁，行为等价且不依赖 NULL stream 兼容性。这个补丁值得报给 opencv_contrib 上游。
 
+同样的 NULL 流坑还有第二处：AscendC kernel 的启动路径 `kernel_launch`（`cann_call.hpp` 里的 inline template，threshold 系列 kernel 走这里）直接把 NULL 传给 kernel 启动函数、NULL 时再调 `stream.waitForCompletion()` → `aclrtSynchronizeStream(NULL)`——CANN 9.1.0 下前者引发 AI Core 越界错误（kernel 没被正确提交）、后者报 `EH0012: The stream is not registered with any allocator`。补 patch (h)：
+
+```shell #test-setup
+python3 - <<'PY'
+import pathlib
+p = pathlib.Path('opencv_contrib/modules/cannops/include/opencv2/cann_call.hpp')
+s = p.read_text()
+old = '''    std::shared_ptr<uchar> tilingDevice =
+        mallocAndUpload(&tiling, sizeof(TILING_TYPE), stream, AscendMat::defaultAllocator());
+    aclrtStream rawStream = AscendStreamAccessor::getStream(stream);
+    CV_ACL_SAFE_CALL(kernel(1, rawStream, tilingDevice.get(), args...));
+    if (rawStream == nullptr)
+    {
+        stream.waitForCompletion();
+    }'''
+new = '''    std::shared_ptr<uchar> tilingDevice =
+        mallocAndUpload(&tiling, sizeof(TILING_TYPE), stream, AscendMat::defaultAllocator());
+    aclrtStream rawStream = AscendStreamAccessor::getStream(stream);
+    // CANN 9.1.0: AscendC kernel launch + aclrtSynchronizeStream both reject
+    // NULL (legacy default) streams via the allocator path. Create a real one.
+    aclrtStream execStream = rawStream;
+    bool ownExecStream = false;
+    if (execStream == nullptr)
+    {
+        CV_ACL_SAFE_CALL(aclrtCreateStream(&execStream));
+        ownExecStream = true;
+    }
+    CV_ACL_SAFE_CALL(kernel(1, execStream, tilingDevice.get(), args...));
+    CV_ACL_SAFE_CALL(aclrtSynchronizeStream(execStream));
+    if (ownExecStream)
+        CV_ACL_SAFE_CALL(aclrtDestroyStream(execStream));'''
+assert old in s, 'cann_call.hpp: kernel_launch body not found'
+p.write_text(s.replace(old, new, 1))
+print('(h) cann_call.hpp: kernel_launch NULL-stream fallback patched')
+PY
+grep -n 'ownExecStream' opencv_contrib/modules/cannops/include/opencv2/cann_call.hpp | head -4
+```
+
+预期：打印 `(h) ... patched`，grep 看到 4 行 `ownExecStream`。
+
 #### CMake 配置：开启 WITH_CANN
 
 mainline 5.0.0 里 CANN 后端的开关变量是 `WITH_CANN`（不是 `BUILD_CANN`，后者不存在），通过环境变量 `ASCEND_TOOLKIT_HOME` 指向 `ascend-toolkit` 安装根目录（也可用 `-DCANN_INSTALL_DIR=...` 直接覆盖）——这一步与 [OpenCV Huawei CANN Backend wiki](https://github.com/opencv/opencv/wiki/Huawei-CANN-Backend) 的 Step 3 一致：
@@ -426,10 +466,8 @@ set -o pipefail
 /usr/local/opencv-cann/bin/opencv_test_cannops --gtest_color=no > /tmp/cannops_gtest.log 2>&1; rc=$?
 tail -n 25 /tmp/cannops_gtest.log
 if [ $rc -ne 0 ]; then
-  echo '--- first failing test detail:'
-  grep -n -m 1 -A 12 '^\[ RUN      \]' /tmp/cannops_gtest.log | head -40
-  echo '--- error lines:'
-  grep -nE 'Failure|Unknown|error|Error|invalid|Invalid' /tmp/cannops_gtest.log | head -20
+  echo '--- failure assertion blocks:'
+  grep -A 10 'unknown file: Failure' /tmp/cannops_gtest.log | head -120
 fi
 exit $rc
 ```

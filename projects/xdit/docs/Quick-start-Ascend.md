@@ -268,24 +268,50 @@ p.print_help()
 
 ```shell #test id="xdit-infer-single" load="model_path>>model_path"
 export TORCH_NPU_USE_HCCL=1
-# sd3_example.py 硬编码 .to(f"cuda:{local_rank}") + torch.cuda.max_memory_allocated(...)。
-# torch_npu 2.9.0 只 monkey-patch torch.nn.functional / torch.nn，**不 patch torch.cuda**。
-# 因此 (a) torch.cuda._lazy_init 触发 "Torch not compiled with CUDA enabled" assert；
-# (b) .to("cuda:0") 走 torch/cuda 路径而不是 torch_npu 的 _module.py 覆盖。
-# 修法：sitecustomize.py 在 Python 启动期 import torch_npu 后再 patch torch.device，
-# 把 "cuda:0" → torch.device("npu", 0)。torch_npu 的 Module.to override (torch_npu/
-# utils/_module.py) 拿到 torch.device("npu", 0) 后正常 cast_weight + _apply。
+# sd3_example.py 硬编码 .to(f"cuda:{local_rank}") + torch.cuda.max_memory_allocated(...) +
+# torch.cuda.reset_peak_memory_stats() + torch.Generator(device="cuda")。torch_npu 2.9.0 只
+# monkey-patch torch.nn.functional / torch.nn，**不 patch torch.cuda**，所以：
+# (a) torch.cuda._lazy_init 触发 "Torch not compiled with CUDA enabled" assert；
+# (b) torch._C._nn._parse_to("cuda:0") 返回 torch.device("cuda", 0)，torch_npu Module.to
+#     override 透传这个 device 给 t.to(device, ...)，Tensor.to 走 torch/cuda 路径。
+# 不能直接 torch.device = wrapper：diffusers.model_loading_utils.py 用 PEP 604 写
+# 'dict[str, int | str | torch.device] | None'，torch.device 被换成普通函数后
+# int | str | torch.device 这个表达式 TypeError: unsupported operand | between
+# types.UnionType and function。
+# 修法：sitecustomize 改两个具体路径：
+#   (1) torch._C._nn._parse_to 入口字符串重写 "cuda:0" → "npu:0"，保留 torch.device 本身
+#       不动（type annotation 不破）；
+#   (2) torch.cuda.* 用 __getattr__ 代理到 torch.npu.*，max_memory_allocated /
+#       reset_peak_memory_stats 等直接 torch.cuda 调用走 npu 实现。
 # 注意：模块名必须是 sitecustomize（不是 _sitecustomize），Python 启动时 import site
 # 按 sys.path 顺序找 sitecustomize 模块。文件名前缀 _Python 不会自动 import。
 cat > /tmp/sitecustomize.py <<'PYEOF'
 import torch
 import torch_npu
-_orig_device_ctor = torch.device
-def _patched_device_ctor(device, *args, **kwargs):
-    if isinstance(device, str) and device.startswith('cuda'):
-        return _orig_device_ctor('npu' + device[4:], *args, **kwargs)
-    return _orig_device_ctor(device, *args, **kwargs)
-torch.device = _patched_device_ctor
+
+# (1) torch._C._nn._parse_to 入口字符串 "cuda:N" → "npu:N"
+_orig_parse_to = torch._C._nn._parse_to
+def _patched_parse_to(*args, **kwargs):
+    new_args = []
+    for a in args:
+        if isinstance(a, str) and a.startswith('cuda'):
+            new_args.append('npu' + a[4:])
+        elif isinstance(a, torch.device) and a.type == 'cuda':
+            new_args.append(torch.device('npu', a.index))
+        else:
+            new_args.append(a)
+    new_kwargs = {k: ('npu' + v[4:] if isinstance(v, str) and v.startswith('cuda')
+                      else torch.device('npu', v.index) if isinstance(v, torch.device) and v.type == 'cuda'
+                      else v) for k, v in kwargs.items()}
+    return _orig_parse_to(*new_args, **new_kwargs)
+torch._C._nn._parse_to = _patched_parse_to
+
+# (2) torch.cuda 代理到 torch.npu，max_memory_allocated / reset_peak_memory_stats 等
+# 直接 torch.cuda.X(...) 走 npu 实现。
+class _CudaProxy:
+    def __getattr__(self, name):
+        return getattr(torch.npu, name)
+torch.cuda = _CudaProxy()
 PYEOF
 export PYTHONPATH=/tmp:${PYTHONPATH:-}
 # CANN 的 torch_npu import 副作用会往 stdout 打 "torch.npu synchronize" 一行，
@@ -326,24 +352,50 @@ mkdir -p ./results
 # TORCH_NPU_USE_HCCL=1 让 torch.distributed.init_process_group(backend="hccl") 在 PR #566 之前的 1.x 版本上走通；2.9.0.post2 是默认 hccl，
 # 但保留 export 以防降级路径。这些 env 通过 torchrun 透传到子进程。
 export TORCH_NPU_USE_HCCL=1
-# sd3_example.py 硬编码 .to(f"cuda:{local_rank}") + torch.cuda.max_memory_allocated(...)。
-# torch_npu 2.9.0 只 monkey-patch torch.nn.functional / torch.nn，**不 patch torch.cuda**。
-# 因此 (a) torch.cuda._lazy_init 触发 "Torch not compiled with CUDA enabled" assert；
-# (b) .to("cuda:0") 走 torch/cuda 路径而不是 torch_npu 的 _module.py 覆盖。
-# 修法：sitecustomize.py 在 Python 启动期 import torch_npu 后再 patch torch.device，
-# 把 "cuda:0" → torch.device("npu", 0)。torch_npu 的 Module.to override (torch_npu/
-# utils/_module.py) 拿到 torch.device("npu", 0) 后正常 cast_weight + _apply。
+# sd3_example.py 硬编码 .to(f"cuda:{local_rank}") + torch.cuda.max_memory_allocated(...) +
+# torch.cuda.reset_peak_memory_stats() + torch.Generator(device="cuda")。torch_npu 2.9.0 只
+# monkey-patch torch.nn.functional / torch.nn，**不 patch torch.cuda**，所以：
+# (a) torch.cuda._lazy_init 触发 "Torch not compiled with CUDA enabled" assert；
+# (b) torch._C._nn._parse_to("cuda:0") 返回 torch.device("cuda", 0)，torch_npu Module.to
+#     override 透传这个 device 给 t.to(device, ...)，Tensor.to 走 torch/cuda 路径。
+# 不能直接 torch.device = wrapper：diffusers.model_loading_utils.py 用 PEP 604 写
+# 'dict[str, int | str | torch.device] | None'，torch.device 被换成普通函数后
+# int | str | torch.device 这个表达式 TypeError: unsupported operand | between
+# types.UnionType and function。
+# 修法：sitecustomize 改两个具体路径：
+#   (1) torch._C._nn._parse_to 入口字符串重写 "cuda:0" → "npu:0"，保留 torch.device 本身
+#       不动（type annotation 不破）；
+#   (2) torch.cuda.* 用 __getattr__ 代理到 torch.npu.*，max_memory_allocated /
+#       reset_peak_memory_stats 等直接 torch.cuda 调用走 npu 实现。
 # 注意：模块名必须是 sitecustomize（不是 _sitecustomize），Python 启动时 import site
 # 按 sys.path 顺序找 sitecustomize 模块。文件名前缀 _Python 不会自动 import。
 cat > /tmp/sitecustomize.py <<'PYEOF'
 import torch
 import torch_npu
-_orig_device_ctor = torch.device
-def _patched_device_ctor(device, *args, **kwargs):
-    if isinstance(device, str) and device.startswith('cuda'):
-        return _orig_device_ctor('npu' + device[4:], *args, **kwargs)
-    return _orig_device_ctor(device, *args, **kwargs)
-torch.device = _patched_device_ctor
+
+# (1) torch._C._nn._parse_to 入口字符串 "cuda:N" → "npu:N"
+_orig_parse_to = torch._C._nn._parse_to
+def _patched_parse_to(*args, **kwargs):
+    new_args = []
+    for a in args:
+        if isinstance(a, str) and a.startswith('cuda'):
+            new_args.append('npu' + a[4:])
+        elif isinstance(a, torch.device) and a.type == 'cuda':
+            new_args.append(torch.device('npu', a.index))
+        else:
+            new_args.append(a)
+    new_kwargs = {k: ('npu' + v[4:] if isinstance(v, str) and v.startswith('cuda')
+                      else torch.device('npu', v.index) if isinstance(v, torch.device) and v.type == 'cuda'
+                      else v) for k, v in kwargs.items()}
+    return _orig_parse_to(*new_args, **new_kwargs)
+torch._C._nn._parse_to = _patched_parse_to
+
+# (2) torch.cuda 代理到 torch.npu，max_memory_allocated / reset_peak_memory_stats 等
+# 直接 torch.cuda.X(...) 走 npu 实现。
+class _CudaProxy:
+    def __getattr__(self, name):
+        return getattr(torch.npu, name)
+torch.cuda = _CudaProxy()
 PYEOF
 export PYTHONPATH=/tmp:${PYTHONPATH:-}
 ```

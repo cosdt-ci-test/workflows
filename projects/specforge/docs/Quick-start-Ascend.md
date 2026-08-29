@@ -310,24 +310,116 @@ if [[ -f scripts/apply_sglang_spec_capture_patch.sh ]]; then
 else
     echo "smoke: WARNING - scripts/apply_sglang_spec_capture_patch.sh missing; assuming already patched"
 fi
-ASCEND_PATCH=$(ls patches/sglang/*/spec-capture-ascend-mount.patch 2>/dev/null | head -1 || true)
-if [[ -n "$ASCEND_PATCH" ]]; then
-    # Resolve site-packages path WITHOUT `import sglang`: sglang.__init__
-    # pulls in sglang.lang → IPython → traitlets, and traitlets is missing
-    # (sglang was --no-deps installed + traitlets isn't in our manual deps
-    # list). importlib.util.find_spec() only locates the spec without
-    # executing the module body.
-    SGLANG_DIR=$(python -c "import importlib.util, os; print(os.path.dirname(os.path.dirname(importlib.util.find_spec('sglang').origin)))")
-    echo "smoke: applying ascend companion patch ($ASCEND_PATCH)"
-    # Use BSD `patch -p2` (matches SpecForge's own apply_sglang_spec_capture_patch.sh),
-    # not `git apply`: the sglang wheel install has no .git/ in site-packages,
-    # so git apply would fail with "not a git repository". -p2 strips a/ + python/
-    # from the diff path, landing at $SGLANG_DIR/sglang/srt/spec_capture_sink.py.
-    pushd "$SGLANG_DIR" >/dev/null
-    patch -p2 --batch -N < "$OLDPWD/$ASCEND_PATCH" 2>&1 || echo "smoke: ascend patch already applied (ok)"
-    popd >/dev/null
+# spec-capture-ascend-mount.patch（仓库自带 hunk1/hunk2 @@ line number 是写给 spec-capture.patch
+# 在 a8c0993 之前的版本（彼时 setup() 没 rdma_devices/master_server_addr 两行），CI 装的 spec-capture.patch
+# 已经是 a8c0993 之后版本 → 实际 spec_capture_sink.py 在 patch 锚点处多 6 行，BSD patch hunk2 直接
+# `malformed patch at line 41`（line 100 → 实际 106，line 113 → 实际 119；用 --fuzz=10 也救不回来，
+# BSD patch 在 @@ 处直接报 malformation 而不是 fallback 到 fuzzy match）。
+#
+# 改用 Python 字符串替换做相同改造：锚点字符串都用 spec-capture.patch 引入的多行 unique 子串，
+# 不依赖行号；上游 spec-capture.patch 改 setup() 字段时不会让我们失锚。
+# 用 `importlib.util.find_spec` 而不是 `import sglang`：sglang.__init__ 会拉 sglang.lang → IPython
+# → traitlets；traitlets 不在 sglang 的 requires_dist 里、IPython 是 --no-deps 后单独装，这条链
+# 上某环断就会 import 失败。find_spec 只查 module spec 不执行 __init__。
+SGLANG_DIR=$(python -c "import importlib.util, os; print(os.path.dirname(os.path.dirname(importlib.util.find_spec('sglang').origin)))")
+SINK_FILE="$SGLANG_DIR/sglang/srt/spec_capture_sink.py"
+if [[ -f "$SINK_FILE" ]] && ! grep -q 'segment_to_mount' "$SINK_FILE"; then
+    echo "smoke: applying ascend companion (inline python; upstream patch's hunk2 is malformed against current spec-capture.patch)"
+    python3 - "$SINK_FILE" <<'PY'
+import sys
+path = sys.argv[1]
+with open(path) as f:
+    src = f.read()
+
+# 1. 在 `store = MooncakeDistributedStore()` 之后、`rc = store.setup(` 之前，
+#    插入 ascend-aware 的 segment / buffer / protocol 变量 + Ascend 检测。
+old_anchor = (
+    '            store = MooncakeDistributedStore()\n'
+    '            rc = store.setup(\n'
+)
+new_anchor = (
+    '            store = MooncakeDistributedStore()\n'
+    '            global_segment_size = int(\n'
+    '                os.environ.get("MOONCAKE_GLOBAL_SEGMENT_SIZE", 1 << 30)\n'
+    '            )\n'
+    '            local_buffer_size = int(\n'
+    '                os.environ.get("MOONCAKE_LOCAL_BUFFER_SIZE", 1 << 30)\n'
+    '            )\n'
+    '            protocol = os.environ.get("MOONCAKE_PROTOCOL", "tcp")\n'
+    '            # Ascend Mooncake rejects the wildcard location ("location:* is\n'
+    '            # not supported"); skip it in setup() and mount with location="cpu".\n'
+    '            ascend_host = bool(os.environ.get("ASCEND_RT_VISIBLE_DEVICES"))\n'
+    '            segment_to_mount = global_segment_size if ascend_host else 0\n'
+    '            if ascend_host:\n'
+    '                global_segment_size = 0\n'
+    '                local_buffer_size = 0\n'
+    '            rc = store.setup(\n'
+)
+assert old_anchor in src, "store.setup anchor not found (spec-capture.patch shape changed?)"
+src = src.replace(old_anchor, new_anchor, 1)
+
+# 2. setup() 里把三个 `int(os.environ.get(...))` / `os.environ.get(...)` 形参替换成上面定义的变量。
+old_args = (
+    '                global_segment_size=int(\n'
+    '                    os.environ.get("MOONCAKE_GLOBAL_SEGMENT_SIZE", 1 << 30)\n'
+    '                ),\n'
+    '                local_buffer_size=int(\n'
+    '                    os.environ.get("MOONCAKE_LOCAL_BUFFER_SIZE", 1 << 30)\n'
+    '                ),\n'
+    '                protocol=os.environ.get("MOONCAKE_PROTOCOL", "tcp"),\n'
+)
+new_args = (
+    '                global_segment_size=global_segment_size,\n'
+    '                local_buffer_size=local_buffer_size,\n'
+    '                protocol=protocol,\n'
+)
+assert old_args in src, "setup() args anchor not found (spec-capture.patch shape changed?)"
+src = src.replace(old_args, new_args, 1)
+
+# 3. setup() 抛错之后插 mount_segment 调用（spec_capture_sink.py 里 if rc is not None 这条分支的紧后）。
+old_post_setup = (
+    '                raise RuntimeError(f"spec-capture mooncake setup failed (status {rc})")\n'
+)
+new_post_setup = (
+    '                raise RuntimeError(f"spec-capture mooncake setup failed (status {rc})")\n'
+    '            if segment_to_mount:\n'
+    '                mount = getattr(store, "allocate_and_mount_segment", None)\n'
+    '                if mount is None:\n'
+    '                    raise RuntimeError(\n'
+    '                        "Mooncake build on this Ascend host cannot register a "\n'
+    '                        "wildcard segment and has no allocate_and_mount_segment; "\n'
+    '                        "upgrade mooncake-transfer-engine"\n'
+    '                    )\n'
+    '                result = mount(segment_to_mount, protocol, "cpu")\n'
+    '                mrc = result.get("ret", -1) if isinstance(result, dict) else result\n'
+    '                if mrc is not None and int(mrc) != 0:\n'
+    '                    raise RuntimeError(\n'
+    '                        f"spec-capture mooncake mount segment failed (status {mrc})"\n'
+    '                    )\n'
+    '                logger.info(\n'
+    '                    "spec-capture mooncake segment mounted with location=cpu "\n'
+    '                    "(%d bytes)",\n'
+    '                    segment_to_mount,\n'
+    '                )\n'
+)
+assert old_post_setup in src, "raise RuntimeError after setup() not found (spec-capture.patch shape changed?)"
+src = src.replace(old_post_setup, new_post_setup, 1)
+
+with open(path, 'w') as f:
+    f.write(src)
+print("smoke: ascend companion edits applied (3 anchors)")
+PY
 fi
 popd >/dev/null
+
+# mooncake-transfer-engine v0.3.13 PyPI wheel 把 libasio/libgflags/libglog/libjsoncpp/liburing/
+# libxxhash/libyaml-cpp/libzstd 八个库改名后打进 mooncake_transfer_engine.libs/，靠
+# RPATH `$ORIGIN/../mooncake_transfer_engine.libs` 让 mooncake_master 找到；
+# 但 libcurl4 / libibverbs1 / libnuma1 没打进 wheel，要走 apt。
+# run 33259780290 直接跑 `mooncake_master` 报
+# `error while loading shared libraries: libibverbs.so.1: cannot open shared object file`。
+apt-get update -qq && apt-get install -y --no-install-recommends \
+    libcurl4 libibverbs1 libnuma1
 
 # ---- 4. Start mooncake_master ----
 echo "smoke: starting mooncake_master"

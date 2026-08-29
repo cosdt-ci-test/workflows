@@ -617,6 +617,15 @@ class Linear8bitLt(nn.Linear):
     def __init__(self, in_features, out_features, bias=True,
                  has_fp16_weights=True, threshold=6.0):
         super().__init__(in_features, out_features, bias=bias)
+
+# Params4bit 是 bnb 的 4-bit Parameter 子类（继承 torch.nn.Parameter），被
+# `transformers.quantizers.quantizer_bnb_4bit.check_quantized_param()` 的
+# `isinstance(module._parameters.get(...), bnb.nn.Params4bit)` 检查。线性 weight
+# 默认 torch.nn.Parameter，check 返 False 走 non-quantized path；但 isinstance 调
+# 起来必须 getattr 不抛 AttributeError。Stub 一个空壳类即可，5 iter smoke 不真做
+# 4-bit weight packing，Params4bit 不会被实例化。
+class Params4bit(nn.Parameter):
+    pass
 PYEOF
 # bnb.optim：mmengine.builder.register_bitsandbytes_optimizers() line 153 写
 # `bnb.optim.AdamW8bit` / `bnb.optim.PagedAdamW8bit` 等类名做 mapping。这些类需要是

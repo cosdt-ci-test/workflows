@@ -64,13 +64,16 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
            SqueezeNet ONNX forward on NPU.
     """
 
-    # 90 min per command: long enough for cold-cache git clone (~250 MB
-    # sparse) + cmake configure (~3 min on cold DNN samples cache) +
-    # `make -j$(nproc)` (~20 min on 32 cores) + `make install` + a few
-    # CLI smokes + SqueezeNet ACL graph build (~30 min cold AOE cache).
-    # 90 min leaves headroom for a full clean build without letting a
-    # hung run sit through the engine default timeout.
-    DEFAULT_COMMAND_TIMEOUT = 5400
+    # 150 min per command: `make -j2` is the long pole — Debug -O0 at
+    # parallelism 2 on the a2-4 runner compiles the full module set
+    # (main modules + ~35 contrib modules + python bindings) in
+    # ~90-120 min measured (CI 33233738107: 58% of targets at the
+    # 70-min mark when it died on the matmul source error). 90 min
+    # cut it too close / timed out, so 9000s it is — still under the
+    # engine's 240-min job budget with ~50-60 min of headroom left
+    # for install + cannops gtests + quickstart + first ACL graph
+    # build (~30 min cold AOE cache).
+    DEFAULT_COMMAND_TIMEOUT = 9000
 
     USER_AGENT = 'cosdt-ci-test/quick-start'  # monitored source is the fork under cosdt-ci-test org
     ERROR_MARKERS = (

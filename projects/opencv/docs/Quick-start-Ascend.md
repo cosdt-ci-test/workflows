@@ -1,6 +1,6 @@
 # Quick Start (Ascend NPU)
 
-在单卡昇腾 NPU 上完成 OpenCV 安装与 CANN (Huawei Ascend) 后端 DNN 推理：先用 pip 装官方 wheel 走完官方 [quickstart 流程](https://opencv-opencv.mintlify.app/quickstart) 的 read/write/draw/color/resize 五类基础 API；再从源码构建带 `WITH_CANN=ON` 的 OpenCV（mainline 5.0.0，opencv_contrib 提供 `cannops` / `cannarithm` 模块；参考 [OpenCV Huawei CANN Backend wiki](https://github.com/opencv/opencv/wiki/Huawei-CANN-Backend) 的模块对照，镜像统一到 CANN 9.1.0 体系），用 [SqueezeNet ONNX](https://opencv-opencv.mintlify.app/installation#python) 跑一次 NPU forward。
+在单卡昇腾 NPU 上完成 OpenCV 安装与 CANN (Huawei Ascend) 后端 DNN 推理：先用 pip 装官方 wheel 走完官方 [quickstart 流程](https://opencv-opencv.mintlify.app/quickstart) 的 read/write/draw/color/resize 五类基础 API；再从源码构建带 `WITH_CANN=ON` 的 OpenCV（mainline 5.0.0，opencv_contrib 提供 `cannops` 模块；参考 [OpenCV Huawei CANN Backend wiki](https://github.com/opencv/opencv/wiki/Huawei-CANN-Backend) 的模块对照，镜像统一到 CANN 9.1.0 体系），用 [SqueezeNet ONNX](https://opencv-opencv.mintlify.app/installation#python) 跑一次 NPU forward。
 
 ## 前置条件
 
@@ -223,6 +223,8 @@ cmake -DCMAKE_BUILD_TYPE=Debug \
       -DBUILD_opencv_world=OFF \
       -DBUILD_EXAMPLES=OFF \
       -DBUILD_TESTS=ON \
+      -DOPENCV_BUILD_TEST_MODULES_LIST=cannops \
+      -DINSTALL_TESTS=ON \
       -DBUILD_PERF_TESTS=OFF \
       -DBUILD_opencv_python3=ON \
       -DBUILD_opencv_python_bindings_generator=ON \
@@ -240,7 +242,7 @@ cmake -DCMAKE_BUILD_TYPE=Debug \
 ...
 ```
 
-预期：`CANN: ... YES` 这一行出现在 cmake summary 段——这正是 wiki 上 Step 4（Verification）所要求的"先看 CMake 报告"步骤。`OPENCV_DOWNLOAD_MIRROR_ID=gitcode` 让主仓 cmake configure 阶段拉 ADE / IPPICV / TBB / xfeatures2d 数据 / 字体 / wechat_qrcode 模型时走 gitcode.net 镜像（中国大陆可达）。
+预期：`CANN: ... YES` 这一行出现在 cmake summary 段——这正是 wiki 上 Step 4（Verification）所要求的"先看 CMake 报告"步骤。`OPENCV_DOWNLOAD_MIRROR_ID=gitcode` 让主仓 cmake configure 阶段拉 ADE / IPPICV / TBB / xfeatures2d 数据 / 字体 / wechat_qrcode 模型时走 gitcode.net 镜像（中国大陆可达）。两个测试相关开关：`OPENCV_BUILD_TEST_MODULES_LIST=cannops` 让 `BUILD_TESTS=ON` 只构建 cannops 一个模块的测试二进制（否则全仓 ~15 个模块、每个几十个 test TU 的 accuracy tests 都会进默认构建目标，`make` 多花 ~40 分钟）；`INSTALL_TESTS=ON` 把测试二进制装进 `CMAKE_INSTALL_PREFIX/bin`（OpenCV 默认**不**安装 opencv_test_*，不打开这个开关 `/usr/local/opencv-cann/bin/opencv_test_cannops` 不会存在）。
 
 #### 编译
 
@@ -249,7 +251,7 @@ cd opencv/build
 make -j2
 ```
 
-> 编译时间受 CPU 核数与是否启用 world 影响：单核 `make` 大约 1.5 小时；8 核并行约 20 分钟。CI runner 内存极紧，dnn 模板大 TU（matmul / dft / reshape2 / slice2 / pad2 / padding / resize / reduce / recurrent2 / permute / group_norm / nary_eltwise / if / shape / split2 / transpose layer）`cc1plus` 在 `-O3` 下会被 OOM kill，所以 cmake 走 `Debug`（`-O0 -g`）砍优化内存、再 `-j2` 限制并行度（~30–45 分钟）。
+> 编译时间受 CPU 核数与是否启用 world 影响：单核 `make` 大约 1.5 小时；8 核并行约 20 分钟。CI runner 内存极紧，dnn 模板大 TU（matmul / dft / reshape2 / slice2 / pad2 / padding / resize / reduce / recurrent2 / permute / group_norm / nary_eltwise / if / shape / split2 / transpose layer）`cc1plus` 在 `-O3` 下会被 OOM kill，所以 cmake 走 `Debug`（`-O0 -g`）砍优化内存、再 `-j2` 限制并行度（~90–120 分钟；`OPENCV_BUILD_TEST_MODULES_LIST=cannops` 已把其余模块的 accuracy tests 从默认构建目标剔除）。
 
 #### 安装到 /usr/local/opencv-cann
 
@@ -279,7 +281,7 @@ CANNxxx...
 `opencv_test_cannops` 内置了 CANN 后端的小型模型测例，会调用 ACL 把模型图下沉到 NPU：
 
 ```shell #test id="opencv-cann-run-tests"
-/usr/local/opencv-cann/bin/opencv_test_cannops --gtest_color=no --gtest_brief=1 2>&1 | tail -n 20
+set -o pipefail; /usr/local/opencv-cann/bin/opencv_test_cannops --gtest_color=no --gtest_brief=1 2>&1 | tail -n 20
 ```
 
 ```shell #test-result id="opencv-cann-run-tests" fuzzy='...' fuzzy='xxx'
@@ -446,10 +448,12 @@ import cv2
 # SqueezeNet 1.0 ONNX from onnx/models — stable raw URL on github.
 # ~5 MB; known to be supported by OpenCV's CANN backend
 # (the standard sample in the OpenCV Huawei-CANN-Backend wiki).
+# opset 12 build; the ancient squeezenet1.0-1.onnx was removed
+# upstream (404), -12 is the current canonical file.
 MODEL_URL = ('https://github.com/onnx/models/raw/main/'
              'validated/vision/classification/squeezenet/'
-             'model/squeezenet1.0-1.onnx')
-MODEL_PATH = '/tmp/squeezenet1.0-1.onnx'
+             'model/squeezenet1.0-12.onnx')
+MODEL_PATH = '/tmp/squeezenet1.0-12.onnx'
 
 if not os.path.exists(MODEL_PATH):
     urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
@@ -502,5 +506,5 @@ top class score: xxx
   ```bash
   rm -rf opencv opencv_contrib /usr/local/opencv-cann \
          /tmp/opencv_quickstart.png /tmp/opencv_draw.png \
-         /tmp/opencv_video.avi /tmp/squeezenet1.0-1.onnx
+         /tmp/opencv_video.avi /tmp/squeezenet1.0-12.onnx
   ```

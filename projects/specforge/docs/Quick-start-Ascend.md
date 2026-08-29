@@ -258,11 +258,21 @@ MOONCAKE_HTTP_PORT="${SPECFORGE_MOONCAKE_HTTP_PORT:-35880}"
 SGLANG_HEALTH_TIMEOUT="${SPECFORGE_SGLANG_HEALTH_TIMEOUT:-600}"  # 10 min for first compile
 
 # ---- Cleanup trap ----
+# pkill -f matches against /proc/<pid>/cmdline; the bash script's own
+# cmdline IS the entire script body (it's run as `bash -c "<script>"`),
+# so unanchored patterns like "sglang.launch_server" / "mooncake_master"
+# / "specforge train" all match bash itself and `pkill -9` SIGKILLs the
+# smoke runner mid-script (rc=-9 at the first pkill — that's exactly
+# what killed run 33245161460 inside the stale-process sweep, before any
+# actual smoke work). Anchor the regexes to ^cmdline: real processes
+# start with `python -m sglang.launch_server` / `mooncake_master` /
+# `specforge train`, while `bash -c "<script>"` starts with `bash` so
+# none of the anchored patterns match the parent shell.
 cleanup() {
     echo "smoke: cleanup"
-    pkill -9 -f sglang.launch_server 2>/dev/null || true
-    pkill -9 -f mooncake_master 2>/dev/null || true
-    pkill -9 -f "specforge train" 2>/dev/null || true
+    pkill -9 -f '^python -m sglang\.launch_server' 2>/dev/null || true
+    pkill -9 -f '^mooncake_master' 2>/dev/null || true
+    pkill -9 -f '^specforge train' 2>/dev/null || true
     rm -rf "$SPECFORGE_ROOT/outputs/qwen3.5-4b-dflash-npu-online" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM

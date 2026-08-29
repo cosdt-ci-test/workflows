@@ -1,0 +1,103 @@
+# lightx2v quick start guard - project thin trigger.
+#
+# Calls the common engine .github/workflows/quick-start-template.yml;
+# this file only declares what varies per project: schedule,
+# concurrency, runner, container image + options, upstream repo,
+# monitored doc, and the test entry command. The guard loop, cache
+# I/O, state relay and publishing all live in the engine. See the
+# engine's `workflow_call.inputs` block for the full input contract.
+#
+# Cache keys (monitor-state-lightx2v-*) and artifact names are derived
+# from project=lightx2v, not from the workflow name.
+#
+# No device mounts: the self-hosted NPU runner (`linux-aarch64-a2-2`,
+# 2-card) auto-passes `/dev/davinci*` into the container via the cluster
+# device-plugin, so container_options stays empty for device binds.
+# The doc's I2V smoke config has been adapted to single-card 32 GB
+# (720P -> 480P, t5/vae cpu_offload on, `parallel` and
+# `video_frame_interpolation` dropped), so only one card is touched;
+# the second card sits idle. This matches the single-card convention
+# used by torchtune / slime / tensordict / pytorch.vision / accelerate /
+# ray / torchtitan / transformers / diffusers / mooncake.
+#
+# Two bind mounts beyond the defaults:
+#   1. modelscope cache -> /root/.cache/modelscope (default location
+#      modelscope writes to when --local_dir is omitted; some helper
+#      commands like `snapshot_download(..., allow_patterns=...)`
+#      bypass --local_dir and land here). Reused across runs.
+#   2. PROJECT_ROOT/models (default /root/lightx2v-test/models on CI,
+#      set by tests/test_quick_start_ascend.py prepare_environment) ->
+#      /data/ci-cache/lightx2v-models. This is where the doc's
+#      `modelscope download --local_dir "$PROJECT_ROOT/models/..."`
+#      commands write. Bind-mount covers persistence + the cache
+#      invalidation contract (purge_corrupt_models walks this dir).
+#   3. HF cache -> /root/.cache/huggingface, for the doc's optional
+#      T2V fallback `huggingface-cli download lightx2v/Wan2.2-Distill-Models`
+#      when ModelScope doesn't carry the T2V distill weights.
+
+name: lightx2v-quick-start
+
+concurrency:
+  # format() is load-bearing: a '||' between 'manual-' and
+  # github.run_id would short-circuit on the truthy literal and
+  # every dispatch would share one 'manual-' group.
+  group: ${{ github.event_name == 'schedule' && 'lightx2v-quick-start-schedule' || format('manual-{0}', github.run_id) }}
+  # cancel-in-progress: false because (1) a schedule run cancelled
+  # mid-way loses its outcome writeback - the outcome is what makes
+  # the retry mechanism work, and the 'if: always()' guard isn't
+  # enough when the container is being torn down; (2) dispatch runs
+  # already live in unique groups so there's nothing to cancel.
+  cancel-in-progress: false
+
+on:
+  schedule:
+    # Run every 6 hours: '45 */6 * * *' fires at minute 45 of every
+    # 6th hour (00:45, 06:45, 12:45, 18:45). Cadence is loose enough
+    # for an upstream that releases every few months, but tight
+    # enough that doc fixes propagate within a day.
+    - cron: '45 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lightx2v-quick-start:
+    uses: ./.github/workflows/quick-start-template.yml
+    with:
+      # Namespaces cache keys (monitor-state-lightx2v-*), artifacts
+      # (lightx2v-quick-start-<run_id>) and the test working dir
+      # (workflows/projects/lightx2v).
+      project: lightx2v
+      # Self-hosted NPU runner for the test job only; the engine pins
+      # the cache I/O jobs (restore-cache / publish-and-persist) to
+      # GitHub-hosted ubuntu-latest. 2-card label (linux-aarch64-a2-2)
+      # is fine even though the doc is single-card adapted - the
+      # second card sits idle (device-plugin still passes both
+      # /dev/davinci* into the container; ASCEND_RT_VISIBLE_DEVICES=0
+      # in the smoke step picks card 0 only).
+      test_runner: '["linux-aarch64-a2-2"]'
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+      container_options: >-
+        --volume=/data/ci-cache/modelscope/lightx2v:/root/.cache/modelscope
+        --volume=/data/ci-cache/huggingface/lightx2v:/root/.cache/huggingface
+        --volume=/data/ci-cache/lightx2v-models:/root/lightx2v-test/models
+      # 4h ceiling: cold run pulls 28 GB base + 7 GB distill + 10 GB
+      # Lightning at cluster network speed (faster than the ~8 MB/s
+      # we measured on coder, but ~1.5h worst-case) + I2V 4-step
+      # smoke on a single 910B4 card (4-step distilled 14B int8 at
+      # 480P / 81 frames typically runs in 1-3 min). 4h covers
+      # cache-cold downloads + several retries on dependency flakes.
+      timeout_minutes: 240
+      upstream_repo: ModelTC/LightX2V
+      # Same URL the legacy pattern monitors: doc-hash state carries
+      # over via the shared monitor-state-lightx2v- cache prefix.
+      doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/lightx2v/docs/Quick-start-Ascend.md
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/lightx2v/docs/Quick-start-Ascend.md
+      # cwd is workflows/projects/lightx2v; env contract (MONITORED_DOC_URL /
+      # UPSTREAM_REF / NPU_READY) is injected by the engine. All project
+      # env prep (CANN source, CUDA exclusion list, uv install, torch
+      # stack probe, PROJECT_ROOT=/root/lightx2v-test export, modelscope
+      # cache resolve + safetensors purge) lives in the test subclass's
+      # prepare_environment hook.
+      test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1

@@ -380,7 +380,7 @@ with open(path) as f:
 #   目录里，xtuner.tools.train 进 transformers.hub.cached_file 报 OSError path_or_model_id）
 text, n = re.subn(
     r'pretrained_model_name_or_path = \"internlm/internlm(?:2|-chat)-\d+b\"',
-    f"pretrained_model_name_or_path = {weights_dir!r}",
+    f\"pretrained_model_name_or_path = {weights_dir!r}\",
     text,
 )
 assert n == 1, f'pretrained_model_name_or_path patch applied {n} times (expected 1)'

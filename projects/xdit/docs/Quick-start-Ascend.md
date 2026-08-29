@@ -308,12 +308,10 @@ text = text.replace('torch.cuda', 'torch.npu')
 # 跟 CUDA 无关。
 if 'import sys as _sys' not in text[:1000]:
     bootstrap = (
-        'import sys as _sys, os as _os\n'
-        '_DBG = True  # 临时打开 debug，下一轮修好 bug 改回 False\n'
+        'import sys as _sys\n'
         'class _XditEnvPatcher:\n'
         '    def find_spec(self, name, path, target=None):\n'
         '        if name != "xfuser.envs" or "xfuser.envs" in _sys.modules:\n'
-        '            if _DBG: print(f"[xdit-patcher] find_spec({name}) -> None (cache hit or not target)")\n'
         '            return None\n'
         '        # 关键：递归调用 find_spec 会再走一遍 sys.meta_path，包含我们自己。\n'
         '        # 先把自己临时拔掉，importlib 才会去走真正的 SourceFileLoader 路径。\n'
@@ -323,7 +321,6 @@ if 'import sys as _sys' not in text[:1000]:
         '            _spec = _ilu.find_spec(name)\n'
         '        finally:\n'
         '            _sys.meta_path.insert(0, self)\n'
-        '        if _DBG: print(f"[xdit-patcher] find_spec({name}) -> {_spec}")\n'
         '        return _spec\n'
         '    def create_module(self, spec):\n'
         '        return None\n'
@@ -335,18 +332,14 @@ if 'import sys as _sys' not in text[:1000]:
         '            _spec.loader.exec_module(module)\n'
         '        finally:\n'
         '            _sys.meta_path.insert(0, self)\n'
-        '        if _DBG: print(f"[xdit-patcher] exec_module({module.__name__}) done; has_long_ctx_attn(before)={module.PACKAGES_CHECKER.packages_info.get(\\"has_long_ctx_attn\\")}")\n'
         '        try:\n'
         '            import yunchang as _yc\n'
         '            module.PACKAGES_CHECKER.packages_info["has_long_ctx_attn"] = True\n'
         '            from xfuser.envs import PackagesEnvChecker as _PC\n'
         '            _PC.check_long_ctx_attn = lambda self: True\n'
-        '            if _DBG: print(f"[xdit-patcher] patched has_long_ctx_attn=True")\n'
-        '        except ImportError as _e:\n'
-        '            if _DBG: print(f"[xdit-patcher] yunchang import failed: {_e}")\n'
+        '        except ImportError:\n'
         '            pass\n'
         '_sys.meta_path.insert(0, _XditEnvPatcher())\n'
-        'if _DBG: print("[xdit-patcher] installed")\n'
     )
     text = bootstrap + text
 open(dst, 'w').write(text)
@@ -423,12 +416,10 @@ text = text.replace('torch.cuda', 'torch.npu')
 # 跟 CUDA 无关。
 if 'import sys as _sys' not in text[:1000]:
     bootstrap = (
-        'import sys as _sys, os as _os\n'
-        '_DBG = True  # 临时打开 debug，下一轮修好 bug 改回 False\n'
+        'import sys as _sys\n'
         'class _XditEnvPatcher:\n'
         '    def find_spec(self, name, path, target=None):\n'
         '        if name != "xfuser.envs" or "xfuser.envs" in _sys.modules:\n'
-        '            if _DBG: print(f"[xdit-patcher] find_spec({name}) -> None (cache hit or not target)")\n'
         '            return None\n'
         '        # 关键：递归调用 find_spec 会再走一遍 sys.meta_path，包含我们自己。\n'
         '        # 先把自己临时拔掉，importlib 才会去走真正的 SourceFileLoader 路径。\n'
@@ -438,7 +429,6 @@ if 'import sys as _sys' not in text[:1000]:
         '            _spec = _ilu.find_spec(name)\n'
         '        finally:\n'
         '            _sys.meta_path.insert(0, self)\n'
-        '        if _DBG: print(f"[xdit-patcher] find_spec({name}) -> {_spec}")\n'
         '        return _spec\n'
         '    def create_module(self, spec):\n'
         '        return None\n'
@@ -450,18 +440,14 @@ if 'import sys as _sys' not in text[:1000]:
         '            _spec.loader.exec_module(module)\n'
         '        finally:\n'
         '            _sys.meta_path.insert(0, self)\n'
-        '        if _DBG: print(f"[xdit-patcher] exec_module({module.__name__}) done; has_long_ctx_attn(before)={module.PACKAGES_CHECKER.packages_info.get(\\"has_long_ctx_attn\\")}")\n'
         '        try:\n'
         '            import yunchang as _yc\n'
         '            module.PACKAGES_CHECKER.packages_info["has_long_ctx_attn"] = True\n'
         '            from xfuser.envs import PackagesEnvChecker as _PC\n'
         '            _PC.check_long_ctx_attn = lambda self: True\n'
-        '            if _DBG: print(f"[xdit-patcher] patched has_long_ctx_attn=True")\n'
-        '        except ImportError as _e:\n'
-        '            if _DBG: print(f"[xdit-patcher] yunchang import failed: {_e}")\n'
+        '        except ImportError:\n'
         '            pass\n'
         '_sys.meta_path.insert(0, _XditEnvPatcher())\n'
-        'if _DBG: print("[xdit-patcher] installed")\n'
     )
     text = bootstrap + text
 open(dst, 'w').write(text)

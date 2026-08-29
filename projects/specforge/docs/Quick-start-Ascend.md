@@ -64,14 +64,31 @@ Python 3.12.xxx
 
 ```shell #test-setup
 uv pip install -f https://mirrors.aliyun.com/pytorch-wheels/cpu torch==2.11.0
-uv pip install --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi torch_npu==2.11.0
+uv pip install --extra-index-url https://mirrors.aliyun.com/pypi/simple torch_npu==2.11.0
 # specforge 的依赖（无 CUDA 哨兵，正常装）
 uv pip install transformers==5.8.1 datasets tqdm accelerate huggingface-hub numpy openai-harmony pydantic psutil pyyaml safetensors requests tensorboard typing-extensions wandb yunchang fastapi uvicorn aiohttp pyzmq python-multipart
 # sglang 0.5.14 上游 requires_dist 里非 CUDA-only 项；里头 quack-kernels 自己带 nvidia-cutlass-dsl<0 哨兵，
 # torch / numpy / pydantic / 等基础 dep 已经装好，整批 --no-deps 装
-uv pip install --no-deps orjson anthropic apache-tvm-ffi av blobfile build compressed-tensors decord2 distro easydict einops gguf interegular IPython kernels llguidance mistral_common msgspec ninja openai outlines packaging partial_json_parser pillow prometheus-client py-spy pybase64 quack-kernels scipy sentencepiece setproctitle sgl-deep-gemm starlette triton torchvision
+uv pip install --no-deps orjson anthropic apache-tvm-ffi av blobfile build compressed-tensors decord2 distro easydict einops gguf interegular IPython kernels llguidance mistral_common msgspec ninja openai outlines packaging partial_json_parser pillow prometheus-client py-spy pybase64 quack-kernels scipy sentencepiece setproctitle sgl-deep-gemm starlette triton
 # sglang wheel 本身 --no-deps 装（cluster 镜像把它的 Requires-Dist cuda-python 改成 <0 哨兵，绕开解析）
 uv pip install --no-deps --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi sglang==0.5.14
+# torchvision stub：sglang srt/utils/common.py line 92 `from torchvision.io import decode_jpeg` 在 import sglang 时硬依赖，
+# 但 torchvision 顶层 __init__.py 跑 @torch.library.register_fake("torchvision::nms") 时会因 CPU torch 2.11.0 没注册该 op 而抛
+# RuntimeError: operator torchvision::nms does not exist。Qwen3.5-4B 文本 smoke 不走 image path，stub 出 torchvision + torchvision.io
+# 让 import 通过；decode_jpeg 不会被调用。
+python - <<'PY'
+import os, site
+sp = site.getsitepackages()[0]
+pkg = os.path.join(sp, 'torchvision')
+io = os.path.join(pkg, 'io')
+os.makedirs(io, exist_ok=True)
+open(os.path.join(pkg, '__init__.py'), 'w').close()
+open(os.path.join(io, '__init__.py'), 'w').write(
+    'def decode_jpeg(*args, **kwargs):\n'
+    '    raise NotImplementedError("torchvision stub: not used in this text-only smoke")\n'
+)
+print(f'torchvision stub installed at {pkg}')
+PY
 ```
 
 检查 torch / torch_npu / sglang 是否装好且 NPU 设备可用：

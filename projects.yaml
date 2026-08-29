@@ -17,6 +17,15 @@ projects:
     workflows:
       examples: .github/workflows/ms-swift-examples.yml
       quick_start: .github/workflows/ms-swift-quick-start.yml
+  - name: flash-linear-attention
+    category: 训练加速
+    support_level: 基础支持
+    upstream_repo: fla-org/flash-linear-attention
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/flash-linear-attention
+    workflows:
+      quick_start: .github/workflows/flash-linear-attention-quick-start.yml
   - name: llama.cpp
     category: 推理加速
     support_level: 基础支持

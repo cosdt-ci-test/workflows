@@ -99,7 +99,7 @@ python -c "import torch, torch_npu; from importlib.metadata import version; prin
 
 输出结果如下：
 
-```shell #test-result id="check-torch"
+```shell #test-result id="check-torch" fuzzy='xxx'
 torch= 2.11.0+cpu
 torch_npu= 2.11.0
 sglang xxx

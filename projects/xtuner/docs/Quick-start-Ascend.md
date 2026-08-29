@@ -448,7 +448,7 @@ print('prompt_template= PROMPT_TEMPLATE.internlm2_chat')
 ```shell #test-result id="xtuner-patch-cfg" fuzzy='xxx'
 cfg_compiles_ok
 cfg_patch_ok
-model_name= ./Shanghai_AI_Laboratory/internlm2-chat-xxx
+model_name= xxx-internlm2-chat-xxx
 data_path= ./colors/train.jsonl
 prompt_template= PROMPT_TEMPLATE.xxx
 ```

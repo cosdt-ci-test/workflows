@@ -427,7 +427,9 @@ prompt_template= PROMPT_TEMPLATE.xxx
 
 #### 单卡（本地 smoke 用例）
 
-```shell #test id="xtuner-train-smoke"
+训练日志行数多、字段不固定，不能直接当 `#test-result` 比对；拆成两步 —— `#test-setup` 跑训练（输出不校），`#test` 只验 .pth 是否落盘：
+
+```shell #test-setup id="xtuner-train-smoke-setup"
 cp /tmp/xtuner_npu_llm_cfg.py /tmp/xtuner_npu_smoke_single_cfg.py
 cat >> /tmp/xtuner_npu_smoke_single_cfg.py <<'EOF'
 
@@ -440,16 +442,19 @@ export TORCH_NPU_USE_HCCL=1
 # 用 python -m xtuner.tools.train 直接调 train 模块，绕开 console_script wrapper shebang 错配
 # （wrapper 启动的 Python 看不到 uv egg-link 把 xtuner 当 namespace package，`from xtuner import cli` ImportError）。
 python -m xtuner.tools.train /tmp/xtuner_npu_smoke_single_cfg.py --work-dir /tmp/xtuner_sft_llm_out_single
+```
+
+```shell #test id="xtuner-train-smoke"
 ls -t /tmp/xtuner_sft_llm_out_single/*.pth 2>/dev/null | head -1
 ```
 
 ```shell #test-result id="xtuner-train-smoke" fuzzy='xxx'
-xxx
+/tmp/xtuner_sft_llm_out_single/iter_xxx.pth
 ```
 
 #### 多卡（本地 smoke 用例，2 卡 runner）
 
-```shell #test id="xtuner-train-smoke-multi"
+```shell #test-setup id="xtuner-train-smoke-multi-setup"
 cp /tmp/xtuner_npu_llm_cfg.py /tmp/xtuner_npu_smoke_multi_cfg.py
 cat >> /tmp/xtuner_npu_smoke_multi_cfg.py <<'EOF'
 
@@ -460,11 +465,14 @@ EOF
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 export TORCH_NPU_USE_HCCL=1
 NPROC_PER_NODE=2 python -m xtuner.tools.train /tmp/xtuner_npu_smoke_multi_cfg.py --work-dir /tmp/xtuner_sft_llm_out_multi
+```
+
+```shell #test id="xtuner-train-smoke-multi"
 ls -t /tmp/xtuner_sft_llm_out_multi/*.pth 2>/dev/null | head -1
 ```
 
 ```shell #test-result id="xtuner-train-smoke-multi" fuzzy='xxx'
-xxx
+/tmp/xtuner_sft_llm_out_multi/iter_xxx.pth
 ```
 
 <!--
@@ -486,10 +494,6 @@ NPROC_PER_NODE=${GPU_NUM} xtuner train /tmp/xtuner_npu_llm_cfg.py --work-dir /tm
 训练产物是 QLoRA 的 `.pth`（只含 adapter 参数），要转 HuggingFace 格式再合并到 base。下面烟囱测 `xtuner convert` 的两个子命令 `pth_to_hf` 和 `merge` 都可用：
 
 ```shell #test id="xtuner-convert-help"
-# 不能直接 xtuner convert pth_to_hf --help —— cli() 对子命令会 subprocess.run(["python",
-# pth_to_hf.__file__, "--help"])，pth_to_hf.py import chain 在 NPU image 触发 torchvision::nms
-# operator 缺失（peft→transformers→torchvision）。改成直接检查 xtuner.entry_point.modes dict
-# 里子命令注册状态：
 python -c "
 from xtuner.entry_point import modes
 convert_dict = modes.get('convert', {})
@@ -500,8 +504,7 @@ print('has_chat: ' + str('chat' in modes))
 "
 ```
 
-输出结果类似：
-
+输出结果如下：
 ```shell #test-result id="xtuner-convert-help" disable_fuzzy
 has_pth_to_hf_subcmd: True
 has_merge_subcmd: True

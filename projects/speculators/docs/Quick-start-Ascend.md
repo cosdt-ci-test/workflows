@@ -393,11 +393,8 @@ len: xxx
 
 用上游 `scripts/train.py` + 单卡 `torchrun --nproc_per_node=1` 训 1 epoch × 10 sample（**smoke 验证管线通，不指望 loss 真下降**）：
 
-```shell #test-setup store="checkpoint_path" load="data_path>>data_path" load="verifier_path>>verifier_path"
+```shell #test-setup store="hs_dir" load="data_path>>data_path" load="verifier_path>>verifier_path"
 set -euo pipefail
-CHECKPOINT_DIR=/root/dflash-trained
-rm -rf "$CHECKPOINT_DIR"
-mkdir -p "$CHECKPOINT_DIR"
 
 # 复用 source install 那步 clone 的 speculators 仓库（cwd 不跨 #test 块，需重新 cd）
 cd /root/speculators
@@ -479,7 +476,18 @@ fi
 cleanup_vllm_gen
 sleep 5  # 给 vllm worker 完全退出 + NPU 释放
 
-# 离线训练：--on-missing raise 强制走 FileBackend 读 $HS_DIR 缓存，不再起 vllm endpoint；
+echo "$HS_DIR"
+```
+
+```shell #test-setup store="checkpoint_path" load="hs_dir>>hs_dir" load="data_path>>data_path" load="verifier_path>>verifier_path"
+set -euo pipefail
+CHECKPOINT_DIR=/root/dflash-trained
+rm -rf "$CHECKPOINT_DIR"
+mkdir -p "$CHECKPOINT_DIR"
+
+cd /root/speculators
+
+# 离线训练：--on-missing raise 强制走 FileBackend 读 <hs_dir> 缓存，不再起 vllm endpoint；
 # （train.py 的 argparse choices 是 generate/skip/warn/raise，没有 error；CI 33201184782 教训）
 # 显式不带 --vllm-endpoint，避免 dataloader 误以为有 server 可问。
 # train.py stdout+stderr 全写到 /tmp/train.log，失败时把整 log cat 到 bash stderr——
@@ -490,7 +498,7 @@ sleep 5  # 给 vllm worker 完全退出 + NPU 释放
 torchrun --standalone --nproc_per_node=1 scripts/train.py \
   --verifier-name-or-path "<verifier_path>" \
   --data-path "<data_path>" \
-  --hidden-states-path "$HS_DIR" \
+  --hidden-states-path "<hs_dir>" \
   --save-path "$CHECKPOINT_DIR" \
   --draft-vocab-size 32000 \
   --epochs 1 \

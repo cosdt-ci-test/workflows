@@ -164,11 +164,17 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         subprocess.run(
             ['bash', '-c',
              'apt-get update -qq && apt-get install -y --no-install-recommends '
-             'cmake ninja-build python3-dev libssl-dev pkg-config git '
+             'python3-dev libssl-dev pkg-config git '
              'curl ca-certificates'],
             check=True,
         )
-        # Rust (minimal toolchain) via rsproxy mirror.
+        subprocess.run(
+            ['python', '-m', 'pip', 'install', '-q', 'cmake>=3.27', 'ninja'],
+            check=True,
+        )
+        cmake_bin_dir = os.path.dirname(sys.executable)
+        os.environ['PATH'] = cmake_bin_dir + os.pathsep + os.environ.get('PATH', '')
+        subprocess.run(['cmake', '--version'], check=True)
         subprocess.run(
             ['bash', '-c',
              'command -v cargo >/dev/null 2>&1 || '
@@ -180,8 +186,6 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             [os.path.expanduser('~/.cargo/bin'), os.environ.get('PATH', '')])
         os.environ['RUSTUP_DIST_SERVER'] = 'https://rsproxy.cn'
         os.environ['RUSTUP_UPDATE_ROOT'] = 'https://rsproxy.cn/rustup'
-        # Redirect vcpkg's github fetch to the gitcode mirror (custom vcpkg with
-        # cxx11_abi disabled) to avoid github rate limits in CI.
         subprocess.run(
             ['git', 'config', '--global',
              'url."https://gitcode.com/xLLM-AI/vcpkg.git".insteadOf',
@@ -189,13 +193,21 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             check=True,
         )
 
-        # 4) Build the xllm C++ extension + wheel, then install it.
-        print('setup: building xllm wheel (device=npu arch=arm) ...')
-        os.environ['SKIP_TEST'] = '1'  # don't build/run the C++ unit-test target
-        subprocess.run(
-            ['python', 'setup.py', 'bdist_wheel', '--device', 'npu', '--arch', 'arm'],
-            cwd=xllm_src, check=True,
-        )
+        build_log = '/tmp/xllm-build.log'
+        print(f'setup: building xllm wheel (device=npu arch=arm); full log -> {build_log}')
+        os.environ['SKIP_TEST'] = '1'
+        with open(build_log, 'w') as lf:
+            try:
+                subprocess.run(
+                    ['python', 'setup.py', 'bdist_wheel', '--device', 'npu', '--arch', 'arm'],
+                    cwd=xllm_src, check=True, stdout=lf, stderr=subprocess.STDOUT,
+                )
+            except subprocess.CalledProcessError:
+                print(f'!! xllm build failed; tail of {build_log}:')
+                subprocess.run(['tail', '-n', '300', build_log])
+                raise
+        print(f'setup: build done; tail of {build_log}:')
+        subprocess.run(['tail', '-n', '300', build_log])
         wheels = sorted(glob.glob(os.path.join(xllm_src, 'dist', '*.whl')))
         if not wheels:
             raise RuntimeError('xllm wheel was not produced by the build')

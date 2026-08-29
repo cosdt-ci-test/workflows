@@ -154,7 +154,7 @@ else
 fi
 cd SpecForge
 uv pip install --no-deps .
-specforge --version
+python -c "from importlib.metadata import version; print('specforge, version', version('specforge'))"
 ```
 
 \<ref> 为最新的 release tag / 分支名 / commit SHA（监控自动 fallback）。

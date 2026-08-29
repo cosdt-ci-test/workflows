@@ -94,7 +94,7 @@ PyPI `vllm==0.23.0` 的 aarch64 wheel 是 **CUDA-only build**，NPU 上无法用
 ```shell #test id="install-torch"
 uv pip install -f https://mirrors.aliyun.com/pytorch-wheels/cpu torch==2.10.0
 uv pip install \
-  --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
+  --extra-index-url https://mirrors.aliyun.com/pypi/simple \
   --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi/variant \
   --find-links https://repo.huaweicloud.com/ascend/repos/pypi/triton-ascend/ \
   torch==2.10.0 torch-npu==2.10.0.post4 torchvision==0.25.0 torchaudio==2.10.0
@@ -499,12 +499,11 @@ sleep 5  # 给 vllm worker 完全退出 + NPU 释放
 # 离线训练：--on-missing raise 强制走 FileBackend 读 $HS_DIR 缓存，不再起 vllm endpoint；
 # （train.py 的 argparse choices 是 generate/skip/warn/raise，没有 error；CI 33201184782 教训）
 # 显式不带 --vllm-endpoint，避免 dataloader 误以为有 server 可问。
-# train.py stdout+stderr 一边 tee 到 /tmp/train.log（供事后 cat），一边串到 bash 的 stderr；
-# 这样 train.py 真炸时 bash stderr 里就有 'Traceback (most recent call last'，
-# framework 触发 ERROR_MARKERS 全量 dump（≤256 KB），不会再像 CI 33239422249 那样
-# 只看到末尾 `bash: line 84: Killed setsid nohup python scripts/launch_vllm.py` + 一个
-# 截断到 `ker: There appear to be %d '` 的 partial traceback——根本看不到 train.py 的
-# 真因。TRAIN_RC 从 PIPESTATUS[0] 取，set -e 不会半路 abort 漏掉后续 echo。
+# train.py stdout+stderr 全写到 /tmp/train.log，失败时把整 log cat 到 bash stderr——
+# framework 的 ERROR_MARKERS 看到 'Traceback (most recent call last' 会触发 ≤256 KB
+# 全量 dump（CI 33240618205 / 33239422249 历史教训：之前 `2>&1 | tee` 把 traceback
+# 灌到 bash stdout，framework 只 head/tail 2000 字符，train.py 真因被截到 `ker:
+# There appear to be %d '` 这种 partial format string，根本看不出哪儿炸的）。
 torchrun --standalone --nproc_per_node=1 scripts/train.py \
   --verifier-name-or-path "<verifier_path>" \
   --data-path "<data_path>" \
@@ -518,16 +517,17 @@ torchrun --standalone --nproc_per_node=1 scripts/train.py \
   --max-anchors 3072 \
   --num-layers 5 \
   --target-layer-ids 2 18 34 \
-  --on-missing raise 2>&1 | tee /tmp/train.log || TRAIN_RC=${PIPESTATUS[0]}
+  --on-missing raise >/tmp/train.log 2>&1 || TRAIN_RC=$?
 TRAIN_RC=${TRAIN_RC:-0}
 
 if [ "$TRAIN_RC" -ne 0 ]; then
-  echo "=== train.py failed (rc=$TRAIN_RC); full train.log saved at /tmp/train.log ==="
+  echo "=== train.py failed (rc=$TRAIN_RC); full train.log follows ===" >&2
+  cat /tmp/train.log >&2
   exit 1
 fi
 if ! test -f "$CHECKPOINT_DIR/config.json" || ! test -f "$CHECKPOINT_DIR/model.safetensors"; then
-  echo "=== train.py rc=0 但 checkpoint 缺失（config.json / model.safetensors）; full train.log ==="
-  cat /tmp/train.log
+  echo "=== train.py rc=0 但 checkpoint 缺失（config.json / model.safetensors）; full train.log ===" >&2
+  cat /tmp/train.log >&2
   exit 1
 fi
 

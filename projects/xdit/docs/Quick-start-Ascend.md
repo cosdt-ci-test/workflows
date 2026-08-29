@@ -270,63 +270,32 @@ p.print_help()
 export TORCH_NPU_USE_HCCL=1
 # sd3_example.py 硬编码 .to(f"cuda:{local_rank}") + torch.cuda.max_memory_allocated(...) +
 # torch.cuda.reset_peak_memory_stats() + torch.Generator(device="cuda")。torch_npu 2.9.0 只
-# monkey-patch torch.nn.functional / torch.nn，**不 patch torch.cuda**，所以：
-# (a) torch.cuda._lazy_init 触发 "Torch not compiled with CUDA enabled" assert；
-# (b) torch._C._nn._parse_to("cuda:0") 返回 torch.device("cuda", 0)，torch_npu Module.to
-#     override 透传这个 device 给 t.to(device, ...)，Tensor.to 走 torch/cuda 路径。
-# 不能直接 torch.device = wrapper：diffusers.model_loading_utils.py 用 PEP 604 写
-# 'dict[str, int | str | torch.device] | None'，torch.device 被换成普通函数后
-# int | str | torch.device 这个表达式 TypeError: unsupported operand | between
-# types.UnionType and function。
-# 修法：sitecustomize 改两个具体路径：
-#   (1) torch._C._nn._parse_to 入口字符串重写 "cuda:0" → "npu:0"，保留 torch.device 本身
-#       不动（type annotation 不破）；
-#   (2) torch.cuda.* 用 __getattr__ 代理到 torch.npu.*，max_memory_allocated /
-#       reset_peak_memory_stats 等直接 torch.cuda 调用走 npu 实现。
-# 注意：模块名必须是 sitecustomize（不是 _sitecustomize），Python 启动时 import site
-# 按 sys.path 顺序找 sitecustomize 模块。文件名前缀 _Python 不会自动 import。
-cat > /tmp/sitecustomize.py <<'PYEOF'
-import torch
-import torch_npu
-
-# (1) torch._C._nn._parse_to 入口字符串 "cuda:N" → "npu:N"
-_orig_parse_to = torch._C._nn._parse_to
-def _patched_parse_to(*args, **kwargs):
-    new_args = []
-    for a in args:
-        if isinstance(a, str) and a.startswith('cuda'):
-            new_args.append('npu' + a[4:])
-        elif isinstance(a, torch.device) and a.type == 'cuda':
-            new_args.append(torch.device('npu', a.index))
-        else:
-            new_args.append(a)
-    new_kwargs = {k: ('npu' + v[4:] if isinstance(v, str) and v.startswith('cuda')
-                      else torch.device('npu', v.index) if isinstance(v, torch.device) and v.type == 'cuda'
-                      else v) for k, v in kwargs.items()}
-    return _orig_parse_to(*new_args, **new_kwargs)
-torch._C._nn._parse_to = _patched_parse_to
-
-# (2) torch.cuda 代理到 torch.npu，max_memory_allocated / reset_peak_memory_stats 等
-# 直接 torch.cuda.X(...) 走 npu 实现。
-class _CudaProxy:
-    def __getattr__(self, name):
-        return getattr(torch.npu, name)
-torch.cuda = _CudaProxy()
+# monkey-patch torch.nn.functional / torch.nn，**不 patch torch.cuda**。
+# sitecustomize 试图用 _CudaProxy 把 torch.cuda 代理到 torch.npu 在 type annotation 处碰壁：
+# transformers.generation.continuous_batching.utils.py:38 用 'torch.cuda.CUDAGraph | None' 做
+# PEP 604 type annotation，_CudaProxy.__getattr__('CUDAGraph') 返回 torch.npu.CUDAGraph
+# （不存在 / 不是 class），annotation 解析失败。
+# 改用最稳的方案：把 sd3_example.py 拷一份到 /tmp，sed 把 "cuda:" → "npu:"、
+# torch.cuda → torch.npu，跑修改过的副本。type annotation 不破，全局 import 链也不污染。
+cat > /tmp/_patch_sd3.py <<'PYEOF'
+import sys
+src = sys.argv[1]
+dst = sys.argv[2]
+text = open(src).read()
+text = text.replace('"cuda:', '"npu:').replace("'cuda:", "'npu:")
+text = text.replace('torch.cuda', 'torch.npu')
+open(dst, 'w').write(text)
 PYEOF
-export PYTHONPATH=/tmp:${PYTHONPATH:-}
-# CANN 的 torch_npu import 副作用会往 stdout 打 "torch.npu synchronize" 一行，
-# 会污染下面的 $(...) 命令替换：dirname 会把整段（含换行）当一个路径处理，
-# 报 "No such file or directory"。先把 xfuser 父目录（=xDiT 仓库根）写进文件，再 cd。
-# 注意只 cd 到 dirname 一次：xfuser __file__ = .../xDiT/xfuser/__init__.py，
-# dirname 一次 = .../xDiT（已经是仓库根了），不能再 /..，否则落到上层 workflows/。
 python -c 'import os, xfuser; open("/tmp/_xdit_root", "w").write(os.path.dirname(os.path.dirname(xfuser.__file__)))'
-cd "$(cat /tmp/_xdit_root)"
+cp "$(cat /tmp/_xdit_root)"/examples/sd3_example.py /tmp/sd3_patched.py
+python /tmp/_patch_sd3.py /tmp/sd3_patched.py /tmp/sd3_patched.py
+export PYTHONPATH="$(cat /tmp/_xdit_root):${PYTHONPATH:-}"
 # xfuser config/args.py:create_config 里 not use_ray and not is_initialized() 会无条件调
 # init_distributed_environment → torch.distributed.init_process_group(backend=hccl, env://)，
 # 需要 RANK / WORLD_SIZE / LOCAL_RANK。直接 `python examples/sd3_example.py` 没 torchrun 注环境
 # 必报 "environment variable RANK expected"。所以单卡也要走 torchrun --nproc_per_node=1，
 # 让 torchrun 把 RANK=0 / WORLD_SIZE=1 / LOCAL_RANK=0 注入环境。
-torchrun --nproc_per_node=1 examples/sd3_example.py --model "<model_path>" \
+torchrun --nproc_per_node=1 /tmp/sd3_patched.py --model "<model_path>" \
     --prompt "a tiny test sketch" \
     --height 256 --width 256 \
     --num_inference_steps 1 \
@@ -354,61 +323,39 @@ mkdir -p ./results
 export TORCH_NPU_USE_HCCL=1
 # sd3_example.py 硬编码 .to(f"cuda:{local_rank}") + torch.cuda.max_memory_allocated(...) +
 # torch.cuda.reset_peak_memory_stats() + torch.Generator(device="cuda")。torch_npu 2.9.0 只
-# monkey-patch torch.nn.functional / torch.nn，**不 patch torch.cuda**，所以：
-# (a) torch.cuda._lazy_init 触发 "Torch not compiled with CUDA enabled" assert；
-# (b) torch._C._nn._parse_to("cuda:0") 返回 torch.device("cuda", 0)，torch_npu Module.to
-#     override 透传这个 device 给 t.to(device, ...)，Tensor.to 走 torch/cuda 路径。
-# 不能直接 torch.device = wrapper：diffusers.model_loading_utils.py 用 PEP 604 写
-# 'dict[str, int | str | torch.device] | None'，torch.device 被换成普通函数后
-# int | str | torch.device 这个表达式 TypeError: unsupported operand | between
-# types.UnionType and function。
-# 修法：sitecustomize 改两个具体路径：
-#   (1) torch._C._nn._parse_to 入口字符串重写 "cuda:0" → "npu:0"，保留 torch.device 本身
-#       不动（type annotation 不破）；
-#   (2) torch.cuda.* 用 __getattr__ 代理到 torch.npu.*，max_memory_allocated /
-#       reset_peak_memory_stats 等直接 torch.cuda 调用走 npu 实现。
-# 注意：模块名必须是 sitecustomize（不是 _sitecustomize），Python 启动时 import site
-# 按 sys.path 顺序找 sitecustomize 模块。文件名前缀 _Python 不会自动 import。
-cat > /tmp/sitecustomize.py <<'PYEOF'
-import torch
-import torch_npu
-
-# (1) torch._C._nn._parse_to 入口字符串 "cuda:N" → "npu:N"
-_orig_parse_to = torch._C._nn._parse_to
-def _patched_parse_to(*args, **kwargs):
-    new_args = []
-    for a in args:
-        if isinstance(a, str) and a.startswith('cuda'):
-            new_args.append('npu' + a[4:])
-        elif isinstance(a, torch.device) and a.type == 'cuda':
-            new_args.append(torch.device('npu', a.index))
-        else:
-            new_args.append(a)
-    new_kwargs = {k: ('npu' + v[4:] if isinstance(v, str) and v.startswith('cuda')
-                      else torch.device('npu', v.index) if isinstance(v, torch.device) and v.type == 'cuda'
-                      else v) for k, v in kwargs.items()}
-    return _orig_parse_to(*new_args, **new_kwargs)
-torch._C._nn._parse_to = _patched_parse_to
-
-# (2) torch.cuda 代理到 torch.npu，max_memory_allocated / reset_peak_memory_stats 等
-# 直接 torch.cuda.X(...) 走 npu 实现。
-class _CudaProxy:
-    def __getattr__(self, name):
-        return getattr(torch.npu, name)
-torch.cuda = _CudaProxy()
+# monkey-patch torch.nn.functional / torch.nn，**不 patch torch.cuda**。
+# sitecustomize 试图用 _CudaProxy 把 torch.cuda 代理到 torch.npu 在 type annotation 处碰壁：
+# transformers.generation.continuous_batching.utils.py:38 用 'torch.cuda.CUDAGraph | None' 做
+# PEP 604 type annotation，_CudaProxy.__getattr__('CUDAGraph') 返回 torch.npu.CUDAGraph
+# （不存在 / 不是 class），annotation 解析失败。
+# 改用最稳的方案：把 sd3_example.py 拷一份到 /tmp，sed 把 "cuda:" → "npu:"、
+# torch.cuda → torch.npu，跑修改过的副本。type annotation 不破，全局 import 链也不污染。
+cat > /tmp/_patch_sd3.py <<'PYEOF'
+import sys
+src = sys.argv[1]
+dst = sys.argv[2]
+text = open(src).read()
+text = text.replace('"cuda:', '"npu:').replace("'cuda:", "'npu:")
+text = text.replace('torch.cuda', 'torch.npu')
+open(dst, 'w').write(text)
 PYEOF
-export PYTHONPATH=/tmp:${PYTHONPATH:-}
+python -c 'import os, xfuser; open("/tmp/_xdit_root", "w").write(os.path.dirname(os.path.dirname(xfuser.__file__)))'
+cp "$(cat /tmp/_xdit_root)"/examples/sd3_example.py /tmp/sd3_patched.py
+python /tmp/_patch_sd3.py /tmp/sd3_patched.py /tmp/sd3_patched.py
+export PYTHONPATH="$(cat /tmp/_xdit_root):${PYTHONPATH:-}"
 ```
 
 ```shell #test id="xdit-infer-multi" load="model_path>>model_path"
-# 每个 #test 块各自一个 bash -c 子进程；上一个 #test-setup 的 export PYTHONPATH
-# 不会自动继承到这里。重导出一次，复用 xdit-infer-multi-setup 创建的 sitecustomize.py。
-export PYTHONPATH=/tmp:${PYTHONPATH:-}
-python -c 'import os, xfuser; open("/tmp/_xdit_root", "w").write(os.path.dirname(os.path.dirname(xfuser.__file__)))'
-cd "$(cat /tmp/_xdit_root)"
+# xdit-infer-multi-setup 已经在 /tmp 准备好 sd3_patched.py + PYTHONPATH。
+# 但 #test 块又是新 bash -c 子进程（execute() 用 env 快照传给 subprocess.run，不读回
+# bash 的 export），所以这里也重做一次 cp+sed+export，确保 /tmp/sd3_patched.py 存在、
+# PYTHONPATH 含 xDiT 仓库根（让 'from xfuser import ...' 能找到）。
+cp "$(cat /tmp/_xdit_root)"/examples/sd3_example.py /tmp/sd3_patched.py
+python /tmp/_patch_sd3.py /tmp/sd3_patched.py /tmp/sd3_patched.py
+export PYTHONPATH="$(cat /tmp/_xdit_root):${PYTHONPATH:-}"
 # ulysses_degree=2, ring_degree=1：度乘积 = 2，torchrun --nproc_per_node=2 显式起 2 个 rank；
 # xfuser 内部通过 xfuser.envs.get_torch_distributed_backend() 选 hccl，不读 env。
-torchrun --nproc_per_node=2 examples/sd3_example.py \
+torchrun --nproc_per_node=2 /tmp/sd3_patched.py \
     --model "<model_path>" \
     --prompt "a tiny test sketch" \
     --height 256 --width 256 \

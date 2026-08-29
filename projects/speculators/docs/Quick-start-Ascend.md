@@ -116,10 +116,13 @@ uv pip install --system \
 
 uv pip install --system \
   --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi \
+  --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi/variant \
   --find-links https://repo.huaweicloud.com/ascend/repos/pypi/triton-ascend/ \
   triton-ascend==3.2.2
 
 python -c "import torch, torch_npu, torchvision, torchaudio; print(f'torch={torch.__version__}'); print(f'torch_npu={torch_npu.__version__}'); print(f'torchvision={torchvision.__version__}'); print(f'torchaudio={torchaudio.__version__}'); print('is_available:', torch.npu.is_available()); print('count:', torch.npu.device_count())"
+python -c "import importlib.metadata; print(f'triton_ascend={importlib.metadata.version(\"triton-ascend\")}')"
+python -c "import importlib.metadata; print(f'triton={importlib.metadata.version(\"triton\")}')"
 ```
 
 输出结果如下：
@@ -131,6 +134,8 @@ torchvision=0.25.0+cpu
 torchaudio=2.10.0+cpu
 is_available: True
 count: xxx
+triton_ascend=3.2.2
+triton=3.5.0
 ```
 
 然后源码 build vllm + 装 vllm-ascend：

@@ -356,7 +356,7 @@ print(save_path)
 
 拷出来的 config 跟模板原版完全一致，按模板的 4 处修改规则调整（详见 [legacy quickstart 模板的"修改配置文件"小节](https://xtuner.readthedocs.io/zh-cn/latest/legacy/get_started/quickstart.html)）。`<cfg>` 是上一节「准备配置文件」store 出来的 cfg 绝对路径：
 
-```shell #test-setup load="xtuner_llm_cfg_path>>cfg xtuner_weights_path>>weights_dir" store="xtuner_llm_cfg_path"
+```shell #test-setup load="xtuner_llm_cfg_path>>cfg" load="xtuner_weights_path>>weights_dir" store="xtuner_llm_cfg_path"
 # 把模板里那 4 处 patch 应用到 copy-cfg 出来的 config 上：
 #   PART 1 Settings
 #     pretrained_model_name_or_path = '<weights_dir>'   # pull-weights store 出来的真实路径
@@ -409,7 +409,7 @@ print(path)
 "
 ```
 
-```shell #test id="xtuner-patch-cfg" load="xtuner_llm_cfg_path>>cfg xtuner_weights_path>>weights_dir"
+```shell #test id="xtuner-patch-cfg" load="xtuner_llm_cfg_path>>cfg" load="xtuner_weights_path>>weights_dir"
 # 用 py_compile 验 cfg 是合法 Python（不触发 import 链）+ grep 验 4 处 patch 都生效：
 # 不能直接用 mmengine.config.Config.fromfile —— 它会执行 cfg 文件的 `from xtuner.utils import ...`，
 # 触发 torchvision::nms import，而 NPU base image 的 torchvision 没有 GPU operator

@@ -246,14 +246,15 @@ from xfuser import xFuserArgs
 p = FlexibleArgumentParser()
 xFuserArgs.add_cli_args(p)
 p.print_help()
-" 2>&1 | head -60
+" 2>&1
 ```
 
-输出结果包含（按需 fuzzy 匹配，不锁行号；CAN 里 `torch.npu synchronize` 是 import-time 副作用，会进 stdout）：
+输出结果包含（按需 fuzzy 匹配，不锁行号；CAN 里 `torch.npu synchronize` 是 import-time 副作用，会进 stdout；transformers import 还会出两行 torchvision warning）：
 
 ```shell #test-result id="xdit-help" fuzzy='...'
 ...
 torch.npu synchronize
+...
 --model MODEL         Name or path of the huggingface model to use.
 ...
 --ulysses_degree ULYSSES_DEGREE

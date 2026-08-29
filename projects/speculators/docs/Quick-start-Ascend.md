@@ -586,15 +586,36 @@ def _patch_triton():
                 print(f'[sitecustomize] profiler stub failed: {_e}', file=_s.stderr, flush=True)
         if not hasattr(_active, 'utils') or not hasattr(getattr(_active, 'utils', None), 'set_printf_fifo_size'):
             try:
-                # CI 33224152006: 静态方法表漏了 get_arch，triton.runtime jit 调用
-                # _active.utils.get_arch() 时 AttributeError。改成 __getattr__ 兜底，
-                # 任何未知方法/属性都返回 no-op lambda，set_printf_fifo_size 这种已知
-                # 方法显式给静态实现。
+                # CI 33224152006: 静态方法表漏了 get_arch → AttributeError。
+                # CI 33225433873: __getattr__ 返 lambda → None，调用方 [None] → TypeError。
+                # 改成递归 sentinel：任何 op（call/[]/attr）都返回 sentinel 本身，
+                # 永不抛 TypeError。显式实现 set_printf_fifo_size 给静态返回。
+                class _Sentinel:
+                    def __call__(self, *a, **kw):
+                        return _Sentinel()
+                    def __getitem__(self, _k):
+                        return _Sentinel()
+                    def __getattr__(self, _name):
+                        if _name.startswith('__') and _name.endswith('__'):
+                            raise AttributeError(_name)
+                        return _Sentinel()
+                    def __iter__(self):
+                        return iter(())
+                    def __bool__(self):
+                        return False
+                    def __hash__(self):
+                        return id(self)
+                    def __eq__(self, other):
+                        return isinstance(other, _Sentinel)
+                    def __repr__(self):
+                        return '<Sentinel>'
+                    def __str__(self):
+                        return ''
                 class _StubUtils:
                     def __getattr__(self, _name):
                         if _name.startswith('_'):
                             raise AttributeError(_name)
-                        return lambda *a, **kw: None
+                        return _Sentinel()
                     @staticmethod
                     def set_printf_fifo_size(*a, **kw):
                         return None

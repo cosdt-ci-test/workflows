@@ -315,9 +315,15 @@ import re
 names = sorted(cfgs_name_path.keys())
 # 优先选 7b：本文档的 pull-weights 只下 7b（Shanghai_AI_Laboratory/internlm2-chat-7b），
 # 而 sorted+next 的 ASCII 序 '2' < '7'，20b 会抢在 7b 前面，把 patch 后的 model_path 指向
-# 不存在的 -20b/ 目录训不动。优先 7b，没有再退到任何匹配项
-match = next((n for n in names if re.search(r'(internlm2|llama).*qlora.*colorist.*7b', n)),
-             next((n for n in names if re.search(r'(internlm2|llama).*qlora.*colorist', n)), ''))
+# 不存在的 -20b/ 目录训不动。三层 fallback：
+#   1. internlm_chat_7b.*qlora.*colorist —— exact match doc 实际下的 chat-7b
+#   2. .*_7b.*qlora.*colorist —— 任何 _7b_ qlora colorist（internlm2_7b base / llama2_7b 等）
+#   3. (internlm2|llama).*qlora.*colorist —— 任何 qlora colorist，最后兜底
+# 注意不能用 `colorist.*7b` 收尾：cfg name 形如 `internlm2_7b_qlora_colorist_e5`，size token 在
+# 开头（7b / 20b），`7b` 不会出现在 `colorist` 后面；之前那条 regex 命中 0 个，fallback 必拿 20b。
+match = next((n for n in names if re.search(r'internlm_chat_7b.*qlora.*colorist', n)),
+             next((n for n in names if re.search(r'.*_7b.*qlora.*colorist', n)),
+                   next((n for n in names if re.search(r'(internlm2|llama).*qlora.*colorist', n)), '')))
 print(match)
 ")
 test -n "$config_name" || { echo "no matching config ((internlm2|llama).*qlora.*colorist); abort"; exit 1; }

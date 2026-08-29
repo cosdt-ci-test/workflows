@@ -264,7 +264,7 @@ p.print_help()
 
 完整脚本会下载 Hub 上的模型权重并实际跑一遍 xfuser 自带的 runner。本文档用最小 smoke（`--num_inference_steps 1` + `--height 256 --width 256`），目的是把"install + 启动 xfuser runtime + 走通单 rank 的 torch.distributed init"完整跑一遍；模型用 SD 3.5 medium（约 4 GB），单卡 64 GB HBM 内还留有 activation 余量。
 
-`python examples/sd3_example.py --ulysses_degree 1 --ring_degree 1` 单 rank 单进程（无 torchrun，rank=0/world=1）：
+`torchrun --nproc_per_node=1 examples/sd3_example.py --ulysses_degree 1 --ring_degree 1` 单 rank 单进程（rank=0/world=1）：
 
 ```shell #test id="xdit-infer-single" load="model_path>>model_path"
 export TORCH_NPU_USE_HCCL=1
@@ -275,7 +275,12 @@ export TORCH_NPU_USE_HCCL=1
 # dirname 一次 = .../xDiT（已经是仓库根了），不能再 /..，否则落到上层 workflows/。
 python -c 'import os, xfuser; open("/tmp/_xdit_root", "w").write(os.path.dirname(os.path.dirname(xfuser.__file__)))'
 cd "$(cat /tmp/_xdit_root)"
-python examples/sd3_example.py --model "<model_path>" \
+# xfuser config/args.py:create_config 里 not use_ray and not is_initialized() 会无条件调
+# init_distributed_environment → torch.distributed.init_process_group(backend=hccl, env://)，
+# 需要 RANK / WORLD_SIZE / LOCAL_RANK。直接 `python examples/sd3_example.py` 没 torchrun 注环境
+# 必报 "environment variable RANK expected"。所以单卡也要走 torchrun --nproc_per_node=1，
+# 让 torchrun 把 RANK=0 / WORLD_SIZE=1 / LOCAL_RANK=0 注入环境。
+torchrun --nproc_per_node=1 examples/sd3_example.py --model "<model_path>" \
     --prompt "a tiny test sketch" \
     --height 256 --width 256 \
     --num_inference_steps 1 \

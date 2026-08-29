@@ -146,6 +146,7 @@ deps ok
 
 ```shell #test-setup store="api_pid" load="model_dir>>ckpt"
 cd stable-diffusion-webui
+mkdir -p db
 export GIT_CONFIG_NOSYSTEM=1
 export STABLE_DIFFUSION_REPO=https://github.com/w-e-w/stablediffusion.git
 python -c "
@@ -161,6 +162,7 @@ nohup /tmp/sd-webui-venv/bin/python launch.py --nowebui --skip-torch-cuda-test -
 echo $!
 ```
 
+- `mkdir -p db`：A1111 把图像历史写入 `db/` 下的 SQLite 数据库，全新 clone 里该目录不存在（被 .gitignore），`--nowebui` 启动不自动创建 → 首次 txt2img 报 `OperationalError: unable to open database file`，这里显式建目录。
 - `GIT_CONFIG_NOSYSTEM=1`：launch 会 git clone 数个 assets 仓库，runner 镜像的 `/etc/gitconfig` 把 github.com 重写到需认证的代理，这里让 git 忽略该配置、直连 github。
 - `STABLE_DIFFUSION_REPO`：上游默认指向的 `Stability-AI/stablediffusion` 已被删除（2025.12 起，GitHub 返回 404），官方用社区 fork `w-e-w/stablediffusion` 兜底（commit hash 不变）；此处通过环境变量覆盖，后续上游修复后可移除。
 - `--nowebui`：API 模式（FastAPI，默认端口 7861），无 Gradio 界面，适合自动化与 CI。

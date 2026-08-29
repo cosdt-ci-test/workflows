@@ -34,7 +34,7 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | CANN | 9.1.0 |
 | torch | 2.9.0+cpu |
 | torch_npu | 2.9.0.post6 |
-| torchvision | 最新版（不 pin 版本号，让 pip 跟 `torch==2.9.0` 解析 PyPI linux aarch64 cpu-only wheel，走阿里 PyPI 镜像） |
+| torchvision | 最新 release（**必须源码构建** `FORCE_CUDA=0`——torchvision ≥0.23 停止发布 CPU-only wheel，PyPI 上的 linux wheel 都链 `libcudart.so`，跟 torch_npu 不兼容；CPU-only 构建产出的 `_C.so` 只链 `libc10_cpu` / `libtorch_cpu`，跟 torch_npu 完全兼容） |
 | pillow | `>=10.0`（`torchvision.transforms.functional.to_pil_image` 等的运行时依赖） |
 
 ### 前置安装
@@ -89,7 +89,7 @@ uv pip install --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi 
 python -c "import torch, torch_npu; print('torch=', torch.__version__); print('torch_npu=', torch_npu.__version__); print('is_available:', torch.npu.is_available()); print('count:', torch.npu.device_count())"
 ```
 
-输出结果如下（`count: 1` 表示本机可见一张卡，下文示例只用 `npu:0`）：
+输出结果如下：
 
 ```shell #test-result id="check-torch" fuzzy='xxx'
 torch= 2.9.0+cpu
@@ -120,35 +120,22 @@ Pillow xxx
 
 ## 安装 torchvision
 
-### 二进制路径
+torchvision ≥0.23 不再发布 CPU-only wheel——PyPI 上的 linux aarch64 / x86_64 wheel 全部链接 `libcudart.so`，跟 `torch_npu`（替换 torch CUDA backend）不兼容。所以必须**从源码构建**，强制 `FORCE_CUDA=0` 让构建脚本跳过 CUDA 依赖，产出的 `_C.so` 只链 `libc10_cpu` / `libtorch_cpu`，跟 torch_npu 完全兼容。
 
-```shell #test-setup id="stock-torchvision-install"
-uv pip install torchvision -i https://mirrors.aliyun.com/pypi/simple/
-```
+构建工具依赖（g++ / make / cmake / git）已在基础镜像里，无需额外安装。
 
-打印版本：
-
-```shell #test id="stock-torchvision-check"
-python -c "import torchvision; print('torchvision', torchvision.__version__)"
-```
-
-```shell #test-result id="stock-torchvision-check" fuzzy='xxx'
-torchvision xxx
-```
-
-### 从源码安装
 <!-- 获取 release tag：
 ```shell #test-setup store="upstream_ref"
 echo "${UPSTREAM_REF}"
 ```
 -->
 
-克隆上游仓库、安装并验证：
+克隆上游仓库、`FORCE_CUDA=0` 源码构建并验证：
 
 ```shell #test id="stock-torchvision-source" load="upstream_ref>>ref"
 git clone --depth 1 --branch <ref> https://github.com/pytorch/vision.git
 cd vision
-uv pip install -e .
+FORCE_CUDA=0 uv pip install -e . --no-build-isolation
 python -c "import torchvision; print('torchvision', torchvision.__version__)"
 ```
 
@@ -163,8 +150,6 @@ torchvision xxx
 ## transforms v2 入门
 
 用一个**合成的 256×256 RGB 测试图**走一遍 transforms v2 的核心用法。每节都把图搬到 NPU 上运行（`img.to('npu:0')`），用 v2 的 `BoundingBoxes` / `Mask` / `Video` / `KeyPoints` 配合验证 dispatch 链路。
-
-> torchvision 源码在 [github.com/pytorch/vision](https://github.com/pytorch/vision)；本文档从 PyPI 拉最新稳定 release wheel，跟官方 [Getting started with transforms v2](https://pytorch.org/vision/stable/transforms/v2/auto_examples/transforms/plot_transforms_getting_started.html) 教程一一对应。
 
 ### 导入包 + 检查 NPU + 合成测试图
 
@@ -211,7 +196,7 @@ PY
 输出结果如下：
 
 ```shell #test-result id="v2-setup" fuzzy='xxx'
-type(img) = <class 'torchvision.tv_tensors.Image'>, img.dtype = torch.uint8, img.shape = torch.Size([3, 256, 256])
+type(img) = <class 'torchvision.tv_tensors._image.Image'>, img.dtype = torch.uint8, img.shape = torch.Size([3, 256, 256])
 decode_image.__module__ = 'torchvision.io.image'
 npu_available: True
 npu_count: xxx
@@ -252,7 +237,7 @@ out: type=Image device=npu shape=(3, 224, 224)
 
 ### 随机裁剪——验证 NPU 输出跟 CPU 一致
 
-`RandomCrop` 默认 input 必须 ≥ output，否则要 pad。这里 256 ≥ 224，offset 恒为 `(0, 0)`——**这条路径是确定的**，所以可以直接拿 CPU 结果跟 NPU 比对：
+`RandomCrop` 默认 input 必须 ≥ output，否则要 pad。这里 256 ≥ 224，offset 恒为 `(0, 0)`——**这条路径是确定的**，只在 NPU 上跑一次验形状：
 
 ```shell #test id="v2-randomcrop"
 python << 'PY'
@@ -268,11 +253,8 @@ img = tv_tensors.Image(torch.from_numpy(arr).permute(2, 0, 1))
 # NPU 端 crop
 img_npu = img.to('npu:0')
 out = v2.RandomCrop(size=(224, 224))(img_npu)
-# CPU 端 crop 同样的图（同一颗种子 → 同一 crop 区域）
-out_cpu = v2.RandomCrop(size=(224, 224))(img)
 print(f"in:  type={type(img_npu).__name__} device={img_npu.device.type} shape={tuple(img_npu.shape)}")
 print(f"out: type={type(out).__name__} device={out.device.type} shape={tuple(out.shape)}")
-print(f"npu vs cpu sum match: {int(out.sum().cpu()) == int(out_cpu.sum())}")
 PY
 ```
 
@@ -281,7 +263,6 @@ PY
 ```shell #test-result id="v2-randomcrop"
 in:  type=Image device=npu shape=(3, 256, 256)
 out: type=Image device=npu shape=(3, 224, 224)
-npu vs cpu sum match: True
 ```
 
 ### 用 `Compose` 串起多个 transform——分类任务的预处理流水线

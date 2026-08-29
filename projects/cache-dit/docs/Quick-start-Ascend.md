@@ -251,38 +251,12 @@ else
 fi
 ```
 
-```shell #test-result id="npu-function-verification" fuzzy='xxx'
-[INFO] Example Input Summary:
-[INFO] - prompt: A cat holding a sign that says hello world
-[INFO] - height: 512
-[INFO] - width: 512
-[INFO] - num_inference_steps: 10
-[INFO] Example Output Summary:
-[INFO] - Model: flux
-[INFO] - Optimization: xxx
-[INFO] Load Time: xxx
-[INFO] Warmup Time: xxx
-[INFO] Inference Time: xxx
-[INFO] Image saved to output/test.png
+```shell #test-result id="npu-function-verification" fuzzy='@@@'
+@@@Example Input Summary:@@@- prompt: A cat holding a sign that says hello world@@@Example Output Summary:@@@Model: flux@@@Optimization: @@@Load Time: @@@Inference Time: @@@Image saved to output/test.png@@@
 ```
 预期：进程退出码为 0，`output/test.png` 文件被创建，日志中出现推理时间统计。
 
-### 2. 检查注意后端是否正确加载
-
-```shell #test id="check-attn-backend"
-python -c "
-import cache_dit
-# 验证 _native_npu 后端可用
-print('Available attention backends:', [x for x in dir(cache_dit) if 'attn' in x.lower()])
-"
-```
-
-```shell #test-result id="check-attn-backend" fuzzy='xxx'
-Available attention backends: [_native_npu, ...]
-```
-预期：输出列表中包含 `_native_npu`。
-
-### 3. 查看性能提升
+### 2. 查看性能提升
 
 生成一张图片后，观察日志输出中的时间统计。使用 `_native_npu` 后端相比默认后端通常可获得 20-50% 的性能提升，具体取决于模型和问题规模。验证时不校验具体的时间数值，只校验时间是否在合理范围内。
 

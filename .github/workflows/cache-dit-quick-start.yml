@@ -29,9 +29,9 @@ concurrency:
   cancel-in-progress: false
 
 on:
-  # schedule:
+  schedule:
     # Temporarily disabled to save NPU runner time. Re-enable when ready.
-    # - cron: '0 */3 * * *'
+    - cron: '0 */3 * * *'
   workflow_dispatch:
 
 permissions:

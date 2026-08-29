@@ -273,6 +273,24 @@ jobs:
           #                                 GitHub Releases — Ascend/vision is
           #                                 the canonical case; /releases/latest
           #                                 404s AND /releases returns [])
+          #   4. /commits/HEAD             (covers repos with NO releases AND
+          #                                 NO tags — sgl-project/SpecForge is
+          #                                 the canonical case; all three
+          #                                 above return empty. Returns the
+          #                                 default-branch HEAD SHA which is
+          #                                 used as both id (change-detection
+          #                                 key — fires NEED_TO_TEST on every
+          #                                 new push) and tag_name (clone ref
+          #                                 — `git clone --branch <sha>` is
+          #                                 valid). No hardcoded branch name;
+          #                                 works for `main` / `master` /
+          #                                 custom default. Cost: noisy —
+          #                                 SpecForge commits every 1–5 days
+          #                                 so 6h schedule fires ~1x per cycle
+          #                                 on average; accepted as the price
+          #                                 of monitoring tagless upstreams
+          #                                 uniformly with the release/tag
+          #                                 path.)
           # Each step normalizes to {id, tag_name} so the downstream .id /
           # .tag_name reads are uniform across sources. `set -e` is masked
           # via `|| true` + jq presence checks so a 404 (or an empty body)
@@ -295,8 +313,13 @@ jobs:
             jq -r 'if (.[0] // null) != null then {id: .[0].commit.sha, tag_name: .[0].name} else empty end' \
               /tmp/r3.json > /tmp/release.json
             echo "monitor: release source=/tags?per_page=1 (tags-only fallback)"
+          elif curl -fsSL --retry 3 --max-time 30 \
+              "$GH_API/repos/${{ env.UPSTREAM_REPO }}/commits/HEAD" -o /tmp/r4.json 2>/dev/null; then
+            jq -r 'if (.sha // null) != null then {id: .sha, tag_name: .sha} else empty end' \
+              /tmp/r4.json > /tmp/release.json
+            echo "monitor: release source=/commits/HEAD (tagless upstream, default-branch HEAD sha)"
           else
-            echo "monitor: all three release sources failed; treating as no signal"
+            echo "monitor: all four release sources failed; treating as no signal"
           fi
           CURRENT_RELEASE_ID=$(jq -r '.id // empty' /tmp/release.json)
           CURRENT_RELEASE_TAG=$(jq -r '.tag_name // empty' /tmp/release.json)
@@ -397,12 +420,13 @@ jobs:
             need_to_test="true"
             reason="manual"
             # Same auto-fallback chain as the monitor step: /releases/latest
-            # -> /releases?per_page=20 -> /tags?per_page=1. Each curl is
-            # guarded with `|| true` + a jq presence check so a 404 or empty
-            # body falls through cleanly. The dispatch path picks `ref`
-            # (the tag_name) directly — no separate SHA lookup is needed
-            # for decision output, so this collapses to three jq
-            # expressions over /tmp/r{1,2,3}.json.
+            # -> /releases?per_page=20 -> /tags?per_page=1 -> /commits/HEAD.
+            # Each curl is guarded with `|| true` + a jq presence check so a
+            # 404 or empty body falls through cleanly. The dispatch path
+            # picks `ref` (the tag_name, or commit SHA in the 4th tier)
+            # directly — no separate SHA lookup is needed for decision
+            # output, so this collapses to four jq expressions over
+            # /tmp/r{1,2,3,4}.json.
             ref=""
             if curl -fsSL --retry 3 --max-time 30 \
                 "$GH_API/repos/${{ env.UPSTREAM_REPO }}/releases/latest" -o /tmp/r1.json 2>/dev/null; then
@@ -415,6 +439,19 @@ jobs:
             if [ -z "$ref" ] && curl -fsSL --retry 3 --max-time 30 \
                 "$GH_API/repos/${{ env.UPSTREAM_REPO }}/tags?per_page=1" -o /tmp/r3.json 2>/dev/null; then
               ref=$(jq -r '.[0].name // empty' /tmp/r3.json)
+            fi
+            # 4th fallback for upstreams that publish no GitHub Releases
+            # AND no tags (sgl-project/SpecForge is the canonical case —
+            # API returns 404 for /releases/latest, [] for /releases, and
+            # [] for /tags). /commits/HEAD resolves to the tip of the
+            # default branch (no hardcoded branch name — works for `main`,
+            # `master`, or any custom default). The test code uses the SHA
+            # as the <ref> in `git clone --branch <ref>`, so a commit SHA
+            # works as a clone ref. 
+            if [ -z "$ref" ] && curl -fsSL --retry 3 --max-time 30 \
+                "$GH_API/repos/${{ env.UPSTREAM_REPO }}/commits/HEAD" -o /tmp/r4.json 2>/dev/null; then
+              ref=$(jq -r '.sha // empty' /tmp/r4.json)
+              echo "monitor: ref source=/commits/HEAD (tagless upstream, default-branch HEAD sha)"
             fi
             [ -n "$ref" ] || { echo "ERROR: failed to resolve latest upstream ref (auto-fallback chain exhausted)"; exit 1; }
             echo "monitor decision (manual override): ref=$ref need_to_test=true reason=manual"

@@ -17,6 +17,15 @@ projects:
     workflows:
       examples: .github/workflows/ms-swift-examples.yml
       quick_start: .github/workflows/ms-swift-quick-start.yml
+  - name: flash-linear-attention
+    category: 训练加速
+    support_level: 基础支持
+    upstream_repo: fla-org/flash-linear-attention
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/flash-linear-attention
+    workflows:
+      quick_start: .github/workflows/flash-linear-attention-quick-start.yml
   - name: llama.cpp
     category: 推理加速
     support_level: 基础支持
@@ -157,7 +166,9 @@ projects:
     support_level: 基础支持
     upstream_repo: InternLM/xtuner
     phase: A
-    runner: linux-aarch64-a2-1
+    # 2-card runner so the multi-card smoke in docs/Quick-start-Ascend.md
+    # can run `NPROC_PER_NODE=2 xtuner train ...` end-to-end.
+    runner: linux-aarch64-a2-2
     dir: projects/xtuner
     workflows:
       quick_start: .github/workflows/xtuner-quick-start.yml
@@ -179,6 +190,26 @@ projects:
     dir: projects/slime
     workflows:
       quick_start: .github/workflows/slime-quick-start.yml
+  # specforge quick start runs an end-to-end 1-step training smoke on
+  # 4-card NPU: installs torch 2.11.0 / torch_npu 2.11.0 / sglang 0.5.14
+  # (matching specforge's pinned pyproject), then a single #test block
+  # in Quick-start-Ascend.md starts mooncake_master + SGLang capture
+  # server on card 0 + specforge trainer on card 1, runs 1 step, tears
+  # down via trap. 1-card runner is too small (capture + trainer on one
+  # device OOMs on Qwen3.5-4B + activations). specforge docs live on
+  # the docs site (not flat markdown in the source tree), so doc-hash
+  # monitoring has to live in this fork rather than on
+  # raw.githubusercontent.com — the Contents API URL in
+  # specforge-quick-start.yml is what makes that work.
+  - name: specforge
+    category: 训练加速
+    support_level: 基础支持
+    upstream_repo: sgl-project/SpecForge
+    phase: A
+    runner: linux-aarch64-a2-4
+    dir: projects/specforge
+    workflows:
+      quick_start: .github/workflows/specforge-quick-start.yml
   # include_prerelease=true used to be wired in the workflow for
   # torchtitan because every pre-stable release is marked prerelease
   # and /releases/latest 404s. Now the engine does the fallback
@@ -298,3 +329,47 @@ projects:
     workflows:
       examples: .github/workflows/mooncake-examples.yml
       quick_start: .github/workflows/mooncake-quick-start.yml
+  - name: flagscale
+    category: TODO
+    support_level: TODO
+    upstream_repo: flagos-ai/FlagScale
+    phase: A
+    runner: linux-aarch64-a2-2
+    dir: projects/flagscale
+    workflows:
+      quick_start: .github/workflows/flagscale-quick-start.yml
+  # stable-diffusion-webui quickstart exercises the native NPU device path
+  # (modules/npu_specific.py + torch_npu) with a headless txt2img call
+  # against the --nowebui API server, using an SD-Turbo checkpoint
+  # fetched via ModelScope.
+  - name: stable-diffusion-webui
+    category: 推理加速
+    support_level: 新兴适配
+    upstream_repo: AUTOMATIC1111/stable-diffusion-webui
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/stable-diffusion-webui
+    workflows:
+      quick_start: .github/workflows/stable-diffusion-webui-quick-start.yml
+  - name: llm-d
+    category: 推理加速
+    support_level: 新兴适配
+    upstream_repo: llm-d/llm-d
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/llm-d
+    workflows:
+      quick_start: .github/workflows/llm-d-quick-start.yml
+  # lm-evaluation-harness quickstart exercises the native NPU device path
+  # (HFLM --device npu:0, PR #1886) with a single-card arc_easy eval run
+  # (--limit 10) on a Qwen2.5-0.5B checkpoint fetched via ModelScope;
+  # datasets are served through HF_ENDPOINT=https://hf-mirror.com.
+  - name: lm-evaluation-harness
+    category: 推理加速
+    support_level: 新兴适配
+    upstream_repo: EleutherAI/lm-evaluation-harness
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/lm-evaluation-harness
+    workflows:
+      quick_start: .github/workflows/lm-evaluation-harness-quick-start.yml

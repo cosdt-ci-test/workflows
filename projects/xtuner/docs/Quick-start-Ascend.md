@@ -435,8 +435,27 @@ prompt_template= PROMPT_TEMPLATE.xxx
 
 跑最小训练：
 
-```shell #test-setup id="xtuner-train-smoke-setup"
-cp /tmp/xtuner_npu_llm_cfg.py /tmp/xtuner_npu_smoke_single_cfg.py
+```shell #test-setup id="xtuner-train-smoke-setup" load="xtuner_llm_cfg_path>>cfg"
+# Stub cv2 via sitecustomize to bypass base image's missing libxcb.so.1.
+# mmengine.hooks.naive_visualization_hook.py:5 顶层 `import cv2`，被
+# `python -m xtuner.tools.train` → `from mmengine.runner import Runner` → ... → naive_visualization_hook
+# 这条 eager import 链触发。cv2 .so 间接链接 libxcb.so.1，NPU base image 缺这个 lib，
+# 走 `opencv-python-headless` 也救不回来（headless 只剥 GUI binding，.so 的 libxcb 引用还在）。
+# 走 PYTHONPATH + sitecustomize 让 Python 启动期注入空 cv2 模块，后续 `import cv2` 直接命中
+# sys.modules 里的 stub，根本不加载 .so。5 iter smoke 不真正做可视化，stub 够用。
+mkdir -p /tmp/cv2_stub
+cat > /tmp/cv2_stub/sitecustomize.py <<'PYEOF'
+import sys, types
+if 'cv2' not in sys.modules:
+    cv2 = types.ModuleType('cv2')
+    cv2.imread = lambda *a, **k: None
+    cv2.imwrite = lambda *a, **k: True
+    cv2.cvtColor = lambda *a, **k: None
+    cv2.resize = lambda *a, **k: None
+    sys.modules['cv2'] = cv2
+PYEOF
+
+cp <cfg> /tmp/xtuner_npu_smoke_single_cfg.py
 cat >> /tmp/xtuner_npu_smoke_single_cfg.py <<'EOF'
 
 train_cfg = dict(max_epochs=1)
@@ -448,6 +467,8 @@ EOF
 
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 export TORCH_NPU_USE_HCCL=1
+export PYTHONPATH=/tmp/cv2_stub${PYTHONPATH:+:$PYTHONPATH}
+mkdir -p /tmp/xtuner_sft_llm_out_single
 # 用 python -m xtuner.tools.train 直接调 train 模块，绕开 console_script wrapper shebang 错配
 # （wrapper 启动的 Python 看不到 uv egg-link 把 xtuner 当 namespace package，`from xtuner import cli` ImportError）。
 python -m xtuner.tools.train /tmp/xtuner_npu_smoke_single_cfg.py --work-dir /tmp/xtuner_sft_llm_out_single 2>&1 | tee /tmp/xtuner_sft_llm_out_single/train.log
@@ -479,8 +500,20 @@ xxx (训前 assistant 回复——5 iter 没训出什么，可能是空 / 乱码
 
 跑最小训练：
 
-```shell #test-setup id="xtuner-train-smoke-multi-setup"
-cp /tmp/xtuner_npu_llm_cfg.py /tmp/xtuner_npu_smoke_multi_cfg.py
+```shell #test-setup id="xtuner-train-smoke-multi-setup" load="xtuner_llm_cfg_path>>cfg"
+mkdir -p /tmp/cv2_stub
+cat > /tmp/cv2_stub/sitecustomize.py <<'PYEOF'
+import sys, types
+if 'cv2' not in sys.modules:
+    cv2 = types.ModuleType('cv2')
+    cv2.imread = lambda *a, **k: None
+    cv2.imwrite = lambda *a, **k: True
+    cv2.cvtColor = lambda *a, **k: None
+    cv2.resize = lambda *a, **k: None
+    sys.modules['cv2'] = cv2
+PYEOF
+
+cp <cfg> /tmp/xtuner_npu_smoke_multi_cfg.py
 cat >> /tmp/xtuner_npu_smoke_multi_cfg.py <<'EOF'
 
 train_cfg = dict(max_epochs=1)
@@ -490,6 +523,8 @@ EOF
 
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 export TORCH_NPU_USE_HCCL=1
+export PYTHONPATH=/tmp/cv2_stub${PYTHONPATH:+:$PYTHONPATH}
+mkdir -p /tmp/xtuner_sft_llm_out_multi
 NPROC_PER_NODE=2 python -m xtuner.tools.train /tmp/xtuner_npu_smoke_multi_cfg.py --work-dir /tmp/xtuner_sft_llm_out_multi 2>&1 | tee /tmp/xtuner_sft_llm_out_multi/train.log
 ```
 

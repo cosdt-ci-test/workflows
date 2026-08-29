@@ -131,43 +131,30 @@ git clone --depth 1 --branch v0.23.0 \
 VLLM_TARGET_DEVICE=empty uv pip install --system --no-deps --no-build-isolation \
   -e /root/deps/vllm
 
-# 5. 装 vllm-ascend NPU variant wheel（/variant 子路径拿 aarch64 build）
+# 5. 卸 vllm 装的主线 triton（CUDA 优化版，NPU 上 DFlash JIT 跑不了）
+python3 -m pip uninstall -y triton
+
+# 6. 装 vllm-ascend NPU variant wheel（/variant 子路径拿 aarch64 build）
 python3 -m pip install --no-deps \
   --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi \
   --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi/variant \
   vllm-ascend==0.23.0
 
-# 6. 装 triton-ascend==3.2.2（DFlash proposer JIT 编译依赖）。
-#    --no-deps：triton-ascend 的 METADATA 钉了 `Requires-Dist: triton==3.5.0`，
-#    默认装会拉回 mainline triton 覆盖 triton-ascend 自带的 bishengir 后端 libtriton.so，
-#    `import triton` 解析到 mainline 走 nvidia/amd 路径、Ascend backend 不可见，
-#    torch._inductor 把 dflash._create_attention_mask 编出的 triton kernel
-#    落进 bishengir-compile PlanMemory Failed（CI 33253390326 triton_unk_fused__to_copy_
-#    bitwise_and_eq_gt_lt_permute_sum_view_5 → MLIRCompilationError）。triton-ascend 自己
-#    包的 triton 命名空间 + bishengir 后端是 DFlash JIT 真正需要的；mainline 装回来反而
-#    让 `triton/backends/ascend` 找不到，shadow 成纯 CUDA 优化版。
-python3 -m pip install --no-deps \
+# 7. 装 triton-ascend==3.2.2（DFlash proposer JIT 编译依赖）
+python3 -m pip install \
   --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi \
   --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi/variant \
   --find-links https://repo.huaweicloud.com/ascend/repos/pypi/triton-ascend/ \
   triton-ascend==3.2.2
 
-# 6b. triton-ascend 3.2.2 的 METADATA 还钉了 attrs==24.2.0 / numpy==1.26.4 / scipy==1.13.1 /
-#     decorator 等 hard-deps；--no-deps 跳过了这些，runtime 路径（triton 编译器 / vllm-ascend
-#     ops / numba）会直接 import numpy / scipy / attrs / decorator，逐个装回。其余
-#     (psutil / pybind11 / pyyaml / pandas / pytest*) 是 test/build extras 用不到，
-#     vllm 路径也不依赖，不装。
-python3 -m pip install --quiet \
-  attrs==24.2.0 'numpy==1.26.4' 'scipy==1.13.1' decorator==5.1.1
-
-# 7. 补 vllm runtime deps：VLLM_TARGET_DEVICE=empty 跳过了 install-time 解析（避免 torch 冲突），
+# 8. 补 vllm runtime deps：VLLM_TARGET_DEVICE=empty 跳过了 install-time 解析（避免 torch 冲突），
 #    但 `from vllm.config import ...` 仍需要 cbor2/pyzmq/xgrammar/opencv-python-headless 等；
 #    numba 是 vllm-ascend 0.23.0 policy_flashlb 顶层 `from numba import njit` 的硬依赖（--no-deps 漏装）
 python3 -m pip install --quiet \
   -r /root/deps/vllm/requirements/common.txt \
   numba
 
-# 8. Monkey-patch vllm.triton_utils.HAS_TRITON = True：triton-ascend 3.2.2 的 libtriton.so
+# 9. Monkey-patch vllm.triton_utils.HAS_TRITON = True：triton-ascend 3.2.2 的 libtriton.so
 #    是 3.2.0 fork、不带 nvidia/amd symbol，主线 triton import 链触发 ImportError 把
 #    HAS_TRITON 强制改回 False，导致 qkv_rmsnorm_rope op 不注册、QKNormRopeFusionPass
 #    抛 AttributeError（CI 33140922182）。sitecustomize.py 装 site-packages，try/except
@@ -195,10 +182,7 @@ print('numba:', numba.__version__)
 python -c "import importlib.metadata; print(f'vllm={importlib.metadata.version(\"vllm\")}')"
 python -c "import importlib.metadata; print(f'vllm_ascend={importlib.metadata.version(\"vllm-ascend\")}')"
 python -c "import importlib.metadata; print(f'triton_ascend={importlib.metadata.version(\"triton-ascend\")}')"
-# triton 主线 3.5.0 不装：triton-ascend 自带 libtriton.so + bishengir 后端，
-# mainline triton 装回来 shadow 掉 ascend backend（CI 33253390326 MLIRCompilationError）。
-# triton namespace 由 triton-ascend wheel 提供，import 没问题，只是 dist metadata
-# 没 `Name: triton` 所以 version() 查不到——这是预期的，不校验。
+python -c "import importlib.metadata; print(f'triton={importlib.metadata.version(\"triton\")}')"
 ```
 
 输出结果如下：
@@ -211,6 +195,7 @@ numba: xxx
 vllm=0.23.0+empty
 vllm_ascend=0.23.0
 triton_ascend=3.2.2
+triton=3.5.0
 ```
 
 检查 NPU 设备运行时可用：

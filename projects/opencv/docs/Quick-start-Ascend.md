@@ -351,6 +351,13 @@ python3 - <<'PY'
 import pathlib
 p = pathlib.Path('opencv_contrib/modules/cannops/include/opencv2/cann_call.hpp')
 s = p.read_text()
+# kernel_launch 调的 aclrtCreateStream / aclrtSynchronizeStream / aclrtDestroyStream
+# 声明在 acl_rt.h；该头原来只 include 了 acl_base.h，template 里直接调会报
+# "no arguments ... depend on a template parameter"（两阶段名字查找）。
+inc_old = '#include <acl/acl_base.h>'
+inc_new = '#include <acl/acl_base.h>\n#include <acl/acl_rt.h>'
+assert inc_old in s and inc_new not in s, 'acl include line not found / already patched'
+s = s.replace(inc_old, inc_new, 1)
 old = '''    std::shared_ptr<uchar> tilingDevice =
         mallocAndUpload(&tiling, sizeof(TILING_TYPE), stream, AscendMat::defaultAllocator());
     aclrtStream rawStream = AscendStreamAccessor::getStream(stream);
@@ -377,9 +384,9 @@ new = '''    std::shared_ptr<uchar> tilingDevice =
         CV_ACL_SAFE_CALL(aclrtDestroyStream(execStream));'''
 assert old in s, 'cann_call.hpp: kernel_launch body not found'
 p.write_text(s.replace(old, new, 1))
-print('(h) cann_call.hpp: kernel_launch NULL-stream fallback patched')
+print('(h) cann_call.hpp: kernel_launch NULL-stream fallback + acl_rt.h include patched')
 PY
-grep -n 'ownExecStream' opencv_contrib/modules/cannops/include/opencv2/cann_call.hpp | head -4
+grep -n 'ownExecStream\|acl_rt' opencv_contrib/modules/cannops/include/opencv2/cann_call.hpp | head -6
 ```
 
 预期：打印 `(h) ... patched`，grep 看到 4 行 `ownExecStream`。

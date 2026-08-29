@@ -94,7 +94,7 @@ PY
 检查 torch / torch_npu / sglang 是否装好且 NPU 设备可用：
 
 ```shell #test id="check-torch"
-python -c "import torch, torch_npu, sglang; print('torch=', torch.__version__); print('torch_npu=', torch_npu.__version__); print('sglang', sglang.__version__); print('is_available:', torch.npu.is_available()); print('count:', torch.npu.device_count())"
+python -c "import torch, torch_npu; from importlib.metadata import version; print('torch=', torch.__version__); print('torch_npu=', torch_npu.__version__); print('sglang', version('sglang')); print('is_available:', torch.npu.is_available()); print('count:', torch.npu.device_count())"
 ```
 
 输出结果如下：

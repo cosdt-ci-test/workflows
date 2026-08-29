@@ -86,14 +86,23 @@ uv pip install --no-deps --extra-index-url https://repo.huaweicloud.com/ascend/r
 # → configs/__init__ → deepseekvl2.py 顶部 `from transformers import (...)` → transformers 内部
 # image_utils.py:55 `from torchvision.transforms import InterpolationMode` → ModuleNotFoundError →
 # transformers 的 AutoProcessor lazy loader 报"Could not import module 'AutoProcessor'"（实际根因是 torchvision.transforms）。
+# 还需 torchvision.transforms.functional 子模块（run 33266519990）：configs/__init__ 还导入 deepseek_ocr.py，
+# 顶部 `from torchvision.transforms import functional as TF` → ModuleNotFoundError（functional 子模块不存在）。
+# 顺便把 v2.functional 也 stub 上（sglang NPU 路径有 `import torchvision.transforms.v2.functional as tvF`，
+# 文本 smoke 不走 VL 路径但 configs 链路 import 时可能引入）。transformers 5.8.1 还用 pil_to_tensor（image_utils.py:56），
+# functional 里加个 raise NotImplementedError 占位。
 python - <<'PY'
 import os, site
 sp = site.getsitepackages()[0]
 pkg = os.path.join(sp, 'torchvision')
 io = os.path.join(pkg, 'io')
 tx = os.path.join(pkg, 'transforms')
+txf = os.path.join(tx, 'functional')
+txv2 = os.path.join(tx, 'v2')
+txv2f = os.path.join(txv2, 'functional')
 os.makedirs(io, exist_ok=True)
-os.makedirs(tx, exist_ok=True)
+os.makedirs(txf, exist_ok=True)
+os.makedirs(txv2f, exist_ok=True)
 open(os.path.join(pkg, '__init__.py'), 'w').close()
 open(os.path.join(io, '__init__.py'), 'w').write(
     'class ImageReadMode:\n'
@@ -108,6 +117,8 @@ open(os.path.join(io, '__init__.py'), 'w').write(
     '    raise NotImplementedError("torchvision stub: not used in this text-only smoke")\n'
 )
 open(os.path.join(tx, '__init__.py'), 'w').write(
+    'from torchvision.transforms import functional as _F  # re-export submodule\n'
+    '\n'
     'class InterpolationMode:\n'
     '    NEAREST = "nearest"\n'
     '    NEAREST_EXACT = "nearest-exact"\n'
@@ -116,6 +127,36 @@ open(os.path.join(tx, '__init__.py'), 'w').write(
     '    BOX = "box"\n'
     '    HAMMING = "hamming"\n'
     '    LANCZOS = "lanczos"\n'
+    '\n'
+    'functional = _F\n'
+)
+# Sub-module so `from torchvision.transforms import functional` / `import torchvision.transforms.functional as TF` works.
+open(os.path.join(txf, '__init__.py'), 'w').write(
+    'class InterpolationMode:\n'
+    '    NEAREST = "nearest"\n'
+    '    NEAREST_EXACT = "nearest-exact"\n'
+    '    BILINEAR = "bilinear"\n'
+    '    BICUBIC = "bicubic"\n'
+    '    BOX = "box"\n'
+    '    HAMMING = "hamming"\n'
+    '    LANCZOS = "lanczos"\n'
+    '\n'
+    'def pil_to_tensor(*args, **kwargs):\n'
+    '    raise NotImplementedError("torchvision stub: not used in this text-only smoke")\n'
+    '\n'
+    'def resize(*args, **kwargs):\n'
+    '    raise NotImplementedError("torchvision stub: not used in this text-only smoke")\n'
+    '\n'
+    'def center_crop(*args, **kwargs):\n'
+    '    raise NotImplementedError("torchvision stub: not used in this text-only smoke")\n'
+)
+# torchvision.transforms.v2 也要 stub（v2/__init__.py 让 `from torchvision.transforms.v2 import functional` 能 import）。
+open(os.path.join(txv2, '__init__.py'), 'w').write(
+    'from torchvision.transforms.v2 import functional\n'
+)
+open(os.path.join(txv2f, '__init__.py'), 'w').write(
+    'def __getattr__(name):\n'
+    '    raise NotImplementedError(f"torchvision stub: torchvision.transforms.v2.functional.{name} not used in this text-only smoke")\n'
 )
 print(f'torchvision stub installed at {pkg}')
 PY

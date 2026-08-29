@@ -13,8 +13,7 @@
 - CANN / torch 2.11.0 / torch_npu 2.11.0 / sglang 0.5.14 / modelscope 前置检查与安装（按 specforge `pyproject.toml` 的 pin 对齐，不绕 `--no-deps`）；
 - specforge 源码安装（`git clone <ref>` + `pip install .`），PyPI 二进制 wheel 作为可选路径；
 - `specforge --help` / `specforge train --help` CLI 自检；
-- **端到端 smoke**：在 4 卡 NPU 上起 `mooncake_master` + SGLang capture server（卡 0）+ `specforge train` 1 步训练（卡 1），跑完 trap 兜底清理。命令直接写在 [Quick-start-Ascend.md 端到端 smoke 章节](docs/Quick-start-Ascend.md#端到端-smoke1-步训练) 的 `<details>` 折叠块里，CI 整段执行；
-- **完整训练链路**（不在 CI 范围内，文档末尾展开）：多卡 managed-local 拓扑、SGLang capture patch 应用顺序、数据集准备、生产参数（`nproc_per_node=10`、`num_anchors=512` 等）、成功判据（`prompts_failed=0` / `step N: {...loss...}` / teardown 无 `could not drain`）、清理脚本、排错表（`ACL_ERROR_RT_CONTEXT_NULL` / USP 在 NPU 上不可用 / `--spec-capture-aux-layer-ids` 不一致等）。
+- **端到端 smoke**：在 4 卡 NPU 上起 `mooncake_master` + SGLang capture server（卡 0）+ `specforge train` 1 步训练（卡 1），跑完 trap 兜底清理。命令直接写在 [Quick-start-Ascend.md 端到端 smoke 章节](docs/Quick-start-Ascend.md#端到端-smoke1-步训练) 的 `<details>` 折叠块里，CI 整段执行；CI smoke 已经覆盖端到端主路径，本地不再补完整训练示例（参考 xtuner 删「完整 5 epoch 本地手动块」的同一取舍）。
 
 ## 触发
 

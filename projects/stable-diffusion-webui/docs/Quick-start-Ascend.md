@@ -100,6 +100,12 @@ HEAD xxx
 
 ## 安装依赖
 
+stable-diffusion-webui 的依赖链（`facexlib` → `opencv-python`）在 import 时动态链接 `libGL.so.1` 与 `libglib-2.0`，基础 CANN 镜像不含这些运行库，需先补装（`libgl1` 提供 libGL，`libglib2.0-0` 提供 libglib/libgthread；GUI 相关的 X11/xcb 库 opencv wheel 自带，无需安装）：
+
+```shell #test-setup
+apt-get update -qq && apt-get install -y -qq --no-install-recommends libgl1 libglib2.0-0
+```
+
 stable-diffusion-webui 的依赖 pin 为 py3.10 时代版本（部分包没有 cp312 wheel），因此用 `uv` 建一个**独立的 py3.10 venv**（`uv` 会自动托管下载 CPython 3.10），所有安装与运行都走该 venv：
 
 ```shell #test-setup

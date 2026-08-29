@@ -586,7 +586,19 @@ def _patch_triton():
                 print(f'[sitecustomize] profiler stub failed: {_e}', file=_s.stderr, flush=True)
         if not hasattr(_active, 'utils') or not hasattr(getattr(_active, 'utils', None), 'set_printf_fifo_size'):
             try:
-                _active.utils = type('U', (), {'set_printf_fifo_size': staticmethod(lambda *a, **kw: None)})()
+                # CI 33224152006: 静态方法表漏了 get_arch，triton.runtime jit 调用
+                # _active.utils.get_arch() 时 AttributeError。改成 __getattr__ 兜底，
+                # 任何未知方法/属性都返回 no-op lambda，set_printf_fifo_size 这种已知
+                # 方法显式给静态实现。
+                class _StubUtils:
+                    def __getattr__(self, _name):
+                        if _name.startswith('_'):
+                            raise AttributeError(_name)
+                        return lambda *a, **kw: None
+                    @staticmethod
+                    def set_printf_fifo_size(*a, **kw):
+                        return None
+                _active.utils = _StubUtils()
             except Exception as _e:
                 print(f'[sitecustomize] utils stub failed: {_e}', file=_s.stderr, flush=True)
         for _name, _stub in (

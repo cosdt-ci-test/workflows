@@ -60,12 +60,14 @@ python --version
 Python 3.12.xxx
 ```
 
-对齐 specforge 上游 pin 装 `torch` / `torch_npu` / `sglang`：
+对齐 specforge 上游 pin 装 `torch` / `torch_npu` / `sglang`（cluster 镜像里 sglang 0.5.14 wheel 的 `Requires-Dist: cuda-python` 被重打包成 `<0` 当"exclude 哨兵"——uv 的 pubgrub 不识别这个模式，会去找 <0.0.0 的 cuda-python 找不到而报 unsatisfiable，所以 sglang 必须 `--no-deps`；specforge 跟上游 [ascend_npu.md](https://github.com/sgl-project/SpecForge/blob/main/docs/basic_usage/Ascend/ascend_npu.md) 一致也 `--no-deps`，避免再把 sglang 拉进来重解析）：
 
 ```shell #test-setup
 uv pip install -f https://mirrors.aliyun.com/pytorch-wheels/cpu torch==2.11.0
 uv pip install --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi torch_npu==2.11.0
-uv pip install --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi sglang==0.5.14
+# specforge / sglang 其余依赖逐项列出来，绕开 cuda-python<0 哨兵
+uv pip install transformers==5.8.1 datasets tqdm accelerate huggingface-hub numpy openai-harmony pydantic psutil pyyaml safetensors requests tensorboard typing-extensions wandb yunchang fastapi uvicorn aiohttp pyzmq python-multipart
+uv pip install --no-deps --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi sglang==0.5.14
 ```
 
 检查 torch / torch_npu / sglang 是否装好且 NPU 设备可用：
@@ -121,11 +123,11 @@ echo "${UPSTREAM_REF}"
 ```shell #test id="specforge-install-source" load="upstream_ref>>ref"
 git clone --depth 1 --branch <ref> https://github.com/sgl-project/SpecForge.git SpecForge
 cd SpecForge
-uv pip install .
+uv pip install --no-deps .
 specforge --version
 ```
 
-\<ref> 为最新的 release 分支名（例如 `v0.5.14`）。
+\<ref> 为最新的 release 分支名。
 
 输出结果类似如下：
 

@@ -463,8 +463,8 @@ set -o pipefail
 /usr/local/opencv-cann/bin/opencv_test_cannops --gtest_color=no > /tmp/cannops_gtest.log 2>&1; rc=$?
 tail -n 25 /tmp/cannops_gtest.log
 if [ $rc -ne 0 ]; then
-  echo '--- failure assertion blocks:'
-  grep -A 10 'unknown file: Failure' /tmp/cannops_gtest.log | head -120
+  echo '--- per-test failure summary:'
+  grep -E '^\[ RUN|unknown file: Failure|C\+\+ exception|op\[[A-Za-z0-9_]+\]|E[0-9]{5}' /tmp/cannops_gtest.log | head -80
 fi
 exit $rc
 ```

@@ -92,8 +92,12 @@ jobs:
       # `markdown_doc_test_base.py` already special-cases `api.github.com`
       # URLs and re-applies the same Accept header on the test-side
       # fetch, so MONITORED_DOC_URL inherits the fix.
-      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/specforge/docs/Quick-start-Ascend.md
-      doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/specforge/docs/Quick-start-Ascend.md
+      # `?ref=${{ github.sha }}` is load-bearing: the Contents API without
+      # a ref defaults to the repo's default branch (`main`), so a dispatch
+      # on hdc would silently fetch main's doc and the test would never
+      # reflect hdc edits. Same pattern as aibrix / bitsandbytes / colossalai.
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/specforge/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/specforge/docs/Quick-start-Ascend.md
       # cwd is workflows/projects/specforge; env contract (MONITORED_DOC_URL /
       # UPSTREAM_REF / NPU_READY) is injected by the engine. All project
       # env prep and installs live in the test subclass's

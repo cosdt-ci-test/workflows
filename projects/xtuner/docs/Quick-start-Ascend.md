@@ -278,11 +278,11 @@ ls colors/ | sort
 
 输出结果（同时是数据集会落在 `./colors/` 下的目录结构）：
 
-```shell #test-result id="xtuner-pull-dataset" fuzzy='xxx'
+```shell #test-result id="xtuner-pull-dataset"
 colors.json
 README.md
 train.jsonl
-xxx
+...
 ```
 
 
@@ -291,10 +291,6 @@ xxx
 XTuner 自带大量开箱即用的 config：
 
 ```shell #test id="xtuner-list-cfg"
-# 绕开 console_script wrapper（其 shebang 在 base image 上可能指向非 uv 的 python，
-# 看不到 uv 装的 egg-link，把 xtuner 当 namespace package 处理后 `from xtuner import cli`
-# 报 `ImportError: cannot import name 'cli' from 'xtuner' (unknown location)`），
-# 直接用 Python API 验 cfg 可枚举 + 含 colorist：
 python -c "
 from xtuner.configs import cfgs_name_path
 names = sorted(cfgs_name_path.keys())
@@ -312,7 +308,7 @@ colorist_count: xxx
 
 从 list-cfg 拷一份 QLoRA + Colorist 配置到本地：
 
-```shell #test-setup store="xtuner_llm_cfg_path"
+```shell #test-setup store="xtuner_colorist_cfg_name"
 config_name=$(python -c "
 from xtuner.configs import cfgs_name_path
 import re
@@ -321,6 +317,9 @@ match = next((n for n in names if re.search(r'(internlm2|llama).*qlora.*colorist
 print(match)
 ")
 test -n "$config_name" || { echo "no matching config ((internlm2|llama).*qlora.*colorist); abort"; exit 1; }
+```
+
+```shell #test-setup store="xtuner_llm_cfg_path" load="xtuner_colorist_cfg_name>>config_name"
 # xtuner copy-cfg 把 save_dir 当目录用，文件实际写到 save_dir/<basename>_copy.py；
 # 直接调 main() 然后 echo save_dir 路径会被 Step 18 当文件读，触发 IsADirectoryError。
 # 改用 Python 自己算 actual file path 并只 print 这一行（setup 抓 stdout 当 store）：

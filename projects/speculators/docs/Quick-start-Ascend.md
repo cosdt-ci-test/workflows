@@ -498,10 +498,13 @@ sleep 5  # 给 vllm worker 完全退出 + NPU 释放
 
 # 离线训练：--on-missing raise 强制走 FileBackend 读 $HS_DIR 缓存，不再起 vllm endpoint；
 # （train.py 的 argparse choices 是 generate/skip/warn/raise，没有 error；CI 33201184782 教训）
-# 显式不带 --vllm-endpoint，避免 dataloader 误以为有 server 可问。stderr 重定向到 /tmp/train.log
-# 必 echo 末尾诊断（哪怕 0 错误也给 framework 看到 train.log 末尾）；用 || true 屏蔽 set -e，
-# 失败时下文统一 cat /tmp/train.log + 抛 exit 1，避免 CI 33177074202 那种 torchrun 静默崩 →
-# set -e 中断 → bash stderr=0B → framework 只看到 rc=1 + 0B stderr
+# 显式不带 --vllm-endpoint，避免 dataloader 误以为有 server 可问。
+# train.py stdout+stderr 一边 tee 到 /tmp/train.log（供事后 cat），一边串到 bash 的 stderr；
+# 这样 train.py 真炸时 bash stderr 里就有 'Traceback (most recent call last'，
+# framework 触发 ERROR_MARKERS 全量 dump（≤256 KB），不会再像 CI 33239422249 那样
+# 只看到末尾 `bash: line 84: Killed setsid nohup python scripts/launch_vllm.py` + 一个
+# 截断到 `ker: There appear to be %d '` 的 partial traceback——根本看不到 train.py 的
+# 真因。TRAIN_RC 从 PIPESTATUS[0] 取，set -e 不会半路 abort 漏掉后续 echo。
 torchrun --standalone --nproc_per_node=1 scripts/train.py \
   --verifier-name-or-path "<verifier_path>" \
   --data-path "<data_path>" \
@@ -515,15 +518,11 @@ torchrun --standalone --nproc_per_node=1 scripts/train.py \
   --max-anchors 3072 \
   --num-layers 5 \
   --target-layer-ids 2 18 34 \
-  --on-missing raise >/tmp/train.log 2>&1 || TRAIN_RC=$?
+  --on-missing raise 2>&1 | tee /tmp/train.log || TRAIN_RC=${PIPESTATUS[0]}
 TRAIN_RC=${TRAIN_RC:-0}
 
-echo "=== train.log tail (last 80 lines) ==="
-tail -80 /tmp/train.log
-
 if [ "$TRAIN_RC" -ne 0 ]; then
-  echo "=== train.py failed (rc=$TRAIN_RC); full train.log ==="
-  cat /tmp/train.log
+  echo "=== train.py failed (rc=$TRAIN_RC); full train.log saved at /tmp/train.log ==="
   exit 1
 fi
 if ! test -f "$CHECKPOINT_DIR/config.json" || ! test -f "$CHECKPOINT_DIR/model.safetensors"; then

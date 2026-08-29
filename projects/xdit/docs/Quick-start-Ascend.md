@@ -263,7 +263,6 @@ torch.npu synchronize
 ...
 --ring_degree RING_DEGREE
 ...
-```
 
 ### 单卡推理 smoke（`--ulysses_degree 1`，2 卡机器也跑）
 

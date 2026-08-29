@@ -27,7 +27,7 @@ Atlas **800T** / **900 A2** 训练系列（Ascend **910B**）。本文示例为*
 
 新开终端后 CANN 变量不会自动生效。`cmake` 配置阶段还会调用 `npu-smi` 探测 SoC 型号；在常见容器布局里，`npu-smi` 位于 `/usr/local/sbin`，需把该目录加入 `PATH`。
 
-```shell
+```shell #test-setup
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 export PATH=/usr/local/sbin:$PATH
 ```
@@ -152,12 +152,14 @@ whisper_backend_init_gpu: using CANN0 backend
 
 `whisper-server` 把转写包成 HTTP 服务。它启动后不会自己退出（用 Ctrl+C 结束），想手动体验时可以使用：
 
+<!--
 ```shell
 cd whisper.cpp && ASCEND_RT_VISIBLE_DEVICES=0 ./build/bin/whisper-server \
     -m models/ggml-tiny.en.bin \
     -t 4 --device 0 \
     --host 127.0.0.1 --port 8080
 ```
+-->
 
 服务就绪后用浏览器打开 `http://127.0.0.1:8080`，或从另一个终端向 `POST /inference` 上传音频。
 

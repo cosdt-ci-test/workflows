@@ -33,7 +33,7 @@ Atlas **800T** / **900 A2** 训练系列（Ascend **910B**）。本文示例为*
 
 在终端里 source 以下两个脚本，加载 CANN toolkit 和 ATB 算子库。后续命令都假设这个终端已经加载好环境。
 
-```shell
+```shell #test-setup
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 source /usr/local/Ascend/nnal/atb/set_env.sh
 ```

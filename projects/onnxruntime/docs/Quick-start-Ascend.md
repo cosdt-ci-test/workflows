@@ -24,7 +24,7 @@ Atlas **800T** / **900 A2** 训练系列（Ascend **910B**）。本文示例为*
 
 新开终端后 CANN 变量不会自动生效。`npu-smi` 在常见容器里位于 `/usr/local/sbin` 或 `/usr/local/bin`。后面每一个真正调用 `onnxruntime` 的命令块都会再 `source` 一次，单独复制也能跑。
 
-```shell
+```shell #test-setup
 export PATH=/usr/local/sbin:/usr/local/bin:$PATH
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 ```

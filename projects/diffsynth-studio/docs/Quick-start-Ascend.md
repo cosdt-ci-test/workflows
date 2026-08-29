@@ -39,7 +39,7 @@ Atlas **800T** / **900 A2** 训练系列（Ascend **910B**）。本文示例为*
 ## 1. 加载 CANN 环境
 
 
-```shell
+```shell #test-setup
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 export PATH=/usr/local/sbin:$PATH
 export PYTHONNOUSERSITE=1

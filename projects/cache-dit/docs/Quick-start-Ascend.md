@@ -75,7 +75,7 @@ cache-dit version: xxx
 
 使用预建的 Ascend NPU Docker 镜像启动 cache-dit，无需手动安装 torch 和 torch_npu：
 
-```shell
+```shell #test-setup
 # 拉取预建镜像
 docker pull quay.io/ascend/vllm-ascend:v0.13.0rc1
 
@@ -99,7 +99,7 @@ docker run \
 
 在容器内设置环境变量并安装 cache-dit：
 
-```shell
+```shell #test-setup
 export ASCEND_RT_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
@@ -126,7 +126,7 @@ npu-smi info
 
 **安装 PyTorch 2.8.0**：
 
-```shell
+```shell #test-setup
 # aarch64 (Ascend 服务器)
 pip3 install torch==2.8.0
 
@@ -146,14 +146,14 @@ https://gitcode.com/Ascend/pytorch/releases
 
 **安装额外依赖**：
 
-```shell
+```shell #test-setup
 pip install --no-deps torchvision==0.23.0
 pip install einops sentencepiece accelerate
 ```
 
 #### 3. 安装 cache-dit
 
-```shell
+```shell #test-setup
 pip3 install -U cache-dit
 # 或者安装最新 develop 版本
 pip3 install git+https://github.com/vipshop/cache-dit.git
@@ -161,7 +161,7 @@ pip3 install git+https://github.com/vipshop/cache-dit.git
 
 **同时安装 diffusers (用于并行支持)**：
 
-```shell
+```shell #test-setup
 pip3 install -U diffusers  # 要求 >= 0.36.0（PyPI latest，避免走 github 代理）
 ```
 
@@ -171,6 +171,7 @@ pip3 install -U diffusers  # 要求 >= 0.36.0（PyPI latest，避免走 github �
 
 使用 `_native_npu` 后端（推荐）启动单卡推理：
 
+<!--
 ```shell
 # 使用默认模型路径，例如 "black-forest-labs/FLUX.1-dev"
 python3 -m cache_dit.generate flux --attn _native_npu
@@ -178,11 +179,13 @@ python3 -m cache_dit.generate qwen_image --attn _native_npu
 python3 -m cache_dit.generate flux --cache --attn _native_npu
 python3 -m cache_dit.generate qwen_image --cache --attn _native_npu
 ```
+-->
 
 ### 分布式推理
 
 cache-dit 支持上下文并行和张量并行。使用 `torchrun` 启动分布式任务：
 
+<!--
 ```shell
 torchrun --nproc_per_node=4 -m cache_dit.generate flux --parallel ulysses --attn _native_npu
 torchrun --nproc_per_node=4 -m cache_dit.generate zimage --parallel ulysses --attn _native_npu
@@ -191,12 +194,13 @@ torchrun --nproc_per_node=4 -m cache_dit.generate flux --parallel ulysses --cach
 torchrun --nproc_per_node=4 -m cache_dit.generate zimage --parallel ulysses --cache --attn _native_npu
 torchrun --nproc_per_node=4 -m cache_dit.generate qwen_image --parallel ulysses --cache --attn _native_npu
 ```
+-->
 
 ## 启动后验证
 
 ### 1. 验证 NPU 加速是否生效
 
-```shell
+```shell #test
 python -c "
 import torch
 import cache_dit
@@ -209,9 +213,15 @@ print('NPU inference test: OK')
 "
 ```
 
+```shell #test-result id="npu-function-verification-2" disable_fuzzy
+torch.npu.is_available(): True
+cache-dit version: xxx
+NPU inference test: OK
+```
+
 ### 2. 检查注意后端是否正确加载
 
-```shell
+```shell #test
 python -c "
 import cache_dit
 # 验证 _native_npu 后端可用

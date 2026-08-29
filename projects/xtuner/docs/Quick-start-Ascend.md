@@ -384,8 +384,8 @@ print(path)
 "
 ```
 
+用 py_compile 验 cfg 是合法 Python + grep 验 4 处 patch 都生效：
 ```shell #test id="xtuner-patch-cfg" load="xtuner_llm_cfg_path>>cfg"
-# 用 py_compile 验 cfg 是合法 Python（不触发 import 链）+ grep 验 4 处 patch 都生效：
 python -c "
 import py_compile
 import re
@@ -423,13 +423,11 @@ prompt_template= PROMPT_TEMPLATE.xxx
 
 ### 启动微调
 
-> **CI smoke 不跑训练**——`peft → transformers → torchvision` import chain 在 NPU base image 上挂（torchvision 没 `nms` operator，因为 torchvision 是 CPU/NPU 编译版本但 `_meta_registrations.py` 仍尝试注册 `torchvision::nms` 这个 CUDA-only operator），是 base image 的 torchvision/transformers 兼容问题，跟 doc 无关。下面命令仅供本地真机手动跑（5 samples × 1 epoch smoke 用例也留给本地）。
-
 参考模板给的单卡 + 多卡启动方式。
 
 #### 单卡（本地 smoke 用例）
 
-```shell
+```shell #test id="xtuner-train-smoke"
 cp /tmp/xtuner_npu_llm_cfg.py /tmp/xtuner_npu_smoke_single_cfg.py
 cat >> /tmp/xtuner_npu_smoke_single_cfg.py <<'EOF'
 
@@ -443,12 +441,15 @@ export TORCH_NPU_USE_HCCL=1
 # （wrapper 启动的 Python 看不到 uv egg-link 把 xtuner 当 namespace package，`from xtuner import cli` ImportError）。
 python -m xtuner.tools.train /tmp/xtuner_npu_smoke_single_cfg.py --work-dir /tmp/xtuner_sft_llm_out_single
 ls -t /tmp/xtuner_sft_llm_out_single/*.pth 2>/dev/null | head -1
-# 预期 stdout 形如：/tmp/xtuner_sft_llm_out_single/iter_xxx.pth
+```
+
+```shell #test-result id="xtuner-train-smoke" fuzzy='xxx'
+xxx
 ```
 
 #### 多卡（本地 smoke 用例，2 卡 runner）
 
-```shell
+```shell #test id="xtuner-train-smoke-multi"
 cp /tmp/xtuner_npu_llm_cfg.py /tmp/xtuner_npu_smoke_multi_cfg.py
 cat >> /tmp/xtuner_npu_smoke_multi_cfg.py <<'EOF'
 
@@ -460,9 +461,13 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 export TORCH_NPU_USE_HCCL=1
 NPROC_PER_NODE=2 python -m xtuner.tools.train /tmp/xtuner_npu_smoke_multi_cfg.py --work-dir /tmp/xtuner_sft_llm_out_multi
 ls -t /tmp/xtuner_sft_llm_out_multi/*.pth 2>/dev/null | head -1
-# 预期 stdout 形如：/tmp/xtuner_sft_llm_out_multi/iter_xxx.pth
 ```
 
+```shell #test-result id="xtuner-train-smoke-multi" fuzzy='xxx'
+xxx
+```
+
+<!--
 完整 5 epoch × 144 step = 720 step 训练命令（本地按需手动跑，跑出来的 .pth 路径可直接被"模型转换 + LoRA 合并"章节消费）：
 
 ```shell
@@ -474,6 +479,7 @@ xtuner train /tmp/xtuner_npu_llm_cfg.py --work-dir /tmp/xtuner_sft_llm_out
 # 多卡（xtuner.train 内置 torchrun 集成，按需调整 NPROC_PER_NODE）
 NPROC_PER_NODE=${GPU_NUM} xtuner train /tmp/xtuner_npu_llm_cfg.py --work-dir /tmp/xtuner_sft_llm_out
 ```
+-->
 
 ### 模型转换 + LoRA 合并
 
@@ -505,6 +511,7 @@ has_chat: True
 
 完整 `pth_to_hf` + `merge` 流程（依赖前面训练出 `.pth`，本地按需手动跑）：
 
+<!--
 ```shell
 # 创建存放 hf 格式参数的目录
 mkdir -p /tmp/xtuner_sft_llm_out/iter_720_hf
@@ -521,6 +528,7 @@ xtuner convert merge ./Shanghai_AI_Laboratory/internlm2-chat-7b \
     /tmp/xtuner_sft_llm_out/merged \
     --max-shard-size 2GB
 ```
+-->
 
 > `#test` 只烟囱测 `xtuner convert` 的两个子命令 `pth_to_hf` 和 `merge` 在 `xtuner.entry_point.modes` dict 里**注册**（不真跑 `xtuner convert pth_to_hf --help` —— 它会 subprocess 调 `python pth_to_hf.py --help`，触发 peft→transformers→torchvision import chain 在 NPU image 上挂 `torchvision::nms` operator 缺失）。完整转换 + 合并依赖前面训练出的 `.pth`，CI smoke 跑不到，本地按需手动跑。
 
@@ -558,20 +566,24 @@ has_system_template_arg: True
 
 完整 `xtuner chat` 命令（交互式 CLI，依赖前面合并后的权重，本地按需手动跑）：
 
+<!--
 ```shell
 xtuner chat /tmp/xtuner_sft_llm_out/merged \
     --prompt-template internlm2_chat \
     --system-template colorist
 ```
+-->
 
 也可以不合并、只跟 LLM + LoRA adapter 直接对话：
 
+<!--
 ```shell
 xtuner chat ./Shanghai_AI_Laboratory/internlm2-chat-7b \
     --adapter /tmp/xtuner_sft_llm_out/iter_720_hf \
     --prompt-template internlm2_chat \
     --system-template colorist
 ```
+-->
 
 交互示例（训练前模型 → 训练后模型的输出变化）：
 

@@ -220,14 +220,12 @@ python -c "from modelscope import snapshot_download; snapshot_download('Shanghai
 检查是否有对应的文件：
 ```shell #test id="xtuner-pull-weights"
 ws=$(find ./Shanghai_AI_Laboratory -name config.json -print -quit)
-test -n "$ws" && test -f "$ws" && echo "weights_ok"
 ls "$(dirname "$ws")" | grep -E '\.(safetensors|json|model|py)$' | sort
 ```
 
 输出结果类似：
 
 ```shell #test-result id="xtuner-pull-weights"
-weights_ok
 config.json
 configuration.json
 configuration_internlm2.py

@@ -268,7 +268,11 @@ p.print_help()
 
 ```shell #test id="xdit-infer-single" load="model_path>>model_path"
 export TORCH_NPU_USE_HCCL=1
-cd "$(dirname "$(python -c 'import xfuser, os; print(os.path.dirname(xfuser.__file__))')")"/..
+# CANN 的 torch_npu import 副作用会往 stdout 打 "torch.npu synchronize" 一行，
+# 会污染下面的 $(...) 命令替换：dirname 会把整段（含换行）当一个路径处理，
+# 报 "No such file or directory"。先把 xfuser 路径写进文件，再 cd。
+python -c 'import os, xfuser; open("/tmp/_xfuser_dir", "w").write(os.path.dirname(xfuser.__file__))'
+cd "$(dirname "$(cat /tmp/_xfuser_dir)")"/..
 python examples/sd3_example.py --model "<model_path>" \
     --prompt "a tiny test sketch" \
     --height 256 --width 256 \
@@ -298,7 +302,8 @@ export TORCH_NPU_USE_HCCL=1
 ```
 
 ```shell #test id="xdit-infer-multi" load="model_path>>model_path"
-cd "$(dirname "$(python -c 'import xfuser, os; print(os.path.dirname(xfuser.__file__))')")"/..
+python -c 'import os, xfuser; open("/tmp/_xfuser_dir", "w").write(os.path.dirname(xfuser.__file__))'
+cd "$(dirname "$(cat /tmp/_xfuser_dir)")"/..
 # ulysses_degree=2, ring_degree=1：度乘积 = 2，torchrun --nproc_per_node=2 显式起 2 个 rank；
 # xfuser 内部通过 xfuser.envs.get_torch_distributed_backend() 选 hccl，不读 env。
 torchrun --nproc_per_node=2 examples/sd3_example.py \

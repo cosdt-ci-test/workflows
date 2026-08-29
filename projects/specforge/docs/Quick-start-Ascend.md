@@ -69,7 +69,7 @@ uv pip install --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi 
 uv pip install transformers==5.8.1 datasets tqdm accelerate huggingface-hub numpy openai-harmony pydantic psutil pyyaml safetensors requests tensorboard typing-extensions wandb yunchang fastapi uvicorn aiohttp pyzmq python-multipart
 # sglang 0.5.14 上游 requires_dist 里非 CUDA-only 项；里头 quack-kernels 自己带 nvidia-cutlass-dsl<0 哨兵，
 # torch / numpy / pydantic / 等基础 dep 已经装好，整批 --no-deps 装
-uv pip install --no-deps orjson anthropic apache-tvm-ffi av blobfile build compressed-tensors decord2 distro easydict einops gguf interegular IPython kernels llguidance mistral_common msgspec ninja openai outlines packaging partial_json_parser pillow prometheus-client py-spy pybase64 quack-kernels scipy sentencepiece setproctitle sgl-deep-gemm
+uv pip install --no-deps orjson anthropic apache-tvm-ffi av blobfile build compressed-tensors decord2 distro easydict einops gguf interegular IPython kernels llguidance mistral_common msgspec ninja openai outlines packaging partial_json_parser pillow prometheus-client py-spy pybase64 quack-kernels scipy sentencepiece setproctitle sgl-deep-gemm starlette triton torchvision
 # sglang wheel 本身 --no-deps 装（cluster 镜像把它的 Requires-Dist cuda-python 改成 <0 哨兵，绕开解析）
 uv pip install --no-deps --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi sglang==0.5.14
 ```

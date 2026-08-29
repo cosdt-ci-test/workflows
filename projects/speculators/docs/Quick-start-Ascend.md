@@ -180,8 +180,6 @@ python -c "import importlib.metadata; print(f'triton={importlib.metadata.version
 输出结果如下：
 
 ```shell #test-result id="vllm-ascend-install" fuzzy='xxx'
-xxx
-qkv_rmsnorm_rope op: vllm.qkv_rmsnorm_rope
 vllm=0.23.0+empty
 vllm_ascend=0.23.0
 triton_ascend=3.2.2

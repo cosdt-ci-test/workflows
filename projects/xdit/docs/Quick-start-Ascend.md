@@ -257,6 +257,7 @@ p.print_help()
 ...--ulysses_degree ULYSSES_DEGREE
 ...--ring_degree RING_DEGREE
 ...--pipefusion_parallel_degree PIPEFUSION_PARALLEL_DEGREE
+...--use_cache           Use cache config for attention compression.
 
 ### 单卡推理 smoke（`--ulysses_degree 1`，2 卡机器也跑）
 

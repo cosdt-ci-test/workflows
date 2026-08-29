@@ -258,13 +258,10 @@ torch.npu synchronize
 --model MODEL         Name or path of the huggingface model to use.
 ...
 --ulysses_degree ULYSSES_DEGREE
-...Ulysses sequence parallel degree. Used in attention layer.
 ...
 --pipefusion_parallel_degree PIPEFUSION_PARALLEL_DEGREE
-...Pipefusion parallel degree. Indicates the number of pipeline stages.
 ...
 --ring_degree RING_DEGREE
-...Ring sequence parallel degree. Used in attention layer.
 ...
 ```
 

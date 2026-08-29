@@ -32,6 +32,13 @@ import os
 import subprocess
 import unittest
 
+import sys
+
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+_SRC = os.path.join(_REPO_ROOT, 'src')
+if _SRC not in sys.path:
+    sys.path.insert(0, _SRC)
+
 from workflows.markdown_doc_test_base import MarkdownDocTestBase
 
 

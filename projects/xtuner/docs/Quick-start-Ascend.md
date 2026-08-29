@@ -476,6 +476,7 @@ PYEOF
 # 注意：merge-setup 后面也会建同名 stub——这里先建好让 smoke setup 立即能用。
 mkdir -p /tmp/torchvision_stub/torchvision/ops /tmp/torchvision_stub/torchvision/transforms
 cat > /tmp/torchvision_stub/torchvision/__init__.py <<'PYEOF'
+__version__ = "0.24.0"
 PYEOF
 cat > /tmp/torchvision_stub/torchvision/ops/__init__.py <<'PYEOF'
 def nms(*args, **kwargs):
@@ -623,6 +624,7 @@ PYEOF
 # image_utils → torchvision.transforms，site-packages torchvision 缺 C++ op 挂）。
 mkdir -p /tmp/torchvision_stub/torchvision/ops /tmp/torchvision_stub/torchvision/transforms
 cat > /tmp/torchvision_stub/torchvision/__init__.py <<'PYEOF'
+__version__ = "0.24.0"
 PYEOF
 cat > /tmp/torchvision_stub/torchvision/ops/__init__.py <<'PYEOF'
 def nms(*args, **kwargs):
@@ -762,6 +764,7 @@ CI smoke 真跑 `pth_to_hf` + `merge`：
 # `RuntimeError: operator torchvision::nms does not exist`）。
 mkdir -p /tmp/torchvision_stub/torchvision/ops /tmp/torchvision_stub/torchvision/transforms
 cat > /tmp/torchvision_stub/torchvision/__init__.py <<'PYEOF'
+__version__ = "0.24.0"
 PYEOF
 cat > /tmp/torchvision_stub/torchvision/ops/__init__.py <<'PYEOF'
 def nms(*args, **kwargs):

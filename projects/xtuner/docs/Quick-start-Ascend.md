@@ -440,33 +440,42 @@ prompt_template= PROMPT_TEMPLATE.xxx
 跑最小训练：
 
 ```shell #test-setup id="xtuner-train-smoke-setup" load="xtuner_llm_cfg_path>>cfg"
-# Stub cv2 via sitecustomize to bypass base image's missing libxcb.so.1.
+# Stub cv2 via a real stub package (not sitecustomize) to bypass base image's missing libxcb.so.1.
 # mmengine.hooks.naive_visualization_hook.py:5 顶层 `import cv2`，被
 # `python -m xtuner.tools.train` → `from mmengine.runner import Runner` → ... → naive_visualization_hook
 # 这条 eager import 链触发。cv2 .so 间接链接 libxcb.so.1，NPU base image 缺这个 lib，
 # 走 `opencv-python-headless` 也救不回来（headless 只剥 GUI binding，.so 的 libxcb 引用还在）。
-# 走 PYTHONPATH + sitecustomize 让 Python 启动期注入空 cv2 模块，后续 `import cv2` 直接命中
-# sys.modules 里的 stub，根本不加载 .so。5 iter smoke 不真正做可视化，stub 够用。
-mkdir -p /tmp/cv2_stub
-cat > /tmp/cv2_stub/sitecustomize.py <<'PYEOF'
-import sys, types
-if 'cv2' not in sys.modules:
-    cv2 = types.ModuleType('cv2')
-    cv2.imread = lambda *a, **k: None
-    cv2.imwrite = lambda *a, **k: True
-    cv2.cvtColor = lambda *a, **k: None
-    cv2.resize = lambda *a, **k: None
-    sys.modules['cv2'] = cv2
+# 走 PYTHONPATH 让 Python 用 FileFinder 解析 `/tmp/cv2_stub/cv2/__init__.py`——这是真正的
+# importable package，module 自带合法 `__spec__`。这样 `transformers.utils.import_utils:115`
+# 的 `_cv2_available = importlib.util.find_spec("cv2") is not None` 走正常路径返回 spec
+# （不会被之前 sitecustomize 注入的 `types.ModuleType('cv2')` 那种 `__spec__ is None` 状态
+# 引发 ValueError）。5 iter smoke 不真正做可视化，stub 够用。
+mkdir -p /tmp/cv2_stub/cv2
+cat > /tmp/cv2_stub/cv2/__init__.py <<'PYEOF'
+def imread(*args, **kwargs):
+    return None
+
+def imwrite(*args, **kwargs):
+    return True
+
+def cvtColor(*args, **kwargs):
+    return None
+
+def resize(*args, **kwargs):
+    return None
 PYEOF
 
 cp <cfg> /tmp/xtuner_npu_smoke_single_cfg.py
+# 只 append samples_per_epoch：5 iter 短训足够触发一次 checkpoint + EvaluateChatHook。
+# 其他 override（max_epochs、checkpoint.interval、custom_hooks[1].every_n_iters）走
+# `--cfg-options` 而不是再赋值 cfg 变量。原因：cfg 文件里 `train_cfg`、`custom_hooks[1]`、
+# `default_hooks.checkpoint` 都在 line 167-200 期间被 cfg 文件靠前的赋值**捕获**为具体值
+# （TrainLoop、200、500），等 cat >> 再赋值同名顶层变量已晚——这些 dict 已经是闭包外的
+# snapshot，重新赋值只改顶层 var，dict 内容不变。`--cfg-options` 走 mmengine 的
+# DictAction + Config.merge_from_dict，支持点号语法 + list index，能穿透到 nested 字段。
 cat >> /tmp/xtuner_npu_smoke_single_cfg.py <<'EOF'
 
-train_cfg = dict(max_epochs=1)
 train_dataloader = dict(dataset=dict(samples_per_epoch=5))
-# 5 iter 训练里要让 EvaluateChatHook 触发（cfg 顶层 evaluation_freq 默认 200），
-# 改成 1 让 hook 每 iter 打 Sample output:
-evaluation_freq = 1
 EOF
 
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
@@ -479,7 +488,13 @@ mkdir -p /tmp/xtuner_sft_llm_out_single
 set -o pipefail
 # 用 python -m xtuner.tools.train 直接调 train 模块，绕开 console_script wrapper shebang 错配
 # （wrapper 启动的 Python 看不到 uv egg-link 把 xtuner 当 namespace package，`from xtuner import cli` ImportError）。
-python -m xtuner.tools.train /tmp/xtuner_npu_smoke_single_cfg.py --work-dir /tmp/xtuner_sft_llm_out_single 2>&1 | tee /tmp/xtuner_sft_llm_out_single/train.log
+python -m xtuner.tools.train /tmp/xtuner_npu_smoke_single_cfg.py \
+    --work-dir /tmp/xtuner_sft_llm_out_single \
+    --cfg-options \
+        train_cfg.max_epochs=1 \
+        default_hooks.checkpoint.interval=1 \
+        'custom_hooks.1.every_n_iters=1' \
+    2>&1 | tee /tmp/xtuner_sft_llm_out_single/train.log
 ```
 
 查 .pth 有没有落盘 + 训练日志里的 Sample output 段：
@@ -509,24 +524,29 @@ xxx (训前 assistant 回复——5 iter 没训出什么，可能是空 / 乱码
 跑最小训练：
 
 ```shell #test-setup id="xtuner-train-smoke-multi-setup" load="xtuner_llm_cfg_path>>cfg"
-mkdir -p /tmp/cv2_stub
-cat > /tmp/cv2_stub/sitecustomize.py <<'PYEOF'
-import sys, types
-if 'cv2' not in sys.modules:
-    cv2 = types.ModuleType('cv2')
-    cv2.imread = lambda *a, **k: None
-    cv2.imwrite = lambda *a, **k: True
-    cv2.cvtColor = lambda *a, **k: None
-    cv2.resize = lambda *a, **k: None
-    sys.modules['cv2'] = cv2
+# Stub cv2 via real stub package; see xtuner-train-smoke-setup for why we can't use
+# sitecustomize-injected ModuleType (find_spec raises on __spec__ is None).
+mkdir -p /tmp/cv2_stub/cv2
+cat > /tmp/cv2_stub/cv2/__init__.py <<'PYEOF'
+def imread(*args, **kwargs):
+    return None
+
+def imwrite(*args, **kwargs):
+    return True
+
+def cvtColor(*args, **kwargs):
+    return None
+
+def resize(*args, **kwargs):
+    return None
 PYEOF
 
 cp <cfg> /tmp/xtuner_npu_smoke_multi_cfg.py
+# samples_per_epoch 走 cfg 文件末尾 append；其他 max_epochs / checkpoint.interval /
+# custom_hooks[1].every_n_iters 走 --cfg-options（见 xtuner-train-smoke-setup 注释）。
 cat >> /tmp/xtuner_npu_smoke_multi_cfg.py <<'EOF'
 
-train_cfg = dict(max_epochs=1)
 train_dataloader = dict(dataset=dict(samples_per_epoch=5))
-evaluation_freq = 1
 EOF
 
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
@@ -534,7 +554,13 @@ export TORCH_NPU_USE_HCCL=1
 export PYTHONPATH=/tmp/cv2_stub${PYTHONPATH:+:$PYTHONPATH}
 mkdir -p /tmp/xtuner_sft_llm_out_multi
 set -o pipefail
-NPROC_PER_NODE=2 python -m xtuner.tools.train /tmp/xtuner_npu_smoke_multi_cfg.py --work-dir /tmp/xtuner_sft_llm_out_multi 2>&1 | tee /tmp/xtuner_sft_llm_out_multi/train.log
+NPROC_PER_NODE=2 python -m xtuner.tools.train /tmp/xtuner_npu_smoke_multi_cfg.py \
+    --work-dir /tmp/xtuner_sft_llm_out_multi \
+    --cfg-options \
+        train_cfg.max_epochs=1 \
+        default_hooks.checkpoint.interval=1 \
+        'custom_hooks.1.every_n_iters=1' \
+    2>&1 | tee /tmp/xtuner_sft_llm_out_multi/train.log
 ```
 
 查 .pth + Sample output：
@@ -584,22 +610,34 @@ CI smoke 真跑 `pth_to_hf` + `merge`：
 
 ```shell #test-setup
 # xtuner.tools.merge 顶层 import transformers（含 CLIPImageProcessor / CLIPVisionModel），
-# 触发 torchvision lazy import 在 NPU base image 上挂。stub torchvision 让 import 通过：
-python -c "
-import sys, types
-tv = types.ModuleType('torchvision'); sys.modules['torchvision'] = tv
-tv_ops = types.ModuleType('torchvision.ops')
-tv_ops.nms = lambda *a, **k: None
-sys.modules['torchvision.ops'] = tv_ops
-tv_t = types.ModuleType('torchvision.transforms')
-tv_t.Compose = lambda x: x
-tv_t.ToTensor = lambda *a, **k: None
-tv_t.Resize = lambda *a, **k: None
-tv_t.CenterCrop = lambda *a, **k: None
-tv_t.Normalize = lambda *a, **k: None
-sys.modules['torchvision.transforms'] = tv_t
-print('torchvision_stubbed: ok')
-"
+# 触发 torchvision lazy import 在 NPU base image 上挂。走 PYTHONPATH + 真正的 stub package
+# 让 import 命中 `__init__.py`，module 自带合法 `__spec__`，避免旧 transformers 启动期
+# `importlib.util.find_spec("torchvision")` 因为 `types.ModuleType` 没 `__spec__` 抛 ValueError。
+mkdir -p /tmp/torchvision_stub/torchvision/ops /tmp/torchvision_stub/torchvision/transforms
+cat > /tmp/torchvision_stub/torchvision/__init__.py <<'PYEOF'
+PYEOF
+cat > /tmp/torchvision_stub/torchvision/ops/__init__.py <<'PYEOF'
+def nms(*args, **kwargs):
+    return None
+PYEOF
+cat > /tmp/torchvision_stub/torchvision/transforms/__init__.py <<'PYEOF'
+def Compose(*args, **kwargs):
+    return None
+
+def ToTensor(*args, **kwargs):
+    return None
+
+def Resize(*args, **kwargs):
+    return None
+
+def CenterCrop(*args, **kwargs):
+    return None
+
+def Normalize(*args, **kwargs):
+    return None
+PYEOF
+export PYTHONPATH=/tmp/torchvision_stub${PYTHONPATH:+:$PYTHONPATH}
+python -c "import torchvision, torchvision.ops, torchvision.transforms; print('torchvision_stubbed: ok')"
 
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 src_pth=$(ls -t /tmp/xtuner_sft_llm_out_single/*.pth 2>/dev/null | head -1)

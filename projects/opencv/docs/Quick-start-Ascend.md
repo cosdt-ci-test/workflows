@@ -127,6 +127,8 @@ OpenCV 5.0.0 把 `cv::MatShape` 从 `std::vector<int>` 的别名改成了一个�
 
 但只改一个签名还不够——`batch_norm_layer.cpp:383` / `elementwise_layers.cpp:652,2815` / `slice_layer.cpp:691,739` 等几处用本地 `std::vector<int> shape_{...}` 然后传给 `CannConstOp`，会再报反向错误 `no known conversion for argument 3 from 'std::vector<int>' to 'const cv::MatShape&'`。最干净的修复是加一个转发构造函数：第二签名接受 `const std::vector<int>&`，在初始化列表里构造 `cv::MatShape(shape)` 后委托给主构造，避免改 4 个 layer 文件里的局部变量类型。
 
+还不够——`gemm_layer.cpp:534` 和 `matmul_layer.cpp:516` 各有一处 `xxx_shape = std::vector<int>{...}` 赋值给 `MatShape` 局部变量（不是传给函数，是 `operator=`），这条路径转发重载救不了（重载只匹配函数调用），得改这两行用 `MatShape` 的 raw-array 构造 `cv::MatShape(1, &val)`（mat.hpp:111）。改完这俩 `make` 才能彻底过 dnn。
+
 等 5.0.1 / 主仓把 CANN backend 重命名到 contrib 后这步可删。
 
 ```shell #test-setup
@@ -161,14 +163,33 @@ deleg = ('\nCannConstOp::CannConstOp(const uint8_t* data, const int dtype, const
 assert anchor in cs and deleg.strip() not in cs, 'cpp delegating ctor already patched or anchor missing'
 cp.write_text(cs.replace(anchor, anchor + deleg, 1))
 print('(c) op_cann.cpp: +1 std::vector<int>& delegating ctor')
+
+# (d) 两处 MatShape = std::vector<int>{...} 赋值改成 MatShape(1, &val) raw-array 构造
+fixes = [
+    ('opencv/modules/dnn/src/layers/gemm_layer.cpp',
+     '            shape_C = std::vector<int>{dim};',
+     '            shape_C = cv::MatShape(1, &dim);'),
+    ('opencv/modules/dnn/src/layers/matmul_layer.cpp',
+     '                    bias_shape = std::vector<int>{bias_shape.front()};',
+     '                    int _bias_front = bias_shape.front(); bias_shape = cv::MatShape(1, &_bias_front);'),
+]
+for rel, o, n in fixes:
+    p = pathlib.Path(rel); s = p.read_text()
+    assert o in s, f'{rel}: pattern not found: {o!r}'
+    assert n not in s, f'{rel}: already patched'
+    p.write_text(s.replace(o, n, 1))
+    print(f'(d) {rel}: 1 assignment fixed')
 PY
 echo '---grep verify:'
 grep -n 'CannConstOp(const uint8_t\* data, const int dtype,' \
   opencv/modules/dnn/src/op_cann.hpp \
   opencv/modules/dnn/src/op_cann.cpp
+grep -n 'cv::MatShape(1, &\|cv::MatShape(1, &_bias_front)' \
+  opencv/modules/dnn/src/layers/gemm_layer.cpp \
+  opencv/modules/dnn/src/layers/matmul_layer.cpp
 ```
 
-预期：步骤 (a) 两行各输出 `1 occurrence(s) -> MatShape&`，步骤 (b) +1 decl，步骤 (c) +1 delegating ctor；最后 `grep` 在 hpp 看到 2 行构造声明、cpp 看到 2 个构造函数定义。Python 而非 sed：`&` 在 sed 替换串里代表匹配文本，转义 `\&` 在 GNU/BSD sed 行为不一致，换 Python 避免踩坑。
+预期：步骤 (a) 两行各 `1 occurrence(s) -> MatShape&`；(b) hpp +1 decl；(c) cpp +1 delegating ctor；(d) 2 个 assignment 各修复。最后 `grep` 第一组在 hpp 看到 2 行构造声明、cpp 看到 2 个构造函数定义；第二组在 gemm_layer.cpp:534 和 matmul_layer.cpp:516 各 1 行。Python 而非 sed：`&` 在 sed 替换串里代表匹配文本，转义 `\&` 在 GNU/BSD sed 行为不一致，换 Python 避免踩坑。
 
 #### 桥接 OpenCV 5.0.0 与 CANN 9.1.0 的 layout 差
 

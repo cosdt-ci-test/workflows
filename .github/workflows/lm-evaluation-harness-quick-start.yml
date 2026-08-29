@@ -21,12 +21,9 @@
 # schedule-only steps (monitor / record-monitor-outcome / cache save)
 # simply never run.
 #
-# Bind mount: the doc flow downloads real model weights via
-# modelscope.snapshot_download (Qwen/Qwen2.5-0.5B-Instruct), so the
-# ModelScope cache is bind-mounted to the host
-# (/data/ci-cache/modelscope/lm-evaluation-harness) to keep the
-# downloaded weights persistent across runs. The self-hosted NPU
-# runner (linux-aarch64-a2-1) auto-passes /dev/davinci* into the
+# Bind mounts: three host-side caches persist across runs (see the
+# container_options block below for the volume list). The self-hosted
+# NPU runner (linux-aarch64-a2-1) auto-passes /dev/davinci* into the
 # container via the cluster device-plugin.
 #
 # HF endpoint: the eval run downloads the arc_easy dataset
@@ -36,21 +33,26 @@
 # precedent) and by the test subclass's prepare_environment hook
 # (subprocess inheritance) - NOT here, because a reusable-workflow
 # caller cannot reliably propagate job-level env into the engine.
+# With the HF cache bind-mounted (mount 3), these only hit the
+# network on a cache miss: the first successful run populates it and
+# repeat runs load the dataset from disk.
 
 name: lm-evaluation-harness-quick-start
 
 concurrency:
-  # format() is load-bearing: a '||' between 'manual-' and
-  # github.run_id would short-circuit on the truthy literal and
-  # every dispatch would share one 'manual-' group.
-  # The schedule branch is kept (even though schedule is not enabled
-  # yet) so re-enabling the cron later needs no concurrency change.
-  group: ${{ github.event_name == 'schedule' && 'lm-evaluation-harness-quick-start-schedule' || format('manual-{0}', github.run_id) }}
+  # Fixed group: manual and schedule runs share one serial queue. The
+  # pip wheel cache and the HF cache are bind-mounted on the host and
+  # shared across runs, so concurrent runs would race on them; this
+  # also matches the single-NPU physical constraint of the runner
+  # (same rationale as the stable-diffusion-webui perf commit 14cf553).
+  group: lm-evaluation-harness-quick-start
   # cancel-in-progress: false because (1) a schedule run cancelled
   # mid-way loses its outcome writeback - the outcome is what makes
   # the retry mechanism work, and the 'if: always()' guard isn't
-  # enough when the container is being torn down; (2) dispatch runs
-  # already live in unique groups so there's nothing to cancel.
+  # enough when the container is being torn down; (2) queueing is the
+  # desired behaviour here - back-to-back dispatches on the
+  # single-card runner should run one after another, so cancelling a
+  # queued run would be pointless anyway.
   cancel-in-progress: false
 
 on:
@@ -77,8 +79,18 @@ jobs:
       image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
       container_options: >-
         --volume=/data/ci-cache/modelscope/lm-evaluation-harness:/root/.cache/modelscope
-      # Doc flow downloads real weights via modelscope.snapshot_download;
-      # the bind-mount above persists the ModelScope cache on the host.
+        --volume=/data/ci-cache/pip:/root/.cache/pip
+        --volume=/data/ci-cache/hf/lm-evaluation-harness:/root/.cache/huggingface
+      # Three bind mounts persist caches on the host across runs:
+      # 1. ModelScope weights (Qwen/Qwen2.5-0.5B-Instruct, ~1 GB,
+      #    downloaded by the doc flow on the first run only);
+      # 2. pip wheel cache, shared across projects (transformers /
+      #    ms-swift / xllm precedent) - repeat runs hit the wheels for
+      #    lm_eval[hf] / transformers / modelscope, pip only unpacks;
+      # 3. HF hub + datasets cache (per-project subdir) - the arc_easy
+      #    parquet and the processed arrow cache persist, so repeat runs
+      #    skip the dataset download entirely (removes the run#4 Xet
+      #    CDN timeout flake surface).
       timeout_minutes: 120
       upstream_repo: EleutherAI/lm-evaluation-harness
       # Raw URL the engine's monitor hashes and the test fetches;

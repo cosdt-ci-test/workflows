@@ -228,7 +228,12 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         #    allenai/ai2_arc via datasets.load_dataset). Same
         #    subprocess-inheritance rationale as the constraints above;
         #    setdefault keeps an explicitly injected value winning.
+        #    HF_HUB_DISABLE_XET additionally forces the classic HTTP
+        #    download path: the Xet data plane connects to
+        #    us.aws.cdn.hf.co directly (HF_ENDPOINT does not apply to
+        #    it), which is unreachable from restricted networks.
         os.environ.setdefault('HF_ENDPOINT', cls._HF_ENDPOINT)
+        os.environ.setdefault('HF_HUB_DISABLE_XET', '1')
 
         # 3) uv: the doc's ``install-lmeval`` block calls ``pip``, but keep
         # uv for parity with the other projects' setup (the workflow may

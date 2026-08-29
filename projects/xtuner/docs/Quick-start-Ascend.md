@@ -599,13 +599,16 @@ print('torchvision_stubbed: ok')
 
 ```shell #test id="xtuner-chat-smoke"
 # stub 完再 import chat，跑真 chat：Qwen2.5-0.5B + qwen_chat template + stdin pipe
-# "hello\nEXIT"（第一轮 input 返回 "hello"，第二轮返回 "EXIT" 触发 main() 里的 exit(0)）。
+# 一个颜色描述 prompt + EXIT（第一轮 input 返回 prompt，第二轮返回 "EXIT" 触发 main() 里的 exit(0)）。
+# 选 colorist 风格的中文 prompt 顺带验 tokenizer 编码中文 OK；smoke 不验证具体色号
+# （那要 7B + 真训过 colorist，不是 doc 范围），只验 chat 端到端能跑。
 # --no-streamer 关掉 TextStreamer 改 print 完整输出（CI 抓 stdout 比对）。
-# --max-new-tokens 8 限制输出长度（CI smoke 不需要长文）。
-echo -e "hello\nEXIT" | python -m xtuner.tools.chat Qwen/Qwen2.5-0.5B-Instruct \
+# --max-new-tokens 32 给中文回复留余量。
+echo -e "宁静而又相当明亮的浅天蓝色，介于天蓝色和婴儿蓝之间，因其亮度而带有一丝轻微的荧光感。\nEXIT" | \
+python -m xtuner.tools.chat Qwen/Qwen2.5-0.5B-Instruct \
     --prompt-template qwen_chat \
     --no-streamer \
-    --max-new-tokens 8 2>&1 | tail -n 5
+    --max-new-tokens 32 2>&1 | tail -n 5
 ```
 
 输出结果如下：

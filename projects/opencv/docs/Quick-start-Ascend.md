@@ -359,7 +359,7 @@ xxx
 `opencv_test_cannops` 内置了 CANN 后端的小型模型测例，会调用 ACL 把模型图下沉到 NPU：
 
 ```shell #test id="opencv-cann-run-tests"
-set -o pipefail; /usr/local/opencv-cann/bin/opencv_test_cannops --gtest_color=no --gtest_brief=1 2>&1 | tail -n 20
+set -o pipefail; /usr/local/opencv-cann/bin/opencv_test_cannops --gtest_color=no 2>&1 | tail -n 25
 ```
 
 ```shell #test-result id="opencv-cann-run-tests" fuzzy='...' fuzzy='xxx'
@@ -367,6 +367,8 @@ set -o pipefail; /usr/local/opencv-cann/bin/opencv_test_cannops --gtest_color=no
 ...
 [  PASSED  ] xxx
 ```
+
+> 不要加 `--gtest_brief`：OpenCV 5.0.0 vendored 的这份 gtest（`modules/ts/src/ts_gtest.cpp`）没有实现该 flag（只认 list_tests / color / filter / print_time / output / repeat 等），带 `--gtest_` 前缀但无法解析的参数会走"unrecognized Google Test flag"路径——直接打印 flag 帮助文本、**一个测试都不跑、退出码还是 0**（CI 33259147288 实测：958B stdout 全是 help 文本，`set -o pipefail` 拦不住 rc=0 的假绿）。`--gtest_list_tests` 是实现了的，所以上一步能正常列举。
 
 
 ## 使用样例：OpenCV 官方 quickstart

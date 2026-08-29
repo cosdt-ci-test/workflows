@@ -218,7 +218,16 @@ has_chat: True
 # `./Shanghai_AI_Laboratory/Shanghai_AI_Laboratory/internlm2-chat-7b/`。硬编码
 # `./Shanghai_AI_Laboratory/internlm2-chat-7b` 会让 xtuner.tools.train 找不到 weights。把
 # 返回值 print 出来，store 给 patch 用真实路径：
-python -c "from modelscope import snapshot_download; print(snapshot_download('Shanghai_AI_Laboratory/internlm2-chat-7b', cache_dir='./Shanghai_AI_Laboratory'))"
+# print 绝对路径给后面 patch-cfg + smoke 用：cwd 在 patch-cfg / smoke 之间会变（smoke 多卡走
+# `cd xtuner` 让 xtuner 包走 cwd FileFinder 解析），如果 store 的是相对路径，到 smoke 阶段
+# `cfg.pretrained_model_name_or_path` 就指错地方了。`os.path.abspath` 把 cwd 钉到调用瞬间，
+# 后面 cat-relative/cat-absolute 都能用。
+python -c "
+import os
+from modelscope import snapshot_download
+path = snapshot_download('Shanghai_AI_Laboratory/internlm2-chat-7b', cache_dir='./Shanghai_AI_Laboratory')
+print(os.path.abspath(path))
+"
 ```
 
 ```shell #test id="xtuner-pull-weights"
@@ -384,8 +393,15 @@ text, n = re.subn(
     text,
 )
 assert n == 1, f'pretrained_model_name_or_path patch applied {n} times (expected 1)'
+# data_path 用绝对路径：`xtuner-train-smoke-setup` 里有 `cd xtuner` 把 cwd 改到 clone 的 xtuner
+# 源目录（避免 editable finder 把 xtuner 当 namespace package），相对路径 `./colors/train.jsonl`
+# 在那个 cwd 下找不到。pull-dataset 把 colors 落到 framework cwd（即 projects/xtuner/），用
+# `os.path.dirname(<cfg>)` 反推 pull-dataset cwd 是同一个，因为 <cfg> 是 framework cwd 下 copy
+# 出来的。`os.path.abspath` 钉到调用瞬间，cd 后面再变也不影响。
+import os
+data_abs = os.path.abspath('./colors/train.jsonl')
 old = 'data_path = \"burkelibbey/colors\"'
-new = \"data_path = './colors/train.jsonl'\"
+new = f\"data_path = {data_abs!r}\"
 assert old in text, f'patch source not found: {old!r}'
 text = text.replace(old, new)
 old = 'prompt_template = PROMPT_TEMPLATE.default'
@@ -426,11 +442,13 @@ with open('<cfg>') as f:
 # ./Shanghai_AI_Laboratory/Shanghai_AI_Laboratory/internlm2-chat-7b）。patch 把 cfg 里
 # 的 HF repo_id 替成这条路径：
 weights_dir = '<weights_dir>'
+import os
+data_abs = os.path.abspath('./colors/train.jsonl')
 checks = [
     # 用 cfg 里实际的权重路径字面量 grep（cfg 字段名是 pretrained_model_name_or_path 不是 model_path，
     # 不要把 check 名当字段名拼到 needle 里）：
     ('model_path', f\"pretrained_model_name_or_path = '{weights_dir}'\"),
-    ('data_path', './colors/train.jsonl'),
+    ('data_path', f\"data_path = '{data_abs}'\"),
     ('prompt_template', 'PROMPT_TEMPLATE.internlm2_chat'),
     ('dataset_format', \"dataset=dict(type=load_dataset, path='json', data_files=dict(train=data_path))\"),
 ]
@@ -438,7 +456,7 @@ for name, expected in checks:
     assert expected in text, f'missing patch ({name}): {expected!r}'
 print('cfg_patch_ok')
 print(f'model_name= {weights_dir}')
-print('data_path= ./colors/train.jsonl')
+print(f'data_path= {data_abs}')
 print('prompt_template= PROMPT_TEMPLATE.internlm2_chat')
 "
 ```

@@ -514,6 +514,8 @@ cat > /tmp/torchvision_stub/torchvision/transforms/v2.py <<'PYEOF'
 from torchvision.transforms import functional
 PYEOF
 cat > /tmp/torchvision_stub/torchvision/transforms/functional.py <<'PYEOF'
+from torchvision.transforms import InterpolationMode
+
 def normalize(*args, **kwargs):
     return None
 
@@ -656,6 +658,8 @@ cat > /tmp/torchvision_stub/torchvision/transforms/v2.py <<'PYEOF'
 from torchvision.transforms import functional
 PYEOF
 cat > /tmp/torchvision_stub/torchvision/transforms/functional.py <<'PYEOF'
+from torchvision.transforms import InterpolationMode
+
 def normalize(*args, **kwargs):
     return None
 
@@ -790,6 +794,8 @@ PYEOF
 # transforms.functional 给 image_transforms 4.48 line 58 `from torchvision.transforms import
 # functional as F` 用——F.normalize 至少要 no-op（5 iter smoke 不真正做图像增强）。
 cat > /tmp/torchvision_stub/torchvision/transforms/functional.py <<'PYEOF'
+from torchvision.transforms import InterpolationMode
+
 def normalize(*args, **kwargs):
     return None
 

@@ -218,9 +218,15 @@ curl -s -X POST http://127.0.0.1:7861/sdapi/v1/txt2img \
   -d '{"prompt": "a cute cat", "steps": 1, "cfg_scale": 1.0, "width": 512, "height": 512}' \
   > /tmp/sd-turbo-resp.json
 python -c "
-import json, base64
-r = json.load(open('/tmp/sd-turbo-resp.json'))
-assert 'images' in r, 'txt2img error response: ' + json.dumps(r)[:2000]
+import json, base64, sys
+try:
+    r = json.load(open('/tmp/sd-turbo-resp.json'))
+    assert 'images' in r, 'txt2img error response: ' + json.dumps(r)[:2000]
+except Exception as e:
+    print('txt2img failed:', e, file=sys.stderr)
+    print('--- /tmp/sdwebui.log tail ---', file=sys.stderr)
+    print(open('/tmp/sdwebui.log').read()[-8000:], file=sys.stderr)
+    raise SystemExit(1)
 imgs = r['images']
 print('txt2img images:', len(imgs))
 open('/tmp/sd-turbo-out.png', 'wb').write(base64.b64decode(imgs[0]))

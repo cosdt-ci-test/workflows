@@ -567,8 +567,13 @@ PYEOF
 # `importlib.metadata.version('bitsandbytes')`——NPU base image 不装 bnb（bnb 没有
 # aarch64 wheel + 需要 CUDA），setup 时 metadata lookup 抛 PackageNotFoundError 直接
 # ERR99999 退出。Stub 走两条路：(1) 真 package 让 `import bitsandbytes` 拿到合法 module；
-# (2) `bitsandbytes-0.43.0.dist-info/METADATA` 让 importlib.metadata.version() 返回稳定
-# 版本字符串绕过 if 分支。5 iter smoke 不真做 4-bit quant，只 post_init 走通就够了。
+# (2) `bitsandbytes-0.46.1.dist-info/METADATA` 让 importlib.metadata.version() 返回稳定
+# 版本字符串绕过 if 分支。版本必须 **>= 0.43.1**——transformers 4.48 的
+# `is_bitsandbytes_available()` 对 < 0.43.1 的 bnb 走 `return torch.cuda.is_available()` 分支，
+# NPU base image 没有 CUDA → 该函数返 False → 4-bit quantizer 抛 ImportError
+# "Using `bitsandbytes` 4-bit quantization requires the latest version of bitsandbytes"。
+# 用 0.46.1 是为了同时满足新 transformers（>=0.46.1）和老 transformers（>=0.43.1）。
+# 5 iter smoke 不真做 4-bit quant，只 post_init 走通就够了。
 # 子模块：mmengine.optim.optimizer.builder.register_bitsandbytes_optimizers() (line 153)
 # eager 调 `bnb.optim`，`bnb.nn` 也被 transformers.integrations.bitsandbytes 访问——空 stub
 # 够绕 AttributeError，5 iter smoke 不真做 quant。
@@ -579,7 +584,7 @@ mkdir -p /tmp/bitsandbytes_stub/bitsandbytes/nn /tmp/bitsandbytes_stub/bitsandby
 # `import bitsandbytes.optim` 才会触发自动 register。mmengine
 # builder.py:153 用的是 `bnb.optim` 属性访问，必须显式 import）。
 cat > /tmp/bitsandbytes_stub/bitsandbytes/__init__.py <<'PYEOF'
-__version__ = "0.43.0"
+__version__ = "0.46.1"
 from . import nn, optim, functional, autograd, cextension
 PYEOF
 for sub in nn optim functional autograd cextension; do
@@ -588,11 +593,11 @@ def __getattr__(name):
     return lambda *args, **kwargs: None
 PYEOF
 done
-mkdir -p /tmp/bitsandbytes_stub/bitsandbytes-0.43.0.dist-info
-cat > /tmp/bitsandbytes_stub/bitsandbytes-0.43.0.dist-info/METADATA <<'EOF'
+mkdir -p /tmp/bitsandbytes_stub/bitsandbytes-0.46.1.dist-info
+cat > /tmp/bitsandbytes_stub/bitsandbytes-0.46.1.dist-info/METADATA <<'EOF'
 Metadata-Version: 2.1
 Name: bitsandbytes
-Version: 0.43.0
+Version: 0.46.1
 EOF
 
 cp <cfg> /tmp/xtuner_npu_smoke_single_cfg.py
@@ -747,6 +752,7 @@ PYEOF
 
 # Stub bitsandbytes via real package + dist-info：见 xtuner-train-smoke-setup 注释
 # (BitsAndBytesConfig.post_init() 无条件查 metadata，NPU base image 不装 bnb 抛 PackageNotFoundError)。
+# 版本必须 >= 0.43.1，绕开 transformers 4.48 is_bitsandbytes_available() 的 CUDA 分支。
 mkdir -p /tmp/bitsandbytes_stub/bitsandbytes/nn /tmp/bitsandbytes_stub/bitsandbytes/optim /tmp/bitsandbytes_stub/bitsandbytes/functional /tmp/bitsandbytes_stub/bitsandbytes/autograd /tmp/bitsandbytes_stub/bitsandbytes/cextension
 # 顶层 __init__.py 显式 import 子模块——`from bitsandbytes import optim` 和
 # `import bitsandbytes as bnb; bnb.optim` 都需要子模块**作为属性**挂在 bnb 上，
@@ -754,7 +760,7 @@ mkdir -p /tmp/bitsandbytes_stub/bitsandbytes/nn /tmp/bitsandbytes_stub/bitsandby
 # `import bitsandbytes.optim` 才会触发自动 register。mmengine
 # builder.py:153 用的是 `bnb.optim` 属性访问，必须显式 import）。
 cat > /tmp/bitsandbytes_stub/bitsandbytes/__init__.py <<'PYEOF'
-__version__ = "0.43.0"
+__version__ = "0.46.1"
 from . import nn, optim, functional, autograd, cextension
 PYEOF
 for sub in nn optim functional autograd cextension; do
@@ -763,11 +769,11 @@ def __getattr__(name):
     return lambda *args, **kwargs: None
 PYEOF
 done
-mkdir -p /tmp/bitsandbytes_stub/bitsandbytes-0.43.0.dist-info
-cat > /tmp/bitsandbytes_stub/bitsandbytes-0.43.0.dist-info/METADATA <<'EOF'
+mkdir -p /tmp/bitsandbytes_stub/bitsandbytes-0.46.1.dist-info
+cat > /tmp/bitsandbytes_stub/bitsandbytes-0.46.1.dist-info/METADATA <<'EOF'
 Metadata-Version: 2.1
 Name: bitsandbytes
-Version: 0.43.0
+Version: 0.46.1
 EOF
 
 cp <cfg> /tmp/xtuner_npu_smoke_multi_cfg.py

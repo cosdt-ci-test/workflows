@@ -177,7 +177,7 @@ p = 'modules/devices.py'
 t = open(p).read()
 t = t.replace(
     'if has_xpu() or has_mps() or cuda_no_autocast():',
-    'if has_xpu() or has_mps() or cuda_no_autocast() or npu_specific.has_npu:'
+    'if npu_specific.has_npu or has_xpu() or has_mps() or cuda_no_autocast():'
 )
 open(p, 'w').write(t)
 "
@@ -190,7 +190,7 @@ echo $!
 - `STABLE_DIFFUSION_REPO`：上游默认指向的 `Stability-AI/stablediffusion` 已被删除（2025.12 起，GitHub 返回 404），官方用社区 fork `w-e-w/stablediffusion` 兜底（commit hash 不变）；此处通过环境变量覆盖，后续上游修复后可移除。
 - `--nowebui`：API 模式（FastAPI，默认端口 7861），无 Gradio 界面，适合自动化与 CI。
 - `--skip-torch-cuda-test`：允许非 CUDA 设备（NPU）。
-- `python -c ".../npu_specific.has_npu..."`：A1111 的 `autocast()` 只对 CUDA/MPS/XPU 做 `manual_cast`（自动把输入转 fp16），NPU 上落到 `torch.autocast("cuda")`（no-op）→ float32 输入撞上 fp16 权重 → `RuntimeError: Input type (float) and bias type (c10::Half)`。这行补丁把 NPU 纳入 `manual_cast` 分支（`npu_specific` 已在 `devices.py` 顶部 import），上游未来原生支持后可移除。
+- `python -c ".../npu_specific.has_npu..."`：A1111 的 `autocast()` 只对 CUDA/MPS/XPU 做 `manual_cast`（自动把输入转 fp16），NPU 上落到 `torch.autocast("cuda")`（no-op）→ float32 输入撞上 fp16 权重。补丁把 NPU 纳入 `manual_cast` 分支，且**必须把 `npu_specific.has_npu` 放在链首**：`or` 从左到右短路，`cuda_no_autocast()` 内部会调用 `torch.cuda`，在无 CUDA 的 torch 构建上抛 `AssertionError: Torch not compiled with CUDA enabled`——NPU 判断先行短路后就永远不会碰它（`npu_specific` 已在 `devices.py` 顶部 import），上游未来原生支持后可移除。
 - `--ckpt <目录>/sd_turbo.safetensors`：A1111 的 checkpoint 加载器需要**单文件** .safetensors；ModelScope 快照根目录提供了合并后的 `sd_turbo.safetensors`（其余为 diffusers 分片格式），此处指向该单文件。
 - 设备选择由 `modules/npu_specific.py` 自动完成（检测到 torch_npu 即用 npu:0）。
 

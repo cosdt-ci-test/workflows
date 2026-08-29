@@ -143,6 +143,7 @@ jobs:
     # (ubuntu-latest, the only runner that can reach cache storage).
     outputs:
       result_json:             ${{ steps.write-result.outputs.result_json }}
+      test_log_b64:            ${{ steps.write-result.outputs.test_log_b64 }}
       trigger:                 ${{ steps.write-result.outputs.trigger }}
       reason:                  ${{ steps.decide.outputs.reason }}
       job_status:              ${{ steps.write-result.outputs.job_status }}
@@ -653,6 +654,20 @@ jobs:
             printf 'job_status=%s\n' "$JOB_STATUS"
           } >> "$GITHUB_OUTPUT"
 
+          # 诊断增强：把 test framework 写的 /tmp/markdown_doc_test.log 也
+          # 通过 job output 传到 publish-and-persist（self-hosted NPU runner
+          # 的 GH job log 不一定归档到 run zip——之前 run 33260065162 /
+          # 33261718257 都缺 "monitor + test on change" job log，artifact
+          # 只有 result.json 没 stdout）。截尾 16KB 够定位失败（fail mode
+          # 都在最后一段；前面大量 mmengine init log 无价值）。
+          if [ -f /tmp/markdown_doc_test.log ]; then
+            test_log_b64=$(tail -c 16384 /tmp/markdown_doc_test.log | base64 -w0)
+            printf 'test_log_b64=%s\n' "$test_log_b64" >> "$GITHUB_OUTPUT"
+            echo "shipped $(wc -c < /tmp/markdown_doc_test.log)B test log (last 16KB as b64)"
+          else
+            echo "no /tmp/markdown_doc_test.log; framework log path not written"
+          fi
+
           # ----- Summarize -----
           echo "============================================================"
           echo "QUICK START TEST SUMMARY"
@@ -727,6 +742,33 @@ jobs:
         with:
           name: ${{ inputs.project }}-quick-start-${{ github.run_id }}
           path: output/result.json
+          if-no-files-found: warn
+
+      # 诊断增强：接收 test job ship 来的 test_log_b64，写到 output/ 上传
+      # 为独立 artifact（self-hosted NPU runner 的 GH job log 经常不归档到
+      # run zip，没这个就只剩 "test failed" 字符串，没法定位 fail mode）。
+      - name: Upload test log
+        if: always()
+        env:
+          TEST_LOG_B64: ${{ needs.test.outputs.test_log_b64 }}
+        run: |
+          set -euo pipefail
+          mkdir -p output
+          if [ -z "$TEST_LOG_B64" ]; then
+            echo "no test_log_b64 from test job; skipping test log upload"
+            exit 0
+          fi
+          printf '%s' "$TEST_LOG_B64" | base64 -d > output/test.log
+          echo "decoded $(wc -c < output/test.log) bytes of test log"
+          tail -50 output/test.log
+        # upload-artifact 也得在这个 step 里，因为后面如果只 upload result.json
+        # 不会有 log。直接用 step 级 if-no-files-found 防御。
+      - name: Upload test log artifact
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ inputs.project }}-quick-start-log-${{ github.run_id }}
+          path: output/test.log
           if-no-files-found: warn
 
       # Cache fields arrive as one job output each (set by

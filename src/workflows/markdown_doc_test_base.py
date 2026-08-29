@@ -916,6 +916,15 @@ class MarkdownDocTestBase(ABC):
         ms = int(time.time() * 1000) % 1000
         ts = time.strftime('%H:%M:%S') + f'.{ms:03d}'
         print(f'[{ts}] {msg}', flush=True)
+        # 也写到固定路径，给 CI 归档用——self-hosted runner 的 GH job log
+        # 不一定出现在 run zip（之前 run 33260065162 / 33261718257 都缺
+        # "monitor + test on change" job log，artifact 只有 result.json 没 stdout）。
+        # 写到 /tmp 让后续 step `tee` + upload-artifact 能拿到。
+        try:
+            with open('/tmp/markdown_doc_test.log', 'a', encoding='utf-8') as f:
+                f.write(f'[{ts}] {msg}\n')
+        except OSError:
+            pass
 
     def log_block(self, label: str, lines, cap: int = 30) -> None:
         """Block log: OK path ``cap`` lines head+tail; MISMATCH path ``cap=0`` no truncation.

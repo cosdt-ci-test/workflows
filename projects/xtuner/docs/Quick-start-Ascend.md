@@ -489,20 +489,6 @@ ls -t /tmp/xtuner_sft_llm_out_multi/*.pth 2>/dev/null | head -1
 /tmp/xtuner_sft_llm_out_multi/iter_xxx.pth
 ```
 
-<!--
-完整 5 epoch × 144 step = 720 step 训练命令（720 step 太长不进 CI smoke）。
-CI 走 `xtuner-train-smoke`（5 samples × 1 epoch）。真正 720 step 本地按需手动跑 —— 把下面命令的 `--max-epochs 1` 去掉、用 `xtuner train` 替换 `python -m xtuner.tools.train`（去掉 wrapper shebang 错配 workaround，前提是用非 egg-link 装法）：
-
-```shell
-source /usr/local/Ascend/ascend-toolkit/set_env.sh
-export TORCH_NPU_USE_HCCL=1
-python -m xtuner.tools.train /tmp/xtuner_npu_llm_cfg.py --work-dir /tmp/xtuner_sft_llm_out
-
-# 多卡（xtuner.tools.train 内置 torchrun 集成，按需调整 NPROC_PER_NODE）
-NPROC_PER_NODE=${GPU_NUM} python -m xtuner.tools.train /tmp/xtuner_npu_llm_cfg.py --work-dir /tmp/xtuner_sft_llm_out
-```
--->
-
 ### 完整 5 epoch 训练（本地手动）
 
 CI smoke 用 5 samples × 1 epoch 只是"跑通整条链路"——真正训出能用的模型要跑完整个 Colorist（720 step），这一步不进 CI，太慢了：
@@ -544,25 +530,6 @@ has_chat: True
 
 完整 `pth_to_hf` + `merge` 流程（依赖前面 5 epoch 训练出的 `.pth`，本地按需手动跑）：
 
-<!--
-```shell
-# 创建存放 hf 格式参数的目录
-mkdir -p /tmp/xtuner_sft_llm_out/iter_720_hf
-
-# pth → hf
-xtuner convert pth_to_hf /tmp/xtuner_npu_llm_cfg.py \
-    /tmp/xtuner_sft_llm_out/iter_720.pth \
-    /tmp/xtuner_sft_llm_out/iter_720_hf
-
-# 合并 LoRA adapter 到 base
-mkdir -p /tmp/xtuner_sft_llm_out/merged
-xtuner convert merge ./Shanghai_AI_Laboratory/internlm2-chat-7b \
-    /tmp/xtuner_sft_llm_out/iter_720_hf \
-    /tmp/xtuner_sft_llm_out/merged \
-    --max-shard-size 2GB
-```
--->
-
 CI smoke 只验"取 smoke 训出的 .pth + 准备目标目录 + print 命令结构"：
 
 ```shell #test-setup
@@ -578,7 +545,7 @@ echo "xtuner convert merge ./Shanghai_AI_Laboratory/internlm2-chat-7b $hf_dir /t
 
 ### 与模型对话
 
-合并完权重后可以用 `xtuner chat` 跟模型对话。验 chat 脚本存在 + 关键参数在源码里有定义：
+合并完权重后可以用 `xtuner chat` 跟模型对话。先验 chat 脚本存在 + 关键参数在源码里有定义：
 
 ```shell #test id="xtuner-chat-help"
 # 不能直接 xtuner chat --help —— chat.py 顶层 import peft + transformers，触发 torchvision chain
@@ -608,6 +575,47 @@ has_prompt_template_arg: True
 has_system_template_arg: True
 ```
 
+CI smoke 真跑一次 chat（用 Qwen2.5-0.5B ≈ 500 MB 避开 7B 显存；stdin pipe 一行输入 + EXIT 绕开交互循环；stub torchvision 绕开 NPU image 缺 operator）：
+
+```shell #test-setup
+# stub torchvision：transformers 内部有些 image_utils / image_transforms 会 lazy import
+# torchvision；NPU image 故意剔了 torchvision::nms，import 时挂。给个最小 stub 让 import 不挂：
+python -c "
+import sys, types
+tv = types.ModuleType('torchvision'); sys.modules['torchvision'] = tv
+tv_ops = types.ModuleType('torchvision.ops')
+tv_ops.nms = lambda *a, **k: None
+sys.modules['torchvision.ops'] = tv_ops
+tv_t = types.ModuleType('torchvision.transforms')
+tv_t.Compose = lambda x: x
+tv_t.ToTensor = lambda *a, **k: None
+tv_t.Resize = lambda *a, **k: None
+tv_t.CenterCrop = lambda *a, **k: None
+tv_t.Normalize = lambda *a, **k: None
+sys.modules['torchvision.transforms'] = tv_t
+print('torchvision_stubbed: ok')
+"
+```
+
+```shell #test id="xtuner-chat-smoke"
+# stub 完再 import chat，跑真 chat：Qwen2.5-0.5B + qwen_chat template + stdin pipe
+# "hello\nEXIT"（第一轮 input 返回 "hello"，第二轮返回 "EXIT" 触发 main() 里的 exit(0)）。
+# --no-streamer 关掉 TextStreamer 改 print 完整输出（CI 抓 stdout 比对）。
+# --max-new-tokens 8 限制输出长度（CI smoke 不需要长文）。
+echo -e "hello\nEXIT" | python -m xtuner.tools.chat Qwen/Qwen2.5-0.5B-Instruct \
+    --prompt-template qwen_chat \
+    --no-streamer \
+    --max-new-tokens 8 2>&1 | tail -n 5
+```
+
+输出结果如下：
+
+```shell #test-result id="xtuner-chat-smoke" fuzzy='xxx'
+Load LLM from xxx
+xxx (模型对 "hello" 的回复)
+Log: Exit!
+```
+
 合并后的完整模型对话（本地按需手动跑）：
 
 <!--
@@ -617,14 +625,6 @@ xtuner chat /tmp/xtuner_sft_llm_out/merged \
     --system-template colorist
 ```
 -->
-
-```shell #test-setup
-# CI smoke：交互式 CLI 不能 CI 跑（hang 等输入）；同样不能 xtuner chat --help
-# （peft→transformers→torchvision import chain 在 NPU image 上挂）。
-# 真实 chat 会话本地按需手动跑 —— 用 `python -m xtuner.tools.chat` 替换 `xtuner chat`
-# 绕开 wrapper shebang 错配：
-echo "python -m xtuner.tools.chat /tmp/xtuner_sft_llm_out_full/merged --prompt-template internlm2_chat --system-template colorist"
-```
 
 也可以不合并、只跟 LLM + LoRA adapter 直接对话：
 
@@ -636,11 +636,6 @@ xtuner chat ./Shanghai_AI_Laboratory/internlm2-chat-7b \
     --system-template colorist
 ```
 -->
-
-```shell #test-setup
-# 也可以不合并、只跟 LLM + LoRA adapter 直接对话（同上 chat 不能 CI 跑）：
-echo "python -m xtuner.tools.chat ./Shanghai_AI_Laboratory/internlm2-chat-7b --adapter /tmp/xtuner_sft_llm_out_full/iter_xxx_hf --prompt-template internlm2_chat --system-template colorist"
-```
 
 交互示例（训练前模型 → 训练后模型的输出变化）：
 

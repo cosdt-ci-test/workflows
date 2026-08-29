@@ -85,8 +85,11 @@ ensure_build_deps() {
   echo "installing build dependencies (cmake/ninja/rust)..."
   apt-get update -qq 2>/dev/null || true
   apt-get install -y --no-install-recommends \
-    cmake ninja-build python3-dev libssl-dev pkg-config git curl ca-certificates 2>/dev/null || true
-  pip_ascend cmake ninja 2>/dev/null || python -m pip install -q cmake ninja
+    python3-dev libssl-dev pkg-config git curl ca-certificates 2>/dev/null || true
+  python -m pip install -q "cmake>=3.27" ninja
+  CMAKE_BIN_DIR="$(python -c 'import sys,os;print(os.path.dirname(sys.executable))')"
+  export PATH="$CMAKE_BIN_DIR:$PATH"
+  echo "cmake: $(cmake --version | head -n1)"
   if ! command -v cargo >/dev/null 2>&1; then
     export RUSTUP_DIST_SERVER=https://rsproxy.cn
     export RUSTUP_UPDATE_ROOT=https://rsproxy.cn/rustup
@@ -102,9 +105,17 @@ ensure_build_deps() {
 # Build the xllm wheel from a checked-out xllm tree and install it.
 build_xllm() {
   local root="$1"
-  echo "building xllm wheel from $root (device=npu arch=arm)..."
+  local build_log=/tmp/xllm-build.log
+  echo "building xllm wheel from $root (device=npu arch=arm); full log -> $build_log"
   export SKIP_TEST=1
-  ( cd "$root" && python setup.py bdist_wheel --device npu --arch arm )
+  if ( cd "$root" && python setup.py bdist_wheel --device npu --arch arm ) >"$build_log" 2>&1; then
+    echo "build succeeded; tail of $build_log:"
+    tail -n 300 "$build_log"
+  else
+    echo "!! xllm build failed; tail of $build_log:"
+    tail -n 300 "$build_log"
+    exit 1
+  fi
   local wheel
   wheel=$(ls "$root"/dist/*.whl 2>/dev/null | head -n1)
   [ -n "$wheel" ] || { echo "xllm wheel not found after build"; exit 1; }

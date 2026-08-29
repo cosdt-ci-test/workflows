@@ -97,9 +97,14 @@ pip 发布的 `opencv-python` / `opencv-python-headless` wheel **不带** CANN �
 
 #### 安装基础编译依赖
 
+镜像基于原生 `ubuntu:22.04`（arm64），`/etc/apt/sources.list` 指向 Canonical 的 `ports.ubuntu.com`（海外源），国内 runner 上 `apt-get update` 拉索引极慢甚至超时。先把源换成阿里云的 arm64 ports 归档（必须是 `ubuntu-ports`，不能用 x86 的 `ubuntu/` 归档），再装依赖：
+
 ```shell #test-setup
+sed -i 's|http://ports.ubuntu.com/ubuntu-ports/|https://mirrors.aliyun.com/ubuntu-ports/|g' /etc/apt/sources.list
 apt-get update -qq && apt-get install -y -qq git build-essential cmake pkg-config libjpeg-dev libpng-dev libtiff-dev
 ```
+
+> 测试容器每次 run 重建，sed 只影响本次容器，不污染 runner 或镜像。镜像构建时已装过 git / build-essential / cmake（构建历史可见），这条命令真正要下载的只有 libjpeg / libpng / libtiff 三个图像编解码 dev 包，换源后秒级完成。
 
 #### 从源码克隆 opencv + opencv_contrib
 

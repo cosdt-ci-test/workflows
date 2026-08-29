@@ -107,6 +107,7 @@ pip install deepspeed -i https://repo.huaweicloud.com/ascend/repos/pypi
 DeepSpeed 需要通过 MPI 通信库发现分布式环境，安装完 DeepSpeed 后请一并安装：
 
 ```shell #test-setup
+sed -i 's|http://ports.ubuntu.com/ubuntu-ports/|https://mirrors.aliyun.com/ubuntu-ports/|g' /etc/apt/sources.list
 apt-get update && apt-get install -y libopenmpi-dev
 pip install mpi4py
 ```

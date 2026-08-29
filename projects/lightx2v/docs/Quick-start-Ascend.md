@@ -276,6 +276,7 @@ uv pip install \
 export PROJECT_ROOT=${PROJECT_ROOT:-/home/coder/work/lightx2v-test}
 cd "$PROJECT_ROOT/src"
 export PYTHONPATH=/tmp/stubs:$PYTHONPATH  # aarch64 才需要,x86_64 跳过
+export PLATFORM=ascend_npu              # lightx2v import 时 read env 选后端,默认 cuda
 python -c "
 import lightx2v
 spec = __import__('importlib.util').util.find_spec('lightx2v')

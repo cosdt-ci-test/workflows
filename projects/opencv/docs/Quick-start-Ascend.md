@@ -171,7 +171,7 @@ fixes = [
      '            shape_C = cv::MatShape(1, &dim);'),
     ('opencv/modules/dnn/src/layers/matmul_layer.cpp',
      '                    bias_shape = std::vector<int>{bias_shape.front()};',
-     '                    int _bias_front = bias_shape.front(); bias_shape = cv::MatShape(1, &_bias_front);'),
+     '                    int _bias_val = bias_shape[0]; bias_shape = cv::MatShape(1, &_bias_val);'),
 ]
 for rel, o, n in fixes:
     p = pathlib.Path(rel); s = p.read_text()

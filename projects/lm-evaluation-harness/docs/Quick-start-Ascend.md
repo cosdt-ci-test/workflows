@@ -111,7 +111,7 @@ python -m lm_eval run --model hf \
     --device npu:0 \
     --batch_size 8 \
     --limit 10 \
-    --output_path /tmp/lm_eval_out.json
+    --output_path /tmp/lm_eval_out
 ```
 
 输出结果如下（评测日志较长，此处仅校验关键锚点）：
@@ -124,13 +124,13 @@ python -m lm_eval run --model hf \
 - `--device npu:0`：lm-eval 的设备白名单以 `npu:<i>` 形式收录 NPU 设备（单卡即 `npu:0`）；裸 `npu` 不在白名单内，勿省略索引。
 - `--tasks arc_easy --limit 10`：AI2 ARC-Easy 小规模功能评测；`--limit 10` 只取前 10 个样本，控制墙钟时间（数值本身不代表模型能力）。
 - `--batch_size 8`：0.5B 模型单卡 batch 8。
-- `--output_path`：结果 JSON 落盘，供下一步校验。
+- `--output_path /tmp/lm_eval_out`：结果目录（lm-eval 会把结果 JSON 写入该目录，文件名含模型参数哈希），供下一步校验。
 - `HF_ENDPOINT=https://hf-mirror.com`：评测数据集 `allenai/ai2_arc` 默认从 HuggingFace Hub 下载；机器不可达 HuggingFace 时必须设置镜像。
 
 ## 检查评测结果
 
 ```shell #test id="check-acc"
-python -c "import json; r = json.load(open('/tmp/lm_eval_out.json')); acc = r['results']['arc_easy']['acc,none']; assert 0.0 <= acc <= 1.0, acc; print('acc', round(acc, 4))"
+python -c "import glob, json; paths = glob.glob('/tmp/lm_eval_out/**/*.json', recursive=True); assert paths, 'no result json'; r = json.load(open(paths[0])); acc = r['results']['arc_easy']['acc,none']; assert 0.0 <= acc <= 1.0, acc; print('acc', round(acc, 4))"
 ```
 
 输出结果如下：

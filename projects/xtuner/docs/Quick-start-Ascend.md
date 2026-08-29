@@ -85,7 +85,7 @@ Python 3.12.xxx
 
 ```shell #test-setup
 uv pip install -f https://mirrors.aliyun.com/pytorch-wheels/cpu torch==2.11.0
-uv pip install --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi torch_npu==2.11.0
+uv pip install --extra-index-url https://mirrors.aliyun.com/pypi/simple torch_npu==2.11.0
 ```
 
 检查 torch / torch_npu 是否装好且 NPU 设备可用：
@@ -313,7 +313,11 @@ config_name=$(python -c "
 from xtuner.configs import cfgs_name_path
 import re
 names = sorted(cfgs_name_path.keys())
-match = next((n for n in names if re.search(r'(internlm2|llama).*qlora.*colorist', n)), '')
+# 优先选 7b：本文档的 pull-weights 只下 7b（Shanghai_AI_Laboratory/internlm2-chat-7b），
+# 而 sorted+next 的 ASCII 序 '2' < '7'，20b 会抢在 7b 前面，把 patch 后的 model_path 指向
+# 不存在的 -20b/ 目录训不动。优先 7b，没有再退到任何匹配项
+match = next((n for n in names if re.search(r'(internlm2|llama).*qlora.*colorist.*7b', n)),
+             next((n for n in names if re.search(r'(internlm2|llama).*qlora.*colorist', n)), ''))
 print(match)
 ")
 test -n "$config_name" || { echo "no matching config ((internlm2|llama).*qlora.*colorist); abort"; exit 1; }
@@ -435,22 +439,137 @@ prompt_template= PROMPT_TEMPLATE.xxx
 
 跑最小训练：
 
-```shell #test-setup id="xtuner-train-smoke-setup"
-cp /tmp/xtuner_npu_llm_cfg.py /tmp/xtuner_npu_smoke_single_cfg.py
+```shell #test-setup id="xtuner-train-smoke-setup" load="xtuner_llm_cfg_path>>cfg"
+# Stub cv2 via a real stub package (not sitecustomize) to bypass base image's missing libxcb.so.1.
+# mmengine.hooks.naive_visualization_hook.py:5 顶层 `import cv2`，被
+# `python -m xtuner.tools.train` → `from mmengine.runner import Runner` → ... → naive_visualization_hook
+# 这条 eager import 链触发。cv2 .so 间接链接 libxcb.so.1，NPU base image 缺这个 lib，
+# 走 `opencv-python-headless` 也救不回来（headless 只剥 GUI binding，.so 的 libxcb 引用还在）。
+# 走 PYTHONPATH 让 Python 用 FileFinder 解析 `/tmp/cv2_stub/cv2/__init__.py`——这是真正的
+# importable package，module 自带合法 `__spec__`。这样 `transformers.utils.import_utils:115`
+# 的 `_cv2_available = importlib.util.find_spec("cv2") is not None` 走正常路径返回 spec
+# （不会被之前 sitecustomize 注入的 `types.ModuleType('cv2')` 那种 `__spec__ is None` 状态
+# 引发 ValueError）。5 iter smoke 不真正做可视化，stub 够用。
+mkdir -p /tmp/cv2_stub/cv2
+cat > /tmp/cv2_stub/cv2/__init__.py <<'PYEOF'
+def imread(*args, **kwargs):
+    return None
+
+def imwrite(*args, **kwargs):
+    return True
+
+def cvtColor(*args, **kwargs):
+    return None
+
+def resize(*args, **kwargs):
+    return None
+
+def setNumThreads(*args, **kwargs):
+    return None
+PYEOF
+
+# Stub torchvision via real package: NPU base image 的 torchvision 缺 C++ extension，
+# 任何 torch.ops.torchvision.* 调用都会抛 `RuntimeError: operator torchvision::nms does
+# not exist`。触发链：xtuner.tools.train → peft → transformers.bloom → ... → image_utils →
+# `from torchvision.transforms import InterpolationMode` / `from torchvision.transforms
+# import functional as F`。PYTHONPATH 上的 stub 优先于 site-packages，避开坏 torchvision。
+# 注意：merge-setup 后面也会建同名 stub——这里先建好让 smoke setup 立即能用。
+mkdir -p /tmp/torchvision_stub/torchvision/ops /tmp/torchvision_stub/torchvision/transforms
+cat > /tmp/torchvision_stub/torchvision/__init__.py <<'PYEOF'
+PYEOF
+cat > /tmp/torchvision_stub/torchvision/ops/__init__.py <<'PYEOF'
+def nms(*args, **kwargs):
+    return None
+PYEOF
+cat > /tmp/torchvision_stub/torchvision/transforms/__init__.py <<'PYEOF'
+from enum import Enum
+
+class InterpolationMode(Enum):
+    NEAREST = "nearest"
+    NEAREST_EXACT = "nearest-exact"
+    BOX = "box"
+    BILINEAR = "bilinear"
+    HAMMING = "hamming"
+    BICUBIC = "bicubic"
+    LANCZOS = "lanczos"
+
+def Compose(*args, **kwargs):
+    return None
+
+def ToTensor(*args, **kwargs):
+    return None
+
+def Resize(*args, **kwargs):
+    return None
+
+def CenterCrop(*args, **kwargs):
+    return None
+
+def Normalize(*args, **kwargs):
+    return None
+PYEOF
+# `from torchvision.transforms.v2 import functional as tvF` 是 transformers.image_processing_utils
+# 顶层 eager import，bloom.modeling_bloom 走 image_utils 这条链触发；peft.utils.constants 又从
+# transformers 顶层拉 BloomPreTrainedModel 把整条链勾到 xtuner.tools.train。v2 子模块本身不存在会
+# 直接 ModuleNotFoundError，比 functional 内部缺符号更早炸。这里 stub v2 直接从 transforms re-export
+# functional——5 iter smoke 不真正调用 tvF，挂个空模块够用。
+cat > /tmp/torchvision_stub/torchvision/transforms/v2.py <<'PYEOF'
+from torchvision.transforms import functional
+PYEOF
+cat > /tmp/torchvision_stub/torchvision/transforms/functional.py <<'PYEOF'
+from torchvision.transforms import InterpolationMode
+
+def normalize(*args, **kwargs):
+    return None
+
+def pil_to_tensor(*args, **kwargs):
+    return None
+
+def to_tensor(*args, **kwargs):
+    return None
+
+def to_pil_image(*args, **kwargs):
+    return None
+
+def resize(*args, **kwargs):
+    return None
+PYEOF
+
+cp <cfg> /tmp/xtuner_npu_smoke_single_cfg.py
+# 只 append samples_per_epoch：5 iter 短训足够触发一次 checkpoint + EvaluateChatHook。
+# 其他 override（max_epochs、checkpoint.interval、custom_hooks[1].every_n_iters）走
+# `--cfg-options` 而不是再赋值 cfg 变量。原因：cfg 文件里 `train_cfg`、`custom_hooks[1]`、
+# `default_hooks.checkpoint` 都在 line 167-200 期间被 cfg 文件靠前的赋值**捕获**为具体值
+# （TrainLoop、200、500），等 cat >> 再赋值同名顶层变量已晚——这些 dict 已经是闭包外的
+# snapshot，重新赋值只改顶层 var，dict 内容不变。`--cfg-options` 走 mmengine 的
+# DictAction + Config.merge_from_dict，支持点号语法 + list index，能穿透到 nested 字段。
 cat >> /tmp/xtuner_npu_smoke_single_cfg.py <<'EOF'
 
-train_cfg = dict(max_epochs=1)
 train_dataloader = dict(dataset=dict(samples_per_epoch=5))
-# 5 iter 训练里要让 EvaluateChatHook 触发（cfg 顶层 evaluation_freq 默认 200），
-# 改成 1 让 hook 每 iter 打 Sample output:
-evaluation_freq = 1
 EOF
 
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 export TORCH_NPU_USE_HCCL=1
+# torchvision_stub 在 step 18 之前的 merge-setup 里建好；smoke setup 单独 subprocess 没继承，
+# 这里显式 export 把它加回 PYTHONPATH。理由：xtuner.tools.train → peft → transformers.bloom
+# → ... → image_utils → `from torchvision.transforms import InterpolationMode`。site-packages
+# 里的 torchvision 在 NPU base image 缺 C++ extension，import 触发 torch.ops 注册抛
+# `operator torchvision::nms does not exist`。PYTHONPATH 上 stub 优先于 site-packages。
+export PYTHONPATH=/tmp/torchvision_stub:/tmp/cv2_stub${PYTHONPATH:+:$PYTHONPATH}
+mkdir -p /tmp/xtuner_sft_llm_out_single
+# pipefail：train pipeline 是 `python ... | tee`，pipe 默认 rc 取最后一个 cmd（tee），python 抛
+# FileNotFoundError / RuntimeError 时 tee 仍然 rc=0，framework 看不到错误就以为训练成功。开了 pipefail
+# 之后 pipeline rc 取「任一 cmd 的最后一个非零 rc」，python 错误才会 propagate 到 setup 失败
+set -o pipefail
 # 用 python -m xtuner.tools.train 直接调 train 模块，绕开 console_script wrapper shebang 错配
 # （wrapper 启动的 Python 看不到 uv egg-link 把 xtuner 当 namespace package，`from xtuner import cli` ImportError）。
-python -m xtuner.tools.train /tmp/xtuner_npu_smoke_single_cfg.py --work-dir /tmp/xtuner_sft_llm_out_single 2>&1 | tee /tmp/xtuner_sft_llm_out_single/train.log
+python -m xtuner.tools.train /tmp/xtuner_npu_smoke_single_cfg.py \
+    --work-dir /tmp/xtuner_sft_llm_out_single \
+    --cfg-options \
+        train_cfg.max_epochs=1 \
+        default_hooks.checkpoint.interval=1 \
+        'custom_hooks.1.every_n_iters=1' \
+    2>&1 | tee /tmp/xtuner_sft_llm_out_single/train.log
 ```
 
 查 .pth 有没有落盘 + 训练日志里的 Sample output 段：
@@ -479,18 +598,112 @@ xxx (训前 assistant 回复——5 iter 没训出什么，可能是空 / 乱码
 
 跑最小训练：
 
-```shell #test-setup id="xtuner-train-smoke-multi-setup"
-cp /tmp/xtuner_npu_llm_cfg.py /tmp/xtuner_npu_smoke_multi_cfg.py
+```shell #test-setup id="xtuner-train-smoke-multi-setup" load="xtuner_llm_cfg_path>>cfg"
+# Stub cv2 via real stub package; see xtuner-train-smoke-setup for why we can't use
+# sitecustomize-injected ModuleType (find_spec raises on __spec__ is None).
+mkdir -p /tmp/cv2_stub/cv2
+cat > /tmp/cv2_stub/cv2/__init__.py <<'PYEOF'
+def imread(*args, **kwargs):
+    return None
+
+def imwrite(*args, **kwargs):
+    return True
+
+def cvtColor(*args, **kwargs):
+    return None
+
+def resize(*args, **kwargs):
+    return None
+
+def setNumThreads(*args, **kwargs):
+    return None
+PYEOF
+
+# torchvision stub：见 xtuner-train-smoke-setup 注释（peft → transformers.bloom →
+# image_utils → torchvision.transforms，site-packages torchvision 缺 C++ op 挂）。
+mkdir -p /tmp/torchvision_stub/torchvision/ops /tmp/torchvision_stub/torchvision/transforms
+cat > /tmp/torchvision_stub/torchvision/__init__.py <<'PYEOF'
+PYEOF
+cat > /tmp/torchvision_stub/torchvision/ops/__init__.py <<'PYEOF'
+def nms(*args, **kwargs):
+    return None
+PYEOF
+cat > /tmp/torchvision_stub/torchvision/transforms/__init__.py <<'PYEOF'
+from enum import Enum
+
+class InterpolationMode(Enum):
+    NEAREST = "nearest"
+    NEAREST_EXACT = "nearest-exact"
+    BOX = "box"
+    BILINEAR = "bilinear"
+    HAMMING = "hamming"
+    BICUBIC = "bicubic"
+    LANCZOS = "lanczos"
+
+def Compose(*args, **kwargs):
+    return None
+
+def ToTensor(*args, **kwargs):
+    return None
+
+def Resize(*args, **kwargs):
+    return None
+
+def CenterCrop(*args, **kwargs):
+    return None
+
+def Normalize(*args, **kwargs):
+    return None
+PYEOF
+# `from torchvision.transforms.v2 import functional as tvF` 是 transformers.image_processing_utils
+# 顶层 eager import，bloom.modeling_bloom 走 image_utils 这条链触发；peft.utils.constants 又从
+# transformers 顶层拉 BloomPreTrainedModel 把整条链勾到 xtuner.tools.train。v2 子模块本身不存在会
+# 直接 ModuleNotFoundError，比 functional 内部缺符号更早炸。这里 stub v2 直接从 transforms re-export
+# functional——5 iter smoke 不真正调用 tvF，挂个空模块够用。
+cat > /tmp/torchvision_stub/torchvision/transforms/v2.py <<'PYEOF'
+from torchvision.transforms import functional
+PYEOF
+cat > /tmp/torchvision_stub/torchvision/transforms/functional.py <<'PYEOF'
+from torchvision.transforms import InterpolationMode
+
+def normalize(*args, **kwargs):
+    return None
+
+def pil_to_tensor(*args, **kwargs):
+    return None
+
+def to_tensor(*args, **kwargs):
+    return None
+
+def to_pil_image(*args, **kwargs):
+    return None
+
+def resize(*args, **kwargs):
+    return None
+PYEOF
+
+cp <cfg> /tmp/xtuner_npu_smoke_multi_cfg.py
+# samples_per_epoch 走 cfg 文件末尾 append；其他 max_epochs / checkpoint.interval /
+# custom_hooks[1].every_n_iters 走 --cfg-options（见 xtuner-train-smoke-setup 注释）。
 cat >> /tmp/xtuner_npu_smoke_multi_cfg.py <<'EOF'
 
-train_cfg = dict(max_epochs=1)
 train_dataloader = dict(dataset=dict(samples_per_epoch=5))
-evaluation_freq = 1
 EOF
 
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 export TORCH_NPU_USE_HCCL=1
-NPROC_PER_NODE=2 python -m xtuner.tools.train /tmp/xtuner_npu_smoke_multi_cfg.py --work-dir /tmp/xtuner_sft_llm_out_multi 2>&1 | tee /tmp/xtuner_sft_llm_out_multi/train.log
+# torchvision_stub：同 single-setup 注释（xtuner.tools.train → peft → transformers →
+# image_utils → torchvision.transforms，site-packages torchvision 缺 C++ op 挂）。
+export PYTHONPATH=/tmp/torchvision_stub:/tmp/cv2_stub${PYTHONPATH:+:$PYTHONPATH}
+mkdir -p /tmp/xtuner_sft_llm_out_multi
+set -o pipefail
+NPROC_PER_NODE=2 python -m xtuner.tools.train /tmp/xtuner_npu_smoke_multi_cfg.py \
+    --work-dir /tmp/xtuner_sft_llm_out_multi \
+    --cfg-options \
+        train_cfg.max_epochs=1 \
+        default_hooks.checkpoint.interval=1 \
+        'custom_hooks.1.every_n_iters=1' \
+    2>&1 | tee /tmp/xtuner_sft_llm_out_multi/train.log
 ```
 
 查 .pth + Sample output：
@@ -539,23 +752,73 @@ has_merge_subcmd: True
 CI smoke 真跑 `pth_to_hf` + `merge`：
 
 ```shell #test-setup
-# xtuner.tools.merge 顶层 import transformers（含 CLIPImageProcessor / CLIPVisionModel），
-# 触发 torchvision lazy import 在 NPU base image 上挂。stub torchvision 让 import 通过：
-python -c "
-import sys, types
-tv = types.ModuleType('torchvision'); sys.modules['torchvision'] = tv
-tv_ops = types.ModuleType('torchvision.ops')
-tv_ops.nms = lambda *a, **k: None
-sys.modules['torchvision.ops'] = tv_ops
-tv_t = types.ModuleType('torchvision.transforms')
-tv_t.Compose = lambda x: x
-tv_t.ToTensor = lambda *a, **k: None
-tv_t.Resize = lambda *a, **k: None
-tv_t.CenterCrop = lambda *a, **k: None
-tv_t.Normalize = lambda *a, **k: None
-sys.modules['torchvision.transforms'] = tv_t
-print('torchvision_stubbed: ok')
-"
+# Stub torchvision via real package to bypass NPU base image's broken torchvision C++ ops.
+# 触发链：xtuner.tools.merge → import transformers → transformers.models.bloom.modeling_bloom
+#   → transformers.modeling_utils.loss.loss_utils.loss_deformable_detr → image_transforms
+#   → image_utils → `from torchvision.transforms import InterpolationMode` / `from
+#   torchvision.transforms.functional import ...`。
+# 走 PYTHONPATH + 真正的 stub package 让 import 命中 `__init__.py`，避开 site-packages
+# 里那个缺 C++ extension 的 torchvision（任何 torch.ops.torchvision.* 调用都会抛
+# `RuntimeError: operator torchvision::nms does not exist`）。
+mkdir -p /tmp/torchvision_stub/torchvision/ops /tmp/torchvision_stub/torchvision/transforms
+cat > /tmp/torchvision_stub/torchvision/__init__.py <<'PYEOF'
+PYEOF
+cat > /tmp/torchvision_stub/torchvision/ops/__init__.py <<'PYEOF'
+def nms(*args, **kwargs):
+    return None
+PYEOF
+# transforms/__init__.py 至少要提供 InterpolationMode（image_utils 4.48 line 59 用）。
+# 用 Enum 让 `InterpolationMode.NEAREST` 这种属性访问 work；Compose / ToTensor 等 5 iter smoke
+# 不真正做数据增强，lambda no-op 够用。
+cat > /tmp/torchvision_stub/torchvision/transforms/__init__.py <<'PYEOF'
+from enum import Enum
+
+class InterpolationMode(Enum):
+    NEAREST = "nearest"
+    NEAREST_EXACT = "nearest-exact"
+    BOX = "box"
+    BILINEAR = "bilinear"
+    HAMMING = "hamming"
+    BICUBIC = "bicubic"
+    LANCZOS = "lanczos"
+
+def Compose(*args, **kwargs):
+    return None
+
+def ToTensor(*args, **kwargs):
+    return None
+
+def Resize(*args, **kwargs):
+    return None
+
+def CenterCrop(*args, **kwargs):
+    return None
+
+def Normalize(*args, **kwargs):
+    return None
+PYEOF
+# transforms.functional 给 image_transforms 4.48 line 58 `from torchvision.transforms import
+# functional as F` 用——F.normalize 至少要 no-op（5 iter smoke 不真正做图像增强）。
+cat > /tmp/torchvision_stub/torchvision/transforms/functional.py <<'PYEOF'
+from torchvision.transforms import InterpolationMode
+
+def normalize(*args, **kwargs):
+    return None
+
+def pil_to_tensor(*args, **kwargs):
+    return None
+
+def to_tensor(*args, **kwargs):
+    return None
+
+def to_pil_image(*args, **kwargs):
+    return None
+
+def resize(*args, **kwargs):
+    return None
+PYEOF
+export PYTHONPATH=/tmp/torchvision_stub${PYTHONPATH:+:$PYTHONPATH}
+python -c "import torchvision, torchvision.ops, torchvision.transforms, torchvision.transforms.functional; print('torchvision_stubbed: ok')"
 
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 src_pth=$(ls -t /tmp/xtuner_sft_llm_out_single/*.pth 2>/dev/null | head -1)
@@ -582,7 +845,7 @@ python -m xtuner.tools.model_converters.merge \
 验合并产物落盘：
 
 ```shell #test id="xtuner-merge-verify"
-ls -t "$merged_dir"/*.safetensors 2>/dev/null | head -3
+ls -t /tmp/xtuner_sft_llm_out_single/merged/*.safetensors 2>/dev/null | head -3
 ```
 
 输出结果如下：
@@ -619,22 +882,12 @@ CI smoke 真跑 chat（merged 版，复用上面 `xtuner-merge-verify` 合并后
 
 ```shell #test-setup
 # chat.py 顶层 import transformers（含 CLIPImageProcessor / CLIPVisionModel）触发 torchvision
-# lazy import 在 NPU base image 上挂。stub torchvision 让 import 通过：
-python -c "
-import sys, types
-tv = types.ModuleType('torchvision'); sys.modules['torchvision'] = tv
-tv_ops = types.ModuleType('torchvision.ops')
-tv_ops.nms = lambda *a, **k: None
-sys.modules['torchvision.ops'] = tv_ops
-tv_t = types.ModuleType('torchvision.transforms')
-tv_t.Compose = lambda x: x
-tv_t.ToTensor = lambda *a, **k: None
-tv_t.Resize = lambda *a, **k: None
-tv_t.CenterCrop = lambda *a, **k: None
-tv_t.Normalize = lambda *a, **k: None
-sys.modules['torchvision.transforms'] = tv_t
-print('torchvision_stubbed: ok')
-"
+# lazy import 在 NPU base image 上挂。走 PYTHONPATH + 真正的 stub package（不是
+# types.ModuleType 注入，那样 find_spec 因为 `__spec__ is None` 会 ValueError）。
+# transforms/__init__.py 提供 InterpolationMode（image_utils 用）和 Compose/ToTensor 等
+# 5 iter smoke 不真正用得到的 no-op；transforms/functional.py 提供 normalize（F.normalize
+# image_transforms 用）。
+export PYTHONPATH=/tmp/torchvision_stub${PYTHONPATH:+:$PYTHONPATH}
 
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 ```

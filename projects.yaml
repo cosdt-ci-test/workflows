@@ -299,6 +299,33 @@ projects:
     workflows:
       examples: .github/workflows/xllm-examples.yml
       quick_start: .github/workflows/xllm-quick-start.yml
+  # xDiT dispatch path on NPU goes through xfuser/envs.py's `_is_npu()`
+  # + `get_torch_distributed_backend() == "hccl"` (mainline already
+  # has both). Doc body never references flash-attn because xfuser
+  # logs "flash_attn is not ready on torch_npu for now" and falls
+  # back to yunchang ring. Use the Contents API URL (same as xtuner /
+  # specforge / aibrix / colossalai) so doc-hash monitoring sees
+  # edits with matching auth headers. Doc exercises BOTH single-card
+  # (`--ulysses_degree 1 --ring_degree 1`) and 2-card
+  # (`--ulysses_degree 2 --ring_degree 1`) — xfuser.cli auto-spawns
+  # `torchrun --nproc_per_node=2` so the 2-card path needs an
+  # `a2-2` runner. PR #566 only adds single-node multi-card
+  # support (USP / DP / CFG-parallel; no PipeFusion), so the doc
+  # never sets `--pipefusion_parallel_degree > 1`.
+  # timeout_minutes=90 covers cold install + git clone +
+  # `pip install -e . --no-deps` build-from-source + SD3 medium
+  # cold-cache download (~4 GB; warm after first run via the
+  # bind-mount) + single-card inference + multi-card HCCL init
+  # + multi-card inference.
+  - name: xdit
+    category: 推理加速
+    support_level: 新兴适配
+    upstream_repo: xdit-project/xDiT
+    phase: A
+    runner: linux-aarch64-a2-2
+    dir: projects/xdit
+    workflows:
+      quick_start: .github/workflows/xdit-quick-start.yml
   - name: fastchat
     category: 推理加速
     support_level: 新兴适配

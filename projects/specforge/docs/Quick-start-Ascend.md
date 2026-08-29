@@ -60,23 +60,46 @@ python --version
 Python 3.12.xxx
 ```
 
-对齐 specforge 上游 pin 装 `torch` / `torch_npu` / `sglang`：
+对齐 specforge 上游 pin 装 `torch` / `torch_npu` / `sglang`（cluster 镜像里 sglang 0.5.14 wheel 的 `Requires-Dist: cuda-python` 被重打包成 `<0` 当"exclude 哨兵"——uv 的 pubgrub 不识别这个模式，会去找 <0.0.0 的 cuda-python 找不到而报 unsatisfiable，所以 sglang 必须 `--no-deps`；specforge 跟上游 [ascend_npu.md](https://github.com/sgl-project/SpecForge/blob/main/docs/basic_usage/Ascend/ascend_npu.md) 一致也 `--no-deps`，避免再把 sglang 拉进来重解析）：
 
 ```shell #test-setup
 uv pip install -f https://mirrors.aliyun.com/pytorch-wheels/cpu torch==2.11.0
-uv pip install --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi torch_npu==2.11.0
-uv pip install --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi sglang==0.5.14
+uv pip install --extra-index-url https://mirrors.aliyun.com/pypi/simple torch_npu==2.11.0
+# specforge 的依赖（无 CUDA 哨兵，正常装）
+uv pip install transformers==5.8.1 datasets tqdm accelerate huggingface-hub numpy openai-harmony pydantic psutil pyyaml safetensors requests tensorboard typing-extensions wandb yunchang fastapi uvicorn aiohttp pyzmq python-multipart
+# sglang 0.5.14 上游 requires_dist 里非 CUDA-only 项；里头 quack-kernels 自己带 nvidia-cutlass-dsl<0 哨兵，
+# torch / numpy / pydantic / 等基础 dep 已经装好，整批 --no-deps 装
+uv pip install --no-deps orjson anthropic apache-tvm-ffi av blobfile build compressed-tensors decord2 distro easydict einops gguf interegular IPython kernels llguidance mistral_common msgspec ninja openai outlines packaging partial_json_parser pillow prometheus-client py-spy pybase64 quack-kernels scipy sentencepiece setproctitle sgl-deep-gemm starlette triton
+# sglang wheel 本身 --no-deps 装（cluster 镜像把它的 Requires-Dist cuda-python 改成 <0 哨兵，绕开解析）
+uv pip install --no-deps --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi sglang==0.5.14
+# torchvision stub：sglang srt/utils/common.py line 92 `from torchvision.io import decode_jpeg` 在 import sglang 时硬依赖，
+# 但 torchvision 顶层 __init__.py 跑 @torch.library.register_fake("torchvision::nms") 时会因 CPU torch 2.11.0 没注册该 op 而抛
+# RuntimeError: operator torchvision::nms does not exist。Qwen3.5-4B 文本 smoke 不走 image path，stub 出 torchvision + torchvision.io
+# 让 import 通过；decode_jpeg 不会被调用。
+python - <<'PY'
+import os, site
+sp = site.getsitepackages()[0]
+pkg = os.path.join(sp, 'torchvision')
+io = os.path.join(pkg, 'io')
+os.makedirs(io, exist_ok=True)
+open(os.path.join(pkg, '__init__.py'), 'w').close()
+open(os.path.join(io, '__init__.py'), 'w').write(
+    'def decode_jpeg(*args, **kwargs):\n'
+    '    raise NotImplementedError("torchvision stub: not used in this text-only smoke")\n'
+)
+print(f'torchvision stub installed at {pkg}')
+PY
 ```
 
 检查 torch / torch_npu / sglang 是否装好且 NPU 设备可用：
 
 ```shell #test id="check-torch"
-python -c "import torch, torch_npu, sglang; print('torch=', torch.__version__); print('torch_npu=', torch_npu.__version__); print('sglang', sglang.__version__); print('is_available:', torch.npu.is_available()); print('count:', torch.npu.device_count())"
+python -c "import torch, torch_npu; from importlib.metadata import version; print('torch=', torch.__version__); print('torch_npu=', torch_npu.__version__); print('sglang', version('sglang')); print('is_available:', torch.npu.is_available()); print('count:', torch.npu.device_count())"
 ```
 
 输出结果如下：
 
-```shell #test-result id="check-torch"
+```shell #test-result id="check-torch" fuzzy='xxx'
 torch= 2.11.0+cpu
 torch_npu= 2.11.0
 sglang xxx
@@ -92,7 +115,7 @@ count: 4
 uv pip install 'modelscope==1.37.0'
 # mooncake-transfer-engine 是 specforge 在线训练里 specforge runtime 的 client 端。
 # master server 二进制（mooncake_master）从仓库 release tarball 拿；smoke 直接跑仓内构建好的二进制。
-uv pip install --no-deps 'mooncake-transfer-engine @ https://github.com/kvcache-ai/Mooncake/archive/refs/heads/main.tar.gz#subdirectory=mooncake-transfer-engine'
+uv pip install --no-deps 'mooncake-transfer-engine @ https://github.com/kvcache-ai/Mooncake/archive/refs/heads/main.tar.gz#subdirectory=mooncake-wheel'
 ```
 
 打印安装版本：
@@ -119,13 +142,22 @@ echo "${UPSTREAM_REF}"
 克隆上游仓库并 checkout 到工作流注入的最新 release tag，安装并且验证：
 
 ```shell #test id="specforge-install-source" load="upstream_ref>>ref"
-git clone --depth 1 --branch <ref> https://github.com/sgl-project/SpecForge.git SpecForge
+if [[ "<ref>" =~ ^[0-9a-f]{40}$ ]]; then
+    # commit SHA 路径：sgl-project/SpecForge 没有 release/tag，monitor 走 /commits/HEAD fallback 拿 main HEAD SHA；
+    # git clone --branch 不接 SHA，先浅克隆再 fetch + checkout FETCH_HEAD。
+    git clone --depth 1 https://github.com/sgl-project/SpecForge.git SpecForge
+    git -C SpecForge fetch --depth 1 origin <ref>
+    git -C SpecForge checkout FETCH_HEAD
+else
+    # tag / 分支名路径
+    git clone --depth 1 --branch <ref> https://github.com/sgl-project/SpecForge.git SpecForge
+fi
 cd SpecForge
-uv pip install .
-specforge --version
+uv pip install --no-deps .
+python -c "from importlib.metadata import version; print('specforge, version', version('specforge'))"
 ```
 
-\<ref> 为最新的 release 分支名（例如 `v0.5.14`）。
+\<ref> 为最新的 release tag / 分支名 / commit SHA（监控自动 fallback）。
 
 输出结果类似如下：
 
@@ -161,8 +193,15 @@ specforge --help
 
 ```shell #test-result id="specforge-help"
 usage: specforge [-h] {train,export,benchmark} ...
-...
-{train,export,benchmark}
+
+positional arguments:
+  {train,export,benchmark}
+    train               train a draft model from a typed config
+    export              materialize a runtime checkpoint as a model directory
+    benchmark           benchmark a running SGLang server
+
+options:
+  -h, --help            show this help message and exit
 ```
 
 `specforge train --help` 展示 typed run config 入口：
@@ -174,8 +213,26 @@ specforge train --help
 输出结果类似如下：
 
 ```shell #test-result id="specforge-train-help"
-usage: specforge train [-h] -c CONFIG [--role {auto,all,producer,consumer,both}] [--node-rank NODE_RANK] [--plan] [overrides ...]
-...
+usage: specforge train [-h] -c CONFIG
+                       [--role {auto,all,producer,consumer,both}]
+                       [--node-rank NODE_RANK] [--plan]
+                       [overrides ...]
+
+positional arguments:
+  overrides             dotted overrides, e.g. training.learning_rate=1e-4
+
+options:
+  -h, --help            show this help message and exit
+  -c CONFIG, --config CONFIG
+                        YAML or JSON run config
+  --role {auto,all,producer,consumer,both}
+                        launch selection (default: offline local all or
+                        online/disaggregated producer+consumer)
+  --node-rank NODE_RANK
+                        node-local rank for an explicit multi-node trainer
+                        launch
+  --plan                print the resolved process plan without starting
+                        workers
 ```
 
 ## 端到端 smoke：1 步训练
@@ -201,11 +258,21 @@ MOONCAKE_HTTP_PORT="${SPECFORGE_MOONCAKE_HTTP_PORT:-35880}"
 SGLANG_HEALTH_TIMEOUT="${SPECFORGE_SGLANG_HEALTH_TIMEOUT:-600}"  # 10 min for first compile
 
 # ---- Cleanup trap ----
+# pkill -f matches against /proc/<pid>/cmdline; the bash script's own
+# cmdline IS the entire script body (it's run as `bash -c "<script>"`),
+# so unanchored patterns like "sglang.launch_server" / "mooncake_master"
+# / "specforge train" all match bash itself and `pkill -9` SIGKILLs the
+# smoke runner mid-script (rc=-9 at the first pkill — that's exactly
+# what killed run 33245161460 inside the stale-process sweep, before any
+# actual smoke work). Anchor the regexes to ^cmdline: real processes
+# start with `python -m sglang.launch_server` / `mooncake_master` /
+# `specforge train`, while `bash -c "<script>"` starts with `bash` so
+# none of the anchored patterns match the parent shell.
 cleanup() {
     echo "smoke: cleanup"
-    pkill -9 -f sglang.launch_server 2>/dev/null || true
-    pkill -9 -f mooncake_master 2>/dev/null || true
-    pkill -9 -f "specforge train" 2>/dev/null || true
+    pkill -9 -f '^python -m sglang\.launch_server' 2>/dev/null || true
+    pkill -9 -f '^mooncake_master' 2>/dev/null || true
+    pkill -9 -f '^specforge train' 2>/dev/null || true
     rm -rf "$SPECFORGE_ROOT/outputs/qwen3.5-4b-dflash-npu-online" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
@@ -234,10 +301,19 @@ else
 fi
 ASCEND_PATCH=$(ls patches/sglang/*/spec-capture-ascend-mount.patch 2>/dev/null | head -1 || true)
 if [[ -n "$ASCEND_PATCH" ]]; then
-    SGLANG_DIR=$(python -c "import sglang, os; print(os.path.dirname(os.path.dirname(sglang.__file__)))")
+    # Resolve site-packages path WITHOUT `import sglang`: sglang.__init__
+    # pulls in sglang.lang → IPython → traitlets, and traitlets is missing
+    # (sglang was --no-deps installed + traitlets isn't in our manual deps
+    # list). importlib.util.find_spec() only locates the spec without
+    # executing the module body.
+    SGLANG_DIR=$(python -c "import importlib.util, os; print(os.path.dirname(os.path.dirname(importlib.util.find_spec('sglang').origin)))")
     echo "smoke: applying ascend companion patch ($ASCEND_PATCH)"
+    # Use BSD `patch -p2` (matches SpecForge's own apply_sglang_spec_capture_patch.sh),
+    # not `git apply`: the sglang wheel install has no .git/ in site-packages,
+    # so git apply would fail with "not a git repository". -p2 strips a/ + python/
+    # from the diff path, landing at $SGLANG_DIR/sglang/srt/spec_capture_sink.py.
     pushd "$SGLANG_DIR" >/dev/null
-    git apply "$OLDPWD/$ASCEND_PATCH" 2>&1 || echo "smoke: ascend patch already applied (ok)"
+    patch -p2 --batch -N < "$OLDPWD/$ASCEND_PATCH" 2>&1 || echo "smoke: ascend patch already applied (ok)"
     popd >/dev/null
 fi
 popd >/dev/null

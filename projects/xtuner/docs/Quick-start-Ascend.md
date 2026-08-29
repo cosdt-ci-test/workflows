@@ -476,18 +476,28 @@ ls -t /tmp/xtuner_sft_llm_out_multi/*.pth 2>/dev/null | head -1
 ```
 
 <!--
-完整 5 epoch × 144 step = 720 step 训练命令（本地按需手动跑，跑出来的 .pth 路径可直接被"模型转换 + LoRA 合并"章节消费）：
+完整 5 epoch × 144 step = 720 step 训练命令（720 step 太长不进 CI smoke）。
+CI 走 `xtuner-train-smoke`（5 samples × 1 epoch）。真正 720 step 本地按需手动跑 —— 把下面命令的 `--max-epochs 1` 去掉、用 `xtuner train` 替换 `python -m xtuner.tools.train`（去掉 wrapper shebang 错配 workaround，前提是用非 egg-link 装法）：
 
 ```shell
-# 单卡（src CANN env 是必需的，不 source torch_npu 找不到 libhccl.so）
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 export TORCH_NPU_USE_HCCL=1
-xtuner train /tmp/xtuner_npu_llm_cfg.py --work-dir /tmp/xtuner_sft_llm_out
+python -m xtuner.tools.train /tmp/xtuner_npu_llm_cfg.py --work-dir /tmp/xtuner_sft_llm_out
 
-# 多卡（xtuner.train 内置 torchrun 集成，按需调整 NPROC_PER_NODE）
-NPROC_PER_NODE=${GPU_NUM} xtuner train /tmp/xtuner_npu_llm_cfg.py --work-dir /tmp/xtuner_sft_llm_out
+# 多卡（xtuner.tools.train 内置 torchrun 集成，按需调整 NPROC_PER_NODE）
+NPROC_PER_NODE=${GPU_NUM} python -m xtuner.tools.train /tmp/xtuner_npu_llm_cfg.py --work-dir /tmp/xtuner_sft_llm_out
 ```
 -->
+
+```shell #test-setup
+# CI smoke：复用 xtuner-train-smoke-setup 的 5 samples × 1 epoch，把 max_epochs 显式钉 1
+# 跟上面 5 epoch 完整命令对齐（去掉 --max-epochs 1 就是 5 epoch）。work-dir 用 _full 后缀
+# 跟注释里的示例路径 /tmp/xtuner_sft_llm_out 区分：
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
+export TORCH_NPU_USE_HCCL=1
+python -m xtuner.tools.train /tmp/xtuner_npu_llm_cfg.py --work-dir /tmp/xtuner_sft_llm_out_full --max-epochs 1
+NPROC_PER_NODE=2 python -m xtuner.tools.train /tmp/xtuner_npu_llm_cfg.py --work-dir /tmp/xtuner_sft_llm_out_full --max-epochs 1
+```
 
 ### 模型转换 + LoRA 合并
 
@@ -533,6 +543,18 @@ xtuner convert merge ./Shanghai_AI_Laboratory/internlm2-chat-7b \
 ```
 -->
 
+```shell #test-setup
+# CI smoke 只走"取 smoke 训出的 .pth + 准备目标目录 + print 命令结构"。
+# 真跑 xtuner convert pth_to_hf / merge 会触发 torchvision chain 在 NPU image 上挂
+# （与 xtuner-convert-help 同因），本地按需手动跑上面 HTML 注释里的命令：
+src_pth=$(ls -t /tmp/xtuner_sft_llm_out_full/*.pth 2>/dev/null | head -1)
+[ -n "$src_pth" ] || { echo "no .pth from xtuner-train-smoke-setup"; exit 1; }
+hf_dir="${src_pth%.pth}_hf"
+mkdir -p "$hf_dir" /tmp/xtuner_sft_llm_out_full/merged
+echo "xtuner convert pth_to_hf /tmp/xtuner_npu_llm_cfg.py $src_pth $hf_dir"
+echo "xtuner convert merge ./Shanghai_AI_Laboratory/internlm2-chat-7b $hf_dir /tmp/xtuner_sft_llm_out_full/merged --max-shard-size 2GB"
+```
+
 > `#test` 只烟囱测 `xtuner convert` 的两个子命令 `pth_to_hf` 和 `merge` 在 `xtuner.entry_point.modes` dict 里**注册**（不真跑 `xtuner convert pth_to_hf --help` —— 它会 subprocess 调 `python pth_to_hf.py --help`，触发 peft→transformers→torchvision import chain 在 NPU image 上挂 `torchvision::nms` operator 缺失）。完整转换 + 合并依赖前面训练出的 `.pth`，CI smoke 跑不到，本地按需手动跑。
 
 ### 与模型对话
@@ -577,6 +599,14 @@ xtuner chat /tmp/xtuner_sft_llm_out/merged \
 ```
 -->
 
+```shell #test-setup
+# CI smoke：交互式 CLI 不能 CI 跑（hang 等输入）；同样不能 xtuner chat --help
+# （peft→transformers→torchvision import chain 在 NPU image 上挂）。
+# 真实 chat 会话本地按需手动跑 —— 用 `python -m xtuner.tools.chat` 替换 `xtuner chat`
+# 绕开 wrapper shebang 错配：
+echo "python -m xtuner.tools.chat /tmp/xtuner_sft_llm_out_full/merged --prompt-template internlm2_chat --system-template colorist"
+```
+
 也可以不合并、只跟 LLM + LoRA adapter 直接对话：
 
 <!--
@@ -587,6 +617,11 @@ xtuner chat ./Shanghai_AI_Laboratory/internlm2-chat-7b \
     --system-template colorist
 ```
 -->
+
+```shell #test-setup
+# 也可以不合并、只跟 LLM + LoRA adapter 直接对话（同上 chat 不能 CI 跑）：
+echo "python -m xtuner.tools.chat ./Shanghai_AI_Laboratory/internlm2-chat-7b --adapter /tmp/xtuner_sft_llm_out_full/iter_xxx_hf --prompt-template internlm2_chat --system-template colorist"
+```
 
 交互示例（训练前模型 → 训练后模型的输出变化）：
 

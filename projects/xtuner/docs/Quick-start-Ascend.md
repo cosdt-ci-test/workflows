@@ -582,7 +582,7 @@ python -m xtuner.tools.model_converters.merge \
 验合并产物落盘：
 
 ```shell #test id="xtuner-merge-verify"
-ls -t "$merged_dir"/*.safetensors 2>/dev/null | head -3
+ls -t /tmp/xtuner_sft_llm_out_single/merged/*.safetensors 2>/dev/null | head -3
 ```
 
 输出结果如下：

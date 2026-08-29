@@ -77,8 +77,8 @@ count: 1
 ## 安装 lm-eval
 
 ```shell #test id="install-lmeval"
-python -m pip install "lm_eval[hf]" "transformers<5"
-python -c "from importlib.metadata import version; print('lm_eval', version('lm_eval')); print('transformers', version('transformers'))"
+python -m pip install "lm_eval[hf]" "transformers<5" modelscope
+python -c "from importlib.metadata import version; print('lm_eval', version('lm_eval')); print('transformers', version('transformers')); print('modelscope', version('modelscope'))"
 ```
 
 输出结果如下：
@@ -86,10 +86,12 @@ python -c "from importlib.metadata import version; print('lm_eval', version('lm_
 ```shell #test-result id="install-lmeval" fuzzy='xxx' fuzzy='...'
 ...lm_eval 0.4.xxx
 transformers 4.xxx
+modelscope 1.xxx
 ```
 
 > - `lm_eval[hf]` 安装 HuggingFace transformers 后端（0.4.x 起 base 包不含 `transformers`/`torch`；本机已装的 torch 栈不会被改动）。
 > - 显式钉住 `transformers<5`：transformers 5.x 与 lm-eval 0.4.x 生态的兼容性未经上游验证。
+> - `modelscope` 为 ModelScope 下载模型所需，需显式安装。
 
 ## 下载模型
 

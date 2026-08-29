@@ -249,7 +249,7 @@ tokenizer_config.json
 
 ### 准备训练数据
 
-我们要让模型"看到颜色描述就回答色号"。去 ModelScope 拉 [Colorist](https://www.modelscope.cn/datasets/fanqiNO1/colors)——一堆"颜色描述 → 16 进制色号"的对话样本，只有几 MB：
+把 [Colorist](https://www.modelscope.cn/datasets/fanqiNO1/colors)（颜色描述 → 色号）从 ModelScope 拉到 `./colors/`：
 
 ```shell #test-setup
 python -c "
@@ -278,7 +278,7 @@ done
 ls colors/ | sort
 ```
 
-输出结果（同时是数据集会落在 `./colors/` 下的目录结构）：
+输出结果如下：
 
 ```shell #test-result id="xtuner-pull-dataset"
 colors.json
@@ -287,11 +287,9 @@ train.jsonl
 ...
 ```
 
-下载后落到 `./colors/`：`colors.json`（原始数据）、`README.md`（说明）、`train.jsonl`（每行一条 JSON 对话样本）。
-
 ### 准备配置文件
 
-还差一份"训练说明书"告诉 xtuner 怎么训——也就是配置文件。xtuner 内置 600 多种开箱即用配置（底座 × 微调方法 × 数据集的组合），先看都有哪些：
+xtuner 内置 600 多种配置（底座 × 微调方法 × 数据集的组合）。列出都有哪些：
 
 ```shell #test id="xtuner-list-cfg"
 python -c "
@@ -303,13 +301,15 @@ print('colorist_count:', sum(1 for n in names if 'colorist' in n))
 "
 ```
 
+输出结果如下：
+
 ```shell #test-result id="xtuner-list-cfg" fuzzy='xxx'
 lines: xxx
 head_first: xxx
 colorist_count: xxx
 ```
 
-挑一份我们要的："底座 InternLM2（或 Llama）+ 微调方法 QLoRA（LoRA 的省显存版）+ 数据集 Colorist"。先找到这个配置的名字：
+我们要的是"底座 InternLM2（或 Llama）+ 微调方法 QLoRA + 数据集 Colorist"。先找到这个配置的名字：
 
 ```shell #test-setup store="xtuner_colorist_cfg_name"
 config_name=$(python -c "
@@ -321,7 +321,6 @@ print(match)
 ")
 ```
 
-检查config_name是否存在：
 ```shell #test id="xtuner-find-colorist-cfg" load="xtuner_colorist_cfg_name>>config_name"
 test -n "$config_name" || { echo "no matching qlora+colorist config"; exit 1; }
 echo "config_name=$config_name"
@@ -332,7 +331,8 @@ echo "config_name=$config_name"
 config_name=xxx
 ```
 
-拿到配置名后拷一份到本地（不要直接改原版）：
+把配置拷一份到本地：
+
 ```shell #test-setup store="xtuner_llm_cfg_path" load="xtuner_colorist_cfg_name>>config_name"
 python -c "
 import os
@@ -349,7 +349,6 @@ print(save_path)
 "
 ```
 
-检查路径是否存在：
 ```shell #test id="xtuner-copy-cfg" load="xtuner_llm_cfg_path>>cfg"
 test -f "$cfg" || { echo "cfg not copied to $cfg"; exit 1; }
 echo "cfg_copied: $cfg"
@@ -360,11 +359,9 @@ echo "cfg_copied: $cfg"
 cfg_copied: xxx
 ```
 
-`config_name` 形如 `internlm2_7b_qlora_colorist_e5`，拷出来的 `cfg_copied` 形如 `/tmp/xtuner_npu_llm_cfg.py/internlm2_7b_qlora_colorist_e5_copy.py`。记下这个路径。
-
 ### 修改配置文件
 
-拷出来的配置跟官方模板一模一样——模板里指向的模型路径、数据路径、对话模板都是给"标准环境"写的，对不上我们这台 NPU 上下载好的模型和数据。要改 4 处（详见 [xtuner 快速上手的"修改配置文件"小节](https://xtuner.readthedocs.io/zh-cn/latest/legacy/get_started/quickstart.html)）。`<cfg>` 是上一节最后一行 `cfg_copied:` 后面那个绝对路径：
+拷出来的配置跟官方模板一模一样——里面指向的模型路径 / 数据路径 / 对话模板都是给"标准环境"写的，对不上我们这台 NPU。要改 4 处（详见 [xtuner 快速上手的"修改配置文件"小节](https://xtuner.readthedocs.io/zh-cn/latest/legacy/get_started/quickstart.html)）。`<cfg>` 是上一节 `cfg_copied:` 后面那个绝对路径：
 
 ```shell #test-setup load="xtuner_llm_cfg_path>>cfg" store="xtuner_llm_cfg_path"
 # 把模板里那 4 处 patch 应用到 copy-cfg 出来的 config 上：
@@ -390,7 +387,8 @@ print(path)
 "
 ```
 
-用 py_compile 验 cfg 是合法 Python + grep 验 4 处 patch 都生效：
+验 cfg 是合法 Python + 4 处 patch 都生效：
+
 ```shell #test id="xtuner-patch-cfg" load="xtuner_llm_cfg_path>>cfg"
 python -c "
 import py_compile
@@ -427,19 +425,13 @@ data_path= ./colors/train.jsonl
 prompt_template= PROMPT_TEMPLATE.xxx
 ```
 
-- `cfg_compiles_ok`：配置文件语法 OK
-- `cfg_patch_ok`：4 处修改都生效了
-- `model_name`：指向我们下载好的 InternLM2 权重目录
-- `data_path`：指向我们下载好的 Colorist 数据文件
-- `prompt_template`：用 InternLM2 的"用户提问 / 模型回答"对话格式
-
 ### 启动微调
 
-配置改好了，按模板给的单卡 / 多卡命令就能跑。
+训练日志（loss、学习率等）每次跑都不一样，没法写死预期值。拆成两步：先用最小数据集（5 samples × 1 epoch）跑通训练，再单独检查 `.pth` 有没有落盘。
 
-#### 单卡（CI smoke 用例）
+#### 单卡
 
-训练日志（loss、学习率等）每次跑都不一样，没法写死预期值。拆成两步：先用最小数据集（5 条样本 × 1 epoch）跑通，再单独检查 `.pth` 有没有落盘：
+跑最小训练：
 
 ```shell #test-setup id="xtuner-train-smoke-setup"
 cp /tmp/xtuner_npu_llm_cfg.py /tmp/xtuner_npu_smoke_single_cfg.py
@@ -456,15 +448,21 @@ export TORCH_NPU_USE_HCCL=1
 python -m xtuner.tools.train /tmp/xtuner_npu_smoke_single_cfg.py --work-dir /tmp/xtuner_sft_llm_out_single
 ```
 
+查 .pth 有没有落盘：
+
 ```shell #test id="xtuner-train-smoke"
 ls -t /tmp/xtuner_sft_llm_out_single/*.pth 2>/dev/null | head -1
 ```
+
+输出结果如下：
 
 ```shell #test-result id="xtuner-train-smoke" fuzzy='xxx'
 /tmp/xtuner_sft_llm_out_single/iter_xxx.pth
 ```
 
 #### 多卡（CI smoke 用例，2 卡 runner）
+
+跑最小训练：
 
 ```shell #test-setup id="xtuner-train-smoke-multi-setup"
 cp /tmp/xtuner_npu_llm_cfg.py /tmp/xtuner_npu_smoke_multi_cfg.py
@@ -479,9 +477,13 @@ export TORCH_NPU_USE_HCCL=1
 NPROC_PER_NODE=2 python -m xtuner.tools.train /tmp/xtuner_npu_smoke_multi_cfg.py --work-dir /tmp/xtuner_sft_llm_out_multi
 ```
 
+查 .pth 有没有落盘：
+
 ```shell #test id="xtuner-train-smoke-multi"
 ls -t /tmp/xtuner_sft_llm_out_multi/*.pth 2>/dev/null | head -1
 ```
+
+输出结果如下：
 
 ```shell #test-result id="xtuner-train-smoke-multi" fuzzy='xxx'
 /tmp/xtuner_sft_llm_out_multi/iter_xxx.pth
@@ -501,11 +503,9 @@ NPROC_PER_NODE=${GPU_NUM} python -m xtuner.tools.train /tmp/xtuner_npu_llm_cfg.p
 ```
 -->
 
-> **2 步拆分的备注**：`xtuner-train-smoke-setup` 块跑训练（输出不校），`xtuner-train-smoke` 块只跑 `ls -t` 拿最新 `.pth` 路径。`fuzzy='xxx'` 让 `iter_xxx.pth` 里的 `xxx` 当通配符匹配实际的迭代号，所以 CI 不用每次更新预期输出。
-
 ### 完整 5 epoch 训练（本地手动）
 
-CI smoke 用 5 samples × 1 epoch 只是"跑通整条链路"——真正想训出能用的模型，要跑完整个 Colorist 数据集（720 step），这一步不进 CI，太慢了：
+CI smoke 用 5 samples × 1 epoch 只是"跑通整条链路"——真正训出能用的模型要跑完整个 Colorist（720 step），这一步不进 CI，太慢了：
 
 ```shell #test-setup
 # CI smoke：复用 xtuner-train-smoke-setup 的 5 samples × 1 epoch，把 max_epochs 显式钉 1
@@ -519,9 +519,9 @@ NPROC_PER_NODE=2 python -m xtuner.tools.train /tmp/xtuner_npu_llm_cfg.py --work-
 
 ### 模型转换 + LoRA 合并
 
-训练完产出的 `.pth` 只包含 LoRA 这部分"增量"参数（几十 MB）——QLoRA / LoRA 的精髓就在这：不动原模型 14 GB 权重，只学一个小的"补丁"。但要拿这个 `.pth` 去做推理，必须先转 HuggingFace 标准格式（`pth_to_hf`），再合并回底座（`merge`），合并后才是一个完整的 14 GB 模型。
+训练完产出的 `.pth` 只包含 LoRA "增量"参数（几十 MB）——QLoRA / LoRA 的精髓：不动原模型 14 GB 权重，只学一个小的"补丁"。要拿这个 `.pth` 去做推理，必须先转 HuggingFace 标准格式（`pth_to_hf`），再合并回底座（`merge`），合并后才是一个完整的 14 GB 模型。
 
-先验证 `xtuner convert` 的两个子命令确实注册在 CLI 里（不真跑——会触发 torchvision 缺失）：
+验 `xtuner convert` 的两个子命令确实注册在 CLI 里（不真跑——会触发 torchvision 缺失）：
 
 ```shell #test id="xtuner-convert-help"
 python -c "
@@ -563,8 +563,9 @@ xtuner convert merge ./Shanghai_AI_Laboratory/internlm2-chat-7b \
 ```
 -->
 
+CI smoke 只验"取 smoke 训出的 .pth + 准备目标目录 + print 命令结构"：
+
 ```shell #test-setup
-# CI smoke 只走"取 smoke 训出的 .pth + 准备目标目录 + print 命令结构"。
 # 真跑 xtuner convert pth_to_hf / merge 会触发 torchvision chain 在 NPU image 上挂
 # （与 xtuner-convert-help 同因），本地按需手动跑上面 HTML 注释里的命令：
 src_pth=$(ls -t /tmp/xtuner_sft_llm_out_full/*.pth 2>/dev/null | head -1)
@@ -575,11 +576,9 @@ echo "xtuner convert pth_to_hf /tmp/xtuner_npu_llm_cfg.py $src_pth $hf_dir"
 echo "xtuner convert merge ./Shanghai_AI_Laboratory/internlm2-chat-7b $hf_dir /tmp/xtuner_sft_llm_out_full/merged --max-shard-size 2GB"
 ```
 
-> `#test` 只烟囱测 `xtuner convert` 的两个子命令 `pth_to_hf` 和 `merge` 在 `xtuner.entry_point.modes` dict 里**注册**（不真跑 `xtuner convert pth_to_hf --help` —— 它会 subprocess 调 `python pth_to_hf.py --help`，触发 peft→transformers→torchvision import chain 在 NPU image 上挂 `torchvision::nms` operator 缺失）。完整转换 + 合并依赖前面训练出的 `.pth`，CI smoke 跑不到，本地按需手动跑。
-
 ### 与模型对话
 
-合并完权重后，可以直接用 `xtuner chat` 跟模型对话。下面烟囱测 `xtuner chat --help` 退出码 0 + 关键参数 `--adapter` / `--prompt-template` / `--system-template` 都存在：
+合并完权重后可以用 `xtuner chat` 跟模型对话。验 chat 脚本存在 + 关键参数在源码里有定义：
 
 ```shell #test id="xtuner-chat-help"
 # 不能直接 xtuner chat --help —— chat.py 顶层 import peft + transformers，触发 torchvision chain
@@ -600,7 +599,7 @@ print('has_system_template_arg: ' + str('--system-template' in src))
 "
 ```
 
-输出结果类似：
+输出结果如下：
 
 ```shell #test-result id="xtuner-chat-help" disable_fuzzy
 chat_script_exists: True
@@ -609,7 +608,7 @@ has_prompt_template_arg: True
 has_system_template_arg: True
 ```
 
-完整 `xtuner chat` 命令（交互式 CLI，依赖前面合并后的权重，本地按需手动跑）：
+合并后的完整模型对话（本地按需手动跑）：
 
 <!--
 ```shell
@@ -650,5 +649,3 @@ double enter to end input (EXIT: exit chat, RESET: reset history) >>> 宁静而�
 
 #66ccff
 ```
-
-> `#test` 只烟囱测 `xtuner chat` 脚本存在 + 源码里 `xtuner/tools/chat.py` 定义了 `--adapter` / `--prompt-template` / `--system-template` 三个关键参数——不真跑 `xtuner chat --help`（chat.py 顶层 import peft + transformers，触发 torchvision chain 在 NPU image 挂）。完整交互式对话没法做自动化断言（依赖 stdin），本地按需手动跑。

@@ -92,7 +92,31 @@ jobs:
       upstream_repo: ModelTC/LightX2V
       # Same URL the legacy pattern monitors: doc-hash state carries
       # over via the shared monitor-state-lightx2v- cache prefix.
-      doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/hdc/projects/lightx2v/docs/Quick-start-Ascend.md
+      # GitHub Contents API URL (NOT raw.githubusercontent.com):
+      #   * raw.githubusercontent.com is firewalled off the NPU runner
+      #     → test's MONITORED_DOC_URL fetch fails (returns HTML error
+      #     page that mistune can't parse → empty doc body → "no commands
+      #     parsed" failure). CI 33255726245 / 33258866596 both hit
+      #     `URLError(TimeoutError('_ssl.c:993: The handshake operation timed out'))`
+      #     on the raw URL before this switch.
+      #   * engine's monitor already sends `Authorization: Bearer
+      #     $GH_TOKEN` + `Accept: application/vnd.github.raw`, which is
+      #     exactly the Contents API contract for raw markdown; with the
+      #     raw URL those headers are silently ignored and a HTML error
+      #     page is hashed instead, so doc signal is permanently "unknown"
+      #     and doc edits never trigger a run (only release / retry drives
+      #     it). Contents API + the existing engine headers fix both
+      #     ends with one URL change.
+      # `markdown_doc_test_base.py` already special-cases `api.github.com`
+      # URLs and re-applies the same Accept header on the test-side
+      # fetch, so MONITORED_DOC_URL inherits the fix.
+      # `?ref=${{ github.sha }}` is load-bearing: the Contents API without
+      # a ref defaults to the repo's default branch (`main`), so a dispatch
+      # on hdc would silently fetch main's doc and the test would never
+      # reflect hdc edits. Same pattern as aibrix / bitsandbytes / colossalai /
+      # mooncake / llama.cpp / onnxruntime / opencv / flagscale / specforge /
+      # torchtune.
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/lightx2v/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
       doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/lightx2v/docs/Quick-start-Ascend.md
       # cwd is workflows/projects/lightx2v; env contract (MONITORED_DOC_URL /
       # UPSTREAM_REF / NPU_READY) is injected by the engine. All project

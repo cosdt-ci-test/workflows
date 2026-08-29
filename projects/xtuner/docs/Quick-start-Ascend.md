@@ -371,7 +371,7 @@ with open(path) as f:
 #   pretrained_model_name_or_path 用 regex 同时覆盖 7b/20b 两种 cfg（xtuner v0.2.0 的 colorist cfg 是
 #   llama 版，V1 之后才有 internlm2 版；不同 size 的 HF 模型名不一样，自动取 size 后缀）
 text, n = re.subn(
-    r'pretrained_model_name_or_path = \"internlm/internlm2-(\d+b)\"',
+    r'pretrained_model_name_or_path = \"internlm/internlm(?:2|-chat)-(\d+b)\"',
     r\"pretrained_model_name_or_path = './Shanghai_AI_Laboratory/internlm2-chat-\1'\",
     text,
 )

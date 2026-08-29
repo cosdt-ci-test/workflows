@@ -268,6 +268,8 @@ p.print_help()
 
 ```shell #test id="xdit-infer-single" load="model_path>>model_path"
 export TORCH_NPU_USE_HCCL=1
+# 临时打开 xdit-patcher debug；下一轮 patch 跑通后去掉
+export XEDIT_PATCHER_DEBUG=1
 # sd3_example.py 硬编码 .to(f"cuda:{local_rank}") + torch.cuda.max_memory_allocated(...) +
 # torch.cuda.reset_peak_memory_stats() + torch.Generator(device="cuda")。torch_npu 2.9.0 只
 # monkey-patch torch.nn.functional / torch.nn，**不 patch torch.cuda**。
@@ -309,9 +311,13 @@ text = text.replace('torch.cuda', 'torch.npu')
 if 'import sys as _sys' not in text[:1000]:
     bootstrap = (
         'import sys as _sys\n'
+        'import os as _os\n'
+        '_DBG = _os.environ.get("XEDIT_PATCHER_DEBUG") == "1"\n'
+        'if _DBG: _sys.stderr.write("[xdit-patcher] bootstrap installed; meta_path has " + str(len(_sys.meta_path)) + " finders\\n")\n'
         'class _XditEnvPatcher:\n'
         '    def find_spec(self, name, path, target=None):\n'
         '        if name != "xfuser.envs" or "xfuser.envs" in _sys.modules:\n'
+        '            if _DBG and name == "xfuser.envs": _sys.stderr.write("[xdit-patcher] find_spec skipped (already loaded)\\n")\n'
         '            return None\n'
         '        # 关键：递归调用 find_spec 会再走一遍 sys.meta_path，包含我们自己。\n'
         '        # 先把自己临时拔掉，importlib 才会去走真正的 SourceFileLoader 路径。\n'
@@ -321,6 +327,7 @@ if 'import sys as _sys' not in text[:1000]:
         '            _spec = _ilu.find_spec(name)\n'
         '        finally:\n'
         '            _sys.meta_path.insert(0, self)\n'
+        '        if _DBG: _sys.stderr.write("[xdit-patcher] find_spec(" + name + ") returning spec\\n")\n'
         '        return _spec\n'
         '    def create_module(self, spec):\n'
         '        return None\n'
@@ -332,14 +339,19 @@ if 'import sys as _sys' not in text[:1000]:
         '            _spec.loader.exec_module(module)\n'
         '        finally:\n'
         '            _sys.meta_path.insert(0, self)\n'
+        '        _before = module.PACKAGES_CHECKER.packages_info.get("has_long_ctx_attn")\n'
+        '        if _DBG: _sys.stderr.write("[xdit-patcher] exec_module done; before=" + str(_before) + "\\n")\n'
         '        try:\n'
         '            import yunchang as _yc\n'
         '            module.PACKAGES_CHECKER.packages_info["has_long_ctx_attn"] = True\n'
         '            from xfuser.envs import PackagesEnvChecker as _PC\n'
         '            _PC.check_long_ctx_attn = lambda self: True\n'
-        '        except ImportError:\n'
+        '            if _DBG: _sys.stderr.write("[xdit-patcher] patched has_long_ctx_attn=True\\n")\n'
+        '        except ImportError as _e:\n'
+        '            if _DBG: _sys.stderr.write("[xdit-patcher] yunchang import failed\\n")\n'
         '            pass\n'
         '_sys.meta_path.insert(0, _XditEnvPatcher())\n'
+        'if _DBG: _sys.stderr.write("[xdit-patcher] patcher inserted into meta_path\\n")\n'
     )
     text = bootstrap + text
 open(dst, 'w').write(text)
@@ -417,9 +429,13 @@ text = text.replace('torch.cuda', 'torch.npu')
 if 'import sys as _sys' not in text[:1000]:
     bootstrap = (
         'import sys as _sys\n'
+        'import os as _os\n'
+        '_DBG = _os.environ.get("XEDIT_PATCHER_DEBUG") == "1"\n'
+        'if _DBG: _sys.stderr.write("[xdit-patcher] bootstrap installed; meta_path has " + str(len(_sys.meta_path)) + " finders\\n")\n'
         'class _XditEnvPatcher:\n'
         '    def find_spec(self, name, path, target=None):\n'
         '        if name != "xfuser.envs" or "xfuser.envs" in _sys.modules:\n'
+        '            if _DBG and name == "xfuser.envs": _sys.stderr.write("[xdit-patcher] find_spec skipped (already loaded)\\n")\n'
         '            return None\n'
         '        # 关键：递归调用 find_spec 会再走一遍 sys.meta_path，包含我们自己。\n'
         '        # 先把自己临时拔掉，importlib 才会去走真正的 SourceFileLoader 路径。\n'
@@ -429,6 +445,7 @@ if 'import sys as _sys' not in text[:1000]:
         '            _spec = _ilu.find_spec(name)\n'
         '        finally:\n'
         '            _sys.meta_path.insert(0, self)\n'
+        '        if _DBG: _sys.stderr.write("[xdit-patcher] find_spec(" + name + ") returning spec\\n")\n'
         '        return _spec\n'
         '    def create_module(self, spec):\n'
         '        return None\n'
@@ -440,14 +457,19 @@ if 'import sys as _sys' not in text[:1000]:
         '            _spec.loader.exec_module(module)\n'
         '        finally:\n'
         '            _sys.meta_path.insert(0, self)\n'
+        '        _before = module.PACKAGES_CHECKER.packages_info.get("has_long_ctx_attn")\n'
+        '        if _DBG: _sys.stderr.write("[xdit-patcher] exec_module done; before=" + str(_before) + "\\n")\n'
         '        try:\n'
         '            import yunchang as _yc\n'
         '            module.PACKAGES_CHECKER.packages_info["has_long_ctx_attn"] = True\n'
         '            from xfuser.envs import PackagesEnvChecker as _PC\n'
         '            _PC.check_long_ctx_attn = lambda self: True\n'
-        '        except ImportError:\n'
+        '            if _DBG: _sys.stderr.write("[xdit-patcher] patched has_long_ctx_attn=True\\n")\n'
+        '        except ImportError as _e:\n'
+        '            if _DBG: _sys.stderr.write("[xdit-patcher] yunchang import failed\\n")\n'
         '            pass\n'
         '_sys.meta_path.insert(0, _XditEnvPatcher())\n'
+        'if _DBG: _sys.stderr.write("[xdit-patcher] patcher inserted into meta_path\\n")\n'
     )
     text = bootstrap + text
 open(dst, 'w').write(text)
@@ -463,6 +485,7 @@ export PYTHONPATH="$(cat /tmp/_xdit_root):${PYTHONPATH:-}"
 # 但 #test 块又是新 bash -c 子进程（execute() 用 env 快照传给 subprocess.run，不读回
 # bash 的 export），所以这里也重做一次 cp+sed+export，确保 /tmp/sd3_patched.py 存在、
 # PYTHONPATH 含 xDiT 仓库根（让 'from xfuser import ...' 能找到）。
+export XEDIT_PATCHER_DEBUG=1
 cp "$(cat /tmp/_xdit_root)"/examples/sd3_example.py /tmp/sd3_patched.py
 python /tmp/_patch_sd3.py /tmp/sd3_patched.py /tmp/sd3_patched.py
 export PYTHONPATH="$(cat /tmp/_xdit_root):${PYTHONPATH:-}"

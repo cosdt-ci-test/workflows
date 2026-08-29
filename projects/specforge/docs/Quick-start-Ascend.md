@@ -431,14 +431,33 @@ nohup mooncake_master \
     --enable_metric_reporting=false \
     >/tmp/smoke-mooncake.log 2>&1 &
 MOONCAKE_PID=$!
+# CANN base image (ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12) 没装 nc(netcat)，
+# `nc -z 127.0.0.1 35551` 直接 command-not-found → 30 次循环每次都 false → smoke
+# 误判 mooncake 没 bind；run 33262609924 复现：mooncake_master 实际 log 已经
+# `Master service started on port 35551` + `rpc_address=0.0.0.0`，但 nc 不存在。
+# 改用 Python socket 检查；Python 3.12 在 py3.12 tag 的 CANN 镜像里一定有。
+mooncake_ready() {
+    python3 -c "
+import socket, sys
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.settimeout(0.5)
+try:
+    s.connect(('127.0.0.1', $MOONCAKE_RPC_PORT))
+except Exception:
+    sys.exit(1)
+finally:
+    s.close()
+sys.exit(0)
+" 2>/dev/null
+}
 for _ in $(seq 1 30); do
-    if nc -z 127.0.0.1 "$MOONCAKE_RPC_PORT" 2>/dev/null; then
+    if mooncake_ready; then
         echo "smoke: mooncake ready (rpc $MOONCAKE_RPC_PORT, pid=$MOONCAKE_PID)"
         break
     fi
     sleep 1
 done
-if ! nc -z 127.0.0.1 "$MOONCAKE_RPC_PORT" 2>/dev/null; then
+if ! mooncake_ready; then
     echo "smoke: FAILED - mooncake_master did not bind $MOONCAKE_RPC_PORT in 30s"
     tail -50 /tmp/smoke-mooncake.log
     exit 1

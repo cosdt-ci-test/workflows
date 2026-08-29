@@ -192,41 +192,47 @@ PY
 # / 等很多 sub-module (CI 33259259625 + 33259517415 各抓到不同的子模块，
 # backends.compiler 之后又冒 triton.compiler.compiler)。手列子目录维护成本高，
 # 改成 meta-path finder 自动 stub 任何 triton.* sub-module。
-# 顶层 __init__.py 用模块级 __getattr__ 收 attribute access,
-# 另装一个 MetaPathFinder 接管 `import triton.xxx.yyy` 的子模块查找:
-# sys.modules 直接预注册成 _StubMod，Python 不会再走 filesystem。
+#
+# 关键坑（CI 33259771019）: ModuleSpec(loader=None, is_package=True)
+# 会被 Python 当成 namespace package 处理 — import 系统把模块换成
+# 真的 NamespaceLoader 实例，__getattr__ 不在 spec 上,attribute 走 fallback
+# 路径,直接 AttributeError。必须给 spec 一个真 Loader(create_module 返回
+# 带 __getattr__ 的 ModuleType),这样 import 系统认我们 stub 而不是 namespace。
 mkdir -p /tmp/stubs/triton
 cat > /tmp/stubs/triton/__init__.py <<'PY'
 import sys, types
+from importlib.machinery import ModuleSpec
 
 class _Stub:
     def __getattr__(self, name): return _Stub()
     def __call__(self, *a, **k): return _Stub()
+    def __repr__(self): return '<triton-stub>'
 
-class _StubMod(types.ModuleType):
-    """Auto-stub module: any attribute access returns _Stub()."""
-    def __getattr__(self, name):
-        return _Stub()
+class _TritonStubLoader:
+    """create_module returns a ModuleType with __getattr__ bound; exec_module
+    does nothing. Python's import system treats this as a real package (not
+    a namespace package), so the stub survives instead of being replaced
+    by NamespaceLoader."""
+    def create_module(self, spec):
+        m = types.ModuleType(spec.name)
+        m.__getattr__ = lambda name: _Stub()
+        return m
+    def exec_module(self, module):
+        pass
 
 class _TritonStubFinder:
-    """MetaPathFinder: any `import triton.xxx.yyy` -> _StubMod pre-registered in sys.modules."""
+    """MetaPathFinder: any `import triton.xxx.yyy` -> spec with _TritonStubLoader.
+    Finder at meta_path[0] so it intercepts BEFORE PathFinder/FileFinder look
+    at /tmp/stubs/triton/ on disk (and before any real triton.* the image
+    might still ship in site-packages)."""
     def find_spec(self, fullname, path, target=None):
         if not fullname.startswith('triton'):
             return None
         if fullname in sys.modules:
-            return None  # already loaded (real or stubbed)
-        # fabricate a ModuleSpec for a virtual sub-module under triton
-        stub = _StubMod(fullname)
-        sys.modules[fullname] = stub
-        from importlib.machinery import ModuleSpec
-        return ModuleSpec(fullname, loader=None, is_package=True)
+            return sys.modules[fullname].__spec__
+        return ModuleSpec(fullname, _TritonStubLoader(), is_package=True)
 
-# Install the finder at front of meta_path so it intercepts BEFORE
-# PathFinder / FileFinder look at /tmp/stubs/triton/ on disk.
 sys.meta_path.insert(0, _TritonStubFinder())
-
-# Also stub the top-level triton attribute access (__version__ etc).
-sys.modules[__name__].__getattr__ = lambda n: _Stub()
 PY
 ```
 
@@ -247,6 +253,13 @@ print('cv2.COLOR_BGR2RGB=', cv2.COLOR_BGR2RGB)
 print('decord.VideoReader=', decord.VideoReader)
 print('torchaudio.load=', torchaudio.load)
 print('triton.__version__=', getattr(triton, '__version__', 'no version attr'))
+# torch._inductor.runtime.triton_compat imports `tl.math` at module top
+# (CI 33259771019); the stub must answer attribute access on triton.language
+# without AttributeError. Verify both sub-module import and attribute
+# access on a deep path that mirrors triton_compat's pattern.
+import triton.language as tl
+print('triton.language.math=', tl.math)
+print('triton.language.something.deep=', tl.something.deep.path)
 "
 ```
 
@@ -256,6 +269,8 @@ cv2.COLOR_BGR2RGB= xxx
 decord.VideoReader= xxx
 torchaudio.load= xxx
 triton.__version__= xxx
+triton.language.math= xxx
+triton.language.something.deep= xxx
 ```
 
 ## 安装 LightX2V

@@ -562,6 +562,24 @@ def resize(*args, **kwargs):
     return None
 PYEOF
 
+# Stub bitsandbytes via real package + dist-info: xtuner's qlora cfg 走 BitsAndBytesConfig
+# (transformers 4.48 顶部 eager 实例化)，其 `post_init()` 无条件调
+# `importlib.metadata.version('bitsandbytes')`——NPU base image 不装 bnb（bnb 没有
+# aarch64 wheel + 需要 CUDA），setup 时 metadata lookup 抛 PackageNotFoundError 直接
+# ERR99999 退出。Stub 走两条路：(1) 真 package 让 `import bitsandbytes` 拿到合法 module；
+# (2) `bitsandbytes-0.43.0.dist-info/METADATA` 让 importlib.metadata.version() 返回稳定
+# 版本字符串绕过 if 分支。5 iter smoke 不真做 4-bit quant，只 post_init 走通就够了。
+mkdir -p /tmp/bitsandbytes_stub/bitsandbytes
+cat > /tmp/bitsandbytes_stub/bitsandbytes/__init__.py <<'PYEOF'
+__version__ = "0.43.0"
+PYEOF
+mkdir -p /tmp/bitsandbytes_stub/bitsandbytes-0.43.0.dist-info
+cat > /tmp/bitsandbytes_stub/bitsandbytes-0.43.0.dist-info/METADATA <<'EOF'
+Metadata-Version: 2.1
+Name: bitsandbytes
+Version: 0.43.0
+EOF
+
 cp <cfg> /tmp/xtuner_npu_smoke_single_cfg.py
 # 只 append samples_per_epoch：5 iter 短训足够触发一次 checkpoint + EvaluateChatHook。
 # 其他 override（max_epochs、checkpoint.interval、custom_hooks[1].every_n_iters）走
@@ -582,7 +600,7 @@ export TORCH_NPU_USE_HCCL=1
 # → ... → image_utils → `from torchvision.transforms import InterpolationMode`。site-packages
 # 里的 torchvision 在 NPU base image 缺 C++ extension，import 触发 torch.ops 注册抛
 # `operator torchvision::nms does not exist`。PYTHONPATH 上 stub 优先于 site-packages。
-export PYTHONPATH=/tmp/torchvision_stub:/tmp/cv2_stub${PYTHONPATH:+:$PYTHONPATH}
+export PYTHONPATH=/tmp/torchvision_stub:/tmp/cv2_stub:/tmp/bitsandbytes_stub${PYTHONPATH:+:$PYTHONPATH}
 mkdir -p /tmp/xtuner_sft_llm_out_single
 # pipefail：train pipeline 是 `python ... | tee`，pipe 默认 rc 取最后一个 cmd（tee），python 抛
 # FileNotFoundError / RuntimeError 时 tee 仍然 rc=0，framework 看不到错误就以为训练成功。开了 pipefail
@@ -712,6 +730,19 @@ def resize(*args, **kwargs):
     return None
 PYEOF
 
+# Stub bitsandbytes via real package + dist-info：见 xtuner-train-smoke-setup 注释
+# (BitsAndBytesConfig.post_init() 无条件查 metadata，NPU base image 不装 bnb 抛 PackageNotFoundError)。
+mkdir -p /tmp/bitsandbytes_stub/bitsandbytes
+cat > /tmp/bitsandbytes_stub/bitsandbytes/__init__.py <<'PYEOF'
+__version__ = "0.43.0"
+PYEOF
+mkdir -p /tmp/bitsandbytes_stub/bitsandbytes-0.43.0.dist-info
+cat > /tmp/bitsandbytes_stub/bitsandbytes-0.43.0.dist-info/METADATA <<'EOF'
+Metadata-Version: 2.1
+Name: bitsandbytes
+Version: 0.43.0
+EOF
+
 cp <cfg> /tmp/xtuner_npu_smoke_multi_cfg.py
 # samples_per_epoch 走 cfg 文件末尾 append；其他 max_epochs / checkpoint.interval /
 # custom_hooks[1].every_n_iters 走 --cfg-options（见 xtuner-train-smoke-setup 注释）。
@@ -724,7 +755,7 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 export TORCH_NPU_USE_HCCL=1
 # torchvision_stub：同 single-setup 注释（xtuner.tools.train → peft → transformers →
 # image_utils → torchvision.transforms，site-packages torchvision 缺 C++ op 挂）。
-export PYTHONPATH=/tmp/torchvision_stub:/tmp/cv2_stub${PYTHONPATH:+:$PYTHONPATH}
+export PYTHONPATH=/tmp/torchvision_stub:/tmp/cv2_stub:/tmp/bitsandbytes_stub${PYTHONPATH:+:$PYTHONPATH}
 mkdir -p /tmp/xtuner_sft_llm_out_multi
 set -o pipefail
 NPROC_PER_NODE=2 python -m xtuner.tools.train /tmp/xtuner_npu_smoke_multi_cfg.py \

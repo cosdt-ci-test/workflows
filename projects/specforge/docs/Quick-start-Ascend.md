@@ -72,31 +72,13 @@ uv pip install transformers==5.8.1 datasets tqdm accelerate huggingface-hub nump
 # specforge 的 scripts/apply_sglang_spec_capture_patch.sh 里 `python -c "import sglang; print(sglang.__version__)"`
 # 会触发 sglang.__init__ → sglang.lang → IPython → traitlets 这条 import 链，
 # 而 traitlets 是 IPython 的硬依赖，不在 sglang 自己的 requires_dist 里、也不会被 --no-deps 拉进来。
-uv pip install --no-deps orjson anthropic apache-tvm-ffi av blobfile build compressed-tensors decord2 distro easydict einops gguf interegular kernels llguidance mistral_common msgspec ninja openai outlines packaging partial_json_parser pillow prometheus-client py-spy pybase64 quack-kernels scipy sentencepiece setproctitle sgl-deep-gemm starlette triton
+uv pip install --no-deps orjson anthropic apache-tvm-ffi av blobfile build compressed-tensors decord2 distro easydict einops gguf interegular kernels llguidance mistral_common msgspec ninja 'openai<2.0.0' outlines packaging partial_json_parser pillow prometheus-client py-spy pybase64 quack-kernels scipy sentencepiece setproctitle sgl-deep-gemm starlette triton
 uv pip install IPython
 # sglang wheel 本身 --no-deps 装（cluster 镜像把它的 Requires-Dist cuda-python 改成 <0 哨兵，绕开解析）
 uv pip install --no-deps --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi sglang==0.5.14
-# httpx + httpx2 shim：openai 在 huaweicloud cluster 镜像里被重打包，`_types.py:34` 硬写 `import httpx2`
-# 而不是 `import httpx`（run 33268955540: ModuleNotFoundError: No module named 'httpx2' → sglang.launch_server 启动即崩）。
-# openai 是上一行 --no-deps 装的，所以它的依赖 httpx 没被拉进来；这里先装 httpx，再用
-# `site-packages/httpx2.py` 把整个 httpx 包 re-export 出来，让 `import httpx2` 解析到 httpx 上。
+# openai<2 还在用 httpx（>=2.0 切到了 pydantic 团队的 httpx2 fork，集群镜像没装 httpx2 也没办法走 --no-deps 拉，
+# `import httpx2._config` 那种 sub-module 访问 shim 也补不全）。openai 是 --no-deps 装的，这里把 httpx 显式补上。
 uv pip install httpx
-python - <<'PY'
-import os, site
-sp = site.getsitepackages()[0]
-shim = os.path.join(sp, 'httpx2.py')
-# 写一个 .py 文件：import httpx 后把所有 httpx 的公开名 re-export，让 `import httpx2` 等价于 `import httpx`。
-# openai._types.py:34 只用 `import httpx2`（裸 import），后续通过 `httpx2.<X>` 访问名字，from httpx import *
-# 已经把 httpx.__all__ 全收过来 → httpx2.Client / httpx2.AsyncClient / httpx2.__version__ 等都能解析到 httpx。
-# 子模块（httpx2._api 等）openai 不用，不必 stub 成 package。
-with open(shim, 'w') as f:
-    f.write(
-        '"""httpx2 shim: huaweicloud cluster 镜像里的 openai wheel 把 _types.py 改成 `import httpx2`，'
-        '但 PyPI 上只有 httpx 没 httpx2。这里把 httpx 的 __all__ re-export 出去。"""\n'
-        'from httpx import *  # noqa: F401,F403\n'
-    )
-print(f'httpx2 shim installed at {shim}')
-PY
 # torchvision stub：sglang srt/utils/common.py line 92 `from torchvision.io import decode_jpeg` 在 import sglang 时硬依赖，
 # 但 torchvision 顶层 __init__.py 跑 @torch.library.register_fake("torchvision::nms") 时会因 CPU torch 2.11.0 没注册该 op 而抛
 # RuntimeError: operator torchvision::nms does not exist。Qwen3.5-4B 文本 smoke 不走 image path，stub 出 torchvision + torchvision.io

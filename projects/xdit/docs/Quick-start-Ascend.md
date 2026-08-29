@@ -282,7 +282,11 @@ import sys
 src = sys.argv[1]
 dst = sys.argv[2]
 text = open(src).read()
+# 改三处：(a) "cuda:N" / 'cuda:N' 字符串前缀 → "npu:N" / 'npu:N'（.to(...) / Generator 等）；
+# (b) "cuda" 裸字符串（device="cuda" 不带 colon，如 torch.Generator(device="cuda")）；
+# (c) torch.cuda.X → torch.npu.X（max_memory_allocated / reset_peak_memory_stats 等）。
 text = text.replace('"cuda:', '"npu:').replace("'cuda:", "'npu:")
+text = text.replace('"cuda"', '"npu"').replace("'cuda'", "'npu'")
 text = text.replace('torch.cuda', 'torch.npu')
 open(dst, 'w').write(text)
 PYEOF
@@ -335,7 +339,11 @@ import sys
 src = sys.argv[1]
 dst = sys.argv[2]
 text = open(src).read()
+# 改三处：(a) "cuda:N" / 'cuda:N' 字符串前缀 → "npu:N" / 'npu:N'（.to(...) / Generator 等）；
+# (b) "cuda" 裸字符串（device="cuda" 不带 colon，如 torch.Generator(device="cuda")）；
+# (c) torch.cuda.X → torch.npu.X（max_memory_allocated / reset_peak_memory_stats 等）。
 text = text.replace('"cuda:', '"npu:').replace("'cuda:", "'npu:")
+text = text.replace('"cuda"', '"npu"').replace("'cuda'", "'npu'")
 text = text.replace('torch.cuda', 'torch.npu')
 open(dst, 'w').write(text)
 PYEOF

@@ -118,21 +118,6 @@ count: 2
 uv pip install peft modelscope
 ```
 
-打印安装版本：
-```shell #test id="install-deps"
-python -c "import diffusers, transformers, accelerate, einops, sentencepiece, modelscope; print('diffusers', diffusers.__version__); print('transformers', transformers.__version__); print('accelerate', accelerate.__version__); print('einops', einops.__version__); print('sentencepiece', sentencepiece.__version__); print('modelscope', modelscope.__version__)"
-```
-
-输出结果如下：
-```shell #test-result id="install-deps" fuzzy='xxx'
-diffusers xxx
-transformers xxx
-accelerate xxx
-einops xxx
-sentencepiece xxx
-modelscope xxx
-```
-
 ## 安装 xDiT
 
 xDiT 的发布名是 `xfuser`（PyPI / setup.py 的 `name`），命令行入口叫 `xdit`（`setup.py` 的 `entry_points` 把 `xdit=xfuser.cli:main` 注册成 console_script）。`pip install xfuser` 等价于「装上 xdit 的等价体」。
@@ -166,6 +151,23 @@ xfuser xxx
 - `uv pip install -e .` 会按 [xfuser 0.4.5 setup.py 的 `install_requires`](https://github.com/xdit-project/xDiT/blob/0.4.5/setup.py) 自动装 `torch>=2.4.1` / `accelerate>=0.33.0` / `transformers>=4.39.1` / `sentencepiece>=0.1.99` / `beautifulsoup4>=4.12.3` / `distvae` / `yunchang>=0.6.0` / `einops` / `diffusers>=0.33.0`。NPU 镜像已装的 `torch==2.9.0+cpu` / `torch_npu==2.9.0.post2` 满足 `torch>=2.4.1`，pip 不会重装。
 - `peft`（LoRA adapter 推理）和 `modelscope`（用 `snapshot_download` 下权重）**不在** xfuser `install_requires` 里，已经在前面的「前置安装」里手动装好了。
 - `av`（视频模型 `Wan` / `HunyuanVideo` 的视频编码要用到）**也不在** xfuser `install_requires` / `extras_require` 里，需要单独装：
+
+打印安装版本：
+
+```shell #test id="install-deps"
+python -c "import diffusers, transformers, accelerate, einops, sentencepiece, modelscope; print('diffusers', diffusers.__version__); print('transformers', transformers.__version__); print('accelerate', accelerate.__version__); print('einops', einops.__version__); print('sentencepiece', sentencepiece.__version__); print('modelscope', modelscope.__version__)"
+```
+
+输出结果如下：
+
+```shell #test-result id="install-deps" fuzzy='xxx'
+diffusers xxx
+transformers xxx
+accelerate xxx
+einops xxx
+sentencepiece xxx
+modelscope xxx
+```
 
 ```shell #test-setup
 uv pip install av

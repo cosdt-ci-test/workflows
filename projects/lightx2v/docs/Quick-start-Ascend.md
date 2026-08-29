@@ -188,20 +188,52 @@ PY
 ```
 
 ```shell #test-setup
-# triton stub: sla_kernel 只在模块顶层 `import triton`,attr 访问不在 import 时发生。
-# 给一个空 package + 全 attr __getattr__ 返 _Stub,NPU 走 torchada 不真用 triton。
+# triton stub: torch._inductor 走 import triton.compiler.compiler / backends.compiler
+# / 等很多 sub-module (CI 33259259625 + 33259517415 各抓到不同的子模块，
+# backends.compiler 之后又冒 triton.compiler.compiler)。手列子目录维护成本高，
+# 改成 meta-path finder 自动 stub 任何 triton.* sub-module。
+# 顶层 __init__.py 用模块级 __getattr__ 收 attribute access,
+# 另装一个 MetaPathFinder 接管 `import triton.xxx.yyy` 的子模块查找:
+# sys.modules 直接预注册成 _StubMod，Python 不会再走 filesystem。
+mkdir -p /tmp/stubs/triton
 cat > /tmp/stubs/triton/__init__.py <<'PY'
+import sys, types
+
 class _Stub:
     def __getattr__(self, name): return _Stub()
     def __call__(self, *a, **k): return _Stub()
-import sys as _s
-_s.modules[__name__].__getattr__ = lambda n: _Stub()
+
+class _StubMod(types.ModuleType):
+    """Auto-stub module: any attribute access returns _Stub()."""
+    def __getattr__(self, name):
+        return _Stub()
+
+class _TritonStubFinder:
+    """MetaPathFinder: any `import triton.xxx.yyy` -> _StubMod pre-registered in sys.modules."""
+    def find_spec(self, fullname, path, target=None):
+        if not fullname.startswith('triton'):
+            return None
+        if fullname in sys.modules:
+            return None  # already loaded (real or stubbed)
+        # fabricate a ModuleSpec for a virtual sub-module under triton
+        stub = _StubMod(fullname)
+        sys.modules[fullname] = stub
+        from importlib.machinery import ModuleSpec
+        return ModuleSpec(fullname, loader=None, is_package=True)
+
+# Install the finder at front of meta_path so it intercepts BEFORE
+# PathFinder / FileFinder look at /tmp/stubs/triton/ on disk.
+sys.meta_path.insert(0, _TritonStubFinder())
+
+# Also stub the top-level triton attribute access (__version__ etc).
+sys.modules[__name__].__getattr__ = lambda n: _Stub()
 PY
 ```
 
 ```shell #test-setup
 # 装 LightX2V 时跳过四个 stub 依赖（具体名字以 setup.py / pyproject.toml 为准,
 # 找不到时一个个 --no-deps 单独装也能绕过）。PYTHONPATH 在每条 python 命令前 export。
+# triton 用 meta-path finder 自动 stub 任意 sub-module,这里只检查顶层
 echo "stubs ready at /tmp/stubs/{cv2,decord,torchaudio,triton}"
 ls /tmp/stubs/cv2/__init__.py /tmp/stubs/decord/__init__.py /tmp/stubs/torchaudio/__init__.py /tmp/stubs/triton/__init__.py
 ```

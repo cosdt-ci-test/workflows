@@ -128,10 +128,10 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             os.environ[key] = value
         print('setup: sourced CANN and NNAL env')
 
-        # safetensors_header_ok uses framework='pt', which imports torch
-        # and auto-loads torch_npu. LD_LIBRARY_PATH set on this already-running
-        # process is not seen by dlopen, so torch_npu would fail on libhccl.so.
-        # Child bash blocks inherit the merged env and load the plugin themselves.
+        # Header check uses framework='numpy' and should not import torch.
+        # Keep autoload off around the purge so an unexpected torch import
+        # cannot dlopen torch_npu in this already-running process.
+        # Child bash blocks inherit the merged env and load the plugin.
         prev_autoload = os.environ.get('TORCH_DEVICE_BACKEND_AUTOLOAD')
         os.environ['TORCH_DEVICE_BACKEND_AUTOLOAD'] = '0'
         try:
@@ -139,7 +139,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             try:
                 purge_corrupt_models(resolve_modelscope_cache())
             except ModuleNotFoundError as exc:
-                # safetensors.safe_open(..., framework='pt') imports torch.
+                # safetensors.safe_open(..., framework='numpy') imports numpy.
                 # The install #test has not run yet. A warm ModelScope
                 # volume would otherwise crash setUpClass.
                 print(f'setup: skip model cache purge ({exc})')

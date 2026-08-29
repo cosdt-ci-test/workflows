@@ -1,6 +1,6 @@
 # 快速开始：在昇腾 NPU 上裸机跑通 llm-d 路由栈
 
-你将在**一台机器、一张昇腾 NPU**上，用三个普通进程搭起 llm-d 的最小推理路径，不依赖 Kubernetes。
+本文介绍如何在**一台机器、一张昇腾 NPU**上，用三个普通进程搭起 llm-d 的最小推理路径，不依赖 Kubernetes。
 
 [llm-d](https://github.com/llm-d/llm-d) 是架在推理引擎之上的路由层。最小部署是三个进程：
 
@@ -17,7 +17,7 @@ flowchart LR
 
 本文基于上游 [no-kubernetes-deployment](https://github.com/llm-d/llm-d/tree/v0.9.0/guides/no-kubernetes-deployment) 指南，把 model server 换成 vllm-ascend，并把模型换成适合单卡验证的 `Qwen/Qwen3-0.6B`。上游其余 Kubernetes 指南在这里**不会**用到。
 
-工作目录统一用 `/root/llm-d`。下面每一段命令都可以单独复制。需要 `cd` 或 `source` 的，该段里会自己写。
+工作目录统一用 `/root/llm-d`。
 
 > **阅读本文前**，请先按 [快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html) 装好 CANN、NNAL 与驱动。
 
@@ -44,7 +44,7 @@ Atlas **800T** / **900 A2** 训练系列（Ascend **910B**）。本文示例为*
 
 | 组件 | 版本 |
 | --- | --- |
-| llm-d 配置仓 | 当前最新 Release tag（克隆时换成你要用的 tag） |
+| llm-d 配置仓 | 当前最新 Release tag（克隆时换成要用的 tag） |
 | EPP（llm-d-router） | v0.10.0 |
 | Go | 1.26.6 linux-arm64 |
 | vLLM | 0.23.0 |
@@ -58,7 +58,7 @@ Atlas **800T** / **900 A2** 训练系列（Ascend **910B**）。本文示例为*
 
 ### 加载 CANN 与 NNAL
 
-新开终端后这些变量不会自动生效。`npu-smi` 在常见容器里位于 `/usr/local/sbin` 或 `/usr/local/bin`。后面启动 vLLM 的命令段会再 `source` 一次，单独复制也能跑。
+`npu-smi` 在常见容器里位于 `/usr/local/sbin` 或 `/usr/local/bin`。
 
 ```shell
 export PATH=/usr/local/sbin:/usr/local/bin:$PATH
@@ -252,7 +252,7 @@ mv "$ci/envoy/1.33.2/envoy.part" "$ci/envoy/1.33.2/envoy"
 克隆 llm-d 仓，只取 no-kubernetes 指南里的三份 YAML。默认 EPP 去读 `/etc/epp/endpoints.yaml`，默认模型是 `Qwen/Qwen3-32B`。单机验证改成工作目录里的绝对路径，以及 `Qwen/Qwen3-0.6B`。`address` 必须是字面 IPv4，file-discovery **不会**解析主机名。
 
 
-将下面克隆命令里的 `<ref>` 换成你要用的 llm-d **Release tag**（例如 `v0.9.0`）。
+将下面克隆命令里的 `<ref>` 换成要用的 llm-d **Release tag**（例如 `v0.9.0`）。
 <!--
 ```shell #test-setup store="upstream_ref"
 set -euo pipefail

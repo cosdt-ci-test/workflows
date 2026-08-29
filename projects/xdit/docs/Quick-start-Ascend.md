@@ -268,13 +268,24 @@ p.print_help()
 
 ```shell #test id="xdit-infer-single" load="model_path>>model_path"
 export TORCH_NPU_USE_HCCL=1
-# examples/sd3_example.py 硬编码 .to(f"cuda:{local_rank}") + torch.cuda.max_memory_allocated(...)，
-# torch_npu 必须先 import 才能 monkey-patch torch.cuda.*，否则第一次访问 cuda 触发
-# torch/cuda/__init__.py:403 _lazy_init 报 "Torch not compiled with CUDA enabled"。
-# 用 sitecustomize.py + PYTHONPATH 在 Python 启动期注入 torch_npu，让任何 user 脚本
-# 自动拿到 patch。
+# sd3_example.py 硬编码 .to(f"cuda:{local_rank}") + torch.cuda.max_memory_allocated(...)。
+# torch_npu 2.9.0 只 monkey-patch torch.nn.functional / torch.nn，**不 patch torch.cuda**。
+# 因此 (a) torch.cuda._lazy_init 触发 "Torch not compiled with CUDA enabled" assert；
+# (b) .to("cuda:0") 走 torch/cuda 路径而不是 torch_npu 的 _module.py 覆盖。
+# 修法：sitecustomize.py 在 Python 启动期 import torch_npu 后再 patch torch.device，
+# 把 "cuda:0" → torch.device("npu", 0)。torch_npu 的 Module.to override (torch_npu/
+# utils/_module.py) 拿到 torch.device("npu", 0) 后正常 cast_weight + _apply。
+# 注意：模块名必须是 sitecustomize（不是 _sitecustomize），Python 启动时 import site
+# 按 sys.path 顺序找 sitecustomize 模块。文件名前缀 _Python 不会自动 import。
 cat > /tmp/sitecustomize.py <<'PYEOF'
+import torch
 import torch_npu
+_orig_device_ctor = torch.device
+def _patched_device_ctor(device, *args, **kwargs):
+    if isinstance(device, str) and device.startswith('cuda'):
+        return _orig_device_ctor('npu' + device[4:], *args, **kwargs)
+    return _orig_device_ctor(device, *args, **kwargs)
+torch.device = _patched_device_ctor
 PYEOF
 export PYTHONPATH=/tmp:${PYTHONPATH:-}
 # CANN 的 torch_npu import 副作用会往 stdout 打 "torch.npu synchronize" 一行，
@@ -316,12 +327,23 @@ mkdir -p ./results
 # 但保留 export 以防降级路径。这些 env 通过 torchrun 透传到子进程。
 export TORCH_NPU_USE_HCCL=1
 # sd3_example.py 硬编码 .to(f"cuda:{local_rank}") + torch.cuda.max_memory_allocated(...)。
-# torch_npu 必须先 import 才能 monkey-patch torch.cuda.*，否则报 "Torch not compiled with CUDA enabled"。
-# sitecustomize.py + PYTHONPATH 让任何 user 脚本（不只是本步）启动期自动拿到 patch。
-# 注意：模块名必须是 sitecustomize（不是 _sitecustomize），Python 启动时 import
-# site 才能找到它。文件名写错 sitecustomize 找不到，torch_npu 不会自动 import。
+# torch_npu 2.9.0 只 monkey-patch torch.nn.functional / torch.nn，**不 patch torch.cuda**。
+# 因此 (a) torch.cuda._lazy_init 触发 "Torch not compiled with CUDA enabled" assert；
+# (b) .to("cuda:0") 走 torch/cuda 路径而不是 torch_npu 的 _module.py 覆盖。
+# 修法：sitecustomize.py 在 Python 启动期 import torch_npu 后再 patch torch.device，
+# 把 "cuda:0" → torch.device("npu", 0)。torch_npu 的 Module.to override (torch_npu/
+# utils/_module.py) 拿到 torch.device("npu", 0) 后正常 cast_weight + _apply。
+# 注意：模块名必须是 sitecustomize（不是 _sitecustomize），Python 启动时 import site
+# 按 sys.path 顺序找 sitecustomize 模块。文件名前缀 _Python 不会自动 import。
 cat > /tmp/sitecustomize.py <<'PYEOF'
+import torch
 import torch_npu
+_orig_device_ctor = torch.device
+def _patched_device_ctor(device, *args, **kwargs):
+    if isinstance(device, str) and device.startswith('cuda'):
+        return _orig_device_ctor('npu' + device[4:], *args, **kwargs)
+    return _orig_device_ctor(device, *args, **kwargs)
+torch.device = _patched_device_ctor
 PYEOF
 export PYTHONPATH=/tmp:${PYTHONPATH:-}
 ```

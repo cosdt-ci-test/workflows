@@ -573,8 +573,14 @@ PYEOF
 # eager 调 `bnb.optim`，`bnb.nn` 也被 transformers.integrations.bitsandbytes 访问——空 stub
 # 够绕 AttributeError，5 iter smoke 不真做 quant。
 mkdir -p /tmp/bitsandbytes_stub/bitsandbytes/nn /tmp/bitsandbytes_stub/bitsandbytes/optim /tmp/bitsandbytes_stub/bitsandbytes/functional /tmp/bitsandbytes_stub/bitsandbytes/autograd /tmp/bitsandbytes_stub/bitsandbytes/cextension
+# 顶层 __init__.py 显式 import 子模块——`from bitsandbytes import optim` 和
+# `import bitsandbytes as bnb; bnb.optim` 都需要子模块**作为属性**挂在 bnb 上，
+# 不显式 import 就 AttributeError（`__getattr__` 返 lambda 不是 module，
+# `import bitsandbytes.optim` 才会触发自动 register。mmengine
+# builder.py:153 用的是 `bnb.optim` 属性访问，必须显式 import）。
 cat > /tmp/bitsandbytes_stub/bitsandbytes/__init__.py <<'PYEOF'
 __version__ = "0.43.0"
+from . import nn, optim, functional, autograd, cextension
 PYEOF
 for sub in nn optim functional autograd cextension; do
 cat > /tmp/bitsandbytes_stub/bitsandbytes/${sub}/__init__.py <<'PYEOF'
@@ -742,8 +748,14 @@ PYEOF
 # Stub bitsandbytes via real package + dist-info：见 xtuner-train-smoke-setup 注释
 # (BitsAndBytesConfig.post_init() 无条件查 metadata，NPU base image 不装 bnb 抛 PackageNotFoundError)。
 mkdir -p /tmp/bitsandbytes_stub/bitsandbytes/nn /tmp/bitsandbytes_stub/bitsandbytes/optim /tmp/bitsandbytes_stub/bitsandbytes/functional /tmp/bitsandbytes_stub/bitsandbytes/autograd /tmp/bitsandbytes_stub/bitsandbytes/cextension
+# 顶层 __init__.py 显式 import 子模块——`from bitsandbytes import optim` 和
+# `import bitsandbytes as bnb; bnb.optim` 都需要子模块**作为属性**挂在 bnb 上，
+# 不显式 import 就 AttributeError（`__getattr__` 返 lambda 不是 module，
+# `import bitsandbytes.optim` 才会触发自动 register。mmengine
+# builder.py:153 用的是 `bnb.optim` 属性访问，必须显式 import）。
 cat > /tmp/bitsandbytes_stub/bitsandbytes/__init__.py <<'PYEOF'
 __version__ = "0.43.0"
+from . import nn, optim, functional, autograd, cextension
 PYEOF
 for sub in nn optim functional autograd cextension; do
 cat > /tmp/bitsandbytes_stub/bitsandbytes/${sub}/__init__.py <<'PYEOF'

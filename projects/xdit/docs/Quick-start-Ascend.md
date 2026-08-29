@@ -285,24 +285,50 @@ text = open(src).read()
 # 改三处：(a) "cuda:N" / 'cuda:N' 字符串前缀 → "npu:N" / 'npu:N'（.to(...) / Generator 等）；
 # (b) "cuda" 裸字符串（device="cuda" 不带 colon，如 torch.Generator(device="cuda")）；
 # (c) torch.cuda.X → torch.npu.X（max_memory_allocated / reset_peak_memory_stats 等）。
-# 头部注入 bootstrap：让 torch.cuda.is_available() 在 NPU 上也返回 True，让 xfuser 0.4.5
-# 的 HAS_LONG_CTX_ATTN 通过（详见 bootstrap 块下面的注释）。
+# 头部注入 bootstrap：在 NPU 上 monkey-patch xfuser.envs 让 HAS_LONG_CTX_ATTN=True。
 text = text.replace('"cuda:', '"npu:').replace("'cuda:", "'npu:")
 text = text.replace('"cuda"', '"npu"').replace("'cuda'", "'npu'")
 text = text.replace('torch.cuda', 'torch.npu')
-# 头部再插一段：让 torch.cuda.is_available() 在 NPU 上也返回 True。xfuser 0.4.5 的
-# xfuser/envs.py:check_long_ctx_attn() 第一行就 `if not torch.cuda.is_available():
-# return False`，NPU 上 torch.cuda.is_available() 永远是 False → HAS_LONG_CTX_ATTN
-# = False → sp_degree=2 时 xfuser/config/config.py:__post_init__ 直接
-# `raise ImportError("Sequence Parallel kit 'yunchang' not found but sp_degree is 2, ...")`。
-# yunchang 走纯 PyTorch ring 实现，不真的需要 cuda runtime；这里 monkey-patch
-# is_available 即可让 xfuser 走 import yunchang 分支（已经装好）。
-bootstrap = (
-    'import torch as _t\n'
-    'if _t.npu.is_available() and not _t.cuda.is_available():\n'
-    '    _t.cuda.is_available = lambda: True\n'
-)
-if 'torch.cuda.is_available' not in text[:300]:
+# 头部再插一段（见下 bootstrap 字符串）：在 NPU 上 monkey-patch xfuser.envs 的
+# check_long_ctx_attn，让它真的尝试 import yunchang 并返回 True（如果 yunchang
+# 装好），而不是被 torch.cuda.is_available() 短路掉。
+#
+# 为什么不能直接 patch torch.cuda.is_available = True：xfuser 0.4.5 的
+# xfuser/model_executor/layers/attention_processor.py:62-65 定义 is_v100()，
+# 它会调 torch.cuda.current_device()，而 _lazy_init 在 torch 没编 CUDA 时直接
+# raise "Torch not compiled with CUDA enabled"。让 is_available() 报 True 会
+# 触发这一连串 lazy init，整段 import 链就崩。
+#
+# 因此只针对 xfuser.envs 的 check_long_ctx_attn 做点 patch：在源文件 load 之前
+# 通过 sys.meta_path 拦截 xfuser.envs，exec 之前先 patch 该方法。yunchang 走纯
+# PyTorch ring 实现（不依赖 CUDA runtime），所以 import 成功就证明可用。
+#
+# 注：xfuser/envs.py:check_long_ctx_attn 第一行 `if not torch.cuda.is_available():
+# return False` 是 NPU 上的 fail point；其余代码（`from yunchang import ...`）
+# 跟 CUDA 无关。
+if 'import sys as _sys' not in text[:1000]:
+    bootstrap = (
+        'import sys as _sys\n'
+        'class _XditEnvPatcher:\n'
+        '    def find_spec(self, name, path, target=None):\n'
+        '        if name != "xfuser.envs" or "xfuser.envs" in _sys.modules:\n'
+        '            return None\n'
+        '        import importlib.util as _ilu\n'
+        '        return _ilu.find_spec(name)\n'
+        '    def create_module(self, spec):\n'
+        '        return None\n'
+        '    def exec_module(self, module):\n'
+        '        spec = module.__spec__\n'
+        '        spec.loader.exec_module(module)\n'
+        '        try:\n'
+        '            import yunchang as _yc\n'
+        '            module.PACKAGES_CHECKER.packages_info["has_long_ctx_attn"] = True\n'
+        '            from xfuser.envs import PackagesEnvChecker as _PC\n'
+        '            _PC.check_long_ctx_attn = lambda self: True\n'
+        '        except ImportError:\n'
+        '            pass\n'
+        '_sys.meta_path.insert(0, _XditEnvPatcher())\n'
+    )
     text = bootstrap + text
 open(dst, 'w').write(text)
 PYEOF
@@ -355,24 +381,50 @@ text = open(src).read()
 # 改三处：(a) "cuda:N" / 'cuda:N' 字符串前缀 → "npu:N" / 'npu:N'（.to(...) / Generator 等）；
 # (b) "cuda" 裸字符串（device="cuda" 不带 colon，如 torch.Generator(device="cuda")）；
 # (c) torch.cuda.X → torch.npu.X（max_memory_allocated / reset_peak_memory_stats 等）。
-# 头部注入 bootstrap：让 torch.cuda.is_available() 在 NPU 上也返回 True，让 xfuser 0.4.5
-# 的 HAS_LONG_CTX_ATTN 通过（详见 bootstrap 块下面的注释）。
+# 头部注入 bootstrap：在 NPU 上 monkey-patch xfuser.envs 让 HAS_LONG_CTX_ATTN=True。
 text = text.replace('"cuda:', '"npu:').replace("'cuda:", "'npu:")
 text = text.replace('"cuda"', '"npu"').replace("'cuda'", "'npu'")
 text = text.replace('torch.cuda', 'torch.npu')
-# 头部再插一段：让 torch.cuda.is_available() 在 NPU 上也返回 True。xfuser 0.4.5 的
-# xfuser/envs.py:check_long_ctx_attn() 第一行就 `if not torch.cuda.is_available():
-# return False`，NPU 上 torch.cuda.is_available() 永远是 False → HAS_LONG_CTX_ATTN
-# = False → sp_degree=2 时 xfuser/config/config.py:__post_init__ 直接
-# `raise ImportError("Sequence Parallel kit 'yunchang' not found but sp_degree is 2, ...")`。
-# yunchang 走纯 PyTorch ring 实现，不真的需要 cuda runtime；这里 monkey-patch
-# is_available 即可让 xfuser 走 import yunchang 分支（已经装好）。
-bootstrap = (
-    'import torch as _t\n'
-    'if _t.npu.is_available() and not _t.cuda.is_available():\n'
-    '    _t.cuda.is_available = lambda: True\n'
-)
-if 'torch.cuda.is_available' not in text[:300]:
+# 头部再插一段（见下 bootstrap 字符串）：在 NPU 上 monkey-patch xfuser.envs 的
+# check_long_ctx_attn，让它真的尝试 import yunchang 并返回 True（如果 yunchang
+# 装好），而不是被 torch.cuda.is_available() 短路掉。
+#
+# 为什么不能直接 patch torch.cuda.is_available = True：xfuser 0.4.5 的
+# xfuser/model_executor/layers/attention_processor.py:62-65 定义 is_v100()，
+# 它会调 torch.cuda.current_device()，而 _lazy_init 在 torch 没编 CUDA 时直接
+# raise "Torch not compiled with CUDA enabled"。让 is_available() 报 True 会
+# 触发这一连串 lazy init，整段 import 链就崩。
+#
+# 因此只针对 xfuser.envs 的 check_long_ctx_attn 做点 patch：在源文件 load 之前
+# 通过 sys.meta_path 拦截 xfuser.envs，exec 之前先 patch 该方法。yunchang 走纯
+# PyTorch ring 实现（不依赖 CUDA runtime），所以 import 成功就证明可用。
+#
+# 注：xfuser/envs.py:check_long_ctx_attn 第一行 `if not torch.cuda.is_available():
+# return False` 是 NPU 上的 fail point；其余代码（`from yunchang import ...`）
+# 跟 CUDA 无关。
+if 'import sys as _sys' not in text[:1000]:
+    bootstrap = (
+        'import sys as _sys\n'
+        'class _XditEnvPatcher:\n'
+        '    def find_spec(self, name, path, target=None):\n'
+        '        if name != "xfuser.envs" or "xfuser.envs" in _sys.modules:\n'
+        '            return None\n'
+        '        import importlib.util as _ilu\n'
+        '        return _ilu.find_spec(name)\n'
+        '    def create_module(self, spec):\n'
+        '        return None\n'
+        '    def exec_module(self, module):\n'
+        '        spec = module.__spec__\n'
+        '        spec.loader.exec_module(module)\n'
+        '        try:\n'
+        '            import yunchang as _yc\n'
+        '            module.PACKAGES_CHECKER.packages_info["has_long_ctx_attn"] = True\n'
+        '            from xfuser.envs import PackagesEnvChecker as _PC\n'
+        '            _PC.check_long_ctx_attn = lambda self: True\n'
+        '        except ImportError:\n'
+        '            pass\n'
+        '_sys.meta_path.insert(0, _XditEnvPatcher())\n'
+    )
     text = bootstrap + text
 open(dst, 'w').write(text)
 PYEOF

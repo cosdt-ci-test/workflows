@@ -273,7 +273,7 @@ export TORCH_NPU_USE_HCCL=1
 # torch/cuda/__init__.py:403 _lazy_init 报 "Torch not compiled with CUDA enabled"。
 # 用 sitecustomize.py + PYTHONPATH 在 Python 启动期注入 torch_npu，让任何 user 脚本
 # 自动拿到 patch。
-cat > /tmp/_sitecustomize.py <<'PYEOF'
+cat > /tmp/sitecustomize.py <<'PYEOF'
 import torch_npu
 PYEOF
 export PYTHONPATH=/tmp:${PYTHONPATH:-}
@@ -318,7 +318,9 @@ export TORCH_NPU_USE_HCCL=1
 # sd3_example.py 硬编码 .to(f"cuda:{local_rank}") + torch.cuda.max_memory_allocated(...)。
 # torch_npu 必须先 import 才能 monkey-patch torch.cuda.*，否则报 "Torch not compiled with CUDA enabled"。
 # sitecustomize.py + PYTHONPATH 让任何 user 脚本（不只是本步）启动期自动拿到 patch。
-cat > /tmp/_sitecustomize.py <<'PYEOF'
+# 注意：模块名必须是 sitecustomize（不是 _sitecustomize），Python 启动时 import
+# site 才能找到它。文件名写错 sitecustomize 找不到，torch_npu 不会自动 import。
+cat > /tmp/sitecustomize.py <<'PYEOF'
 import torch_npu
 PYEOF
 export PYTHONPATH=/tmp:${PYTHONPATH:-}
@@ -326,7 +328,7 @@ export PYTHONPATH=/tmp:${PYTHONPATH:-}
 
 ```shell #test id="xdit-infer-multi" load="model_path>>model_path"
 # 每个 #test 块各自一个 bash -c 子进程；上一个 #test-setup 的 export PYTHONPATH
-# 不会自动继承到这里。重导出一次，并复用 xdit-infer-multi-setup 创建的 sitecustomize.py。
+# 不会自动继承到这里。重导出一次，复用 xdit-infer-multi-setup 创建的 sitecustomize.py。
 export PYTHONPATH=/tmp:${PYTHONPATH:-}
 python -c 'import os, xfuser; open("/tmp/_xdit_root", "w").write(os.path.dirname(os.path.dirname(xfuser.__file__)))'
 cd "$(cat /tmp/_xdit_root)"

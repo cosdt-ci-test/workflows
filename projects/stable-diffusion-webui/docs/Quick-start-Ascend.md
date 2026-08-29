@@ -135,7 +135,24 @@ deps ok
 ## 下载模型
 
 ```shell #test-setup store="model_dir"
-/tmp/sd-webui-venv/bin/python -c "from modelscope import snapshot_download; print(snapshot_download('AI-ModelScope/sd-turbo', revision='master'))" | tail -n 1
+/tmp/sd-webui-venv/bin/python -c "
+import time, sys
+from pathlib import Path
+from modelscope import snapshot_download
+d = None
+for i in range(3):
+    try:
+        d = snapshot_download('AI-ModelScope/sd-turbo', revision='master')
+        if (Path(d) / 'sd_turbo.safetensors').is_file():
+            break
+        print('attempt %d/3: file not complete, retrying' % (i+1), file=sys.stderr)
+        d = None
+    except Exception as e:
+        print('attempt %d/3 failed: %s' % (i+1, e), file=sys.stderr)
+        time.sleep(15)
+assert d, 'snapshot_download failed after 3 attempts'
+print(d)
+" > /tmp/sd-turbo-model-dir.txt && tail -n 1 /tmp/sd-turbo-model-dir.txt
 ```
 
 > `tail -n 1` 过滤下载进度输出，仅保留模型目录路径；sd-turbo 为 1 步采样的蒸馏模型，下载约 3.4GB，首次运行请耐心等待。

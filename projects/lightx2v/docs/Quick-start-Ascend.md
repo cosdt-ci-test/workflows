@@ -139,7 +139,10 @@ LightX2V 在 import 时会触发这些模块：
 策略：源码 `--no-deps` 安装时跳过这四个依赖,然后在 site-packages 里塞同名的 stub 包（`PYTHONPATH` 优先,`sys.modules` 命中空 stub,真 .so 不会被加载）。LightX2V 不真正做 GUI / 视频解码 / 音频 IO / triton JIT（slack_kernel 只在 CUDA 路径跑,NPU 不触发）,空 stub 够用。
 
 ```shell #test-setup
-mkdir -p /tmp/stubs/cv2 /tmp/stubs/decord /tmp/stubs/torchaudio /tmp/stubs/triton
+mkdir -p /tmp/stubs/cv2 /tmp/stubs/decord /tmp/stubs/torchaudio \
+         /tmp/stubs/triton /tmp/stubs/triton/backends \
+         /tmp/stubs/triton/backends/compiler /tmp/stubs/triton/language \
+         /tmp/stubs/triton/runtime
 ```
 
 ```shell #test-setup
@@ -188,8 +191,12 @@ PY
 ```
 
 ```shell #test-setup
-# triton stub: sla_kernel 只在模块顶层 `import triton`,attr 访问不在 import 时发生。
-# 给一个空 package + 全 attr __getattr__ 返 _Stub,NPU 走 torchada 不真用 triton。
+# triton stub: torch._inductor 走 import triton.backends.compiler (CI 33259259625
+# traceback)，单层 stub 不够，需要把 backends / backends.compiler / language / runtime
+# 都做成 sub-package stub。NPU 走 torchada 不真用 triton，但 torch._dynamo /
+# torch._inductor 的 import 链会触达 triton。
+# 顶层 __init__.py 用模块级 __getattr__ 自动收 sub-module 访问，
+# 配合同名的子目录 __init__.py 让 `import triton.backends.compiler` 能解析。
 cat > /tmp/stubs/triton/__init__.py <<'PY'
 class _Stub:
     def __getattr__(self, name): return _Stub()
@@ -197,13 +204,25 @@ class _Stub:
 import sys as _s
 _s.modules[__name__].__getattr__ = lambda n: _Stub()
 PY
+for _sub in backends backends/compiler language runtime; do
+    cat > /tmp/stubs/triton/${_sub}/__init__.py <<'PY'
+class _Stub:
+    def __getattr__(self, name): return _Stub()
+    def __call__(self, *a, **k): return _Stub()
+import sys as _s
+_s.modules[__name__].__getattr__ = lambda n: _Stub()
+PY
+done
 ```
 
 ```shell #test-setup
 # 装 LightX2V 时跳过四个 stub 依赖（具体名字以 setup.py / pyproject.toml 为准,
 # 找不到时一个个 --no-deps 单独装也能绕过）。PYTHONPATH 在每条 python 命令前 export。
 echo "stubs ready at /tmp/stubs/{cv2,decord,torchaudio,triton}"
-ls /tmp/stubs/cv2/__init__.py /tmp/stubs/decord/__init__.py /tmp/stubs/torchaudio/__init__.py /tmp/stubs/triton/__init__.py
+ls /tmp/stubs/cv2/__init__.py /tmp/stubs/decord/__init__.py /tmp/stubs/torchaudio/__init__.py \
+   /tmp/stubs/triton/__init__.py \
+   /tmp/stubs/triton/backends/__init__.py /tmp/stubs/triton/backends/compiler/__init__.py \
+   /tmp/stubs/triton/language/__init__.py /tmp/stubs/triton/runtime/__init__.py
 ```
 
 ```shell #test id="stubs-verify"

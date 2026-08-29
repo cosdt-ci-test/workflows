@@ -316,7 +316,15 @@ names = sorted(cfgs_name_path.keys())
 match = next((n for n in names if re.search(r'(internlm2|llama).*qlora.*colorist', n)), '')
 print(match)
 ")
-test -n "$config_name" || { echo "no matching config ((internlm2|llama).*qlora.*colorist); abort"; exit 1; }
+```
+
+```shell #test id="xtuner-find-colorist-cfg" load="xtuner_colorist_cfg_name>>config_name"
+test -n "$config_name" || { echo "no matching qlora+colorist config"; exit 1; }
+echo "config_name=$config_name"
+```
+
+```shell #test-result id="xtuner-find-colorist-cfg" fuzzy='xxx'
+config_name=xxx
 ```
 
 ```shell #test-setup store="xtuner_llm_cfg_path" load="xtuner_colorist_cfg_name>>config_name"
@@ -338,21 +346,23 @@ print(save_path)
 "
 ```
 
+```shell #test id="xtuner-copy-cfg" load="xtuner_llm_cfg_path>>cfg"
+test -f "$cfg" || { echo "cfg not copied to $cfg"; exit 1; }
+echo "cfg_copied: $cfg"
+```
+
+```shell #test-result id="xtuner-copy-cfg" fuzzy='xxx'
+cfg_copied: xxx
+```
+
 输出路径到下一节「修改配置文件」
 
 ### 修改配置文件
 
-拷出来的 config 跟模板原版完全一致，按模板的 4 处修改规则调整（详见 [legacy quickstart 模板的"修改配置文件"小节](https://xtuner.readthedocs.io/zh-cn/latest/legacy/get_started/quickstart.html)）。`<cfg>` 是上一节「准备配置文件」store 出来的 cfg 绝对路径：
+拷出来的 config 跟模板原版完全一致，按模板的 4 处修改规则调整（详见 [xtuner快速上手的"修改配置文件"小节](https://xtuner.readthedocs.io/zh-cn/latest/legacy/get_started/quickstart.html)）。`<cfg>` 是上一节「准备配置文件」store 出来的 cfg 绝对路径：
 
 ```shell #test-setup load="xtuner_llm_cfg_path>>cfg" store="xtuner_llm_cfg_path"
 # 把模板里那 4 处 patch 应用到 copy-cfg 出来的 config 上：
-#   PART 1 Settings
-#     pretrained_model_name_or_path = './Shanghai_AI_Laboratory/internlm2-chat-7b'
-#     data_path = './colors/train.jsonl'
-#     prompt_template = PROMPT_TEMPLATE.internlm2_chat
-#   PART 3 Dataset & Dataloader
-#     train_dataset = process_hf_dataset(dataset=dict(type=load_dataset, path='json',
-#                                                     data_files=dict(train=data_path)), ...)
 python -c "
 import re
 path = '<cfg>'

@@ -1,6 +1,8 @@
 # Quick Start (Ascend NPU)
 
-在 2 卡昇腾 NPU 上把 [xDiT](https://github.com/xdit-project/xDiT)（发布到 PyPI 的包名为 [`xfuser`](https://pypi.org/project/xfuser/)，命令行入口 `xdit`）从源码装起、跑通 `xdit --help` / NPU 设备检测 / 单卡推理 smoke / 多卡（`torchrun --nproc_per_node=2` 走 HCCL）推理 smoke 这条全链路。
+在 2 卡昇腾 NPU 上把 [xDiT](https://github.com/xdit-project/xDiT)（发布到 PyPI 的包名为 [`xfuser`](https://pypi.org/project/xfuser/)）从源码装起、跑通 `python examples/sd3_example.py --help` / NPU 设备检测 / 单卡推理 smoke / 多卡（`torchrun --nproc_per_node=2 examples/sd3_example.py` 走 HCCL）推理 smoke 这条全链路。
+
+> xDiT 0.4.5 的 `setup.py` **没有 `entry_points` 段**（也没有 `xfuser/cli.py`），所以 `xdit` console_script 不存在；本文档所有原 `xdit --xxx` 实际入口都是 `python examples/<model>_example.py --xxx`（用 `sd3_example.py` 作 smoke 模型），多卡用 `torchrun --nproc_per_node=N examples/sd3_example.py --xxx` 显式起 rank。
 
 模型权重通过 [ModelScope](https://www.modelscope.cn) `snapshot_download` 落到本地，再让 xfuser 走 HuggingFace Hub 的 `from_pretrained` 读本地：xfuser 本身不直接认 ModelScope，但这条路径在国内 CI 限速友好，是 ms-swift / diffusers / xtuner / specforge 等已经默认采用的方式。
 
@@ -41,7 +43,7 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | torch | 2.9.0+cpu |
 | torch_npu | 2.9.0.post2 |
 | xfuser | upstream 最新 release 的源码（>= 0.4.5，已合并 `xfuser/envs.py` 里的 `_is_npu()` + `get_torch_distributed_backend() == "hccl"` 分支） |
-| diffusers | `>=0.33.0`（xfuser `install_requires`，先装再跑 `xdit --model <SD3 / FLUX / Wan>` 等需要 diffusers 的模型） |
+| diffusers | `>=0.33.0`（xfuser `install_requires`，先装再跑 `python examples/sd3_example.py --model <model_path>` 等需要 diffusers 的模型） |
 | yunchang | `>=0.6.0`（xfuser 安装依赖，NPU 上无需 `flash-attn`，yunchang 走纯 PyTorch ring 实现） |
 | modelscope | `>=1.18`（用于 `snapshot_download` 把模型权重先拉到本地） |
 | 推理后端 | torch_npu / `torch.distributed` / `hccl`（xfuser 自动检测；无需手动配置 `master_addr` / `master_port`） |
@@ -120,7 +122,7 @@ uv pip install peft modelscope
 
 ## 安装 xDiT
 
-xDiT 的发布名是 `xfuser`（PyPI / setup.py 的 `name`），命令行入口叫 `xdit`（`setup.py` 的 `entry_points` 把 `xdit=xfuser.cli:main` 注册成 console_script）。`pip install xfuser` 等价于「装上 xdit 的等价体」。
+xDiT 的发布名是 `xfuser`（PyPI / setup.py 的 `name`）。`setup.py` **没有** `entry_points` 段，`xfuser/cli.py` 也不存在——`xdit` console_script 在 xDiT 0.4.5 **没有注册**；统一 CLI 入口实际是 `python examples/<model>_example.py`（用 SD 3.5 medium 跑 smoke 时是 `python examples/sd3_example.py`），底层是 `xfuser.config.FlexibleArgumentParser + xfuser.xFuserArgs`。
 
 ### 从源码安装
 
@@ -244,23 +246,22 @@ from xfuser import xFuserArgs
 p = FlexibleArgumentParser()
 xFuserArgs.add_cli_args(p)
 p.print_help()
-" 2>&1 | head -60
+" 2>&1
 ```
 
-输出结果包含（按需 fuzzy 匹配，不锁行号）：
+输出结果包含（按需 fuzzy 匹配，不锁行号；CAN 里 `torch.npu synchronize` 是 import-time 副作用，会进 stdout；transformers import 还会出两行 torchvision warning）：
 
 ```shell #test-result id="xdit-help" fuzzy='...'
+...
+torch.npu synchronize
 ...
 --model MODEL         Name or path of the huggingface model to use.
 ...
 --ulysses_degree ULYSSES_DEGREE
-                      Ulysses sequence parallel degree. Used in attention layer.
 ...
 --pipefusion_parallel_degree PIPEFUSION_PARALLEL_DEGREE
-                      Pipefusion parallel degree. Indicates the number of pipeline stages.
 ...
 --ring_degree RING_DEGREE
-                      Ring sequence parallel degree. Used in attention layer.
 ...
 ```
 
@@ -268,18 +269,17 @@ p.print_help()
 
 完整脚本会下载 Hub 上的模型权重并实际跑一遍 xfuser 自带的 runner。本文档用最小 smoke（`--num_inference_steps 1` + `--height 256 --width 256`），目的是把"install + 启动 xfuser runtime + 走通单 rank 的 torch.distributed init"完整跑一遍；模型用 SD 3.5 medium（约 4 GB），单卡 64 GB HBM 内还留有 activation 余量。
 
-`xdit --ulysses_degree 1 --ring_degree 1` 自动推 `nproc_per_node=1`，单 rank 单进程：
+`python examples/sd3_example.py --ulysses_degree 1 --ring_degree 1` 单 rank 单进程（无 torchrun，rank=0/world=1）：
 
 ```shell #test id="xdit-infer-single" load="model_path>>model_path"
 export TORCH_NPU_USE_HCCL=1
 cd "$(dirname "$(python -c 'import xfuser, os; print(os.path.dirname(xfuser.__file__))')")"/..
-xdit --model "<model_path>" \
+python examples/sd3_example.py --model "<model_path>" \
     --prompt "a tiny test sketch" \
     --height 256 --width 256 \
     --num_inference_steps 1 \
     --seed 42 \
-    --ulysses_degree 1 --ring_degree 1 \
-    --output_directory ./xdit_smoke_output
+    --ulysses_degree 1 --ring_degree 1
 ```
 
 输出结果包含（按需 fuzzy 匹配）：
@@ -287,57 +287,55 @@ xdit --model "<model_path>" \
 ```shell #test-result id="xdit-infer-single" fuzzy='...'
 ...
 ...epoch time: ...
-...model memory: ...
-...overall memory: ...
+...parameter memory: ...
+...peak memory: ...
 ```
 
 ### 多卡推理 smoke（`--ulysses_degree 2`，HCCL 多 rank）
 
-这是 PR #566 / mainline 文档主线场景：「单节点内多卡，DP / USP / CFG 并行」其中一种；NPU 路径下 PipeFusion 仍不可用（PR #566 在 `xfuser/core/distributed/parallel_state.py` 加了 `assert pipeline_parallel_degree == 1`），所以本文档**只走 USP**：`ulysses_degree=2, ring_degree=1, data_parallel_degree=1`，度乘积 = 2 → `xdit` 自动 spawn `torchrun --nproc_per_node=2 -m xfuser.runner ...`，两个进程跑 HCCL 集合通信。
+这是 PR #566 / mainline 文档主线场景：「单节点内多卡，DP / USP / CFG 并行」其中一种；NPU 路径下 PipeFusion 仍不可用（PR #566 在 `xfuser/core/distributed/parallel_state.py` 加了 `assert pipeline_parallel_degree == 1`），所以本文档**只走 USP**：`ulysses_degree=2, ring_degree=1, data_parallel_degree=1`，度乘积 = 2 → 用 `torchrun --nproc_per_node=2` 显式起两个 rank 跑 HCCL 集合通信。
 
 ```shell #test-setup id="xdit-infer-multi-setup" load="model_path>>model_path"
-mkdir -p ./xdit_smoke_output_multi
+mkdir -p ./results
 # TORCH_NPU_USE_HCCL=1 让 torch.distributed.init_process_group(backend="hccl") 在 PR #566 之前的 1.x 版本上走通；2.9.0.post2 是默认 hccl，
-# 但保留 export 以防降级路径。xdit 通过 xfuser.cli 调 torchrun 时这些 env 透传到子进程。
+# 但保留 export 以防降级路径。这些 env 通过 torchrun 透传到子进程。
 export TORCH_NPU_USE_HCCL=1
 ```
 
 ```shell #test id="xdit-infer-multi" load="model_path>>model_path"
 cd "$(dirname "$(python -c 'import xfuser, os; print(os.path.dirname(xfuser.__file__))')")"/..
-# ulysses_degree=2, ring_degree=1：xfuser.cli 看到 degree 乘积 = 2，自动起 torchrun --nproc_per_node=2；
-# xdit 内部还会通过 xfuser.envs.get_torch_distributed_backend() 选 hccl，不读 env。
-xdit --model "<model_path>" \
+# ulysses_degree=2, ring_degree=1：度乘积 = 2，torchrun --nproc_per_node=2 显式起 2 个 rank；
+# xfuser 内部通过 xfuser.envs.get_torch_distributed_backend() 选 hccl，不读 env。
+torchrun --nproc_per_node=2 examples/sd3_example.py \
+    --model "<model_path>" \
     --prompt "a tiny test sketch" \
     --height 256 --width 256 \
     --num_inference_steps 1 \
     --seed 42 \
     --ulysses_degree 2 --ring_degree 1 \
-    --data_parallel_degree 1 \
-    --output_directory ./xdit_smoke_output_multi
+    --data_parallel_degree 1
 ```
 
-输出结果至少包含一行以 `epoch time:` 开头（xfuser `runner.py` 的标准结尾打印，由 rank=world_size-1 那个进程打）：
+输出结果至少包含一行以 `epoch time:` 开头（`examples/sd3_example.py` 末尾由 rank=world_size-1 那个进程打）：
 
 ```shell #test-result id="xdit-infer-multi" fuzzy='...'
 ...epoch time: ...
-...model memory: ...
-...overall memory: ...
+...parameter memory: ...
+...peak memory: ...
 ```
 
-落盘至少一张 `.png`：
+落盘至少一张 `.png`（`examples/sd3_example.py` 把图片写到 cwd 的 `./results/`，文件名带 `dp/cfg/ulysses/ring/pp/patch/rank`）：
 
 ```shell #test-setup store="multi_output_dir"
-echo ./xdit_smoke_output_multi
+echo ./results
 ```
 
 ```shell #test id="xdit-output-list-multi" load="multi_output_dir>>output_dir"
 ls -1 "${output_dir}" 2>/dev/null
 ```
 
-输出结果类似：
+输出结果至少包含一行（`stable_diffusion_3_result_*` 由 `is_dp_last_group()` 的 rank 落盘）：
 
 ```shell #test-result id="xdit-output-list-multi" fuzzy='...'
-<output line>
-<output line>
-...
+stable_diffusion_3_result_...png
 ```

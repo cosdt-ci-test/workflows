@@ -265,7 +265,6 @@ xxx你好xxx
 
 ## 推送 ModelScope
 
-<!--
 ```shell
 ASCEND_RT_VISIBLE_DEVICES=0 \
 swift export \
@@ -275,6 +274,5 @@ swift export \
     --hub_token '<your-sdk-token>' \
     --use_hf false
 ```
--->
 
 这里的 `<ckpt>` 占位符跟上面 `ls -dt output/*/checkpoint-* | head -n 1` 输出的是同一个值：训练阶段生成的 last checkpoint 文件夹（本例为 `output/v0-20260101_120000-1234/checkpoint-5`）。

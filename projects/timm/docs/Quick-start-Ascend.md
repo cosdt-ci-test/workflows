@@ -80,7 +80,6 @@ x_sum 6.0
 
 以 `ImageNet-1000` 图像分类训练为例（`num_npus` 换成实际 NPU 卡数，`--model` 与数据集路径按需替换）：
 
-<!--
 ```shell
 num_npus=1
 ./distributed_train.sh $num_npus path/to/dataset/ImageNet-1000 \
@@ -95,7 +94,6 @@ num_npus=1
     --batch-size 256 \
     --amp -j 4
 ```
--->
 
 无需数据的最小训练示例（ResNet-18 完成一次「前向 → 损失 → 反向 → 优化器更新」）：
 
@@ -128,11 +126,9 @@ out_shape (4, 1000)
 
 用 `validate.py` 在验证集上评估，`--pretrained` 加载预训练权重：
 
-<!--
 ```shell
 python validate.py path/to/data --device npu --model path/to/model --batch-size 64 --pretrained
 ```
--->
 
 无需数据的最小验证示例（eval 前向，`argmax` 对应 `Acc@1`、`topk(5)` 对应 `Acc@5`）：
 
@@ -162,7 +158,6 @@ top5_shape (8, 5)
 
 用 `inference.py` 对图片做推理分类，`--topk 5` 输出 top-5 类别：
 
-<!--
 ```shell
 python inference.py ../open_clip/data/ImageNet-1000/val/ \
     --device npu \
@@ -171,7 +166,6 @@ python inference.py ../open_clip/data/ImageNet-1000/val/ \
     --label-type detail \
     --topk 5
 ```
--->
 
 无需数据的最小推理示例（单张输入，`softmax` 后取 top-5）：
 

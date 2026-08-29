@@ -36,7 +36,7 @@ Atlas **800T** / **900 A2** 训练系列（Ascend **910B**）。本文示例为*
 
 ## 1. 加载 CANN 环境
 
-```shell #test-setup
+```shell
 export PATH=/usr/local/sbin:/usr/local/bin:$PATH
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 ```
@@ -45,7 +45,7 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 
 Ascend Direct 还依赖 `/etc/hccn.conf`：NPU 驱动在宿主机上写入每张卡的设备网卡 IP。HIXL 初始化时会读这份文件。容器里请把宿主机的 `/etc/hccn.conf` 挂进来，不要自己编造 IP。没有这份文件时，后面的传输会在 ADXL 初始化阶段失败。
 
-```shell #test
+```shell
 test -f /etc/hccn.conf
 ```
 

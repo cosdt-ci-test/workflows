@@ -6,14 +6,14 @@
 
 确认驱动可用、设备可见（`npu-smi` 通常装在 `/usr/local/sbin`）：
 
-```shell #test-setup
+```shell
 export PATH="/usr/local/sbin:/usr/local/bin:$PATH"
 npu-smi info
 ```
 
 加载 CANN 与 ATB 环境，后面的安装和启动步骤都依赖它：
 
-```shell #test-setup
+```shell
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 source /usr/local/Ascend/nnal/atb/latest/atb/set_env.sh
 ```

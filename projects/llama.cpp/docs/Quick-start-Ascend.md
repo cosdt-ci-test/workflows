@@ -27,7 +27,7 @@ Atlas **800T** / **900 A2** 训练系列（Ascend **910B**）。本文示例为*
 
 新开终端后 CANN 变量不会自动生效。`cmake` 配置阶段还会调用 `npu-smi` 探测 SoC 型号；在常见容器布局里，`npu-smi` 位于 `/usr/local/sbin`，需把该目录加入 `PATH`。
 
-```shell #test-setup
+```shell
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 export PATH=/usr/local/sbin:$PATH
 ```
@@ -46,7 +46,7 @@ npu-smi info
 
 ### 2.2 确认 CANN 与编译工具
 
-```shell #test
+```shell
 test -n "$ASCEND_HOME_PATH"
 command -v npu-smi
 cmake --version
@@ -65,7 +65,7 @@ cmake --version
 将 `<UPSTREAM_REF>` 换成目标**分支、tag 或 commit**（上游默认分支为 `master`）。
 
 
-```shell #test-setup
+```shell
 git clone https://github.com/ggml-org/llama.cpp.git
 cd llama.cpp
 git checkout <UPSTREAM_REF>
@@ -91,7 +91,7 @@ llama.cpp 推理输入为 **GGUF** 文件。你可以：
 
 下载完成后用文件头 magic 校验——正确 GGUF 的前 4 字节为 `GGUF`；若得到 HTML，说明 URL 错误或下载到了错误页。
 
-```shell #test
+```shell
 curl -L -o qwen2.5-0.5b-instruct-q4_0.gguf \
   https://modelscope.cn/models/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/master/qwen2.5-0.5b-instruct-q4_0.gguf
 head -c 4 qwen2.5-0.5b-instruct-q4_0.gguf
@@ -134,7 +134,7 @@ llama.cpp 通过 **split mode**（`-sm`）与 **main GPU**（`-mg`）选择设�
 2. 标准输出末尾出现与 prompt 相关的续写文本；
 3. 日志中出现 `load_tensors: ... CANN0 model buffer size = ...`——**这是模型权重已加载到 NPU 的关键证据**。若缺少 `CANN0`，进程仍可能返回 0，但往往在 CPU 上静默回退。
 
-```shell #test
+```shell
 cd llama.cpp && ASCEND_RT_VISIBLE_DEVICES=0 ./build/bin/llama-completion \
     -m ../qwen2.5-0.5b-instruct-q4_0.gguf \
     -p "Building a website can be done in 10 simple steps:" \

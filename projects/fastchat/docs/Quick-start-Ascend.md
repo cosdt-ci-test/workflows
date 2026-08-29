@@ -20,7 +20,7 @@ Atlas 900 A2 单卡（Ascend NPU），并按需完成物理机或容器内的设
 
 按上游 README 的方式设置 CANN 环境变量：
 
-```shell #test-setup
+```shell
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 ```
 

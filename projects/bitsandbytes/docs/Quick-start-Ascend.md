@@ -29,7 +29,7 @@ Atlas **800T** / **900 A2** 训练系列（Ascend **910B**）。本文示例为*
 
 新开终端后 CANN 变量不会自动生效。常见容器里 `npu-smi` 在 `/usr/local/sbin`，需要把该目录加入 `PATH`。
 
-```shell #test-setup
+```shell
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 export PATH=/usr/local/sbin:$PATH
 export PYTHONNOUSERSITE=1

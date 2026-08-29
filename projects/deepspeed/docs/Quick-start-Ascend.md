@@ -100,7 +100,7 @@ DeepSpeed 安装成功，版本： xxx
 
 如果默认 pip 源下载较慢，可使用昇腾 PyPI 镜像：
 
-```shell #test-setup
+```shell
 pip install deepspeed -i https://repo.huaweicloud.com/ascend/repos/pypi
 ```
 
@@ -379,7 +379,7 @@ Quick-start test PASSED
 
 如果你只想使用某几张 NPU（例如只用 0 号和 1 号卡），可以通过 **`ASCEND_RT_VISIBLE_DEVICES`** 环境变量控制。这与 CUDA 场景下的 `CUDA_VISIBLE_DEVICES` 作用相同，在昇腾上请使用前者。下面两条命令等价，都只让 0 号和 1 号 NPU 对当前训练可见：
 
-```shell #test
+```shell
 ASCEND_RT_VISIBLE_DEVICES=0,1 deepspeed --num_gpus 2 train_minimal.py
 deepspeed --include localhost:0,1 train_minimal.py
 ```

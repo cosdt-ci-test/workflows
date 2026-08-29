@@ -439,6 +439,9 @@ cat >> /tmp/xtuner_npu_smoke_single_cfg.py <<'EOF'
 
 train_cfg = dict(max_epochs=1)
 train_dataloader = dict(dataset=dict(samples_per_epoch=5))
+# 每 iter 触发 EvaluateChatHook，5 iter 训练里能看到训前训后 Sample output
+# （cfg 顶层 evaluation_freq 默认 200，5 iter 触发不到，smoke 改成 1）
+evaluation_freq = 1
 EOF
 
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
@@ -448,16 +451,26 @@ export TORCH_NPU_USE_HCCL=1
 python -m xtuner.tools.train /tmp/xtuner_npu_smoke_single_cfg.py --work-dir /tmp/xtuner_sft_llm_out_single
 ```
 
-查 .pth 有没有落盘：
+查 .pth 有没有落盘 + 训练日志里的 Sample output 段：
 
 ```shell #test id="xtuner-train-smoke"
 ls -t /tmp/xtuner_sft_llm_out_single/*.pth 2>/dev/null | head -1
+echo "---SAMPLE_OUTPUT---"
+grep -A 20 "Sample output:" /tmp/xtuner_sft_llm_out_single/*.log 2>/dev/null | head -25
 ```
 
 输出结果如下：
 
 ```shell #test-result id="xtuner-train-smoke" fuzzy='xxx'
 /tmp/xtuner_sft_llm_out_single/iter_xxx.pth
+---SAMPLE_OUTPUT---
+Sample output:
+<s><|im_start|>system
+You are a professional color designer. xxx
+<|im_start|>user
+xxx (训前 user 输入，未训 colorist)
+<|im_start|>assistant
+xxx (训前 assistant 回复——5 iter 没训出什么，可能是空 / 乱码 / 长串 loss)
 ```
 
 #### 多卡（CI smoke 用例，2 卡 runner）
@@ -470,6 +483,7 @@ cat >> /tmp/xtuner_npu_smoke_multi_cfg.py <<'EOF'
 
 train_cfg = dict(max_epochs=1)
 train_dataloader = dict(dataset=dict(samples_per_epoch=5))
+evaluation_freq = 1
 EOF
 
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
@@ -477,17 +491,28 @@ export TORCH_NPU_USE_HCCL=1
 NPROC_PER_NODE=2 python -m xtuner.tools.train /tmp/xtuner_npu_smoke_multi_cfg.py --work-dir /tmp/xtuner_sft_llm_out_multi
 ```
 
-查 .pth 有没有落盘：
+查 .pth + Sample output：
 
 ```shell #test id="xtuner-train-smoke-multi"
 ls -t /tmp/xtuner_sft_llm_out_multi/*.pth 2>/dev/null | head -1
+echo "---SAMPLE_OUTPUT---"
+grep -A 20 "Sample output:" /tmp/xtuner_sft_llm_out_multi/*.log 2>/dev/null | head -25
 ```
 
 输出结果如下：
 
 ```shell #test-result id="xtuner-train-smoke-multi" fuzzy='xxx'
 /tmp/xtuner_sft_llm_out_multi/iter_xxx.pth
+---SAMPLE_OUTPUT---
+Sample output:
+<s><|im_start|>system
+You are a professional color designer. xxx
+<|im_start|>user
+xxx (训前 user 输入，未训 colorist)
+<|im_start|>assistant
+xxx (训前 assistant 回复——5 iter 没训出什么，可能是空 / 乱码 / 长串 loss)
 ```
+
 
 ### 完整 5 epoch 训练（本地手动）
 
@@ -507,7 +532,7 @@ NPROC_PER_NODE=2 python -m xtuner.tools.train /tmp/xtuner_npu_llm_cfg.py --work-
 
 训练完产出的 `.pth` 只包含 LoRA "增量"参数（几十 MB）——QLoRA / LoRA 的精髓：不动原模型 14 GB 权重，只学一个小的"补丁"。要拿这个 `.pth` 去做推理，必须先转 HuggingFace 标准格式（`pth_to_hf`），再合并回底座（`merge`），合并后才是一个完整的 14 GB 模型。
 
-验 `xtuner convert` 的两个子命令确实注册在 CLI 里（不真跑——会触发 torchvision 缺失）：
+先验 `xtuner convert` 的两个子命令确实注册在 CLI 里：
 
 ```shell #test id="xtuner-convert-help"
 python -c "
@@ -528,20 +553,82 @@ has_train: True
 has_chat: True
 ```
 
-完整 `pth_to_hf` + `merge` 流程（依赖前面 5 epoch 训练出的 `.pth`，本地按需手动跑）：
-
-CI smoke 只验"取 smoke 训出的 .pth + 准备目标目录 + print 命令结构"：
+真跑 `pth_to_hf` + `merge`：
 
 ```shell #test-setup
-# 真跑 xtuner convert pth_to_hf / merge 会触发 torchvision chain 在 NPU image 上挂
-# （与 xtuner-convert-help 同因），本地按需手动跑上面 HTML 注释里的命令：
+# merge.py 顶层 import transformers（含 CLIPImageProcessor / CLIPVisionModel），
+# 触发 torchvision lazy import 在 NPU image 上挂。stub torchvision 让 import 通过：
+python -c "
+import sys, types
+tv = types.ModuleType('torchvision'); sys.modules['torchvision'] = tv
+tv_ops = types.ModuleType('torchvision.ops')
+tv_ops.nms = lambda *a, **k: None
+sys.modules['torchvision.ops'] = tv_ops
+tv_t = types.ModuleType('torchvision.transforms')
+tv_t.Compose = lambda x: x
+tv_t.ToTensor = lambda *a, **k: None
+tv_t.Resize = lambda *a, **k: None
+tv_t.CenterCrop = lambda *a, **k: None
+tv_t.Normalize = lambda *a, **k: None
+sys.modules['torchvision.transforms'] = tv_t
+print('torchvision_stubbed: ok')
+"
+
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
 src_pth=$(ls -t /tmp/xtuner_sft_llm_out_full/*.pth 2>/dev/null | head -1)
 [ -n "$src_pth" ] || { echo "no .pth from xtuner-train-smoke-setup"; exit 1; }
 hf_dir="${src_pth%.pth}_hf"
-mkdir -p "$hf_dir" /tmp/xtuner_sft_llm_out_full/merged
-echo "xtuner convert pth_to_hf /tmp/xtuner_npu_llm_cfg.py $src_pth $hf_dir"
-echo "xtuner convert merge ./Shanghai_AI_Laboratory/internlm2-chat-7b $hf_dir /tmp/xtuner_sft_llm_out_full/merged --max-shard-size 2GB"
+merged_dir=/tmp/xtuner_sft_llm_out_full/merged
+rm -rf "$hf_dir" "$merged_dir"
+mkdir -p "$hf_dir" "$merged_dir"
+
+# pth → hf（PEFT 格式：adapter_config.json + adapter_model.safetensors）
+python -m xtuner.tools.model_converters.pth_to_hf \
+    /tmp/xtuner_npu_llm_cfg.py \
+    "$src_pth" \
+    "$hf_dir"
+
+# merge（PEFT adapter 合并回 base → 14 GB safetensors）
+python -m xtuner.tools.model_converters.merge \
+    ./Shanghai_AI_Laboratory/internlm2-chat-7b \
+    "$hf_dir" \
+    "$merged_dir" \
+    --max-shard-size 2GB
 ```
+
+验合并产物落盘：
+
+```shell #test id="xtuner-merge-verify"
+ls -t "$merged_dir"/*.safetensors 2>/dev/null | head -3
+```
+
+输出结果如下：
+
+```shell #test-result id="xtuner-merge-verify" fuzzy='xxx'
+/tmp/xtuner_sft_llm_out_full/merged/model-xxx.safetensors
+/tmp/xtuner_sft_llm_out_full/merged/model-xxx.safetensors
+/tmp/xtuner_sft_llm_out_full/merged/model.safetensors.index.json
+```
+
+完整 `pth_to_hf` + `merge` 流程（本地按需手动跑，跟 smoke 路径等价——去掉 `--max-shard-size 2GB` 之外的参数调整）：
+
+<!--
+```shell
+mkdir -p work_dirs/internlm2_7b_qlora_colorist_e5_copy/iter_720_hf
+
+xtuner convert pth_to_hf /tmp/xtuner_npu_llm_cfg.py \
+    work_dirs/internlm2_7b_qlora_colorist_e5_copy/iter_720.pth \
+    work_dirs/internlm2_7b_qlora_colorist_e5_copy/iter_720_hf
+
+mkdir -p work_dirs/internlm2_7b_qlora_colorist_e5_copy/merged
+
+xtuner convert merge ./Shanghai_AI_Laboratory/internlm2-chat-7b \
+    work_dirs/internlm2_7b_qlora_colorist_e5_copy/iter_720_hf \
+    work_dirs/internlm2_7b_qlora_colorist_e5_copy/merged \
+    --max-shard-size 2GB
+```
+-->
+
 
 ### 与模型对话
 
@@ -575,11 +662,11 @@ has_prompt_template_arg: True
 has_system_template_arg: True
 ```
 
-CI smoke 真跑一次 chat（用 Qwen2.5-0.5B ≈ 500 MB 避开 7B 显存；stdin pipe 一行输入 + EXIT 绕开交互循环；stub torchvision 绕开 NPU image 缺 operator）：
+真跑 chat（复用上面 `xtuner-merge-verify` 合并后的 7B merged/ 目录，internlm2_chat + colorist system-template，复用上游 quickstart 完整命令）：
 
 ```shell #test-setup
-# stub torchvision：transformers 内部有些 image_utils / image_transforms 会 lazy import
-# torchvision；NPU image 故意剔了 torchvision::nms，import 时挂。给个最小 stub 让 import 不挂：
+# chat.py 顶层 import transformers（含 CLIPImageProcessor / CLIPVisionModel）触发 torchvision
+# lazy import 在 NPU image 上挂，stub torchvision 让 import 通过：
 python -c "
 import sys, types
 tv = types.ModuleType('torchvision'); sys.modules['torchvision'] = tv
@@ -595,46 +682,71 @@ tv_t.Normalize = lambda *a, **k: None
 sys.modules['torchvision.transforms'] = tv_t
 print('torchvision_stubbed: ok')
 "
+
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
 ```
 
-```shell #test id="xtuner-chat-smoke"
-# stub 完再 import chat，跑真 chat：Qwen2.5-0.5B + qwen_chat template + stdin pipe
-# 一个颜色描述 prompt + EXIT（第一轮 input 返回 prompt，第二轮返回 "EXIT" 触发 main() 里的 exit(0)）。
-# 选 colorist 风格的中文 prompt 顺带验 tokenizer 编码中文 OK；smoke 不验证具体色号
-# （那要 7B + 真训过 colorist，不是 doc 范围），只验 chat 端到端能跑。
-# --no-streamer 关掉 TextStreamer 改 print 完整输出（CI 抓 stdout 比对）。
-# --max-new-tokens 32 给中文回复留余量。
+```shell #test id="xtuner-chat-merged"
+# 跟上游 quickstart 完全一致：
+# xtuner chat <merged> --prompt-template internlm2_chat --system-template colorist
+# stdin pipe 第一个输入是 colorist prompt，第二个输入是 EXIT 触发 chat.py main() 里 exit(0)
+# （chat.py 是 while True: get_input() 交互式循环，没 --input flag，只能 stdin pipe 喂）。
+# --no-streamer 关掉 TextStreamer（CI 抓 stdout 比对要 print 完整输出而不是增量 stream）。
+# --max-new-tokens 32 给中文回复留余量（5 samples × 1 epoch 训过 colorist 但不充分，
+# smoke 不验证具体色号，只验证 chat 端到端能跑）。
 echo -e "宁静而又相当明亮的浅天蓝色，介于天蓝色和婴儿蓝之间，因其亮度而带有一丝轻微的荧光感。\nEXIT" | \
-python -m xtuner.tools.chat Qwen/Qwen2.5-0.5B-Instruct \
-    --prompt-template qwen_chat \
+python -m xtuner.tools.chat /tmp/xtuner_sft_llm_out_full/merged \
+    --prompt-template internlm2_chat \
+    --system-template colorist \
     --no-streamer \
     --max-new-tokens 32 2>&1 | tail -n 5
 ```
 
 输出结果如下：
 
-```shell #test-result id="xtuner-chat-smoke" fuzzy='xxx'
-Load LLM from xxx
-xxx (模型对中文颜色描述 prompt 的回复)
+```shell #test-result id="xtuner-chat-merged" fuzzy='xxx'
+Load LLM from /tmp/xtuner_sft_llm_out_full/merged
+xxx (InternLM2-7B + 5 samples × 1 epoch 微调后对中文颜色描述的回复；smoke 不验证具体色号)
 Log: Exit!
 ```
 
-合并后的完整模型对话（本地按需手动跑）：
+不合并、只跟 LLM + LoRA adapter 直接对话（路径 B）：
+
+```shell #test id="xtuner-chat-adapter"
+# 跟上游 quickstart 完全一致：
+# xtuner chat <base> --adapter <iter_xxx_hf> --prompt-template internlm2_chat --system-template colorist
+hf_dir=$(ls -td /tmp/xtuner_sft_llm_out_full/iter_*_hf 2>/dev/null | head -1)
+[ -n "$hf_dir" ] || { echo "no iter_*_hf from xtuner pth_to_hf step"; exit 1; }
+echo -e "宁静而又相当明亮的浅天蓝色，介于天蓝色和婴儿蓝之间，因其亮度而带有一丝轻微的荧光感。\nEXIT" | \
+python -m xtuner.tools.chat ./Shanghai_AI_Laboratory/internlm2-chat-7b \
+    --adapter "$hf_dir" \
+    --prompt-template internlm2_chat \
+    --system-template colorist \
+    --no-streamer \
+    --max-new-tokens 32 2>&1 | tail -n 5
+```
+
+输出结果如下：
+
+```shell #test-result id="xtuner-chat-adapter" fuzzy='xxx'
+Load LLM from ./Shanghai_AI_Laboratory/internlm2-chat-7b
+Load adapter from /tmp/xtuner_sft_llm_out_full/iter_xxx_hf
+xxx (InternLM2-7B + LoRA adapter 对中文颜色描述的回复；smoke 不验证具体色号)
+Log: Exit!
+```
+
+本地手动版（完整 5 epoch 训完再跑，跟上游 quickstart 完全一致）：
 
 <!--
 ```shell
-xtuner chat /tmp/xtuner_sft_llm_out/merged \
+xtuner chat work_dirs/internlm2_7b_qlora_colorist_e5_copy/merged \
     --prompt-template internlm2_chat \
     --system-template colorist
 ```
--->
 
-也可以不合并、只跟 LLM + LoRA adapter 直接对话：
-
-<!--
 ```shell
-xtuner chat ./Shanghai_AI_Laboratory/internlm2-chat-7b \
-    --adapter /tmp/xtuner_sft_llm_out/iter_720_hf \
+xtuner chat Shanghai_AI_Laboratory/internlm2-chat-7b \
+    --adapter work_dirs/internlm2_7b_qlora_colorist_e5_copy/iter_720_hf \
     --prompt-template internlm2_chat \
     --system-template colorist
 ```
@@ -647,3 +759,4 @@ double enter to end input (EXIT: exit chat, RESET: reset history) >>> 宁静而�
 
 #66ccff
 ```
+

@@ -569,10 +569,19 @@ PYEOF
 # ERR99999 退出。Stub 走两条路：(1) 真 package 让 `import bitsandbytes` 拿到合法 module；
 # (2) `bitsandbytes-0.43.0.dist-info/METADATA` 让 importlib.metadata.version() 返回稳定
 # 版本字符串绕过 if 分支。5 iter smoke 不真做 4-bit quant，只 post_init 走通就够了。
-mkdir -p /tmp/bitsandbytes_stub/bitsandbytes
+# 子模块：mmengine.optim.optimizer.builder.register_bitsandbytes_optimizers() (line 153)
+# eager 调 `bnb.optim`，`bnb.nn` 也被 transformers.integrations.bitsandbytes 访问——空 stub
+# 够绕 AttributeError，5 iter smoke 不真做 quant。
+mkdir -p /tmp/bitsandbytes_stub/bitsandbytes/nn /tmp/bitsandbytes_stub/bitsandbytes/optim /tmp/bitsandbytes_stub/bitsandbytes/functional /tmp/bitsandbytes_stub/bitsandbytes/autograd /tmp/bitsandbytes_stub/bitsandbytes/cextension
 cat > /tmp/bitsandbytes_stub/bitsandbytes/__init__.py <<'PYEOF'
 __version__ = "0.43.0"
 PYEOF
+for sub in nn optim functional autograd cextension; do
+cat > /tmp/bitsandbytes_stub/bitsandbytes/${sub}/__init__.py <<'PYEOF'
+def __getattr__(name):
+    return lambda *args, **kwargs: None
+PYEOF
+done
 mkdir -p /tmp/bitsandbytes_stub/bitsandbytes-0.43.0.dist-info
 cat > /tmp/bitsandbytes_stub/bitsandbytes-0.43.0.dist-info/METADATA <<'EOF'
 Metadata-Version: 2.1
@@ -732,10 +741,16 @@ PYEOF
 
 # Stub bitsandbytes via real package + dist-info：见 xtuner-train-smoke-setup 注释
 # (BitsAndBytesConfig.post_init() 无条件查 metadata，NPU base image 不装 bnb 抛 PackageNotFoundError)。
-mkdir -p /tmp/bitsandbytes_stub/bitsandbytes
+mkdir -p /tmp/bitsandbytes_stub/bitsandbytes/nn /tmp/bitsandbytes_stub/bitsandbytes/optim /tmp/bitsandbytes_stub/bitsandbytes/functional /tmp/bitsandbytes_stub/bitsandbytes/autograd /tmp/bitsandbytes_stub/bitsandbytes/cextension
 cat > /tmp/bitsandbytes_stub/bitsandbytes/__init__.py <<'PYEOF'
 __version__ = "0.43.0"
 PYEOF
+for sub in nn optim functional autograd cextension; do
+cat > /tmp/bitsandbytes_stub/bitsandbytes/${sub}/__init__.py <<'PYEOF'
+def __getattr__(name):
+    return lambda *args, **kwargs: None
+PYEOF
+done
 mkdir -p /tmp/bitsandbytes_stub/bitsandbytes-0.43.0.dist-info
 cat > /tmp/bitsandbytes_stub/bitsandbytes-0.43.0.dist-info/METADATA <<'EOF'
 Metadata-Version: 2.1

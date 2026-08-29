@@ -236,6 +236,21 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             check=True,
         )
 
+        # 2.5) Pin triton<3.0: torch 2.9.0 + torch_npu 2.9.0 still
+        # reference ``tl.math`` (torch/_inductor/runtime/triton_compat.py:53,
+        # reached via torch_npu.utils._graph_tree -> torch._dynamo ->
+        # torch._inductor), which triton 3.0 removed. Without this pin
+        # the cluster pypi cache can resolve triton 3.x for the
+        # image's torch stack and ``import lightx2v`` (via
+        # lightx2v_platform/base/amd_rocm.py importing torch) dies
+        # with ``AttributeError: module 'triton.language' has no
+        # attribute 'math'`` before the test reaches the doc body.
+        # No-op when the image already has triton 2.x.
+        subprocess.run(
+            ['python', '-m', 'pip', 'install', 'triton<3.0'],
+            check=True,
+        )
+
         # 3) torch stack probe + install: when version matches the image's
         # pre-installed wheels, reuse them to avoid the cluster cache
         # triggering ``+cpu`` resolution.

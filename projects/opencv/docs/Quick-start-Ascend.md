@@ -303,6 +303,7 @@ cmake -DCMAKE_BUILD_TYPE=Debug \
       -DINSTALL_TESTS=ON \
       -DBUILD_PERF_TESTS=OFF \
       -DBUILD_LIST=core,imgproc,imgcodecs,videoio,dnn,python3,cannops,ts \
+      -DSOC_VERSION=ascend910b1 \
       -DBUILD_opencv_python3=ON \
       -DBUILD_opencv_python_bindings_generator=ON \
       -DPYTHON_INCLUDE_DIR=/usr/local/python3.12.13/include/python3.12 \
@@ -324,6 +325,8 @@ cmake -DCMAKE_BUILD_TYPE=Debug \
 `BUILD_LIST` 把全模块 + ~35 个 contrib 模块砍到 8 个——quickstart 只用到 imwrite/imread/resize/cvtColor/putText/VideoWriter（core+imgproc+imgcodecs+videoio）、dnn、python 绑定和 cannops 测试。注意 `ts` 必须在列表里：它是 `opencv_test_cannops` 的测试框架依赖，被 BUILD_LIST 白名单排除时 cannops 的 `ocv_add_accuracy_tests` 建不出测试目标，`opencv_contrib/modules/cannops/CMakeLists.txt:23` 的 `ocv_target_link_libraries(opencv_test_cannops ...)` 直接报 `invalid target`。`ts` 不进列表时 xfeatures2d / face 等 contrib 模块自然被剔除，不再需要单独的 `BUILD_opencv_xfeatures2d=OFF`。
 
 `PYTHON_INCLUDE_DIR` / `PYTHON_LIBRARY` 这对参数是必须的：镜像的 Python 3.12.13 是源码装在 `/usr/local/python3.12.13` 的，cmake 老式 `find_package(PythonLibs)` 不搜这里，不传这对参数 python3 模块会**静默**落进 summary 的 `Unavailable: ... python3 ...` 一行——装出来的 `/usr/local/opencv-cann` 下没有 `lib/python3.12/site-packages`，后面 quickstart 的 `import cv2` 必挂。别只盯 `CANN: YES` 那一行。
+
+`SOC_VERSION=ascend910b1` 必须与实际卡型匹配：contrib `cannops/ascendc_kernels/CMakeLists.txt` 默认编给 `ascend310p3`（cache 变量），AscendC kernel 的 host stub 在加载时用 `AscendCheckSoCVersion` 对比编译 SoC 与 `aclrtGetSocName` 返回的运行时 SoC——不匹配 kernel 不注册，`ASCENDC_KERNEL.*` / `MAT_THRESHOLD_ASCENDC` 等用例直接失败（CI 33262664977：910B1 的 runner 编 310P3 内核，73 用例全红）。`ascend910b1` 是 CANN `host_config.cmake` 的 `ascend910b_list` 合法值；换 runner 卡型时同步改这里。
 
 两个测试相关开关：`OPENCV_BUILD_TEST_MODULES_LIST=cannops` 让 `BUILD_TESTS=ON` 只构建 cannops 一个模块的测试二进制（否则全仓 ~15 个模块、每个几十个 test TU 的 accuracy tests 都会进默认构建目标，`make` 多花 ~40 分钟）；`INSTALL_TESTS=ON` 把测试二进制装进 `CMAKE_INSTALL_PREFIX/bin`（OpenCV 默认**不**安装 opencv_test_*，不打开这个开关 `/usr/local/opencv-cann/bin/opencv_test_cannops` 不会存在）。
 
@@ -359,7 +362,16 @@ xxx
 `opencv_test_cannops` 内置了 CANN 后端的小型模型测例，会调用 ACL 把模型图下沉到 NPU：
 
 ```shell #test id="opencv-cann-run-tests"
-set -o pipefail; /usr/local/opencv-cann/bin/opencv_test_cannops --gtest_color=no 2>&1 | tail -n 25
+set -o pipefail
+/usr/local/opencv-cann/bin/opencv_test_cannops --gtest_color=no > /tmp/cannops_gtest.log 2>&1; rc=$?
+tail -n 25 /tmp/cannops_gtest.log
+if [ $rc -ne 0 ]; then
+  echo '--- first failing test detail:'
+  grep -n -m 1 -A 12 '^\[ RUN      \]' /tmp/cannops_gtest.log | head -40
+  echo '--- error lines:'
+  grep -nE 'Failure|Unknown|error|Error|invalid|Invalid' /tmp/cannops_gtest.log | head -20
+fi
+exit $rc
 ```
 
 ```shell #test-result id="opencv-cann-run-tests" fuzzy='...' fuzzy='xxx'

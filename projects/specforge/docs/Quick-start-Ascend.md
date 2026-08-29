@@ -79,7 +79,9 @@ uv pip install --no-deps --extra-index-url https://repo.huaweicloud.com/ascend/r
 # torchvision stub：sglang srt/utils/common.py line 92 `from torchvision.io import decode_jpeg` 在 import sglang 时硬依赖，
 # 但 torchvision 顶层 __init__.py 跑 @torch.library.register_fake("torchvision::nms") 时会因 CPU torch 2.11.0 没注册该 op 而抛
 # RuntimeError: operator torchvision::nms does not exist。Qwen3.5-4B 文本 smoke 不走 image path，stub 出 torchvision + torchvision.io
-# 让 import 通过；decode_jpeg 不会被调用。
+# 让 import 通过；decode_jpeg 不会被调用。另外 sglang.srt.configs.__init__ 直接 `from sglang.srt.configs.deepseekvl2 import DeepseekVL2Config`，
+# deepseekvl2.py 顶部 `from torchvision.io import ImageReadMode`（PIL.ImageMode 风格 enum）→ run 33263935680
+# 在 launch_server 启动早期就报 `ImportError: cannot import name 'ImageReadMode'`，把 ImageReadMode 也补上。
 python - <<'PY'
 import os, site
 sp = site.getsitepackages()[0]
@@ -88,7 +90,15 @@ io = os.path.join(pkg, 'io')
 os.makedirs(io, exist_ok=True)
 open(os.path.join(pkg, '__init__.py'), 'w').close()
 open(os.path.join(io, '__init__.py'), 'w').write(
+    'class ImageReadMode:\n'
+    '    UNCHANGED = 0\n'
+    '    GRAY = 1\n'
+    '    RGB = 2\n'
+    '\n'
     'def decode_jpeg(*args, **kwargs):\n'
+    '    raise NotImplementedError("torchvision stub: not used in this text-only smoke")\n'
+    '\n'
+    'def decode_image(*args, **kwargs):\n'
     '    raise NotImplementedError("torchvision stub: not used in this text-only smoke")\n'
 )
 print(f'torchvision stub installed at {pkg}')

@@ -35,6 +35,13 @@ ensure_passthrough() {
     echo "example already has \"\$@\"; skipping patch"
     return
   fi
+  # xllm example scripts call ArgumentParser().parse_args() themselves, so they
+  # already consume sys.argv (incl. the overlay args). Patching "$@" onto the
+  # last Python statement would produce invalid syntax — skip them.
+  if grep -qE 'parse_args\(' "$script"; then
+    echo "example uses argparse (reads sys.argv); skipping patch"
+    return
+  fi
   "$PYTHON" - "$script" <<'PY'
 from pathlib import Path
 import sys

@@ -269,26 +269,22 @@ for entry in os.listdir(path):
         shutil.copy2(src, dst)
 print('dataset at', target)
 "
-ls -la colors/ | head -1
 ```
 
 ```shell #test id="xtuner-pull-dataset"
 for f in colors.json README.md train.jsonl; do
     test -f "colors/$f" || { echo "MISSING: colors/$f"; exit 1; }
 done
-echo "colors/"
-echo "├── colors.json"
-echo "├── README.md"
-echo "└── train.jsonl"
+ls colors/ | sort
 ```
 
 输出结果（同时是数据集会落在 `./colors/` 下的目录结构）：
 
-```shell #test-result id="xtuner-pull-dataset" disable_fuzzy
-colors/
-├── colors.json
-├── README.md
-└── train.jsonl
+```shell #test-result id="xtuner-pull-dataset" fuzzy='xxx'
+colors.json
+README.md
+train.jsonl
+xxx
 ```
 
 
@@ -316,12 +312,9 @@ head_first: xxx
 colorist_count: xxx
 ```
 
-从 list-cfg 拷一份 QLoRA + Colorist 配置到本地（具体 config 名随 release 漂移，先 grep 推断；xtuner v0.2.0 的 colorist cfg 是 llama 版，V1 之后才有 internlm2 版）：
+从 list-cfg 拷一份 QLoRA + Colorist 配置到本地：
 
 ```shell #test-setup store="xtuner_llm_cfg_path"
-# 绕开 console_script wrapper shebang 错配（`xtuner list-cfg` / `xtuner copy-cfg` 的 wrapper
-# 启动的 Python 可能不是 uv 装的 python，把 xtuner 当 namespace package 后 `from xtuner import cli` 失败），
-# 直接用 Python API 替代：
 config_name=$(python -c "
 from xtuner.configs import cfgs_name_path
 import re
@@ -363,8 +356,6 @@ print(save_path)
 #   PART 3 Dataset & Dataloader
 #     train_dataset = process_hf_dataset(dataset=dict(type=load_dataset, path='json',
 #                                                     data_files=dict(train=data_path)), ...)
-# 用 Python str.replace 而非 sed：xtuner cfg 用双引号 ("...")，sed 单引号 pattern 不会匹配；
-# 走 Python 字面量替换最稳，避免引号/escape/竖线 delimiter 误伤 cfg 里其他内容。
 python -c "
 import re
 path = '<cfg>'
@@ -428,7 +419,7 @@ print('prompt_template= PROMPT_TEMPLATE.internlm2_chat')
 "
 ```
 
-输出结果类似：
+输出结果如下：
 
 ```shell #test-result id="xtuner-patch-cfg" fuzzy='xxx'
 cfg_compiles_ok

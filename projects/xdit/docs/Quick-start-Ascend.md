@@ -285,9 +285,25 @@ text = open(src).read()
 # 改三处：(a) "cuda:N" / 'cuda:N' 字符串前缀 → "npu:N" / 'npu:N'（.to(...) / Generator 等）；
 # (b) "cuda" 裸字符串（device="cuda" 不带 colon，如 torch.Generator(device="cuda")）；
 # (c) torch.cuda.X → torch.npu.X（max_memory_allocated / reset_peak_memory_stats 等）。
+# 头部注入 bootstrap：让 torch.cuda.is_available() 在 NPU 上也返回 True，让 xfuser 0.4.5
+# 的 HAS_LONG_CTX_ATTN 通过（详见 bootstrap 块下面的注释）。
 text = text.replace('"cuda:', '"npu:').replace("'cuda:", "'npu:")
 text = text.replace('"cuda"', '"npu"').replace("'cuda'", "'npu'")
 text = text.replace('torch.cuda', 'torch.npu')
+# 头部再插一段：让 torch.cuda.is_available() 在 NPU 上也返回 True。xfuser 0.4.5 的
+# xfuser/envs.py:check_long_ctx_attn() 第一行就 `if not torch.cuda.is_available():
+# return False`，NPU 上 torch.cuda.is_available() 永远是 False → HAS_LONG_CTX_ATTN
+# = False → sp_degree=2 时 xfuser/config/config.py:__post_init__ 直接
+# `raise ImportError("Sequence Parallel kit 'yunchang' not found but sp_degree is 2, ...")`。
+# yunchang 走纯 PyTorch ring 实现，不真的需要 cuda runtime；这里 monkey-patch
+# is_available 即可让 xfuser 走 import yunchang 分支（已经装好）。
+bootstrap = (
+    'import torch as _t\n'
+    'if _t.npu.is_available() and not _t.cuda.is_available():\n'
+    '    _t.cuda.is_available = lambda: True\n'
+)
+if 'torch.cuda.is_available' not in text[:300]:
+    text = bootstrap + text
 open(dst, 'w').write(text)
 PYEOF
 python -c 'import os, xfuser; open("/tmp/_xdit_root", "w").write(os.path.dirname(os.path.dirname(xfuser.__file__)))'
@@ -339,9 +355,25 @@ text = open(src).read()
 # 改三处：(a) "cuda:N" / 'cuda:N' 字符串前缀 → "npu:N" / 'npu:N'（.to(...) / Generator 等）；
 # (b) "cuda" 裸字符串（device="cuda" 不带 colon，如 torch.Generator(device="cuda")）；
 # (c) torch.cuda.X → torch.npu.X（max_memory_allocated / reset_peak_memory_stats 等）。
+# 头部注入 bootstrap：让 torch.cuda.is_available() 在 NPU 上也返回 True，让 xfuser 0.4.5
+# 的 HAS_LONG_CTX_ATTN 通过（详见 bootstrap 块下面的注释）。
 text = text.replace('"cuda:', '"npu:').replace("'cuda:", "'npu:")
 text = text.replace('"cuda"', '"npu"').replace("'cuda'", "'npu'")
 text = text.replace('torch.cuda', 'torch.npu')
+# 头部再插一段：让 torch.cuda.is_available() 在 NPU 上也返回 True。xfuser 0.4.5 的
+# xfuser/envs.py:check_long_ctx_attn() 第一行就 `if not torch.cuda.is_available():
+# return False`，NPU 上 torch.cuda.is_available() 永远是 False → HAS_LONG_CTX_ATTN
+# = False → sp_degree=2 时 xfuser/config/config.py:__post_init__ 直接
+# `raise ImportError("Sequence Parallel kit 'yunchang' not found but sp_degree is 2, ...")`。
+# yunchang 走纯 PyTorch ring 实现，不真的需要 cuda runtime；这里 monkey-patch
+# is_available 即可让 xfuser 走 import yunchang 分支（已经装好）。
+bootstrap = (
+    'import torch as _t\n'
+    'if _t.npu.is_available() and not _t.cuda.is_available():\n'
+    '    _t.cuda.is_available = lambda: True\n'
+)
+if 'torch.cuda.is_available' not in text[:300]:
+    text = bootstrap + text
 open(dst, 'w').write(text)
 PYEOF
 python -c 'import os, xfuser; open("/tmp/_xdit_root", "w").write(os.path.dirname(os.path.dirname(xfuser.__file__)))'

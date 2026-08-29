@@ -551,7 +551,7 @@ nohup python -m sglang.launch_server \
     --skip-tokenizer-init \
     --tp-size 1 \
     --mem-fraction-static 0.5 \
-    --max-model-len 1024 \
+    --context-length 1024 \
     --attention-backend ascend \
     --enable-spec-capture --spec-capture-method dflash \
     --spec-capture-aux-layer-ids 1 8 15 22 29 \
@@ -628,4 +628,4 @@ smoke: training exit=0
 smoke: OK - 1-step training completed
 ```
 
-> 卡 0 跑 capture server，卡 1 跑 trainer，卡 2/3 空闲给 HCCL buffer。Smoke 的 `--max-model-len 1024 --mem-fraction-static 0.5` 把 SGLang KV池压住，`training.max_steps=1 training.batch_size=1 training.max_length=512 training.num_anchors=32 deployment.trainer.nproc_per_node=1` 把训练侧压到 1 步最小数据。
+> 卡 0 跑 capture server，卡 1 跑 trainer，卡 2/3 空闲给 HCCL buffer。Smoke 的 `--context-length 1024 --mem-fraction-static 0.5` 把 SGLang KV池压住（sglang 0.5.x 把 `--max-model-len` 改名成 `--context-length`，server_args.py `context_length` 字段），`training.max_steps=1 training.batch_size=1 training.max_length=512 training.num_anchors=32 deployment.trainer.nproc_per_node=1` 把训练侧压到 1 步最小数据。

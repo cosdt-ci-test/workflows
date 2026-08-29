@@ -313,7 +313,11 @@ config_name=$(python -c "
 from xtuner.configs import cfgs_name_path
 import re
 names = sorted(cfgs_name_path.keys())
-match = next((n for n in names if re.search(r'(internlm2|llama).*qlora.*colorist', n)), '')
+# 优先选 7b：本文档的 pull-weights 只下 7b（Shanghai_AI_Laboratory/internlm2-chat-7b），
+# 而 sorted+next 的 ASCII 序 '2' < '7'，20b 会抢在 7b 前面，把 patch 后的 model_path 指向
+# 不存在的 -20b/ 目录训不动。优先 7b，没有再退到任何匹配项
+match = next((n for n in names if re.search(r'(internlm2|llama).*qlora.*colorist.*7b', n)),
+             next((n for n in names if re.search(r'(internlm2|llama).*qlora.*colorist', n)), ''))
 print(match)
 ")
 test -n "$config_name" || { echo "no matching config ((internlm2|llama).*qlora.*colorist); abort"; exit 1; }
@@ -469,6 +473,10 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 export TORCH_NPU_USE_HCCL=1
 export PYTHONPATH=/tmp/cv2_stub${PYTHONPATH:+:$PYTHONPATH}
 mkdir -p /tmp/xtuner_sft_llm_out_single
+# pipefail：train pipeline 是 `python ... | tee`，pipe 默认 rc 取最后一个 cmd（tee），python 抛
+# FileNotFoundError / RuntimeError 时 tee 仍然 rc=0，framework 看不到错误就以为训练成功。开了 pipefail
+# 之后 pipeline rc 取「任一 cmd 的最后一个非零 rc」，python 错误才会 propagate 到 setup 失败
+set -o pipefail
 # 用 python -m xtuner.tools.train 直接调 train 模块，绕开 console_script wrapper shebang 错配
 # （wrapper 启动的 Python 看不到 uv egg-link 把 xtuner 当 namespace package，`from xtuner import cli` ImportError）。
 python -m xtuner.tools.train /tmp/xtuner_npu_smoke_single_cfg.py --work-dir /tmp/xtuner_sft_llm_out_single 2>&1 | tee /tmp/xtuner_sft_llm_out_single/train.log
@@ -525,6 +533,7 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 export TORCH_NPU_USE_HCCL=1
 export PYTHONPATH=/tmp/cv2_stub${PYTHONPATH:+:$PYTHONPATH}
 mkdir -p /tmp/xtuner_sft_llm_out_multi
+set -o pipefail
 NPROC_PER_NODE=2 python -m xtuner.tools.train /tmp/xtuner_npu_smoke_multi_cfg.py --work-dir /tmp/xtuner_sft_llm_out_multi 2>&1 | tee /tmp/xtuner_sft_llm_out_multi/train.log
 ```
 

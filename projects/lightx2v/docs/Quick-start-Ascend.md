@@ -159,6 +159,9 @@ CAP_PROP_FRAME_COUNT = 7
 CAP_PROP_FPS = 5
 
 def _stub(*a, **kw): raise NotImplementedError("cv2 stub on aarch64")
+class _Stub:
+    def __getattr__(self, name): return _Stub()
+    def __call__(self, *a, **k): return _Stub()
 VideoCapture = type("VideoCapture", (), {"__init__": lambda s,*a,**k: None, "read": _stub, "isOpened": lambda s: False, "release": lambda s: None})
 VideoWriter = type("VideoWriter", (), {"__init__": lambda s,*a,**k: None, "write": _stub, "release": lambda s: None})
 imread = imwrite = resize = cvtColor = _stub
@@ -194,7 +197,8 @@ ls /tmp/stubs/cv2/__init__.py /tmp/stubs/decord/__init__.py /tmp/stubs/torchaudi
 export PYTHONPATH=/tmp/stubs:$PYTHONPATH
 python -c "
 import cv2, decord, torchaudio
-print('cv2.INTER_LINEAR=', cv2.INTER_LINEAR, 'cv2.COLOR_BGR2RGB=', cv2.COLOR_BGR2RGB)
+print('cv2.INTER_LINEAR=', cv2.INTER_LINEAR)
+print('cv2.COLOR_BGR2RGB=', cv2.COLOR_BGR2RGB)
 print('decord.VideoReader=', decord.VideoReader)
 print('torchaudio.load=', torchaudio.load)
 "

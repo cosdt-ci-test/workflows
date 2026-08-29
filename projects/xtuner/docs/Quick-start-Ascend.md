@@ -463,6 +463,9 @@ def cvtColor(*args, **kwargs):
 
 def resize(*args, **kwargs):
     return None
+
+def setNumThreads(*args, **kwargs):
+    return None
 PYEOF
 
 # Stub torchvision via real package: NPU base image 的 torchvision 缺 C++ extension，
@@ -610,6 +613,9 @@ def cvtColor(*args, **kwargs):
     return None
 
 def resize(*args, **kwargs):
+    return None
+
+def setNumThreads(*args, **kwargs):
     return None
 PYEOF
 

@@ -249,20 +249,21 @@ p.print_help()
 " 2>&1 | head -60
 ```
 
-输出结果包含（按需 fuzzy 匹配，不锁行号）：
+输出结果包含（按需 fuzzy 匹配，不锁行号；CAN 里 `torch.npu synchronize` 是 import-time 副作用，会进 stdout）：
 
 ```shell #test-result id="xdit-help" fuzzy='...'
 ...
+torch.npu synchronize
 --model MODEL         Name or path of the huggingface model to use.
 ...
 --ulysses_degree ULYSSES_DEGREE
-                      Ulysses sequence parallel degree. Used in attention layer.
+...Ulysses sequence parallel degree. Used in attention layer.
 ...
 --pipefusion_parallel_degree PIPEFUSION_PARALLEL_DEGREE
-                      Pipefusion parallel degree. Indicates the number of pipeline stages.
+...Pipefusion parallel degree. Indicates the number of pipeline stages.
 ...
 --ring_degree RING_DEGREE
-                      Ring sequence parallel degree. Used in attention layer.
+...Ring sequence parallel degree. Used in attention layer.
 ...
 ```
 

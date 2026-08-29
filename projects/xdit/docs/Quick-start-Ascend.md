@@ -252,17 +252,11 @@ p.print_help()
 输出结果包含（按需 fuzzy 匹配，不锁行号；CAN 里 `torch.npu synchronize` 是 import-time 副作用，会进 stdout；transformers import 还会出两行 torchvision warning）：
 
 ```shell #test-result id="xdit-help" fuzzy='...'
-...
-torch.npu synchronize
-...
---model MODEL         Name or path of the huggingface model to use.
-...
---ulysses_degree ULYSSES_DEGREE
-...
---pipefusion_parallel_degree PIPEFUSION_PARALLEL_DEGREE
-...
---ring_degree RING_DEGREE
-...
+...torch.npu synchronize
+...--model MODEL         Name or path of the huggingface model to use.
+...--ulysses_degree ULYSSES_DEGREE
+...--ring_degree RING_DEGREE
+...--pipefusion_parallel_degree PIPEFUSION_PARALLEL_DEGREE
 
 ### 单卡推理 smoke（`--ulysses_degree 1`，2 卡机器也跑）
 

@@ -598,7 +598,48 @@ from . import nn, optim, functional, autograd, cextension
 features = {"multi_backend"}
 supported_torch_devices = {"cpu", "npu"}
 PYEOF
-for sub in nn optim functional autograd cextension; do
+# bnb.nn 提供真 nn.Module 子类：transformers `_replace_with_bnb_linear()` 把每个 torch.nn.Linear
+# 替换成 `bnb.nn.Linear4bit(...)` 后立刻 `model._modules[name].source_cls = type(module)` 并
+# 递归 `list(module.children())`。如果 Linear4bit 是 `lambda *a, **k: None`（原 v1 stub），
+# `model._modules[name]` 变 None，下一行 `.source_cls =` 就 AttributeError。子类化
+# torch.nn.Linear，参数全 swallow，权重是 fp32 Linear（5 iter smoke 不真 quant，跑 forward
+# 也只是基本 Linear，不触发 bnb 算子）。
+cat > /tmp/bitsandbytes_stub/bitsandbytes/nn/__init__.py <<'PYEOF'
+import torch.nn as nn
+
+class Linear4bit(nn.Linear):
+    def __init__(self, in_features, out_features, bias=True,
+                 compute_dtype=None, compress_statistics=True,
+                 quant_type='nf4', **kwargs):
+        super().__init__(in_features, out_features, bias=bias)
+
+class Linear8bitLt(nn.Linear):
+    def __init__(self, in_features, out_features, bias=True,
+                 has_fp16_weights=True, threshold=6.0):
+        super().__init__(in_features, out_features, bias=bias)
+PYEOF
+# bnb.optim：mmengine.builder.register_bitsandbytes_optimizers() line 153 写
+# `bnb.optim.AdamW8bit` / `bnb.optim.PagedAdamW8bit` 等类名做 mapping。这些类需要是
+# `torch.optim.Optimizer` 子类才能被 mmengine.builder.build_optim_wrapper() 实例化。
+# 退化实现：copy torch.optim.AdamW 的全部 init 行为（subclass 最直接），让 optimizer 构造
+# 不报错，5 iter smoke 不真做 8-bit optim state packing。
+cat > /tmp/bitsandbytes_stub/bitsandbytes/optim/__init__.py <<'PYEOF'
+import torch.optim
+
+class AdamW8bit(torch.optim.AdamW):
+    pass
+
+class PagedAdamW8bit(torch.optim.AdamW):
+    pass
+
+class Adam8bit(torch.optim.Adam):
+    pass
+
+class PagedAdam8bit(torch.optim.Adam):
+    pass
+PYEOF
+# functional / autograd / cextension：仍按 lazy lambda 兜底（smoke 不调 quant ops）。
+for sub in functional autograd cextension; do
 cat > /tmp/bitsandbytes_stub/bitsandbytes/${sub}/__init__.py <<'PYEOF'
 def __getattr__(name):
     return lambda *args, **kwargs: None

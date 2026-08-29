@@ -79,8 +79,10 @@ uv pip install --no-deps --extra-index-url https://repo.huaweicloud.com/ascend/r
 # openai<2.0.0 单独装，不带 --no-deps：>=2.0 切到了 pydantic 团队的 httpx2 fork（run 33268955540: `import httpx2._config`），
 # 集群镜像没 httpx2、shim 也补不全 sub-module。openai 是 sglang server_args → openai.protocol → openai._models._utils
 # 的硬依赖（sniffio / anyio / jiter / httpx 这些都从 openai 的 Requires-Dist 拉）；上一行 sglang --no-deps 没带它们，
-# 所以这里让 openai 正常装来补齐 transitive deps。
+# 所以这里让 openai 正常装来补齐 transitive deps。belt-and-suspenders：下面再显式装一次 sniffio / anyio / jiter / httpx，
+# 万一 cluster 镜像里 openai<2.0.0 的 METADATA 被改过、Requires-Dist 不准，这些常被 openai 间接 import 的包也不会缺。
 uv pip install 'openai<2.0.0'
+uv pip install sniffio anyio jiter 'httpx<1'
 # torchvision stub：sglang srt/utils/common.py line 92 `from torchvision.io import decode_jpeg` 在 import sglang 时硬依赖，
 # 但 torchvision 顶层 __init__.py 跑 @torch.library.register_fake("torchvision::nms") 时会因 CPU torch 2.11.0 没注册该 op 而抛
 # RuntimeError: operator torchvision::nms does not exist。Qwen3.5-4B 文本 smoke 不走 image path，stub 出 torchvision + torchvision.io

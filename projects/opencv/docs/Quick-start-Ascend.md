@@ -340,19 +340,19 @@ make install -j2
 
 #### 校验二进制 + CANN 后端可用性
 
-跑 OpenCV 自带的 versioninfo 和 test_dnn 列测试，确认 CANN 后端被识别：
+跑 OpenCV 自带的 versioninfo 和 cannops 测试列举，确认二进制可执行且测试用例在列：
 
 ```shell #test id="opencv-verify-build"
 /usr/local/opencv-cann/bin/opencv_version
 /usr/local/opencv-cann/bin/opencv_test_cannops --gtest_list_tests 2>&1 | head -n 20
 ```
 
-```shell #test-result id="opencv-verify-build" fuzzy='xxx' fuzzy='...'
+```shell #test-result id="opencv-verify-build" fuzzy='xxx'
+5.0.0
 xxx
-CANNxxx...
 ```
 
-预期：versioninfo 第一行打印 OpenCV 版本号；`opencv_test_cannops --gtest_list_tests` 输出中包含至少一条 `CANN` 前缀的测试用例（mainline 5.0.0 把 CANN 单元测试放在 contrib `cannops` 模块的 `opencv_test_cannops` 二进制里，主仓 `opencv_test_dnn` 已不再带 `*HUAWEI*` 用例）。
+预期：versioninfo 第一行打印 `5.0.0`；`opencv_test_cannops --gtest_list_tests` 列出 cannops 模块的 gtest 套件（`CORE.` / `CVT_COLOR.` / `ELEMENTWISE_OP.` / `AscendMat.` / `ASCENDC_KERNEL.`，来自 contrib `modules/cannops/test/`）。注意套件名**没有** `CANN` 前缀——不要按直觉写成 `CANNxxx`（mainline 5.0.0 的 CANN 后端单元测试在这个 `opencv_test_cannops` 二进制里，主仓 `opencv_test_dnn` 已不带 `*HUAWEI*` 用例）。
 
 #### 跑一遍 CANN 单元测试
 

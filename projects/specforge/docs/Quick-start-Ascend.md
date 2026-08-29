@@ -142,13 +142,22 @@ echo "${UPSTREAM_REF}"
 克隆上游仓库并 checkout 到工作流注入的最新 release tag，安装并且验证：
 
 ```shell #test id="specforge-install-source" load="upstream_ref>>ref"
-git clone --depth 1 --branch <ref> https://github.com/sgl-project/SpecForge.git SpecForge
+if [[ "<ref>" =~ ^[0-9a-f]{40}$ ]]; then
+    # commit SHA 路径：sgl-project/SpecForge 没有 release/tag，monitor 走 /commits/HEAD fallback 拿 main HEAD SHA；
+    # git clone --branch 不接 SHA，先浅克隆再 fetch + checkout FETCH_HEAD。
+    git clone --depth 1 https://github.com/sgl-project/SpecForge.git SpecForge
+    git -C SpecForge fetch --depth 1 origin <ref>
+    git -C SpecForge checkout FETCH_HEAD
+else
+    # tag / 分支名路径
+    git clone --depth 1 --branch <ref> https://github.com/sgl-project/SpecForge.git SpecForge
+fi
 cd SpecForge
 uv pip install --no-deps .
 specforge --version
 ```
 
-\<ref> 为最新的 release 分支名。
+\<ref> 为最新的 release tag / 分支名 / commit SHA（监控自动 fallback）。
 
 输出结果类似如下：
 

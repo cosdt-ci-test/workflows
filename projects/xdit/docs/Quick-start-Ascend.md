@@ -268,6 +268,15 @@ p.print_help()
 
 ```shell #test id="xdit-infer-single" load="model_path>>model_path"
 export TORCH_NPU_USE_HCCL=1
+# examples/sd3_example.py 硬编码 .to(f"cuda:{local_rank}") + torch.cuda.max_memory_allocated(...)，
+# torch_npu 必须先 import 才能 monkey-patch torch.cuda.*，否则第一次访问 cuda 触发
+# torch/cuda/__init__.py:403 _lazy_init 报 "Torch not compiled with CUDA enabled"。
+# 用 sitecustomize.py + PYTHONPATH 在 Python 启动期注入 torch_npu，让任何 user 脚本
+# 自动拿到 patch。
+cat > /tmp/_sitecustomize.py <<'PYEOF'
+import torch_npu
+PYEOF
+export PYTHONPATH=/tmp:${PYTHONPATH:-}
 # CANN 的 torch_npu import 副作用会往 stdout 打 "torch.npu synchronize" 一行，
 # 会污染下面的 $(...) 命令替换：dirname 会把整段（含换行）当一个路径处理，
 # 报 "No such file or directory"。先把 xfuser 父目录（=xDiT 仓库根）写进文件，再 cd。
@@ -306,9 +315,19 @@ mkdir -p ./results
 # TORCH_NPU_USE_HCCL=1 让 torch.distributed.init_process_group(backend="hccl") 在 PR #566 之前的 1.x 版本上走通；2.9.0.post2 是默认 hccl，
 # 但保留 export 以防降级路径。这些 env 通过 torchrun 透传到子进程。
 export TORCH_NPU_USE_HCCL=1
+# sd3_example.py 硬编码 .to(f"cuda:{local_rank}") + torch.cuda.max_memory_allocated(...)。
+# torch_npu 必须先 import 才能 monkey-patch torch.cuda.*，否则报 "Torch not compiled with CUDA enabled"。
+# sitecustomize.py + PYTHONPATH 让任何 user 脚本（不只是本步）启动期自动拿到 patch。
+cat > /tmp/_sitecustomize.py <<'PYEOF'
+import torch_npu
+PYEOF
+export PYTHONPATH=/tmp:${PYTHONPATH:-}
 ```
 
 ```shell #test id="xdit-infer-multi" load="model_path>>model_path"
+# 每个 #test 块各自一个 bash -c 子进程；上一个 #test-setup 的 export PYTHONPATH
+# 不会自动继承到这里。重导出一次，并复用 xdit-infer-multi-setup 创建的 sitecustomize.py。
+export PYTHONPATH=/tmp:${PYTHONPATH:-}
 python -c 'import os, xfuser; open("/tmp/_xdit_root", "w").write(os.path.dirname(os.path.dirname(xfuser.__file__)))'
 cd "$(cat /tmp/_xdit_root)"
 # ulysses_degree=2, ring_degree=1：度乘积 = 2，torchrun --nproc_per_node=2 显式起 2 个 rank；

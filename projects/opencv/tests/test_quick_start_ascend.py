@@ -65,14 +65,15 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     """
 
     # 150 min per command: `make -j2` is the long pole — Debug -O0 at
-    # parallelism 2 on the a2-4 runner compiles the full module set
-    # (main modules + ~35 contrib modules + python bindings) in
-    # ~90-120 min measured (CI 33233738107: 58% of targets at the
-    # 70-min mark when it died on the matmul source error). 90 min
-    # cut it too close / timed out, so 9000s it is — still under the
-    # engine's 240-min job budget with ~50-60 min of headroom left
-    # for install + cannops gtests + quickstart + first ACL graph
-    # build (~30 min cold AOE cache).
+    # parallelism 2 on the a2-4 runner. With BUILD_LIST (8 modules
+    # instead of main + ~35 contrib) and the all_ops.h -> narrow-header
+    # patch (dnn .text 516MB -> 47MB, per-TU preprocessed size down
+    # ~80%), the full build is ~50-70 min at -j2 (measured locally in
+    # the CANN image on a comparable ARM core). 9000s keeps generous
+    # headroom under the engine's 240-min job budget for install +
+    # cannops gtests + quickstart + first ACL graph build (~30 min
+    # cold AOE cache); a pre-patch build needed 8208s just to die at
+    # the dnn link (CI 33244401262, R_AARCH64_CALL26 overflow).
     DEFAULT_COMMAND_TIMEOUT = 9000
 
     USER_AGENT = 'cosdt-ci-test/quick-start'  # monitored source is the fork under cosdt-ci-test org

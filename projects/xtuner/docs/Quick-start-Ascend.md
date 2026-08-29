@@ -720,13 +720,30 @@ mkdir -p /tmp/xtuner_sft_llm_out_single
 set -o pipefail
 # 用 python -m xtuner.tools.train 直接调 train 模块，绕开 console_script wrapper shebang 错配
 # （wrapper 启动的 Python 看不到 uv egg-link 把 xtuner 当 namespace package，`from xtuner import cli` ImportError）。
-python -m xtuner.tools.train /tmp/xtuner_npu_smoke_single_cfg.py \
-    --work-dir /tmp/xtuner_sft_llm_out_single \
-    --cfg-options \
-        train_cfg.max_epochs=1 \
-        default_hooks.checkpoint.interval=1 \
-        'custom_hooks.1.every_n_iters=1' \
-    2>&1 | tee /tmp/xtuner_sft_llm_out_single/train.log
+# 但光绕 wrapper 还不够：xtuner.tools.train → Config.fromfile → 注册 custom_hooks 时 LazyObject.build()
+# 会 importlib.import_module("xtuner.engine.hooks")，进而触发 xtuner/engine/__init__.py 第 2 行
+# `from ._strategy import DeepSpeedStrategy`，最终到 xtuner/engine/_strategy/deepspeed.py:6 的
+# `from xtuner import DS_CEPH_DIR`。如果 xtuner 在那一刻被某种原因当成 namespace package（uv 的
+# __editable__ finder 在 cfg 解析 path 上有时失败，sys.modules 里 xtuner.__file__ is None），
+# `from xtuner import DS_CEPH_DIR` 就抛 `cannot import name 'DS_CEPH_DIR' from 'xtuner' (unknown location)`。
+# 修法：进入 train 之前主动 import xtuner.engine._strategy 一次，让 xtuner.__init__.py 完整跑完 +
+# DS_CEPH_DIR 属性落到 sys.modules['xtuner'] 上；之后 LazyObject.build() 再来 import 时直接命中缓存，
+# 不会再走 namespace package 分支。同一个 Python 进程里 sys.modules 共享——前一个 import 把属性
+# 挂上去，后面的 from-import 直接 getattr 就拿到，绕过 (unknown location) 路径。
+python -c "
+import sys
+sys.argv = ['xtuner.tools.train',
+            '/tmp/xtuner_npu_smoke_single_cfg.py',
+            '--work-dir', '/tmp/xtuner_sft_llm_out_single',
+            '--cfg-options',
+            'train_cfg.max_epochs=1',
+            'default_hooks.checkpoint.interval=1',
+            'custom_hooks.1.every_n_iters=1']
+import xtuner
+import xtuner.engine._strategy  # noqa: F401  触发 xtuner/__init__.py + DS_CEPH_DIR
+from xtuner.tools import train
+train.main()
+" 2>&1 | tee /tmp/xtuner_sft_llm_out_single/train.log
 ```
 
 查 .pth 有没有落盘 + 训练日志里的 Sample output 段：
@@ -894,13 +911,23 @@ export TORCH_NPU_USE_HCCL=1
 export PYTHONPATH=/tmp/torchvision_stub:/tmp/cv2_stub:/tmp/bitsandbytes_stub${PYTHONPATH:+:$PYTHONPATH}
 mkdir -p /tmp/xtuner_sft_llm_out_multi
 set -o pipefail
-NPROC_PER_NODE=2 python -m xtuner.tools.train /tmp/xtuner_npu_smoke_multi_cfg.py \
-    --work-dir /tmp/xtuner_sft_llm_out_multi \
-    --cfg-options \
-        train_cfg.max_epochs=1 \
-        default_hooks.checkpoint.interval=1 \
-        'custom_hooks.1.every_n_iters=1' \
-    2>&1 | tee /tmp/xtuner_sft_llm_out_multi/train.log
+# 同 single-setup 注释：进入 train 之前 import xtuner.engine._strategy 强制 xtuner.__init__.py
+# 完整跑完 + DS_CEPH_DIR 落到 sys.modules，规避 LazyObject.build() 再 import 时把 xtuner 当
+# namespace package 触发 `from xtuner import DS_CEPH_DIR` ImportError。
+NPROC_PER_NODE=2 python -c "
+import sys
+sys.argv = ['xtuner.tools.train',
+            '/tmp/xtuner_npu_smoke_multi_cfg.py',
+            '--work-dir', '/tmp/xtuner_sft_llm_out_multi',
+            '--cfg-options',
+            'train_cfg.max_epochs=1',
+            'default_hooks.checkpoint.interval=1',
+            'custom_hooks.1.every_n_iters=1']
+import xtuner
+import xtuner.engine._strategy  # noqa: F401
+from xtuner.tools import train
+train.main()
+" 2>&1 | tee /tmp/xtuner_sft_llm_out_multi/train.log
 ```
 
 查 .pth + Sample output：

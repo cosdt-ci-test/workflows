@@ -123,11 +123,10 @@ uv pip install 'modelscope==1.37.0'
 # 不带那三个预编译二进制 → mooncake_master 启动后 execv 找不到 binary，bind 失败，
 # smoke 30s 后 nc -z 35551 全部 timeout。所以从 release tarball 拿预编译的 wheel。
 #
-# 用 aliyun pypi 镜像拉：直连 GitHub release 在集群网络下不稳（run 33254357756
-# 90 min timeout），而 aliyun 镜像里 aarch64 cp312 的 0.3.10 wheel 是一样的 pre-built
-# 内容。specforge 没 pin mooncake 版本，0.3.10 / 0.3.13 在 store.setup() / client API 上
-# 字段一致（global_segment_size / local_buffer_size / metadata_server 都在），smoke 行为不变。
-uv pip install --index-url https://mirrors.aliyun.com/pypi/simple 'mooncake-transfer-engine==0.3.10'
+# 用 tsinghua 镜像：直连 GitHub release 在集群网络下不稳（run 33254357756 90min timeout），
+# aliyun 镜像只有 manylinux_2_39 aarch64（CI image 是 ubuntu22.04 glibc 2.35，跑不了 2.39 wheel），
+# tsinghua 镜像有 v0.3.13 manylinux_2_28 aarch64 cp312 wheel（与 GitHub release 同字节）。
+uv pip install --index-url https://pypi.tuna.tsinghua.edu.cn/simple 'mooncake-transfer-engine==0.3.13'
 ```
 
 打印安装版本：

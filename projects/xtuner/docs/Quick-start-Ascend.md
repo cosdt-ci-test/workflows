@@ -615,7 +615,7 @@ python -m xtuner.tools.chat Qwen/Qwen2.5-0.5B-Instruct \
 
 ```shell #test-result id="xtuner-chat-smoke" fuzzy='xxx'
 Load LLM from xxx
-xxx (模型对 "hello" 的回复)
+xxx (模型对中文颜色描述 prompt 的回复)
 Log: Exit!
 ```
 

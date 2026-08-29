@@ -193,8 +193,15 @@ specforge --help
 
 ```shell #test-result id="specforge-help"
 usage: specforge [-h] {train,export,benchmark} ...
-...
-{train,export,benchmark}
+
+positional arguments:
+  {train,export,benchmark}
+    train               train a draft model from a typed config
+    export              materialize a runtime checkpoint as a model directory
+    benchmark           benchmark a running SGLang server
+
+options:
+  -h, --help            show this help message and exit
 ```
 
 `specforge train --help` 展示 typed run config 入口：

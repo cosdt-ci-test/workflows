@@ -27,6 +27,7 @@ Environment variables (injected by GitHub workflow
 
 from __future__ import annotations
 
+import glob
 import os
 import subprocess
 import unittest
@@ -130,22 +131,19 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 check=True,
             )
 
-        # 2) Verify xllm is available (image pre-installs it; never build here)
-        subprocess.run(
-            ['python', '-c', 'import xllm; print("xllm:", xllm.__version__)'],
-            check=True,
-        )
-
-        # 3) Clone xllm source tree (no build) so the `examples` package is
-        # importable for `python -m examples.generate`. setup.py does NOT ship
-        # `examples`, so we must provide the repo on PYTHONPATH.
+        # 2) Clone xllm source tree (with submodules) and build from source.
+        # We no longer rely on a xllm-provided image; the CANN base image is
+        # used and xllm's C++ extension is compiled here. xllm's setup.py does
+        # NOT ship the `examples` package, so the repo must also be on
+        # PYTHONPATH for `python -m examples.generate`.
         xllm_src = '/tmp/xllm-ai'
         if not os.path.isdir(xllm_src):
             upstream_ref = os.environ.get('UPSTREAM_REF') or 'main'
-            print(f'setup: cloning xllm@{upstream_ref} to {xllm_src}')
+            print(f'setup: cloning xllm@{upstream_ref} (recursive) to {xllm_src}')
             subprocess.run(
                 [
                     'git', 'clone', '--depth', '1', '--branch', upstream_ref,
+                    '--recurse-submodules', '--shallow-submodules',
                     'https://github.com/xLLM-AI/xllm.git', xllm_src,
                 ],
                 check=True,
@@ -153,7 +151,59 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         # Make `examples` importable in every doc-run subprocess.
         os.environ['PYTHONPATH'] = xllm_src + os.pathsep + os.environ.get('PYTHONPATH', '')
 
-        # 4) Download the example model once into the mounted CI cache.
+        # 3) Install build dependencies (CANN base image lacks cmake/rust/vcpkg
+        # and the third_party submodules are needed by the build).
+        print('setup: installing build dependencies')
+        subprocess.run(
+            ['bash', '-c',
+             'apt-get update -qq && apt-get install -y --no-install-recommends '
+             'cmake ninja-build python3-dev libssl-dev pkg-config git '
+             'curl ca-certificates'],
+            check=True,
+        )
+        # Rust (minimal toolchain) via rsproxy mirror.
+        subprocess.run(
+            ['bash', '-c',
+             'command -v cargo >/dev/null 2>&1 || '
+             '(curl -fsSL https://rsproxy.cn/rustup-init.sh -o /tmp/rustup-init.sh && '
+             'sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain stable)'],
+            check=True,
+        )
+        os.environ['PATH'] = os.pathsep.join(
+            [os.path.expanduser('~/.cargo/bin'), os.environ.get('PATH', '')])
+        os.environ['RUSTUP_DIST_SERVER'] = 'https://rsproxy.cn'
+        os.environ['RUSTUP_UPDATE_ROOT'] = 'https://rsproxy.cn/rustup'
+        # Redirect vcpkg's github fetch to the gitcode mirror (custom vcpkg with
+        # cxx11_abi disabled) to avoid github rate limits in CI.
+        subprocess.run(
+            ['git', 'config', '--global',
+             'url."https://gitcode.com/xLLM-AI/vcpkg.git".insteadOf',
+             'https://github.com/microsoft/vcpkg.git'],
+            check=True,
+        )
+
+        # 4) Build the xllm C++ extension + wheel, then install it.
+        print('setup: building xllm wheel (device=npu arch=arm) ...')
+        os.environ['SKIP_TEST'] = '1'  # don't build/run the C++ unit-test target
+        subprocess.run(
+            ['python', 'setup.py', 'bdist_wheel', '--device', 'npu', '--arch', 'arm'],
+            cwd=xllm_src, check=True,
+        )
+        wheels = sorted(glob.glob(os.path.join(xllm_src, 'dist', '*.whl')))
+        if not wheels:
+            raise RuntimeError('xllm wheel was not produced by the build')
+        subprocess.run(
+            ['python', '-m', 'pip', 'install', '--force-reinstall', '--no-deps', wheels[0]],
+            check=True,
+        )
+
+        # 5) Verify the freshly built xllm imports.
+        subprocess.run(
+            ['python', '-c', 'import xllm; print("xllm:", xllm.__version__)'],
+            check=True,
+        )
+
+        # 6) Download the example model once into the mounted CI cache.
         model_dir = '/root/.cache/modelscope/Qwen2-7B-Instruct'
         if os.path.isdir(model_dir) and any(os.scandir(model_dir)):
             print(f'setup: model already cached at {model_dir}; skipping download')

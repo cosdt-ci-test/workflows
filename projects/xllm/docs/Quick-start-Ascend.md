@@ -20,7 +20,7 @@ Atlas 900 A2 训练系列产品或者 Ascend 910B 系列产品，并按需完成
 
 **配套镜像**：
 
-quay.nju.edu.cn/jd_xllm/xllm-ai:xllm-dev-a2-arm-cann9-20260605
+swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 
 **软件版本**：
 
@@ -30,8 +30,10 @@ quay.nju.edu.cn/jd_xllm/xllm-ai:xllm-dev-a2-arm-cann9-20260605
 | CANN | 9.1.0 |
 | torch | 2.9.0 |
 | torch_npu | 2.9.0.post2 |
-| xllm | 预装在镜像中 |
+| xllm | 从源码编译安装（CANN 基础镜像） |
 | 模型 | [Qwen2-7B-Instruct](https://www.modelscope.cn/models/Qwen/Qwen2-7B-Instruct) |
+
+> 说明：CI 使用通用 CANN 基础镜像 `swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12`，在运行环境内**从源码编译安装 xllm**（含 C++ 扩展、vcpkg 依赖与 TileLang 内核），首次冷编译约 1–2 小时；`xllm` Python 包通过 `pip install` 该 wheel 提供，`examples/` 目录则来自 clone 的源码树。
 
 ### 前置安装
 
@@ -87,7 +89,7 @@ count: 1
 
 ## 验证 xllm 安装
 
-xllm 已预装在镜像中，验证版本：
+xllm 由 CI 从源码编译安装，验证版本：
 
 ```shell #test id="check-xllm"
 python -c "import xllm; print('xllm version:', xllm.__version__)"

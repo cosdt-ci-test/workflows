@@ -505,6 +505,14 @@ def CenterCrop(*args, **kwargs):
 def Normalize(*args, **kwargs):
     return None
 PYEOF
+# `from torchvision.transforms.v2 import functional as tvF` 是 transformers.image_processing_utils
+# 顶层 eager import，bloom.modeling_bloom 走 image_utils 这条链触发；peft.utils.constants 又从
+# transformers 顶层拉 BloomPreTrainedModel 把整条链勾到 xtuner.tools.train。v2 子模块本身不存在会
+# 直接 ModuleNotFoundError，比 functional 内部缺符号更早炸。这里 stub v2 直接从 transforms re-export
+# functional——5 iter smoke 不真正调用 tvF，挂个空模块够用。
+cat > /tmp/torchvision_stub/torchvision/transforms/v2.py <<'PYEOF'
+from torchvision.transforms import functional
+PYEOF
 cat > /tmp/torchvision_stub/torchvision/transforms/functional.py <<'PYEOF'
 def normalize(*args, **kwargs):
     return None
@@ -638,6 +646,14 @@ def CenterCrop(*args, **kwargs):
 
 def Normalize(*args, **kwargs):
     return None
+PYEOF
+# `from torchvision.transforms.v2 import functional as tvF` 是 transformers.image_processing_utils
+# 顶层 eager import，bloom.modeling_bloom 走 image_utils 这条链触发；peft.utils.constants 又从
+# transformers 顶层拉 BloomPreTrainedModel 把整条链勾到 xtuner.tools.train。v2 子模块本身不存在会
+# 直接 ModuleNotFoundError，比 functional 内部缺符号更早炸。这里 stub v2 直接从 transforms re-export
+# functional——5 iter smoke 不真正调用 tvF，挂个空模块够用。
+cat > /tmp/torchvision_stub/torchvision/transforms/v2.py <<'PYEOF'
+from torchvision.transforms import functional
 PYEOF
 cat > /tmp/torchvision_stub/torchvision/transforms/functional.py <<'PYEOF'
 def normalize(*args, **kwargs):

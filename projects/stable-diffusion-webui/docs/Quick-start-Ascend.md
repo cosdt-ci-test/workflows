@@ -148,6 +148,15 @@ deps ok
 cd stable-diffusion-webui
 export GIT_CONFIG_NOSYSTEM=1
 export STABLE_DIFFUSION_REPO=https://github.com/w-e-w/stablediffusion.git
+python -c "
+p = 'modules/devices.py'
+t = open(p).read()
+t = t.replace(
+    'if has_xpu() or has_mps() or cuda_no_autocast():',
+    'if has_xpu() or has_mps() or cuda_no_autocast() or npu_specific.has_npu:'
+)
+open(p, 'w').write(t)
+"
 nohup /tmp/sd-webui-venv/bin/python launch.py --nowebui --skip-torch-cuda-test --ckpt <ckpt>/sd_turbo.safetensors --port 7861 > /tmp/sdwebui.log 2>&1 &
 echo $!
 ```
@@ -156,7 +165,7 @@ echo $!
 - `STABLE_DIFFUSION_REPO`：上游默认指向的 `Stability-AI/stablediffusion` 已被删除（2025.12 起，GitHub 返回 404），官方用社区 fork `w-e-w/stablediffusion` 兜底（commit hash 不变）；此处通过环境变量覆盖，后续上游修复后可移除。
 - `--nowebui`：API 模式（FastAPI，默认端口 7861），无 Gradio 界面，适合自动化与 CI。
 - `--skip-torch-cuda-test`：允许非 CUDA 设备（NPU）。
-- 不传 `--no-half`：`sd_turbo.safetensors` 为 fp16 原生权重，保持默认 fp16 加载（Ascend NPU 原生支持 fp16）；若强制 `--no-half`（fp32）会命中 A1111 模型配置探测的 dtype 不匹配 bug（`Input type (float) and bias type (c10::Half)`）。
+- `python -c ".../npu_specific.has_npu..."`：A1111 的 `autocast()` 只对 CUDA/MPS/XPU 做 `manual_cast`（自动把输入转 fp16），NPU 上落到 `torch.autocast("cuda")`（no-op）→ float32 输入撞上 fp16 权重 → `RuntimeError: Input type (float) and bias type (c10::Half)`。这行补丁把 NPU 纳入 `manual_cast` 分支（`npu_specific` 已在 `devices.py` 顶部 import），上游未来原生支持后可移除。
 - `--ckpt <目录>/sd_turbo.safetensors`：A1111 的 checkpoint 加载器需要**单文件** .safetensors；ModelScope 快照根目录提供了合并后的 `sd_turbo.safetensors`（其余为 diffusers 分片格式），此处指向该单文件。
 - 设备选择由 `modules/npu_specific.py` 自动完成（检测到 torch_npu 即用 npu:0）。
 

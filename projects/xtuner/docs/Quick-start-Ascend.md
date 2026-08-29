@@ -452,6 +452,8 @@ prompt_template= PROMPT_TEMPLATE.xxx
 # 引发 ValueError）。5 iter smoke 不真正做可视化，stub 够用。
 mkdir -p /tmp/cv2_stub/cv2
 cat > /tmp/cv2_stub/cv2/__init__.py <<'PYEOF'
+__version__ = "4.12.0"
+
 def imread(*args, **kwargs):
     return None
 
@@ -604,6 +606,8 @@ xxx (训前 assistant 回复——5 iter 没训出什么，可能是空 / 乱码
 # sitecustomize-injected ModuleType (find_spec raises on __spec__ is None).
 mkdir -p /tmp/cv2_stub/cv2
 cat > /tmp/cv2_stub/cv2/__init__.py <<'PYEOF'
+__version__ = "4.12.0"
+
 def imread(*args, **kwargs):
     return None
 

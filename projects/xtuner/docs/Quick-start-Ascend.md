@@ -467,7 +467,7 @@ print('prompt_template= PROMPT_TEMPLATE.internlm2_chat')
 cfg_compiles_ok
 cfg_patch_ok
 model_name= xxx-internlm2-chat-xxx
-data_path= ./colors/train.jsonl
+data_path= xxx
 prompt_template= PROMPT_TEMPLATE.xxx
 ```
 

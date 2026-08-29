@@ -147,11 +147,13 @@ deps ok
 ```shell #test-setup store="api_pid" load="model_dir>>ckpt"
 cd stable-diffusion-webui
 export GIT_CONFIG_NOSYSTEM=1
+export STABLE_DIFFUSION_REPO=https://github.com/w-e-w/stablediffusion.git
 nohup /tmp/sd-webui-venv/bin/python launch.py --nowebui --skip-torch-cuda-test --no-half --ckpt <ckpt> --port 7861 > /tmp/sdwebui.log 2>&1 &
 echo $!
 ```
 
 - `GIT_CONFIG_NOSYSTEM=1`：launch 会 git clone 数个 assets 仓库，runner 镜像的 `/etc/gitconfig` 把 github.com 重写到需认证的代理，这里让 git 忽略该配置、直连 github。
+- `STABLE_DIFFUSION_REPO`：上游默认指向的 `Stability-AI/stablediffusion` 已被删除（2025.12 起，GitHub 返回 404），官方用社区 fork `w-e-w/stablediffusion` 兜底（commit hash 不变）；此处通过环境变量覆盖，后续上游修复后可移除。
 - `--nowebui`：API 模式（FastAPI，默认端口 7861），无 Gradio 界面，适合自动化与 CI。
 - `--skip-torch-cuda-test`：允许非 CUDA 设备（NPU）。
 - `--no-half`：禁用 fp16（NPU 稳定优先）。

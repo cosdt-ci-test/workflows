@@ -139,10 +139,7 @@ LightX2V 在 import 时会触发这些模块：
 策略：源码 `--no-deps` 安装时跳过这四个依赖,然后在 site-packages 里塞同名的 stub 包（`PYTHONPATH` 优先,`sys.modules` 命中空 stub,真 .so 不会被加载）。LightX2V 不真正做 GUI / 视频解码 / 音频 IO / triton JIT（slack_kernel 只在 CUDA 路径跑,NPU 不触发）,空 stub 够用。
 
 ```shell #test-setup
-mkdir -p /tmp/stubs/cv2 /tmp/stubs/decord /tmp/stubs/torchaudio \
-         /tmp/stubs/triton /tmp/stubs/triton/backends \
-         /tmp/stubs/triton/backends/compiler /tmp/stubs/triton/language \
-         /tmp/stubs/triton/runtime
+mkdir -p /tmp/stubs/cv2 /tmp/stubs/decord /tmp/stubs/torchaudio /tmp/stubs/triton
 ```
 
 ```shell #test-setup
@@ -191,38 +188,54 @@ PY
 ```
 
 ```shell #test-setup
-# triton stub: torch._inductor 走 import triton.backends.compiler (CI 33259259625
-# traceback)，单层 stub 不够，需要把 backends / backends.compiler / language / runtime
-# 都做成 sub-package stub。NPU 走 torchada 不真用 triton，但 torch._dynamo /
-# torch._inductor 的 import 链会触达 triton。
-# 顶层 __init__.py 用模块级 __getattr__ 自动收 sub-module 访问，
-# 配合同名的子目录 __init__.py 让 `import triton.backends.compiler` 能解析。
+# triton stub: torch._inductor 走 import triton.compiler.compiler / backends.compiler
+# / 等很多 sub-module (CI 33259259625 + 33259517415 各抓到不同的子模块，
+# backends.compiler 之后又冒 triton.compiler.compiler)。手列子目录维护成本高，
+# 改成 meta-path finder 自动 stub 任何 triton.* sub-module。
+# 顶层 __init__.py 用模块级 __getattr__ 收 attribute access,
+# 另装一个 MetaPathFinder 接管 `import triton.xxx.yyy` 的子模块查找:
+# sys.modules 直接预注册成 _StubMod，Python 不会再走 filesystem。
+mkdir -p /tmp/stubs/triton
 cat > /tmp/stubs/triton/__init__.py <<'PY'
+import sys, types
+
 class _Stub:
     def __getattr__(self, name): return _Stub()
     def __call__(self, *a, **k): return _Stub()
-import sys as _s
-_s.modules[__name__].__getattr__ = lambda n: _Stub()
+
+class _StubMod(types.ModuleType):
+    """Auto-stub module: any attribute access returns _Stub()."""
+    def __getattr__(self, name):
+        return _Stub()
+
+class _TritonStubFinder:
+    """MetaPathFinder: any `import triton.xxx.yyy` -> _StubMod pre-registered in sys.modules."""
+    def find_spec(self, fullname, path, target=None):
+        if not fullname.startswith('triton'):
+            return None
+        if fullname in sys.modules:
+            return None  # already loaded (real or stubbed)
+        # fabricate a ModuleSpec for a virtual sub-module under triton
+        stub = _StubMod(fullname)
+        sys.modules[fullname] = stub
+        from importlib.machinery import ModuleSpec
+        return ModuleSpec(fullname, loader=None, is_package=True)
+
+# Install the finder at front of meta_path so it intercepts BEFORE
+# PathFinder / FileFinder look at /tmp/stubs/triton/ on disk.
+sys.meta_path.insert(0, _TritonStubFinder())
+
+# Also stub the top-level triton attribute access (__version__ etc).
+sys.modules[__name__].__getattr__ = lambda n: _Stub()
 PY
-for _sub in backends backends/compiler language runtime; do
-    cat > /tmp/stubs/triton/${_sub}/__init__.py <<'PY'
-class _Stub:
-    def __getattr__(self, name): return _Stub()
-    def __call__(self, *a, **k): return _Stub()
-import sys as _s
-_s.modules[__name__].__getattr__ = lambda n: _Stub()
-PY
-done
 ```
 
 ```shell #test-setup
 # 装 LightX2V 时跳过四个 stub 依赖（具体名字以 setup.py / pyproject.toml 为准,
 # 找不到时一个个 --no-deps 单独装也能绕过）。PYTHONPATH 在每条 python 命令前 export。
+# triton 用 meta-path finder 自动 stub 任意 sub-module,这里只检查顶层
 echo "stubs ready at /tmp/stubs/{cv2,decord,torchaudio,triton}"
-ls /tmp/stubs/cv2/__init__.py /tmp/stubs/decord/__init__.py /tmp/stubs/torchaudio/__init__.py \
-   /tmp/stubs/triton/__init__.py \
-   /tmp/stubs/triton/backends/__init__.py /tmp/stubs/triton/backends/compiler/__init__.py \
-   /tmp/stubs/triton/language/__init__.py /tmp/stubs/triton/runtime/__init__.py
+ls /tmp/stubs/cv2/__init__.py /tmp/stubs/decord/__init__.py /tmp/stubs/torchaudio/__init__.py /tmp/stubs/triton/__init__.py
 ```
 
 ```shell #test id="stubs-verify"

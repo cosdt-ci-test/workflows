@@ -605,18 +605,49 @@ PYEOF
 # torch.nn.Linear，参数全 swallow，权重是 fp32 Linear（5 iter smoke 不真 quant，跑 forward
 # 也只是基本 Linear，不触发 bnb 算子）。
 cat > /tmp/bitsandbytes_stub/bitsandbytes/nn/__init__.py <<'PYEOF'
+import torch
 import torch.nn as nn
 
-class Linear4bit(nn.Linear):
+# Linear4bit / Linear8bitLt：用 buffer 代替 Parameter 存 weight，绕开 NPU OOM。
+# 触发链：xtuner.model.sft.SFT._prepare_for_lora → peft.prepare_model_for_kbit_training
+# → `for param in model.parameters(): ... cast fp16/bf16 to fp32`。stub 走 nn.Linear
+# 子类时 weight 是 fp32 Parameter，7B 模型 = 28GB，NPU 29GiB 直接 OOM。改用
+# register_buffer 放 weight（不进 .parameters()），peft 循环看不到 weight，只 cast
+# bias → bias 28GB→56GB 也是 OOM。
+# 解决：weight 改成"按需在 _load_from_state_dict 里 lazy 分配 1×1 placeholder"——
+# 真实 forward 走 F.linear 时 self.weight 必须 shape (out, in) 才能 matmul，但 smoke
+# 不在乎 forward 输出对不对。直接重写 forward 返回 zero tensor，shape 对齐 (bs, out)。
+# 优点：model load 不分配 weight 内存（参数不进 .parameters()，peft 不动它）；
+# forward 不触发 matmul；grad 为 None 不存。整套 7B 模型只占 bias 内存（~14KB 总和）。
+# 5 iter smoke 训出来的 ckpt 是垃圾——smoke 只验 patch + 训练 pipeline 跑通。
+class Linear4bit(nn.Module):
     def __init__(self, in_features, out_features, bias=True,
                  compute_dtype=None, compress_statistics=True,
                  quant_type='nf4', **kwargs):
-        super().__init__(in_features, out_features, bias=bias)
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        # Bias 是 Parameter 但 size 小（per-output 一个数）；peft cast loop 把它 fp32
+        # 也无所谓——7B 模型的 bias 总共 ~14KB fp16 / 28KB fp32，远小于 NPU。
+        self.bias = nn.Parameter(torch.zeros(out_features, dtype=torch.float16),
+                                 requires_grad=False) if bias else None
 
-class Linear8bitLt(nn.Linear):
+    def forward(self, x):
+        return torch.zeros(*x.shape[:-1], self.out_features,
+                           dtype=x.dtype, device=x.device)
+
+class Linear8bitLt(nn.Module):
     def __init__(self, in_features, out_features, bias=True,
                  has_fp16_weights=True, threshold=6.0):
-        super().__init__(in_features, out_features, bias=bias)
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.bias = nn.Parameter(torch.zeros(out_features, dtype=torch.float16),
+                                 requires_grad=False) if bias else None
+
+    def forward(self, x):
+        return torch.zeros(*x.shape[:-1], self.out_features,
+                           dtype=x.dtype, device=x.device)
 
 # Params4bit 是 bnb 的 4-bit Parameter 子类（继承 torch.nn.Parameter），被
 # `transformers.quantizers.quantizer_bnb_4bit.check_quantized_param()` 的

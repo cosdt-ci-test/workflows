@@ -39,7 +39,11 @@ import subprocess
 import unittest
 
 from workflows.markdown_doc_test_base import MarkdownDocTestBase
-from workflows.modelscope_cache import purge_corrupt_models, resolve_modelscope_cache
+from workflows.modelscope_cache import (
+    ensure_safetensors,
+    purge_corrupt_models,
+    resolve_modelscope_cache,
+)
 
 
 def _is_truthy(value: str | None) -> bool:
@@ -225,6 +229,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         # will re-download cleanly on next access. Implementation
         # lives in workflows.modelscope_cache; see that module's
         # docstring for the full rationale.
+        ensure_safetensors()
         purge_corrupt_models(resolve_modelscope_cache())
 
     # ----------------------------------------------------------

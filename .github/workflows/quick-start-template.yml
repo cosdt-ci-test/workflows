@@ -513,41 +513,6 @@ jobs:
           python -m pip install 'mistune>=3,<4'
           ${{ inputs.test_command }}
 
-      # Smoke-log capture: ship any /tmp/smoke-*.log files (sglang /
-      # mooncake / train output that the project smoke scripts wrote
-      # via `>/tmp/smoke-X.log 2>&1` or `tee`) through actions/cache so
-      # publish-and-persist can re-upload them as an artifact.
-      # Rationale: GitHub only retains the runner's job log for ~3
-      # minutes after completion (BlobNotFound past that), and the NPU
-      # runner can't reach upload-artifact blob storage. actions/cache
-      # is a different code path the NPU runner CAN reach (it
-      # already does cache/restore on line 111), so save->restore
-      # survives across jobs. continue-on-error: true so a cache
-      # outage doesn't make a smoke failure worse.
-      - name: Capture smoke log to cache
-        if: always()
-        continue-on-error: true
-        run: |
-          set -euo pipefail
-          mkdir -p .smoke-cache
-          for f in /tmp/smoke-*.log; do
-            [ -f "$f" ] || continue
-            cp "$f" ".smoke-cache/$(basename "$f")"
-          done
-          if [ -z "$(ls -A .smoke-cache 2>/dev/null)" ]; then
-            echo "no /tmp/smoke-*.log captured; skipping cache/save"
-            exit 0
-          fi
-          echo "smoke cache contents: $(ls -la .smoke-cache)"
-          echo "::notice::smoke logs: $(ls .smoke-cache | tr '\n' ' ')"
-      - name: Save smoke log to cache
-        if: always()
-        continue-on-error: true
-        uses: actions/cache/save@v6
-        with:
-          path: .smoke-cache
-          key: smoke-log-${{ inputs.project }}-${{ github.run_id }}
-
       # Schedule + need_to_test - dispatch forces need_to_test=true
       # but must not mutate monitor state (otherwise it would clobber
       # the failure flag the next schedule cycle uses to decide
@@ -762,32 +727,6 @@ jobs:
         with:
           name: ${{ inputs.project }}-quick-start-${{ github.run_id }}
           path: output/result.json
-          if-no-files-found: warn
-
-      # Rehydrate smoke logs that the test job stashed via
-      # actions/cache/save (see "Capture smoke log to cache" in the
-      # test job). Same key, .smoke-cache/ path: actions/cache writes
-      # the tarball key-addressable, so cross-job restore works as long
-      # as both jobs run in the same repo (same GITHUB_WORKSPACE root,
-      # which they do — both run `actions/checkout` against
-      # cosdt-ci-test/workflows). if-no-files-found: warn means a
-      # missing cache (e.g. test job's cache/save hit a network blip)
-      # doesn't fail this step.
-      - name: Restore smoke log from cache
-        if: always()
-        continue-on-error: true
-        uses: actions/cache/restore@v6
-        with:
-          path: .smoke-cache
-          key: smoke-log-${{ inputs.project }}-${{ github.run_id }}
-          fail-on-cache-miss: false
-      - name: Upload smoke log artifact
-        if: always()
-        continue-on-error: true
-        uses: actions/upload-artifact@v6
-        with:
-          name: ${{ inputs.project }}-smoke-log-${{ github.run_id }}
-          path: .smoke-cache
           if-no-files-found: warn
 
       # Cache fields arrive as one job output each (set by

@@ -115,7 +115,7 @@ count: 4
 uv pip install 'modelscope==1.37.0'
 # mooncake-transfer-engine 是 specforge 在线训练里 specforge runtime 的 client 端。
 # master server 二进制（mooncake_master）从仓库 release tarball 拿；smoke 直接跑仓内构建好的二进制。
-uv pip install --no-deps 'mooncake-transfer-engine @ https://github.com/kvcache-ai/Mooncake/archive/refs/heads/main.tar.gz#subdirectory=mooncake-transfer-engine'
+uv pip install --no-deps 'mooncake-transfer-engine @ https://github.com/kvcache-ai/Mooncake/archive/refs/heads/main.tar.gz#subdirectory=mooncake-wheel'
 ```
 
 打印安装版本：

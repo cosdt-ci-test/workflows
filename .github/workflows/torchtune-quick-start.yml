@@ -1,0 +1,104 @@
+# torchtune quick start guard - project thin trigger.
+#
+# Calls the common engine .github/workflows/quick-start-template.yml;
+# this file only declares what varies per project: schedule,
+# concurrency, runner, container image + options, upstream repo,
+# monitored doc, and the test entry command. The guard loop, cache
+# I/O, state relay and publishing all live in the engine. See the
+# engine's `workflow_call.inputs` block for the full input contract.
+#
+# Cache keys (monitor-state-torchtune-*) and artifact names
+# are derived from project=torchtune, not from the workflow name.
+#
+# No device mounts: the self-hosted NPU runner (`linux-aarch64-a2-1`)
+# auto-passes `/dev/davinci*` into the container via the cluster
+# device-plugin, so container_options stays empty. Same convention
+# used by xtuner / slime / tensordict / pytorch.vision / accelerate /
+# ray / torchtitan. The 8 projects that still ship a full
+# `--device=/dev/davinci0` block (bitsandbytes / cache-dit /
+# colossalai / deepspeed / llama.cpp / onnxruntime / trl /
+# whisper.cpp) keep that block for the read-only Ascend driver
+# bind-mounts the test wants; torchtune does not need those.
+#
+# No modelscope cache bind-mount: the test's MODELSCOPE_CACHE points
+# at a container-local, run-scoped directory (see
+# projects/torchtune/tests/test_quick_start_ascend.py prepare_environment);
+# the shared host cache at /data/ci-cache/modelscope accumulates stale
+# files across runs (incomplete downloads, model revision drift,
+# cross-project leftovers) that would break hash checks, so a mount at
+# ~/.cache/modelscope would be dead config.
+
+name: torchtune-quick-start
+
+concurrency:
+  # format() is load-bearing: a '||' between 'manual-' and
+  # github.run_id would short-circuit on the truthy literal and
+  # every dispatch would share one 'manual-' group.
+  group: ${{ github.event_name == 'schedule' && 'torchtune-quick-start-schedule' || format('manual-{0}', github.run_id) }}
+  # cancel-in-progress: false because (1) a schedule run cancelled
+  # mid-way loses its outcome writeback - the outcome is what makes
+  # the retry mechanism work, and the 'if: always()' guard isn't
+  # enough when the container is being torn down; (2) dispatch runs
+  # already live in unique groups so there's nothing to cancel.
+  cancel-in-progress: false
+
+on:
+  schedule:
+    # Run every 6 hours: '0 */6 * * *' fires at minute 0 of every
+    # 6th hour (00:00, 06:00, 12:00, 18:00). Cadence is loose enough
+    # for an upstream that releases a few times a year (torchtune
+    # current latest is v0.6.1), but tight enough that doc fixes
+    # propagate within a day.
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  torchtune-quick-start:
+    uses: ./.github/workflows/quick-start-template.yml
+    with:
+      # Namespaces cache keys (monitor-state-torchtune-*), artifacts
+      # (torchtune-quick-start-<run_id>) and the test working dir
+      # (workflows/projects/torchtune).
+      project: torchtune
+      # Self-hosted NPU runner for the test job only; the engine pins
+      # the cache I/O jobs (restore-cache / publish-and-persist) to
+      # GitHub-hosted ubuntu-latest.
+      test_runner: '["linux-aarch64-a2-1"]'
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+      container_options: >-
+      # Doc body does: git clone + uv pip install -e . + a 3-step
+      # `tune run lora_finetune_single_device` over Qwen2.5-0.5B (~1 GB).
+      # 150 min leaves room for the install chain (torchtune pulls
+      # omegaconf / torchdata / tqdm) + first-time model download from
+      # ModelScope + the LoRA forward/backward on NPU.
+      timeout_minutes: 150
+      upstream_repo: meta-pytorch/torchtune
+      # GitHub Contents API URL (NOT raw.githubusercontent.com):
+      #   * raw.githubusercontent.com is firewalled off the NPU runner
+      #     → test's MONITORED_DOC_URL fetch fails (returns HTML error
+      #     page that mistune can't parse → empty doc body → "no commands
+      #     parsed" failure).
+      #   * engine's monitor already sends `Authorization: Bearer
+      #     $GH_TOKEN` + `Accept: application/vnd.github.raw`, which is
+      #     exactly the Contents API contract for raw markdown; with the
+      #     raw URL those headers are silently ignored and a HTML error
+      #     page is hashed instead, so doc signal is permanently "unknown"
+      #     and doc edits never trigger a run (only release / retry drives
+      #     it). Contents API + the existing engine headers fix both
+      #     ends with one URL change.
+      # `markdown_doc_test_base.py:674-675` already special-cases
+      # `api.github.com` URLs and re-applies the same Accept header on
+      # the test-side fetch, so MONITORED_DOC_URL inherits the fix.
+      # This same problem hits the other 9 quick-start projects in
+      # this repo; torchtune is the first to flip — once green, port
+      # the same `doc_url:` rewrite to the rest.
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/torchtune/docs/Quick-start-Ascend.md
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/torchtune/docs/Quick-start-Ascend.md
+      # cwd is workflows/projects/torchtune; env contract (MONITORED_DOC_URL /
+      # UPSTREAM_REF / NPU_READY) is injected by the engine. All project
+      # env prep and installs live in the test subclass's
+      # prepare_environment hook.
+      test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1

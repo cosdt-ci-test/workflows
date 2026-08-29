@@ -264,8 +264,11 @@ echo "${UPSTREAM_REF}"
 克隆上游仓库并 checkout 到工作流注入的最新 release tag，安装并且验证：
 
 ```shell #test id="speculators-install-source" load="upstream_ref>>ref"
-git clone --depth 1 --branch <ref> https://github.com/vllm-project/speculators.git
-cd speculators
+# 显式 clone 到绝对路径：测试进程 cwd 是 workflows/projects/speculators（engine
+# working-directory 钉死），相对 clone 会落到 <cwd>/speculators；Step 16 #test-setup
+# 的 `cd /root/speculators` 拿不到这个目录、整个 train.py 链就静默失败
+git clone --depth 1 --branch <ref> https://github.com/vllm-project/speculators.git /root/speculators
+cd /root/speculators
 uv pip install -e .
 speculators --version
 python -c "from importlib.metadata import version; print('speculators', version('speculators'))"
@@ -342,85 +345,73 @@ echo <dflash_path>
 /root/dflash-qwen3-8b-converted
 ```
 
-### Step 2 — 场景 1：Offline Training Data Generation using vLLM-Ascend
+### Step 2 — 场景 1：Training Data Preprocessing
 
-用 vllm-ascend 的 `extract_hidden_states` 离线 API（`vllm.LLM()` + `kv_transfer_config` 配 `ExampleHiddenStatesConnector`，路径与 vllm-ascend `tests/e2e/pull_request/one_card/spec_decode/test_extract_hidden_states.py` 一致）让 verifier 在指定层的 forward pass 输出 hidden states，落到 `/root/dflash-train-data/`：
+用上游 `scripts/prepare_data.py` 把 chat-formatted JSONL tokenize + chat template → HF arrow 数据集写到 `$DATA_DIR`（同 upstream canonical `examples/train/dflash_qwen3_8b_sharegpt_online_5k.sh` 的 Step 1）。train.py 的 `ArrowDataset.load_from_disk($DATA_DIR)` 直接吃。
 
-```shell #test-setup store="hidden_states_path" load="verifier_path>>verifier_path"
+之前这步走的是 vllm-ascend 的 `extract_hidden_states` 离线 API 写单文件 .safetensors —— 但 `load_from_disk` 不吃 safetensors、只看 `dataset.save_to_disk()` 写出来的 `.arrow` shards + `dataset_info.json`（CI 33166102161 之后暴露的第二个 bug），同时文件命名 `0-b124ee50.safetensors` 也不对 FileBackend 期望的 `hs_<idx>.safetensors`。干脆切到上游 prepare_data.py + 在线模式（Step 16 起 vllm server 拉 hidden states）。
+
+```shell #test-setup store="data_path" load="verifier_path>>verifier_path"
+set -euo pipefail
 DATA_DIR=/root/dflash-train-data
 rm -rf "$DATA_DIR"
 mkdir -p "$DATA_DIR"
 
-cat > /tmp/extract_hidden.py << 'PY'
-import os
-os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
+# 10 条 chat samples：每条 user + assistant 都填，否则 loss_mask 全 0、prepare_data.py
+# 默认会因 assistant token 不足 raise。smoke 不指望 loss 真下降，只要 chat template +
+# tokenizer 跑通 + arrow + token_freq.pt 都写出来即可
+# 顶层 key 必须是 "conversations"（不是 "messages"），load_and_preprocess_dataset
+# 直接 examples.get("conversations", [])，messages 字段会全部被 silently drop，
+# 末尾 raise "No samples remain after preprocessing"（CI 33172655874 教训）
+cat > /tmp/prompts.jsonl << 'JSONL'
+{"conversations":[{"role":"user","content":"Briefly describe AI topic #0."},{"role":"assistant","content":"AI is a field of computer science."}]}
+{"conversations":[{"role":"user","content":"Briefly describe AI topic #1."},{"role":"assistant","content":"AI is a field of computer science."}]}
+{"conversations":[{"role":"user","content":"Briefly describe AI topic #2."},{"role":"assistant","content":"AI is a field of computer science."}]}
+{"conversations":[{"role":"user","content":"Briefly describe AI topic #3."},{"role":"assistant","content":"AI is a field of computer science."}]}
+{"conversations":[{"role":"user","content":"Briefly describe AI topic #4."},{"role":"assistant","content":"AI is a field of computer science."}]}
+{"conversations":[{"role":"user","content":"Briefly describe AI topic #5."},{"role":"assistant","content":"AI is a field of computer science."}]}
+{"conversations":[{"role":"user","content":"Briefly describe AI topic #6."},{"role":"assistant","content":"AI is a field of computer science."}]}
+{"conversations":[{"role":"user","content":"Briefly describe AI topic #7."},{"role":"assistant","content":"AI is a field of computer science."}]}
+{"conversations":[{"role":"user","content":"Briefly describe AI topic #8."},{"role":"assistant","content":"AI is a field of computer science."}]}
+{"conversations":[{"role":"user","content":"Briefly describe AI topic #9."},{"role":"assistant","content":"AI is a field of computer science."}]}
+JSONL
 
-from vllm import LLM, SamplingParams
+# 复用 source install 那步 clone 的仓库（cwd 不跨 #test 块，需重新 cd）
+cd /root/speculators
 
-# 必须把 vllm 调用包进 `if __name__ == "__main__":` —— Python multiprocessing
-# spawn 路径要求：spawn 子进程重新 import __main__，父进程顶层还在 bootstrap 时
-# 起新进程会被 `_check_not_importing_main()` 拒掉
-if __name__ == "__main__":
-    # Qwen3-8B 有 36 层，抽 [2, 18, 34] 三层（vllm-ascend test_extract_hidden_states 同值）；
-    # eagle_aux_hidden_state_layer_ids 是 draft_model_config.hf_config 字段，不是 CLI flag
-    llm = LLM(
-        model="<verifier_path>",
-        tensor_parallel_size=1,
-        enable_chunked_prefill=False,
-        speculative_config={
-            "method": "extract_hidden_states",
-            "num_speculative_tokens": 1,
-            "draft_model_config": {
-                "hf_config": {
-                    "eagle_aux_hidden_state_layer_ids": [2, 18, 34],
-                }
-            },
-        },
-        kv_transfer_config={
-            "kv_connector": "ExampleHiddenStatesConnector",
-            "kv_role": "kv_producer",
-            "kv_connector_extra_config": {
-                "shared_storage_path": "/root/dflash-train-data",
-            },
-        },
-    )
+# prepare_data.py 走 chat template + tokenizer，输出 HF arrow 数据集 + token_freq.pt；
+# --seq-length 8192 与 train.py default 对齐
+python scripts/prepare_data.py \
+  --model "<verifier_path>" \
+  --data /tmp/prompts.jsonl \
+  --output "$DATA_DIR" \
+  --max-samples 10 \
+  --seq-length 8192 \
+  --overwrite
 
-    prompts = [f"Briefly describe AI topic #{i}." for i in range(10)]
-    outputs = llm.generate(prompts, SamplingParams(temperature=0, max_tokens=1))
-
-    # 第一个输出的 hidden_states_path 即可代表整批（kv_connector 对每个 prompt 写一个 .safetensors）。
-    # 写到固定文件而不是 print 出来 —— vllm.LLM() teardown 时往 stdout 写
-    # `[ERROR] ... applicaiton exception`（CANN 驱动的 typo 字面量），`tail -1` 抓
-    # 到的就是错误行而不是路径；写文件 + cat 让 capture 完全跟 vllm 输出解耦。
-    with open("/tmp/last_hidden_path.txt", "w") as _f:
-        _f.write(outputs[0].kv_transfer_params["hidden_states_path"])
-PY
-
-# 把 vllm 的 INFO/WARNING 丢到日志文件，否则 `store="hidden_states_path"` 会捕获到
-# vllm INFO + 路径混合多行，下游 `echo <hidden_states_path>` 替换后 bash 把每行当命令
-python /tmp/extract_hidden.py > /tmp/extract.log 2>&1
-cat /tmp/last_hidden_path.txt
+echo "$DATA_DIR"
 ```
 
-> `extract_hidden_states` 是 vllm-ascend 的特殊 spec_decode mode：不真做 decoding、每个请求产出 1 token + 把 hidden states 写到 `shared_storage_path`。`outputs[0].kv_transfer_params["hidden_states_path"]` 是 vllm-ascend v0.23.0 引入的 safetensors 单文件格式。**不靠 `tail -1` 抓路径** —— vllm.LLM() 退出前 CANN 驱动 teardown 同时往 stdout 和 stderr 写一行 `[ERROR] applicaiton exception`（CANN typo 字面量），`tail -1` 抓到的都是错误行。改成 python 端把路径写到固定文件 `/tmp/last_hidden_path.txt`，capture 完全跟 vllm 输出解耦。
-
-```shell #test id="pipeline-step2-extract" load="hidden_states_path>>hidden_states_path"
-echo <hidden_states_path>
-ls -1 /root/dflash-train-data/*.safetensors 2>/dev/null | wc -l
+```shell #test id="pipeline-step2-extract" load="data_path>>data_path"
+echo <data_path>
+python -c "from datasets import load_from_disk; print(len(load_from_disk('<data_path>')))"
+test -f <data_path>/token_freq.pt && echo "token_freq.pt: ok"
 ```
 
 输出结果如下：
 
-```shell #test-result id="pipeline-step2-extract" fuzzy='xxx'
-/root/dflash-train-data/xxx.safetensors
-xxx
+```shell #test-result id="pipeline-step2-extract"
+/root/dflash-train-data
+10
+token_freq.pt: ok
 ```
 
 ### Step 3 — 场景 2：Draft Model Training Support
 
 用上游 `scripts/train.py` + 单卡 `torchrun --nproc_per_node=1` 训 1 epoch × 10 sample（**smoke 验证管线通，不指望 loss 真下降**）：
 
-```shell #test-setup store="checkpoint_path" load="hidden_states_path>>data_path" load="verifier_path>>verifier_path"
+```shell #test-setup store="checkpoint_path" load="data_path>>data_path" load="verifier_path>>verifier_path"
+set -euo pipefail
 CHECKPOINT_DIR=/root/dflash-trained
 rm -rf "$CHECKPOINT_DIR"
 mkdir -p "$CHECKPOINT_DIR"
@@ -428,13 +419,65 @@ mkdir -p "$CHECKPOINT_DIR"
 # 复用 source install 那步 clone 的 speculators 仓库（cwd 不跨 #test 块，需重新 cd）
 cd /root/speculators
 
+# 在线模式：先起 vllm server（spec=extract_hidden_states），train.py 通过
+# --vllm-endpoint 按需拉 hidden states。FileBackend 把 generate 出来的临时文件落
+# $HS_DIR，--on-generate delete 让 dataloader 用完即删避免撑爆
+HS_DIR=/tmp/hs-train
+rm -rf "$HS_DIR"
+mkdir -p "$HS_DIR"
+
+# setsid 把 vllm server 丢到独立 session + process group，后面 kill -- -$PGID
+# 才能连带杀掉 vllm fork 出的 worker 子进程，避免 torchrun 跑完 wait 还卡住、
+# trap 退到 stop-container 步骤把 job timeout 顶到 15min+（CI 33174490852 的
+# Stop containers hang 现象；普通 kill $VLLM_TRAIN_PID 只杀 launcher，worker 残留）
+setsid nohup python scripts/launch_vllm.py "<verifier_path>" \
+  --target-layer-ids 2 18 34 \
+  --hidden-states-path "$HS_DIR" \
+  -- \
+  --gpu-memory-utilization 0.5 \
+  --max-model-len 2048 \
+  > /tmp/vllm-train.log 2>&1 < /dev/null &
+VLLM_TRAIN_PID=$!
+VLLM_PGID=$(ps -o pgid= -p "$VLLM_TRAIN_PID" | tr -d ' ')
+# 兜底 cleanup：trap + 主动 kill，都用 SIGKILL 整组；pkill -f 兜住 worker 名变了的情况
+cleanup_vllm() {
+  kill -- -"$VLLM_PGID" 2>/dev/null || true
+  sleep 2
+  kill -9 -- -"$VLLM_PGID" 2>/dev/null || true
+  pkill -9 -f "scripts/launch_vllm.py" 2>/dev/null || true
+  pkill -9 -f "vllm.entrypoints.cli" 2>/dev/null || true
+}
+trap cleanup_vllm EXIT
+
+# 等 /health 200（最长 6 min，与 Step 4 同上限；裸 vllm-ascend load Qwen3-8B
+# 实测 3-4 min）；set -e 模式下循环体用 if 而不是 &&，避免 curl 失败时静默 360s
+VLLM_READY=0
+for i in {1..180}; do
+  if curl -sf http://127.0.0.1:8000/health > /dev/null; then
+    VLLM_READY=1
+    break
+  fi
+  sleep 2
+done
+if [ "$VLLM_READY" != "1" ]; then
+  echo "vllm server failed to come up within 6 min; tail of vllm-train.log:"
+  tail -80 /tmp/vllm-train.log
+  cleanup_vllm
+  exit 1
+fi
+
 # --speculator-type=dflash 由 train.py 从 SpeculatorModel.registry 动态解析；
-# --target-layer-ids 2 18 34 必须与 Step 2 extract 一致；
-# --on-missing generate --on-generate delete 是 online 模式标志（smoke 下 hidden_states 已落盘，不触发）
+# --target-layer-ids 2 18 34 与 launch_vllm.py 一致（两边都内部 append 最后一层 36）；
+# --on-missing generate 让 dataloader 找 vllm 拉 hidden_states（cache 没文件就 fallback 到 endpoint）
+# stderr 重定向到 /tmp/train.log，否则 ERROR_MARKERS 抓不到训练错误（CI 33166102161 silent fail 教训）
+# 用 `|| true` 屏蔽 set -e：失败时下文统一 cat /tmp/train.log + 抛 exit 1，避免 CI 33177074202
+# 那种 torchrun 静默崩 → set -e 中断 → bash 整个 stderr 为空 → framework 只看到 rc=1 + 0B
+# stderr 的情况（之前 280s 跑完才发现 vllm fork 的 train worker 提前 crash，0 字节诊断）
 torchrun --standalone --nproc_per_node=1 scripts/train.py \
   --verifier-name-or-path "<verifier_path>" \
   --data-path "<data_path>" \
   --vllm-endpoint "http://127.0.0.1:8000/v1" \
+  --hidden-states-path "$HS_DIR" \
   --save-path "$CHECKPOINT_DIR" \
   --draft-vocab-size 32000 \
   --epochs 1 \
@@ -444,7 +487,28 @@ torchrun --standalone --nproc_per_node=1 scripts/train.py \
   --max-anchors 3072 \
   --num-layers 5 \
   --target-layer-ids 2 18 34 \
-  --on-missing generate --on-generate delete >/dev/null 2>&1
+  --on-missing generate --on-generate delete >/tmp/train.log 2>&1 || TRAIN_RC=$?
+TRAIN_RC=${TRAIN_RC:-0}
+
+# 必 echo 末尾诊断（哪怕 0 错误也给 framework 看到 train.log 末尾）
+echo "=== train.log tail (last 80 lines) ==="
+tail -80 /tmp/train.log
+
+if [ "$TRAIN_RC" -ne 0 ]; then
+  echo "=== train.py failed (rc=$TRAIN_RC); full train.log ==="
+  cat /tmp/train.log
+  cleanup_vllm
+  exit 1
+fi
+if ! test -f "$CHECKPOINT_DIR/config.json" || ! test -f "$CHECKPOINT_DIR/model.safetensors"; then
+  echo "=== train.py rc=0 但 checkpoint 缺失（config.json / model.safetensors）; full train.log ==="
+  cat /tmp/train.log
+  cleanup_vllm
+  exit 1
+fi
+
+# 主动停 vllm（不依赖 trap，因为 trap 是兜底）
+cleanup_vllm
 
 echo "$CHECKPOINT_DIR"
 ```

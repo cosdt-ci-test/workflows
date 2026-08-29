@@ -1,0 +1,101 @@
+# specforge quick start guard - project thin trigger.
+#
+# Calls the common engine .github/workflows/quick-start-template.yml;
+# this file only declares what varies per project: schedule,
+# concurrency, runner, container image + options, upstream repo,
+# monitored doc, and the test entry command. The guard loop, cache
+# I/O, state relay and publishing all live in the engine. See the
+# engine's `workflow_call.inputs` block for the full input contract.
+#
+# Cache keys (monitor-state-specforge-*) and artifact names
+# are derived from project=specforge, not from the workflow name.
+#
+# No device mounts: the self-hosted NPU runner (`linux-aarch64-a2-1`)
+# auto-passes `/dev/davinci*` into the container via the cluster
+# device-plugin, so container_options stays empty. Same convention
+# used by xtuner / slime / tensordict / pytorch.vision / accelerate /
+# ray / torchtitan / torchtune.
+#
+# No modelscope cache bind-mount: specforge's smoke test only does
+# install + CLI + `specforge train --plan` self-check; no model /
+# dataset snapshot_download touches the cache, so the bind-mount is
+# dead config. (Modelscope is still installed as a doc body step so
+# that `--plan` doesn't fail on an unresolved `model.target_model_path`
+# during config validation; the plan path itself doesn't materialize
+# the model — only the HF Hub ID is parsed.)
+
+name: specforge-quick-start
+
+concurrency:
+  # format() is load-bearing: a '||' between 'manual-' and
+  # github.run_id would short-circuit on the truthy literal and
+  # every dispatch would share one 'manual-' group.
+  group: ${{ github.event_name == 'schedule' && 'specforge-quick-start-schedule' || format('manual-{0}', github.run_id) }}
+  # cancel-in-progress: false because (1) a schedule run cancelled
+  # mid-way loses its outcome writeback - the outcome is what makes
+  # the retry mechanism work, and the 'if: always()' guard isn't
+  # enough when the container is being torn down; (2) dispatch runs
+  # already live in unique groups so there's nothing to cancel.
+  cancel-in-progress: false
+
+on:
+  schedule:
+    # Run every 6 hours: '0 */6 * * *' fires at minute 0 of every
+    # 6th hour (00:00, 06:00, 12:00, 18:00). Cadence is loose enough
+    # for an upstream that releases a few times a year (specforge
+    # current latest is v0.5.x line), but tight enough that doc fixes
+    # propagate within a day.
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  specforge-quick-start:
+    uses: ./.github/workflows/quick-start-template.yml
+    with:
+      # Namespaces cache keys (monitor-state-specforge-*), artifacts
+      # (specforge-quick-start-<run_id>) and the test working dir
+      # (workflows/projects/specforge).
+      project: specforge
+      # 4-card NPU runner: smoke parks the SGLang capture server on
+      # card 0, the specforge trainer on card 1, and leaves cards 2-3
+      # idle for HCCL buffers. A 1-card runner is too small (capture +
+      # trainer on one device would OOM on Qwen3.5-4B + activations).
+      test_runner: '["linux-aarch64-a2-4"]'
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+      container_options: >-
+      # Doc body does: install torch 2.11.0 + torch_npu 2.11.0 +
+      # sglang 0.5.14 + modelscope + specforge from source, then runs
+      # the inline smoke block in Quick-start-Ascend.md (one big #test
+      # inside <details>) which downloads Qwen3.5-4B from ModelScope,
+      # applies SGLang capture patches, starts mooncake + patched
+      # SGLang capture server + 1-step specforge train. 180 min covers
+      # cold-cache model snapshot + SGLang first-time graph compile
+      # (5-10 min on NPU) + the 1-step train.
+      timeout_minutes: 180
+      upstream_repo: sgl-project/SpecForge
+      # GitHub Contents API URL (NOT raw.githubusercontent.com):
+      #   * raw.githubusercontent.com is firewalled off the NPU runner
+      #     → test's MONITORED_DOC_URL fetch fails (returns HTML error
+      #     page that mistune can't parse → empty doc body → "no commands
+      #     parsed" failure).
+      #   * engine's monitor already sends `Authorization: Bearer
+      #     $GH_TOKEN` + `Accept: application/vnd.github.raw`, which is
+      #     exactly the Contents API contract for raw markdown; with the
+      #     raw URL those headers are silently ignored and a HTML error
+      #     page is hashed instead, so doc signal is permanently "unknown"
+      #     and doc edits never trigger a run (only release / retry drives
+      #     it). Contents API + the existing engine headers fix both
+      #     ends with one URL change.
+      # `markdown_doc_test_base.py` already special-cases `api.github.com`
+      # URLs and re-applies the same Accept header on the test-side
+      # fetch, so MONITORED_DOC_URL inherits the fix.
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/specforge/docs/Quick-start-Ascend.md
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/specforge/docs/Quick-start-Ascend.md
+      # cwd is workflows/projects/specforge; env contract (MONITORED_DOC_URL /
+      # UPSTREAM_REF / NPU_READY) is injected by the engine. All project
+      # env prep and installs live in the test subclass's
+      # prepare_environment hook.
+      test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1

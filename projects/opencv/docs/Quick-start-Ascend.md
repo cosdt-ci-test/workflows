@@ -119,14 +119,105 @@ git clone --depth 1 --branch <ref> https://github.com/opencv/opencv_contrib.git
 
 > `<ref>` 为工作流注入的最新 release tag。
 
+#### 修补 OpenCV 5.0.0 CANN backend 的 MatShape 签名不匹配
+
+OpenCV 5.0.0 把 `cv::MatShape` 从 `std::vector<int>` 的别名改成了一个独立 struct（mat.hpp:106，加了 layout / dims 等字段），但 `modules/dnn/src/op_cann.{hpp,cpp}` 里的 `CannConstOp` 构造函数仍按老签名 `const std::vector<int>& shape` 写，导致 `dnn` 模板里 `std::make_shared<CannConstOp>(..., shape(w_mat), ...)`（convolution_layer.cpp:703 等 20+ 处）编译报 `no known conversion for argument 3 from 'cv::MatShape' to 'const std::vector<int>&'`。
+
+把构造函数第三参数改成 `const cv::MatShape&` 即可——`MatShape` 自身提供了 `begin()` / `end()`（mat.hpp:142-145），`.cpp` 里 `std::vector<int64_t> shape_{shape.begin(), shape.end()};` 不需要改。
+
+但只改一个签名还不够——`batch_norm_layer.cpp:383` / `elementwise_layers.cpp:652,2815` / `slice_layer.cpp:691,739` 等几处用本地 `std::vector<int> shape_{...}` 然后传给 `CannConstOp`，会再报反向错误 `no known conversion for argument 3 from 'std::vector<int>' to 'const cv::MatShape&'`。最干净的修复是加一个转发构造函数：第二签名接受 `const std::vector<int>&`，在初始化列表里构造 `cv::MatShape(shape)` 后委托给主构造，避免改 4 个 layer 文件里的局部变量类型。
+
+还不够——`gemm_layer.cpp:534` 和 `matmul_layer.cpp:516` 各有一处 `xxx_shape = std::vector<int>{...}` 赋值给 `MatShape` 局部变量（不是传给函数，是 `operator=`），这条路径转发重载救不了（重载只匹配函数调用），得改这两行用 `MatShape` 的 raw-array 构造 `cv::MatShape(1, &val)`（mat.hpp:111）。改完这俩 `make` 才能彻底过 dnn。
+
+等 5.0.1 / 主仓把 CANN backend 重命名到 contrib 后这步可删。
+
+```shell #test-setup
+python3 - <<'PY'
+import pathlib
+# (a) 主构造：std::vector<int>& → cv::MatShape&
+old = 'const std::vector<int>& shape, const std::string& name'
+new = 'const cv::MatShape& shape, const std::string& name'
+for rel in ['opencv/modules/dnn/src/op_cann.hpp',
+            'opencv/modules/dnn/src/op_cann.cpp']:
+    p = pathlib.Path(rel); s = p.read_text()
+    assert old in s, f'{rel}: pattern not found'
+    p.write_text(s.replace(old, new))
+    print(f'(a) {rel}: {s.count(old)} occurrence(s) -> MatShape&')
+
+# (b) hpp 加 vector<int> 转发重载声明
+hp = pathlib.Path('opencv/modules/dnn/src/op_cann.hpp')
+hs = hp.read_text()
+decl_old = 'CannConstOp(const uint8_t* data, const int dtype, const cv::MatShape& shape, const std::string& name);'
+decl_new = (decl_old
+            + '\n        CannConstOp(const uint8_t* data, const int dtype, const std::vector<int>& shape, const std::string& name);')
+assert decl_old in hs and decl_new.splitlines()[1] not in hs, 'hpp decl already patched'
+hp.write_text(hs.replace(decl_old, decl_new, 1))
+print('(b) op_cann.hpp: +1 std::vector<int>& overload decl')
+
+# (c) cpp 加 vector<int> 转发构造函数（委托给 MatShape 主构造）
+cp = pathlib.Path('opencv/modules/dnn/src/op_cann.cpp')
+cs = cp.read_text()
+anchor = 'op_ = std::make_shared<ge::op::Const>(name);\n    op_->set_attr_value(*ge_tensor);\n}\n'
+deleg = ('\nCannConstOp::CannConstOp(const uint8_t* data, const int dtype, const std::vector<int>& shape, const std::string& name)\n'
+         '    : CannConstOp(data, dtype, cv::MatShape(shape), name) {}\n')
+assert anchor in cs and deleg.strip() not in cs, 'cpp delegating ctor already patched or anchor missing'
+cp.write_text(cs.replace(anchor, anchor + deleg, 1))
+print('(c) op_cann.cpp: +1 std::vector<int>& delegating ctor')
+
+# (d) 两处 MatShape = std::vector<int>{...} 赋值改成 MatShape(1, &val) raw-array 构造
+fixes = [
+    ('opencv/modules/dnn/src/layers/gemm_layer.cpp',
+     '            shape_C = std::vector<int>{dim};',
+     '            shape_C = cv::MatShape(1, &dim);'),
+    # matmul_layer.cpp:515 也用了 bias_shape.front()（在 if 条件里 != 1），先
+    # 把 .front() 全部换成 [0]，再修赋值那一行。
+    ('opencv/modules/dnn/src/layers/matmul_layer.cpp',
+     '                if (real_ndims_C == 1 && bias_shape.front() != 1) {',
+     '                if (real_ndims_C == 1 && bias_shape[0] != 1) {'),
+    ('opencv/modules/dnn/src/layers/matmul_layer.cpp',
+     '                    bias_shape = std::vector<int>{bias_shape.front()};',
+     '                    int _bias_val = bias_shape[0]; bias_shape = cv::MatShape(1, &_bias_val);'),
+]
+for rel, o, n in fixes:
+    p = pathlib.Path(rel); s = p.read_text()
+    assert o in s, f'{rel}: pattern not found: {o!r}'
+    assert n not in s, f'{rel}: already patched'
+    p.write_text(s.replace(o, n, 1))
+    print(f'(d) {rel}: 1 assignment fixed')
+PY
+echo '---grep verify:'
+grep -n 'CannConstOp(const uint8_t\* data, const int dtype,' \
+  opencv/modules/dnn/src/op_cann.hpp \
+  opencv/modules/dnn/src/op_cann.cpp
+grep -n 'cv::MatShape(1, &\|cv::MatShape(1, &_bias_front)' \
+  opencv/modules/dnn/src/layers/gemm_layer.cpp \
+  opencv/modules/dnn/src/layers/matmul_layer.cpp
+```
+
+预期：步骤 (a) 两行各 `1 occurrence(s) -> MatShape&`；(b) hpp +1 decl；(c) cpp +1 delegating ctor；(d) 2 个 assignment 各修复。最后 `grep` 第一组在 hpp 看到 2 行构造声明、cpp 看到 2 个构造函数定义；第二组在 gemm_layer.cpp:534 和 matmul_layer.cpp:516 各 1 行。Python 而非 sed：`&` 在 sed 替换串里代表匹配文本，转义 `\&` 在 GNU/BSD sed 行为不一致，换 Python 避免踩坑。
+
+#### 桥接 OpenCV 5.0.0 与 CANN 9.1.0 的 layout 差
+
+mainline 5.0.0 的 `OpenCVFindCANN.cmake` 假设库在 `${CANN_INSTALL_DIR}/{acllib,lib64,compiler/lib64}/` 下，但 CANN 9.1.0 实际把 ACL/AOE/GE 库都装在 `${CANN_INSTALL_DIR}/aarch64-linux/lib64/`。补三个软链让 cmake 找得到：
+
+```shell #test-setup
+ln -sfn /usr/local/Ascend/cann-9.1.0/aarch64-linux /usr/local/Ascend/cann-9.1.0/acllib
+ln -sfn /usr/local/Ascend/cann-9.1.0/aarch64-linux/lib64 /usr/local/Ascend/cann-9.1.0/lib64
+ln -sfn /usr/local/Ascend/cann-9.1.0/aarch64-linux/lib64 /usr/local/Ascend/cann-9.1.0/compiler/lib64
+```
+
+> 后续版本（OpenCV 5.0.1+ / CANN 9.2+）若 `OpenCVFindCANN.cmake` 把搜索路径加进 `aarch64-linux/lib64/`，这步可以删。镜像自带 `ascend-toolkit/latest -> cann-9.1.0` 时，把上面三行里的 `cann-9.1.0` 改成 `ascend-toolkit/latest` 也可以。
+
 #### CMake 配置：开启 WITH_CANN
 
 mainline 5.0.0 里 CANN 后端的开关变量是 `WITH_CANN`（不是 `BUILD_CANN`，后者不存在），通过环境变量 `ASCEND_TOOLKIT_HOME` 指向 `ascend-toolkit` 安装根目录（也可用 `-DCANN_INSTALL_DIR=...` 直接覆盖）——这一步与 [OpenCV Huawei CANN Backend wiki](https://github.com/opencv/opencv/wiki/Huawei-CANN-Backend) 的 Step 3 一致：
 
+> CI runner 内存极紧，`-O3` 模板优化阶段 cc1plus 内存 spike 会把 dnn 大 TU OOM kill，所以走 `CMAKE_BUILD_TYPE=Debug`（`-O0 -g`）砍优化内存，再配合下面 `-j2`——Debug 编译是为了 CI 通过，不是为生产性能。
+
 ```shell #test id="opencv-cmake-configure" load="upstream_ref>>ref"
 cd opencv
 mkdir -p build && cd build
-cmake -DCMAKE_BUILD_TYPE=RELEASE \
+cmake -DCMAKE_BUILD_TYPE=Debug \
       -DCMAKE_INSTALL_PREFIX=/usr/local/opencv-cann \
       -DWITH_CANN=ON \
       -DBUILD_opencv_world=OFF \
@@ -143,7 +234,7 @@ cmake -DCMAKE_BUILD_TYPE=RELEASE \
       ..
 ```
 
-```shell #test-result id="opencv-cmake-configure" fuzzy='xxx'
+```shell #test-result id="opencv-cmake-configure" fuzzy='xxx' fuzzy='...'
 ...
 --   CANN:xxx YES
 ...
@@ -155,10 +246,10 @@ cmake -DCMAKE_BUILD_TYPE=RELEASE \
 
 ```shell #test-setup
 cd opencv/build
-make -j$(nproc)
+make -j2
 ```
 
-> 编译时间受 CPU 核数与是否启用 world 影响：单核 `make` 大约 1.5 小时；8 核并行约 20 分钟。CI runner 通常 32+ 核，10 分钟内可以结束。
+> 编译时间受 CPU 核数与是否启用 world 影响：单核 `make` 大约 1.5 小时；8 核并行约 20 分钟。CI runner 内存极紧，dnn 模板大 TU（matmul / dft / reshape2 / slice2 / pad2 / padding / resize / reduce / recurrent2 / permute / group_norm / nary_eltwise / if / shape / split2 / transpose layer）`cc1plus` 在 `-O3` 下会被 OOM kill，所以 cmake 走 `Debug`（`-O0 -g`）砍优化内存、再 `-j2` 限制并行度（~30–45 分钟）。
 
 #### 安装到 /usr/local/opencv-cann
 

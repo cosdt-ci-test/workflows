@@ -284,6 +284,103 @@ ln -sfn /usr/local/Ascend/cann-9.1.0/aarch64-linux/lib64 /usr/local/Ascend/cann-
 
 > 后续版本（OpenCV 5.0.1+ / CANN 9.2+）若 `OpenCVFindCANN.cmake` 把搜索路径加进 `aarch64-linux/lib64/`，这步可以删。镜像自带 `ascend-toolkit/latest -> cann-9.1.0` 时，把上面三行里的 `cann-9.1.0` 改成 `ascend-toolkit/latest` 也可以。
 
+#### 修补 cannops 默认流（NULL stream）与 CANN 9.1.0 的不兼容
+
+cannops 的默认流是 NULL 指针（`cann_call.cpp` 的 `DefaultDeviceInitializer` 直接 `aclrtStream stream = nullptr`——ACL 的 legacy"默认流"语义，老 CANN 上 `aclopCompileAndExecute(..., NULL)` 合法）。但 CANN 9.1.0 的 `aclopCompileAndExecute` GE 执行路径内部会调 `aclrtAllocatorGetByStream(stream)`，这个 API **不接受 NULL**，直接报 `Invalid_Argument_Null_Pointer(EH0008): stream cannot be a NULL pointer`——于是测试里每个 op 执行（ConcatD/SplitD/TransposeD/ReverseV2/...）全灭，72 个用例同一死法（CI 33265462625 诊断输出实锤）。修法：patch `OperatorRunner::run`，NULL 时换成 `aclrtCtxGetCurrentDefaultStream` 取到的 context 注册默认流（注意**不要**用 `aclrtCreateStream` 造裸流——裸流没有 allocator 注册，GE 对部分 op 仍报 `EH0012: The stream is not registered with any allocator`，CI 33274715919 实测 17 个 CVT_COLOR 用例卡这条）：
+
+```shell #test-setup
+python3 - <<'PY'
+import pathlib
+p = pathlib.Path('opencv_contrib/modules/cannops/src/cann_call.cpp')
+s = p.read_text()
+old = '''OperatorRunner& OperatorRunner::run(AscendStream& stream)
+{
+    aclrtStream rawStream = AscendStreamAccessor::getStream(stream);
+    CV_ACL_SAFE_CALL(aclopCompileAndExecute(op.c_str(), inputDesc_.size(), inputDesc_.data(),
+                                            inputBuffers_.data(), outputDesc_.size(),
+                                            outputDesc_.data(), outputBuffers_.data(), opAttr_,
+                                            ACL_ENGINE_SYS, ACL_COMPILE_SYS, NULL, rawStream));
+    if (rawStream == nullptr)
+        CV_ACL_SAFE_CALL(aclrtSynchronizeStream(rawStream));
+    else
+    {
+        for (const auto& ptr : holder)
+            stream.addTensorHolder(ptr);
+    }
+    return *this;
+}'''
+new = '''OperatorRunner& OperatorRunner::run(AscendStream& stream)
+{
+    aclrtStream rawStream = AscendStreamAccessor::getStream(stream);
+    // CANN 9.1.0: aclopCompileAndExecute's GE path calls aclrtAllocatorGetByStream,
+    // which rejects NULL (legacy default-stream) pointers with EH0008. Swap in the
+    // context's registered default stream - it carries an allocator registration.
+    aclrtStream execStream = rawStream;
+    if (execStream == nullptr)
+        CV_ACL_SAFE_CALL(aclrtCtxGetCurrentDefaultStream(&execStream));
+    CV_ACL_SAFE_CALL(aclopCompileAndExecute(op.c_str(), inputDesc_.size(), inputDesc_.data(),
+                                            inputBuffers_.data(), outputDesc_.size(),
+                                            outputDesc_.data(), outputBuffers_.data(), opAttr_,
+                                            ACL_ENGINE_SYS, ACL_COMPILE_SYS, NULL, execStream));
+    CV_ACL_SAFE_CALL(aclrtSynchronizeStream(execStream));
+    if (rawStream != nullptr)
+    {
+        for (const auto& ptr : holder)
+            stream.addTensorHolder(ptr);
+    }
+    return *this;
+}'''
+assert old in s, 'cann_call.cpp: OperatorRunner::run body not found'
+p.write_text(s.replace(old, new, 1))
+print('(g) cann_call.cpp: OperatorRunner::run NULL-stream fallback patched')
+PY
+grep -n 'CtxGetCurrentDefaultStream' opencv_contrib/modules/cannops/src/cann_call.cpp | head -2
+```
+
+预期：打印 `(g) ... patched`，grep 看到 1 行 `CtxGetCurrentDefaultStream`。原逻辑对 NULL 流走 `aclrtSynchronizeStream(NULL)`（同样依赖 legacy 语义），新逻辑换 context 默认流 + 同步，行为等价且不依赖 NULL stream 兼容性。这个补丁值得报给 opencv_contrib 上游。
+
+同样的 NULL 流坑还有第二处：AscendC kernel 的启动路径 `kernel_launch`（`cann_call.hpp` 里的 inline template，threshold 系列 kernel 走这里）直接把 NULL 传给 kernel 启动函数、NULL 时再调 `stream.waitForCompletion()` → `aclrtSynchronizeStream(NULL)`——CANN 9.1.0 下前者引发 AI Core 越界错误（kernel 没被正确提交）、后者报 `EH0012: The stream is not registered with any allocator`。补 patch (h)：
+
+```shell #test-setup
+python3 - <<'PY'
+import pathlib
+p = pathlib.Path('opencv_contrib/modules/cannops/include/opencv2/cann_call.hpp')
+s = p.read_text()
+# kernel_launch 调的 aclrtCreateStream / aclrtSynchronizeStream / aclrtDestroyStream
+# 声明在 acl_rt.h；该头原来只 include 了 acl_base.h，template 里直接调会报
+# "no arguments ... depend on a template parameter"（两阶段名字查找）。
+inc_old = '#include <acl/acl_base.h>'
+inc_new = '#include <acl/acl_base.h>\n#include <acl/acl_rt.h>'
+assert inc_old in s and inc_new not in s, 'acl include line not found / already patched'
+s = s.replace(inc_old, inc_new, 1)
+old = '''    std::shared_ptr<uchar> tilingDevice =
+        mallocAndUpload(&tiling, sizeof(TILING_TYPE), stream, AscendMat::defaultAllocator());
+    aclrtStream rawStream = AscendStreamAccessor::getStream(stream);
+    CV_ACL_SAFE_CALL(kernel(1, rawStream, tilingDevice.get(), args...));
+    if (rawStream == nullptr)
+    {
+        stream.waitForCompletion();
+    }'''
+new = '''    std::shared_ptr<uchar> tilingDevice =
+        mallocAndUpload(&tiling, sizeof(TILING_TYPE), stream, AscendMat::defaultAllocator());
+    aclrtStream rawStream = AscendStreamAccessor::getStream(stream);
+    // CANN 9.1.0: AscendC kernel launch + aclrtSynchronizeStream reject NULL
+    // (legacy default) streams via the allocator path. Use the context's
+    // registered default stream instead of a bare aclrtCreateStream.
+    aclrtStream execStream = rawStream;
+    if (execStream == nullptr)
+        CV_ACL_SAFE_CALL(aclrtCtxGetCurrentDefaultStream(&execStream));
+    CV_ACL_SAFE_CALL(kernel(1, execStream, tilingDevice.get(), args...));
+    CV_ACL_SAFE_CALL(aclrtSynchronizeStream(execStream));'''
+assert old in s, 'cann_call.hpp: kernel_launch body not found'
+p.write_text(s.replace(old, new, 1))
+print('(h) cann_call.hpp: kernel_launch NULL-stream fallback + acl_rt.h include patched')
+PY
+grep -n 'CtxGetCurrentDefaultStream\|acl_rt' opencv_contrib/modules/cannops/include/opencv2/cann_call.hpp | head -4
+```
+
+预期：打印 `(h) ... patched`，grep 看到 `acl_rt.h` include 1 行 + `CtxGetCurrentDefaultStream` 1 行。
+
 #### CMake 配置：开启 WITH_CANN
 
 mainline 5.0.0 里 CANN 后端的开关变量是 `WITH_CANN`（不是 `BUILD_CANN`，后者不存在），通过环境变量 `ASCEND_TOOLKIT_HOME` 指向 `ascend-toolkit` 安装根目录（也可用 `-DCANN_INSTALL_DIR=...` 直接覆盖）——这一步与 [OpenCV Huawei CANN Backend wiki](https://github.com/opencv/opencv/wiki/Huawei-CANN-Backend) 的 Step 3 一致：
@@ -366,10 +463,8 @@ set -o pipefail
 /usr/local/opencv-cann/bin/opencv_test_cannops --gtest_color=no > /tmp/cannops_gtest.log 2>&1; rc=$?
 tail -n 25 /tmp/cannops_gtest.log
 if [ $rc -ne 0 ]; then
-  echo '--- first failing test detail:'
-  grep -n -m 1 -A 12 '^\[ RUN      \]' /tmp/cannops_gtest.log | head -40
-  echo '--- error lines:'
-  grep -nE 'Failure|Unknown|error|Error|invalid|Invalid' /tmp/cannops_gtest.log | head -20
+  echo '--- failure assertion blocks:'
+  grep -A 10 'unknown file: Failure' /tmp/cannops_gtest.log | head -120
 fi
 exit $rc
 ```

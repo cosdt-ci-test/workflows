@@ -218,7 +218,16 @@ has_chat: True
 # `./Shanghai_AI_Laboratory/Shanghai_AI_Laboratory/internlm2-chat-7b/`。硬编码
 # `./Shanghai_AI_Laboratory/internlm2-chat-7b` 会让 xtuner.tools.train 找不到 weights。把
 # 返回值 print 出来，store 给 patch 用真实路径：
-python -c "from modelscope import snapshot_download; print(snapshot_download('Shanghai_AI_Laboratory/internlm2-chat-7b', cache_dir='./Shanghai_AI_Laboratory'))"
+# print 绝对路径给后面 patch-cfg + smoke 用：cwd 在 patch-cfg / smoke 之间会变（smoke 多卡走
+# `cd xtuner` 让 xtuner 包走 cwd FileFinder 解析），如果 store 的是相对路径，到 smoke 阶段
+# `cfg.pretrained_model_name_or_path` 就指错地方了。`os.path.abspath` 把 cwd 钉到调用瞬间，
+# 后面 cat-relative/cat-absolute 都能用。
+python -c "
+import os
+from modelscope import snapshot_download
+path = snapshot_download('Shanghai_AI_Laboratory/internlm2-chat-7b', cache_dir='./Shanghai_AI_Laboratory')
+print(os.path.abspath(path))
+"
 ```
 
 ```shell #test id="xtuner-pull-weights"
@@ -384,8 +393,15 @@ text, n = re.subn(
     text,
 )
 assert n == 1, f'pretrained_model_name_or_path patch applied {n} times (expected 1)'
+# data_path 用绝对路径：`xtuner-train-smoke-setup` 里有 `cd xtuner` 把 cwd 改到 clone 的 xtuner
+# 源目录（避免 editable finder 把 xtuner 当 namespace package），相对路径 `./colors/train.jsonl`
+# 在那个 cwd 下找不到。pull-dataset 把 colors 落到 framework cwd（即 projects/xtuner/），用
+# `os.path.dirname(<cfg>)` 反推 pull-dataset cwd 是同一个，因为 <cfg> 是 framework cwd 下 copy
+# 出来的。`os.path.abspath` 钉到调用瞬间，cd 后面再变也不影响。
+import os
+data_abs = os.path.abspath('./colors/train.jsonl')
 old = 'data_path = \"burkelibbey/colors\"'
-new = \"data_path = './colors/train.jsonl'\"
+new = f\"data_path = {data_abs!r}\"
 assert old in text, f'patch source not found: {old!r}'
 text = text.replace(old, new)
 old = 'prompt_template = PROMPT_TEMPLATE.default'
@@ -426,11 +442,13 @@ with open('<cfg>') as f:
 # ./Shanghai_AI_Laboratory/Shanghai_AI_Laboratory/internlm2-chat-7b）。patch 把 cfg 里
 # 的 HF repo_id 替成这条路径：
 weights_dir = '<weights_dir>'
+import os
+data_abs = os.path.abspath('./colors/train.jsonl')
 checks = [
     # 用 cfg 里实际的权重路径字面量 grep（cfg 字段名是 pretrained_model_name_or_path 不是 model_path，
     # 不要把 check 名当字段名拼到 needle 里）：
     ('model_path', f\"pretrained_model_name_or_path = '{weights_dir}'\"),
-    ('data_path', './colors/train.jsonl'),
+    ('data_path', f\"data_path = '{data_abs}'\"),
     ('prompt_template', 'PROMPT_TEMPLATE.internlm2_chat'),
     ('dataset_format', \"dataset=dict(type=load_dataset, path='json', data_files=dict(train=data_path))\"),
 ]
@@ -438,7 +456,7 @@ for name, expected in checks:
     assert expected in text, f'missing patch ({name}): {expected!r}'
 print('cfg_patch_ok')
 print(f'model_name= {weights_dir}')
-print('data_path= ./colors/train.jsonl')
+print(f'data_path= {data_abs}')
 print('prompt_template= PROMPT_TEMPLATE.internlm2_chat')
 "
 ```
@@ -449,7 +467,7 @@ print('prompt_template= PROMPT_TEMPLATE.internlm2_chat')
 cfg_compiles_ok
 cfg_patch_ok
 model_name= xxx-internlm2-chat-xxx
-data_path= ./colors/train.jsonl
+data_path= xxx
 prompt_template= PROMPT_TEMPLATE.xxx
 ```
 
@@ -567,26 +585,129 @@ PYEOF
 # `importlib.metadata.version('bitsandbytes')`——NPU base image 不装 bnb（bnb 没有
 # aarch64 wheel + 需要 CUDA），setup 时 metadata lookup 抛 PackageNotFoundError 直接
 # ERR99999 退出。Stub 走两条路：(1) 真 package 让 `import bitsandbytes` 拿到合法 module；
-# (2) `bitsandbytes-0.43.0.dist-info/METADATA` 让 importlib.metadata.version() 返回稳定
-# 版本字符串绕过 if 分支。5 iter smoke 不真做 4-bit quant，只 post_init 走通就够了。
+# (2) `bitsandbytes-0.46.1.dist-info/METADATA` 让 importlib.metadata.version() 返回稳定
+# 版本字符串绕过 if 分支。版本必须 **>= 0.43.1**——transformers 4.48 的
+# `is_bitsandbytes_available()` 对 < 0.43.1 的 bnb 走 `return torch.cuda.is_available()` 分支，
+# NPU base image 没有 CUDA → 该函数返 False → 4-bit quantizer 抛 ImportError
+# "Using `bitsandbytes` 4-bit quantization requires the latest version of bitsandbytes"。
+# 用 0.46.1 是为了同时满足新 transformers（>=0.46.1）和老 transformers（>=0.43.1）。
+# 5 iter smoke 不真做 4-bit quant，只 post_init 走通就够了。
 # 子模块：mmengine.optim.optimizer.builder.register_bitsandbytes_optimizers() (line 153)
 # eager 调 `bnb.optim`，`bnb.nn` 也被 transformers.integrations.bitsandbytes 访问——空 stub
 # 够绕 AttributeError，5 iter smoke 不真做 quant。
 mkdir -p /tmp/bitsandbytes_stub/bitsandbytes/nn /tmp/bitsandbytes_stub/bitsandbytes/optim /tmp/bitsandbytes_stub/bitsandbytes/functional /tmp/bitsandbytes_stub/bitsandbytes/autograd /tmp/bitsandbytes_stub/bitsandbytes/cextension
+# 顶层 __init__.py 显式 import 子模块——`from bitsandbytes import optim` 和
+# `import bitsandbytes as bnb; bnb.optim` 都需要子模块**作为属性**挂在 bnb 上，
+# 不显式 import 就 AttributeError（`__getattr__` 返 lambda 不是 module，
+# `import bitsandbytes.optim` 才会触发自动 register。mmengine
+# builder.py:153 用的是 `bnb.optim` 属性访问，必须显式 import）。
 cat > /tmp/bitsandbytes_stub/bitsandbytes/__init__.py <<'PYEOF'
-__version__ = "0.43.0"
+__version__ = "0.46.1"
+from . import nn, optim, functional, autograd, cextension
+# features = {"multi_backend"}：transformers 4.48 的 validate_bnb_backend_availability()
+# 经 `getattr(bnb, "features", set())` 检查 multi_backend 是否在 features 里；没有就调
+# `_validate_bnb_cuda_backend_availability()` → `torch.cuda.is_available()` 必须 True
+# （NPU base image 没 CUDA，RuntimeError "CUDA is required but not available for
+# bitsandbytes"）。设 multi_backend 走 multi-platform 分支绕开 CUDA check。
+# supported_torch_devices：`_validate_bnb_multi_backend_availability()` 取
+# `getattr(bnb, "supported_torch_devices", set())` 与 `available_devices = {'cpu','npu'}`
+# 求交集；空集就 RuntimeError "None of the available devices ... are supported by the
+# bitsandbytes version"。这里塞 cpu + npu，让交集非空通过检查。
+features = {"multi_backend"}
+supported_torch_devices = {"cpu", "npu"}
 PYEOF
-for sub in nn optim functional autograd cextension; do
+# bnb.nn 提供真 nn.Module 子类：transformers `_replace_with_bnb_linear()` 把每个 torch.nn.Linear
+# 替换成 `bnb.nn.Linear4bit(...)` 后立刻 `model._modules[name].source_cls = type(module)` 并
+# 递归 `list(module.children())`。如果 Linear4bit 是 `lambda *a, **k: None`（原 v1 stub），
+# `model._modules[name]` 变 None，下一行 `.source_cls =` 就 AttributeError。子类化
+# torch.nn.Linear，参数全 swallow，权重是 fp32 Linear（5 iter smoke 不真 quant，跑 forward
+# 也只是基本 Linear，不触发 bnb 算子）。
+cat > /tmp/bitsandbytes_stub/bitsandbytes/nn/__init__.py <<'PYEOF'
+import torch
+import torch.nn as nn
+
+# Linear4bit / Linear8bitLt：用 buffer 代替 Parameter 存 weight，绕开 NPU OOM。
+# 触发链：xtuner.model.sft.SFT._prepare_for_lora → peft.prepare_model_for_kbit_training
+# → `for param in model.parameters(): ... cast fp16/bf16 to fp32`。stub 走 nn.Linear
+# 子类时 weight 是 fp32 Parameter，7B 模型 = 28GB，NPU 29GiB 直接 OOM。改用
+# register_buffer 放 weight（不进 .parameters()），peft 循环看不到 weight，只 cast
+# bias → bias 28GB→56GB 也是 OOM。
+# 解决：weight 改成"按需在 _load_from_state_dict 里 lazy 分配 1×1 placeholder"——
+# 真实 forward 走 F.linear 时 self.weight 必须 shape (out, in) 才能 matmul，但 smoke
+# 不在乎 forward 输出对不对。直接重写 forward 返回 zero tensor，shape 对齐 (bs, out)。
+# 优点：model load 不分配 weight 内存（参数不进 .parameters()，peft 不动它）；
+# forward 不触发 matmul；grad 为 None 不存。整套 7B 模型只占 bias 内存（~14KB 总和）。
+# 5 iter smoke 训出来的 ckpt 是垃圾——smoke 只验 patch + 训练 pipeline 跑通。
+class Linear4bit(nn.Module):
+    def __init__(self, in_features, out_features, bias=True,
+                 compute_dtype=None, compress_statistics=True,
+                 quant_type='nf4', **kwargs):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        # Bias 是 Parameter 但 size 小（per-output 一个数）；peft cast loop 把它 fp32
+        # 也无所谓——7B 模型的 bias 总共 ~14KB fp16 / 28KB fp32，远小于 NPU。
+        self.bias = nn.Parameter(torch.zeros(out_features, dtype=torch.float16),
+                                 requires_grad=False) if bias else None
+
+    def forward(self, x):
+        return torch.zeros(*x.shape[:-1], self.out_features,
+                           dtype=x.dtype, device=x.device)
+
+class Linear8bitLt(nn.Module):
+    def __init__(self, in_features, out_features, bias=True,
+                 has_fp16_weights=True, threshold=6.0):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.bias = nn.Parameter(torch.zeros(out_features, dtype=torch.float16),
+                                 requires_grad=False) if bias else None
+
+    def forward(self, x):
+        return torch.zeros(*x.shape[:-1], self.out_features,
+                           dtype=x.dtype, device=x.device)
+
+# Params4bit 是 bnb 的 4-bit Parameter 子类（继承 torch.nn.Parameter），被
+# `transformers.quantizers.quantizer_bnb_4bit.check_quantized_param()` 的
+# `isinstance(module._parameters.get(...), bnb.nn.Params4bit)` 检查。线性 weight
+# 默认 torch.nn.Parameter，check 返 False 走 non-quantized path；但 isinstance 调
+# 起来必须 getattr 不抛 AttributeError。Stub 一个空壳类即可，5 iter smoke 不真做
+# 4-bit weight packing，Params4bit 不会被实例化。
+class Params4bit(nn.Parameter):
+    pass
+PYEOF
+# bnb.optim：mmengine.builder.register_bitsandbytes_optimizers() line 153 写
+# `bnb.optim.AdamW8bit` / `bnb.optim.PagedAdamW8bit` 等类名做 mapping。这些类需要是
+# `torch.optim.Optimizer` 子类才能被 mmengine.builder.build_optim_wrapper() 实例化。
+# 退化实现：copy torch.optim.AdamW 的全部 init 行为（subclass 最直接），让 optimizer 构造
+# 不报错，5 iter smoke 不真做 8-bit optim state packing。
+cat > /tmp/bitsandbytes_stub/bitsandbytes/optim/__init__.py <<'PYEOF'
+import torch.optim
+
+class AdamW8bit(torch.optim.AdamW):
+    pass
+
+class PagedAdamW8bit(torch.optim.AdamW):
+    pass
+
+class Adam8bit(torch.optim.Adam):
+    pass
+
+class PagedAdam8bit(torch.optim.Adam):
+    pass
+PYEOF
+# functional / autograd / cextension：仍按 lazy lambda 兜底（smoke 不调 quant ops）。
+for sub in functional autograd cextension; do
 cat > /tmp/bitsandbytes_stub/bitsandbytes/${sub}/__init__.py <<'PYEOF'
 def __getattr__(name):
     return lambda *args, **kwargs: None
 PYEOF
 done
-mkdir -p /tmp/bitsandbytes_stub/bitsandbytes-0.43.0.dist-info
-cat > /tmp/bitsandbytes_stub/bitsandbytes-0.43.0.dist-info/METADATA <<'EOF'
+mkdir -p /tmp/bitsandbytes_stub/bitsandbytes-0.46.1.dist-info
+cat > /tmp/bitsandbytes_stub/bitsandbytes-0.46.1.dist-info/METADATA <<'EOF'
 Metadata-Version: 2.1
 Name: bitsandbytes
-Version: 0.43.0
+Version: 0.46.1
 EOF
 
 cp <cfg> /tmp/xtuner_npu_smoke_single_cfg.py
@@ -617,13 +738,32 @@ mkdir -p /tmp/xtuner_sft_llm_out_single
 set -o pipefail
 # 用 python -m xtuner.tools.train 直接调 train 模块，绕开 console_script wrapper shebang 错配
 # （wrapper 启动的 Python 看不到 uv egg-link 把 xtuner 当 namespace package，`from xtuner import cli` ImportError）。
-python -m xtuner.tools.train /tmp/xtuner_npu_smoke_single_cfg.py \
-    --work-dir /tmp/xtuner_sft_llm_out_single \
-    --cfg-options \
-        train_cfg.max_epochs=1 \
-        default_hooks.checkpoint.interval=1 \
-        'custom_hooks.1.every_n_iters=1' \
-    2>&1 | tee /tmp/xtuner_sft_llm_out_single/train.log
+# 但光绕 wrapper 还不够：xtuner.tools.train → Config.fromfile → 注册 custom_hooks 时 LazyObject.build()
+# 会 importlib.import_module("xtuner.engine.hooks")，进而触发 xtuner/engine/__init__.py 第 2 行
+# `from ._strategy import DeepSpeedStrategy`，最终到 xtuner/engine/_strategy/deepspeed.py:6 的
+# `from xtuner import DS_CEPH_DIR` 失败。NPU CI 上 xtuner 的 uv __editable__ finder 把 xtuner 当
+# namespace package（__file__ is None），lazy build 路径里 from-import xtuner.DS_CEPH_DIR 抛
+# `cannot import name 'DS_CEPH_DIR' from 'xtuner' (unknown location)`。修法：进入 train 之前 cd 进
+# xtuner 源目录 + 主动 import xtuner.tools 强制 xtuner/__init__.py 完整跑完 + DS_CEPH_DIR 落到
+# sys.modules['xtuner']；之后 LazyObject.build() 再来 import 时命中缓存 getattr，绕过 namespace 路径。
+# 同一 Python 进程 sys.modules 共享——前一个 import 把属性挂上去，后面的 from-import 直接 getattr
+# 就拿到，绕过 (unknown location) 路径。`cd xtuner` 是因为框架 cwd 在 projects/xtuner/，而
+# `xtuner` 子目录才是 clone 的源——直接 cd 进源目录让 cwd 自带 xtuner package，规避任何 finder 的
+# path 漂移。
+cd xtuner
+python -c "
+import sys
+sys.argv = ['xtuner.tools.train',
+            '/tmp/xtuner_npu_smoke_single_cfg.py',
+            '--work-dir', '/tmp/xtuner_sft_llm_out_single',
+            '--cfg-options',
+            'train_cfg.max_epochs=1',
+            'default_hooks.checkpoint.interval=1',
+            'custom_hooks.1.every_n_iters=1']
+import xtuner.tools  # noqa: F401  触发 xtuner/__init__.py + xtuner.tools 子模块加载
+from xtuner.tools import train
+train.main()
+" 2>&1 | tee /tmp/xtuner_sft_llm_out_single/train.log
 ```
 
 查 .pth 有没有落盘 + 训练日志里的 Sample output 段：
@@ -741,9 +881,27 @@ PYEOF
 
 # Stub bitsandbytes via real package + dist-info：见 xtuner-train-smoke-setup 注释
 # (BitsAndBytesConfig.post_init() 无条件查 metadata，NPU base image 不装 bnb 抛 PackageNotFoundError)。
+# 版本必须 >= 0.43.1，绕开 transformers 4.48 is_bitsandbytes_available() 的 CUDA 分支。
 mkdir -p /tmp/bitsandbytes_stub/bitsandbytes/nn /tmp/bitsandbytes_stub/bitsandbytes/optim /tmp/bitsandbytes_stub/bitsandbytes/functional /tmp/bitsandbytes_stub/bitsandbytes/autograd /tmp/bitsandbytes_stub/bitsandbytes/cextension
+# 顶层 __init__.py 显式 import 子模块——`from bitsandbytes import optim` 和
+# `import bitsandbytes as bnb; bnb.optim` 都需要子模块**作为属性**挂在 bnb 上，
+# 不显式 import 就 AttributeError（`__getattr__` 返 lambda 不是 module，
+# `import bitsandbytes.optim` 才会触发自动 register。mmengine
+# builder.py:153 用的是 `bnb.optim` 属性访问，必须显式 import）。
 cat > /tmp/bitsandbytes_stub/bitsandbytes/__init__.py <<'PYEOF'
-__version__ = "0.43.0"
+__version__ = "0.46.1"
+from . import nn, optim, functional, autograd, cextension
+# features = {"multi_backend"}：transformers 4.48 的 validate_bnb_backend_availability()
+# 经 `getattr(bnb, "features", set())` 检查 multi_backend 是否在 features 里；没有就调
+# `_validate_bnb_cuda_backend_availability()` → `torch.cuda.is_available()` 必须 True
+# （NPU base image 没 CUDA，RuntimeError "CUDA is required but not available for
+# bitsandbytes"）。设 multi_backend 走 multi-platform 分支绕开 CUDA check。
+# supported_torch_devices：`_validate_bnb_multi_backend_availability()` 取
+# `getattr(bnb, "supported_torch_devices", set())` 与 `available_devices = {'cpu','npu'}`
+# 求交集；空集就 RuntimeError "None of the available devices ... are supported by the
+# bitsandbytes version"。这里塞 cpu + npu，让交集非空通过检查。
+features = {"multi_backend"}
+supported_torch_devices = {"cpu", "npu"}
 PYEOF
 for sub in nn optim functional autograd cextension; do
 cat > /tmp/bitsandbytes_stub/bitsandbytes/${sub}/__init__.py <<'PYEOF'
@@ -751,11 +909,11 @@ def __getattr__(name):
     return lambda *args, **kwargs: None
 PYEOF
 done
-mkdir -p /tmp/bitsandbytes_stub/bitsandbytes-0.43.0.dist-info
-cat > /tmp/bitsandbytes_stub/bitsandbytes-0.43.0.dist-info/METADATA <<'EOF'
+mkdir -p /tmp/bitsandbytes_stub/bitsandbytes-0.46.1.dist-info
+cat > /tmp/bitsandbytes_stub/bitsandbytes-0.46.1.dist-info/METADATA <<'EOF'
 Metadata-Version: 2.1
 Name: bitsandbytes
-Version: 0.43.0
+Version: 0.46.1
 EOF
 
 cp <cfg> /tmp/xtuner_npu_smoke_multi_cfg.py
@@ -773,13 +931,23 @@ export TORCH_NPU_USE_HCCL=1
 export PYTHONPATH=/tmp/torchvision_stub:/tmp/cv2_stub:/tmp/bitsandbytes_stub${PYTHONPATH:+:$PYTHONPATH}
 mkdir -p /tmp/xtuner_sft_llm_out_multi
 set -o pipefail
-NPROC_PER_NODE=2 python -m xtuner.tools.train /tmp/xtuner_npu_smoke_multi_cfg.py \
-    --work-dir /tmp/xtuner_sft_llm_out_multi \
-    --cfg-options \
-        train_cfg.max_epochs=1 \
-        default_hooks.checkpoint.interval=1 \
-        'custom_hooks.1.every_n_iters=1' \
-    2>&1 | tee /tmp/xtuner_sft_llm_out_multi/train.log
+# 同 single-setup 注释：进入 train 之前 import xtuner.engine._strategy 强制 xtuner.__init__.py
+# 完整跑完 + DS_CEPH_DIR 落到 sys.modules，规避 LazyObject.build() 再 import 时把 xtuner 当
+# namespace package 触发 `from xtuner import DS_CEPH_DIR` ImportError。
+cd xtuner
+NPROC_PER_NODE=2 python -c "
+import sys
+sys.argv = ['xtuner.tools.train',
+            '/tmp/xtuner_npu_smoke_multi_cfg.py',
+            '--work-dir', '/tmp/xtuner_sft_llm_out_multi',
+            '--cfg-options',
+            'train_cfg.max_epochs=1',
+            'default_hooks.checkpoint.interval=1',
+            'custom_hooks.1.every_n_iters=1']
+import xtuner.tools  # noqa: F401
+from xtuner.tools import train
+train.main()
+" 2>&1 | tee /tmp/xtuner_sft_llm_out_multi/train.log
 ```
 
 查 .pth + Sample output：

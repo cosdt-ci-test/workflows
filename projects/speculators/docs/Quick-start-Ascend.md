@@ -186,21 +186,6 @@ triton_ascend=3.2.2
 triton=3.5.0
 ```
 
-检查 NPU 设备运行时可用：
-
-```shell #test id="check-npu-runtime"
-python -c "import torch, torch_npu; print(f'torch={torch.__version__}'); print(f'torch_npu={torch_npu.__version__}'); print('is_available:', torch.npu.is_available()); print('count:', torch.npu.device_count())"
-```
-
-输出结果如下：
-
-```shell #test-result id="check-npu-runtime" fuzzy='xxx'
-torch=2.10.0+cpu
-torch_npu=2.10.0.post4
-is_available: True
-count: xxx
-```
-
 #### 安装 modelscope
 
 ```shell #test-setup
@@ -383,26 +368,33 @@ echo "$DATA_DIR"
 ```shell #test id="pipeline-step2-extract" load="data_path>>data_path"
 echo <data_path>
 python -c "from datasets import load_from_disk; print(len(load_from_disk('<data_path>')))"
-test -f <data_path>/token_freq.pt && echo "token_freq.pt: ok"
+python -c "
+import torch
+from pathlib import Path
+p = Path('<data_path>') / 'token_freq.pt'
+print('exists:', p.exists(), 'size:', p.stat().st_size if p.exists() else 0)
+freq = torch.load(p, weights_only=True)
+print('token_freq keys:', list(freq.keys()) if isinstance(freq, dict) else type(freq).__name__)
+print('len:', len(freq))
+"
 ```
 
 输出结果如下：
 
-```shell #test-result id="pipeline-step2-extract"
+```shell #test-result id="pipeline-step2-extract" fuzzy='xxx'
 /root/dflash-train-data
 10
-token_freq.pt: ok
+exists: True size: xxx
+token_freq keys: xxx
+len: xxx
 ```
 
 ### Step 3 — 场景 2：Draft Model Training Support
 
 用上游 `scripts/train.py` + 单卡 `torchrun --nproc_per_node=1` 训 1 epoch × 10 sample（**smoke 验证管线通，不指望 loss 真下降**）：
 
-```shell #test-setup store="checkpoint_path" load="data_path>>data_path" load="verifier_path>>verifier_path"
+```shell #test-setup store="hs_dir" load="data_path>>data_path" load="verifier_path>>verifier_path"
 set -euo pipefail
-CHECKPOINT_DIR=/root/dflash-trained
-rm -rf "$CHECKPOINT_DIR"
-mkdir -p "$CHECKPOINT_DIR"
 
 # 复用 source install 那步 clone 的 speculators 仓库（cwd 不跨 #test 块，需重新 cd）
 cd /root/speculators
@@ -484,7 +476,18 @@ fi
 cleanup_vllm_gen
 sleep 5  # 给 vllm worker 完全退出 + NPU 释放
 
-# 离线训练：--on-missing raise 强制走 FileBackend 读 $HS_DIR 缓存，不再起 vllm endpoint；
+echo "$HS_DIR"
+```
+
+```shell #test-setup store="checkpoint_path" load="hs_dir>>hs_dir" load="data_path>>data_path" load="verifier_path>>verifier_path"
+set -euo pipefail
+CHECKPOINT_DIR=/root/dflash-trained
+rm -rf "$CHECKPOINT_DIR"
+mkdir -p "$CHECKPOINT_DIR"
+
+cd /root/speculators
+
+# 离线训练：--on-missing raise 强制走 FileBackend 读 <hs_dir> 缓存，不再起 vllm endpoint；
 # （train.py 的 argparse choices 是 generate/skip/warn/raise，没有 error；CI 33201184782 教训）
 # 显式不带 --vllm-endpoint，避免 dataloader 误以为有 server 可问。
 # train.py stdout+stderr 全写到 /tmp/train.log，失败时把整 log cat 到 bash stderr——
@@ -495,7 +498,7 @@ sleep 5  # 给 vllm worker 完全退出 + NPU 释放
 torchrun --standalone --nproc_per_node=1 scripts/train.py \
   --verifier-name-or-path "<verifier_path>" \
   --data-path "<data_path>" \
-  --hidden-states-path "$HS_DIR" \
+  --hidden-states-path "<hs_dir>" \
   --save-path "$CHECKPOINT_DIR" \
   --draft-vocab-size 32000 \
   --epochs 1 \

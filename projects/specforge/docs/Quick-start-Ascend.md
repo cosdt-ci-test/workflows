@@ -72,22 +72,44 @@ uv pip install transformers==5.8.1 datasets tqdm accelerate huggingface-hub nump
 # specforge 的 scripts/apply_sglang_spec_capture_patch.sh 里 `python -c "import sglang; print(sglang.__version__)"`
 # 会触发 sglang.__init__ → sglang.lang → IPython → traitlets 这条 import 链，
 # 而 traitlets 是 IPython 的硬依赖，不在 sglang 自己的 requires_dist 里、也不会被 --no-deps 拉进来。
-uv pip install --no-deps orjson anthropic apache-tvm-ffi av blobfile build compressed-tensors decord2 distro easydict einops gguf interegular kernels llguidance mistral_common msgspec ninja openai outlines packaging partial_json_parser pillow prometheus-client py-spy pybase64 quack-kernels scipy sentencepiece setproctitle sgl-deep-gemm starlette triton
+uv pip install --no-deps orjson anthropic apache-tvm-ffi av blobfile build compressed-tensors decord2 distro easydict einops gguf interegular kernels llguidance mistral_common msgspec ninja outlines packaging partial_json_parser pillow prometheus-client py-spy pybase64 quack-kernels scipy sentencepiece setproctitle sgl-deep-gemm starlette triton
 uv pip install IPython
 # sglang wheel 本身 --no-deps 装（cluster 镜像把它的 Requires-Dist cuda-python 改成 <0 哨兵，绕开解析）
 uv pip install --no-deps --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi sglang==0.5.14
+# openai<2.0.0 单独装，不带 --no-deps：>=2.0 切到了 pydantic 团队的 httpx2 fork（run 33268955540: `import httpx2._config`），
+# 集群镜像没 httpx2、shim 也补不全 sub-module。openai 是 sglang server_args → openai.protocol → openai._models._utils
+# 的硬依赖（sniffio / anyio / jiter / httpx 这些都从 openai 的 Requires-Dist 拉）；上一行 sglang --no-deps 没带它们，
+# 所以这里让 openai 正常装来补齐 transitive deps。belt-and-suspenders：下面再显式装一次 sniffio / anyio / jiter / httpx，
+# 万一 cluster 镜像里 openai<2.0.0 的 METADATA 被改过、Requires-Dist 不准，这些常被 openai 间接 import 的包也不会缺。
+uv pip install 'openai<2.0.0'
+uv pip install sniffio anyio jiter 'httpx<1'
 # torchvision stub：sglang srt/utils/common.py line 92 `from torchvision.io import decode_jpeg` 在 import sglang 时硬依赖，
 # 但 torchvision 顶层 __init__.py 跑 @torch.library.register_fake("torchvision::nms") 时会因 CPU torch 2.11.0 没注册该 op 而抛
 # RuntimeError: operator torchvision::nms does not exist。Qwen3.5-4B 文本 smoke 不走 image path，stub 出 torchvision + torchvision.io
 # 让 import 通过；decode_jpeg 不会被调用。另外 sglang.srt.configs.__init__ 直接 `from sglang.srt.configs.deepseekvl2 import DeepseekVL2Config`，
 # deepseekvl2.py 顶部 `from torchvision.io import ImageReadMode`（PIL.ImageMode 风格 enum）→ run 33263935680
 # 在 launch_server 启动早期就报 `ImportError: cannot import name 'ImageReadMode'`，把 ImageReadMode 也补上。
+# 再加 torchvision.transforms.InterpolationMode（run 33265261220）：sglang.launch_server → server_args
+# → configs/__init__ → deepseekvl2.py 顶部 `from transformers import (...)` → transformers 内部
+# image_utils.py:55 `from torchvision.transforms import InterpolationMode` → ModuleNotFoundError →
+# transformers 的 AutoProcessor lazy loader 报"Could not import module 'AutoProcessor'"（实际根因是 torchvision.transforms）。
+# 还需 torchvision.transforms.functional 子模块（run 33266519990）：configs/__init__ 还导入 deepseek_ocr.py，
+# 顶部 `from torchvision.transforms import functional as TF` → ModuleNotFoundError（functional 子模块不存在）。
+# 顺便把 v2.functional 也 stub 上（sglang NPU 路径有 `import torchvision.transforms.v2.functional as tvF`，
+# 文本 smoke 不走 VL 路径但 configs 链路 import 时可能引入）。transformers 5.8.1 还用 pil_to_tensor（image_utils.py:56），
+# functional 里加个 raise NotImplementedError 占位。
 python - <<'PY'
 import os, site
 sp = site.getsitepackages()[0]
 pkg = os.path.join(sp, 'torchvision')
 io = os.path.join(pkg, 'io')
+tx = os.path.join(pkg, 'transforms')
+txf = os.path.join(tx, 'functional')
+txv2 = os.path.join(tx, 'v2')
+txv2f = os.path.join(txv2, 'functional')
 os.makedirs(io, exist_ok=True)
+os.makedirs(txf, exist_ok=True)
+os.makedirs(txv2f, exist_ok=True)
 open(os.path.join(pkg, '__init__.py'), 'w').close()
 open(os.path.join(io, '__init__.py'), 'w').write(
     'class ImageReadMode:\n'
@@ -100,6 +122,48 @@ open(os.path.join(io, '__init__.py'), 'w').write(
     '\n'
     'def decode_image(*args, **kwargs):\n'
     '    raise NotImplementedError("torchvision stub: not used in this text-only smoke")\n'
+)
+open(os.path.join(tx, '__init__.py'), 'w').write(
+    'from torchvision.transforms import functional as _F  # re-export submodule\n'
+    '\n'
+    'class InterpolationMode:\n'
+    '    NEAREST = "nearest"\n'
+    '    NEAREST_EXACT = "nearest-exact"\n'
+    '    BILINEAR = "bilinear"\n'
+    '    BICUBIC = "bicubic"\n'
+    '    BOX = "box"\n'
+    '    HAMMING = "hamming"\n'
+    '    LANCZOS = "lanczos"\n'
+    '\n'
+    'functional = _F\n'
+)
+# Sub-module so `from torchvision.transforms import functional` / `import torchvision.transforms.functional as TF` works.
+open(os.path.join(txf, '__init__.py'), 'w').write(
+    'class InterpolationMode:\n'
+    '    NEAREST = "nearest"\n'
+    '    NEAREST_EXACT = "nearest-exact"\n'
+    '    BILINEAR = "bilinear"\n'
+    '    BICUBIC = "bicubic"\n'
+    '    BOX = "box"\n'
+    '    HAMMING = "hamming"\n'
+    '    LANCZOS = "lanczos"\n'
+    '\n'
+    'def pil_to_tensor(*args, **kwargs):\n'
+    '    raise NotImplementedError("torchvision stub: not used in this text-only smoke")\n'
+    '\n'
+    'def resize(*args, **kwargs):\n'
+    '    raise NotImplementedError("torchvision stub: not used in this text-only smoke")\n'
+    '\n'
+    'def center_crop(*args, **kwargs):\n'
+    '    raise NotImplementedError("torchvision stub: not used in this text-only smoke")\n'
+)
+# torchvision.transforms.v2 也要 stub（v2/__init__.py 让 `from torchvision.transforms.v2 import functional` 能 import）。
+open(os.path.join(txv2, '__init__.py'), 'w').write(
+    'from torchvision.transforms.v2 import functional\n'
+)
+open(os.path.join(txv2f, '__init__.py'), 'w').write(
+    'def __getattr__(name):\n'
+    '    raise NotImplementedError(f"torchvision stub: torchvision.transforms.v2.functional.{name} not used in this text-only smoke")\n'
 )
 print(f'torchvision stub installed at {pkg}')
 PY
@@ -487,7 +551,7 @@ nohup python -m sglang.launch_server \
     --skip-tokenizer-init \
     --tp-size 1 \
     --mem-fraction-static 0.5 \
-    --max-model-len 1024 \
+    --context-length 1024 \
     --attention-backend ascend \
     --enable-spec-capture --spec-capture-method dflash \
     --spec-capture-aux-layer-ids 1 8 15 22 29 \
@@ -564,4 +628,4 @@ smoke: training exit=0
 smoke: OK - 1-step training completed
 ```
 
-> 卡 0 跑 capture server，卡 1 跑 trainer，卡 2/3 空闲给 HCCL buffer。Smoke 的 `--max-model-len 1024 --mem-fraction-static 0.5` 把 SGLang KV池压住，`training.max_steps=1 training.batch_size=1 training.max_length=512 training.num_anchors=32 deployment.trainer.nproc_per_node=1` 把训练侧压到 1 步最小数据。
+> 卡 0 跑 capture server，卡 1 跑 trainer，卡 2/3 空闲给 HCCL buffer。Smoke 的 `--context-length 1024 --mem-fraction-static 0.5` 把 SGLang KV池压住（sglang 0.5.x 把 `--max-model-len` 改名成 `--context-length`，server_args.py `context_length` 字段），`training.max_steps=1 training.batch_size=1 training.max_length=512 training.num_anchors=32 deployment.trainer.nproc_per_node=1` 把训练侧压到 1 步最小数据。

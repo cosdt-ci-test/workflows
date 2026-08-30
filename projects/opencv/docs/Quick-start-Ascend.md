@@ -676,7 +676,8 @@ print('top class score:', float(np.max(out[0])))
 PY
 ```
 
-```shell #test-result id="opencv-cann-infer" fuzzy='xxx'
+```shell #test-result id="opencv-cann-infer" fuzzy='xxx' fuzzy='...'
+...
 model bytes: xxx
 output shape: (1, 1000)xxx
 output dtype: float32
@@ -686,7 +687,7 @@ top class score: xxx
 
 预期：
 
-- `output shape: (1, 1000)`：SqueezeNet 输出是 1×1000 的 ImageNet 1000-class logits。
+- `output shape: (1, 1000)`：SqueezeNet 输出是 1×1000 的 ImageNet 1000-class logits（实测 CANN 后端返回 4D `(1, 1000, 1, 1)`，尾部维度由 graph 编译保持，预期里 `xxx` 吸收）。ONNX importer 首次运行会往 stdout 打 2 行 `[ INFO ]` 日志，预期开头用 `...` 吸收。
 - `top class score` 在 `0~1` 之间：随机初始化输入对应全 0 图像，输出是数据集 bias，对 **某一** 类的得分会高于其他 999 类；如果输出是 NaN / Inf 或全是同一数值，说明 ACL graph 编译失败。
 - 第一次跑会触发 ACL graph 编译（耗时数十秒），日志里有 `acl graph compile ...` 字样；第二次起命中 `$HOME/ascend` 下的 AOE 缓存，forward 耗时降到 10 ms 量级。
 

@@ -456,7 +456,7 @@ xxx
 
 #### 跑一遍 CANN 单元测试
 
-`opencv_test_cannops` 内置了 CANN 后端的小型模型测例，会调用 ACL 把模型图下沉到 NPU。**CANN 9.1.0 + 910B1 上有 23 个用例因上游 cannops 的已知不兼容而失败**（三类根因，历轮 CI 诊断实锤），用 `--gtest_filter` 排除后跑其余 73 个；上游修复（或换 CANN 版本）后应恢复全量并删掉过滤：
+`opencv_test_cannops` 内置了 CANN 后端的小型模型测例，会调用 ACL 把模型图下沉到 NPU。**CANN 9.1.0 + 910B1 上有 23 个用例因上游 cannops 的已知不兼容而失败**（三类根因，历轮 CI 诊断实锤），用 `--gtest_filter` 排除后跑其余 55 个（全部通过）；上游修复（或换 CANN 版本）后应恢复全量并删掉过滤：
 
 ```shell #test id="opencv-cann-run-tests"
 set -o pipefail
@@ -471,10 +471,10 @@ fi
 exit $rc
 ```
 
-```shell #test-result id="opencv-cann-run-tests" fuzzy='...' fuzzy='xxx'
-[==========]xxx
+```shell #test-result id="opencv-cann-run-tests" fuzzy='xxx' fuzzy='...'
 ...
-[  PASSED  ] xxx
+[==========]xxx
+[  PASSED  ] 55 tests.
 ```
 
 排除清单与根因（都值得报给 opencv_contrib 上游）：

@@ -127,6 +127,70 @@ class TestTensorFlowProjectContract(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertIn(path, text)
 
+    def test_python37_is_installed_side_by_side_and_uv_targets_it(self) -> None:
+        doc = (
+            _REPO_ROOT
+            / "projects"
+            / "tensorflow"
+            / "docs"
+            / "Quick-start-Ascend.md"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            "https://repo.huaweicloud.com/python/3.7.10/Python-3.7.10.tgz",
+            doc,
+        )
+        self.assertIn(
+            "c9649ad84dc3a434c8637df6963100b2e5608697f9ba56d82e3809e4148e0975",
+            doc,
+        )
+        self.assertIn("--prefix=/usr/local/python3.7.10", doc)
+        self.assertIn("make altinstall", doc)
+        self.assertIn(
+            "TF_PYTHON=/usr/local/python3.7.10/bin/python3.7",
+            doc,
+        )
+        self.assertIn("python -m pip install -q uv", doc)
+        self.assertIn("UV_PYTHON_DOWNLOADS=never", doc)
+        self.assertIn('uv pip install --python "$TF_PYTHON"', doc)
+        self.assertNotIn('"$TF_PYTHON" -m pip install', doc)
+        self.assertNotIn("micro.mamba.pm", doc)
+        self.assertNotIn("micromamba", doc.lower())
+        self.assertNotIn("conda-forge", doc)
+
+    def test_hdf5_setup_keeps_the_upstream_aarch64_commands(self) -> None:
+        doc = (
+            _REPO_ROOT
+            / "projects"
+            / "tensorflow"
+            / "docs"
+            / "Quick-start-Ascend.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "https://support.hdfgroup.org/ftp/HDF5/releases/hdf5-1.10/"
+            "hdf5-1.10.5/src/hdf5-1.10.5.tar.gz",
+            doc,
+        )
+        self.assertIn("./configure --prefix=/usr/local/hdf5", doc)
+        self.assertIn("make -j16 && make install", doc)
+        self.assertIn(
+            "export CPATH=/usr/local/hdf5/include/:/usr/local/hdf5/lib/",
+            doc,
+        )
+        self.assertIn(
+            "export LD_LIBRARY_PATH=/usr/local/hdf5/lib/:${LD_LIBRARY_PATH:-}",
+            doc,
+        )
+
+        test_file = (
+            _REPO_ROOT
+            / "projects"
+            / "tensorflow"
+            / "tests"
+            / "test_quick_start_ascend.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("/usr/local/hdf5/lib", test_file)
+
     def test_e2e_test_sources_cann_and_is_npu_gated(self) -> None:
         test_file = (
             _REPO_ROOT

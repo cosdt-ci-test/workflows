@@ -40,9 +40,10 @@ Ubuntu 22.04。
 
 `swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12-devel`
 
-镜像自带的 Python 3.12 用来运行文档测试框架；TensorFlow 1.15 运行在隔离的
-Python 3.7.10 环境中。`devel` 变体只用于提供编译 h5py 2.8.0 所需的工具，
-CANN 版本和设备环境仍与 ms-swift 的 9.1.0 基线一致。
+镜像自带的 Python 3.12 用来运行文档测试框架；另外将 Python 3.7.10 安装到
+`/usr/local/python3.7.10`，只用于 TensorFlow 1.15。两个解释器并存，不覆盖
+系统的 `python` / `python3`。`devel` 变体提供编译 Python、HDF5 和 h5py
+所需的工具，CANN 版本和设备环境仍与 ms-swift 的 9.1.0 基线一致。
 
 | 组件 | 版本 |
 | --- | --- |
@@ -59,53 +60,74 @@ CANN 版本和设备环境仍与 ms-swift 的 9.1.0 基线一致。
 ## 准备 Python 3.7 环境
 
 官方文档要求 TensorFlow 1.15 使用 Python 3.7.x；这里固定为仍处于官方范围
-内的 Python 3.7.10。为了不替换 CANN 镜像的系统 Python，使用固定版本的
-micromamba 创建隔离环境，并把下载内容保存到当前容器的工作缓存目录。
+内的 Python 3.7.10。使用 `make altinstall` 安装到独立前缀，不创建 conda
+或 venv，也不会修改 CANN 镜像已有的 Python 3.12。
 
 ```shell #test-setup
 set -euo pipefail
-TF_CACHE=/root/.cache/tensorflow
-TF_ENV="$TF_CACHE/envs/tf115"
-MICROMAMBA="$TF_CACHE/bin/micromamba"
-MICROMAMBA_ARCHIVE="$TF_CACHE/micromamba-2.3.2-linux-aarch64.tar.bz2"
-mkdir -p "$TF_CACHE/bin" "$TF_CACHE/envs"
+PYTHON_PREFIX=/usr/local/python3.7.10
+PYTHON_ARCHIVE=/tmp/Python-3.7.10.tgz
+HDF5_PREFIX=/usr/local/hdf5
+HDF5_ARCHIVE=/tmp/hdf5-1.10.5.tar.gz
 
-if [ ! -x "$MICROMAMBA" ]; then
-  curl -fL --retry 5 --retry-all-errors --connect-timeout 30 --max-time 300 \
-    https://micro.mamba.pm/api/micromamba/linux-aarch64/2.3.2 \
-    -o "$MICROMAMBA_ARCHIVE.tmp"
-  echo "7ded447a291cd1a05efe42c895a43f11fa3446011957cffe899aeabda8c3ee25  $MICROMAMBA_ARCHIVE.tmp" \
+apt-get update
+apt-get install -y --no-install-recommends \
+  build-essential ca-certificates curl \
+  libbz2-dev libffi-dev libgdbm-dev liblzma-dev libncurses5-dev \
+  libreadline-dev libsqlite3-dev libssl-dev tk-dev uuid-dev zlib1g-dev
+
+if [ ! -x "$PYTHON_PREFIX/bin/python3.7" ]; then
+  curl -fL --retry 5 --retry-all-errors --connect-timeout 30 --max-time 600 \
+    https://repo.huaweicloud.com/python/3.7.10/Python-3.7.10.tgz \
+    -o "$PYTHON_ARCHIVE"
+  echo "c9649ad84dc3a434c8637df6963100b2e5608697f9ba56d82e3809e4148e0975  $PYTHON_ARCHIVE" \
     | sha256sum -c -
-  mv "$MICROMAMBA_ARCHIVE.tmp" "$MICROMAMBA_ARCHIVE"
-  tar -xjf "$MICROMAMBA_ARCHIVE" -C "$TF_CACHE" bin/micromamba
+  tar -xzf "$PYTHON_ARCHIVE" -C /tmp
+  cd /tmp/Python-3.7.10
+  ./configure --prefix=/usr/local/python3.7.10 --with-ensurepip=install
+  make -j"$(nproc)"
+  make altinstall
 fi
 
-export MAMBA_ROOT_PREFIX="$TF_CACHE/mamba-root"
-if [ -x "$TF_ENV/bin/python" ]; then
-  "$MICROMAMBA" install -y -p "$TF_ENV" -c conda-forge \
-    'python=3.7.10' 'pip=23.1.2' 'setuptools=59.8.0' 'wheel=0.37.1' \
-    'hdf5=1.10.5' 'numpy=1.19.5'
-else
-  "$MICROMAMBA" create -y -p "$TF_ENV" -c conda-forge \
-    'python=3.7.10' 'pip=23.1.2' 'setuptools=59.8.0' 'wheel=0.37.1' \
-    'hdf5=1.10.5' 'numpy=1.19.5'
+if [ ! -x "$HDF5_PREFIX/bin/h5cc" ]; then
+  curl -fL --retry 5 --retry-all-errors --connect-timeout 30 --max-time 600 \
+    https://support.hdfgroup.org/ftp/HDF5/releases/hdf5-1.10/hdf5-1.10.5/src/hdf5-1.10.5.tar.gz \
+    -o "$HDF5_ARCHIVE"
+  echo "6d4ce8bf902a97b050f6f491f4268634e252a63dadd6656a1a9be5b7b7726fa8  $HDF5_ARCHIVE" \
+    | sha256sum -c -
+  tar -xzf "$HDF5_ARCHIVE" -C /tmp
+  cd /tmp/hdf5-1.10.5
+  ./configure --prefix=/usr/local/hdf5
+  make -j16 && make install
 fi
+
+# 与 TF Adapter 9.1.0 仓库的 aarch64 TensorFlow 1.15 安装文档一致。
+export CPATH=/usr/local/hdf5/include/:/usr/local/hdf5/lib/
+export LD_LIBRARY_PATH=/usr/local/hdf5/lib/:${LD_LIBRARY_PATH:-}
+
+# uv 由镜像已有的 Python 3.12 启动；后续通过 --python 明确写入 Python 3.7。
+python -m pip install -q uv
 ```
+
+这里使用 `uv pip install` 而不是调用 `python3.7 -m pip install`，原因是 uv
+本身由镜像已有的 Python 3.12 启动，却可以通过 `--python` 把包准确安装到
+指定的 Python 3.7。这样不需要升级已经停止支持 Python 3.7 的新版 pip，
+也能直接复用工作流提供的 `UV_INDEX_URL` / `UV_EXTRA_INDEX_URL`。设置
+`UV_PYTHON_DOWNLOADS=never` 后，uv 只使用刚编译的解释器，不再尝试从外网
+下载另一份 Python，也不会创建虚拟环境。
 
 检查 Python 与 HDF5 版本：
 
 ```shell #test id="check-python"
-TF_CACHE=/root/.cache/tensorflow
-TF_ENV="$TF_CACHE/envs/tf115"
-"$TF_ENV/bin/python" - <<'PY'
+TF_PYTHON=/usr/local/python3.7.10/bin/python3.7
+"$TF_PYTHON" - <<'PY'
 import re
 import subprocess
 import sys
-from pathlib import Path
 
 print("Python", sys.version.split()[0])
 h5_config = subprocess.check_output(
-    [str(Path(sys.prefix) / "bin" / "h5cc"), "-showconfig"],
+    ["/usr/local/hdf5/bin/h5cc", "-showconfig"],
     text=True,
 )
 match = re.search(r"HDF5 Version:\s+(\S+)", h5_config)
@@ -128,8 +150,8 @@ Ascend 官方镜像项目公开的 aarch64 wheel，并校验 SHA-256；HDF5 1.10
 ```shell #test-setup
 set -euo pipefail
 TF_CACHE=/root/.cache/tensorflow
-TF_ENV="$TF_CACHE/envs/tf115"
-TF_PYTHON="$TF_ENV/bin/python"
+TF_PYTHON=/usr/local/python3.7.10/bin/python3.7
+HDF5_PREFIX=/usr/local/hdf5
 TF_WHEEL="$TF_CACHE/wheels/tensorflow-1.15.0-cp37-cp37m-manylinux2014_aarch64.whl"
 mkdir -p "$TF_CACHE/wheels"
 
@@ -142,17 +164,23 @@ fi
 echo "c2d6df0930f6558ec9bb741c219cb84f90f906cc9e2c28c6561960a1404dec39  $TF_WHEEL" \
   | sha256sum -c - >/dev/null
 
-"$TF_PYTHON" -m pip install --upgrade \
+UV_PYTHON_DOWNLOADS=never uv pip install --python "$TF_PYTHON" \
+  'setuptools==59.8.0' 'wheel==0.37.1' 'numpy==1.19.5' \
   'Cython==0.29.36' 'pkgconfig==1.5.5' 'protobuf==3.20.3'
-HDF5_DIR="$TF_ENV" "$TF_PYTHON" -m pip install --no-build-isolation 'h5py==2.8.0'
-"$TF_PYTHON" -m pip install --upgrade "$TF_WHEEL"
+CPATH="$HDF5_PREFIX/include/:$HDF5_PREFIX/lib/" \
+LD_LIBRARY_PATH="$HDF5_PREFIX/lib/:${LD_LIBRARY_PATH:-}" \
+HDF5_DIR="$HDF5_PREFIX" UV_PYTHON_DOWNLOADS=never \
+  uv pip install --python "$TF_PYTHON" --no-build-isolation 'h5py==2.8.0'
+UV_PYTHON_DOWNLOADS=never \
+  uv pip install --python "$TF_PYTHON" "$TF_WHEEL"
 ```
 
 验证 TensorFlow 和 h5py 的实际安装版本：
 
 ```shell #test id="install-tensorflow"
-TF_PYTHON=/root/.cache/tensorflow/envs/tf115/bin/python
-TF_CPP_MIN_LOG_LEVEL=2 "$TF_PYTHON" - <<'PY'
+TF_PYTHON=/usr/local/python3.7.10/bin/python3.7
+LD_LIBRARY_PATH=/usr/local/hdf5/lib/:${LD_LIBRARY_PATH:-} \
+  TF_CPP_MIN_LOG_LEVEL=2 "$TF_PYTHON" - <<'PY'
 import h5py
 import tensorflow as tf
 
@@ -175,8 +203,7 @@ h5py 2.8.0
 ```shell #test-setup
 set -euo pipefail
 TF_CACHE=/root/.cache/tensorflow
-TF_ENV="$TF_CACHE/envs/tf115"
-TF_PYTHON="$TF_ENV/bin/python"
+TF_PYTHON=/usr/local/python3.7.10/bin/python3.7
 TFPLUGIN_INSTALL_PATH="$TF_CACHE/tfplugin-9.1.0"
 ADAPTER_WHEEL="$TF_CACHE/wheels/npu_bridge-1.15.0-py3-none-manylinux2014_aarch64.whl"
 mkdir -p "$TF_CACHE/wheels" "$TFPLUGIN_INSTALL_PATH"
@@ -190,18 +217,19 @@ fi
 echo "faac580f9a732e86b6ad2a49150eb450757ee18c173ec099044d855d364d4d98  $ADAPTER_WHEEL" \
   | sha256sum -c - >/dev/null
 
-"$TF_PYTHON" -m pip install --no-deps --upgrade --force-reinstall \
-  -t "$TFPLUGIN_INSTALL_PATH" "$ADAPTER_WHEEL"
+UV_PYTHON_DOWNLOADS=never \
+  uv pip install --python "$TF_PYTHON" --no-deps --reinstall \
+  --target "$TFPLUGIN_INSTALL_PATH" "$ADAPTER_WHEEL"
 ```
 
 验证插件安装版本：
 
 ```shell #test id="install-tf-adapter"
 TF_CACHE=/root/.cache/tensorflow
-TF_ENV="$TF_CACHE/envs/tf115"
-TF_PYTHON="$TF_ENV/bin/python"
+TF_PYTHON=/usr/local/python3.7.10/bin/python3.7
 TFPLUGIN_INSTALL_PATH="$TF_CACHE/tfplugin-9.1.0"
 PYTHONPATH="$TFPLUGIN_INSTALL_PATH${PYTHONPATH:+:$PYTHONPATH}" \
+  LD_LIBRARY_PATH=/usr/local/hdf5/lib/:${LD_LIBRARY_PATH:-} \
   TF_CPP_MIN_LOG_LEVEL=2 "$TF_PYTHON" - <<'PY'
 import pkg_resources
 import npu_bridge
@@ -227,6 +255,8 @@ else
 fi
 export TFPLUGIN_INSTALL_PATH=/root/.cache/tensorflow/tfplugin-9.1.0
 export PYTHONPATH="${TFPLUGIN_INSTALL_PATH}:${PYTHONPATH:-}"
+export CPATH=/usr/local/hdf5/include/:/usr/local/hdf5/lib/
+export LD_LIBRARY_PATH=/usr/local/hdf5/lib/:${LD_LIBRARY_PATH:-}
 export JOB_ID=tensorflow-quick-start
 export ASCEND_DEVICE_ID=0
 ```
@@ -240,9 +270,10 @@ CI 输出稳定，输入由官方示例中的随机张量改成占位符和固�
 ```shell #test id="run-npu-optimizer"
 set -euo pipefail
 TF_CACHE=/root/.cache/tensorflow
-TF_PYTHON="$TF_CACHE/envs/tf115/bin/python"
+TF_PYTHON=/usr/local/python3.7.10/bin/python3.7
 TFPLUGIN_INSTALL_PATH="$TF_CACHE/tfplugin-9.1.0"
 PYTHONPATH="$TFPLUGIN_INSTALL_PATH${PYTHONPATH:+:$PYTHONPATH}" \
+LD_LIBRARY_PATH=/usr/local/hdf5/lib/:${LD_LIBRARY_PATH:-} \
 JOB_ID=tensorflow-quick-start \
 ASCEND_DEVICE_ID=0 \
 TF_CPP_MIN_LOG_LEVEL=2 \

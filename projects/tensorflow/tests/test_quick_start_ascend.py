@@ -45,6 +45,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         "/usr/local/Ascend/ascend-toolkit/set_env.sh",
     )
     _TFPLUGIN_INSTALL_PATH = "/root/.cache/tensorflow/tfplugin-9.1.0"
+    _HDF5_LIBRARY_PATH = "/usr/local/hdf5/lib"
 
     @classmethod
     def prepare_environment(cls) -> None:
@@ -80,6 +81,12 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         os.environ["PYTHONPATH"] = os.pathsep.join(
             item
             for item in (cls._TFPLUGIN_INSTALL_PATH, existing_pythonpath)
+            if item
+        )
+        existing_library_path = os.environ.get("LD_LIBRARY_PATH", "")
+        os.environ["LD_LIBRARY_PATH"] = os.pathsep.join(
+            item
+            for item in (cls._HDF5_LIBRARY_PATH, existing_library_path)
             if item
         )
         os.environ["JOB_ID"] = "tensorflow-quick-start"

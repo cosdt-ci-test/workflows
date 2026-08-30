@@ -45,7 +45,7 @@ class TestFlashLinearAttentionProjectContract(unittest.TestCase):
             },
         )
 
-    def test_workflow_uses_shared_template_and_release_stack(self) -> None:
+    def test_workflow_uses_shared_template_and_swr_image(self) -> None:
         workflow_path = (
             _REPO_ROOT
             / ".github"
@@ -58,8 +58,11 @@ class TestFlashLinearAttentionProjectContract(unittest.TestCase):
         self.assertIn("project: flash-linear-attention", workflow)
         self.assertIn("linux-aarch64-a2-1", workflow)
         self.assertIn(
-            "ascendai/cann:9.0.0-910b-ubuntu22.04-py3.11", workflow
+            "swr.cn-south-1.myhuaweicloud.com/ascendhub/"
+            "cann:9.0.0-910b-ubuntu22.04-py3.11",
+            workflow,
         )
+        self.assertNotIn("ascendai/cann:9.0.0", workflow)
         self.assertIn("container_options: '--shm-size=16g'", workflow)
         self.assertIn("upstream_repo: fla-org/flash-linear-attention", workflow)
 
@@ -89,6 +92,8 @@ class TestFlashLinearAttentionProjectContract(unittest.TestCase):
         self.assertIn("### 检查前置是否满足", text)
         self.assertIn("## 安装 flash-linear-attention", text)
         self.assertIn("## 使用样例", text)
+        self.assertIn("| Python | 3.11 |", text)
+        self.assertIn("| CANN | 9.0.0 |", text)
         self.assertNotIn("# Quick Start：在昇腾 NPU 上运行 GatedDeltaNet", text)
         self.assertIn("fla-org/flash-linear-attention/blob/main/INSTALL.md", text)
         self.assertIn('store="upstream_ref"', text)

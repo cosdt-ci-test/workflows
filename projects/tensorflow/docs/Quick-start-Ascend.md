@@ -97,10 +97,13 @@ if [ ! -x "$HDF5_PREFIX/bin/h5cc" ]; then
     | sha256sum -c -
   tar -xzf "$HDF5_ARCHIVE" -C /tmp
   cd /tmp/hdf5-1.10.5
-  ./configure --prefix="$HDF5_PREFIX"
-  make -j"$(nproc)"
-  make install
+  ./configure --prefix=/usr/local/hdf5
+  make -j16 && make install
 fi
+
+# 与 TF Adapter 9.1.0 仓库的 aarch64 TensorFlow 1.15 安装文档一致。
+export CPATH=/usr/local/hdf5/include/:/usr/local/hdf5/lib/
+export LD_LIBRARY_PATH=/usr/local/hdf5/lib/:${LD_LIBRARY_PATH:-}
 
 # uv 由镜像已有的 Python 3.12 启动；后续通过 --python 明确写入 Python 3.7。
 python -m pip install -q uv
@@ -164,6 +167,8 @@ echo "c2d6df0930f6558ec9bb741c219cb84f90f906cc9e2c28c6561960a1404dec39  $TF_WHEE
 UV_PYTHON_DOWNLOADS=never uv pip install --python "$TF_PYTHON" \
   'setuptools==59.8.0' 'wheel==0.37.1' 'numpy==1.19.5' \
   'Cython==0.29.36' 'pkgconfig==1.5.5' 'protobuf==3.20.3'
+CPATH="$HDF5_PREFIX/include/:$HDF5_PREFIX/lib/" \
+LD_LIBRARY_PATH="$HDF5_PREFIX/lib/:${LD_LIBRARY_PATH:-}" \
 HDF5_DIR="$HDF5_PREFIX" UV_PYTHON_DOWNLOADS=never \
   uv pip install --python "$TF_PYTHON" --no-build-isolation 'h5py==2.8.0'
 UV_PYTHON_DOWNLOADS=never \
@@ -174,7 +179,8 @@ UV_PYTHON_DOWNLOADS=never \
 
 ```shell #test id="install-tensorflow"
 TF_PYTHON=/usr/local/python3.7.10/bin/python3.7
-TF_CPP_MIN_LOG_LEVEL=2 "$TF_PYTHON" - <<'PY'
+LD_LIBRARY_PATH=/usr/local/hdf5/lib/:${LD_LIBRARY_PATH:-} \
+  TF_CPP_MIN_LOG_LEVEL=2 "$TF_PYTHON" - <<'PY'
 import h5py
 import tensorflow as tf
 
@@ -223,6 +229,7 @@ TF_CACHE=/root/.cache/tensorflow
 TF_PYTHON=/usr/local/python3.7.10/bin/python3.7
 TFPLUGIN_INSTALL_PATH="$TF_CACHE/tfplugin-9.1.0"
 PYTHONPATH="$TFPLUGIN_INSTALL_PATH${PYTHONPATH:+:$PYTHONPATH}" \
+  LD_LIBRARY_PATH=/usr/local/hdf5/lib/:${LD_LIBRARY_PATH:-} \
   TF_CPP_MIN_LOG_LEVEL=2 "$TF_PYTHON" - <<'PY'
 import pkg_resources
 import npu_bridge
@@ -248,6 +255,8 @@ else
 fi
 export TFPLUGIN_INSTALL_PATH=/root/.cache/tensorflow/tfplugin-9.1.0
 export PYTHONPATH="${TFPLUGIN_INSTALL_PATH}:${PYTHONPATH:-}"
+export CPATH=/usr/local/hdf5/include/:/usr/local/hdf5/lib/
+export LD_LIBRARY_PATH=/usr/local/hdf5/lib/:${LD_LIBRARY_PATH:-}
 export JOB_ID=tensorflow-quick-start
 export ASCEND_DEVICE_ID=0
 ```
@@ -264,6 +273,7 @@ TF_CACHE=/root/.cache/tensorflow
 TF_PYTHON=/usr/local/python3.7.10/bin/python3.7
 TFPLUGIN_INSTALL_PATH="$TF_CACHE/tfplugin-9.1.0"
 PYTHONPATH="$TFPLUGIN_INSTALL_PATH${PYTHONPATH:+:$PYTHONPATH}" \
+LD_LIBRARY_PATH=/usr/local/hdf5/lib/:${LD_LIBRARY_PATH:-} \
 JOB_ID=tensorflow-quick-start \
 ASCEND_DEVICE_ID=0 \
 TF_CPP_MIN_LOG_LEVEL=2 \

@@ -679,7 +679,7 @@ PY
 ```shell #test-result id="opencv-cann-infer" fuzzy='xxx' fuzzy='...'
 ...
 model bytes: xxx
-output shape: (1, 1000)xxx
+output shape: (1, 1000xxx
 output dtype: float32
 top class index: xxx
 top class score: xxx

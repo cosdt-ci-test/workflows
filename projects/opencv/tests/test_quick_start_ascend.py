@@ -191,15 +191,24 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
               cmake-configure`` / ``opencv-cann-run-tests`` rather than
               being masked by a pre-installed copy.
         """
-        # 1) PYTHONPATH: prepend the source-built OpenCV site-packages
-        # so the doc's Python blocks import the cv2 with HUAWEI_NPU
-        # backend (see _OPENCV_CANN_PYTHONPATH rationale). Use
-        # setdefault so we don't overwrite a PYTHONPATH injected by
-        # jobs.env / steps.env.
-        os.environ.setdefault('PYTHONPATH', cls._OPENCV_CANN_PYTHONPATH)
+        # 1) PYTHONPATH: PREPEND the source-built OpenCV site-packages so
+        # the doc's Python blocks import the cv2 with HUAWEI_NPU backend.
+        # PREPEND, not setdefault: the CANN image itself exports
+        # PYTHONPATH=/usr/local/Ascend/cann-9.1.0/python/site-packages:...
+        # (its TBE/ACL python bits), so setdefault would silently keep the
+        # image value and every subprocess would import nothing (CI
+        # 33286049447: "ModuleNotFoundError: No module named 'cv2'" on the
+        # first quickstart block even though the install log showed
+        # cv2.cpython-312-*.so landing in the right place).
+        _pp = cls._OPENCV_CANN_PYTHONPATH
+        _existing = os.environ.get('PYTHONPATH', '')
+        if _pp not in _existing:
+            os.environ['PYTHONPATH'] = (
+                f'{_pp}:{_existing}' if _existing else _pp
+            )
         print(
-            f'setup: PYTHONPATH -> {cls._OPENCV_CANN_PYTHONPATH} '
-            '(source-built cv2)'
+            f'setup: PYTHONPATH -> {os.environ["PYTHONPATH"]} '
+            '(prepended source-built cv2; kept image entries)'
         )
 
         # 2) CUDA exclusion list + process-level env

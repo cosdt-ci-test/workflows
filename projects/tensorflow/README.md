@@ -22,5 +22,7 @@ Quick Start。它不是对 TensorFlow 当前 2.x release 的通用 NPU 看护，
 
 CI 使用与 ms-swift 相同来源和版本的 CANN 9.1.0 镜像；选择 `devel` 变体是
 因为官方 aarch64 安装流程要求 HDF5 1.10.5 和 h5py 2.8.0，而 h5py 需要在
-Python 3.7 环境中编译。Runner 已自动配置一张 NPU，工作流不重复挂载设备、
-驱动、`npu-smi` 或缓存目录。
+Python 3.7 环境中编译。文档从华为云镜像源码安装 Python 3.7.10，与镜像的
+Python 3.12 并存；uv 由 Python 3.12 启动，通过 `--python` 只向 3.7 安装
+TensorFlow 依赖。Runner 已自动配置一张 NPU，工作流不重复挂载设备、驱动、
+`npu-smi` 或缓存目录。

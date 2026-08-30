@@ -638,6 +638,7 @@ NPU target available: xxx
 ```shell #test id="opencv-cann-infer"
 python << 'PY'
 import os
+import time
 import urllib.request
 import numpy as np
 import cv2
@@ -653,7 +654,15 @@ MODEL_URL = ('https://github.com/onnx/models/raw/main/'
 MODEL_PATH = '/tmp/squeezenet1.0-12.onnx'
 
 if not os.path.exists(MODEL_PATH):
-    urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
+    # github raw 下载偶发 RemoteDisconnected（国内网络抖动），重试 3 次
+    for attempt in range(3):
+        try:
+            urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
+            break
+        except OSError:
+            if attempt == 2:
+                raise
+            time.sleep(5)
 print('model bytes:', os.path.getsize(MODEL_PATH))
 
 net = cv2.dnn.readNetFromONNX(MODEL_PATH)

@@ -14,3 +14,6 @@ The container image is intentionally explicit because it must match the CANN
 generation of the selected release. When upstream publishes a release with a
 new NPU stack, a failing guard is the signal to update the image and documented
 prerequisites together.
+
+The workflow uses Huawei SWR's mirror of the upstream CANN 9.0 image to avoid
+pulling the multi-gigabyte image from Docker Hub on a cold NPU runner.

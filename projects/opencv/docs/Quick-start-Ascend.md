@@ -601,12 +601,14 @@ print('video file size:', os.path.getsize('/tmp/opencv_video.avi'))
 PY
 ```
 
-```shell #test-result id="quickstart-video" fuzzy='xxx'
+```shell #test-result id="quickstart-video" fuzzy='xxx' fuzzy='...'
+...
 video frames: 3
 video file size: xxx
+...
 ```
 
-预期：3 帧写入完成，`/tmp/opencv_video.avi` 被创建（MJPG 编码后即使是 3 帧黑帧也有几 KB）。
+预期：3 帧写入完成，`/tmp/opencv_video.avi` 被创建（MJPG 编码后即使是 3 帧黑帧也有几 KB）。首次调用 videoio 会往 stdout 打一批 `[ INFO:...]` 插件注册日志（源码构建不带 FFmpeg/GStreamer 后端插件时的 registry 扫描），预期里用 `...` 通配吸收，不要试图逐行匹配。
 
 ## 使用样例：用 CANN 后端跑一次 DNN 推理
 

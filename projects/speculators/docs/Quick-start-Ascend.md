@@ -44,7 +44,7 @@ swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/vllm-ascend/vllm-ascen
 
 ### 前置安装
 
-确认 NPU 可见：
+确认 NPU 设备可见：
 
 ```shell
 npu-smi info
@@ -52,7 +52,7 @@ npu-smi info
 
 > `npu-smi` 不存在就回到 [Ascend 官方快速安装指南](https://ascend.github.io/docs/sources/ascend/quick_install.html) 装驱动。
 
-检查 Python：
+检查 Python 版本（应输出 3.12.x）：
 
 ```shell #test id="check-py"
 python --version
@@ -61,7 +61,7 @@ python --version
 Python 3.12.xxx
 ```
 
-验证镜像预装的 vllm-ascend 栈：
+加载 CANN env 并验证镜像预装的 vllm-ascend 栈（应输出下表的版本号）：
 
 ```shell #test id="verify-vllm-stack"
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
@@ -85,11 +85,13 @@ triton_ascend=3.2.2
 triton=3.5.0
 ```
 
-安装 modelscope：
+装 modelscope（用来从 ModelScope 拉权重；镜像不含）：
 
 ```shell #test-setup
 uv pip install 'modelscope==1.37.0'
 ```
+
+确认 modelscope 版本：
 
 ```shell #test id="install-deps"
 python -c "import modelscope; print(f'modelscope={modelscope.__version__}')"
@@ -109,6 +111,8 @@ echo "${UPSTREAM_REF}"
 ```
 -->
 
+克隆 speculators 上游 release tag 源码到 `/root/speculators/` 并 editable 安装（`<ref>` 由工作流注入最新 release tag）：
+
 ```shell #test id="speculators-install-source" load="upstream_ref>>ref"
 git clone --depth 1 --branch <ref> https://github.com/vllm-project/speculators.git /root/speculators
 cd /root/speculators
@@ -116,8 +120,6 @@ uv pip install -e .
 speculators --version
 python -c "from importlib.metadata import version; print('speculators', version('speculators'))"
 ```
-
-`\<ref>` 由工作流注入最新 release tag。
 
 ```shell #test-result id="speculators-install-source" fuzzy='xxx'
 speculators version: xxx
@@ -128,9 +130,13 @@ speculators xxx
 
 ### 前置：下载 draft 与 verifier
 
+从 ModelScope 拉 draft 模型 z-lab/Qwen3-8B-DFlash-b16：
+
 ```shell #test-setup store="draft_path"
 python -c "from modelscope import snapshot_download; print(snapshot_download('z-lab/Qwen3-8B-DFlash-b16'))" | tail -n 1
 ```
+
+从 ModelScope 拉 verifier 模型 Qwen/Qwen3-8B：
 
 ```shell #test-setup store="verifier_path"
 python -c "from modelscope import snapshot_download; print(snapshot_download('Qwen/Qwen3-8B'))" | tail -n 1
@@ -138,7 +144,7 @@ python -c "from modelscope import snapshot_download; print(snapshot_download('Qw
 
 ### Step 1：convert（DFlash 算法）
 
-CLI 的 `--algorithm` 不支持 `dflash`，走 Python API：
+`speculators convert` 把本地 draft + verifier 读进来按 DFlash 算法重映射权重、写到 `/root/dflash-qwen3-8b-converted/`。CLI 的 `--algorithm` 不支持 `dflash`，走 Python API：
 
 ```shell #test-setup store="dflash_path" load="draft_path>>draft_path" load="verifier_path>>verifier_path"
 python << 'PY'
@@ -156,6 +162,8 @@ test -f /root/dflash-qwen3-8b-converted/model.safetensors
 echo "/root/dflash-qwen3-8b-converted"
 ```
 
+确认 convert 产物存在（`config.json` + `model.safetensors`）：
+
 ```shell #test id="pipeline-step1-convert" load="dflash_path>>dflash_path"
 ls -1 <dflash_path>/config.json <dflash_path>/model.safetensors
 echo <dflash_path>
@@ -169,7 +177,7 @@ echo <dflash_path>
 
 ### Step 2：训练数据预处理
 
-用上游 `scripts/prepare_data.py` 把 JSONL chat 数据 tokenize 写成 HF arrow 数据集。
+用上游 `scripts/prepare_data.py` 把 JSONL chat 数据 tokenize 写到 `/root/dflash-train-data/`（HF arrow 数据集）：
 
 ```shell #test-setup store="data_path" load="verifier_path>>verifier_path"
 set -euo pipefail
@@ -204,6 +212,8 @@ python scripts/prepare_data.py \
 echo "$DATA_DIR"
 ```
 
+确认数据集已落盘（行数 + `token_freq.pt` 存在）：
+
 ```shell #test id="pipeline-step2-extract" load="data_path>>data_path"
 echo <data_path>
 python -c "from datasets import load_from_disk; print(len(load_from_disk('<data_path>')))"
@@ -228,7 +238,9 @@ len: xxx
 
 ### Step 3：训练（单卡 torchrun）
 
-离线模式：先起 vllm 一次性 generate hidden_states 落盘，杀 vllm 释放 NPU，再 train.py 离线读 cache。
+单卡 64 GB NPU 装不下「vllm 16 GB 权重 + KV + train draft 模型 + optimizer 激活」并发跑，所以拆成两步：先生成 hidden_states 缓存，再离线训。
+
+起 vllm 一次性 generate 10 条 hidden_states 写到 `/tmp/hs-train/`（train.py 的 FileBackend 直接读这个目录；生成完杀 vllm 释放全部 NPU 给后续 train 留 64 GB 完整空间）：
 
 ```shell #test-setup store="hs_dir" load="data_path>>data_path" load="verifier_path>>verifier_path"
 set -euo pipefail
@@ -297,6 +309,8 @@ sleep 5
 echo "$HS_DIR"
 ```
 
+用上游 `scripts/train.py` 单卡 torchrun 训 1 epoch × 10 sample（smoke 验证管线通，不指望 loss 真下降）：
+
 ```shell #test-setup store="checkpoint_path" load="hs_dir>>hs_dir" load="data_path>>data_path" load="verifier_path>>verifier_path"
 set -euo pipefail
 CHECKPOINT_DIR=/root/dflash-trained
@@ -337,6 +351,8 @@ fi
 echo "$CHECKPOINT_DIR"
 ```
 
+确认训练产物（checkpoint 目录 + `config.json` + `model.safetensors`）：
+
 ```shell #test id="pipeline-step3-train" load="checkpoint_path>>checkpoint_path"
 echo <checkpoint_path>
 ls -1 <checkpoint_path>
@@ -349,6 +365,8 @@ model.safetensors
 ```
 
 ### Step 4：`vllm serve` 挂 draft 做推理
+
+起 vllm-ascend serve 把训好的 draft 挂上做 chat completion smoke（8 token completion）：
 
 ```shell #test id="pipeline-step4-serve" load="checkpoint_path>>draft_model" load="verifier_path>>verifier_path"
 # num_speculative_tokens=5：vllm-ascend 限制 (num_speculative_tokens + 1) ≤ 15
@@ -378,6 +396,8 @@ kill "$VLLM_PID" 2>/dev/null || true
 ```
 
 ### 编程式入口：SpeculatorsConfig / TokenProposalConfig
+
+验证 `SpeculatorsConfig` / `TokenProposalConfig` 可以在 NPU 环境 import + 实例化（不依赖 GPU 计算）：
 
 ```shell #test id="config-import" load="verifier_path>>verifier_path"
 python << 'PY'

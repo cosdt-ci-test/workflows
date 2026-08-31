@@ -230,6 +230,26 @@ class TestTensorFlowProjectContract(unittest.TestCase):
         self.assertIn(mirror, doc)
         self.assertLess(doc.index(mirror), doc.index("apt-get update"))
 
+    def test_quick_start_explains_user_actions_not_ci_internals(self) -> None:
+        doc = (
+            _REPO_ROOT
+            / "projects"
+            / "tensorflow"
+            / "docs"
+            / "Quick-start-Ascend.md"
+        ).read_text(encoding="utf-8")
+        for internal_phrase in (
+            "CI Runner",
+            "文档测试框架",
+            "工作流提供",
+            "与仓库中的 OpenCV Quick Start",
+            "CI 输出稳定",
+            "这里看护的",
+        ):
+            with self.subTest(internal_phrase=internal_phrase):
+                self.assertNotIn(internal_phrase, doc)
+        self.assertIn("如果已经配置了可用的 Ubuntu 软件源", doc)
+
     def test_e2e_test_sources_cann_and_is_npu_gated(self) -> None:
         test_file = (
             _REPO_ROOT

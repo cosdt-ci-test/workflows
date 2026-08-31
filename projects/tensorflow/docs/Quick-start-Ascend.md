@@ -1,8 +1,8 @@
 # Quick Start（TensorFlow 1.15 + Ascend NPU）
 
 本文在单张昇腾 NPU 上安装 TensorFlow 1.15 和 TF Adapter 9.1.0，并运行
-官方 `NpuOptimizer` 加法样例。TensorFlow 1.15 已停止演进，因此这里看护的
-是一个**固定兼容基线**，不是 TensorFlow 最新 2.x release。
+官方 `NpuOptimizer` 加法样例。TensorFlow 1.15 已停止演进，本文使用固定的
+兼容版本组合，不适用于 TensorFlow 最新 2.x release。
 
 安装和迁移逻辑来自 TF Adapter 9.1.0 的三份官方文档：
 
@@ -21,15 +21,12 @@
 - 驱动和容器运行环境已经配置完成，`npu-smi info` 能正常显示设备。
 
 本文样例只创建一个 TensorFlow Session，不使用 HCCL 或多卡并行，所以
-`linux-aarch64-a2-1` 的一张 NPU 足够。CI Runner 会自动提供设备和驱动，
-无需在工作流中重复填写 `--device` 或驱动目录挂载。
+一张 NPU 即可。运行前请确认当前环境能正常访问该设备。
 
 ### 基础软件
 
 在运行本文前，需要先安装可用的 CANN 9.1.0。安装方式参考
 [快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html)。
-CI 使用与 ms-swift 相同来源的 AscendHub CANN 镜像，Python 包默认经过
-集群 PyPI 缓存，并把华为云昇腾 PyPI 作为额外源。
 
 ### 本文档验证的固定配套
 
@@ -40,10 +37,9 @@ Ubuntu 22.04。
 
 `swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12-devel`
 
-镜像自带的 Python 3.12 用来运行文档测试框架；另外将 Python 3.7.10 安装到
-`/usr/local/python3.7.10`，只用于 TensorFlow 1.15。两个解释器并存，不覆盖
-系统的 `python` / `python3`。`devel` 变体提供编译 Python、HDF5 和 h5py
-所需的工具，CANN 版本和设备环境仍与 ms-swift 的 9.1.0 基线一致。
+保留镜像自带的 Python 3.12，另外将 Python 3.7.10 安装到
+`/usr/local/python3.7.10`，只用于 TensorFlow 1.15。`devel` 变体提供编译
+Python、HDF5 和 h5py 所需的工具。
 
 | 组件 | 版本 |
 | --- | --- |
@@ -65,9 +61,8 @@ Ubuntu 22.04。
 
 ### 安装编译依赖
 
-与仓库中的 OpenCV Quick Start 保持一致：Ubuntu 22.04 aarch64 镜像默认的
-`ports.ubuntu.com` 在国内 Runner 上可能较慢，先切换到阿里云
-`ubuntu-ports` 镜像；该修改只存在于本次临时容器。
+如果已经配置了可用的 Ubuntu 软件源，可以删除下面的 `sed` 命令；在国内
+环境中可将默认 `ports.ubuntu.com` 切换到阿里云 `ubuntu-ports` 镜像。
 
 ```shell #test-setup
 set -euo pipefail
@@ -119,7 +114,6 @@ if [ ! -x "$HDF5_PREFIX/bin/h5cc" ]; then
   make -j16 && make install
 fi
 
-# 与 TF Adapter 9.1.0 仓库的 aarch64 TensorFlow 1.15 安装文档一致。
 export CPATH=/usr/local/hdf5/include/:/usr/local/hdf5/lib/
 export LD_LIBRARY_PATH=/usr/local/hdf5/lib/:${LD_LIBRARY_PATH:-}
 ```
@@ -128,16 +122,11 @@ export LD_LIBRARY_PATH=/usr/local/hdf5/lib/:${LD_LIBRARY_PATH:-}
 
 ```shell #test-setup
 set -euo pipefail
-# uv 由镜像已有的 Python 3.12 启动；后续通过 --python 明确写入 Python 3.7。
 python -m pip install -q uv
 ```
 
-这里使用 `uv pip install` 而不是调用 `python3.7 -m pip install`，原因是 uv
-本身由镜像已有的 Python 3.12 启动，却可以通过 `--python` 把包准确安装到
-指定的 Python 3.7。这样不需要升级已经停止支持 Python 3.7 的新版 pip，
-也能直接复用工作流提供的 `UV_INDEX_URL` / `UV_EXTRA_INDEX_URL`。设置
-`UV_PYTHON_DOWNLOADS=never` 后，uv 只使用刚编译的解释器，不再尝试从外网
-下载另一份 Python，也不会创建虚拟环境。
+uv 可以通过 `--python` 将包安装到指定的 Python 3.7，无需替换系统 Python
+或创建虚拟环境。`UV_PYTHON_DOWNLOADS=never` 用于禁止自动下载其他解释器。
 
 检查 Python 与 HDF5 版本：
 
@@ -287,8 +276,8 @@ export ASCEND_DEVICE_ID=0
 ## 运行 NpuOptimizer 样例
 
 以下逻辑保持官方迁移步骤：导入 `npu_bridge`、向 Session 注册
-`NpuOptimizer`，并关闭会与 NPU 图优化冲突的 remapping 和内存优化。为让
-CI 输出稳定，输入由官方示例中的随机张量改成占位符和固定数据。
+`NpuOptimizer`，并关闭会与 NPU 图优化冲突的 remapping 和内存优化。为了
+得到可复现的结果，输入由随机张量改成占位符和固定数据。
 
 ```shell #test id="run-npu-optimizer"
 set -euo pipefail

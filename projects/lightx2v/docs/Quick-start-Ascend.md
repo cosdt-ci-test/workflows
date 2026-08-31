@@ -334,11 +334,14 @@ print('lightx2v version:', getattr(lightx2v, '__version__', 'unknown'))
 "
 ```
 
-```shell #test-result id="lightx2v-install-verify" fuzzy='xxx'
+```shell #test-result id="lightx2v-install-verify" fuzzy='xxx' fuzzy='...'
+...
 lightx2v spec: xxx
 lightx2v version: xxx
 ```
 
+> 开头的 `...` 吞掉 `import lightx2v` 期间可选加速后端（sage_attn）未安装时的提示行（如 `spas_sage_attn is not installed.`），它与验证无关、且会随安装环境出现/消失，不进断言。
+>
 > LightX2V 内部通过 `os.getenv('PLATFORM', 'cuda')` 选后端(`lightx2v/shot_runner/shot_base.py:43`)。**`PLATFORM=ascend_npu`**(不是 `npu`,不是 `ascend`)。后续每条 `python -m lightx2v.infer` / `python examples/...py` 命令都要 export。
 
 ## 拉权重（ModelScope）

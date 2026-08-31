@@ -194,12 +194,12 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         )
 
         build_log = '/tmp/xllm-build.log'
-        print(f'setup: building xllm wheel (device=npu arch=arm); full log -> {build_log}')
+        print(f'setup: building xllm wheel (device=npu); full log -> {build_log}')
         os.environ['SKIP_TEST'] = '1'
         with open(build_log, 'w') as lf:
             try:
                 subprocess.run(
-                    ['python', 'setup.py', 'bdist_wheel', '--device', 'npu', '--arch', 'arm'],
+                    ['python', 'setup.py', 'bdist_wheel', '--device', 'npu'],
                     cwd=xllm_src, check=True, stdout=lf, stderr=subprocess.STDOUT,
                 )
             except subprocess.CalledProcessError:

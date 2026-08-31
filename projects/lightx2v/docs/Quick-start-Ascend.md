@@ -188,43 +188,85 @@ PY
 ```
 
 ```shell #test-setup
-# triton stub: torch._inductor 走 import triton.compiler.compiler / backends.compiler
-# / 等很多 sub-module (CI 33259259625 + 33259517415 各抓到不同的子模块，
-# backends.compiler 之后又冒 triton.compiler.compiler)。手列子目录维护成本高，
-# 改成 meta-path finder 自动 stub 任何 triton.* sub-module。
-#
-# 关键坑（CI 33259771019）: ModuleSpec(loader=None, is_package=True)
-# 会被 Python 当成 namespace package 处理 — import 系统把模块换成
-# 真的 NamespaceLoader 实例，__getattr__ 不在 spec 上,attribute 走 fallback
-# 路径,直接 AttributeError。必须给 spec 一个真 Loader(create_module 返回
-# 带 __getattr__ 的 ModuleType),这样 import 系统认我们 stub 而不是 namespace。
+# triton stub：torch 侧触点有三类,单独一个 meta-path finder 不够(run#1 挂):
+#   1. `import triton.xxx.yyy` 语句 —— finder 拦截,自动 stub 任意子模块
+#   2. 纯属性访问 `triton.language.dtype`(torch/_dynamo/utils.py:2417)——
+#      真实 triton 的 __init__.py 内部 import 了 language 子模块,所以属性在;
+#      stub 的顶层模块必须兜底属性访问(run#1: AttributeError: module 'triton'
+#      has no attribute 'language')
+#   3. `triton.__version__` 解包(torch/_dynamo/utils.py:1632)—— 给 '0.0.0'
+# 两个坑:
+#   * ModuleSpec(loader=None) 会被当 namespace package(CI 33259771019),
+#     必须给真 Loader
+#   * special method(__repr__ 等)只在 type 上解析,ModuleType 实例绑 __repr__
+#     不生效,print(module) 会落进模块 __getattr__ 无限递归 —— 用
+#     _StubModule(ModuleType 子类)承载 __getattr__/__repr__,预注册的子模块
+#     带真 spec + __path__,find_spec 也不会 ValueError
 mkdir -p /tmp/stubs/triton
 cat > /tmp/stubs/triton/__init__.py <<'PY'
-import sys, types
+import sys
+import types
 from importlib.machinery import ModuleSpec
 
+__version__ = '0.0.0'  # torch/_dynamo get_triton_version 解包用
+
+
 class _Stub:
-    def __getattr__(self, name): return _Stub()
-    def __call__(self, *a, **k): return _Stub()
-    def __repr__(self): return '<triton-stub>'
+    def __getattr__(self, name):
+        return _Stub()
+
+    def __call__(self, *a, **k):
+        return _Stub()
+
+    def __repr__(self):
+        return '<triton-stub-obj>'
+
+    def __iter__(self):
+        return iter(())
+
+    def __bool__(self):
+        return False
+
+
+class _StubModule(types.ModuleType):
+    """ModuleType subclass. Special methods (__repr__ etc.) are resolved
+    through the type, never through the instance dict, so defining them
+    on a plain ModuleType instance silently no-ops (and a module __getattr__
+    then recurses: print(m) -> _module_repr -> m.__repr__ missing on type ->
+    m's __getattr__('__repr__') -> new module -> ... RecursionError)."""
+
+    def __getattr__(self, attr):
+        full = f'{self.__name__}.{attr}'
+        if full not in sys.modules:
+            sys.modules[full] = _StubModule(full)
+        return sys.modules[full]
+
+    def __repr__(self):
+        return f'<triton-stub {self.__name__}>'
+
 
 class _TritonStubLoader:
-    """create_module returns a ModuleType with __getattr__ bound; exec_module
-    does nothing. Python's import system treats this as a real package (not
-    a namespace package), so the stub survives instead of being replaced
-    by NamespaceLoader."""
+    """create_module returns a _StubModule; exec_module does nothing.
+    Python's import system treats this as a real package (not a
+    namespace package), so the stub survives instead of being replaced
+    by NamespaceLoader (CI 33259771019)."""
+
     def create_module(self, spec):
-        m = types.ModuleType(spec.name)
-        m.__getattr__ = lambda name: _Stub()
+        m = _StubModule(spec.name)
+        if spec.name == 'triton':
+            m.__version__ = __version__
         return m
+
     def exec_module(self, module):
         pass
 
+
 class _TritonStubFinder:
-    """MetaPathFinder: any `import triton.xxx.yyy` -> spec with _TritonStubLoader.
-    Finder at meta_path[0] so it intercepts BEFORE PathFinder/FileFinder look
-    at /tmp/stubs/triton/ on disk (and before any real triton.* the image
-    might still ship in site-packages)."""
+    """MetaPathFinder: any `import triton.xxx.yyy` -> spec with
+    _TritonStubLoader. Finder at meta_path[0] so it intercepts BEFORE
+    PathFinder/FileFinder look at /tmp/stubs/triton/ on disk (and before
+    any real triton.* the image might still ship in site-packages)."""
+
     def find_spec(self, fullname, path, target=None):
         if not fullname.startswith('triton'):
             return None
@@ -232,6 +274,29 @@ class _TritonStubFinder:
             return sys.modules[fullname].__spec__
         return ModuleSpec(fullname, _TritonStubLoader(), is_package=True)
 
+
+def _register(fullname):
+    """Preregister a sub-module with a real spec so both pure attribute
+    access (torch/_dynamo/utils.py:2417 reads `triton.language.dtype`
+    without importing) and `import triton.xxx` hit the stub directly."""
+    m = _StubModule(fullname)
+    m.__spec__ = ModuleSpec(fullname, _TritonStubLoader(), is_package=True)
+    m.__path__ = []  # package marker
+    sys.modules.setdefault(fullname, m)
+    return m
+
+
+# torch 触点已知的子模块全预注册
+for _sub in ('language', 'language.math', 'compiler', 'compiler.compiler',
+             'backends', 'backends.compiler', 'runtime', 'testing'):
+    _register(f'triton.{_sub}')
+
+# 顶层 triton 是本文件模块(属性访问走 module dict + type lookup),
+# 把 __class__ 换成 _StubModule 后 triton.language 之类的属性访问
+# 由 _StubModule.__getattr__ 兜底 —— run#1 的 AttributeError 就挂在这。
+_self = sys.modules[__name__]
+_self.__class__ = _StubModule
+sys.modules.setdefault('triton', _self)
 sys.meta_path.insert(0, _TritonStubFinder())
 PY
 ```
@@ -252,14 +317,20 @@ print('cv2.INTER_LINEAR=', cv2.INTER_LINEAR)
 print('cv2.COLOR_BGR2RGB=', cv2.COLOR_BGR2RGB)
 print('decord.VideoReader=', decord.VideoReader)
 print('torchaudio.load=', torchaudio.load)
-print('triton.__version__=', getattr(triton, '__version__', 'no version attr'))
-# torch._inductor.runtime.triton_compat imports `tl.math` at module top
-# (CI 33259771019); the stub must answer attribute access on triton.language
-# without AttributeError. Verify both sub-module import and attribute
-# access on a deep path that mirrors triton_compat's pattern.
+print('triton.__version__=', triton.__version__)
+# torch 侧三个触点逐一镜像验证:
+#  1. torch/_dynamo/utils.py:2417 —— 顶层 import 后纯属性访问
+common = set()
+common.add(triton.language.dtype)
+print('triton.language.dtype=', triton.language.dtype)
+#  2. torch/_dynamo/utils.py:1632 —— __version__ 解包
+major, minor = tuple(int(v) for v in triton.__version__.split('.')[:2])
+print('triton major/minor=', major, minor)
+#  3. torch/utils/_triton.has_triton_package —— 裸 import 成功即 True
 import triton.language as tl
 print('triton.language.math=', tl.math)
-print('triton.language.something.deep=', tl.something.deep.path)
+import triton.compiler.compiler as tcc
+print('triton.compiler.compiler=', tcc)
 "
 ```
 
@@ -269,8 +340,10 @@ cv2.COLOR_BGR2RGB= xxx
 decord.VideoReader= xxx
 torchaudio.load= xxx
 triton.__version__= xxx
+triton.language.dtype= xxx
+triton major/minor= xxx
 triton.language.math= xxx
-triton.language.something.deep= xxx
+triton.compiler.compiler= xxx
 ```
 
 ## 安装 LightX2V

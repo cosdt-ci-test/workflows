@@ -361,7 +361,7 @@ for _n, _m in list(_sys.modules.items()):
         inspect.getmodule(_m)
 print('iterate triton modules: OK')
 #  5. 模块对象 print/repr 安全(实例级 special method 不生效的坑)
-print('triton.language repr ok:', repr(triton.language))
+print('triton.language repr ok=', repr(triton.language))
 "
 ```
 

@@ -268,8 +268,6 @@ p.print_help()
 
 ```shell #test id="xdit-infer-single" load="model_path>>model_path"
 export TORCH_NPU_USE_HCCL=1
-# 临时打开 xdit-patcher debug；下一轮 patch 跑通后去掉
-export XEDIT_PATCHER_DEBUG=1
 # sd3_example.py 硬编码 .to(f"cuda:{local_rank}") + torch.cuda.max_memory_allocated(...) +
 # torch.cuda.reset_peak_memory_stats() + torch.Generator(device="cuda")。torch_npu 2.9.0 只
 # monkey-patch torch.nn.functional / torch.nn，**不 patch torch.cuda**。
@@ -287,81 +285,50 @@ text = open(src).read()
 # 改三处：(a) "cuda:N" / 'cuda:N' 字符串前缀 → "npu:N" / 'npu:N'（.to(...) / Generator 等）；
 # (b) "cuda" 裸字符串（device="cuda" 不带 colon，如 torch.Generator(device="cuda")）；
 # (c) torch.cuda.X → torch.npu.X（max_memory_allocated / reset_peak_memory_stats 等）。
-# 头部注入 bootstrap：在 NPU 上 monkey-patch xfuser.envs 让 HAS_LONG_CTX_ATTN=True。
+# 多卡（sp_degree>1）还需要 xfuser.envs 的 check_long_ctx_attn 在 NPU 上返回 True
+#（config.py 在 import 时把它的结果快照为 HAS_LONG_CTX_ATTN），
+# 这里改为直接对 envs.py 源码做确定性替换（见后面的 _patch_envs.py 步骤）。
 text = text.replace('"cuda:', '"npu:').replace("'cuda:", "'npu:")
 text = text.replace('"cuda"', '"npu"').replace("'cuda'", "'npu'")
 text = text.replace('torch.cuda', 'torch.npu')
-# 头部再插一段（见下 bootstrap 字符串）：在 NPU 上 monkey-patch xfuser.envs 的
-# check_long_ctx_attn，让它真的尝试 import yunchang 并返回 True（如果 yunchang
-# 装好），而不是被 torch.cuda.is_available() 短路掉。
-#
-# 为什么不能直接 patch torch.cuda.is_available = True：xfuser 0.4.5 的
-# xfuser/model_executor/layers/attention_processor.py:62-65 定义 is_v100()，
-# 它会调 torch.cuda.current_device()，而 _lazy_init 在 torch 没编 CUDA 时直接
-# raise "Torch not compiled with CUDA enabled"。让 is_available() 报 True 会
-# 触发这一连串 lazy init，整段 import 链就崩。
-#
-# 因此只针对 xfuser.envs 的 check_long_ctx_attn 做点 patch：在源文件 load 之前
-# 通过 sys.meta_path 拦截 xfuser.envs，exec 之前先 patch 该方法。yunchang 走纯
-# PyTorch ring 实现（不依赖 CUDA runtime），所以 import 成功就证明可用。
-#
-# 注：xfuser/envs.py:check_long_ctx_attn 第一行 `if not torch.cuda.is_available():
-# return False` 是 NPU 上的 fail point；其余代码（`from yunchang import ...`）
-# 跟 CUDA 无关。
-if 'import sys as _sys' not in text[:1000]:
-    bootstrap = (
-        'import sys as _sys\n'
-        'import os as _os\n'
-        '_DBG = _os.environ.get("XEDIT_PATCHER_DEBUG") == "1"\n'
-        'class _XditEnvPatcher:\n'
-        '    def find_spec(self, name, path, target=None):\n'
-        '        if name != "xfuser.envs" or "xfuser.envs" in _sys.modules:\n'
-        '            return None\n'
-        '        # 关键：返回 spec 时 loader=我自己（不是默认 SourceFileLoader），\n'
-        '        # Python 才会调 exec_module(module)；否则 exec_module 不会被触发。\n'
-        '        # 同时临时拔掉 patcher 防止递归 find_spec。\n'
-        '        _sys.meta_path.remove(self)\n'
-        '        try:\n'
-        '            import importlib.util as _ilu\n'
-        '            _spec = _ilu.find_spec(name)\n'
-        '        finally:\n'
-        '            _sys.meta_path.insert(0, self)\n'
-        '        if _spec is None:\n'
-        '            return None\n'
-        '        # 用 spec_from_loader 替换 loader 为 self；xfuser.envs 是 submodule 不是 package，\n'
-        '        # 不传 is_package 让其默认 False。origin 从原 spec 拿。spec_from_loader 在 importlib.util 里。\n'
-        '        import importlib.util as _ilu2\n'
-        '        _new_spec = _ilu2.spec_from_loader(name, self, origin=_spec.origin)\n'
-        '        return _new_spec\n'
-        '    def create_module(self, spec):\n'
-        '        # 用默认 ModuleType 即可，不复用 caching\n'
-        '        import importlib.util as _ilu\n'
-        '        return _ilu.module_from_spec(spec)\n'
-        '    def exec_module(self, module):\n'
-        '        # 让真正的 loader 跑模块体。先拿原始 spec（用 module.__name__ 再 find 一次）。\n'
-        '        _sys.meta_path.remove(self)\n'
-        '        try:\n'
-        '            import importlib.util as _ilu\n'
-        '            _orig_spec = _ilu.find_spec(module.__name__)\n'
-        '            _orig_spec.loader.exec_module(module)\n'
-        '        finally:\n'
-        '            _sys.meta_path.insert(0, self)\n'
-        '        try:\n'
-        '            import yunchang as _yc\n'
-        '            module.PACKAGES_CHECKER.packages_info["has_long_ctx_attn"] = True\n'
-        '            from xfuser.envs import PackagesEnvChecker as _PC\n'
-        '            _PC.check_long_ctx_attn = lambda self: True\n'
-        '            if _DBG: _sys.stderr.write("[xdit-patcher] patched has_long_ctx_attn=True\\n")\n'
-        '        except ImportError:\n'
-        '            pass\n'
-        '_sys.meta_path.insert(0, _XditEnvPatcher())\n'
-    )
-    text = bootstrap + text
 open(dst, 'w').write(text)
 PYEOF
 python -c 'import os, xfuser; open("/tmp/_xdit_root", "w").write(os.path.dirname(os.path.dirname(xfuser.__file__)))'
 cp "$(cat /tmp/_xdit_root)"/examples/sd3_example.py /tmp/sd3_patched.py
 python /tmp/_patch_sd3.py /tmp/sd3_patched.py /tmp/sd3_patched.py
+# envs.py 源码级补丁：xfuser/envs.py 的 check_long_ctx_attn 第一行
+# `if not torch.cuda.is_available(): return False` 在 NPU 上必然短路（torch_npu
+# 不提供 CUDA runtime），导致多卡 sp_degree>1 时 config.py 的
+# HAS_LONG_CTX_ATTN=False → SequenceParallelConfig.__post_init__ 抛
+# "Sequence Parallel kit 'yunchang' not found"。yunchang 走纯 PyTorch ring 实现
+#（不依赖 CUDA runtime），NPU 上可用；把短路条件改成 False，让函数走到真正的
+# `from yunchang import ...` 探测。必须带函数上下文精确替换：同 pattern 在
+# check_flash_attn 里也有一处，但 flash_attn 在 NPU 上本来就不可用，不能动。
+# （曾试过用 sys.meta_path import-hook 在 exec 前打补丁，CI 上在 create_module
+#   里 module_from_spec(spec) 自递归 RecursionError（spec.loader 是 hook 自己）；
+#   import-hook 语义脆弱，弃用。）
+cat > /tmp/_patch_envs.py <<'PYEOF'
+import sys
+path = sys.argv[1]
+code = open(path).read()
+OLD = (
+    "    def check_long_ctx_attn(self):\n"
+    "        if not torch.cuda.is_available():\n"
+    "            return False\n"
+)
+NEW = (
+    "    def check_long_ctx_attn(self):\n"
+    "        # [xdit-npu-patch] torch.cuda.is_available() is always False on NPU\n"
+    "        # (torch_npu ships no CUDA runtime); skip the short-circuit so the\n"
+    "        # real yunchang import below decides.\n"
+    "        if False:\n"
+    "            return False\n"
+)
+assert code.count(OLD) == 1, 'check_long_ctx_attn pattern not unique/found'
+open(path, 'w').write(code.replace(OLD, NEW))
+print('[xdit-npu-patch] envs.py check_long_ctx_attn patched')
+PYEOF
+python /tmp/_patch_envs.py "$(cat /tmp/_xdit_root)/xfuser/envs.py"
 export PYTHONPATH="$(cat /tmp/_xdit_root):${PYTHONPATH:-}"
 # xfuser config/args.py:create_config 里 not use_ray and not is_initialized() 会无条件调
 # init_distributed_environment → torch.distributed.init_process_group(backend=hccl, env://)，
@@ -400,6 +367,8 @@ export TORCH_NPU_USE_HCCL=1
 # （不存在 / 不是 class），annotation 解析失败。
 # 改用最稳的方案：把 sd3_example.py 拷一份到 /tmp，sed 把 "cuda:" → "npu:"、
 # torch.cuda → torch.npu，跑修改过的副本。type annotation 不破，全局 import 链也不污染。
+# xdit-infer-single 已完成同样的 sd3_example.py / envs.py 补丁；这里重做一遍，保证
+# 每个 #test 子进程（新 bash -c）不依赖上一个块的内存状态。
 cat > /tmp/_patch_sd3.py <<'PYEOF'
 import sys
 src = sys.argv[1]
@@ -408,92 +377,55 @@ text = open(src).read()
 # 改三处：(a) "cuda:N" / 'cuda:N' 字符串前缀 → "npu:N" / 'npu:N'（.to(...) / Generator 等）；
 # (b) "cuda" 裸字符串（device="cuda" 不带 colon，如 torch.Generator(device="cuda")）；
 # (c) torch.cuda.X → torch.npu.X（max_memory_allocated / reset_peak_memory_stats 等）。
-# 头部注入 bootstrap：在 NPU 上 monkey-patch xfuser.envs 让 HAS_LONG_CTX_ATTN=True。
+# 多卡（sp_degree>1）还需要 xfuser.envs 的 check_long_ctx_attn 在 NPU 上返回 True
+#（config.py 在 import 时把它的结果快照为 HAS_LONG_CTX_ATTN，见下），
+# 这里改为直接对 envs.py 源码做确定性替换（见后面的 _patch_envs.py 步骤）。
 text = text.replace('"cuda:', '"npu:').replace("'cuda:", "'npu:")
 text = text.replace('"cuda"', '"npu"').replace("'cuda'", "'npu'")
 text = text.replace('torch.cuda', 'torch.npu')
-# 头部再插一段（见下 bootstrap 字符串）：在 NPU 上 monkey-patch xfuser.envs 的
-# check_long_ctx_attn，让它真的尝试 import yunchang 并返回 True（如果 yunchang
-# 装好），而不是被 torch.cuda.is_available() 短路掉。
-#
-# 为什么不能直接 patch torch.cuda.is_available = True：xfuser 0.4.5 的
-# xfuser/model_executor/layers/attention_processor.py:62-65 定义 is_v100()，
-# 它会调 torch.cuda.current_device()，而 _lazy_init 在 torch 没编 CUDA 时直接
-# raise "Torch not compiled with CUDA enabled"。让 is_available() 报 True 会
-# 触发这一连串 lazy init，整段 import 链就崩。
-#
-# 因此只针对 xfuser.envs 的 check_long_ctx_attn 做点 patch：在源文件 load 之前
-# 通过 sys.meta_path 拦截 xfuser.envs，exec 之前先 patch 该方法。yunchang 走纯
-# PyTorch ring 实现（不依赖 CUDA runtime），所以 import 成功就证明可用。
-#
-# 注：xfuser/envs.py:check_long_ctx_attn 第一行 `if not torch.cuda.is_available():
-# return False` 是 NPU 上的 fail point；其余代码（`from yunchang import ...`）
-# 跟 CUDA 无关。
-if 'import sys as _sys' not in text[:1000]:
-    bootstrap = (
-        'import sys as _sys\n'
-        'import os as _os\n'
-        '_DBG = _os.environ.get("XEDIT_PATCHER_DEBUG") == "1"\n'
-        'class _XditEnvPatcher:\n'
-        '    def find_spec(self, name, path, target=None):\n'
-        '        if name != "xfuser.envs" or "xfuser.envs" in _sys.modules:\n'
-        '            return None\n'
-        '        # 关键：返回 spec 时 loader=我自己（不是默认 SourceFileLoader），\n'
-        '        # Python 才会调 exec_module(module)；否则 exec_module 不会被触发。\n'
-        '        # 同时临时拔掉 patcher 防止递归 find_spec。\n'
-        '        _sys.meta_path.remove(self)\n'
-        '        try:\n'
-        '            import importlib.util as _ilu\n'
-        '            _spec = _ilu.find_spec(name)\n'
-        '        finally:\n'
-        '            _sys.meta_path.insert(0, self)\n'
-        '        if _spec is None:\n'
-        '            return None\n'
-        '        # 用 spec_from_loader 替换 loader 为 self；xfuser.envs 是 submodule 不是 package，\n'
-        '        # 不传 is_package 让其默认 False。origin 从原 spec 拿。spec_from_loader 在 importlib.util 里。\n'
-        '        import importlib.util as _ilu2\n'
-        '        _new_spec = _ilu2.spec_from_loader(name, self, origin=_spec.origin)\n'
-        '        return _new_spec\n'
-        '    def create_module(self, spec):\n'
-        '        # 用默认 ModuleType 即可，不复用 caching\n'
-        '        import importlib.util as _ilu\n'
-        '        return _ilu.module_from_spec(spec)\n'
-        '    def exec_module(self, module):\n'
-        '        # 让真正的 loader 跑模块体。先拿原始 spec（用 module.__name__ 再 find 一次）。\n'
-        '        _sys.meta_path.remove(self)\n'
-        '        try:\n'
-        '            import importlib.util as _ilu\n'
-        '            _orig_spec = _ilu.find_spec(module.__name__)\n'
-        '            _orig_spec.loader.exec_module(module)\n'
-        '        finally:\n'
-        '            _sys.meta_path.insert(0, self)\n'
-        '        try:\n'
-        '            import yunchang as _yc\n'
-        '            module.PACKAGES_CHECKER.packages_info["has_long_ctx_attn"] = True\n'
-        '            from xfuser.envs import PackagesEnvChecker as _PC\n'
-        '            _PC.check_long_ctx_attn = lambda self: True\n'
-        '            if _DBG: _sys.stderr.write("[xdit-patcher] patched has_long_ctx_attn=True\\n")\n'
-        '        except ImportError:\n'
-        '            pass\n'
-        '_sys.meta_path.insert(0, _XditEnvPatcher())\n'
-    )
-    text = bootstrap + text
 open(dst, 'w').write(text)
 PYEOF
 python -c 'import os, xfuser; open("/tmp/_xdit_root", "w").write(os.path.dirname(os.path.dirname(xfuser.__file__)))'
 cp "$(cat /tmp/_xdit_root)"/examples/sd3_example.py /tmp/sd3_patched.py
 python /tmp/_patch_sd3.py /tmp/sd3_patched.py /tmp/sd3_patched.py
+# envs.py 源码级补丁（同 xdit-infer-single）：把 check_long_ctx_attn 的
+# torch.cuda 短路条件改为 False，让 yunchang 的真实 import 探测生效。
+# 多卡 sp_degree=2 时 HAS_LONG_CTX_ATTN 必须为 True，否则
+# SequenceParallelConfig.__post_init__ 抛 "Sequence Parallel kit 'yunchang' not found"。
+cat > /tmp/_patch_envs.py <<'PYEOF'
+import sys
+path = sys.argv[1]
+code = open(path).read()
+OLD = (
+    "    def check_long_ctx_attn(self):\n"
+    "        if not torch.cuda.is_available():\n"
+    "            return False\n"
+)
+NEW = (
+    "    def check_long_ctx_attn(self):\n"
+    "        # [xdit-npu-patch] torch.cuda.is_available() is always False on NPU\n"
+    "        # (torch_npu ships no CUDA runtime); skip the short-circuit so the\n"
+    "        # real yunchang import below decides.\n"
+    "        if False:\n"
+    "            return False\n"
+)
+assert code.count(OLD) == 1, 'check_long_ctx_attn pattern not unique/found'
+open(path, 'w').write(code.replace(OLD, NEW))
+print('[xdit-npu-patch] envs.py check_long_ctx_attn patched')
+PYEOF
+python /tmp/_patch_envs.py "$(cat /tmp/_xdit_root)/xfuser/envs.py"
 export PYTHONPATH="$(cat /tmp/_xdit_root):${PYTHONPATH:-}"
 ```
 
 ```shell #test id="xdit-infer-multi" load="model_path>>model_path"
-# xdit-infer-multi-setup 已经在 /tmp 准备好 sd3_patched.py + PYTHONPATH。
-# 但 #test 块又是新 bash -c 子进程（execute() 用 env 快照传给 subprocess.run，不读回
-# bash 的 export），所以这里也重做一次 cp+sed+export，确保 /tmp/sd3_patched.py 存在、
-# PYTHONPATH 含 xDiT 仓库根（让 'from xfuser import ...' 能找到）。
-export XEDIT_PATCHER_DEBUG=1
+# xdit-infer-multi-setup 已经在 /tmp 准备好 sd3_patched.py（含已打补丁的 envs.py）
+# + PYTHONPATH。但 #test 块又是新 bash -c 子进程（execute() 用 env 快照传给
+# subprocess.run，不读回 bash 的 export），所以这里也重做一次 cp+patch+export，
+# 确保 /tmp/sd3_patched.py 存在、envs.py 补丁在位、PYTHONPATH 含 xDiT 仓库根
+#（让 'from xfuser import ...' 能找到）。
 cp "$(cat /tmp/_xdit_root)"/examples/sd3_example.py /tmp/sd3_patched.py
 python /tmp/_patch_sd3.py /tmp/sd3_patched.py /tmp/sd3_patched.py
+python /tmp/_patch_envs.py "$(cat /tmp/_xdit_root)/xfuser/envs.py"
 export PYTHONPATH="$(cat /tmp/_xdit_root):${PYTHONPATH:-}"
 # ulysses_degree=2, ring_degree=1：度乘积 = 2，torchrun --nproc_per_node=2 显式起 2 个 rank；
 # xfuser 内部通过 xfuser.envs.get_torch_distributed_backend() 选 hccl，不读 env。

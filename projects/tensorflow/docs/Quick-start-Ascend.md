@@ -95,6 +95,16 @@ if [ ! -x "$PYTHON_PREFIX/bin/python3.7" ]; then
 fi
 ```
 
+### 安装 uv
+
+```shell #test-setup
+set -euo pipefail
+python -m pip install -q uv
+```
+
+uv 可以通过 `--python` 将包安装到指定的 Python 3.7，无需替换系统 Python
+或创建虚拟环境。`UV_PYTHON_DOWNLOADS=never` 用于禁止自动下载其他解释器。
+
 ### 编译安装 HDF5 1.10.5
 
 ```shell #test-setup
@@ -118,17 +128,23 @@ export CPATH=/usr/local/hdf5/include/:/usr/local/hdf5/lib/
 export LD_LIBRARY_PATH=/usr/local/hdf5/lib/:${LD_LIBRARY_PATH:-}
 ```
 
-### 安装 uv
+### 安装 h5py 2.8.0
 
 ```shell #test-setup
 set -euo pipefail
-python -m pip install -q uv
+TF_PYTHON=/usr/local/python3.7.10/bin/python3.7
+HDF5_PREFIX=/usr/local/hdf5
+
+UV_PYTHON_DOWNLOADS=never uv pip install --python "$TF_PYTHON" \
+  'setuptools==59.8.0' 'Cython==0.29.36' \
+  'wheel==0.37.1' 'numpy==1.19.5' 'pkgconfig==1.5.5'
+CPATH="$HDF5_PREFIX/include/:$HDF5_PREFIX/lib/" \
+LD_LIBRARY_PATH="$HDF5_PREFIX/lib/:${LD_LIBRARY_PATH:-}" \
+HDF5_DIR="$HDF5_PREFIX" UV_PYTHON_DOWNLOADS=never \
+  uv pip install --python "$TF_PYTHON" --no-build-isolation 'h5py==2.8.0'
 ```
 
-uv 可以通过 `--python` 将包安装到指定的 Python 3.7，无需替换系统 Python
-或创建虚拟环境。`UV_PYTHON_DOWNLOADS=never` 用于禁止自动下载其他解释器。
-
-检查 Python 与 HDF5 版本：
+检查 Python、HDF5 和 h5py 版本：
 
 ```shell #test id="check-python"
 TF_PYTHON=/usr/local/python3.7.10/bin/python3.7
@@ -136,6 +152,7 @@ TF_PYTHON=/usr/local/python3.7.10/bin/python3.7
 import re
 import subprocess
 import sys
+import h5py
 
 print("Python", sys.version.split()[0])
 h5_config = subprocess.check_output(
@@ -145,25 +162,25 @@ h5_config = subprocess.check_output(
 match = re.search(r"HDF5 Version:\s+(\S+)", h5_config)
 assert match is not None, h5_config
 print("HDF5", match.group(1))
+print("h5py", h5py.__version__)
 PY
 ```
 
 ```shell #test-result id="check-python"
 Python 3.7.10
 HDF5 1.10.5
+h5py 2.8.0
 ```
 
 ## 安装 TensorFlow 1.15
 
 官方说明指出 PyPI 没有 Linux aarch64 的 TensorFlow 1.15 wheel。这里使用
-Ascend 官方镜像项目公开的 aarch64 wheel，并校验 SHA-256；HDF5 1.10.5
-由上一步安装，h5py 2.8.0 按官方要求从源码编译。
+Ascend 官方镜像项目公开的 aarch64 wheel，并校验 SHA-256。
 
 ```shell #test-setup
 set -euo pipefail
 TF_CACHE=/root/.cache/tensorflow
 TF_PYTHON=/usr/local/python3.7.10/bin/python3.7
-HDF5_PREFIX=/usr/local/hdf5
 TF_WHEEL="$TF_CACHE/wheels/tensorflow-1.15.0-cp37-cp37m-manylinux2014_aarch64.whl"
 mkdir -p "$TF_CACHE/wheels"
 
@@ -176,34 +193,26 @@ fi
 echo "c2d6df0930f6558ec9bb741c219cb84f90f906cc9e2c28c6561960a1404dec39  $TF_WHEEL" \
   | sha256sum -c - >/dev/null
 
-UV_PYTHON_DOWNLOADS=never uv pip install --python "$TF_PYTHON" \
-  'setuptools==59.8.0' 'wheel==0.37.1' 'numpy==1.19.5' \
-  'Cython==0.29.36' 'pkgconfig==1.5.5' 'protobuf==3.20.3'
-CPATH="$HDF5_PREFIX/include/:$HDF5_PREFIX/lib/" \
-LD_LIBRARY_PATH="$HDF5_PREFIX/lib/:${LD_LIBRARY_PATH:-}" \
-HDF5_DIR="$HDF5_PREFIX" UV_PYTHON_DOWNLOADS=never \
-  uv pip install --python "$TF_PYTHON" --no-build-isolation 'h5py==2.8.0'
+UV_PYTHON_DOWNLOADS=never \
+  uv pip install --python "$TF_PYTHON" 'protobuf==3.20.3'
 UV_PYTHON_DOWNLOADS=never \
   uv pip install --python "$TF_PYTHON" "$TF_WHEEL"
 ```
 
-验证 TensorFlow 和 h5py 的实际安装版本：
+验证 TensorFlow 的实际安装版本：
 
 ```shell #test id="install-tensorflow"
 TF_PYTHON=/usr/local/python3.7.10/bin/python3.7
 LD_LIBRARY_PATH=/usr/local/hdf5/lib/:${LD_LIBRARY_PATH:-} \
   TF_CPP_MIN_LOG_LEVEL=2 "$TF_PYTHON" - <<'PY'
-import h5py
 import tensorflow as tf
 
 print("tensorflow", tf.__version__)
-print("h5py", h5py.__version__)
 PY
 ```
 
 ```shell #test-result id="install-tensorflow"
 tensorflow 1.15.0
-h5py 2.8.0
 ```
 
 ## 安装 TF Adapter

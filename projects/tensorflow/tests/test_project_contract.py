@@ -203,20 +203,58 @@ class TestTensorFlowProjectContract(unittest.TestCase):
         markers = (
             "apt-get update",
             "Python-3.7.10.tgz",
-            "hdf5-1.10.5.tar.gz",
             "python -m pip install -q uv",
+            "hdf5-1.10.5.tar.gz",
+            "h5py==2.8.0",
         )
         phase_indices = [
             next(i for i, command in enumerate(commands) if marker in command.cmd)
             for marker in markers
         ]
-        self.assertEqual(phase_indices, [0, 1, 2, 3])
+        self.assertEqual(phase_indices, [0, 1, 2, 3, 4])
         for command in commands:
             with self.subTest(command=command.cmd[:80]):
                 self.assertLessEqual(
                     sum(marker in command.cmd for marker in markers),
                     1,
                 )
+
+    def test_h5py_install_is_an_explicit_step_after_hdf5(self) -> None:
+        doc_path = (
+            _REPO_ROOT
+            / "projects"
+            / "tensorflow"
+            / "docs"
+            / "Quick-start-Ascend.md"
+        )
+        text = doc_path.read_text(encoding="utf-8")
+        commands, results = _Parser().parse(text)
+        hdf5_index = next(
+            i for i, command in enumerate(commands)
+            if "hdf5-1.10.5.tar.gz" in command.cmd
+        )
+        h5py_index = next(
+            i for i, command in enumerate(commands)
+            if "h5py==2.8.0" in command.cmd
+        )
+        self.assertEqual(h5py_index, hdf5_index + 1)
+        h5py_command = commands[h5py_index].cmd
+        for dependency in (
+            "Cython==0.29.36",
+            "wheel==0.37.1",
+            "numpy==1.19.5",
+            "h5py==2.8.0",
+        ):
+            with self.subTest(dependency=dependency):
+                self.assertIn(dependency, h5py_command)
+        tensorflow_command = next(
+            command.cmd for command in commands
+            if "tensorflow-1.15.0-cp37" in command.cmd
+        )
+        self.assertNotIn("h5py==2.8.0", tensorflow_command)
+        self.assertNotIn("Cython==0.29.36", tensorflow_command)
+        self.assertIn("h5py 2.8.0", results["check-python"].body)
+        self.assertIn("### 安装 h5py 2.8.0", text)
 
     def test_apt_uses_the_existing_arm64_mirror_pattern(self) -> None:
         doc = (

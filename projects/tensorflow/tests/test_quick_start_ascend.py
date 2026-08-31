@@ -1,4 +1,4 @@
-"""Execute the TensorFlow 1.15 + TF Adapter 9.1.0 Quick Start on NPU."""
+"""Execute the TensorFlow 2.6.5 + TF Adapter 9.1.0 Quick Start on NPU."""
 
 from __future__ import annotations
 
@@ -29,12 +29,12 @@ def _e2e_enabled() -> bool:
 class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     """Fetch, parse, and execute the labelled documentation blocks."""
 
-    DEFAULT_COMMAND_TIMEOUT = 14400
+    DEFAULT_COMMAND_TIMEOUT = 3600
     USER_AGENT = "cosdt-ci-test/tensorflow-quick-start"
     ERROR_MARKERS = (
         *MarkdownDocTestBase.ERROR_MARKERS,
         "GEInitialize failed",
-        "NpuOptimizer init failed",
+        "NPU device open failed",
         "device open failed",
         "ERR99999",
         "EZ9999",
@@ -44,7 +44,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         "/usr/local/Ascend/cann/set_env.sh",
         "/usr/local/Ascend/ascend-toolkit/set_env.sh",
     )
-    _PYTHON37_BIN = "/usr/local/python3.7.10/bin"
+    _PYTHON39_BIN = "/usr/local/python3.9.25/bin"
     _TFPLUGIN_INSTALL_PATH = "/root/Ascend/tfplugin"
     _HDF5_LIBRARY_PATH = "/usr/local/hdf5/lib"
 
@@ -80,7 +80,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         existing_pythonpath = os.environ.get("PYTHONPATH", "")
         existing_path = os.environ.get("PATH", "")
         os.environ["PATH"] = os.pathsep.join(
-            item for item in (cls._PYTHON37_BIN, existing_path) if item
+            item for item in (cls._PYTHON39_BIN, existing_path) if item
         )
         os.environ["TFPLUGIN_INSTALL_PATH"] = cls._TFPLUGIN_INSTALL_PATH
         os.environ["PYTHONPATH"] = os.pathsep.join(

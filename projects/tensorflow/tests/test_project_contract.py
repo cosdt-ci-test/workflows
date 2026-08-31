@@ -1,4 +1,4 @@
-"""Static contract for the TensorFlow 1.15 + TF Adapter 9.1.0 guard."""
+"""Static contract for the TensorFlow 2.6.5 + TF Adapter 9.1.0 guard."""
 
 from __future__ import annotations
 
@@ -39,14 +39,15 @@ class TestTensorFlowProjectContract(unittest.TestCase):
             {"quick_start": ".github/workflows/tensorflow-quick-start.yml"},
         )
 
-    def test_workflow_uses_fixed_tf115_ref_on_one_a2_npu(self) -> None:
+    def test_workflow_uses_fixed_tf265_ref_on_one_a2_npu(self) -> None:
         workflow = (
             _REPO_ROOT / ".github" / "workflows" / "tensorflow-quick-start.yml"
         ).read_text(encoding="utf-8")
         self.assertIn("uses: ./.github/workflows/quick-start-template.yml", workflow)
         self.assertIn("project: tensorflow", workflow)
         self.assertIn("test_runner: '[\"linux-aarch64-a2-1\"]'", workflow)
-        self.assertIn("fixed_ref: v1.15.0", workflow)
+        self.assertIn("fixed_ref: v2.6.5", workflow)
+        self.assertNotIn("fixed_ref: v1.15.0", workflow)
         self.assertIn("upstream_repo: tensorflow/tensorflow", workflow)
         self.assertIn(
             "cann:9.1.0-910b-ubuntu22.04-py3.12-devel",
@@ -83,7 +84,7 @@ class TestTensorFlowProjectContract(unittest.TestCase):
                 "check-python",
                 "install-tensorflow",
                 "install-tf-adapter",
-                "run-npu-optimizer",
+                "run-npu-device",
             },
         )
         self.assertEqual(set(results), test_ids)
@@ -98,36 +99,38 @@ class TestTensorFlowProjectContract(unittest.TestCase):
         self.assertNotIn("curl ", test_commands["install-tf-adapter"])
 
         required_fragments = (
-            "| Python | 3.7.10 |",
-            "| TensorFlow | 1.15.0 (`v1.15.0`) |",
+            "| Python | 3.9.25 |",
+            "| TensorFlow | 2.6.5 (`v2.6.5`) |",
             "| CANN | 9.1.0 |",
             "| TF Adapter branch | 9.1.0 |",
             "| TF Adapter wheel release | `tfa_v0.0.49_9.1.0` |",
-            "| npu_bridge | 1.15.0 |",
+            "| npu_device | 2.6.5 |",
             "| HDF5 | 1.10.5 |",
-            "| h5py | 2.8.0 |",
-            "tensorflow-1.15.0-*.whl",
-            "npu_bridge-1.15.0-py3-none-manylinux2014_aarch64.whl",
-            "from npu_bridge.npu_init import *",
-            'custom_op.name = "NpuOptimizer"',
-            "RewriterConfig.OFF",
+            "| h5py | 3.1.0 |",
+            "| numpy | 1.19.5 |",
+            "| protobuf | 3.19.6 |",
+            "tensorflow-2.6.5-cp39-cp39-linux_aarch64.whl",
+            "npu_device-2.6.5-py3-none-manylinux2014_aarch64.whl",
+            "import npu_device as npu",
+            "npu.open().as_default()",
+            "@tf.function",
             "ASCEND_DEVICE_ID=0",
-            "TensorFlow Ascend Quick Start PASSED",
+            "TensorFlow 2.6.5 Ascend Quick Start PASSED",
         )
         for fragment in required_fragments:
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, text)
 
         official_paths = (
-            "docs/zh/tfadapter_1/installation/tensorflow-1-15_install.md",
-            "docs/zh/tfadapter_1/installation/tfadapter_install.md",
-            "docs/zh/tfadapter_1/quick_start.md",
+            "docs/zh/tfadapter_2/installation/tensorflow-2-6-5_install.md",
+            "docs/zh/tfadapter_2/installation/tfadapter_install.md",
+            "docs/zh/tfadapter_2/migration/script_migration/manual_porting.md",
         )
         for path in official_paths:
             with self.subTest(path=path):
                 self.assertIn(path, text)
 
-    def test_python37_is_installed_side_by_side_and_pip3_is_used(self) -> None:
+    def test_python39_is_installed_side_by_side_and_pip3_is_used(self) -> None:
         doc = (
             _REPO_ROOT
             / "projects"
@@ -137,16 +140,17 @@ class TestTensorFlowProjectContract(unittest.TestCase):
         ).read_text(encoding="utf-8")
 
         self.assertIn(
-            "https://repo.huaweicloud.com/python/3.7.10/Python-3.7.10.tgz",
+            "https://repo.huaweicloud.com/python/3.9.25/Python-3.9.25.tgz",
             doc,
         )
         self.assertIn(
-            "c9649ad84dc3a434c8637df6963100b2e5608697f9ba56d82e3809e4148e0975",
+            "a7438eabd3a48139f42d4e058096af8d880b0bb6e8fb8c78838892e4ce5583f2",
             doc,
         )
-        self.assertIn("--prefix=/usr/local/python3.7.10", doc)
+        self.assertIn("--prefix=/usr/local/python3.9.25", doc)
         self.assertIn("make altinstall", doc)
-        self.assertIn("export PATH=/usr/local/python3.7.10/bin:$PATH", doc)
+        self.assertIn("export PATH=/usr/local/python3.9.25/bin:$PATH", doc)
+        self.assertNotIn("/usr/local/python3.7.10", doc)
         self.assertIn("pip3 install", doc)
         self.assertNotIn("uv pip install", doc)
         self.assertNotIn("UV_PYTHON_DOWNLOADS", doc)
@@ -198,7 +202,7 @@ class TestTensorFlowProjectContract(unittest.TestCase):
         commands, _ = _Parser().parse(doc_path.read_text(encoding="utf-8"))
         markers = (
             "apt-get update",
-            "Python-3.7.10.tgz",
+            "Python-3.9.25.tgz",
             "hdf5-1.10.5.tar.gz",
             'pip3 install "Cython<3"',
         )
@@ -235,7 +239,7 @@ class TestTensorFlowProjectContract(unittest.TestCase):
         )
         h5py_install_index = next(
             i for i, command in enumerate(commands)
-            if "pip3 install h5py==2.8.0" in command.cmd
+            if 'pip3 install "h5py==3.1.0"' in command.cmd
         )
         self.assertEqual(h5py_deps_index, hdf5_index + 1)
         self.assertEqual(h5py_install_index, h5py_deps_index + 1)
@@ -243,24 +247,25 @@ class TestTensorFlowProjectContract(unittest.TestCase):
         for dependency in (
             'pip3 install "Cython<3"',
             "pip3 install wheel",
-            "pip3 install numpy",
+            'pip3 install "numpy==1.19.5"',
         ):
             with self.subTest(dependency=dependency):
                 self.assertIn(dependency, h5py_deps_command)
         self.assertIn(
-            "pip3 install h5py==2.8.0",
+            'pip3 install "h5py==3.1.0"',
             commands[h5py_install_index].cmd,
         )
         tensorflow_command = next(
             command.cmd for command in commands
-            if "pip3 install tensorflow-1.15.0-*.whl" in command.cmd
+            if 'pip3 install "$TF_WHEEL"' in command.cmd
         )
-        self.assertNotIn("h5py==2.8.0", tensorflow_command)
+        self.assertNotIn("h5py==3.1.0", tensorflow_command)
         self.assertNotIn('Cython<3', tensorflow_command)
-        self.assertIn("h5py 2.8.0", results["check-python"].body)
-        self.assertIn("#### 安装 h5py 2.8.0", text)
+        self.assertIn("numpy 1.19.5", results["check-python"].body)
+        self.assertIn("h5py 3.1.0", results["check-python"].body)
+        self.assertIn("#### 安装 h5py 3.1.0", text)
 
-    def test_tensorflow_aarch64_follows_the_v115_source_build_flow(self) -> None:
+    def test_tensorflow_aarch64_downloads_the_pinned_wheel(self) -> None:
         doc = (
             _REPO_ROOT
             / "projects"
@@ -269,27 +274,34 @@ class TestTensorFlowProjectContract(unittest.TestCase):
             / "Quick-start-Ascend.md"
         ).read_text(encoding="utf-8")
         for fragment in (
-            "--branch v1.15.0",
-            "nsync-1.22.0.tar.gz",
-            "#define ATM_CB_() __sync_synchronize()",
-            "sha256sum /tmp/nsync-1.22.0.tar.gz",
-            '"file:///tmp/nsync-1.22.0.tar.gz"',
-            "bazel-0.26.1-dist.zip",
-            "openjdk-8-jdk-headless",
-            "JAVA_HOME=/usr/lib/jvm/java-8-openjdk-arm64",
-            "| GCC | linux_gcc7.3.0 |",
-            "TensorFlow 1.15 requires linux_gcc7.3.0",
-            "-D_GLIBCXX_USE_CXX11_ABI=0",
-            "//tensorflow/tools/pip_package:build_pip_package",
-            "tensorflow-1.15.0-*.whl",
+            "## 安装 TensorFlow 2.6.5",
+            "https://ascend-repo.obs.cn-east-2.myhuaweicloud.com/MindX/"
+            "OpenSource/packages/"
+            "tensorflow-2.6.5-cp39-cp39-linux_aarch64.whl",
+            "be1c8f52d6a72cc0db5826605f61c196777f5939441b7e87442688a5d1866bd0",
+            'pip3 install "protobuf==3.19.6"',
+            'pip3 install "$TF_WHEEL"',
         ):
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, doc)
-        self.assertNotIn(
-            "ascend-repo.obs.cn-east-2.myhuaweicloud.com/MindX/OpenSource/"
-            "python/packages/tensorflow-1.15.0",
-            doc,
-        )
+        for source_build_fragment in (
+            "--branch v2.6.5",
+            "nsync-1.22.0.tar.gz",
+            "bazel-0.26.1-dist.zip",
+            "openjdk-8-jdk-headless",
+            "| GCC | linux_gcc7.3.0 |",
+            "//tensorflow/tools/pip_package:build_pip_package",
+        ):
+            with self.subTest(source_build_fragment=source_build_fragment):
+                self.assertNotIn(source_build_fragment, doc)
+
+        readme = (
+            _REPO_ROOT / "projects" / "tensorflow" / "README.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("TensorFlow 2.6.5", readme)
+        self.assertIn("npu_device", readme)
+        self.assertIn("aarch64 wheel", readme)
+        self.assertNotIn("TensorFlow 1.15", readme)
 
     def test_tf_adapter_uses_the_documented_pip3_target_install(self) -> None:
         doc = (
@@ -308,9 +320,20 @@ class TestTensorFlowProjectContract(unittest.TestCase):
             'export PYTHONPATH=${TFPLUGIN_INSTALL_PATH}:$PYTHONPATH',
             doc,
         )
+        self.assertIn(
+            "https://gitcode.com/cann/tensorflow/releases/download/"
+            "tfa_v0.0.49_9.1.0/"
+            "npu_device-2.6.5-py3-none-manylinux2014_aarch64.whl",
+            doc,
+        )
+        self.assertIn(
+            "68a14762b24ebfafe554c2a29406be2932b82a1950938d1de97a2cc0909d73fc",
+            doc,
+        )
+        self.assertNotIn("npu_bridge", doc)
         self.assertNotIn("uv pip install", doc)
 
-    def test_source_build_timeouts_cover_the_official_flow(self) -> None:
+    def test_wheel_install_uses_the_standard_quick_start_timeouts(self) -> None:
         workflow = (
             _REPO_ROOT / ".github" / "workflows" / "tensorflow-quick-start.yml"
         ).read_text(encoding="utf-8")
@@ -321,8 +344,8 @@ class TestTensorFlowProjectContract(unittest.TestCase):
             / "tests"
             / "test_quick_start_ascend.py"
         ).read_text(encoding="utf-8")
-        self.assertIn("timeout_minutes: 360", workflow)
-        self.assertIn("DEFAULT_COMMAND_TIMEOUT = 14400", test_file)
+        self.assertIn("timeout_minutes: 120", workflow)
+        self.assertIn("DEFAULT_COMMAND_TIMEOUT = 3600", test_file)
 
     def test_install_sections_follow_the_upstream_document_structure(self) -> None:
         doc = (
@@ -337,16 +360,8 @@ class TestTensorFlowProjectContract(unittest.TestCase):
             "### 编译安装 HDF5 1.10.5",
             "### 安装 h5py",
             "#### 安装 h5py 依赖包",
-            "#### 安装 h5py 2.8.0",
-            "## 安装 TensorFlow",
-            "### 1. 下载 nsync 1.22.0",
-            "### 2. 修改 nsync 1.22.0",
-            "### 3. 重新压缩 nsync 1.22.0",
-            "### 4. 生成 sha256sum 校验码",
-            "### 5. 修改 sha256sum 和 urls",
-            "### 6. 编译 TensorFlow",
-            "### 7. 安装编译好的 TensorFlow",
-            "### 8. 验证 TensorFlow",
+            "#### 安装 h5py 3.1.0",
+            "## 安装 TensorFlow 2.6.5",
             "## 安装框架插件包 TF Adapter",
             "### 安装插件包",
             "#### 1. 获取 TF Adapter 安装包",
@@ -408,6 +423,8 @@ class TestTensorFlowProjectContract(unittest.TestCase):
         self.assertIn("/usr/local/Ascend/cann/set_env.sh", test_file)
         self.assertIn("TFPLUGIN_INSTALL_PATH", test_file)
         self.assertIn("ASCEND_DEVICE_ID", test_file)
+        self.assertIn("_PYTHON39_BIN", test_file)
+        self.assertNotIn("NpuOptimizer init failed", test_file)
         self.assertIn("ERR99999", test_file)
 
 

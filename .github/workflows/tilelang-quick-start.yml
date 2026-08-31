@@ -35,17 +35,18 @@
 name: tilelang-quick-start
 
 concurrency:
-  # format() is load-bearing: a '||' between 'manual-' and
-  # github.run_id would short-circuit on the truthy literal and
-  # every dispatch would share one 'manual-' group.
-  # The schedule branch is kept (even though schedule is not enabled
-  # yet) so re-enabling the cron later needs no concurrency change.
-  group: ${{ github.event_name == 'schedule' && 'tilelang-quick-start-schedule' || format('manual-{0}', github.run_id) }}
+  # Fixed group (NOT per-run format('manual-{0}', github.run_id)): both
+  # bind-mounts below are host-shared state. /data/ci-cache/pip is
+  # shared with the other projects, and the tilelang wheelhouse gets
+  # mkdir/cp/prune from the doc's build block - concurrent runs would
+  # race on both (pip cache corruption / wheelhouse prune vs cp).
+  # Same convention as lm-evaluation-harness and stable-diffusion-webui.
+  group: ${{ github.event_name == 'schedule' && 'tilelang-quick-start-schedule' || 'tilelang-quick-start-manual' }}
   # cancel-in-progress: false because (1) a schedule run cancelled
   # mid-way loses its outcome writeback - the outcome is what makes
   # the retry mechanism work, and the 'if: always()' guard isn't
-  # enough when the container is being torn down; (2) dispatch runs
-  # already live in unique groups so there's nothing to cancel.
+  # enough when the container is being torn down; (2) a queued run
+  # simply waits for the previous one instead of being cancelled.
   cancel-in-progress: false
 
 on:
@@ -70,12 +71,17 @@ jobs:
       # GitHub-hosted ubuntu-latest.
       test_runner: '["linux-aarch64-a2-1"]'
       image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-      # Required by the engine (container options for the test job).
-      # Empty like tensorflow / specforge on a2-1: the runner's device
-      # plugin already passes /dev/davinci* into the container, and this
-      # workload (source build + GEMM) has no model/dataset caches to
-      # bind-mount.
-      container_options: ''
+      # Shared pip wheel cache (cross-project, same convention as
+      # lm-evaluation-harness / stable-diffusion-webui / xllm /
+      # transformers): repeat runs hit the wheel and pip only unpacks.
+      # The tilelang wheelhouse holds source-built wheels keyed by
+      # upstream commit (see the doc's build block): same-commit reruns
+      # skip the ~15 min C++ build entirely. Mounted at a fixed
+      # container path so the doc can probe it with a plain [ -d ].
+      # Still no ModelScope bind mount: pure operator run, no weights.
+      container_options: >-
+        --volume=/data/ci-cache/pip:/root/.cache/pip
+        --volume=/data/ci-cache/tilelang-wheelhouse:/tilelang-wheelhouse
       # Doc flow builds tilelang-ascend from source (TVM submodule
       # clone + C++ compile) and JIT-compiles/runs a GEMM kernel;
       # 180 min covers the cold build with headroom.

@@ -60,7 +60,7 @@ python --version
 
 将 `<UPSTREAM_REF>` 换成目标**分支、tag 或 commit**（上游默认分支为 `main`）。
 
-```shell #test id="clone" load="upstream_ref>>UPSTREAM_REF"
+```shell #test-setup id="clone" load="upstream_ref>>UPSTREAM_REF"
 git clone https://github.com/wenet-e2e/wenet.git
 cd wenet
 git checkout <UPSTREAM_REF>
@@ -68,7 +68,7 @@ git checkout <UPSTREAM_REF>
 
 安装 WeNet 及其 NPU 依赖：
 
-```shell #test id="install"
+```shell #test-setup id="install"
 cd wenet
 pip install -e .[torch-npu]
 pip install -r requirements.txt
@@ -106,7 +106,7 @@ npu count: 1
 
 创建目录结构：
 
-```shell #test id="create-dirs"
+```shell #test-setup id="create-dirs"
 mkdir -p /tmp/wenet-mock/data_aishell/wav/train/S0001
 mkdir -p /tmp/wenet-mock/data_aishell/transcript
 mkdir -p /tmp/wenet-mock/data/{train,dev,test}
@@ -191,7 +191,7 @@ data/train -> /tmp/wenet-mock/data/train
 
 运行 stage 2（生成字典）和 stage 3（生成 data.list）：
 
-```shell #test id="prepare-data"
+```shell #test-setup id="prepare-data"
 cd wenet/examples/aishell/s0
 bash run_npu.sh --stage 2 --stop_stage 3
 ```
@@ -221,7 +221,7 @@ head -1 data/train/data.list
 
 使用 `--override_config` 将 `max_epoch` 从 240 缩短到 5：
 
-```shell #test id="train"
+```shell #test-setup id="train"
 cd wenet/examples/aishell/s0
 bash run_npu.sh --stage 4 --stop_stage 4 \
   --override_config "max_epoch 5"
@@ -251,7 +251,7 @@ exp/conformer/epoch_5.pt
 
 使用训练好的模型对测试数据进行推理验证：
 
-```shell #test id="infer"
+```shell #test-setup id="infer"
 cd wenet/examples/aishell/s0
 bash run_npu.sh --stage 5 --stop_stage 5
 ```

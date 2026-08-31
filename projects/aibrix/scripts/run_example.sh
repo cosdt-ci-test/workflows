@@ -31,7 +31,7 @@ RUN_LOG="${CI_OUTPUT_DIR}/run.log"
 VLLM_LOG="${CI_OUTPUT_DIR}/vllm.log"
 VLLM_PID_FILE="${CI_OUTPUT_DIR}/vllm.pid"
 ENDPOINTS="${CI_OUTPUT_DIR}/endpoints.yaml"
-TOOLS="${AIBRIX_TOOLS_DIR:-${PROJECT_ROOT}/.tools}"
+TOOLS="${AIBRIX_TOOLS_DIR:-/root/.cache/cosdt-ci-test/aibrix/tools}"
 
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:${TOOLS}/bin:${TOOLS}/toolchain/go/bin:${PATH}"
 set +u

@@ -58,6 +58,10 @@ ORT 从源码编 CANN 要数小时。产物按目标 commit SHA 放。
 
 workflow 的 `max-parallel` 是 1。两条 job 共用这份缓存，并行会抢同一把锁并打满编译机。
 
+## cmake FetchContent 镜像
+
+`setup_example.sh` 在编译前填充 `/root/.cache/cosdt-ci-test/onnxruntime/cmake-mirror/`。布局与 ORT 的 `--cmake_deps_mirror_dir` 约定一致：`cmake/deps.txt` 里每条 `https://` URL 对应 `<mirror>/<去掉 https:// 的 URL>`。github.com 和 codeload.github.com 先走 `https://gh-proxy.test.osinfra.cn/<原 URL>`，失败再直连。下完按 deps.txt 的 SHA1 校验，错了删除。单文件失败只告警，cmake 会回退在线下载。`www.nuget.org` 条目跳过（Windows 遥测，本配置用不到）。已命中 ORT 编译缓存的暖跑不会再填镜像。
+
 ## 触发
 
 `onnxruntime-examples.yml` 有两种入口。`monitor` 跑在 `ubuntu-latest`，不占 NPU。

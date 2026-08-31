@@ -175,6 +175,19 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         cmake_bin_dir = os.path.dirname(sys.executable)
         os.environ['PATH'] = cmake_bin_dir + os.pathsep + os.environ.get('PATH', '')
         subprocess.run(['cmake', '--version'], check=True)
+
+        # 3.5) Ensure Python 3.11 venv for tilelang cp311 wheel
+        print('setup: installing python3.11 and creating venv')
+        subprocess.run(
+            ['bash', '-c',
+             'apt-get update -qq && apt-get install -y --no-install-recommends '
+             'python3.11 python3.11-venv python3.11-dev'],
+            check=True,
+        )
+        venv_path = '/opt/py311'
+        subprocess.run([f'{venv_path}/bin/python', '-m', 'venv', venv_path], check=True)
+        self._build_python = f'{venv_path}/bin/python'
+
         subprocess.run(
             ['bash', '-c',
              'command -v cargo >/dev/null 2>&1 || '
@@ -194,12 +207,12 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         )
 
         build_log = '/tmp/xllm-build.log'
-        print(f'setup: building xllm wheel (device=npu arch=arm); full log -> {build_log}')
+        print(f'setup: building xllm wheel (device=npu); full log -> {build_log}')
         os.environ['SKIP_TEST'] = '1'
         with open(build_log, 'w') as lf:
             try:
                 subprocess.run(
-                    ['python', 'setup.py', 'bdist_wheel', '--device', 'npu', '--arch', 'arm'],
+                    [self._build_python, 'setup.py', 'bdist_wheel', '--device', 'npu'],
                     cwd=xllm_src, check=True, stdout=lf, stderr=subprocess.STDOUT,
                 )
             except subprocess.CalledProcessError:
@@ -212,13 +225,13 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         if not wheels:
             raise RuntimeError('xllm wheel was not produced by the build')
         subprocess.run(
-            ['python', '-m', 'pip', 'install', '--force-reinstall', '--no-deps', wheels[0]],
+            [self._build_python, '-m', 'pip', 'install', '--force-reinstall', '--no-deps', wheels[0]],
             check=True,
         )
 
         # 5) Verify the freshly built xllm imports.
         subprocess.run(
-            ['python', '-c', 'import xllm; print("xllm:", xllm.__version__)'],
+            [self._build_python, '-c', 'import xllm; print("xllm:", xllm.__version__)'],
             check=True,
         )
 
@@ -230,13 +243,13 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             print(f'setup: downloading Qwen2-7B-Instruct to {model_dir}')
             subprocess.run(
                 [
-                    'python', '-m', 'pip', 'install', '-q', 'modelscope',
+                    self._build_python, '-m', 'pip', 'install', '-q', 'modelscope',
                 ],
                 check=False,
             )
             subprocess.run(
                 [
-                    'python', '-c',
+                    self._build_python, '-c',
                     "from modelscope import snapshot_download; "
                     "snapshot_download('Qwen/Qwen2-7B-Instruct', "
                     f"local_dir='{model_dir}')",

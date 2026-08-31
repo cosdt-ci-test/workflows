@@ -82,7 +82,7 @@ ensure_model() {
 # Install the toolchain needed to build xllm from source on the CANN base
 # image (which ships CANN + torch but not cmake/rust/vcpkg).
 ensure_build_deps() {
-  echo "installing build dependencies (cmake/ninja/rust)..."
+  echo "installing build dependencies (cmake/ninja/rust/python3.11)..."
   apt-get update -qq 2>/dev/null || true
   apt-get install -y --no-install-recommends \
     python3-dev libssl-dev pkg-config git curl ca-certificates 2>/dev/null || true
@@ -90,6 +90,16 @@ ensure_build_deps() {
   CMAKE_BIN_DIR="$(python -c 'import sys,os;print(os.path.dirname(sys.executable))')"
   export PATH="$CMAKE_BIN_DIR:$PATH"
   echo "cmake: $(cmake --version | head -n1)"
+
+  # Python 3.11 venv for tilelang cp311 wheel
+  apt-get update -qq 2>/dev/null || true
+  apt-get install -y --no-install-recommends \
+    python3.11 python3.11-venv python3.11-dev 2>/dev/null || true
+  /usr/bin/python3.11 -m venv /opt/py311
+  export PY311="/opt/py311/bin/python"
+  export PATH="/opt/py311/bin:$PATH"
+  echo "python3.11 venv ready: $($PY311 --version)"
+
   if ! command -v cargo >/dev/null 2>&1; then
     export RUSTUP_DIST_SERVER=https://rsproxy.cn
     export RUSTUP_UPDATE_ROOT=https://rsproxy.cn/rustup
@@ -106,9 +116,9 @@ ensure_build_deps() {
 build_xllm() {
   local root="$1"
   local build_log=/tmp/xllm-build.log
-  echo "building xllm wheel from $root (device=npu arch=arm); full log -> $build_log"
+  echo "building xllm wheel from $root (device=npu); full log -> $build_log"
   export SKIP_TEST=1
-  if ( cd "$root" && python setup.py bdist_wheel --device npu --arch arm ) >"$build_log" 2>&1; then
+  if ( cd "$root" && "$PY311" setup.py bdist_wheel --device npu ) >"$build_log" 2>&1; then
     echo "build succeeded; tail of $build_log:"
     tail -n 300 "$build_log"
   else
@@ -119,8 +129,8 @@ build_xllm() {
   local wheel
   wheel=$(ls "$root"/dist/*.whl 2>/dev/null | head -n1)
   [ -n "$wheel" ] || { echo "xllm wheel not found after build"; exit 1; }
-  python -m pip install --force-reinstall --no-deps "$wheel"
-  python -c "import xllm; print('xllm:', xllm.__version__)"
+  "$PY311" -m pip install --force-reinstall --no-deps "$wheel"
+  "$PY311" -c "import xllm; print('xllm:', xllm.__version__)"
 }
 
 if ! declare -F "setup_${PROFILE}" >/dev/null 2>&1; then

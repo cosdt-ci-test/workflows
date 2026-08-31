@@ -1,29 +1,29 @@
-# aibrix quick start guard - project thin trigger.
+# wenet quick start guard - project thin trigger.
 #
 # The shared quick-start template owns monitoring, cache state, result
 # validation, and artifact publishing. Project-specific environment setup
-# and document execution live in projects/aibrix/tests.
+# and document execution live in projects/wenet/tests.
 
-name: aibrix-quick-start
+name: wenet-quick-start
 
 concurrency:
-  group: ${{ github.event_name == 'schedule' && 'aibrix-quick-start-schedule' || format('manual-{0}', github.run_id) }}
+  group: ${{ github.event_name == 'schedule' && 'wenet-quick-start-schedule' || format('manual-{0}', github.run_id) }}
   cancel-in-progress: false
 
 on:
   # Enable after the first successful workflow_dispatch run.
   # schedule:
-  #   - cron: '50 */6 * * *'
+  #   - cron: '30 */6 * * *'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  aibrix-quick-start:
+  wenet-quick-start:
     uses: ./.github/workflows/quick-start-template.yml
     with:
-      project: aibrix
+      project: wenet
       test_runner: '["linux-aarch64-a2-1"]'
       image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
       container_options: >-
@@ -33,13 +33,10 @@ jobs:
         --device=/dev/devmm_svm
         --device=/dev/hisi_hdc
         --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
-        --volume=/usr/local/Ascend/nnal:/usr/local/Ascend/nnal:ro
         --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
         --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
-        --volume=/data/ci-cache/modelscope/aibrix:/root/.cache/modelscope
-        --volume=/root/.cache/cosdt-ci-test/aibrix:/root/.cache/cosdt-ci-test/aibrix
-      timeout_minutes: 45
-      upstream_repo: vllm-project/aibrix
-      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/aibrix/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
-      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/aibrix/docs/Quick-start-Ascend.md
+      timeout_minutes: 120
+      upstream_repo: wenet-e2e/wenet
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/wenet/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/wenet/docs/Quick-start-Ascend.md
       test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1

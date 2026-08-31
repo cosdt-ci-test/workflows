@@ -26,7 +26,9 @@ Atlas 900 A2 / A3 训练系列产品或者 Ascend 950 系列产品，并按需�
 
 **配套镜像**：
 
-swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/vllm-ascend/vllm-ascend:vllm-ascend:v0.23.0
+
+> 该镜像**预装** vllm==0.23.0 + vllm-ascend==0.23.0 + triton-ascend==3.2.2 + triton 3.5.0 + torch 2.10.0+cpu + torch_npu 2.10.0.post4 + CANN 9.1.0 + Python 3.12。本文「前置安装」一节只验证版本 + 装 modelscope，不再源码 build vllm、不再拉 vllm-ascend NPU variant wheel。
 
 **软件版本**：
 
@@ -37,11 +39,11 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | torch | 2.10.0+cpu |
 | torch_npu | 2.10.0.post4 |
 | transformers | 由 `speculators` 透传拉入（>=4.56.1,<5.15.0） |
-| vllm | 0.23.0（[源码 build](#安装-vllm-ascend)：`VLLM_TARGET_DEVICE=empty` 跳过 CUDA kernel 编译，仅注册 `torch.ops.vllm` schema） |
-| triton-ascend | 3.2.2|
-| triton | 3.5.0 |
-| vllm-ascend | 0.23.0（`--extra-index-url` 拉华为 ascend 源 + `.../variant` 子路径取 NPU variant wheel，详见下方「[安装 vllm-ascend](#安装-vllm-ascend)」小节） |
-| modelscope | 1.37.0 |
+| vllm | 0.23.0（镜像预装） |
+| triton-ascend | 3.2.2（镜像预装）|
+| triton | 3.5.0（镜像预装） |
+| vllm-ascend | 0.23.0（镜像预装，NPU variant wheel） |
+| modelscope | 1.37.0（镜像不含，`前置安装` 一节装） |
 | speculators | 最新 release 的源码/二进制 |
 | draft 模型 | [z-lab/Qwen3-8B-DFlash-b16] |
 | verifier | [Qwen/Qwen3-8B] |
@@ -85,92 +87,17 @@ python --version
 Python 3.12.xxx
 ```
 
-#### 安装 vllm-ascend
+#### 验证 vllm-ascend 镜像预装
 
-安装系统依赖项并配置 pip 镜像：
-```shell #test-setup
-# Using apt-get with mirror
-sed -i 's|ports.ubuntu.com|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list
-apt-get update -y && apt-get install -y gcc g++ cmake ninja-build libnuma-dev wget git curl jq
-```
+> [配套镜像](#配套镜像) 已预装 vllm==0.23.0 + vllm-ascend==0.23.0 + triton-ascend==3.2.2 + torch 2.10.0+cpu + torch_npu 2.10.0.post4 + CANN 9.1.0 + Python 3.12。下面只做版本验证 —— **不** 源码 build vllm，**不** `pip install` vllm-ascend NPU variant wheel（bare-CANN 镜像时代那些 25-35 min 的冷启开销在新镜像里都没了）。
 
-安装 Python 构建后端和原生构建工具（vllm 源码 build 需要 `cmake>=3.26` + ninja + setuptools-scm；
-apt 装的 system cmake 是 Ubuntu 22.04 自带 3.22.2，对 vllm 太旧，靠 pip 的 `cmake` 提供 shim）：
-```shell #test-setup
-uv pip install --system \
-  "setuptools>=77,<81" "setuptools-scm>=8" wheel \
-  "cmake>=3.26" ninja nanobind pyyaml
-```
+加载 CANN env 并验证版本：
 
-第一步先把 torch 栈装上：
-
-```shell #test id="install-torch"
-uv pip install --system -f https://mirrors.aliyun.com/pytorch-wheels/cpu \
-  torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0
-
-uv pip install --system \
-  --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi \
-  --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi/variant \
-  --find-links https://repo.huaweicloud.com/ascend/repos/pypi/triton-ascend/ \
-  torch-npu==2.10.0.post4
-
-uv pip install --system \
-  --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi \
-  --find-links https://repo.huaweicloud.com/ascend/repos/pypi/triton-ascend/ \
-  triton-ascend==3.2.2
-
-python -c "import torch, torch_npu, torchvision, torchaudio; print(f'torch={torch.__version__}'); print(f'torch_npu={torch_npu.__version__}'); print(f'torchvision={torchvision.__version__}'); print(f'torchaudio={torchaudio.__version__}'); print('is_available:', torch.npu.is_available()); print('npu_count:', torch.npu.device_count())"
-
-python -c "import importlib.metadata; print(f'triton_ascend={importlib.metadata.version(\"triton-ascend\")}')"
-python -c "import importlib.metadata; print(f'triton={importlib.metadata.version(\"triton\")}')"
-```
-
-输出结果如下：
-
-```shell #test-result id="install-torch" fuzzy='xxx'
-torch=2.10.0+cpu
-torch_npu=2.10.0.post4
-torchvision=0.25.0+cpu
-torchaudio=2.10.0+cpu
-is_available: True
-npu_count: xxx
-triton_ascend=3.2.2
-triton=3.5.0
-```
-
-然后源码 build vllm + 装 vllm-ascend：
-
-```shell #test id="vllm-ascend-install"
-# 加载 CANN env（vllm 源码编译时链接 libascendcl / libatb 需要；
-# 不 source 的话 cmake 找不到 AscendCL/include，CANN_INCLUDE_DIRS 空、build 挂）
+```shell #test id="verify-vllm-stack"
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 
-# clone vllm v0.23.0 源码到 /root/deps/vllm
-mkdir -p /root/deps
-git clone --depth 1 --branch v0.23.0 https://github.com/vllm-project/vllm.git /root/deps/vllm
-# clone vllm-ascend v0.23.0 源拿到 requirements/requirements.txt（--no-deps 后靠它补 transitive）
-git clone --depth 1 --branch v0.23.0 https://github.com/vllm-project/vllm-ascend.git /root/deps/vllm-ascend
+python -c "import torch, torch_npu; print(f'torch={torch.__version__}'); print(f'torch_npu={torch_npu.__version__}'); print('is_available:', torch.npu.is_available()); print('npu_count:', torch.npu.device_count())"
 
-#  源码 build：VLLM_TARGET_DEVICE=empty 跳过 CUDA kernel 编译、只注册 torch.ops.vllm schema
-VLLM_TARGET_DEVICE=empty uv pip install --system \
-  -e /root/deps/vllm
-
-# 装 vllm-ascend NPU variant wheel（/variant 子路径拿 aarch64 build）
-uv pip install --system --no-deps \
-  --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi \
-  --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi/variant \
-  vllm-ascend==0.23.0
-
-# 补 vllm-ascend runtime deps：上一步 --no-deps 跳过了 transitive 解析，
-# 但 vllm_ascend 模块 import 时会 import pyyaml / packaging / torch_npu 等；
-# 用源仓 requirements/requirements.txt 比手列更跟版本对齐；
-uv pip install --system \
-  --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi \
-  --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi/variant \
-  -r /root/deps/vllm-ascend/requirements.txt
-
-
-# 验证版本
 python -c "import importlib.metadata; print(f'vllm={importlib.metadata.version(\"vllm\")}')"
 python -c "import importlib.metadata; print(f'vllm_ascend={importlib.metadata.version(\"vllm-ascend\")}')"
 python -c "import importlib.metadata; print(f'triton_ascend={importlib.metadata.version(\"triton-ascend\")}')"
@@ -179,12 +106,18 @@ python -c "import importlib.metadata; print(f'triton={importlib.metadata.version
 
 输出结果如下：
 
-```shell #test-result id="vllm-ascend-install" fuzzy='xxx'
-vllm=0.23.0+empty
+```shell #test-result id="verify-vllm-stack" fuzzy='xxx'
+torch=2.10.0+cpu
+torch_npu=2.10.0.post4
+is_available: True
+npu_count: xxx
+vllm=0.23.0
 vllm_ascend=0.23.0
 triton_ascend=3.2.2
 triton=3.5.0
 ```
+
+> 如果某个版本对不上或 `npu_count` 不是 ≥ 1，重新 `docker pull` 一次该镜像；本文档不补救版本漂移——镜像里就该是这些版本。
 
 #### 安装 modelscope
 

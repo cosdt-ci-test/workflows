@@ -63,15 +63,50 @@ go version go1.22.6 linux/arm64
 
 local mode 经 Envoy 监听 `:10080`。从 GitHub Release 下载官方 aarch64 包：
 
+<!--
+```shell #test-setup
+set -euo pipefail
+ci='/root/.cache/cosdt-ci-test/aibrix'
+cached="$ci/envoy/1.39.0/envoy"
+sum='ee53a4f5375566f15944dc9cb03afb1fc228df38f61737c677f139213215afcf'
+mkdir -p .aibrix-quick-start/bin
+if [ -f "$cached" ]; then
+  if echo "$sum  $cached" | sha256sum -c >/dev/null 2>&1; then
+    cp -a "$cached" .aibrix-quick-start/bin/envoy
+    chmod 0755 .aibrix-quick-start/bin/envoy
+  else
+    rm -f "$cached"
+  fi
+fi
+```
+-->
+
 ```shell #test id="install-envoy"
 mkdir -p .aibrix-quick-start/bin
-curl -fL --connect-timeout 20 --retry 8 --retry-all-errors --retry-delay 3 --max-time 300 \
-  -C - -o .aibrix-quick-start/bin/envoy.part \
-  https://github.com/envoyproxy/envoy/releases/download/v1.39.0/envoy-1.39.0-linux-aarch_64
-mv .aibrix-quick-start/bin/envoy.part .aibrix-quick-start/bin/envoy
-chmod +x .aibrix-quick-start/bin/envoy
+if [ ! -x .aibrix-quick-start/bin/envoy ]; then
+  curl -fL --connect-timeout 20 --retry 8 --retry-all-errors --retry-delay 3 --max-time 300 \
+    -C - -o .aibrix-quick-start/bin/envoy.part \
+    https://github.com/envoyproxy/envoy/releases/download/v1.39.0/envoy-1.39.0-linux-aarch_64
+  mv .aibrix-quick-start/bin/envoy.part .aibrix-quick-start/bin/envoy
+  chmod +x .aibrix-quick-start/bin/envoy
+fi
 .aibrix-quick-start/bin/envoy --version
 ```
+
+<!--
+```shell #test-setup
+set -euo pipefail
+ci='/root/.cache/cosdt-ci-test/aibrix'
+src='.aibrix-quick-start/bin/envoy'
+sum='ee53a4f5375566f15944dc9cb03afb1fc228df38f61737c677f139213215afcf'
+echo "$sum  $src" | sha256sum -c
+mkdir -p "$ci/envoy/1.39.0"
+if [ ! -f "$ci/envoy/1.39.0/envoy" ]; then
+  cp -a "$src" "$ci/envoy/1.39.0/envoy.part"
+  mv "$ci/envoy/1.39.0/envoy.part" "$ci/envoy/1.39.0/envoy"
+fi
+```
+-->
 
 输出结果如下：
 
@@ -92,11 +127,56 @@ echo "${UPSTREAM_REF}"
 
 克隆 release tag（`<ref>` 可改为例如 `v0.7.0`）。只用下面的 `go build`，勿用 `make build-gateway-plugins-nozmq`（会跑全仓 `manifests generate fmt vet`）。
 
+<!--
+```shell #test-setup
+set -euo pipefail
+ci='/root/.cache/cosdt-ci-test/aibrix'
+ref="${UPSTREAM_REF}"
+printf '%s\n' "$ref" | grep -Eq '^[A-Za-z0-9._/-]+$'
+cached="$ci/src/aibrix-${ref}"
+dest='.aibrix-quick-start/aibrix'
+if [ -d "$cached/.git" ]; then
+  got=$(git -C "$cached" describe --tags --exact-match 2>/dev/null || true)
+  if [ "$got" = "$ref" ]; then
+    mkdir -p .aibrix-quick-start
+    rm -rf "$dest"
+    cp -a "$cached" "$dest"
+  else
+    rm -rf "$cached"
+  fi
+fi
+```
+-->
+
 ```shell #test id="clone-aibrix" load="upstream_ref>>ref"
-rm -rf .aibrix-quick-start/aibrix
-git clone --depth 1 --branch <ref> https://github.com/vllm-project/aibrix.git .aibrix-quick-start/aibrix
+if [ ! -d .aibrix-quick-start/aibrix/.git ]; then
+  rm -rf .aibrix-quick-start/aibrix
+  for _ in 1 2 3; do
+    GIT_TERMINAL_PROMPT=0 GIT_HTTP_VERSION=HTTP/1.1 \
+      git clone --depth 1 --branch <ref> https://github.com/vllm-project/aibrix.git .aibrix-quick-start/aibrix && break
+    rm -rf .aibrix-quick-start/aibrix
+    sleep 5
+  done
+fi
 git -C .aibrix-quick-start/aibrix describe --tags --exact-match
 ```
+
+<!--
+```shell #test-setup
+set -euo pipefail
+ci='/root/.cache/cosdt-ci-test/aibrix'
+ref="${UPSTREAM_REF}"
+printf '%s\n' "$ref" | grep -Eq '^[A-Za-z0-9._/-]+$'
+src='.aibrix-quick-start/aibrix'
+cached="$ci/src/aibrix-${ref}"
+if [ -d "$src/.git" ] && [ ! -d "$cached/.git" ]; then
+  mkdir -p "$ci/src"
+  rm -rf "${cached}.part"
+  cp -a "$src" "${cached}.part"
+  mv "${cached}.part" "$cached"
+fi
+```
+-->
 
 输出结果如下：
 
@@ -160,6 +240,20 @@ echo pprof_port_wrapped
 
 本步骤依赖第一节加载的 CANN/ATB 环境（构建 `vllm-ascend` 时会加载 `torch_npu`，找不到 `libhccl.so` 会直接失败）。`VLLM_USE_MODELSCOPE=True` 留到启动服务再设。pip 默认走清华镜像；当前环境已设 `PIP_INDEX_URL` 时沿用已有镜像。
 
+<!--
+```shell #test-setup
+set -euo pipefail
+ci='/root/.cache/cosdt-ci-test/aibrix'
+cached="$ci/src/vllm-v0.23.0"
+dest='.aibrix-quick-start/src/vllm'
+if [ -d "$cached/.git" ]; then
+  mkdir -p .aibrix-quick-start/src
+  rm -rf "$dest"
+  cp -a "$cached" "$dest"
+fi
+```
+-->
+
 ```shell #test id="install-vllm"
 python3 -m venv .aibrix-quick-start/venv
 .aibrix-quick-start/venv/bin/python -m pip install -U pip
@@ -172,8 +266,15 @@ export PIP_RETRIES=5
   --find-links https://repo.huaweicloud.com/ascend/repos/pypi/triton-ascend/ \
   torch==2.10.0 torch-npu==2.10.0.post4 torchvision==0.25.0 torchaudio==2.10.0 triton-ascend==3.2.2
 .aibrix-quick-start/venv/bin/python -m pip install 'cmake>=3.26' nanobind ninja setuptools-rust wheel 'setuptools-scm>=8' 'setuptools>=77,<81'
-rm -rf .aibrix-quick-start/src/vllm
-git clone --depth 1 --branch v0.23.0 https://github.com/vllm-project/vllm.git .aibrix-quick-start/src/vllm
+if [ ! -d .aibrix-quick-start/src/vllm/.git ]; then
+  rm -rf .aibrix-quick-start/src/vllm
+  for _ in 1 2 3; do
+    GIT_TERMINAL_PROMPT=0 GIT_HTTP_VERSION=HTTP/1.1 \
+      git clone --depth 1 --branch v0.23.0 https://github.com/vllm-project/vllm.git .aibrix-quick-start/src/vllm && break
+    rm -rf .aibrix-quick-start/src/vllm
+    sleep 5
+  done
+fi
 export VLLM_TARGET_DEVICE=empty
 .aibrix-quick-start/venv/bin/python -m pip install --no-build-isolation -e .aibrix-quick-start/src/vllm
 .aibrix-quick-start/venv/bin/python -m pip install grpcio-tools
@@ -189,6 +290,21 @@ export PYTHON_EXECUTABLE="$PWD/.aibrix-quick-start/venv/bin/python"
 for n in ['torch', 'torch-npu', 'vllm', 'vllm-ascend', 'modelscope']:
     print(n, m.version(n))"
 ```
+
+<!--
+```shell #test-setup
+set -euo pipefail
+ci='/root/.cache/cosdt-ci-test/aibrix'
+src='.aibrix-quick-start/src/vllm'
+cached="$ci/src/vllm-v0.23.0"
+if [ -d "$src/.git" ] && [ ! -d "$cached/.git" ]; then
+  mkdir -p "$ci/src"
+  rm -rf "${cached}.part"
+  cp -a "$src" "${cached}.part"
+  mv "${cached}.part" "$cached"
+fi
+```
+-->
 
 输出结果如下：
 

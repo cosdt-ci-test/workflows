@@ -29,7 +29,7 @@ def _e2e_enabled() -> bool:
 class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     """Fetch, parse, and execute the labelled documentation blocks."""
 
-    DEFAULT_COMMAND_TIMEOUT = 3600
+    DEFAULT_COMMAND_TIMEOUT = 14400
     USER_AGENT = "cosdt-ci-test/tensorflow-quick-start"
     ERROR_MARKERS = (
         *MarkdownDocTestBase.ERROR_MARKERS,
@@ -44,7 +44,8 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         "/usr/local/Ascend/cann/set_env.sh",
         "/usr/local/Ascend/ascend-toolkit/set_env.sh",
     )
-    _TFPLUGIN_INSTALL_PATH = "/root/.cache/tensorflow/tfplugin-9.1.0"
+    _PYTHON37_BIN = "/usr/local/python3.7.10/bin"
+    _TFPLUGIN_INSTALL_PATH = "/root/Ascend/tfplugin"
     _HDF5_LIBRARY_PATH = "/usr/local/hdf5/lib"
 
     @classmethod
@@ -77,6 +78,10 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 os.environ[key] = value
 
         existing_pythonpath = os.environ.get("PYTHONPATH", "")
+        existing_path = os.environ.get("PATH", "")
+        os.environ["PATH"] = os.pathsep.join(
+            item for item in (cls._PYTHON37_BIN, existing_path) if item
+        )
         os.environ["TFPLUGIN_INSTALL_PATH"] = cls._TFPLUGIN_INSTALL_PATH
         os.environ["PYTHONPATH"] = os.pathsep.join(
             item
@@ -92,6 +97,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         os.environ["JOB_ID"] = "tensorflow-quick-start"
         os.environ["ASCEND_DEVICE_ID"] = "0"
         os.environ["ASCEND_RT_VISIBLE_DEVICES"] = "0"
+        os.environ["PIP_EXTRA_INDEX_URL"] = ""
         print(f"setup: sourced CANN environment from {cann_set_env}")
 
     @classmethod

@@ -106,7 +106,7 @@ class TestTensorFlowProjectContract(unittest.TestCase):
             "| npu_bridge | 1.15.0 |",
             "| HDF5 | 1.10.5 |",
             "| h5py | 2.8.0 |",
-            "tensorflow-1.15.0-cp37-cp37m-manylinux2014_aarch64.whl",
+            "tensorflow-1.15.0-*.whl",
             "npu_bridge-1.15.0-py3-none-manylinux2014_aarch64.whl",
             "from npu_bridge.npu_init import *",
             'custom_op.name = "NpuOptimizer"',
@@ -127,7 +127,7 @@ class TestTensorFlowProjectContract(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertIn(path, text)
 
-    def test_python37_is_installed_side_by_side_and_uv_targets_it(self) -> None:
+    def test_python37_is_installed_side_by_side_and_pip3_is_used(self) -> None:
         doc = (
             _REPO_ROOT
             / "projects"
@@ -146,14 +146,10 @@ class TestTensorFlowProjectContract(unittest.TestCase):
         )
         self.assertIn("--prefix=/usr/local/python3.7.10", doc)
         self.assertIn("make altinstall", doc)
-        self.assertIn(
-            "TF_PYTHON=/usr/local/python3.7.10/bin/python3.7",
-            doc,
-        )
-        self.assertIn("python -m pip install -q uv", doc)
-        self.assertIn("UV_PYTHON_DOWNLOADS=never", doc)
-        self.assertIn('uv pip install --python "$TF_PYTHON"', doc)
-        self.assertNotIn('"$TF_PYTHON" -m pip install', doc)
+        self.assertIn("export PATH=/usr/local/python3.7.10/bin:$PATH", doc)
+        self.assertIn("pip3 install", doc)
+        self.assertNotIn("uv pip install", doc)
+        self.assertNotIn("UV_PYTHON_DOWNLOADS", doc)
         self.assertNotIn("micro.mamba.pm", doc)
         self.assertNotIn("micromamba", doc.lower())
         self.assertNotIn("conda-forge", doc)
@@ -203,15 +199,15 @@ class TestTensorFlowProjectContract(unittest.TestCase):
         markers = (
             "apt-get update",
             "Python-3.7.10.tgz",
-            "python -m pip install -q uv",
             "hdf5-1.10.5.tar.gz",
-            "h5py==2.8.0",
+            'pip3 install "Cython<3"',
         )
         phase_indices = [
             next(i for i, command in enumerate(commands) if marker in command.cmd)
             for marker in markers
         ]
-        self.assertEqual(phase_indices, [0, 1, 2, 3, 4])
+        self.assertEqual(phase_indices, sorted(phase_indices))
+        self.assertEqual(len(set(phase_indices)), len(phase_indices))
         for command in commands:
             with self.subTest(command=command.cmd[:80]):
                 self.assertLessEqual(
@@ -231,30 +227,140 @@ class TestTensorFlowProjectContract(unittest.TestCase):
         commands, results = _Parser().parse(text)
         hdf5_index = next(
             i for i, command in enumerate(commands)
-            if "hdf5-1.10.5.tar.gz" in command.cmd
+            if "export LD_LIBRARY_PATH=/usr/local/hdf5/lib/" in command.cmd
         )
-        h5py_index = next(
+        h5py_deps_index = next(
             i for i, command in enumerate(commands)
-            if "h5py==2.8.0" in command.cmd
+            if 'pip3 install "Cython<3"' in command.cmd
         )
-        self.assertEqual(h5py_index, hdf5_index + 1)
-        h5py_command = commands[h5py_index].cmd
+        h5py_install_index = next(
+            i for i, command in enumerate(commands)
+            if "pip3 install h5py==2.8.0" in command.cmd
+        )
+        self.assertEqual(h5py_deps_index, hdf5_index + 1)
+        self.assertEqual(h5py_install_index, h5py_deps_index + 1)
+        h5py_deps_command = commands[h5py_deps_index].cmd
         for dependency in (
-            "Cython==0.29.36",
-            "wheel==0.37.1",
-            "numpy==1.19.5",
-            "h5py==2.8.0",
+            'pip3 install "Cython<3"',
+            "pip3 install wheel",
+            "pip3 install numpy",
         ):
             with self.subTest(dependency=dependency):
-                self.assertIn(dependency, h5py_command)
+                self.assertIn(dependency, h5py_deps_command)
+        self.assertIn(
+            "pip3 install h5py==2.8.0",
+            commands[h5py_install_index].cmd,
+        )
         tensorflow_command = next(
             command.cmd for command in commands
-            if "tensorflow-1.15.0-cp37" in command.cmd
+            if "pip3 install tensorflow-1.15.0-*.whl" in command.cmd
         )
         self.assertNotIn("h5py==2.8.0", tensorflow_command)
-        self.assertNotIn("Cython==0.29.36", tensorflow_command)
+        self.assertNotIn('Cython<3', tensorflow_command)
         self.assertIn("h5py 2.8.0", results["check-python"].body)
-        self.assertIn("### 安装 h5py 2.8.0", text)
+        self.assertIn("#### 安装 h5py 2.8.0", text)
+
+    def test_tensorflow_aarch64_follows_the_v115_source_build_flow(self) -> None:
+        doc = (
+            _REPO_ROOT
+            / "projects"
+            / "tensorflow"
+            / "docs"
+            / "Quick-start-Ascend.md"
+        ).read_text(encoding="utf-8")
+        for fragment in (
+            "--branch v1.15.0",
+            "nsync-1.22.0.tar.gz",
+            "#define ATM_CB_() __sync_synchronize()",
+            "sha256sum /tmp/nsync-1.22.0.tar.gz",
+            '"file:///tmp/nsync-1.22.0.tar.gz"',
+            "bazel-0.26.1-dist.zip",
+            "openjdk-8-jdk-headless",
+            "JAVA_HOME=/usr/lib/jvm/java-8-openjdk-arm64",
+            "| GCC | linux_gcc7.3.0 |",
+            "TensorFlow 1.15 requires linux_gcc7.3.0",
+            "-D_GLIBCXX_USE_CXX11_ABI=0",
+            "//tensorflow/tools/pip_package:build_pip_package",
+            "tensorflow-1.15.0-*.whl",
+        ):
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, doc)
+        self.assertNotIn(
+            "ascend-repo.obs.cn-east-2.myhuaweicloud.com/MindX/OpenSource/"
+            "python/packages/tensorflow-1.15.0",
+            doc,
+        )
+
+    def test_tf_adapter_uses_the_documented_pip3_target_install(self) -> None:
+        doc = (
+            _REPO_ROOT
+            / "projects"
+            / "tensorflow"
+            / "docs"
+            / "Quick-start-Ascend.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            'pip3 install "$ADAPTER_WHEEL" --force-reinstall '
+            '-t "$TFPLUGIN_INSTALL_PATH"',
+            doc,
+        )
+        self.assertIn(
+            'export PYTHONPATH=${TFPLUGIN_INSTALL_PATH}:$PYTHONPATH',
+            doc,
+        )
+        self.assertNotIn("uv pip install", doc)
+
+    def test_source_build_timeouts_cover_the_official_flow(self) -> None:
+        workflow = (
+            _REPO_ROOT / ".github" / "workflows" / "tensorflow-quick-start.yml"
+        ).read_text(encoding="utf-8")
+        test_file = (
+            _REPO_ROOT
+            / "projects"
+            / "tensorflow"
+            / "tests"
+            / "test_quick_start_ascend.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("timeout_minutes: 360", workflow)
+        self.assertIn("DEFAULT_COMMAND_TIMEOUT = 14400", test_file)
+
+    def test_install_sections_follow_the_upstream_document_structure(self) -> None:
+        doc = (
+            _REPO_ROOT
+            / "projects"
+            / "tensorflow"
+            / "docs"
+            / "Quick-start-Ascend.md"
+        ).read_text(encoding="utf-8")
+        headings = (
+            "## 安装前准备",
+            "### 编译安装 HDF5 1.10.5",
+            "### 安装 h5py",
+            "#### 安装 h5py 依赖包",
+            "#### 安装 h5py 2.8.0",
+            "## 安装 TensorFlow",
+            "### 1. 下载 nsync 1.22.0",
+            "### 2. 修改 nsync 1.22.0",
+            "### 3. 重新压缩 nsync 1.22.0",
+            "### 4. 生成 sha256sum 校验码",
+            "### 5. 修改 sha256sum 和 urls",
+            "### 6. 编译 TensorFlow",
+            "### 7. 安装编译好的 TensorFlow",
+            "### 8. 验证 TensorFlow",
+            "## 安装框架插件包 TF Adapter",
+            "### 安装插件包",
+            "#### 1. 获取 TF Adapter 安装包",
+            "#### 2. 安装 TF Adapter",
+            "#### 3. 设置 TF Adapter 环境变量",
+        )
+        positions = []
+        for heading in headings:
+            with self.subTest(heading=heading):
+                self.assertIn(heading, doc)
+            if heading in doc:
+                positions.append(doc.index(heading))
+        if len(positions) == len(headings):
+            self.assertEqual(positions, sorted(positions))
 
     def test_apt_uses_the_existing_arm64_mirror_pattern(self) -> None:
         doc = (

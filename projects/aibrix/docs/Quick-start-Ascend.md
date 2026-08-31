@@ -69,15 +69,24 @@ set -euo pipefail
 ci='/root/.cache/cosdt-ci-test/aibrix'
 cached="$ci/envoy/1.39.0/envoy"
 sum='ee53a4f5375566f15944dc9cb03afb1fc228df38f61737c677f139213215afcf'
-mkdir -p .aibrix-quick-start/bin
-if [ -f "$cached" ]; then
-  if echo "$sum  $cached" | sha256sum -c >/dev/null 2>&1; then
-    cp -a "$cached" .aibrix-quick-start/bin/envoy
-    chmod 0755 .aibrix-quick-start/bin/envoy
-  else
-    rm -f "$cached"
-  fi
+url='https://gh-proxy.test.osinfra.cn/https://github.com/envoyproxy/envoy/releases/download/v1.39.0/envoy-1.39.0-linux-aarch_64'
+mkdir -p .aibrix-quick-start/bin "$ci/envoy/1.39.0"
+if [ -f "$cached" ] && ! echo "$sum  $cached" | sha256sum -c >/dev/null 2>&1; then
+  rm -f "$cached"
 fi
+if [ ! -f "$cached" ]; then
+  (
+    flock 9
+    if [ ! -f "$cached" ]; then
+      curl -fL --connect-timeout 20 --retry 3 --retry-all-errors --retry-delay 3 --max-time 600 \
+        -o "$cached.part" "$url"
+      echo "$sum  $cached.part" | sha256sum -c
+      mv "$cached.part" "$cached"
+    fi
+  ) 9> "$ci/envoy/1.39.0/.lock"
+fi
+cp -a "$cached" .aibrix-quick-start/bin/envoy
+chmod 0755 .aibrix-quick-start/bin/envoy
 ```
 -->
 

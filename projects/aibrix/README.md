@@ -52,7 +52,7 @@ CI 容器里如果 `127.0.0.1:6060` 已被占用（例如本机调试时的 code
 
 example 线工具目录默认 `/root/.cache/cosdt-ci-test/aibrix/tools`（可用 `AIBRIX_TOOLS_DIR` 覆盖）。Go 工具链、Envoy、`GOPATH` / `GOCACHE`、vllm 源码树都在这里跨 run 复用。Envoy 和 vllm clone 的主源是组织代理 `https://gh-proxy.test.osinfra.cn/<原 GitHub URL>`，失败再直连 GitHub。
 
-Quick Start 文档的可见命令仍写官方 GitHub URL。跨 run 复用只在隐藏 `#test-setup` 里，路径是 `/root/.cache/cosdt-ci-test/aibrix/`（Envoy `envoy/1.39.0/envoy`，源码 `src/aibrix-<ref>` 和 `src/vllm-v0.23.0`）。workflow 把该目录按同路径挂进容器。
+Quick Start 文档的可见命令仍写官方 GitHub URL。跨 run 复用只在隐藏 `#test-setup` 里，路径是 `/root/.cache/cosdt-ci-test/aibrix/`（Envoy `envoy/1.39.0/envoy`，源码 `src/aibrix-<ref>` 和 `src/vllm-v0.23.0`）。workflow 把该目录按同路径挂进容器。Envoy 的隐藏 restore 块在缓存未命中时会经组织代理下载（CI 直连 GitHub Release 只有十几 KB/s，可见块必然超 1200 秒块超时），sha256 校验后原子写入缓存再预置工作目录；代理也失败则该块直接非 0，秒级失败，不再烧一个块超时。
 
 ## 触发
 

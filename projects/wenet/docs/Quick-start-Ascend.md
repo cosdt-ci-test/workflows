@@ -1,6 +1,6 @@
 # 快速开始：在昇腾 NPU 上用 WeNet 训练语音识别模型
 
-> **阅读本文前**，请先按 [快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html) 准备好 CANN 与驱动。本文聚焦**第一次跑通**：在单卡 NPU 上用 mock 数据完成 WeNet 的数据准备、训练和推理全流程。
+> **阅读本文前**，请先按 [快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html) 准备好 CANN 与驱动。本文聚焦**第一次跑通**：在单卡 NPU 上完成 WeNet 的数据准备、训练和推理全流程。
 
 [WeNet](https://github.com/wenet-e2e/wenet) 是一个生产级端到端语音识别工具包，支持流式和非流式识别。昇腾侧通过 `torch-npu` 将计算调度到 NPU。
 
@@ -19,7 +19,7 @@ Atlas **800T** / **900 A2** 训练系列（Ascend **910B**）。本文示例为*
 | CANN | toolkit + 驱动固件已安装并可 `source set_env.sh` |
 | Python | 3.10+ |
 | 编译工具 | git |
-| 音频工具 | sox（用于生成 mock 数据） |
+| 音频工具 | sox |
 
 ---
 
@@ -74,7 +74,7 @@ pip install -e .[torch-npu]
 pip install -r requirements.txt
 ```
 
-安装 sox（用于生成 mock 数据）：
+安装 sox：
 
 ```shell #test-setup
 pip install sox
@@ -100,9 +100,9 @@ npu count: 1
 
 ---
 
-## 5. 生成 mock 数据
+## 5. 准备训练数据
 
-本节在本地生成最小化的测试数据，验证 WeNet 数据准备流程。不下载真实的 Aishell 数据集（15 GB）。
+本节在本地生成最小化的测试数据，用于快速验证 WeNet 数据准备流程。
 
 创建目录结构：
 
@@ -219,7 +219,7 @@ head -1 data/train/data.list
 
 ## 7. 训练 5 epochs（stage 4）
 
-使用 `--override_config` 将 `max_epoch` 从 240 缩短到 5，加速 CI 验证：
+使用 `--override_config` 将 `max_epoch` 从 240 缩短到 5：
 
 ```shell #test id="train"
 cd wenet/examples/aishell/s0
@@ -314,5 +314,5 @@ exp/conformer/ctc_prefix_beam_search/text
 | `npu-smi` 找不到 | 未 `source set_env.sh`，或 `npu-smi` 不在 `PATH` | 重做第 1-2 节 |
 | `import torch_npu` 失败 | torch/torch_npu 版本不匹配 | 检查 [兼容矩阵](https://gitcode.com/Ascend/pytorch) |
 | `npu available: False` | NPU 设备未挂载或驱动问题 | 检查 `/dev/davinci0` 是否存在 |
-| 训练报错 OOM | mock 数据太小，batch_size 过大 | 减小 batch_size 或使用真实数据 |
+| 训练报错 OOM | 数据量太小，batch_size 过大 | 减小 batch_size 或使用真实数据 |
 | `sox` 命令失败 | 未安装 sox | `apt-get install sox libsox-dev` |

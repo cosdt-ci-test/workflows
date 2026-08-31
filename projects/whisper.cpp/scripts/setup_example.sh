@@ -11,17 +11,26 @@ fi
 
 PROFILE="$1"
 
-TINY_EN_URL=https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin
 TINY_EN_DEST=/root/.cache/cosdt-ci-test/whisper.cpp/ggml-tiny.en.bin
 TINY_EN_SHA256=921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f
+TINY_EN_URLS=(
+  https://www.modelscope.cn/models/cjc1887415157/whisper.cpp/resolve/master/ggml-tiny.en.bin
+  https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin
+)
 
-PARAKEET_F16_URL=https://hf-mirror.com/ggml-org/parakeet-GGUF/resolve/main/ggml-parakeet-tdt-0.6b-v3-f16.bin
 PARAKEET_F16_DEST=/root/.cache/cosdt-ci-test/whisper.cpp/ggml-parakeet-tdt-0.6b-v3-f16.bin
 PARAKEET_F16_SHA256=833bffc9513b2cae867ee9e51633cfd11e4d51aaa5597c8ac02159385a2b426f
+PARAKEET_F16_URLS=(
+  https://www.modelscope.cn/models/ggml-org/parakeet-GGUF/resolve/master/ggml-parakeet-tdt-0.6b-v3-f16.bin
+  https://hf-mirror.com/ggml-org/parakeet-GGUF/resolve/main/ggml-parakeet-tdt-0.6b-v3-f16.bin
+)
 
-VAD_URL=https://hf-mirror.com/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin
 VAD_DEST=/root/.cache/cosdt-ci-test/whisper.cpp/ggml-silero-v6.2.0.bin
 VAD_SHA256=2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987
+VAD_URLS=(
+  https://www.modelscope.cn/models/ggml-org/whisper-vad/resolve/master/ggml-silero-v6.2.0.bin
+  https://hf-mirror.com/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin
+)
 
 NODE_VERSION=v20.18.2
 NODE_ARCH=linux-arm64
@@ -31,6 +40,9 @@ NODE_TARBALL="${NODE_DEST}.tar.xz"
 NODE_URL="https://mirrors.huaweicloud.com/nodejs/${NODE_VERSION}/${NODE_NAME}.tar.xz"
 NODE_TARBALL_SHA256=5c1437aa16e7e6a2e0687a42c4d3f0a8f8a2039cda8880cb3be8cd983aeefb44
 NPM_REGISTRY=https://repo.huaweicloud.com/repository/npm/
+NVM_NODEJS_ORG_MIRROR=https://mirrors.huaweicloud.com/nodejs
+CMAKE_JS_CACHE=/root/.cache/cosdt-ci-test/whisper.cpp/cmake-js
+CMAKE_JS_RUNTIME="${HOME}/.cmake-js/node-arm64/${NODE_VERSION}"
 
 file_sha256() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -70,11 +82,13 @@ download_to_part() {
     "$url" -o "$part"
 }
 
-# Resume-then-scratch GET into dest. Caller holds the lock if needed.
+# Resume-then-scratch GET into dest, trying each URL in order.
+# Usage: fetch_pinned <dest> <sha256> <url> [url...]
+# Caller holds the lock if needed.
 fetch_pinned() {
-  local url="$1"
-  local dest="$2"
-  local expected_sha="$3"
+  local dest="$1"
+  local expected_sha="$2"
+  shift 2
   local part="$dest.part"
   if file_complete "$dest" "$expected_sha"; then
     echo "reusing $dest"
@@ -84,51 +98,56 @@ fetch_pinned() {
     echo "cached $dest is corrupt or the wrong object; re-downloading" >&2
     rm -f "$dest"
   fi
-  if ! download_to_part "$url" "$part" -C - \
-    || ! file_complete "$part" "$expected_sha"; then
-    echo "resume produced no valid file at $part; downloading from scratch" >&2
-    rm -f "$part"
-    if ! download_to_part "$url" "$part"; then
-      echo "failed to download from $url" >&2
-      rm -f "$part"
-      exit 1
+  local url
+  for url in "$@"; do
+    echo "fetching $dest from $url"
+    if download_to_part "$url" "$part" -C - \
+      && file_complete "$part" "$expected_sha"; then
+      mv -f "$part" "$dest"
+      return
     fi
-  fi
-  if ! file_complete "$part" "$expected_sha"; then
-    echo "downloaded file failed checksum: $part" >&2
+    echo "resume from $url produced no valid file; downloading from scratch" >&2
     rm -f "$part"
-    exit 1
-  fi
-  mv -f "$part" "$dest"
+    if download_to_part "$url" "$part" \
+      && file_complete "$part" "$expected_sha"; then
+      mv -f "$part" "$dest"
+      return
+    fi
+    echo "failed to fetch a valid file from $url" >&2
+    rm -f "$part"
+  done
+  echo "all download sources failed for $dest" >&2
+  exit 1
 }
 
 fetch_ggml() {
-  local url="$1"
-  local dest="$2"
-  local expected_sha="$3"
-  local env_name="$4"
+  local dest="$1"
+  local expected_sha="$2"
+  local env_name="$3"
+  shift 3
   mkdir -p "$(dirname "$dest")"
   local lock="$dest.lock"
   (
     flock 9
-    fetch_pinned "$url" "$dest" "$expected_sha"
+    fetch_pinned "$dest" "$expected_sha" "$@"
     echo "${env_name}=${dest}" >> "$GITHUB_ENV"
     echo "model ready: $dest"
   ) 9>"$lock"
 }
 
 fetch_tiny_en() {
-  fetch_ggml "$TINY_EN_URL" "$TINY_EN_DEST" "$TINY_EN_SHA256" \
-    WHISPER_CI_MODEL
+  fetch_ggml "$TINY_EN_DEST" "$TINY_EN_SHA256" WHISPER_CI_MODEL \
+    "${TINY_EN_URLS[@]}"
 }
 
 fetch_parakeet_f16() {
-  fetch_ggml "$PARAKEET_F16_URL" "$PARAKEET_F16_DEST" \
-    "$PARAKEET_F16_SHA256" PARAKEET_CI_MODEL
+  fetch_ggml "$PARAKEET_F16_DEST" "$PARAKEET_F16_SHA256" PARAKEET_CI_MODEL \
+    "${PARAKEET_F16_URLS[@]}"
 }
 
 fetch_vad() {
-  fetch_ggml "$VAD_URL" "$VAD_DEST" "$VAD_SHA256" WHISPER_CI_VAD_MODEL
+  fetch_ggml "$VAD_DEST" "$VAD_SHA256" WHISPER_CI_VAD_MODEL \
+    "${VAD_URLS[@]}"
 }
 
 configure_cann_build() {
@@ -148,7 +167,42 @@ node_complete() {
 }
 
 fetch_node_tarball() {
-  fetch_pinned "$NODE_URL" "$NODE_TARBALL" "$NODE_TARBALL_SHA256"
+  fetch_pinned "$NODE_TARBALL" "$NODE_TARBALL_SHA256" "$NODE_URL"
+}
+
+restore_cmake_js_runtime() {
+  local dest="$CMAKE_JS_RUNTIME"
+  local cache="$CMAKE_JS_CACHE/node-arm64/${NODE_VERSION}"
+  if [[ -s "$dest/include/node/node.h" ]]; then
+    echo "cmake-js headers already at $dest"
+    return
+  fi
+  if [[ -s "$cache/include/node/node.h" ]]; then
+    mkdir -p "$(dirname "$dest")"
+    rm -rf "$dest"
+    cp -a "$cache" "$dest"
+    echo "restored cmake-js headers from $cache"
+  fi
+}
+
+stage_cmake_js_runtime() {
+  local dest="$CMAKE_JS_RUNTIME"
+  local cache="$CMAKE_JS_CACHE/node-arm64/${NODE_VERSION}"
+  if [[ ! -s "$dest/include/node/node.h" ]] \
+      && [[ -s "$NODE_DEST/include/node/node.h" ]]; then
+    mkdir -p "$dest"
+    rm -rf "$dest/include"
+    cp -a "$NODE_DEST/include" "$dest/"
+    echo "staged cmake-js headers from $NODE_DEST"
+  fi
+  if [[ -s "$dest/include/node/node.h" ]] \
+      && [[ ! -s "$cache/include/node/node.h" ]]; then
+    mkdir -p "$(dirname "$cache")"
+    rm -rf "${cache}.part"
+    cp -a "$dest" "${cache}.part"
+    mv "${cache}.part" "$cache"
+    echo "persisted cmake-js headers to $cache"
+  fi
 }
 
 extract_node() {
@@ -297,18 +351,20 @@ setup_cmake-pkg() {
 
 setup_node() {
   source_cann
+  restore_cmake_js_runtime
   ensure_node
+  stage_cmake_js_runtime
   fetch_tiny_en
   patch_addon_prints
   npm install --prefix "$TARGET_ROOT/examples/addon.node" \
     --registry "$NPM_REGISTRY"
+  export NVM_NODEJS_ORG_MIRROR
   (
     cd "$TARGET_ROOT"
     npx --prefix "$TARGET_ROOT/examples/addon.node" cmake-js compile \
       -d "$TARGET_ROOT" \
       -T addon.node \
       -B Release \
-      --dist-url https://mirrors.huaweicloud.com/nodejs \
       --CDGGML_CANN=on
   )
   if [[ ! -f "$TARGET_ROOT/build/Release/addon.node" ]]; then

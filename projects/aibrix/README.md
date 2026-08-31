@@ -48,6 +48,12 @@ python3 scripts/bootstrap_manifest.py \
 
 CI 容器里如果 `127.0.0.1:6060` 已被占用（例如本机调试时的 coder agent），文档里有一段隐藏的 `#test-setup` 只给 `gateway-plugins` 套一层 `localhost -> 127.0.0.2` 的 hosts remap。vLLM 仍在主机网络里跑。example 线用 `scripts/with_free_pprof.sh` 只包 `run-local.sh`。用户文档不写这一步。用户机器上 6060 空闲时，原样 `run-local.sh` 即可。
 
+## 缓存与下载源
+
+example 线工具目录默认 `/root/.cache/cosdt-ci-test/aibrix/tools`（可用 `AIBRIX_TOOLS_DIR` 覆盖）。Go 工具链、Envoy、`GOPATH` / `GOCACHE`、vllm 源码树都在这里跨 run 复用。Envoy 和 vllm clone 的主源是组织代理 `https://gh-proxy.test.osinfra.cn/<原 GitHub URL>`，失败再直连 GitHub。
+
+Quick Start 文档的可见命令仍写官方 GitHub URL。跨 run 复用只在隐藏 `#test-setup` 里，路径是 `/root/.cache/cosdt-ci-test/aibrix/`（Envoy `envoy/1.39.0/envoy`，源码 `src/aibrix-<ref>` 和 `src/vllm-v0.23.0`）。workflow 把该目录按同路径挂进容器。
+
 ## 触发
 
 `aibrix-examples.yml` 有两种入口。`monitor` 跑在 `ubuntu-latest`，不占 NPU。

@@ -423,3 +423,17 @@ projects:
     dir: projects/tilelang
     workflows:
       quick_start: .github/workflows/tilelang-quick-start.yml
+  # wenet quickstart exercises the full ASR pipeline on Ascend NPU:
+  # mock data generation (sox) -> data prep (stage 2-3) -> training
+  # (stage 4, 5 epochs via --override_config) -> inference (stage 5).
+  # No real dataset download needed; validates torch-npu compatibility
+  # and end-to-end training/inference flow.
+  - name: wenet
+    category: 推理加速
+    support_level: 新兴适配
+    upstream_repo: wenet-e2e/wenet
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/wenet
+    workflows:
+      quick_start: .github/workflows/wenet-quick-start.yml

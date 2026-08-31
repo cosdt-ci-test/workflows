@@ -73,6 +73,7 @@ git checkout <UPSTREAM_REF>
 安装 WeNet 及其 NPU 依赖：
 
 ```shell #test-setup id="install"
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
 cd wenet
 pip install -e .[torch-npu]
 pip install -r requirements.txt

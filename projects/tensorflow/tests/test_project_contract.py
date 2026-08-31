@@ -389,6 +389,85 @@ class TestTensorFlowProjectContract(unittest.TestCase):
         self.assertIn(mirror, doc)
         self.assertLess(doc.index(mirror), doc.index("apt-get update"))
 
+    def test_apt_update_and_install_are_separate_verbose_steps(self) -> None:
+        doc_path = (
+            _REPO_ROOT
+            / "projects"
+            / "tensorflow"
+            / "docs"
+            / "Quick-start-Ascend.md"
+        )
+        text = doc_path.read_text(encoding="utf-8")
+        commands, _ = _Parser().parse(text)
+        update_index = next(
+            i for i, command in enumerate(commands)
+            if "apt-get update" in command.cmd
+        )
+        install_index = next(
+            i for i, command in enumerate(commands)
+            if "apt-get install" in command.cmd
+        )
+        self.assertEqual(install_index, update_index + 1)
+        self.assertNotIn("apt-get install", commands[update_index].cmd)
+        self.assertNotIn("apt-get update", commands[install_index].cmd)
+        self.assertNotIn("-qq", text)
+
+    def test_long_running_steps_emit_progress_boundaries(self) -> None:
+        doc_path = (
+            _REPO_ROOT
+            / "projects"
+            / "tensorflow"
+            / "docs"
+            / "Quick-start-Ascend.md"
+        )
+        commands, _ = _Parser().parse(doc_path.read_text(encoding="utf-8"))
+        boundaries = (
+            ("apt-get update", "Updating package indexes", "Package indexes updated"),
+            (
+                "apt-get install",
+                "Installing build dependencies",
+                "Build dependencies installed",
+            ),
+            ("Python-3.9.25.tgz", "Preparing Python 3.9.25", "Python 3.9.25 is ready"),
+            (
+                "hdf5-1.10.5.tar.gz",
+                "Downloading HDF5 1.10.5",
+                "HDF5 1.10.5 source is ready",
+            ),
+            ("make -j16", "Building HDF5 1.10.5", "HDF5 1.10.5 is ready"),
+            (
+                'pip3 install "h5py==3.1.0"',
+                "Installing h5py 3.1.0",
+                "h5py 3.1.0 is installed",
+            ),
+            (
+                'pip3 install "$TF_WHEEL"',
+                "Installing TensorFlow 2.6.5",
+                "TensorFlow 2.6.5 is installed",
+            ),
+            (
+                "tfa_v0.0.49_9.1.0/npu_device",
+                "Downloading TF Adapter 9.1.0",
+                "TF Adapter wheel is ready",
+            ),
+            (
+                'pip3 install "$ADAPTER_WHEEL"',
+                "Installing npu_device 2.6.5",
+                "npu_device 2.6.5 is installed",
+            ),
+        )
+        for command_marker, before, after in boundaries:
+            command = next(
+                command.cmd for command in commands
+                if command_marker in command.cmd
+            )
+            with self.subTest(command_marker=command_marker):
+                self.assertIn(before, command)
+                self.assertIn(after, command)
+                if before in command and after in command:
+                    self.assertLess(command.index(before), command.index(command_marker))
+                    self.assertLess(command.index(command_marker), command.index(after))
+
     def test_quick_start_explains_user_actions_not_ci_internals(self) -> None:
         doc = (
             _REPO_ROOT

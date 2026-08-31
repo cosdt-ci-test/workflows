@@ -68,17 +68,26 @@ CANN 镜像已有的 Python 3.12。
 ```shell #test-setup
 set -euo pipefail
 sed -i 's|http://ports.ubuntu.com/ubuntu-ports/|https://mirrors.aliyun.com/ubuntu-ports/|g' /etc/apt/sources.list
-apt-get update -qq
-apt-get install -y -qq --no-install-recommends \
+echo "Updating package indexes..."
+apt-get update
+echo "Package indexes updated."
+```
+
+```shell #test-setup
+set -euo pipefail
+echo "Installing build dependencies..."
+apt-get install -y --no-install-recommends \
   build-essential ca-certificates curl \
   libbz2-dev libffi-dev libgdbm-dev liblzma-dev libncurses5-dev \
   libreadline-dev libsqlite3-dev libssl-dev tk-dev uuid-dev zlib1g-dev
+echo "Build dependencies installed."
 ```
 
 ### 安装 Python 3.9.25
 
 ```shell #test-setup
 set -euo pipefail
+echo "Preparing Python 3.9.25..."
 PYTHON_PREFIX=/usr/local/python3.9.25
 PYTHON_ARCHIVE=/tmp/Python-3.9.25.tgz
 
@@ -97,6 +106,7 @@ fi
 ln -sfn "$PYTHON_PREFIX/bin/python3.9" "$PYTHON_PREFIX/bin/python3"
 ln -sfn "$PYTHON_PREFIX/bin/pip3.9" "$PYTHON_PREFIX/bin/pip3"
 export PATH="$PYTHON_PREFIX/bin:$PATH"
+echo "Python 3.9.25 is ready."
 ```
 
 ### 编译安装 HDF5 1.10.5
@@ -107,6 +117,7 @@ export PATH="$PYTHON_PREFIX/bin:$PATH"
 
 ```shell #test-setup
 set -euo pipefail
+echo "Downloading HDF5 1.10.5 if needed..."
 HDF5_ARCHIVE=/tmp/hdf5-1.10.5.tar.gz
 if [ ! -s "$HDF5_ARCHIVE" ]; then
   curl -fL --retry 5 --retry-all-errors --connect-timeout 30 --max-time 600 \
@@ -115,6 +126,7 @@ if [ ! -s "$HDF5_ARCHIVE" ]; then
   echo "6d4ce8bf902a97b050f6f491f4268634e252a63dadd6656a1a9be5b7b7726fa8  $HDF5_ARCHIVE" \
     | sha256sum -c -
 fi
+echo "HDF5 1.10.5 source is ready."
 ```
 
 #### 解压 HDF5 源码包
@@ -128,12 +140,14 @@ tar -zxvf /tmp/hdf5-1.10.5.tar.gz -C /tmp
 
 ```shell #test-setup
 set -euo pipefail
+echo "Building HDF5 1.10.5 if needed..."
 HDF5_PREFIX=/usr/local/hdf5
 if [ ! -x "$HDF5_PREFIX/bin/h5cc" ]; then
   cd /tmp/hdf5-1.10.5
   ./configure --prefix=/usr/local/hdf5
   make -j16 && make install
 fi
+echo "HDF5 1.10.5 is ready."
 ```
 
 #### 配置 HDF5 环境变量
@@ -149,6 +163,7 @@ export LD_LIBRARY_PATH=/usr/local/hdf5/lib/:${LD_LIBRARY_PATH:-}
 
 ```shell #test-setup
 set -euo pipefail
+echo "Installing h5py dependencies..."
 export PATH=/usr/local/python3.9.25/bin:$PATH
 export CPATH=/usr/local/hdf5/include/:/usr/local/hdf5/lib/
 export LD_LIBRARY_PATH=/usr/local/hdf5/lib/:${LD_LIBRARY_PATH:-}
@@ -156,16 +171,19 @@ pip3 install "setuptools==59.8.0"
 pip3 install "Cython<3"
 pip3 install wheel
 pip3 install "numpy==1.19.5"
+echo "h5py dependencies installed."
 ```
 
 #### 安装 h5py 3.1.0
 
 ```shell #test-setup
 set -euo pipefail
+echo "Installing h5py 3.1.0..."
 export PATH=/usr/local/python3.9.25/bin:$PATH
 export CPATH=/usr/local/hdf5/include/:/usr/local/hdf5/lib/
 export LD_LIBRARY_PATH=/usr/local/hdf5/lib/:${LD_LIBRARY_PATH:-}
 HDF5_DIR=/usr/local/hdf5 pip3 install "h5py==3.1.0"
+echo "h5py 3.1.0 is installed."
 ```
 
 检查 Python、HDF5、numpy 和 h5py 版本：
@@ -207,6 +225,7 @@ PyPI 没有 Linux aarch64 的 TensorFlow 2.6.5 wheel。这里使用 Ascend 官�
 
 ```shell #test-setup
 set -euo pipefail
+echo "Installing TensorFlow 2.6.5..."
 TF_CACHE=/root/.cache/tensorflow
 TF_WHEEL="$TF_CACHE/wheels/tensorflow-2.6.5-cp39-cp39-linux_aarch64.whl"
 mkdir -p "$TF_CACHE/wheels"
@@ -223,6 +242,7 @@ echo "be1c8f52d6a72cc0db5826605f61c196777f5939441b7e87442688a5d1866bd0  $TF_WHEE
 export PATH=/usr/local/python3.9.25/bin:$PATH
 pip3 install "protobuf==3.19.6"
 pip3 install "$TF_WHEEL"
+echo "TensorFlow 2.6.5 is installed."
 ```
 
 验证 TensorFlow 版本和 Eager 模式：
@@ -257,6 +277,7 @@ TF Adapter 2.x 通过 `npu_device` 将 NPU 注册为 TensorFlow 自定义设备�
 
 ```shell #test-setup
 set -euo pipefail
+echo "Downloading TF Adapter 9.1.0 if needed..."
 PACKAGE_DIR=/home/package
 ADAPTER_WHEEL="$PACKAGE_DIR/npu_device-2.6.5-py3-none-manylinux2014_aarch64.whl"
 mkdir -p "$PACKAGE_DIR"
@@ -269,17 +290,20 @@ if [ ! -s "$ADAPTER_WHEEL" ]; then
 fi
 echo "68a14762b24ebfafe554c2a29406be2932b82a1950938d1de97a2cc0909d73fc  $ADAPTER_WHEEL" \
   | sha256sum -c - >/dev/null
+echo "TF Adapter wheel is ready."
 ```
 
 #### 2. 安装 TF Adapter
 
 ```shell #test-setup
 set -euo pipefail
+echo "Installing npu_device 2.6.5..."
 export PATH=/usr/local/python3.9.25/bin:$PATH
 TFPLUGIN_INSTALL_PATH=$HOME/Ascend/tfplugin
 ADAPTER_WHEEL=/home/package/npu_device-2.6.5-py3-none-manylinux2014_aarch64.whl
 mkdir -p "$TFPLUGIN_INSTALL_PATH"
 pip3 install "$ADAPTER_WHEEL" --force-reinstall -t "$TFPLUGIN_INSTALL_PATH"
+echo "npu_device 2.6.5 is installed."
 ```
 
 - `--force-reinstall`：强制重新安装插件包。

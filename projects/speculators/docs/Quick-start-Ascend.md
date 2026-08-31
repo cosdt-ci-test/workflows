@@ -111,7 +111,7 @@ torch=2.10.0+cpu
 torch_npu=2.10.0.post4
 is_available: True
 npu_count: xxx
-vllm=0.23.0
+vllm=0.23.0+empty
 vllm_ascend=0.23.0
 triton_ascend=3.2.2
 triton=3.5.0

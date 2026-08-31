@@ -21,8 +21,8 @@ jobs:
     with:
       project: flash-linear-attention
       test_runner: '["linux-aarch64-a2-1"]'
-      # Latest release v0.5.2 uses the upstream CANN 9.0 / Python 3.11 stack.
-      image: ascendai/cann:9.0.0-910b-ubuntu22.04-py3.11
+      # SWR mirrors the upstream v0.5.2 CANN 9.0 / Python 3.11 image.
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
       container_options: '--shm-size=16g'
       timeout_minutes: 120
       upstream_repo: fla-org/flash-linear-attention

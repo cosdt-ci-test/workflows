@@ -69,6 +69,10 @@ on:
         description: Upstream repo (owner/name) polled for releases; recorded as target_repo in result.json
         type: string
         required: true
+      fixed_ref:
+        description: Optional upstream tag/branch/SHA to test instead of auto-resolving the latest release; its commit SHA is still monitored for changes
+        type: string
+        default: ''
       doc_url:
         description: URL of the monitored quick-start doc; the monitor hashes it and the test fetches the same URL
         type: string
@@ -161,6 +165,7 @@ jobs:
       # Engine-fixed env: upstream repo + monitored doc come from the
       # caller's inputs (caller env does not cross the `uses:` boundary).
       UPSTREAM_REPO: ${{ inputs.upstream_repo }}
+      FIXED_REF: ${{ inputs.fixed_ref }}
       MONITORED_DOC_URL: ${{ inputs.doc_url }}
       GH_TOKEN: ${{ github.token }}
       GH_API: https://api.github.com
@@ -262,7 +267,10 @@ jobs:
           echo "monitor cache: release(id=$last_release_id) doc(hash=$doc_hash) test(result=$test_result error=$test_error)"
 
           # ----- release signal -----
-          # Automatic fallback chain — no caller input needed:
+          # When FIXED_REF is set, resolve that tag/branch/SHA directly.
+          # Its commit SHA remains the change-detection key, so a mutable
+          # fixed branch can still fire the release signal. Otherwise use
+          # the automatic fallback chain:
           #   1. /releases/latest          (default path; most upstreams)
           #   2. /releases?per_page=20     (covers prerelease-only repos, e.g.
           #                                 torchtitan pre-stable where
@@ -297,7 +305,23 @@ jobs:
           # at one step falls through cleanly to the next instead of
           # aborting the whole monitor cycle.
           : > /tmp/release.json  # start empty; each step either writes or leaves empty
-          if curl -fsSL --retry 3 --max-time 30 \
+          if [ -n "$FIXED_REF" ]; then
+            if curl -fsSL --retry 3 --max-time 30 \
+                "$GH_API/repos/${{ env.UPSTREAM_REPO }}/commits/$FIXED_REF" \
+                -o /tmp/fixed-ref.json 2>/dev/null; then
+              jq --arg ref "$FIXED_REF" \
+                '{id: (.sha // ""), tag_name: $ref}' \
+                /tmp/fixed-ref.json > /tmp/release.json
+              echo "monitor: release source=/commits/$FIXED_REF (caller-fixed ref)"
+            else
+              # Preserve the requested ref so a doc/retry signal can still
+              # test it; the decide step's final commit lookup will fail
+              # explicitly if the GitHub API remains unavailable.
+              jq -n --arg ref "$FIXED_REF" \
+                '{id: "", tag_name: $ref}' > /tmp/release.json
+              echo "monitor: failed to resolve fixed ref $FIXED_REF; release signal unavailable"
+            fi
+          elif curl -fsSL --retry 3 --max-time 30 \
               "$GH_API/repos/${{ env.UPSTREAM_REPO }}/releases/latest" -o /tmp/r1.json 2>/dev/null \
               && jq -e '.tag_name // empty' /tmp/r1.json > /dev/null 2>&1; then
             mv /tmp/r1.json /tmp/release.json
@@ -428,7 +452,11 @@ jobs:
             # output, so this collapses to four jq expressions over
             # /tmp/r{1,2,3,4}.json.
             ref=""
-            if curl -fsSL --retry 3 --max-time 30 \
+            if [ -n "$FIXED_REF" ]; then
+              ref="$FIXED_REF"
+              echo "monitor: ref source=caller-fixed ref ($ref)"
+            fi
+            if [ -z "$ref" ] && curl -fsSL --retry 3 --max-time 30 \
                 "$GH_API/repos/${{ env.UPSTREAM_REPO }}/releases/latest" -o /tmp/r1.json 2>/dev/null; then
               ref=$(jq -r '.tag_name // empty' /tmp/r1.json)
             fi

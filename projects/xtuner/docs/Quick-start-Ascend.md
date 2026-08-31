@@ -85,7 +85,7 @@ Python 3.12.xxx
 
 ```shell #test-setup
 uv pip install -f https://mirrors.aliyun.com/pytorch-wheels/cpu torch==2.11.0
-uv pip install --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi torch_npu==2.11.0
+uv pip install --extra-index-url https://mirrors.aliyun.com/pypi/simple torch_npu==2.11.0
 ```
 
 检查 torch / torch_npu 是否装好且 NPU 设备可用：
@@ -212,8 +212,22 @@ has_chat: True
 
 下载 InternLM2-Chat-7B 权重（约 14 GB，落到 `./Shanghai_AI_Laboratory/internlm2-chat-7b/`）：
 
-```shell #test-setup
-python -c "from modelscope import snapshot_download; snapshot_download('Shanghai_AI_Laboratory/internlm2-chat-7b', cache_dir='./Shanghai_AI_Laboratory')"
+```shell #test-setup store="xtuner_weights_path"
+# modelscope snapshot_download 返回的路径是 `<cache_dir>/<namespace>/<name>` 结构，对
+# `cache_dir=./Shanghai_AI_Laboratory` + `Shanghai_AI_Laboratory/internlm2-chat-7b` 实际落到
+# `./Shanghai_AI_Laboratory/Shanghai_AI_Laboratory/internlm2-chat-7b/`。硬编码
+# `./Shanghai_AI_Laboratory/internlm2-chat-7b` 会让 xtuner.tools.train 找不到 weights。把
+# 返回值 print 出来，store 给 patch 用真实路径：
+# print 绝对路径给后面 patch-cfg + smoke 用：cwd 在 patch-cfg / smoke 之间会变（smoke 多卡走
+# `cd xtuner` 让 xtuner 包走 cwd FileFinder 解析），如果 store 的是相对路径，到 smoke 阶段
+# `cfg.pretrained_model_name_or_path` 就指错地方了。`os.path.abspath` 把 cwd 钉到调用瞬间，
+# 后面 cat-relative/cat-absolute 都能用。
+python -c "
+import os
+from modelscope import snapshot_download
+path = snapshot_download('Shanghai_AI_Laboratory/internlm2-chat-7b', cache_dir='./Shanghai_AI_Laboratory')
+print(os.path.abspath(path))
+"
 ```
 
 ```shell #test id="xtuner-pull-weights"
@@ -313,7 +327,17 @@ config_name=$(python -c "
 from xtuner.configs import cfgs_name_path
 import re
 names = sorted(cfgs_name_path.keys())
-match = next((n for n in names if re.search(r'(internlm2|llama).*qlora.*colorist', n)), '')
+# 优先选 7b：本文档的 pull-weights 只下 7b（Shanghai_AI_Laboratory/internlm2-chat-7b），
+# 而 sorted+next 的 ASCII 序 '2' < '7'，20b 会抢在 7b 前面，把 patch 后的 model_path 指向
+# 不存在的 -20b/ 目录训不动。三层 fallback：
+#   1. internlm_chat_7b.*qlora.*colorist —— exact match doc 实际下的 chat-7b
+#   2. .*_7b.*qlora.*colorist —— 任何 _7b_ qlora colorist（internlm2_7b base / llama2_7b 等）
+#   3. (internlm2|llama).*qlora.*colorist —— 任何 qlora colorist，最后兜底
+# 注意不能用 `colorist.*7b` 收尾：cfg name 形如 `internlm2_7b_qlora_colorist_e5`，size token 在
+# 开头（7b / 20b），`7b` 不会出现在 `colorist` 后面；之前那条 regex 命中 0 个，fallback 必拿 20b。
+match = next((n for n in names if re.search(r'internlm_chat_7b.*qlora.*colorist', n)),
+             next((n for n in names if re.search(r'.*_7b.*qlora.*colorist', n)),
+                   next((n for n in names if re.search(r'(internlm2|llama).*qlora.*colorist', n)), '')))
 print(match)
 ")
 test -n "$config_name" || { echo "no matching config ((internlm2|llama).*qlora.*colorist); abort"; exit 1; }
@@ -341,10 +365,10 @@ print(save_path)
 
 拷出来的 config 跟模板原版完全一致，按模板的 4 处修改规则调整（详见 [legacy quickstart 模板的"修改配置文件"小节](https://xtuner.readthedocs.io/zh-cn/latest/legacy/get_started/quickstart.html)）。`<cfg>` 是上一节「准备配置文件」store 出来的 cfg 绝对路径：
 
-```shell #test-setup load="xtuner_llm_cfg_path>>cfg" store="xtuner_llm_cfg_path"
+```shell #test-setup load="xtuner_llm_cfg_path>>cfg" load="xtuner_weights_path>>weights_dir" store="xtuner_llm_cfg_path"
 # 把模板里那 4 处 patch 应用到 copy-cfg 出来的 config 上：
 #   PART 1 Settings
-#     pretrained_model_name_or_path = './Shanghai_AI_Laboratory/internlm2-chat-7b'
+#     pretrained_model_name_or_path = '<weights_dir>'   # pull-weights store 出来的真实路径
 #     data_path = './colors/train.jsonl'
 #     prompt_template = PROMPT_TEMPLATE.internlm2_chat
 #   PART 3 Dataset & Dataloader
@@ -355,25 +379,42 @@ print(save_path)
 python -c "
 import re
 path = '<cfg>'
+weights_dir = '<weights_dir>'
 with open(path) as f:
     text = f.read()
 # 4 处 patch：
-#   pretrained_model_name_or_path 用 regex 同时覆盖 7b/20b 两种 cfg（xtuner v0.2.0 的 colorist cfg 是
-#   llama 版，V1 之后才有 internlm2 版；不同 size 的 HF 模型名不一样，自动取 size 后缀）
+#   pretrained_model_name_or_path：直接替换成 pull-weights store 出来的真实路径（modelscope
+#   返回的 cache 路径，含 <cache_dir>/<namespace>/<name>，跟 cfg 模板里的 HF repo_id 不
+#   同结构；旧代码硬编码 ./Shanghai_AI_Laboratory/internlm2-chat-Xb，文件实际落在更深的
+#   目录里，xtuner.tools.train 进 transformers.hub.cached_file 报 OSError path_or_model_id）
 text, n = re.subn(
-    r'pretrained_model_name_or_path = \"internlm/internlm2-(\d+b)\"',
-    r\"pretrained_model_name_or_path = './Shanghai_AI_Laboratory/internlm2-chat-\1'\",
+    r'pretrained_model_name_or_path = \"internlm/internlm(?:2|-chat)-\d+b\"',
+    f\"pretrained_model_name_or_path = {weights_dir!r}\",
     text,
 )
 assert n == 1, f'pretrained_model_name_or_path patch applied {n} times (expected 1)'
+# data_path 用绝对路径：`xtuner-train-smoke-setup` 里有 `cd xtuner` 把 cwd 改到 clone 的 xtuner
+# 源目录（避免 editable finder 把 xtuner 当 namespace package），相对路径 `./colors/train.jsonl`
+# 在那个 cwd 下找不到。pull-dataset 把 colors 落到 framework cwd（即 projects/xtuner/），用
+# `os.path.dirname(<cfg>)` 反推 pull-dataset cwd 是同一个，因为 <cfg> 是 framework cwd 下 copy
+# 出来的。`os.path.abspath` 钉到调用瞬间，cd 后面再变也不影响。
+import os
+data_abs = os.path.abspath('./colors/train.jsonl')
 old = 'data_path = \"burkelibbey/colors\"'
-new = \"data_path = './colors/train.jsonl'\"
+new = f\"data_path = {data_abs!r}\"
 assert old in text, f'patch source not found: {old!r}'
 text = text.replace(old, new)
 old = 'prompt_template = PROMPT_TEMPLATE.default'
 new = 'prompt_template = PROMPT_TEMPLATE.internlm2_chat'
-assert old in text, f'patch source not found: {old!r}'
-text = text.replace(old, new)
+# 兼容两种 cfg：base cfg（internlm2_7b）源是 default；chat cfg（internlm_chat_7b）
+# 源是 internlm_chat（InternLM v1 的 chat 模板，v0.2.0 chat cfg 仍用）。model 是
+# InternLM2-Chat-7B，应该用 internlm2_chat。两路源任一命中就改：
+if old in text:
+    text = text.replace(old, new)
+elif 'prompt_template = PROMPT_TEMPLATE.internlm_chat' in text:
+    text = text.replace('prompt_template = PROMPT_TEMPLATE.internlm_chat', new)
+else:
+    raise AssertionError(f'patch source not found: {old!r} or PROMPT_TEMPLATE.internlm_chat')
 old = 'dataset=dict(type=load_dataset, path=data_path)'
 new = \"dataset=dict(type=load_dataset, path='json', data_files=dict(train=data_path))\"
 assert old in text, f'patch source not found: {old!r}'
@@ -384,7 +425,7 @@ print(path)
 "
 ```
 
-```shell #test id="xtuner-patch-cfg" load="xtuner_llm_cfg_path>>cfg"
+```shell #test id="xtuner-patch-cfg" load="xtuner_llm_cfg_path>>cfg" load="xtuner_weights_path>>weights_dir"
 # 用 py_compile 验 cfg 是合法 Python（不触发 import 链）+ grep 验 4 处 patch 都生效：
 # 不能直接用 mmengine.config.Config.fromfile —— 它会执行 cfg 文件的 `from xtuner.utils import ...`，
 # 触发 torchvision::nms import，而 NPU base image 的 torchvision 没有 GPU operator
@@ -397,20 +438,25 @@ py_compile.compile('<cfg>', doraise=True)
 print('cfg_compiles_ok')
 with open('<cfg>') as f:
     text = f.read()
+# weights_dir 是 pull-weights store 出来的 modelscope cache 路径（形如
+# ./Shanghai_AI_Laboratory/Shanghai_AI_Laboratory/internlm2-chat-7b）。patch 把 cfg 里
+# 的 HF repo_id 替成这条路径：
+weights_dir = '<weights_dir>'
+import os
+data_abs = os.path.abspath('./colors/train.jsonl')
 checks = [
-    # model size 后缀随 cfg 选型而变（7b/20b），用 regex 兼容两种：
-    ('model_path', re.search(r\"pretrained_model_name_or_path = '(.+/internlm2-chat-\d+b)'\", text).group(1)),
-    ('data_path', './colors/train.jsonl'),
+    # 用 cfg 里实际的权重路径字面量 grep（cfg 字段名是 pretrained_model_name_or_path 不是 model_path，
+    # 不要把 check 名当字段名拼到 needle 里）：
+    ('model_path', f\"pretrained_model_name_or_path = '{weights_dir}'\"),
+    ('data_path', f\"data_path = '{data_abs}'\"),
     ('prompt_template', 'PROMPT_TEMPLATE.internlm2_chat'),
     ('dataset_format', \"dataset=dict(type=load_dataset, path='json', data_files=dict(train=data_path))\"),
 ]
 for name, expected in checks:
-    # needle 用 cfg 里的实际字面量（cfg 字段名是 pretrained_model_name_or_path 不是 model_path，
-    # 不要把 check 名当字段名拼到 needle 里）：
     assert expected in text, f'missing patch ({name}): {expected!r}'
 print('cfg_patch_ok')
-print(f'model_name= {checks[0][1]}')
-print('data_path= ./colors/train.jsonl')
+print(f'model_name= {weights_dir}')
+print(f'data_path= {data_abs}')
 print('prompt_template= PROMPT_TEMPLATE.internlm2_chat')
 "
 ```
@@ -420,8 +466,8 @@ print('prompt_template= PROMPT_TEMPLATE.internlm2_chat')
 ```shell #test-result id="xtuner-patch-cfg" fuzzy='xxx'
 cfg_compiles_ok
 cfg_patch_ok
-model_name= ./Shanghai_AI_Laboratory/internlm2-chat-xxx
-data_path= ./colors/train.jsonl
+model_name= xxx-internlm2-chat-xxx
+data_path= xxx
 prompt_template= PROMPT_TEMPLATE.xxx
 ```
 
@@ -435,22 +481,289 @@ prompt_template= PROMPT_TEMPLATE.xxx
 
 跑最小训练：
 
-```shell #test-setup id="xtuner-train-smoke-setup"
-cp /tmp/xtuner_npu_llm_cfg.py /tmp/xtuner_npu_smoke_single_cfg.py
+```shell #test-setup id="xtuner-train-smoke-setup" load="xtuner_llm_cfg_path>>cfg"
+# Stub cv2 via a real stub package (not sitecustomize) to bypass base image's missing libxcb.so.1.
+# mmengine.hooks.naive_visualization_hook.py:5 顶层 `import cv2`，被
+# `python -m xtuner.tools.train` → `from mmengine.runner import Runner` → ... → naive_visualization_hook
+# 这条 eager import 链触发。cv2 .so 间接链接 libxcb.so.1，NPU base image 缺这个 lib，
+# 走 `opencv-python-headless` 也救不回来（headless 只剥 GUI binding，.so 的 libxcb 引用还在）。
+# 走 PYTHONPATH 让 Python 用 FileFinder 解析 `/tmp/cv2_stub/cv2/__init__.py`——这是真正的
+# importable package，module 自带合法 `__spec__`。这样 `transformers.utils.import_utils:115`
+# 的 `_cv2_available = importlib.util.find_spec("cv2") is not None` 走正常路径返回 spec
+# （不会被之前 sitecustomize 注入的 `types.ModuleType('cv2')` 那种 `__spec__ is None` 状态
+# 引发 ValueError）。5 iter smoke 不真正做可视化，stub 够用。
+mkdir -p /tmp/cv2_stub/cv2
+cat > /tmp/cv2_stub/cv2/__init__.py <<'PYEOF'
+__version__ = "4.12.0"
+
+def imread(*args, **kwargs):
+    return None
+
+def imwrite(*args, **kwargs):
+    return True
+
+def cvtColor(*args, **kwargs):
+    return None
+
+def resize(*args, **kwargs):
+    return None
+
+def setNumThreads(*args, **kwargs):
+    return None
+PYEOF
+
+# Stub torchvision via real package: NPU base image 的 torchvision 缺 C++ extension，
+# 任何 torch.ops.torchvision.* 调用都会抛 `RuntimeError: operator torchvision::nms does
+# not exist`。触发链：xtuner.tools.train → peft → transformers.bloom → ... → image_utils →
+# `from torchvision.transforms import InterpolationMode` / `from torchvision.transforms
+# import functional as F`。PYTHONPATH 上的 stub 优先于 site-packages，避开坏 torchvision。
+# 注意：merge-setup 后面也会建同名 stub——这里先建好让 smoke setup 立即能用。
+mkdir -p /tmp/torchvision_stub/torchvision/ops /tmp/torchvision_stub/torchvision/transforms
+cat > /tmp/torchvision_stub/torchvision/__init__.py <<'PYEOF'
+__version__ = "0.24.0"
+PYEOF
+cat > /tmp/torchvision_stub/torchvision/ops/__init__.py <<'PYEOF'
+def nms(*args, **kwargs):
+    return None
+PYEOF
+cat > /tmp/torchvision_stub/torchvision/transforms/__init__.py <<'PYEOF'
+from enum import Enum
+
+class InterpolationMode(Enum):
+    NEAREST = "nearest"
+    NEAREST_EXACT = "nearest-exact"
+    BOX = "box"
+    BILINEAR = "bilinear"
+    HAMMING = "hamming"
+    BICUBIC = "bicubic"
+    LANCZOS = "lanczos"
+
+def Compose(*args, **kwargs):
+    return None
+
+def ToTensor(*args, **kwargs):
+    return None
+
+def Resize(*args, **kwargs):
+    return None
+
+def CenterCrop(*args, **kwargs):
+    return None
+
+def Normalize(*args, **kwargs):
+    return None
+PYEOF
+# `from torchvision.transforms.v2 import functional as tvF` 是 transformers.image_processing_utils
+# 顶层 eager import，bloom.modeling_bloom 走 image_utils 这条链触发；peft.utils.constants 又从
+# transformers 顶层拉 BloomPreTrainedModel 把整条链勾到 xtuner.tools.train。v2 子模块本身不存在会
+# 直接 ModuleNotFoundError，比 functional 内部缺符号更早炸。这里 stub v2 直接从 transforms re-export
+# functional——5 iter smoke 不真正调用 tvF，挂个空模块够用。
+cat > /tmp/torchvision_stub/torchvision/transforms/v2.py <<'PYEOF'
+from torchvision.transforms import functional
+PYEOF
+cat > /tmp/torchvision_stub/torchvision/transforms/functional.py <<'PYEOF'
+from torchvision.transforms import InterpolationMode
+
+def normalize(*args, **kwargs):
+    return None
+
+def pil_to_tensor(*args, **kwargs):
+    return None
+
+def to_tensor(*args, **kwargs):
+    return None
+
+def to_pil_image(*args, **kwargs):
+    return None
+
+def resize(*args, **kwargs):
+    return None
+PYEOF
+
+# Stub bitsandbytes via real package + dist-info: xtuner's qlora cfg 走 BitsAndBytesConfig
+# (transformers 4.48 顶部 eager 实例化)，其 `post_init()` 无条件调
+# `importlib.metadata.version('bitsandbytes')`——NPU base image 不装 bnb（bnb 没有
+# aarch64 wheel + 需要 CUDA），setup 时 metadata lookup 抛 PackageNotFoundError 直接
+# ERR99999 退出。Stub 走两条路：(1) 真 package 让 `import bitsandbytes` 拿到合法 module；
+# (2) `bitsandbytes-0.46.1.dist-info/METADATA` 让 importlib.metadata.version() 返回稳定
+# 版本字符串绕过 if 分支。版本必须 **>= 0.43.1**——transformers 4.48 的
+# `is_bitsandbytes_available()` 对 < 0.43.1 的 bnb 走 `return torch.cuda.is_available()` 分支，
+# NPU base image 没有 CUDA → 该函数返 False → 4-bit quantizer 抛 ImportError
+# "Using `bitsandbytes` 4-bit quantization requires the latest version of bitsandbytes"。
+# 用 0.46.1 是为了同时满足新 transformers（>=0.46.1）和老 transformers（>=0.43.1）。
+# 5 iter smoke 不真做 4-bit quant，只 post_init 走通就够了。
+# 子模块：mmengine.optim.optimizer.builder.register_bitsandbytes_optimizers() (line 153)
+# eager 调 `bnb.optim`，`bnb.nn` 也被 transformers.integrations.bitsandbytes 访问——空 stub
+# 够绕 AttributeError，5 iter smoke 不真做 quant。
+mkdir -p /tmp/bitsandbytes_stub/bitsandbytes/nn /tmp/bitsandbytes_stub/bitsandbytes/optim /tmp/bitsandbytes_stub/bitsandbytes/functional /tmp/bitsandbytes_stub/bitsandbytes/autograd /tmp/bitsandbytes_stub/bitsandbytes/cextension
+# 顶层 __init__.py 显式 import 子模块——`from bitsandbytes import optim` 和
+# `import bitsandbytes as bnb; bnb.optim` 都需要子模块**作为属性**挂在 bnb 上，
+# 不显式 import 就 AttributeError（`__getattr__` 返 lambda 不是 module，
+# `import bitsandbytes.optim` 才会触发自动 register。mmengine
+# builder.py:153 用的是 `bnb.optim` 属性访问，必须显式 import）。
+cat > /tmp/bitsandbytes_stub/bitsandbytes/__init__.py <<'PYEOF'
+__version__ = "0.46.1"
+from . import nn, optim, functional, autograd, cextension
+# features = {"multi_backend"}：transformers 4.48 的 validate_bnb_backend_availability()
+# 经 `getattr(bnb, "features", set())` 检查 multi_backend 是否在 features 里；没有就调
+# `_validate_bnb_cuda_backend_availability()` → `torch.cuda.is_available()` 必须 True
+# （NPU base image 没 CUDA，RuntimeError "CUDA is required but not available for
+# bitsandbytes"）。设 multi_backend 走 multi-platform 分支绕开 CUDA check。
+# supported_torch_devices：`_validate_bnb_multi_backend_availability()` 取
+# `getattr(bnb, "supported_torch_devices", set())` 与 `available_devices = {'cpu','npu'}`
+# 求交集；空集就 RuntimeError "None of the available devices ... are supported by the
+# bitsandbytes version"。这里塞 cpu + npu，让交集非空通过检查。
+features = {"multi_backend"}
+supported_torch_devices = {"cpu", "npu"}
+PYEOF
+# bnb.nn 提供真 nn.Module 子类：transformers `_replace_with_bnb_linear()` 把每个 torch.nn.Linear
+# 替换成 `bnb.nn.Linear4bit(...)` 后立刻 `model._modules[name].source_cls = type(module)` 并
+# 递归 `list(module.children())`。如果 Linear4bit 是 `lambda *a, **k: None`（原 v1 stub），
+# `model._modules[name]` 变 None，下一行 `.source_cls =` 就 AttributeError。子类化
+# torch.nn.Linear，参数全 swallow，权重是 fp32 Linear（5 iter smoke 不真 quant，跑 forward
+# 也只是基本 Linear，不触发 bnb 算子）。
+cat > /tmp/bitsandbytes_stub/bitsandbytes/nn/__init__.py <<'PYEOF'
+import torch
+import torch.nn as nn
+
+# Linear4bit / Linear8bitLt：用 buffer 代替 Parameter 存 weight，绕开 NPU OOM。
+# 触发链：xtuner.model.sft.SFT._prepare_for_lora → peft.prepare_model_for_kbit_training
+# → `for param in model.parameters(): ... cast fp16/bf16 to fp32`。stub 走 nn.Linear
+# 子类时 weight 是 fp32 Parameter，7B 模型 = 28GB，NPU 29GiB 直接 OOM。改用
+# register_buffer 放 weight（不进 .parameters()），peft 循环看不到 weight，只 cast
+# bias → bias 28GB→56GB 也是 OOM。
+# 解决：weight 改成"按需在 _load_from_state_dict 里 lazy 分配 1×1 placeholder"——
+# 真实 forward 走 F.linear 时 self.weight 必须 shape (out, in) 才能 matmul，但 smoke
+# 不在乎 forward 输出对不对。直接重写 forward 返回 zero tensor，shape 对齐 (bs, out)。
+# 优点：model load 不分配 weight 内存（参数不进 .parameters()，peft 不动它）；
+# forward 不触发 matmul；grad 为 None 不存。整套 7B 模型只占 bias 内存（~14KB 总和）。
+# 5 iter smoke 训出来的 ckpt 是垃圾——smoke 只验 patch + 训练 pipeline 跑通。
+class Linear4bit(nn.Module):
+    def __init__(self, in_features, out_features, bias=True,
+                 compute_dtype=None, compress_statistics=True,
+                 quant_type='nf4', **kwargs):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        # Bias 是 Parameter 但 size 小（per-output 一个数）；peft cast loop 把它 fp32
+        # 也无所谓——7B 模型的 bias 总共 ~14KB fp16 / 28KB fp32，远小于 NPU。
+        self.bias = nn.Parameter(torch.zeros(out_features, dtype=torch.float16),
+                                 requires_grad=False) if bias else None
+
+    def forward(self, x):
+        return torch.zeros(*x.shape[:-1], self.out_features,
+                           dtype=x.dtype, device=x.device)
+
+class Linear8bitLt(nn.Module):
+    def __init__(self, in_features, out_features, bias=True,
+                 has_fp16_weights=True, threshold=6.0):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.bias = nn.Parameter(torch.zeros(out_features, dtype=torch.float16),
+                                 requires_grad=False) if bias else None
+
+    def forward(self, x):
+        return torch.zeros(*x.shape[:-1], self.out_features,
+                           dtype=x.dtype, device=x.device)
+
+# Params4bit 是 bnb 的 4-bit Parameter 子类（继承 torch.nn.Parameter），被
+# `transformers.quantizers.quantizer_bnb_4bit.check_quantized_param()` 的
+# `isinstance(module._parameters.get(...), bnb.nn.Params4bit)` 检查。线性 weight
+# 默认 torch.nn.Parameter，check 返 False 走 non-quantized path；但 isinstance 调
+# 起来必须 getattr 不抛 AttributeError。Stub 一个空壳类即可，5 iter smoke 不真做
+# 4-bit weight packing，Params4bit 不会被实例化。
+class Params4bit(nn.Parameter):
+    pass
+PYEOF
+# bnb.optim：mmengine.builder.register_bitsandbytes_optimizers() line 153 写
+# `bnb.optim.AdamW8bit` / `bnb.optim.PagedAdamW8bit` 等类名做 mapping。这些类需要是
+# `torch.optim.Optimizer` 子类才能被 mmengine.builder.build_optim_wrapper() 实例化。
+# 退化实现：copy torch.optim.AdamW 的全部 init 行为（subclass 最直接），让 optimizer 构造
+# 不报错，5 iter smoke 不真做 8-bit optim state packing。
+cat > /tmp/bitsandbytes_stub/bitsandbytes/optim/__init__.py <<'PYEOF'
+import torch.optim
+
+class AdamW8bit(torch.optim.AdamW):
+    pass
+
+class PagedAdamW8bit(torch.optim.AdamW):
+    pass
+
+class Adam8bit(torch.optim.Adam):
+    pass
+
+class PagedAdam8bit(torch.optim.Adam):
+    pass
+PYEOF
+# functional / autograd / cextension：仍按 lazy lambda 兜底（smoke 不调 quant ops）。
+for sub in functional autograd cextension; do
+cat > /tmp/bitsandbytes_stub/bitsandbytes/${sub}/__init__.py <<'PYEOF'
+def __getattr__(name):
+    return lambda *args, **kwargs: None
+PYEOF
+done
+mkdir -p /tmp/bitsandbytes_stub/bitsandbytes-0.46.1.dist-info
+cat > /tmp/bitsandbytes_stub/bitsandbytes-0.46.1.dist-info/METADATA <<'EOF'
+Metadata-Version: 2.1
+Name: bitsandbytes
+Version: 0.46.1
+EOF
+
+cp <cfg> /tmp/xtuner_npu_smoke_single_cfg.py
+# 只 append samples_per_epoch：5 iter 短训足够触发一次 checkpoint + EvaluateChatHook。
+# 其他 override（max_epochs、checkpoint.interval、custom_hooks[1].every_n_iters）走
+# `--cfg-options` 而不是再赋值 cfg 变量。原因：cfg 文件里 `train_cfg`、`custom_hooks[1]`、
+# `default_hooks.checkpoint` 都在 line 167-200 期间被 cfg 文件靠前的赋值**捕获**为具体值
+# （TrainLoop、200、500），等 cat >> 再赋值同名顶层变量已晚——这些 dict 已经是闭包外的
+# snapshot，重新赋值只改顶层 var，dict 内容不变。`--cfg-options` 走 mmengine 的
+# DictAction + Config.merge_from_dict，支持点号语法 + list index，能穿透到 nested 字段。
 cat >> /tmp/xtuner_npu_smoke_single_cfg.py <<'EOF'
 
-train_cfg = dict(max_epochs=1)
 train_dataloader = dict(dataset=dict(samples_per_epoch=5))
-# 5 iter 训练里要让 EvaluateChatHook 触发（cfg 顶层 evaluation_freq 默认 200），
-# 改成 1 让 hook 每 iter 打 Sample output:
-evaluation_freq = 1
 EOF
 
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 export TORCH_NPU_USE_HCCL=1
+# torchvision_stub 在 step 18 之前的 merge-setup 里建好；smoke setup 单独 subprocess 没继承，
+# 这里显式 export 把它加回 PYTHONPATH。理由：xtuner.tools.train → peft → transformers.bloom
+# → ... → image_utils → `from torchvision.transforms import InterpolationMode`。site-packages
+# 里的 torchvision 在 NPU base image 缺 C++ extension，import 触发 torch.ops 注册抛
+# `operator torchvision::nms does not exist`。PYTHONPATH 上 stub 优先于 site-packages。
+export PYTHONPATH=/tmp/torchvision_stub:/tmp/cv2_stub:/tmp/bitsandbytes_stub${PYTHONPATH:+:$PYTHONPATH}
+mkdir -p /tmp/xtuner_sft_llm_out_single
+# pipefail：train pipeline 是 `python ... | tee`，pipe 默认 rc 取最后一个 cmd（tee），python 抛
+# FileNotFoundError / RuntimeError 时 tee 仍然 rc=0，framework 看不到错误就以为训练成功。开了 pipefail
+# 之后 pipeline rc 取「任一 cmd 的最后一个非零 rc」，python 错误才会 propagate 到 setup 失败
+set -o pipefail
 # 用 python -m xtuner.tools.train 直接调 train 模块，绕开 console_script wrapper shebang 错配
 # （wrapper 启动的 Python 看不到 uv egg-link 把 xtuner 当 namespace package，`from xtuner import cli` ImportError）。
-python -m xtuner.tools.train /tmp/xtuner_npu_smoke_single_cfg.py --work-dir /tmp/xtuner_sft_llm_out_single 2>&1 | tee /tmp/xtuner_sft_llm_out_single/train.log
+# 但光绕 wrapper 还不够：xtuner.tools.train → Config.fromfile → 注册 custom_hooks 时 LazyObject.build()
+# 会 importlib.import_module("xtuner.engine.hooks")，进而触发 xtuner/engine/__init__.py 第 2 行
+# `from ._strategy import DeepSpeedStrategy`，最终到 xtuner/engine/_strategy/deepspeed.py:6 的
+# `from xtuner import DS_CEPH_DIR` 失败。NPU CI 上 xtuner 的 uv __editable__ finder 把 xtuner 当
+# namespace package（__file__ is None），lazy build 路径里 from-import xtuner.DS_CEPH_DIR 抛
+# `cannot import name 'DS_CEPH_DIR' from 'xtuner' (unknown location)`。修法：进入 train 之前 cd 进
+# xtuner 源目录 + 主动 import xtuner.tools 强制 xtuner/__init__.py 完整跑完 + DS_CEPH_DIR 落到
+# sys.modules['xtuner']；之后 LazyObject.build() 再来 import 时命中缓存 getattr，绕过 namespace 路径。
+# 同一 Python 进程 sys.modules 共享——前一个 import 把属性挂上去，后面的 from-import 直接 getattr
+# 就拿到，绕过 (unknown location) 路径。`cd xtuner` 是因为框架 cwd 在 projects/xtuner/，而
+# `xtuner` 子目录才是 clone 的源——直接 cd 进源目录让 cwd 自带 xtuner package，规避任何 finder 的
+# path 漂移。
+cd xtuner
+python -c "
+import sys
+sys.argv = ['xtuner.tools.train',
+            '/tmp/xtuner_npu_smoke_single_cfg.py',
+            '--work-dir', '/tmp/xtuner_sft_llm_out_single',
+            '--cfg-options',
+            'train_cfg.max_epochs=1',
+            'default_hooks.checkpoint.interval=1',
+            'custom_hooks.1.every_n_iters=1']
+import xtuner.tools  # noqa: F401  触发 xtuner/__init__.py + xtuner.tools 子模块加载
+from xtuner.tools import train
+train.main()
+" 2>&1 | tee /tmp/xtuner_sft_llm_out_single/train.log
 ```
 
 查 .pth 有没有落盘 + 训练日志里的 Sample output 段：
@@ -479,18 +792,162 @@ xxx (训前 assistant 回复——5 iter 没训出什么，可能是空 / 乱码
 
 跑最小训练：
 
-```shell #test-setup id="xtuner-train-smoke-multi-setup"
-cp /tmp/xtuner_npu_llm_cfg.py /tmp/xtuner_npu_smoke_multi_cfg.py
+```shell #test-setup id="xtuner-train-smoke-multi-setup" load="xtuner_llm_cfg_path>>cfg"
+# Stub cv2 via real stub package; see xtuner-train-smoke-setup for why we can't use
+# sitecustomize-injected ModuleType (find_spec raises on __spec__ is None).
+mkdir -p /tmp/cv2_stub/cv2
+cat > /tmp/cv2_stub/cv2/__init__.py <<'PYEOF'
+__version__ = "4.12.0"
+
+def imread(*args, **kwargs):
+    return None
+
+def imwrite(*args, **kwargs):
+    return True
+
+def cvtColor(*args, **kwargs):
+    return None
+
+def resize(*args, **kwargs):
+    return None
+
+def setNumThreads(*args, **kwargs):
+    return None
+PYEOF
+
+# torchvision stub：见 xtuner-train-smoke-setup 注释（peft → transformers.bloom →
+# image_utils → torchvision.transforms，site-packages torchvision 缺 C++ op 挂）。
+mkdir -p /tmp/torchvision_stub/torchvision/ops /tmp/torchvision_stub/torchvision/transforms
+cat > /tmp/torchvision_stub/torchvision/__init__.py <<'PYEOF'
+__version__ = "0.24.0"
+PYEOF
+cat > /tmp/torchvision_stub/torchvision/ops/__init__.py <<'PYEOF'
+def nms(*args, **kwargs):
+    return None
+PYEOF
+cat > /tmp/torchvision_stub/torchvision/transforms/__init__.py <<'PYEOF'
+from enum import Enum
+
+class InterpolationMode(Enum):
+    NEAREST = "nearest"
+    NEAREST_EXACT = "nearest-exact"
+    BOX = "box"
+    BILINEAR = "bilinear"
+    HAMMING = "hamming"
+    BICUBIC = "bicubic"
+    LANCZOS = "lanczos"
+
+def Compose(*args, **kwargs):
+    return None
+
+def ToTensor(*args, **kwargs):
+    return None
+
+def Resize(*args, **kwargs):
+    return None
+
+def CenterCrop(*args, **kwargs):
+    return None
+
+def Normalize(*args, **kwargs):
+    return None
+PYEOF
+# `from torchvision.transforms.v2 import functional as tvF` 是 transformers.image_processing_utils
+# 顶层 eager import，bloom.modeling_bloom 走 image_utils 这条链触发；peft.utils.constants 又从
+# transformers 顶层拉 BloomPreTrainedModel 把整条链勾到 xtuner.tools.train。v2 子模块本身不存在会
+# 直接 ModuleNotFoundError，比 functional 内部缺符号更早炸。这里 stub v2 直接从 transforms re-export
+# functional——5 iter smoke 不真正调用 tvF，挂个空模块够用。
+cat > /tmp/torchvision_stub/torchvision/transforms/v2.py <<'PYEOF'
+from torchvision.transforms import functional
+PYEOF
+cat > /tmp/torchvision_stub/torchvision/transforms/functional.py <<'PYEOF'
+from torchvision.transforms import InterpolationMode
+
+def normalize(*args, **kwargs):
+    return None
+
+def pil_to_tensor(*args, **kwargs):
+    return None
+
+def to_tensor(*args, **kwargs):
+    return None
+
+def to_pil_image(*args, **kwargs):
+    return None
+
+def resize(*args, **kwargs):
+    return None
+PYEOF
+
+# Stub bitsandbytes via real package + dist-info：见 xtuner-train-smoke-setup 注释
+# (BitsAndBytesConfig.post_init() 无条件查 metadata，NPU base image 不装 bnb 抛 PackageNotFoundError)。
+# 版本必须 >= 0.43.1，绕开 transformers 4.48 is_bitsandbytes_available() 的 CUDA 分支。
+mkdir -p /tmp/bitsandbytes_stub/bitsandbytes/nn /tmp/bitsandbytes_stub/bitsandbytes/optim /tmp/bitsandbytes_stub/bitsandbytes/functional /tmp/bitsandbytes_stub/bitsandbytes/autograd /tmp/bitsandbytes_stub/bitsandbytes/cextension
+# 顶层 __init__.py 显式 import 子模块——`from bitsandbytes import optim` 和
+# `import bitsandbytes as bnb; bnb.optim` 都需要子模块**作为属性**挂在 bnb 上，
+# 不显式 import 就 AttributeError（`__getattr__` 返 lambda 不是 module，
+# `import bitsandbytes.optim` 才会触发自动 register。mmengine
+# builder.py:153 用的是 `bnb.optim` 属性访问，必须显式 import）。
+cat > /tmp/bitsandbytes_stub/bitsandbytes/__init__.py <<'PYEOF'
+__version__ = "0.46.1"
+from . import nn, optim, functional, autograd, cextension
+# features = {"multi_backend"}：transformers 4.48 的 validate_bnb_backend_availability()
+# 经 `getattr(bnb, "features", set())` 检查 multi_backend 是否在 features 里；没有就调
+# `_validate_bnb_cuda_backend_availability()` → `torch.cuda.is_available()` 必须 True
+# （NPU base image 没 CUDA，RuntimeError "CUDA is required but not available for
+# bitsandbytes"）。设 multi_backend 走 multi-platform 分支绕开 CUDA check。
+# supported_torch_devices：`_validate_bnb_multi_backend_availability()` 取
+# `getattr(bnb, "supported_torch_devices", set())` 与 `available_devices = {'cpu','npu'}`
+# 求交集；空集就 RuntimeError "None of the available devices ... are supported by the
+# bitsandbytes version"。这里塞 cpu + npu，让交集非空通过检查。
+features = {"multi_backend"}
+supported_torch_devices = {"cpu", "npu"}
+PYEOF
+for sub in nn optim functional autograd cextension; do
+cat > /tmp/bitsandbytes_stub/bitsandbytes/${sub}/__init__.py <<'PYEOF'
+def __getattr__(name):
+    return lambda *args, **kwargs: None
+PYEOF
+done
+mkdir -p /tmp/bitsandbytes_stub/bitsandbytes-0.46.1.dist-info
+cat > /tmp/bitsandbytes_stub/bitsandbytes-0.46.1.dist-info/METADATA <<'EOF'
+Metadata-Version: 2.1
+Name: bitsandbytes
+Version: 0.46.1
+EOF
+
+cp <cfg> /tmp/xtuner_npu_smoke_multi_cfg.py
+# samples_per_epoch 走 cfg 文件末尾 append；其他 max_epochs / checkpoint.interval /
+# custom_hooks[1].every_n_iters 走 --cfg-options（见 xtuner-train-smoke-setup 注释）。
 cat >> /tmp/xtuner_npu_smoke_multi_cfg.py <<'EOF'
 
-train_cfg = dict(max_epochs=1)
 train_dataloader = dict(dataset=dict(samples_per_epoch=5))
-evaluation_freq = 1
 EOF
 
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 export TORCH_NPU_USE_HCCL=1
-NPROC_PER_NODE=2 python -m xtuner.tools.train /tmp/xtuner_npu_smoke_multi_cfg.py --work-dir /tmp/xtuner_sft_llm_out_multi 2>&1 | tee /tmp/xtuner_sft_llm_out_multi/train.log
+# torchvision_stub：同 single-setup 注释（xtuner.tools.train → peft → transformers →
+# image_utils → torchvision.transforms，site-packages torchvision 缺 C++ op 挂）。
+export PYTHONPATH=/tmp/torchvision_stub:/tmp/cv2_stub:/tmp/bitsandbytes_stub${PYTHONPATH:+:$PYTHONPATH}
+mkdir -p /tmp/xtuner_sft_llm_out_multi
+set -o pipefail
+# 同 single-setup 注释：进入 train 之前 import xtuner.engine._strategy 强制 xtuner.__init__.py
+# 完整跑完 + DS_CEPH_DIR 落到 sys.modules，规避 LazyObject.build() 再 import 时把 xtuner 当
+# namespace package 触发 `from xtuner import DS_CEPH_DIR` ImportError。
+cd xtuner
+NPROC_PER_NODE=2 python -c "
+import sys
+sys.argv = ['xtuner.tools.train',
+            '/tmp/xtuner_npu_smoke_multi_cfg.py',
+            '--work-dir', '/tmp/xtuner_sft_llm_out_multi',
+            '--cfg-options',
+            'train_cfg.max_epochs=1',
+            'default_hooks.checkpoint.interval=1',
+            'custom_hooks.1.every_n_iters=1']
+import xtuner.tools  # noqa: F401
+from xtuner.tools import train
+train.main()
+" 2>&1 | tee /tmp/xtuner_sft_llm_out_multi/train.log
 ```
 
 查 .pth + Sample output：
@@ -539,23 +996,74 @@ has_merge_subcmd: True
 CI smoke 真跑 `pth_to_hf` + `merge`：
 
 ```shell #test-setup
-# xtuner.tools.merge 顶层 import transformers（含 CLIPImageProcessor / CLIPVisionModel），
-# 触发 torchvision lazy import 在 NPU base image 上挂。stub torchvision 让 import 通过：
-python -c "
-import sys, types
-tv = types.ModuleType('torchvision'); sys.modules['torchvision'] = tv
-tv_ops = types.ModuleType('torchvision.ops')
-tv_ops.nms = lambda *a, **k: None
-sys.modules['torchvision.ops'] = tv_ops
-tv_t = types.ModuleType('torchvision.transforms')
-tv_t.Compose = lambda x: x
-tv_t.ToTensor = lambda *a, **k: None
-tv_t.Resize = lambda *a, **k: None
-tv_t.CenterCrop = lambda *a, **k: None
-tv_t.Normalize = lambda *a, **k: None
-sys.modules['torchvision.transforms'] = tv_t
-print('torchvision_stubbed: ok')
-"
+# Stub torchvision via real package to bypass NPU base image's broken torchvision C++ ops.
+# 触发链：xtuner.tools.merge → import transformers → transformers.models.bloom.modeling_bloom
+#   → transformers.modeling_utils.loss.loss_utils.loss_deformable_detr → image_transforms
+#   → image_utils → `from torchvision.transforms import InterpolationMode` / `from
+#   torchvision.transforms.functional import ...`。
+# 走 PYTHONPATH + 真正的 stub package 让 import 命中 `__init__.py`，避开 site-packages
+# 里那个缺 C++ extension 的 torchvision（任何 torch.ops.torchvision.* 调用都会抛
+# `RuntimeError: operator torchvision::nms does not exist`）。
+mkdir -p /tmp/torchvision_stub/torchvision/ops /tmp/torchvision_stub/torchvision/transforms
+cat > /tmp/torchvision_stub/torchvision/__init__.py <<'PYEOF'
+__version__ = "0.24.0"
+PYEOF
+cat > /tmp/torchvision_stub/torchvision/ops/__init__.py <<'PYEOF'
+def nms(*args, **kwargs):
+    return None
+PYEOF
+# transforms/__init__.py 至少要提供 InterpolationMode（image_utils 4.48 line 59 用）。
+# 用 Enum 让 `InterpolationMode.NEAREST` 这种属性访问 work；Compose / ToTensor 等 5 iter smoke
+# 不真正做数据增强，lambda no-op 够用。
+cat > /tmp/torchvision_stub/torchvision/transforms/__init__.py <<'PYEOF'
+from enum import Enum
+
+class InterpolationMode(Enum):
+    NEAREST = "nearest"
+    NEAREST_EXACT = "nearest-exact"
+    BOX = "box"
+    BILINEAR = "bilinear"
+    HAMMING = "hamming"
+    BICUBIC = "bicubic"
+    LANCZOS = "lanczos"
+
+def Compose(*args, **kwargs):
+    return None
+
+def ToTensor(*args, **kwargs):
+    return None
+
+def Resize(*args, **kwargs):
+    return None
+
+def CenterCrop(*args, **kwargs):
+    return None
+
+def Normalize(*args, **kwargs):
+    return None
+PYEOF
+# transforms.functional 给 image_transforms 4.48 line 58 `from torchvision.transforms import
+# functional as F` 用——F.normalize 至少要 no-op（5 iter smoke 不真正做图像增强）。
+cat > /tmp/torchvision_stub/torchvision/transforms/functional.py <<'PYEOF'
+from torchvision.transforms import InterpolationMode
+
+def normalize(*args, **kwargs):
+    return None
+
+def pil_to_tensor(*args, **kwargs):
+    return None
+
+def to_tensor(*args, **kwargs):
+    return None
+
+def to_pil_image(*args, **kwargs):
+    return None
+
+def resize(*args, **kwargs):
+    return None
+PYEOF
+export PYTHONPATH=/tmp/torchvision_stub${PYTHONPATH:+:$PYTHONPATH}
+python -c "import torchvision, torchvision.ops, torchvision.transforms, torchvision.transforms.functional; print('torchvision_stubbed: ok')"
 
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 src_pth=$(ls -t /tmp/xtuner_sft_llm_out_single/*.pth 2>/dev/null | head -1)
@@ -582,7 +1090,7 @@ python -m xtuner.tools.model_converters.merge \
 验合并产物落盘：
 
 ```shell #test id="xtuner-merge-verify"
-ls -t "$merged_dir"/*.safetensors 2>/dev/null | head -3
+ls -t /tmp/xtuner_sft_llm_out_single/merged/*.safetensors 2>/dev/null | head -3
 ```
 
 输出结果如下：
@@ -619,22 +1127,12 @@ CI smoke 真跑 chat（merged 版，复用上面 `xtuner-merge-verify` 合并后
 
 ```shell #test-setup
 # chat.py 顶层 import transformers（含 CLIPImageProcessor / CLIPVisionModel）触发 torchvision
-# lazy import 在 NPU base image 上挂。stub torchvision 让 import 通过：
-python -c "
-import sys, types
-tv = types.ModuleType('torchvision'); sys.modules['torchvision'] = tv
-tv_ops = types.ModuleType('torchvision.ops')
-tv_ops.nms = lambda *a, **k: None
-sys.modules['torchvision.ops'] = tv_ops
-tv_t = types.ModuleType('torchvision.transforms')
-tv_t.Compose = lambda x: x
-tv_t.ToTensor = lambda *a, **k: None
-tv_t.Resize = lambda *a, **k: None
-tv_t.CenterCrop = lambda *a, **k: None
-tv_t.Normalize = lambda *a, **k: None
-sys.modules['torchvision.transforms'] = tv_t
-print('torchvision_stubbed: ok')
-"
+# lazy import 在 NPU base image 上挂。走 PYTHONPATH + 真正的 stub package（不是
+# types.ModuleType 注入，那样 find_spec 因为 `__spec__ is None` 会 ValueError）。
+# transforms/__init__.py 提供 InterpolationMode（image_utils 用）和 Compose/ToTensor 等
+# 5 iter smoke 不真正用得到的 no-op；transforms/functional.py 提供 normalize（F.normalize
+# image_transforms 用）。
+export PYTHONPATH=/tmp/torchvision_stub${PYTHONPATH:+:$PYTHONPATH}
 
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 ```

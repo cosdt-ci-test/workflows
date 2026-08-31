@@ -105,6 +105,7 @@ python -c "from modelscope import snapshot_download; print(snapshot_download('Qw
 
 ```shell #test id="run-eval" load="model_dir>>model"
 export HF_ENDPOINT=https://hf-mirror.com
+export HF_HUB_DISABLE_XET=1
 python -m lm_eval run --model hf \
     --model_args pretrained=<model> \
     --tasks arc_easy \
@@ -126,6 +127,7 @@ python -m lm_eval run --model hf \
 - `--batch_size 8`：0.5B 模型单卡 batch 8。
 - `--output_path /tmp/lm_eval_out`：结果目录（lm-eval 会把结果 JSON 写入该目录，文件名含模型参数哈希），供下一步校验。
 - `HF_ENDPOINT=https://hf-mirror.com`：评测数据集 `allenai/ai2_arc` 默认从 HuggingFace Hub 下载；机器不可达 HuggingFace 时必须设置镜像。
+- `HF_HUB_DISABLE_XET=1`：禁用 Xet 下载路径——Xet 的数据面直连 `us.aws.cdn.hf.co`（不受 `HF_ENDPOINT` 控制），受限网络不可达；禁用后退回经典 HTTP 下载，文件体经镜像反代获取。
 
 ## 检查评测结果
 

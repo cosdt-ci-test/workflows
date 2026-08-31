@@ -60,6 +60,10 @@ python --version
 
 将 `<UPSTREAM_REF>` 换成目标**分支、tag 或 commit**（上游默认分支为 `main`）。
 
+```shell #test-setup store="upstream_ref"
+echo "${UPSTREAM_REF}"
+```
+
 ```shell #test-setup id="clone" load="upstream_ref>>UPSTREAM_REF"
 git clone https://github.com/wenet-e2e/wenet.git
 cd wenet

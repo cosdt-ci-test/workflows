@@ -105,8 +105,16 @@ echo "HEAD $(git log -1 --format=%h)"
 ```shell #test-setup
 export ASCEND_HOME_PATH=${ASCEND_HOME_PATH:-/usr/local/Ascend/ascend-toolkit/latest}
 cd tilelang-ascend
-python -m pip install -r requirements-build.txt
 python -m pip install -r requirements.txt
+# 流水线把 /data/ci-cache/tilelang-wheelhouse 挂载到容器内的
+# /tilelang-wheelhouse（本地手动执行无此目录，恒走完整构建）。
+CACHE_DIR=/tilelang-wheelhouse
+KEY=$(git rev-parse HEAD)
+CACHED=$(ls "$CACHE_DIR/$KEY"/tilelang-*.whl 2>/dev/null | head -n 1 || true)
+if [ -n "$CACHED" ] && python -m pip install --force-reinstall --no-deps "$CACHED" && python -c "import tilelang"; then
+  echo "wheel cache hit ($KEY), skipping source build"
+else
+python -m pip install -r requirements-build.txt
 python - <<'EOF'
 from pathlib import Path
 p = Path('setup.py')
@@ -122,13 +130,27 @@ p.write_text(s)
 print('setup.py build parallelism clamped to <=12')
 EOF
 ./build_wheel_ascend.sh
-python -m pip install dist/tilelang-*.whl
+ls -la dist/
+for W in dist/tilelang-*.whl; do
+  python -m zipfile -l "$W" | grep -q 'tilelang/__init__.py' || { echo "FATAL: $W missing tilelang package"; exit 1; }
+done
+if [ -d "$CACHE_DIR" ]; then
+  mkdir -p "$CACHE_DIR/$KEY"
+  cp dist/tilelang-*.whl "$CACHE_DIR/$KEY"/
+  ls -1dt "$CACHE_DIR"/*/ | tail -n +3 | xargs -r rm -rf
+fi
+python -m pip install --force-reinstall --no-deps dist/tilelang-*.whl
+fi
+python -c "import tilelang; print('tilelang installed:', tilelang.__version__)"
 ```
 
 > - 构建脚本会应用 TVM 子模块补丁、执行 C++ 编译并产出 `dist/tilelang-*.whl`，首次构建需要较长时间，请耐心等待。
 > - `setup.py` 默认按宿主机核数的一半（`cpu_count() * 0.5`，192 核机器即 `-j96`）推导编译并行度，容器内存限额下必 OOM（OOM killer 杀 cc1plus/ld）。上面的补丁把两条并行度推导钳到最高 12 个任务，小核数机器自动取 `cpu_count()` 原值；补丁锚点若被上游改写会直接报错终止，不会静默失效。
-> - 构建脚本内部使用裸 `pip` 安装依赖；上面两步已提前用 `python -m pip` 装好同样的依赖，脚本内对应步骤会显示 already satisfied，保证依赖装进当前 `python` 环境。
-> - `requirements-build.txt` / `requirements.txt` 的详细清单以 tilelang-ascend 仓库为准。
+> - 构建脚本内部使用裸 `pip` 安装依赖；构建分支已提前用 `python -m pip` 装好同样的依赖，脚本内对应步骤会显示 already satisfied，保证依赖装进当前 `python` 环境。
+> - `requirements-build.txt` / `requirements.txt` 的详细清单以 tilelang-ascend 仓库为准；`requirements-build.txt` 只含构建期工具（cmake、patchelf 等），故只出现在源码构建分支。
+> - 流水线在 `/tilelang-wheelhouse` 挂载了宿主机 wheel 缓存，按上游 commit 为 key：同一 commit 重跑（重试、文档修订、手动 dispatch）直接复用已构建的 wheel，跳过约 15 分钟的源码编译；新 release 是新 commit，自动全量构建。本地手动执行没有这个目录，永远走完整构建。缓存命中但安装或导入失败时（wheel 损坏等）自动回落到源码重建并覆盖缓存。
+> - wheel 安装用 `--force-reinstall --no-deps`（依赖已由 requirements 步骤装好），避免 pip 以 "Requirement already satisfied" 跳过安装导致 site-packages 里实际没有 tilelang 包。
+> - 构建后的 wheel 会做完整性自检（列出 dist/ 内容 + 校验压缩包内有 `tilelang/__init__.py`），块尾的 `import tilelang` 是最终安装断言——任一环节失败都会让整块以非零码退出，日志不会静默丢失。
 
 验证安装：
 
@@ -148,6 +170,11 @@ python -c "import tilelang; print('tilelang', tilelang.__version__)"
 
 ```shell #test id="run-gemm"
 cd tilelang-ascend
+# tilelang 的 JIT 编译器（tilelang/jit/adapter/libgen.py 的 _get_tl_root）按
+# ${TL_ROOT}/3rdparty/... 拼接 bisheng 编译的 include 路径；TL_ROOT 未设置时默认
+# 取 tilelang 包所在目录，而源码 checkout 下 3rdparty 位于仓库根而非 tilelang/ 下，
+# 不指过去 JIT 编译会报 'catlass/catlass.hpp' file not found。
+export TL_ROOT="$(pwd)"
 python examples/gemm/example_gemm.py > /tmp/gemm.log 2>&1
 grep -q "init successful!" /tmp/gemm.log && grep -q "Kernel Output Match!" /tmp/gemm.log && echo "gemm ok" || { tail -n 50 /tmp/gemm.log; exit 1; }
 ```

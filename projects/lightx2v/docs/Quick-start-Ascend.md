@@ -195,13 +195,19 @@ PY
 #      stub 的顶层模块必须兜底属性访问(run#1: AttributeError: module 'triton'
 #      has no attribute 'language')
 #   3. `triton.__version__` 解包(torch/_dynamo/utils.py:1632)—— 给 '0.0.0'
-# 两个坑:
+# 三个坑:
 #   * ModuleSpec(loader=None) 会被当 namespace package(CI 33259771019),
 #     必须给真 Loader
 #   * special method(__repr__ 等)只在 type 上解析,ModuleType 实例绑 __repr__
 #     不生效,print(module) 会落进模块 __getattr__ 无限递归 —— 用
 #     _StubModule(ModuleType 子类)承载 __getattr__/__repr__,预注册的子模块
 #     带真 spec + __path__,find_spec 也不会 ValueError
+#   * __getattr__ 兜底不能吃掉 dunder(run#2 挂):torch/_library/custom_ops
+#     装饰器走 inspect.getmodule -> getabsfile -> getsourcefile 读
+#     module.__file__,stub 把 __file__ 也兜成子模块对象,inspect 拿它
+#     调 .endswith() 直接 TypeError: '_StubModule' object is not callable。
+#     dunder 属性访问必须老实抛 AttributeError(inspect 的
+#     getattr(object, '__file__', None) 带 default,安全返回 None)
 mkdir -p /tmp/stubs/triton
 cat > /tmp/stubs/triton/__init__.py <<'PY'
 import sys
@@ -233,9 +239,18 @@ class _StubModule(types.ModuleType):
     through the type, never through the instance dict, so defining them
     on a plain ModuleType instance silently no-ops (and a module __getattr__
     then recurses: print(m) -> _module_repr -> m.__repr__ missing on type ->
-    m's __getattr__('__repr__') -> new module -> ... RecursionError)."""
+    m's __getattr__('__repr__') -> new module -> ... RecursionError).
+
+    Dunder attribute access deliberately raises AttributeError: the import
+    machinery and inspect (getmodule -> getabsfile -> getsourcefile reads
+    module.__file__) rely on missing dunders being *missing*; a stub that
+    answers __file__/__name__ lookups with a child stub object turns
+    `filename.endswith(...)` into TypeError: '_StubModule' object is not
+    callable (run#2). Non-dunder attributes fan out into stub submodules."""
 
     def __getattr__(self, attr):
+        if attr.startswith('__'):
+            raise AttributeError(attr)
         full = f'{self.__name__}.{attr}'
         if full not in sys.modules:
             sys.modules[full] = _StubModule(full)
@@ -243,6 +258,9 @@ class _StubModule(types.ModuleType):
 
     def __repr__(self):
         return f'<triton-stub {self.__name__}>'
+
+    def __call__(self, *a, **k):
+        return _Stub()
 
 
 class _TritonStubLoader:
@@ -318,7 +336,7 @@ print('cv2.COLOR_BGR2RGB=', cv2.COLOR_BGR2RGB)
 print('decord.VideoReader=', decord.VideoReader)
 print('torchaudio.load=', torchaudio.load)
 print('triton.__version__=', triton.__version__)
-# torch 侧三个触点逐一镜像验证:
+# torch 触点逐一镜像验证:
 #  1. torch/_dynamo/utils.py:2417 —— 顶层 import 后纯属性访问
 common = set()
 common.add(triton.language.dtype)
@@ -331,6 +349,19 @@ import triton.language as tl
 print('triton.language.math=', tl.math)
 import triton.compiler.compiler as tcc
 print('triton.compiler.compiler=', tcc)
+#  4. torch/_library/custom_ops 装饰器链(run#2 挂点)——
+#     inspect.getmodule -> getabsfile -> getsourcefile 读 module.__file__,
+#     dunder 必须老实抛 AttributeError 而不是兜成子模块对象
+import inspect
+print('inspect.getmodule=', inspect.getmodule(triton.language))
+print('stub __file__ is None=', getattr(triton.language, '__file__', None))
+import sys as _sys
+for _n, _m in list(_sys.modules.items()):
+    if _n.startswith('triton'):
+        inspect.getmodule(_m)
+print('iterate triton modules: OK')
+#  5. 模块对象 print/repr 安全(实例级 special method 不生效的坑)
+print('triton.language repr ok:', repr(triton.language))
 "
 ```
 
@@ -344,6 +375,10 @@ triton.language.dtype= xxx
 triton major/minor= xxx
 triton.language.math= xxx
 triton.compiler.compiler= xxx
+inspect.getmodule= xxx
+stub __file__ is None= xxx
+iterate triton modules: OK
+triton.language repr ok= xxx
 ```
 
 ## 安装 LightX2V

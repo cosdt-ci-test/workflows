@@ -32,7 +32,7 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 
 | 组件 | 版本 |
 | --- | --- |
-| Python | 3.12 |
+| Python | 3.11 |
 | CANN | 9.1.0 |
 | torch | 2.11.0+cpu |
 | torch_npu | 2.11.0 |
@@ -40,7 +40,7 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | specforge | 最新 release 的源码（>= #722 修 NPU 传输绑定） |
 | modelscope | 1.37.0 |
 | mooncake | main 分支 latest（master server 二进制需单独编译，smoke 阶段可用 pip 从源码装 transfer engine 部分） |
-| 模型 | [Qwen/Qwen3.5-4B](https://www.modelscope.cn/Qwen/Qwen3.5-4B)（同时存在于 HF Hub；ModelScope 镜像同 ID） |
+| 模型 | [Qwen/Qwen3.5-4B](https://www.modelscope.cn/Qwen/Qwen3.5-4B) |
 | 配方 | `examples/configs/online/disaggregated/external/qwen3.5-4b-dflash-online-npu.yaml`（来自 specforge 源码仓） |
 
 > 上游 `pyproject.toml` 把 `torch==2.11.0` / `transformers==5.8.1` / `sglang==0.5.14` 写死——本文档在装 specforge **之前**就装齐这三个版本，让 `pip install specforge`（无 `--no-deps`）满足依赖解析即可。
@@ -57,7 +57,7 @@ python --version
 
 输出结果如下：
 ```shell #test-result id="check-py" fuzzy='xxx'
-Python 3.12.xxx
+Python 3.11.xxx
 ```
 
 对齐 specforge 上游 pin 装 `torch` / `torch_npu` / `sglang`（cluster 镜像里 sglang 0.5.14 wheel 的 `Requires-Dist: cuda-python` 被重打包成 `<0` 当"exclude 哨兵"——uv 的 pubgrub 不识别这个模式，会去找 <0.0.0 的 cuda-python 找不到而报 unsatisfiable，所以 sglang 必须 `--no-deps`；specforge 跟上游 [ascend_npu.md](https://github.com/sgl-project/SpecForge/blob/main/docs/basic_usage/Ascend/ascend_npu.md) 一致也 `--no-deps`，避免再把 sglang 拉进来重解析）：
@@ -73,100 +73,10 @@ uv pip install transformers==5.8.1 datasets tqdm accelerate huggingface-hub nump
 # 会触发 sglang.__init__ → sglang.lang → IPython → traitlets 这条 import 链，
 # 而 traitlets 是 IPython 的硬依赖，不在 sglang 自己的 requires_dist 里、也不会被 --no-deps 拉进来。
 uv pip install --no-deps orjson anthropic apache-tvm-ffi av blobfile build compressed-tensors decord2 distro easydict einops gguf interegular kernels llguidance mistral_common msgspec ninja outlines packaging partial_json_parser pillow prometheus-client py-spy pybase64 quack-kernels scipy sentencepiece setproctitle sgl-deep-gemm starlette triton
-uv pip install IPython
-# sglang wheel 本身 --no-deps 装（cluster 镜像把它的 Requires-Dist cuda-python 改成 <0 哨兵，绕开解析）
 uv pip install --no-deps --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi sglang==0.5.14
-# openai<2.0.0 单独装，不带 --no-deps：>=2.0 切到了 pydantic 团队的 httpx2 fork（run 33268955540: `import httpx2._config`），
-# 集群镜像没 httpx2、shim 也补不全 sub-module。openai 是 sglang server_args → openai.protocol → openai._models._utils
-# 的硬依赖（sniffio / anyio / jiter / httpx 这些都从 openai 的 Requires-Dist 拉）；上一行 sglang --no-deps 没带它们，
-# 所以这里让 openai 正常装来补齐 transitive deps。belt-and-suspenders：下面再显式装一次 sniffio / anyio / jiter / httpx，
-# 万一 cluster 镜像里 openai<2.0.0 的 METADATA 被改过、Requires-Dist 不准，这些常被 openai 间接 import 的包也不会缺。
-uv pip install 'openai<2.0.0'
-uv pip install sniffio anyio jiter 'httpx<1'
-# torchvision stub：sglang srt/utils/common.py line 92 `from torchvision.io import decode_jpeg` 在 import sglang 时硬依赖，
-# 但 torchvision 顶层 __init__.py 跑 @torch.library.register_fake("torchvision::nms") 时会因 CPU torch 2.11.0 没注册该 op 而抛
-# RuntimeError: operator torchvision::nms does not exist。Qwen3.5-4B 文本 smoke 不走 image path，stub 出 torchvision + torchvision.io
-# 让 import 通过；decode_jpeg 不会被调用。另外 sglang.srt.configs.__init__ 直接 `from sglang.srt.configs.deepseekvl2 import DeepseekVL2Config`，
-# deepseekvl2.py 顶部 `from torchvision.io import ImageReadMode`（PIL.ImageMode 风格 enum）→ run 33263935680
-# 在 launch_server 启动早期就报 `ImportError: cannot import name 'ImageReadMode'`，把 ImageReadMode 也补上。
-# 再加 torchvision.transforms.InterpolationMode（run 33265261220）：sglang.launch_server → server_args
-# → configs/__init__ → deepseekvl2.py 顶部 `from transformers import (...)` → transformers 内部
-# image_utils.py:55 `from torchvision.transforms import InterpolationMode` → ModuleNotFoundError →
-# transformers 的 AutoProcessor lazy loader 报"Could not import module 'AutoProcessor'"（实际根因是 torchvision.transforms）。
-# 还需 torchvision.transforms.functional 子模块（run 33266519990）：configs/__init__ 还导入 deepseek_ocr.py，
-# 顶部 `from torchvision.transforms import functional as TF` → ModuleNotFoundError（functional 子模块不存在）。
-# 顺便把 v2.functional 也 stub 上（sglang NPU 路径有 `import torchvision.transforms.v2.functional as tvF`，
-# 文本 smoke 不走 VL 路径但 configs 链路 import 时可能引入）。transformers 5.8.1 还用 pil_to_tensor（image_utils.py:56），
-# functional 里加个 raise NotImplementedError 占位。
-python - <<'PY'
-import os, site
-sp = site.getsitepackages()[0]
-pkg = os.path.join(sp, 'torchvision')
-io = os.path.join(pkg, 'io')
-tx = os.path.join(pkg, 'transforms')
-txf = os.path.join(tx, 'functional')
-txv2 = os.path.join(tx, 'v2')
-txv2f = os.path.join(txv2, 'functional')
-os.makedirs(io, exist_ok=True)
-os.makedirs(txf, exist_ok=True)
-os.makedirs(txv2f, exist_ok=True)
-open(os.path.join(pkg, '__init__.py'), 'w').close()
-open(os.path.join(io, '__init__.py'), 'w').write(
-    'class ImageReadMode:\n'
-    '    UNCHANGED = 0\n'
-    '    GRAY = 1\n'
-    '    RGB = 2\n'
-    '\n'
-    'def decode_jpeg(*args, **kwargs):\n'
-    '    raise NotImplementedError("torchvision stub: not used in this text-only smoke")\n'
-    '\n'
-    'def decode_image(*args, **kwargs):\n'
-    '    raise NotImplementedError("torchvision stub: not used in this text-only smoke")\n'
-)
-open(os.path.join(tx, '__init__.py'), 'w').write(
-    'from torchvision.transforms import functional as _F  # re-export submodule\n'
-    '\n'
-    'class InterpolationMode:\n'
-    '    NEAREST = "nearest"\n'
-    '    NEAREST_EXACT = "nearest-exact"\n'
-    '    BILINEAR = "bilinear"\n'
-    '    BICUBIC = "bicubic"\n'
-    '    BOX = "box"\n'
-    '    HAMMING = "hamming"\n'
-    '    LANCZOS = "lanczos"\n'
-    '\n'
-    'functional = _F\n'
-)
-# Sub-module so `from torchvision.transforms import functional` / `import torchvision.transforms.functional as TF` works.
-open(os.path.join(txf, '__init__.py'), 'w').write(
-    'class InterpolationMode:\n'
-    '    NEAREST = "nearest"\n'
-    '    NEAREST_EXACT = "nearest-exact"\n'
-    '    BILINEAR = "bilinear"\n'
-    '    BICUBIC = "bicubic"\n'
-    '    BOX = "box"\n'
-    '    HAMMING = "hamming"\n'
-    '    LANCZOS = "lanczos"\n'
-    '\n'
-    'def pil_to_tensor(*args, **kwargs):\n'
-    '    raise NotImplementedError("torchvision stub: not used in this text-only smoke")\n'
-    '\n'
-    'def resize(*args, **kwargs):\n'
-    '    raise NotImplementedError("torchvision stub: not used in this text-only smoke")\n'
-    '\n'
-    'def center_crop(*args, **kwargs):\n'
-    '    raise NotImplementedError("torchvision stub: not used in this text-only smoke")\n'
-)
-# torchvision.transforms.v2 也要 stub（v2/__init__.py 让 `from torchvision.transforms.v2 import functional` 能 import）。
-open(os.path.join(txv2, '__init__.py'), 'w').write(
-    'from torchvision.transforms.v2 import functional\n'
-)
-open(os.path.join(txv2f, '__init__.py'), 'w').write(
-    'def __getattr__(name):\n'
-    '    raise NotImplementedError(f"torchvision stub: torchvision.transforms.v2.functional.{name} not used in this text-only smoke")\n'
-)
-print(f'torchvision stub installed at {pkg}')
-PY
+
+
+
 ```
 
 检查 torch / torch_npu / sglang 是否装好且 NPU 设备可用：
@@ -191,11 +101,6 @@ count: 4
 
 ```shell #test-setup
 uv pip install 'modelscope==1.37.0'
-# mooncake-transfer-engine 是 specforge 在线训练里 specforge runtime 的 client 端；
-# master server 二进制（mooncake_master / mooncake_client / transfer_engine_bench）必须
-# 随 wheel 一起分发。main 分支的 mooncake-wheel/ setup.py 只编译 _fast_copy 扩展，
-# 不带那三个预编译二进制 → mooncake_master 启动后 execv 找不到 binary，bind 失败，
-# smoke 30s 后 nc -z 35551 全部 timeout。所以从 release tarball 拿预编译的 wheel。
 #
 # 用 tsinghua 镜像：直连 GitHub release 在集群网络下不稳（run 33254357756 90min timeout），
 # aliyun 镜像只有 manylinux_2_39 aarch64（CI image 是 ubuntu22.04 glibc 2.35，跑不了 2.39 wheel），

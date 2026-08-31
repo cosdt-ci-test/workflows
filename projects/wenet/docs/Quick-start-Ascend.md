@@ -180,6 +180,7 @@ BAC009S0002W003 语音识别很有意思
 
 ```shell #test id="link-data"
 cd wenet/examples/aishell/s0
+mkdir -p data
 ln -sf /tmp/wenet-mock/data/train data/train
 ln -sf /tmp/wenet-mock/data/dev data/dev
 ln -sf /tmp/wenet-mock/data/test data/test

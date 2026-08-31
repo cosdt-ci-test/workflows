@@ -409,3 +409,17 @@ projects:
     dir: projects/lm-evaluation-harness
     workflows:
       quick_start: .github/workflows/lm-evaluation-harness-quick-start.yml
+  # tilelang quickstart builds the tilelang-ascend wheel from source
+  # (ascendc_pto route; TVM submodule + ASCEND_HOME_PATH toolchain)
+  # and runs the GEMM example end-to-end on a single Ascend NPU card.
+  # Upstream points at the tile-ai/tilelang-ascend fork because the
+  # main tile-ai/tilelang repo has no NPU backend of its own.
+  - name: tilelang
+    category: 算子库和编程
+    support_level: 新兴适配
+    upstream_repo: tile-ai/tilelang-ascend
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/tilelang
+    workflows:
+      quick_start: .github/workflows/tilelang-quick-start.yml

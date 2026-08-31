@@ -72,11 +72,17 @@ npu-smi info
 
 `onnx` 用来在下一步当场生成模型，不从网上下载权重。这个 wheel 按 NumPy 1.x 编译。不钉 `numpy<2` 时，pip 会拉到 NumPy 2，`import onnxruntime` 会直接失败。
 
+CANN 编译算子还要用 `decorator`、`scipy`、`attrs`、`psutil`。不装的话，会话能建起来，第一次 `sess.run()` 会报 `aclgrphBuildInitialize` 或 `aclopCompileAndExecute`。`scipy` 钉在 1.15 以下，避免把 NumPy 升到 2。
+
 ```shell #test id="install"
 python -m pip install --index-url https://repo.huaweicloud.com/repository/pypi/simple \
     onnxruntime-cann==1.24.4 \
     onnx==1.22.0 \
-    'numpy<2'
+    'numpy<2' \
+    decorator \
+    'scipy>=1.11,<1.15' \
+    attrs \
+    psutil
 python -c "from importlib.metadata import version; print('onnxruntime-cann', version('onnxruntime-cann')); print('onnx', version('onnx'))"
 ```
 
@@ -190,6 +196,6 @@ result [4.0, 6.0]
 | `get_available_providers()` 没有 `CANNExecutionProvider` | 没 `source set_env.sh`，或装的是 CPU 包 `onnxruntime`，或两个包叠在一起 | 在同一段命令里重新 `source /usr/local/Ascend/ascend-toolkit/set_env.sh`。若叠装过 CPU 包，先 `python -m pip uninstall -y onnxruntime onnxruntime-cann`，再只装 `onnxruntime-cann==1.24.4` |
 | `import onnxruntime` 报找不到 CANN 动态库 | 当前 shell 没有 CANN 环境变量 | 先 `source`，不要只在另一个终端里 source 过 |
 | 创建 `InferenceSession` 失败，日志提到 CANN / ACL 版本 | 本文验证的是 CANN 9.1.0 + `onnxruntime-cann==1.24.4`。官方兼容表只写到 ORT 1.20–1.22.1 ↔ CANN 8.2.0 | 对齐本文版本表，或按你本机 CANN 换已验证过的 `onnxruntime-cann` |
-| 会话能建，`get_providers()` 第一项也是 `CANNExecutionProvider`，但 `sess.run()` 报 `aclgrphBuildInitialize` 或 `aclopCompileAndExecute("Add")` / `ACL_ERROR_FAILURE` | 在 CANN 9.1.0 + `onnxruntime-cann==1.24.4` 上测到过：最小 Add 图能进 CANN 会话，图编译或算子编译失败。官方兼容表没有覆盖这个组合 | 这不是复制错了。关掉回退后失败，说明没有静默落到 CPU。换官方表里的 CANN / ORT 组合，或从源码用 `./build.sh --use_cann` 编一份再推理 |
+| 会话能建，`get_providers()` 第一项也是 `CANNExecutionProvider`，但 `sess.run()` 报 `aclgrphBuildInitialize` 或 `aclopCompileAndExecute("Add")` / `ACL_ERROR_FAILURE` | 当前 Python 环境缺 CANN 算子编译依赖，`import tbe` 失败 | 回到「安装 onnxruntime-cann」，确认 `decorator`、`scipy`、`attrs`、`psutil` 都装上了，再 `source` 一次后重跑推理 |
 | 推理结果正确，但 `get_providers()` 里同时出现 CPU | 创建会话时把 CPU 写进了 `providers`，或没有关掉回退。有的版本建好 CANN 会话后仍会在列表里留下 CPU | 不要把 `CPUExecutionProvider` 写进创建会话时的 `providers`。第一项必须是 `CANNExecutionProvider`，并且推理没有落到 CPU 回退日志 |
 | `npu-smi: command not found` | `npu-smi` 在 `/usr/local/sbin` 或 `/usr/local/bin`，不在默认 `PATH` | `export PATH=/usr/local/sbin:/usr/local/bin:$PATH` 后再执行 `npu-smi info` |

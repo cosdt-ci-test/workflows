@@ -25,7 +25,9 @@ python3 scripts/bootstrap_manifest.py \
 
 ## 绿灯含义
 
-- `local_gateway`（路径 `deployment/local/run-local.sh`）。先用文档同一套 vLLM-Ascend 栈在 `127.0.0.1:8000` 拉起 `Qwen/Qwen2.5-0.5B-Instruct`，日志必须出现 `backend=hccl`，再原样执行上游 `run-local.sh`，经 Envoy `:10080` 拿到 HTTP 200 且 `choices[0].message.content` 非空。**绿灯 = 昇腾后端上跑过一次经 AIBrix local mode 转发的 completion，不是“Go 编过了”或“网关进程还活着”。**
+- `local_gateway`（路径 `deployment/local/run-local.sh`）。先用文档同一套 vLLM-Ascend 栈在 `127.0.0.1:8000` 拉起 `Qwen/Qwen2.5-0.5B-Instruct`，日志必须出现 `backend=hccl`，再执行上游 `run-local.sh`，经 Envoy `:10080` 拿到 HTTP 200 且 `choices[0].message.content` 非空。**绿灯 = 昇腾后端上跑过一次经 AIBrix local mode 转发的 completion，不是“Go 编过了”或“网关进程还活着”。**
+
+  一处 CI 侧工作副本补丁（不提交回上游）：上游脚本等 Envoy 监听 `:10080` 的就绪窗口硬编码 10 秒，共享 ARC runner 上 Envoy 进程健康但 10 秒内未完成绑定（2026-08-31 run 33365752486）。`run_example.sh` 在启动 vLLM 之前把工作副本里的该窗口 sed 成 60 秒；若上游改写了这个循环导致补丁打不上，脚本立即非 0 退出要求复查，而不是静默回到 10 秒。
 
 ## Quick Start 看护范围
 

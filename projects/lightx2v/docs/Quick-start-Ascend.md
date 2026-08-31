@@ -123,7 +123,7 @@ python -c "import modelscope; print('modelscope=', modelscope.__version__)"
 modelscope= 1.37.0
 ```
 
-### （aarch64 机器）打 cv2 / decord / torchaudio / triton 四个 stub
+### （aarch64 机器）打 cv2 / decord / torchaudio 三个 stub + 装真 triton
 
 仅 aarch64 镜像（如华为云 C76 容器）需要这一步。x86_64 镜像有现成 wheel,直接 `uv pip install opencv-python decord torchaudio triton` 就行,跳到下一节。
 
@@ -134,12 +134,17 @@ LightX2V 在 import 时会触发这些模块：
 | `cv2` | `lightx2v.models.video_encoders` 顶层 import | `ImportError: libxcb.so.1`（base image 缺 GUI X11 lib,headless 变体也救不回来） |
 | `decord` | 视频解码 | PyPI 没 aarch64 wheel |
 | `torchaudio` | 跟着 `torch` 一起装到 2.11.0 | `OSError: Could not load ..._torchaudio.abi3.so`（编的是 torch CUDA,跟 torch_npu 不兼容） |
-| `triton` | `lightx2v.common.ops.attn.kernels.sla_kernel` 顶层 `import triton` | triton 3.x 没 aarch64 wheel,2.x 多数发行版缺关键 aarch64 build;sla_kernel 是 CUDA sparse-linear-attn 路径,NPU 走 `torchada` 不真用,但 import 仍要可解析 |
+| `triton` | `lightx2v.common.ops.attn.kernels.sla_kernel` 顶层 `import triton`;更重的链路是 `torch_npu.utils._graph_tree -> torch._inductor.compile_fx -> ... -> runtime/triton_heuristics` | 老镜像缺 triton;但 **不能拿空 stub 糊弄**（见下） |
 
-策略：源码 `--no-deps` 安装时跳过这四个依赖,然后在 site-packages 里塞同名的 stub 包（`PYTHONPATH` 优先,`sys.modules` 命中空 stub,真 .so 不会被加载）。LightX2V 不真正做 GUI / 视频解码 / 音频 IO / triton JIT（slack_kernel 只在 CUDA 路径跑,NPU 不触发）,空 stub 够用。
+策略：cv2 / decord / torchaudio 源码 `--no-deps` 安装时跳过,在 site-packages 前面塞同名 stub 包（`PYTHONPATH` 优先,`sys.modules` 命中空 stub,真 .so 不会被加载）。LightX2V 不真正做 GUI / 视频解码 / 音频 IO,空 stub 够用。
+
+**triton 不 stub,装真包**。run#1~#3 证明 stub 路线是打地鼠：torch `_inductor/runtime/triton_heuristics` 会 `from .triton_compat import Config` 然后 `class InductorConfig(Config)` —— 拿 `triton.Config` 当**基类**继承;stub 的模块对象哪怕补了属性访问、dunder、`__call__`、`__mro_entries__`,也堵不住真实 triton 的类/函数语义（torch 在模块 import 期就实例化 `Config`、读 `GPUTarget`、查 `knobs`）。triton 3.5.x 起 PyPI 直接发 aarch64 wheel（cp312 manylinux,run#1 时代"没 wheel"的结论已过期,且它**零运行时依赖**,不会把 CUDA 栈拖回来）,正好也是 torch 2.9 官方配套线（torch 2.9 配 triton 3.5）。`sla_kernel` 的 CUDA kernel 依然不会在 NPU 上执行（torchada 接管）,装真包只为让 import 链语义完整。
 
 ```shell #test-setup
-mkdir -p /tmp/stubs/cv2 /tmp/stubs/decord /tmp/stubs/torchaudio /tmp/stubs/triton
+# rm -rf 防御:老镜像/跑过旧版文档的机器上可能残留 /tmp/stubs/triton,
+# 不删的话 PYTHONPATH 会拿它遮蔽下面装的(和已有的)真 triton
+rm -rf /tmp/stubs/triton
+mkdir -p /tmp/stubs/cv2 /tmp/stubs/decord /tmp/stubs/torchaudio
 ```
 
 ```shell #test-setup
@@ -188,180 +193,46 @@ PY
 ```
 
 ```shell #test-setup
-# triton stub：torch 侧触点有三类,单独一个 meta-path finder 不够(run#1 挂):
-#   1. `import triton.xxx.yyy` 语句 —— finder 拦截,自动 stub 任意子模块
-#   2. 纯属性访问 `triton.language.dtype`(torch/_dynamo/utils.py:2417)——
-#      真实 triton 的 __init__.py 内部 import 了 language 子模块,所以属性在;
-#      stub 的顶层模块必须兜底属性访问(run#1: AttributeError: module 'triton'
-#      has no attribute 'language')
-#   3. `triton.__version__` 解包(torch/_dynamo/utils.py:1632)—— 给 '0.0.0'
-# 三个坑:
-#   * ModuleSpec(loader=None) 会被当 namespace package(CI 33259771019),
-#     必须给真 Loader
-#   * special method(__repr__ 等)只在 type 上解析,ModuleType 实例绑 __repr__
-#     不生效,print(module) 会落进模块 __getattr__ 无限递归 —— 用
-#     _StubModule(ModuleType 子类)承载 __getattr__/__repr__,预注册的子模块
-#     带真 spec + __path__,find_spec 也不会 ValueError
-#   * __getattr__ 兜底不能吃掉 dunder(run#2 挂):torch/_library/custom_ops
-#     装饰器走 inspect.getmodule -> getabsfile -> getsourcefile 读
-#     module.__file__,stub 把 __file__ 也兜成子模块对象,inspect 拿它
-#     调 .endswith() 直接 TypeError: '_StubModule' object is not callable。
-#     dunder 属性访问必须老实抛 AttributeError(inspect 的
-#     getattr(object, '__file__', None) 带 default,安全返回 None)
-mkdir -p /tmp/stubs/triton
-cat > /tmp/stubs/triton/__init__.py <<'PY'
-import sys
-import types
-from importlib.machinery import ModuleSpec
-
-__version__ = '0.0.0'  # torch/_dynamo get_triton_version 解包用
-
-
-class _Stub:
-    def __getattr__(self, name):
-        return _Stub()
-
-    def __call__(self, *a, **k):
-        return _Stub()
-
-    def __repr__(self):
-        return '<triton-stub-obj>'
-
-    def __iter__(self):
-        return iter(())
-
-    def __bool__(self):
-        return False
-
-
-class _StubModule(types.ModuleType):
-    """ModuleType subclass. Special methods (__repr__ etc.) are resolved
-    through the type, never through the instance dict, so defining them
-    on a plain ModuleType instance silently no-ops (and a module __getattr__
-    then recurses: print(m) -> _module_repr -> m.__repr__ missing on type ->
-    m's __getattr__('__repr__') -> new module -> ... RecursionError).
-
-    Dunder attribute access deliberately raises AttributeError: the import
-    machinery and inspect (getmodule -> getabsfile -> getsourcefile reads
-    module.__file__) rely on missing dunders being *missing*; a stub that
-    answers __file__/__name__ lookups with a child stub object turns
-    `filename.endswith(...)` into TypeError: '_StubModule' object is not
-    callable (run#2). Non-dunder attributes fan out into stub submodules."""
-
-    def __getattr__(self, attr):
-        if attr.startswith('__'):
-            raise AttributeError(attr)
-        full = f'{self.__name__}.{attr}'
-        if full not in sys.modules:
-            sys.modules[full] = _StubModule(full)
-        return sys.modules[full]
-
-    def __repr__(self):
-        return f'<triton-stub {self.__name__}>'
-
-    def __call__(self, *a, **k):
-        return _Stub()
-
-
-class _TritonStubLoader:
-    """create_module returns a _StubModule; exec_module does nothing.
-    Python's import system treats this as a real package (not a
-    namespace package), so the stub survives instead of being replaced
-    by NamespaceLoader (CI 33259771019)."""
-
-    def create_module(self, spec):
-        m = _StubModule(spec.name)
-        if spec.name == 'triton':
-            m.__version__ = __version__
-        return m
-
-    def exec_module(self, module):
-        pass
-
-
-class _TritonStubFinder:
-    """MetaPathFinder: any `import triton.xxx.yyy` -> spec with
-    _TritonStubLoader. Finder at meta_path[0] so it intercepts BEFORE
-    PathFinder/FileFinder look at /tmp/stubs/triton/ on disk (and before
-    any real triton.* the image might still ship in site-packages)."""
-
-    def find_spec(self, fullname, path, target=None):
-        if not fullname.startswith('triton'):
-            return None
-        if fullname in sys.modules:
-            return sys.modules[fullname].__spec__
-        return ModuleSpec(fullname, _TritonStubLoader(), is_package=True)
-
-
-def _register(fullname):
-    """Preregister a sub-module with a real spec so both pure attribute
-    access (torch/_dynamo/utils.py:2417 reads `triton.language.dtype`
-    without importing) and `import triton.xxx` hit the stub directly."""
-    m = _StubModule(fullname)
-    m.__spec__ = ModuleSpec(fullname, _TritonStubLoader(), is_package=True)
-    m.__path__ = []  # package marker
-    sys.modules.setdefault(fullname, m)
-    return m
-
-
-# torch 触点已知的子模块全预注册
-for _sub in ('language', 'language.math', 'compiler', 'compiler.compiler',
-             'backends', 'backends.compiler', 'runtime', 'testing'):
-    _register(f'triton.{_sub}')
-
-# 顶层 triton 是本文件模块(属性访问走 module dict + type lookup),
-# 把 __class__ 换成 _StubModule 后 triton.language 之类的属性访问
-# 由 _StubModule.__getattr__ 兜底 —— run#1 的 AttributeError 就挂在这。
-_self = sys.modules[__name__]
-_self.__class__ = _StubModule
-sys.modules.setdefault('triton', _self)
-sys.meta_path.insert(0, _TritonStubFinder())
-PY
+# triton:装真包,不 stub。torch 2.9 配套 triton 3.5.x;3.5 起 PyPI 有
+# cp312 aarch64 manylinux wheel,且零运行时依赖(不会把 nvidia/cuda 栈
+# 拖回来,与 process env 里的 CUDA 排除清单无冲突)。
+# 为什么 run#1~#3 的 stub 路线不行:空 stub 让 `import triton` "成功",
+# 把 torch 推进真实代码路径 —— triton_heuristics 拿 triton.Config 当基类
+# 继承、读 GPUTarget/knobs,stub 语义对不上逐层炸
+# (AttributeError -> TypeError -> module() takes at most 2 arguments)。
+# 而镜像里原本"没装 triton"反而没事:torch 的 has_triton_package() 捕获
+# ImportError 走 HAS_TRITON=False 的无 triton 兜底路径。装真包两边都对。
+uv pip install 'triton==3.5.*'
 ```
 
 ```shell #test-setup
-# 装 LightX2V 时跳过四个 stub 依赖（具体名字以 setup.py / pyproject.toml 为准,
+# 装 LightX2V 时跳过三个 stub 依赖（具体名字以 setup.py / pyproject.toml 为准,
 # 找不到时一个个 --no-deps 单独装也能绕过）。PYTHONPATH 在每条 python 命令前 export。
-# triton 用 meta-path finder 自动 stub 任意 sub-module,这里只检查顶层
-echo "stubs ready at /tmp/stubs/{cv2,decord,torchaudio,triton}"
-ls /tmp/stubs/cv2/__init__.py /tmp/stubs/decord/__init__.py /tmp/stubs/torchaudio/__init__.py /tmp/stubs/triton/__init__.py
+echo "stubs ready at /tmp/stubs/{cv2,decord,torchaudio}"
+ls /tmp/stubs/cv2/__init__.py /tmp/stubs/decord/__init__.py /tmp/stubs/torchaudio/__init__.py
 ```
 
 ```shell #test id="stubs-verify"
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
 export PYTHONPATH=/tmp/stubs:$PYTHONPATH
 python -c "
-import cv2, decord, torchaudio, triton
+import cv2, decord, torchaudio
 print('cv2.INTER_LINEAR=', cv2.INTER_LINEAR)
 print('cv2.COLOR_BGR2RGB=', cv2.COLOR_BGR2RGB)
 print('decord.VideoReader=', decord.VideoReader)
 print('torchaudio.load=', torchaudio.load)
+# triton 真包:镜像 run#1~#3 的失败触点
+import triton
 print('triton.__version__=', triton.__version__)
-# torch 触点逐一镜像验证:
-#  1. torch/_dynamo/utils.py:2417 —— 顶层 import 后纯属性访问
-common = set()
-common.add(triton.language.dtype)
-print('triton.language.dtype=', triton.language.dtype)
-#  2. torch/_dynamo/utils.py:1632 —— __version__ 解包
-major, minor = tuple(int(v) for v in triton.__version__.split('.')[:2])
-print('triton major/minor=', major, minor)
-#  3. torch/utils/_triton.has_triton_package —— 裸 import 成功即 True
 import triton.language as tl
 print('triton.language.math=', tl.math)
-import triton.compiler.compiler as tcc
-print('triton.compiler.compiler=', tcc)
-#  4. torch/_library/custom_ops 装饰器链(run#2 挂点)——
-#     inspect.getmodule -> getabsfile -> getsourcefile 读 module.__file__,
-#     dunder 必须老实抛 AttributeError 而不是兜成子模块对象
-import inspect
-print('inspect.getmodule=', inspect.getmodule(triton.language))
-print('stub __file__ is None=', getattr(triton.language, '__file__', None))
-import sys as _sys
-for _n, _m in list(_sys.modules.items()):
-    if _n.startswith('triton'):
-        inspect.getmodule(_m)
-print('iterate triton modules: OK')
-#  5. 模块对象 print/repr 安全(实例级 special method 不生效的坑)
-print('triton.language repr ok=', repr(triton.language))
+class ProbeConfig(triton.Config):  # run#3 挂点:Config 必须可继承
+    pass
+print('Config subclass ok=', ProbeConfig.__name__)
+# 完整触发 step 17 的同款 import 链(run#1~#3 都挂在这条链上):
+# torch_npu -> _graph_tree -> inductor -> triton_heuristics
+import torch, torch_npu
+print('torch/torch_npu chain ok=', torch.__version__)
 "
 ```
 
@@ -371,14 +242,9 @@ cv2.COLOR_BGR2RGB= xxx
 decord.VideoReader= xxx
 torchaudio.load= xxx
 triton.__version__= xxx
-triton.language.dtype= xxx
-triton major/minor= xxx
 triton.language.math= xxx
-triton.compiler.compiler= xxx
-inspect.getmodule= xxx
-stub __file__ is None= xxx
-iterate triton modules: OK
-triton.language repr ok= xxx
+Config subclass ok= xxx
+torch/torch_npu chain ok= xxx
 ```
 
 ## 安装 LightX2V
@@ -431,15 +297,15 @@ uv pip install --no-deps -v .
 ```
 
 ```shell #test-setup id="lightx2v-install-deps"
-# LightX2V 直接依赖（除上面 stub 的四个外），从 pyproject.toml 同步过来。
+# LightX2V 直接依赖（除上面 stub 的三个外），从 pyproject.toml 同步过来。
 # 故意不写 `uv pip install .` 重做依赖解析：之前已经 --no-deps 把 lightx2v 装上,
 # 再用 constraint 列表一次装齐其余 deps;CUDA 排除清单(_CUDA_CONSTRAINTS)
 # 通过 PIP_CONSTRAINT/UV_CONSTRAINT 已在 process env,自动屏蔽 nvidia-* / cuda-* 等。
-# 例外的四个 stub:
+# 例外的三个 stub:
 #   - opencv-python → stub cv2(/tmp/stubs/cv2)
 #   - decord        → stub decord(/tmp/stubs/decord)
 #   - torchaudio    → stub torchaudio(/tmp/stubs/torchaudio),torchada 仍是 NPU 版
-#   - triton        → stub triton(/tmp/stubs/triton meta-path finder)
+# triton 走真包(上一节已 uv pip install 'triton==3.5.*'),不在例外里
 # torch + torch_npu 在 step 4 check-torch 已装 2.9.0,这里不重复
 uv pip install \
     numpy scipy diffusers transformers tokenizers tqdm accelerate safetensors \

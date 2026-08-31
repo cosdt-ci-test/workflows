@@ -67,7 +67,9 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
     Scope: torch + torch_npu + modelscope install + LightX2V source
     install (with aarch64 stub packages for cv2 / decord / torchaudio
-    / triton that lack usable aarch64 wheels) + include-filtered
+    that lack usable aarch64 wheels, plus the real triton==3.5.* wheel
+    — an empty triton stub drives torch._inductor into real triton
+    code paths it cannot survive) + include-filtered
     ModelScope weight pulls (12 GB Wan2.2-I2V-A14B base T5/VAE/
     tokenizer + 4.8 GB CLIP vision encoder from Wan2.1-I2V-14B-480P
     + 30 GB I2V int8 distill split dirs) + I2V single-card smoke
@@ -237,17 +239,19 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             check=True,
         )
 
-        # 2.5) triton: NOT installed here. The image / cluster index
-        # only carries triton 3.5+ on aarch64 (no 2.x wheel exists for
-        # this platform), so a `pip install triton<3.0` pin is a dead
-        # end (resolver failure at setUpClass, before any doc command
-        # runs). torch 2.9.0's ``tl.math`` reference
-        # (torch/_inductor/runtime/triton_compat.py:53, reached via
-        # torch_npu.utils._graph_tree -> torch._dynamo ->
-        # torch._inductor) is covered by the doc's triton meta-path
-        # stub instead: any real triton is shadowed via sys.meta_path,
-        # so ``import triton`` / ``triton.language.math`` resolve to
-        # the stub regardless of what version pip resolved.
+        # 2.5) triton: NOT installed here — the doc's aarch64 stub
+        # section installs the *real* wheel (`uv pip install
+        # 'triton==3.5.*'`). Two dead ends ruled this out empirically:
+        # a `pip install triton<3.0` pin fails the resolver (no 2.x
+        # aarch64 wheel on the cluster index), and an empty import-time
+        # stub makes ``import triton`` succeed *too well* — torch then
+        # walks its real triton code paths (_inductor triton_heuristics
+        # subclasses triton.Config, reads GPUTarget/knobs) and dies
+        # layer by layer (run#1 tl.math AttributeError, run#2
+        # inspect TypeError, run#3 module() arity TypeError). triton
+        # 3.5.x ships cp312 aarch64 manylinux wheels with zero runtime
+        # deps (the CUDA constraint list never conflicts), and matches
+        # torch 2.9's official triton line.
 
         # 3) torch stack probe + install: when version matches the image's
         # pre-installed wheels, reuse them to avoid the cluster cache

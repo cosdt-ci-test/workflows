@@ -106,9 +106,9 @@ ensure_build_deps() {
 build_xllm() {
   local root="$1"
   local build_log=/tmp/xllm-build.log
-  echo "building xllm wheel from $root (device=npu arch=arm); full log -> $build_log"
+  echo "building xllm wheel from $root (device=npu); full log -> $build_log"
   export SKIP_TEST=1
-  if ( cd "$root" && python setup.py bdist_wheel --device npu --arch arm ) >"$build_log" 2>&1; then
+  if ( cd "$root" && python setup.py bdist_wheel --device npu ) >"$build_log" 2>&1; then
     echo "build succeeded; tail of $build_log:"
     tail -n 300 "$build_log"
   else

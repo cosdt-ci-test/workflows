@@ -97,7 +97,7 @@ count: 4
 
 > 如果 `import torch_npu` 失败或 `count` 不是 4，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查三方兼容矩阵；`sglang` 必须有 `--attention-backend ascend` 支持（普通 PyPI 轮子不支持，需要 vendor 镜像或 NPU 编译产物）。
 
-装 `modelscope`（走 ModelScope 镜像拉底座模型 + datasets）+ `mooncake` 传输引擎（master server 二进制留给生产环境，本文档 smoke 仅用其 Python 客户端路径）：
+装 `modelscope`（走 ModelScope 镜像拉底座模型 + datasets）+ `mooncake-transfer-engine`（smoke 链路需要 `mooncake_master` 二进制做 capture state 后端 + Python 客户端做传输；wheel 把 8 个 lib RPATH 内嵌进 `mooncake_transfer_engine.libs/`，仅 libcurl4 / libibverbs1 / libnuma1 走 apt）：
 
 ```shell #test-setup
 uv pip install 'modelscope==1.37.0'
@@ -111,12 +111,16 @@ uv pip install --index-url https://pypi.tuna.tsinghua.edu.cn/simple 'mooncake-tr
 打印安装版本：
 ```shell #test id="install-deps"
 python -c "import modelscope; print('modelscope', modelscope.__version__)"
+python -c "import mooncake_transfer_engine; print('mooncake-transfer-engine ok')"
+test -x "$(command -v mooncake_master)" && echo "mooncake_master binary present" || echo "mooncake_master binary MISSING"
 ```
 
 输出结果如下：
 
 ```shell #test-result id="install-deps" fuzzy='xxx'
 modelscope xxx
+mooncake-transfer-engine ok
+mooncake_master binary present
 ```
 
 ## 安装 specforge

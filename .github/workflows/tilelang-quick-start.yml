@@ -70,6 +70,12 @@ jobs:
       # GitHub-hosted ubuntu-latest.
       test_runner: '["linux-aarch64-a2-1"]'
       image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+      # Required by the engine (container options for the test job).
+      # Empty like tensorflow / specforge on a2-1: the runner's device
+      # plugin already passes /dev/davinci* into the container, and this
+      # workload (source build + GEMM) has no model/dataset caches to
+      # bind-mount.
+      container_options: ''
       # Doc flow builds tilelang-ascend from source (TVM submodule
       # clone + C++ compile) and JIT-compiles/runs a GEMM kernel;
       # 180 min covers the cold build with headroom.

@@ -190,10 +190,12 @@ ls -la data/
 输出结果如下：
 
 ```shell #test-result id="link-data"
-...
-dev -> /tmp/wenet-mock/data/dev
-test -> /tmp/wenet-mock/data/test
-train -> /tmp/wenet-mock/data/train
+total 8
+drwxr-xr-x 2 root root 4096 ...
+drwxr-xr-x 5 root root 4096 ...
+lrwxrwxrwx 1 root root 24 ... dev -> /tmp/wenet-mock/data/dev
+lrwxrwxrwx 1 root root 25 ... test -> /tmp/wenet-mock/data/test
+lrwxrwxrwx 1 root root 26 ... train -> /tmp/wenet-mock/data/train
 ```
 
 运行 stage 2（生成字典）和 stage 3（生成 data.list）：

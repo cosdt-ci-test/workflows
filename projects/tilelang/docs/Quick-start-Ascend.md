@@ -92,8 +92,8 @@ echo "HEAD $(git log -1 --format=%h)"
 
 输出结果如下：
 
-```shell #test-result id="clone-repo" fuzzy='xxx'
-HEAD xxx
+```shell #test-result id="clone-repo" fuzzy='xxx' fuzzy='...'
+...HEAD xxx
 ```
 
 \<ref> 为流水线注入的上游最新 release tag。

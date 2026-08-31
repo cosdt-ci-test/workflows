@@ -1,6 +1,6 @@
 # Quick Start (Ascend NPU)
 
-在单卡昇腾 NPU 上跑通 [LightX2V](https://github.com/ModelTC/LightX2V) 的最小链路：4 步蒸馏文生视频（T2V）+ 图生视频（I2V）+ 图编辑（T2I）。权重下载走 [ModelScope](https://modelscope.cn/)（国内网络更稳），HF 仓库同名映射。
+在单卡昇腾 NPU 上跑通 [LightX2V](https://github.com/ModelTC/LightX2V) 的最小链路：安装源码 + 拉权重 + 4 步蒸馏图生视频（I2V）烟囱测试。权重下载走 [ModelScope](https://modelscope.cn/)（国内网络更稳），HF 仓库同名映射。
 
 ## 前置条件
 
@@ -36,7 +36,7 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | torch | 2.9.0+cpu |
 | torch_npu | 2.9.0.post2 |
 | modelscope | 1.37.0 |
-| lightx2v | GitHub main 分支 |
+| lightx2v | GitHub main 分支（上游零 release 零 tag，滚动 main） |
 
 ## 前置安装
 
@@ -290,21 +290,29 @@ triton.language.something.deep= xxx
 │   └── models -> ../models              <- 软链到 ../models
 ├── models/                              <- 模型权重(项目隔离,持久)
 │   ├── Wan2.2-I2V-A14B/
-│   ├── Wan2.2-Distill-Models/
-│   ├── Qwen-Image-Edit-2511/
-│   └── Qwen-Image-Edit-2511-Lightning/
+│   ├── Wan2.1-I2V-14B-480P/
+│   └── Wan2.2-Distill-Models/
 └── save_results/                        <- 推理输出
 ```
 
-```shell #test-setup id="lightx2v-install-source"
+<!-- 工作流注入的 UPSTREAM_REF（上游零 tag,固定 main）通过这个隐藏的 #test-setup 捕获并注入到下方 clone 命令中；markdown 渲染器会丢掉注释，读者看不到，runner 仍会执行 -->
+<!--
+```shell #test-setup store="upstream_ref"
+echo "${UPSTREAM_REF}"
+```
+-->
+
+```shell #test-setup id="lightx2v-install-source" load="upstream_ref>>UPSTREAM_REF"
 # 把项目根定在持久卷上,默认 /home/coder/work/lightx2v-test;
 # CI 注入 PROJECT_ROOT 走别的路径也行
 export PROJECT_ROOT=${PROJECT_ROOT:-/home/coder/work/lightx2v-test}
 mkdir -p "$PROJECT_ROOT"
 cd "$PROJECT_ROOT"
 
-# 源码 clone 到 src 子目录(不是项目根,避免和 models/ save_results/ 平级混淆)
-git clone --depth 1 https://github.com/ModelTC/LightX2V.git src
+# 源码 clone 到 src 子目录(不是项目根,避免和 models/ save_results/ 平级混淆)。
+# <UPSTREAM_REF> 换成目标 分支/tag/commit —— 上游零 release 零 tag,默认 main。
+# 看护流水线会把本次要测的 ref 注入 UPSTREAM_REF 环境变量。
+git clone --depth 1 --branch <UPSTREAM_REF> https://github.com/ModelTC/LightX2V.git src
 cd src
 # 软链 ./models → ../models,LightX2V 内部 ./models/ 相对路径依然命中
 ln -sfn ../models models
@@ -315,14 +323,15 @@ uv pip install --no-deps -v .
 ```
 
 ```shell #test-setup id="lightx2v-install-deps"
-# LightX2V 直接依赖（除上面 stub 的三个外），从 pyproject.toml 同步过来。
+# LightX2V 直接依赖（除上面 stub 的四个外），从 pyproject.toml 同步过来。
 # 故意不写 `uv pip install .` 重做依赖解析：之前已经 --no-deps 把 lightx2v 装上,
 # 再用 constraint 列表一次装齐其余 deps;CUDA 排除清单(_CUDA_CONSTRAINTS)
 # 通过 PIP_CONSTRAINT/UV_CONSTRAINT 已在 process env,自动屏蔽 nvidia-* / cuda-* 等。
-# 例外的三个 stub:
+# 例外的四个 stub:
 #   - opencv-python → stub cv2(/tmp/stubs/cv2)
 #   - decord        → stub decord(/tmp/stubs/decord)
 #   - torchaudio    → stub torchaudio(/tmp/stubs/torchaudio),torchada 仍是 NPU 版
+#   - triton        → stub triton(/tmp/stubs/triton meta-path finder)
 # torch + torch_npu 在 step 4 check-torch 已装 2.9.0,这里不重复
 uv pip install \
     numpy scipy diffusers transformers tokenizers tqdm accelerate safetensors \
@@ -356,113 +365,96 @@ lightx2v version: xxx
 
 ## 拉权重（ModelScope）
 
-LightX2V 跑蒸馏需要两组权重：
+LightX2V 跑 I2V 蒸馏需要三组权重（**务必带 include 过滤**，全量仓库有几百 GB 无关权重）：
 
-1. **base 模型**：T5 text encoder + CLIP vision encoder + VAE + Tokenizer,从 base 模型目录拿。I2V demo 用 `Wan2.2-I2V-A14B`(约 28 GB)。
-2. **distill LoRA / ckpt**：MoE 架构分 high noise + low noise 两份,4 步推理只用 DIT。从 `lightx2v/Wan2.2-Distill-Models` 拿。
-
-> ⚠️ ModelScope 上的 `lightx2v/Wan2.2-Distill-Models` 当前**只有 I2V 蒸馏权重**(T2V 蒸馏还没同步过来),4 个目录全是 `wan2.2_i2v_A14b_*_split/`。HF 上的同名 repo 含 T2V 蒸馏(`wan2.2_t2v_A14b_*_4step.safetensors`),如果只做 T2V,临时走 `huggingface-cli download` 也行。
-
-### 拉 base 模型（I2V）
+1. **base 模型**（`Wan-AI/Wan2.2-I2V-A14B`）：T5 text encoder（`models_t5_umt5-xxl-enc-bf16.pth`，11.4 GB）+ VAE（`Wan2.1_VAE.pth`，0.5 GB）+ tokenizer（`google/`）。**不要下 `high_noise_model/` + `low_noise_model/` 两个目录**（各 60 GB 的原始 BF16 权重,14B MoE 蒸馏场景被下面的量化 ckpt 完全替代）,只留两份 `config.json`。
+2. **CLIP vision encoder**（`Wan-AI/Wan2.1-I2V-14B-480P`）：`models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth`（4.8 GB）+ tokenizer（`xlm-roberta-large/`）。Wan2.2-I2V-A14B 仓库**不带 CLIP**,I2V 的 image encoder 走的是 Wan2.1 同款 XLM-RoBERTa-large ViT-Huge,从 Wan2.1-I2V 仓库单独拉这一个文件即可,不用下整个 14B 模型。
+3. **蒸馏量化 ckpt**（`lightx2v/Wan2.2-Distill-Models`）：MoE 架构分 high noise + low noise 两份,4 步推理只用 DIT 的 int8 量化 split-block 目录。仓库里同时存了单文件形态（15 GB/份）和 split 目录形态（42 个 `block_*.safetensors`,合计 15 GB/份）以及 fp8/BF16 变体——**只拉 I2V int8 的两个 split 目录**。
 
 ```shell #test-setup id="lightx2v-pull-wan22-base"
-# Wan2.2-I2V-A14B 28 GB 左右。约 8 MB/s 的话 1 小时下完,后台上更稳。
-# 落到 $PROJECT_ROOT/models/(持久卷 + 项目隔离),而不是 ./models/
+# base:T5 + VAE + tokenizer + 高低噪声 config.json(~12 GB,跳过 120 GB 原始 DIT shards)
 export PROJECT_ROOT=${PROJECT_ROOT:-/home/coder/work/lightx2v-test}
 mkdir -p "$PROJECT_ROOT/models"
 modelscope download \
     --model Wan-AI/Wan2.2-I2V-A14B \
-    --local_dir "$PROJECT_ROOT/models/Wan2.2-I2V-A14B"
+    --local_dir "$PROJECT_ROOT/models/Wan2.2-I2V-A14B" \
+    --include "models_t5_umt5-xxl-enc-bf16.pth" "Wan2.1_VAE.pth" \
+               "google/*" "high_noise_model/config.json" "low_noise_model/config.json"
+```
+
+```shell #test-setup id="lightx2v-pull-clip"
+# CLIP vision encoder:Wan2.2 仓库不带,从 Wan2.1-I2V-14B-480P 单拉(~4.8 GB)
+export PROJECT_ROOT=${PROJECT_ROOT:-/home/coder/work/lightx2v-test}
+modelscope download \
+    --model Wan-AI/Wan2.1-I2V-14B-480P \
+    --local_dir "$PROJECT_ROOT/models/Wan2.1-I2V-14B-480P" \
+    --include "models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth" "xlm-roberta-large/*"
 ```
 
 ```shell #test id="lightx2v-pull-wan22-base-verify"
 export PROJECT_ROOT=${PROJECT_ROOT:-/home/coder/work/lightx2v-test}
-# 展示 base 模型目录结构(diffusion_pytorch_model shards + config.json):
-ls -la "$PROJECT_ROOT/models/Wan2.2-I2V-A14B/" | head -20
+ls -la "$PROJECT_ROOT/models/Wan2.2-I2V-A14B/" | grep -v "^total"
 echo "---"
-# head config.json 验 model_type + _name_or_path
-head -15 "$PROJECT_ROOT/models/Wan2.2-I2V-A14B/config.json"
+head -5 "$PROJECT_ROOT/models/Wan2.2-I2V-A14B/google/umt5-xxl/tokenizer_config.json"
 ```
 
 ```shell #test-result id="lightx2v-pull-wan22-base-verify" fuzzy='xxx'
 total xxx
-drwxr-xr-x 2 xxx xxx       64 Aug 29 16:05 .
-drwxr-xr-x 4 xxx xxx      128 Aug 29 16:05 ..
--rw-r--r-- 1 xxx xxx      897 Aug 29 16:05 config.json
--rw-r--r-- 1 xxx xxx        1 Aug 29 16:05 .msc
--rw-r--r-- 1 xxx xxx 2516582400 Aug 29 16:06 diffusion_pytorch_model-00001-of-00007.safetensors
--rw-r--r-- 1 xxx xxx 2516582400 Aug 29 16:06 diffusion_pytorch_model-00002-of-00007.safetensors
-... (省略 5-7 shards)
+drwxr-xr-x 2 xxx xxx       64 xxx .
+drwxr-xr-x 4 xxx xxx      128 xxx ..
+-rw-r--r-- 1 xxx xxx  11361920418 xxx models_t5_umt5-xxl-enc-bf16.pth
+-rw-r--r-- 1 xxx xxx   507609880 xxx Wan2.1_VAE.pth
+drwxr-xr-x 2 xxx xxx       64 xxx google
+drwxr-xr-x 2 xxx xxx       64 xxx high_noise_model
+drwxr-xr-x 2 xxx xxx       64 xxx low_noise_model
+... (省略其余条目)
 ---
 {
-  "_class_name": "WanImageToVideoPipeline",
-  "_diffusers_version": "0.31.0",
-  "_name_or_path": "Wan-AI/Wan2.2-I2V-A14B",
-  ...
+  ... (tokenizer config json 内容)
 }
 ```
 
-### 拉 I2V 蒸馏 LoRA（split blocks）
+### 拉 I2V 蒸馏 ckpt（split blocks）
 
 ```shell #test-setup id="lightx2v-pull-wan22-i2v-distill"
-# ModelScope repo 当前只同步了 I2V 的 split-block 蒸馏 ckpt(4 个目录,
-# high/low noise × int8/fp8 共 ~6.5 GB)。lightx2v 的 lazy load 直接读
-# 目录里的 block_*.safetensors,不用先 merge 成单个文件。
+# 只拉 I2V int8 两个 split 目录(~30 GB)。仓库还有单文件/fp8/BF16 变体共 335 GB,
+# include 过滤必须带,否则全量下载直接把磁盘打爆。
+# lightx2v 的 load_safetensors 原生支持目录形态(utils.py: load_safetensors_from_dir
+# 遍历目录下所有 block_*.safetensors),split 目录直接当 ckpt 路径用,不用先 merge。
 export PROJECT_ROOT=${PROJECT_ROOT:-/home/coder/work/lightx2v-test}
 modelscope download \
     --model lightx2v/Wan2.2-Distill-Models \
-    --local_dir "$PROJECT_ROOT/models/Wan2.2-Distill-Models"
+    --local_dir "$PROJECT_ROOT/models/Wan2.2-Distill-Models" \
+    --include "wan2.2_i2v_A14b_high_noise_int8_lightx2v_4step_1030_split/*" \
+               "wan2.2_i2v_A14b_low_noise_int8_lightx2v_4step_split/*"
 ```
 
 ```shell #test id="lightx2v-pull-wan22-i2v-distill-verify"
 export PROJECT_ROOT=${PROJECT_ROOT:-/home/coder/work/lightx2v-test}
 # 展示 split-block 目录列表(每个目录里有 block_0.safetensors ~ block_*.safetensors)
-ls -la "$PROJECT_ROOT/models/Wan2.2-Distill-Models/" | grep -v "^total"
+ls "$PROJECT_ROOT/models/Wan2.2-Distill-Models/" | grep split
 echo "---"
-ls "$PROJECT_ROOT/models/Wan2.2-Distill-Models/wan2.2_i2v_A14b_high_noise_scaled_fp8_e4m3_lightx2v_4step_1030_split/" | head -15
+ls "$PROJECT_ROOT/models/Wan2.2-Distill-Models/wan2.2_i2v_A14b_high_noise_int8_lightx2v_4step_1030_split/" | head -5
+echo "---"
+ls "$PROJECT_ROOT/models/Wan2.2-Distill-Models/wan2.2_i2v_A14b_high_noise_int8_lightx2v_4step_1030_split/" | wc -l
 ```
 
 ```shell #test-result id="lightx2v-pull-wan22-i2v-distill-verify" fuzzy='xxx'
-drwxr-xr-x 2 xxx xxx  4096 Aug 29 08:52 ._____temp
--rw------- 1 xxx xxx  2574 Aug 29 08:54 .msc
-drwxr-xr-x 2 xxx xxx  4096 Aug 29 08:53 wan2.2_i2v_A14b_high_noise_int8_lightx2v_4step_1030_split
-drwxr-xr-x 2 xxx xxx  4096 Aug 29 08:54 wan2.2_i2v_A14b_high_noise_scaled_fp8_e4m3_lightx2v_4step_1030_split
-drwxr-xr-x 2 xxx xxx  4096 Aug 29 08:54 wan2.2_i2v_A14b_low_noise_int8_lightx2v_4step_split
-drwxr-xr-x 2 xxx xxx  4096 Aug 29 08:54 wan2.2_i2v_A14b_low_noise_scaled_fp8_e4m3_lightx2v_4step_split
+wan2.2_i2v_A14b_high_noise_int8_lightx2v_4step_1030_split
+wan2.2_i2v_A14b_low_noise_int8_lightx2v_4step_split
 ---
 block_0.safetensors
 block_1.safetensors
 block_10.safetensors
 block_11.safetensors
-... (split block files)
+block_12.safetensors
+---
+42
 ```
 
-> HF 上的同名 repo 还含 T2V 蒸馏(`wan2.2_t2v_A14b_*_4step.safetensors`,单文件 LoRA 不是 split) + ComfyUI 格式变体,完整清单见 [HF Wan2.2-Distill-Models](https://huggingface.co/lightx2v/Wan2.2-Distill-Models)。
-
-### 拉 Qwen-Image-Edit-2511 Lightning（I2I demo 用）
-
-⚠️ **20B BF16 Qwen-Image-Edit-2511 base 跑不动单卡 32 GB**(权重 40 GB,常驻就 OOM)。改走 **FP8 蒸馏版**(`qwen_image_i2i_2511_distill_fp8.json`),只下 Lightning repo 里的 FP8 merged ckpt(**不下 base**):
-
-```shell #test-setup id="lightx2v-pull-qwen-edit"
-export PROJECT_ROOT=${PROJECT_ROOT:-/home/coder/work/lightx2v-test}
-# Lightning repo 里 FP8 merged ckpt(~10 GB) + 纯 LoRA 适配器(~0.5 GB)+ 其它辅助文件
-modelscope download \
-    --model lightx2v/Qwen-Image-Edit-2511-Lightning \
-    --local_dir "$PROJECT_ROOT/models/Qwen-Image-Edit-2511-Lightning"
-```
-
-```shell #test id="lightx2v-pull-qwen-edit-verify"
-export PROJECT_ROOT=${PROJECT_ROOT:-/home/coder/work/lightx2v-test}
-ls -la "$PROJECT_ROOT/models/Qwen-Image-Edit-2511-Lightning/" | grep -v "^total"
-```
-
-```shell #test-result id="lightx2v-pull-qwen-edit-verify" fuzzy='xxx'
--rw-r--r-- 1 xxx xxx 540770304 Aug 29 16:19 Qwen-Image-Edit-2511-Lightning-8steps-V1.0-fp32.safetensors
--rw-r--r-- 1 xxx xxx 10000000000 Aug 29 16:21 qwen_image_edit_2511_fp8_e4m3fn_scaled_lightning_8steps_v1.0.safetensors
-... (其它辅助文件: text encoder / VAE 等,视 repo 内容)
-```
-
-> FP8 ckpt 只量化 DiT(20B → 10 GB)。text encoder(Qwen2.5-VL-7B 等)和 VAE 视 Lightning repo 是否带 → 如果带了就直接用,没带要单独补下。**跑 smoke test 时如果报缺模块,再到 `lightx2v/models/input_encoders/` / `video_encoders/` 看具体依赖**。
+> ⚠️ 上面 split 目录名里的 `_1030` 后缀是 distill 权重的版本日期（10月30日）,high noise 带、low noise 不带——**名字以 ModelScope 仓库实际为准**,跑之前先 `ls` 确认。
+>
+> HF 上的同名 repo [lightx2v/Wan2.2-Distill-Models](https://huggingface.co/lightx2v/Wan2.2-Distill-Models) 内容相同,还含 T2V 蒸馏(`wan2.2_t2v_A14b_*_4step.safetensors`,ModelScope 没同步),T2V 路线需要时再走 HF。
 
 ## 列出 Wan2.2 4 步蒸馏 config
 
@@ -483,25 +475,13 @@ wan_moe_i2v.json
 wan_moe_t2v.json
 ... (主线 moe 配置)
 ---
-wan_moe_i2v_distill_4090.json
-wan_moe_i2v_distill_5090.json
-wan_moe_i2v_distill_fp8_4step_cfg_ulysses.json
-wan_moe_i2v_distill_int8_4step_ulysses_npu.json   <- NPU int8 量化专用,单卡需改
-wan_moe_i2v_distill_lora_4step_cfg_ulysses.json
-wan_moe_i2v_distill_model.json
-wan_moe_i2v_distill_model_4step_cfg_ulysses.json
-wan_moe_i2v_distill_model_4step_cfg_ulysses_rainfusion.json
-wan_moe_i2v_distill_quant.json
-wan_moe_i2v_distill_with_lora.json                <- 蒸馏 LoRA 通用版
-wan_moe_t2v_distill_lora.json
-wan_moe_t2v_distill_lora_4step_cfg_ulysses.json
+wan_moe_i2v_distill_int8_4step_ulysses_npu.json
+... (蒸馏配置,含 NPU int8 专用版)
 ```
 
-下面 I2V demo 用 **`configs/distill/wan22/wan_moe_i2v_distill_int8_4step_ulysses_npu.json`**(NPU int8 量化版本,`self_attn_1_type=rainfusion_attn` + `cross_attn_*=npu_flash_attn`,直走 NPU 算子)。**但默认 config 是为「910B + 2 卡 + 720P」设计的**(720P+ 81 帧 + T5/VAE 全常驻 + ulysses 并行 + rife 视频插帧),**单卡 32 GB 必须改**:720→480 + 开 t5/vae cpu_offload + 删 parallel + 删 video_frame_interpolation。改动在下面 I2V smoke 块里完成。
+下面 I2V demo 用 **`configs/distill/wan22/wan_moe_i2v_distill_int8_4step_ulysses_npu.json`**(NPU int8 量化版本,`self_attn_1_type=rainfusion_attn` + `cross_attn_*=npu_flash_attn`,直走 NPU 算子)。**但默认 config 是为「910B + 2 卡 + 720P」设计的**(720P + 81 帧 + T5/VAE 全常驻 + ulysses 并行 + rife 视频插帧),**单卡 32 GB 必须改**:720→480 + 开 t5/vae cpu_offload + 删 parallel + 删 video_frame_interpolation。改动在下面 I2V smoke 块里完成。
 
-I2I demo 用 **`configs/qwen_image/qwen_image_i2i_2511_distill_fp8.json`**(FP8 量化 + Lightning 8 步),**不下载 Qwen-Image-Edit-2511 base 20 GB**(单卡 BF16 跑不下)。
-
-> 公共要点:所有 config JSON 里 `xxx_ckpt` 默认是 HF repo 路径(`lightx2v/Qwen-Image-Edit-2511-Lightning/...` 之类),LightX2V 通过 hf_hub / 本地 cache 解析。本文 doc 把它们改成 `$PROJECT_ROOT/models/...` 绝对路径,避免 hf cache 污染。
+> 公共要点:config JSON 里 `high/low_noise_quantized_ckpt` 默认是 `models/Wan2.2-Distill-Models/...` 相对路径(LightX2V 仓库内 `./models/` 约定)。本文 doc 把它们改成 `$PROJECT_ROOT/models/...` 绝对路径的 **split 目录**,配合源码 clone 里 `./models -> ../models` 的软链两种寻址都能命中。
 
 ## I2V 烟囱测试：4 步蒸馏图生视频
 
@@ -517,9 +497,17 @@ import json, pathlib, os
 cfg_path = pathlib.Path('configs/distill/wan22/wan_moe_i2v_distill_int8_4step_ulysses_npu.json')
 cfg = json.loads(cfg_path.read_text())
 proj_models = os.environ['PROJECT_ROOT'] + '/models'
-# split-block 目录:绝对路径,避免 cwd 依赖
+# split-block 目录:绝对路径,避免 cwd 依赖。config 默认值是
+# models/Wan2.2-Distill-Models/wan2.2_i2v_A14b_*_int8_*.safetensors
+# (单文件形态),ModelScope 只同步了 split 目录形态,这里必须换路径,
+# 否则 FileNotFoundError。load_safetensors 原生支持目录(utils.py)。
 cfg['high_noise_quantized_ckpt'] = proj_models + '/Wan2.2-Distill-Models/wan2.2_i2v_A14b_high_noise_int8_lightx2v_4step_1030_split'
 cfg['low_noise_quantized_ckpt']  = proj_models + '/Wan2.2-Distill-Models/wan2.2_i2v_A14b_low_noise_int8_lightx2v_4step_split'
+# I2V 的 CLIP image encoder:Wan2.2 base 仓库不带这文件,单独从
+# Wan2.1-I2V-14B-480P 拉的。不指定的话 runner 走 find_torch_model_path
+# 在 model_path 下找 models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth,
+# 两处都找不到直接 FileNotFoundError。
+cfg['clip_original_ckpt'] = proj_models + '/Wan2.1-I2V-14B-480P/models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth'
 # 720P → 480P(activation/KV 省 ~40%)
 cfg['target_height'] = 480
 cfg['target_width']  = 832
@@ -535,7 +523,7 @@ cfg.pop('parallel', None)
 cfg.pop('video_frame_interpolation', None)
 cfg_path.write_text(json.dumps(cfg, indent=4))
 print('cfg adapted (单卡 32GB 适配):')
-for k in ['target_height', 'target_width', 'cpu_offload', 't5_cpu_offload', 'vae_cpu_offload', 'high_noise_quantized_ckpt']:
+for k in ['target_height', 'target_width', 'cpu_offload', 't5_cpu_offload', 'vae_cpu_offload', 'high_noise_quantized_ckpt', 'clip_original_ckpt']:
     print(f'  {k}: {cfg[k]}')
 "
 ```
@@ -596,114 +584,13 @@ duration=xxx
 >
 > **单卡 vs 多卡**：默认 config 是 2 卡 ulysses 并行,本文 doc 单卡跑通后要再扩到多卡,把 `parallel.seq_p_size` 加回去并设成 `torch.npu.device_count()`。
 
-## T2V 烟囱测试：4 步蒸馏文生视频
+## 更多模型路线（本文档未覆盖）
 
-`configs/wan22/wan_moe_t2v_distill.json` 已经写好(`infer_steps: 4`, `high_noise_original_ckpt` + `low_noise_original_ckpt` 两份 DIT ckpt,MoE 合并)。**单卡 32 GB 同样要做 I2V 那套适配**:
+跑通 I2V 之后,其它任务/模型的调用模式完全一致(`python -m lightx2v.infer --model_cls ... --task ... --model_path ... --config_json ...`),差异只在权重和 config:
 
-```shell #test-setup id="lightx2v-t2v-cfg-adapt"
-export PROJECT_ROOT=${PROJECT_ROOT:-/home/coder/work/lightx2v-test}
-cd "$PROJECT_ROOT/src"
-python -c "
-import json, pathlib, os
-cfg_path = pathlib.Path('configs/wan22/wan_moe_t2v_distill.json')
-cfg = json.loads(cfg_path.read_text())
-print('---wan_moe_t2v_distill.json 原始值---')
-print('infer_steps:', cfg['infer_steps'])
-print('high_noise_original_ckpt:', cfg.get('high_noise_original_ckpt'))
-print('low_noise_original_ckpt:',  cfg.get('low_noise_original_ckpt'))
-print('sample_guide_scale:', cfg.get('sample_guide_scale'))
-print('denoising_step_list:', cfg.get('denoising_step_list'))
-"
-```
-
-```shell #test-result id="lightx2v-t2v-cfg-adapt" fuzzy='xxx'
-infer_steps: xxx
-high_noise_original_ckpt: xxx
-low_noise_original_ckpt: xxx
-sample_guide_scale: xxx
-denoising_step_list: xxx
-```
-
-⚠️ **ModelScope 的 `lightx2v/Wan2.2-Distill-Models` 当前只同步了 I2V ckpt**(目录全是 `wan2.2_i2v_A14b_*_split/`)。T2V 蒸馏要的两份 `Wan2.2-T2V-A14B/distill_models/{high,low}_noise_model/distill_model.safetensors` 在 ModelScope 上没有,需要绕走:
-
-```shell #test-setup id="lightx2v-pull-wan22-t2v-distill-fallback"
-export PROJECT_ROOT=${PROJECT_ROOT:-/home/coder/work/lightx2v-test}
-# 方案 A:HF 上拉(需要 HF token + 网络通畅)
-huggingface-cli download lightx2v/Wan2.2-Distill-Models \
-    --local-dir "$PROJECT_ROOT/models/Wan2.2-Distill-Models-hf" \
-    --include "wan2.2_t2v_A14b_high_noise_lightx2v_4step*.safetensors" \
-                "wan2.2_t2v_A14b_low_noise_lightx2v_4step*.safetensors"
-
-# 方案 B:跑主线 wan_moe_t2v(不蒸馏,50 步,慢但不需要额外蒸馏权重)
-# python -m lightx2v.infer --model_cls wan2.2_moe --task t2v --model_path ... --config_json configs/wan22/wan_moe_t2v.json
-```
-
-走通之后跟 I2V 同款调用模式(`--task t2v`, 去掉 `--image_path`, 改 `--config_json`)。完整 T2V 烟囱测试本文档略,留给后续按需补。
-
-## T2I 烟囱测试：Qwen-Image-Edit Lightning FP8 图编辑
-
-参考 [examples/qwen_image/qwen_2511_with_distill_lora.py](https://github.com/ModelTC/LightX2V/blob/main/examples/qwen_image/qwen_2511_with_distill_lora.py),Qwen-Image-Edit 用 `model_cls=qwen-image-edit-2511` + `task=i2i`(LightX2V 命名是 i2i,**不是 t2i**)。Lightning 是 **8 步蒸馏**(不是 4 步,example docstring 的 4steps 名字是别的版本)。
-
-### 跑 I2I(FP8 蒸馏版,不下 20 GB base)
-
-```shell #test-setup id="lightx2v-i2i-cfg-adapt"
-# FP8 config 默认 dit_quantized_ckpt 指向 HF repo,改成 $PROJECT_ROOT/models/ 绝对路径
-export PROJECT_ROOT=${PROJECT_ROOT:-/home/coder/work/lightx2v-test}
-cd "$PROJECT_ROOT/src"
-python -c "
-import json, pathlib, os
-cfg_path = pathlib.Path('configs/qwen_image/qwen_image_i2i_2511_distill_fp8.json')
-cfg = json.loads(cfg_path.read_text())
-proj_models = os.environ['PROJECT_ROOT'] + '/models'
-cfg['dit_quantized_ckpt'] = proj_models + '/Qwen-Image-Edit-2511-Lightning/qwen_image_edit_2511_fp8_e4m3fn_scaled_lightning_8steps_v1.0.safetensors'
-cfg_path.write_text(json.dumps(cfg, indent=4))
-print('cfg dit_quantized_ckpt:', cfg['dit_quantized_ckpt'])
-"
-```
-
-```shell #test-setup id="lightx2v-i2i-smoke-run"
-export PROJECT_ROOT=${PROJECT_ROOT:-/home/coder/work/lightx2v-test}
-cd "$PROJECT_ROOT/src"
-mkdir -p "$PROJECT_ROOT/save_results"
-source /usr/local/Ascend/ascend-toolkit/set_env.sh
-export PLATFORM=ascend_npu
-export ASCEND_RT_VISIBLE_DEVICES=0
-export PYTHONPATH=/tmp/stubs:${PYTHONPATH:-}     # aarch64 才有,x86_64 删掉
-export TOKENIZERS_PARALLELISM=false
-
-python -m lightx2v.infer \
-    --model_cls qwen-image-edit-2511 \
-    --task i2i \
-    --model_path "$PROJECT_ROOT/models/Qwen-Image-Edit-2511-Lightning" \
-    --config_json configs/qwen_image/qwen_image_i2i_2511_distill_fp8.json \
-    --prompt "Replace the polka-dot shirt with a light blue shirt." \
-    --image_path "$PROJECT_ROOT/src/assets/inputs/imgs/img_0.jpg" \
-    --save_result_path "$PROJECT_ROOT/save_results/output_qwen_image_edit_2511_distill_fp8.png"
-```
-
-> **关于 `--model_path`**: FP8 ckpt 是 Lightning repo 里的 merged 文件,config 里 `dit_quantized_ckpt` 已经指向它了;`--model_path` 这里传 Lightning repo 根目录是 LightX2V 找 text encoder / VAE / tokenizer 的位置(视 Lightning repo 是否带这些组件而定)。如果 Lightning repo 不带 text encoder,要补下 Qwen2.5-VL-7B 这类,然后 `--model_path` 改成那个目录。
-
-```shell #test id="lightx2v-i2i-output"
-export PROJECT_ROOT=${PROJECT_ROOT:-/home/coder/work/lightx2v-test}
-OUT="$PROJECT_ROOT/save_results/output_qwen_image_edit_2511_distill_fp8.png"
-ls -la "$OUT"
-file "$OUT"
-python -c "
-from PIL import Image
-im = Image.open('$OUT')
-print(f'size: {im.size}, mode: {im.mode}, format: {im.format}')
-"
-```
-
-```shell #test-result id="lightx2v-i2i-output" fuzzy='xxx'
--rw-r--r-- 1 xxx xxx xxx Aug 29 16:25 /home/coder/work/lightx2v-test/save_results/output_qwen_image_edit_2511_distill_fp8.png
-/home/coder/work/lightx2v-test/save_results/output_qwen_image_edit_2511_distill_fp8.png: PNG image data, 1328 x 1328, 8-bit/color RGB, non-interlaced
-size: (xxx, xxx), mode: xxx, format: xxx
-```
-
-> **I2I 跟 I2V/T2V 的 env 区别**:Qwen demo **不需要 `DTYPE=BF16` / PYTORCH_CUDA_ALLOC_CONF**(没碰 DIT bf16 路径);`enable_cfg: false` 已经是 8 步蒸馏默认,不需要另开。
->
-> **跑失败的常见原因**:Lightning repo 不带 text encoder → import / load 时报缺 Qwen2.5-VL 这类模块 → 回到 [LightX2V 模型结构文档](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/getting_started/model_structure.html)看完整目录布局,缺啥补啥。
+- **T2V(Wan2.2 蒸馏)**:`--task t2v` + `configs/wan22/wan_moe_t2v_distill.json`。⚠️ ModelScope 的 `lightx2v/Wan2.2-Distill-Models` **没同步 T2V 蒸馏权重**(只有 I2V),要跑得走 HF([lightx2v/Wan2.2-Distill-Models](https://huggingface.co/lightx2v/Wan2.2-Distill-Models),`wan2.2_t2v_A14b_*_4step.safetensors`)或者跑不蒸馏的 `wan_moe_t2v` 主线(50 步,慢)。
+- **T2V(Wan2.1 轻量)**:`--model_cls wan2.1` + `configs/wan22/` 同款 config。官方昇腾入口是 [`scripts/platforms/ascend_npu/run_wan21_t2v.sh`](https://github.com/ModelTC/LightX2V/blob/main/scripts/platforms/ascend_npu/run_wan21_t2v.sh)(配 `configs/platforms/ascend_npu/wan_t2v.json`,`npu_flash_attn` + cpu_offload),模型用 [Wan-AI/Wan2.1-T2V-1.3B](https://modelscope.cn/models/Wan-AI/Wan2.1-T2V-1.3B)(~17.6 GB,单卡无压力)。
+- **T2I(Qwen-Image-Edit)**:`--model_cls qwen-image-edit-2511` + `--task i2i`(命名是 **i2i 不是 t2i**)。单卡 32 GB 要走 FP8 蒸馏版(`configs/qwen_image/qwen_image_i2i_2511_distill_fp8.json` + [lightx2v/Qwen-Image-Edit-2511-Lightning](https://modelscope.cn/models/lightx2v/Qwen-Image-Edit-2511-Lightning),FP8 merged ckpt 单文件就有 20 GB,include 过滤挑 `qwen_image_edit_2511_fp8_e4m3fn_scaled_lightning_8steps_v1.0.safetensors`,**别全量拉**,repo 共 87 GB)。text encoder / VAE 视 Lightning repo 是否携带,缺了再补。
 
 ## 下一步
 

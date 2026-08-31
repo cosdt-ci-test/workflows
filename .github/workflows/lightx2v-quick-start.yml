@@ -31,9 +31,10 @@
 #      `modelscope download --local_dir "$PROJECT_ROOT/models/..."`
 #      commands write. Bind-mount covers persistence + the cache
 #      invalidation contract (purge_corrupt_models walks this dir).
-#   3. HF cache -> /root/.cache/huggingface, for the doc's optional
-#      T2V fallback `huggingface-cli download lightx2v/Wan2.2-Distill-Models`
-#      when ModelScope doesn't carry the T2V distill weights.
+# The HF cache bind from earlier iterations was dropped: the doc's
+# e2e scope no longer downloads from HF (Wan2.2 T2V distill and the
+# Qwen-Image-Edit I2I route were cut to pointer-only sections; all
+# smoke weights come from ModelScope now).
 
 name: lightx2v-quick-start
 
@@ -50,12 +51,10 @@ concurrency:
   cancel-in-progress: false
 
 on:
-  schedule:
-    # Run every 6 hours: '45 */6 * * *' fires at minute 45 of every
-    # 6th hour (00:45, 06:45, 12:45, 18:45). Cadence is loose enough
-    # for an upstream that releases every few months, but tight
-    # enough that doc fixes propagate within a day.
-    - cron: '45 */6 * * *'
+  # Enable after the first successful workflow_dispatch run (same
+  # convention as mooncake / tensorflow / most of the repo).
+  # schedule:
+  #   - cron: '45 */6 * * *'
   workflow_dispatch:
 
 permissions:
@@ -80,16 +79,27 @@ jobs:
       image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
       container_options: >-
         --volume=/data/ci-cache/modelscope/lightx2v:/root/.cache/modelscope
-        --volume=/data/ci-cache/huggingface/lightx2v:/root/.cache/huggingface
         --volume=/data/ci-cache/lightx2v-models:/root/lightx2v-test/models
-      # 4h ceiling: cold run pulls 28 GB base + 7 GB distill + 10 GB
-      # Lightning at cluster network speed (faster than the ~8 MB/s
-      # we measured on coder, but ~1.5h worst-case) + I2V 4-step
-      # smoke on a single 910B4 card (4-step distilled 14B int8 at
-      # 480P / 81 frames typically runs in 1-3 min). 4h covers
-      # cache-cold downloads + several retries on dependency flakes.
+      # 4h ceiling: cold run pulls ~47 GB of weights (12 GB Wan2.2 base
+      # T5/VAE/tokenizer + 4.8 GB CLIP from Wan2.1-I2V + 30 GB I2V int8
+      # distill split dirs, all include-filtered) at cluster network
+      # speed + I2V 4-step smoke on a single 910B4 card (4-step
+      # distilled 14B int8 at 480P / 81 frames typically runs in a few
+      # minutes). 4h covers cache-cold downloads + several retries on
+      # dependency flakes.
       timeout_minutes: 240
       upstream_repo: ModelTC/LightX2V
+      # LightX2V has zero GitHub Releases and zero tags (verified via
+      # the API: /tags returns 200 + []), rolling main only. The
+      # engine's auto-fallback chain short-circuits on that empty-tags
+      # 200: monitor resolves ref="" and the decide step's
+      # /commits/$ref lookup 422s -> exit 1 (the same failure that
+      # killed every schedule run of the tagless specforge guard
+      # before fixed_ref existed). fixed_ref: main makes the monitor
+      # poll /commits/main and use its SHA as the change key, and the
+      # dispatch path resolves ref="main" directly, so UPSTREAM_REF
+      # is a non-empty "main" the doc's store/load contract can use.
+      fixed_ref: main
       # Same URL the legacy pattern monitors: doc-hash state carries
       # over via the shared monitor-state-lightx2v- cache prefix.
       # GitHub Contents API URL (NOT raw.githubusercontent.com):

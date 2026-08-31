@@ -12,10 +12,16 @@ Run: ``python -m unittest tests.test_quick_start_ascend -v 2>&1``
 Environment variables (injected by the quick-start engine workflow
 ``quick-start-template.yml``, triggered by ``lightx2v-quick-start.yml``):
     ``MONITORED_DOC_URL``         Required; raw URL of the document under test.
-    ``UPSTREAM_REF``               Not consumed by this doc body (lightx2v
-                                   has no stable release tag yet; doc
-                                   clones main HEAD). Engine injects it
-                                   for template uniformity.
+    ``UPSTREAM_REF``               Consumed by the doc body: the hidden
+                                   ``store="upstream_ref"`` setup block
+                                   captures it and the source-install
+                                   block ``load``s it into
+                                   ``git clone --branch <ref>``.
+                                   LightX2V has no stable release tag
+                                   (zero releases, zero tags, rolling
+                                   main), so the trigger pins
+                                   ``fixed_ref: main`` and this is
+                                   always ``main``.
     ``NPU_READY=true``             Required, otherwise the class is skipped.
                                    End-to-end tests only run on the NPU runner:
                                    local dev machines / normal ubuntu runners
@@ -61,26 +67,21 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
     Scope: torch + torch_npu + modelscope install + LightX2V source
     install (with aarch64 stub packages for cv2 / decord / torchaudio
-    that lack aarch64 wheels) + 3-way ModelScope weight pull (28 GB
-    Wan2.2-I2V-A14B base + 7 GB split-block Wan2.2-Distill-Models +
-    10 GB Qwen-Image-Edit-2511-Lightning FP8) + I2V single-card smoke
+    / triton that lack usable aarch64 wheels) + include-filtered
+    ModelScope weight pulls (12 GB Wan2.2-I2V-A14B base T5/VAE/
+    tokenizer + 4.8 GB CLIP vision encoder from Wan2.1-I2V-14B-480P
+    + 30 GB I2V int8 distill split dirs) + I2V single-card smoke
     (4-step distilled 14B int8 at 480P on a 910B4). The doc's
     I2V config is adapted single-card 32 GB (720P -> 480P, t5/vae
     cpu_offload on, `parallel` and `video_frame_interpolation`
     dropped), so only one card is touched.
 
-    T2V and T2I smoke blocks are listed in the doc but not in the
-    default e2e scope:
-       * T2V — ModelScope's `lightx2v/Wan2.2-Distill-Models` repo only
-         carries I2V split blocks; the T2V distill weights live on HF
-         only. The doc marks this clearly and falls back to either
-         `huggingface-cli download` (token-gated, flaky in CI) or the
-         un-distilled `wan_moe_t2v` baseline (slow + heavier). Skip in
-         the smoke scope to keep CI run-time bounded.
-       * T2I — relies on the Lightning repo carrying text encoder /
-         VAE components; if the repo doesn't, the smoke fails with an
-         opaque "missing module" trace. Marked in the doc as
-         "实测时填坑" rather than a hard e2e assertion.
+    The Wan2.2 T2V distill route and the Qwen-Image-Edit I2I route
+    are documented as pointer-only sections (no #test blocks): the
+    T2V distill weights are HF-only (not on ModelScope), and the
+    Qwen Lightning route needs an extra ~20 GB FP8 ckpt plus
+    undetermined text-encoder components — both are follow-up work
+    after the I2V path is green.
     """
 
     DEFAULT_COMMAND_TIMEOUT = 1800  # 30 min: cold download of 28 GB base alone can hit ~1h on slow cluster egress; per-block 4-step gen ~1-3 min
@@ -236,20 +237,17 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             check=True,
         )
 
-        # 2.5) Pin triton<3.0: torch 2.9.0 + torch_npu 2.9.0 still
-        # reference ``tl.math`` (torch/_inductor/runtime/triton_compat.py:53,
-        # reached via torch_npu.utils._graph_tree -> torch._dynamo ->
-        # torch._inductor), which triton 3.0 removed. Without this pin
-        # the cluster pypi cache can resolve triton 3.x for the
-        # image's torch stack and ``import lightx2v`` (via
-        # lightx2v_platform/base/amd_rocm.py importing torch) dies
-        # with ``AttributeError: module 'triton.language' has no
-        # attribute 'math'`` before the test reaches the doc body.
-        # No-op when the image already has triton 2.x.
-        subprocess.run(
-            ['python', '-m', 'pip', 'install', 'triton<3.0'],
-            check=True,
-        )
+        # 2.5) triton: NOT installed here. The image / cluster index
+        # only carries triton 3.5+ on aarch64 (no 2.x wheel exists for
+        # this platform), so a `pip install triton<3.0` pin is a dead
+        # end (resolver failure at setUpClass, before any doc command
+        # runs). torch 2.9.0's ``tl.math`` reference
+        # (torch/_inductor/runtime/triton_compat.py:53, reached via
+        # torch_npu.utils._graph_tree -> torch._dynamo ->
+        # torch._inductor) is covered by the doc's triton meta-path
+        # stub instead: any real triton is shadowed via sys.meta_path,
+        # so ``import triton`` / ``triton.language.math`` resolve to
+        # the stub regardless of what version pip resolved.
 
         # 3) torch stack probe + install: when version matches the image's
         # pre-installed wheels, reuse them to avoid the cluster cache

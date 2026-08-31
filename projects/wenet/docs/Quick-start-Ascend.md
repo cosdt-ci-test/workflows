@@ -76,7 +76,7 @@ git checkout <UPSTREAM_REF>
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 cd wenet
 pip install -e .
-pip install torch==2.12.0 torchaudio==2.12.0 torch-npu==2.12.0
+pip install torch==2.12.0 torch-npu==2.12.0
 ```
 
 安装 sox：

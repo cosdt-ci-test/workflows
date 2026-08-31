@@ -63,18 +63,28 @@ Ubuntu 22.04。
 内的 Python 3.7.10。使用 `make altinstall` 安装到独立前缀，不创建 conda
 或 venv，也不会修改 CANN 镜像已有的 Python 3.12。
 
+### 安装编译依赖
+
+与仓库中的 OpenCV Quick Start 保持一致：Ubuntu 22.04 aarch64 镜像默认的
+`ports.ubuntu.com` 在国内 Runner 上可能较慢，先切换到阿里云
+`ubuntu-ports` 镜像；该修改只存在于本次临时容器。
+
+```shell #test-setup
+set -euo pipefail
+sed -i 's|http://ports.ubuntu.com/ubuntu-ports/|https://mirrors.aliyun.com/ubuntu-ports/|g' /etc/apt/sources.list
+apt-get update -qq
+apt-get install -y -qq --no-install-recommends \
+  build-essential ca-certificates curl \
+  libbz2-dev libffi-dev libgdbm-dev liblzma-dev libncurses5-dev \
+  libreadline-dev libsqlite3-dev libssl-dev tk-dev uuid-dev zlib1g-dev
+```
+
+### 安装 Python 3.7.10
+
 ```shell #test-setup
 set -euo pipefail
 PYTHON_PREFIX=/usr/local/python3.7.10
 PYTHON_ARCHIVE=/tmp/Python-3.7.10.tgz
-HDF5_PREFIX=/usr/local/hdf5
-HDF5_ARCHIVE=/tmp/hdf5-1.10.5.tar.gz
-
-apt-get update
-apt-get install -y --no-install-recommends \
-  build-essential ca-certificates curl \
-  libbz2-dev libffi-dev libgdbm-dev liblzma-dev libncurses5-dev \
-  libreadline-dev libsqlite3-dev libssl-dev tk-dev uuid-dev zlib1g-dev
 
 if [ ! -x "$PYTHON_PREFIX/bin/python3.7" ]; then
   curl -fL --retry 5 --retry-all-errors --connect-timeout 30 --max-time 600 \
@@ -88,6 +98,14 @@ if [ ! -x "$PYTHON_PREFIX/bin/python3.7" ]; then
   make -j"$(nproc)"
   make altinstall
 fi
+```
+
+### 编译安装 HDF5 1.10.5
+
+```shell #test-setup
+set -euo pipefail
+HDF5_PREFIX=/usr/local/hdf5
+HDF5_ARCHIVE=/tmp/hdf5-1.10.5.tar.gz
 
 if [ ! -x "$HDF5_PREFIX/bin/h5cc" ]; then
   curl -fL --retry 5 --retry-all-errors --connect-timeout 30 --max-time 600 \
@@ -104,7 +122,12 @@ fi
 # 与 TF Adapter 9.1.0 仓库的 aarch64 TensorFlow 1.15 安装文档一致。
 export CPATH=/usr/local/hdf5/include/:/usr/local/hdf5/lib/
 export LD_LIBRARY_PATH=/usr/local/hdf5/lib/:${LD_LIBRARY_PATH:-}
+```
 
+### 安装 uv
+
+```shell #test-setup
+set -euo pipefail
 # uv 由镜像已有的 Python 3.12 启动；后续通过 --python 明确写入 Python 3.7。
 python -m pip install -q uv
 ```

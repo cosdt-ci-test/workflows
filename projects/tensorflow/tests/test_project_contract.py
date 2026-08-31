@@ -191,6 +191,45 @@ class TestTensorFlowProjectContract(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("/usr/local/hdf5/lib", test_file)
 
+    def test_slow_bootstrap_phases_are_separate_setup_commands(self) -> None:
+        doc_path = (
+            _REPO_ROOT
+            / "projects"
+            / "tensorflow"
+            / "docs"
+            / "Quick-start-Ascend.md"
+        )
+        commands, _ = _Parser().parse(doc_path.read_text(encoding="utf-8"))
+        markers = (
+            "apt-get update",
+            "Python-3.7.10.tgz",
+            "hdf5-1.10.5.tar.gz",
+            "python -m pip install -q uv",
+        )
+        phase_indices = [
+            next(i for i, command in enumerate(commands) if marker in command.cmd)
+            for marker in markers
+        ]
+        self.assertEqual(phase_indices, [0, 1, 2, 3])
+        for command in commands:
+            with self.subTest(command=command.cmd[:80]):
+                self.assertLessEqual(
+                    sum(marker in command.cmd for marker in markers),
+                    1,
+                )
+
+    def test_apt_uses_the_existing_arm64_mirror_pattern(self) -> None:
+        doc = (
+            _REPO_ROOT
+            / "projects"
+            / "tensorflow"
+            / "docs"
+            / "Quick-start-Ascend.md"
+        ).read_text(encoding="utf-8")
+        mirror = "https://mirrors.aliyun.com/ubuntu-ports/"
+        self.assertIn(mirror, doc)
+        self.assertLess(doc.index(mirror), doc.index("apt-get update"))
+
     def test_e2e_test_sources_cann_and_is_npu_gated(self) -> None:
         test_file = (
             _REPO_ROOT

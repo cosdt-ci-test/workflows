@@ -170,6 +170,11 @@ python -c "import tilelang; print('tilelang', tilelang.__version__)"
 
 ```shell #test id="run-gemm"
 cd tilelang-ascend
+# tilelang 的 JIT 编译器（tilelang/jit/adapter/libgen.py 的 _get_tl_root）按
+# ${TL_ROOT}/3rdparty/... 拼接 bisheng 编译的 include 路径；TL_ROOT 未设置时默认
+# 取 tilelang 包所在目录，而源码 checkout 下 3rdparty 位于仓库根而非 tilelang/ 下，
+# 不指过去 JIT 编译会报 'catlass/catlass.hpp' file not found。
+export TL_ROOT="$(pwd)"
 python examples/gemm/example_gemm.py > /tmp/gemm.log 2>&1
 grep -q "init successful!" /tmp/gemm.log && grep -q "Kernel Output Match!" /tmp/gemm.log && echo "gemm ok" || { tail -n 50 /tmp/gemm.log; exit 1; }
 ```

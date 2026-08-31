@@ -87,98 +87,90 @@ Python 3.12.xxx
 
 #### 安装 vllm-ascend
 
-PyPI `vllm==0.23.0` 的 aarch64 wheel 是 **CUDA-only build**，NPU 上无法用，且其 METADATA 钉 `torch==2.11.0+cpu` 与前置的 `torch==2.10.0+cpu` 冲突。所以本节从源码 build vllm：`VLLM_TARGET_DEVICE=empty` 跳过 CUDA kernel 编译、只注册 `torch.ops.vllm` schema 占位，运行时由 vllm-ascend 通过 `vllm.platform_plugins` entry point 把 NPU fused op 注入 `torch.ops.vllm` namespace。
+安装系统依赖项并配置 pip 镜像：
+```shell #test-setup
+# Using apt-get with mirror
+sed -i 's|ports.ubuntu.com|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list
+apt-get update -y && apt-get install -y gcc g++ cmake ninja-build libnuma-dev wget git curl jq
+```
+
+安装 Python 构建后端和原生构建工具（vllm 源码 build 需要 `cmake>=3.26` + ninja + setuptools-scm；
+apt 装的 system cmake 是 Ubuntu 22.04 自带 3.22.2，对 vllm 太旧，靠 pip 的 `cmake` 提供 shim）：
+```shell #test-setup
+uv pip install --system \
+  "setuptools>=77,<81" "setuptools-scm>=8" wheel \
+  "cmake>=3.26" ninja nanobind pyyaml
+```
 
 第一步先把 torch 栈装上：
 
 ```shell #test id="install-torch"
-uv pip install -f https://mirrors.aliyun.com/pytorch-wheels/cpu torch==2.10.0
-uv pip install \
-  --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
+uv pip install --system -f https://mirrors.aliyun.com/pytorch-wheels/cpu \
+  torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0
+
+uv pip install --system \
+  --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi \
   --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi/variant \
   --find-links https://repo.huaweicloud.com/ascend/repos/pypi/triton-ascend/ \
-  torch==2.10.0 torch-npu==2.10.0.post4 torchvision==0.25.0 torchaudio==2.10.0
+  torch-npu==2.10.0.post4
 
-python -c "import torch, torch_npu; print(f'torch={torch.__version__}'); print(f'torch_npu={torch_npu.__version__}'); print('is_available:', torch.npu.is_available()); print('count:', torch.npu.device_count())"
+uv pip install --system \
+  --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi \
+  --find-links https://repo.huaweicloud.com/ascend/repos/pypi/triton-ascend/ \
+  triton-ascend==3.2.2
+
+python -c "import torch, torch_npu, torchvision, torchaudio; print(f'torch={torch.__version__}'); print(f'torch_npu={torch_npu.__version__}'); print(f'torchvision={torchvision.__version__}'); print(f'torchaudio={torchaudio.__version__}'); print('is_available:', torch.npu.is_available()); print('npu_count:', torch.npu.device_count())"
+
+python -c "import importlib.metadata; print(f'triton_ascend={importlib.metadata.version(\"triton-ascend\")}')"
+python -c "import importlib.metadata; print(f'triton={importlib.metadata.version(\"triton\")}')"
 ```
 
 输出结果如下：
 
-```shell #test-result id="install-torch"
+```shell #test-result id="install-torch" fuzzy='xxx'
 torch=2.10.0+cpu
 torch_npu=2.10.0.post4
+torchvision=0.25.0+cpu
+torchaudio=2.10.0+cpu
 is_available: True
-count: 1
+npu_count: xxx
+triton_ascend=3.2.2
+triton=3.5.0
 ```
 
-然后源码 build vllm + 装 vllm-ascend + triton-ascend：
+然后源码 build vllm + 装 vllm-ascend：
 
 ```shell #test id="vllm-ascend-install"
-# 1. vllm 源码 build 依赖（cmake / ninja / pybind11 / setuptools-scm）。
-uv pip install --system "cmake>=3.26" pyyaml nanobind ninja setuptools-rust wheel \
-  "setuptools-scm>=8" "setuptools>=77,<81"
-
-# 2. 加载 CANN env（vllm 源码编译时链接 libascendcl / libatb 需要；
+# 加载 CANN env（vllm 源码编译时链接 libascendcl / libatb 需要；
+# 不 source 的话 cmake 找不到 AscendCL/include，CANN_INCLUDE_DIRS 空、build 挂）
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 
-# 3. clone vllm v0.23.0 源码到 /root/deps/vllm
+# clone vllm v0.23.0 源码到 /root/deps/vllm
 mkdir -p /root/deps
-git clone --depth 1 --branch v0.23.0 \
-  https://github.com/vllm-project/vllm.git /root/deps/vllm
+git clone --depth 1 --branch v0.23.0 https://github.com/vllm-project/vllm.git /root/deps/vllm
+# clone vllm-ascend v0.23.0 源拿到 requirements/requirements.txt（--no-deps 后靠它补 transitive）
+git clone --depth 1 --branch v0.23.0 https://github.com/vllm-project/vllm-ascend.git /root/deps/vllm-ascend
 
-# 4. 源码 build：--no-deps/--no-build-isolation 跳过 vllm 0.23.0 钉的 torch==2.11.0+cpu（与 torch==2.10.0 冲突），
-#    VLLM_TARGET_DEVICE=empty 只注册 torch.ops.vllm schema、跳过 CUDA kernel 编译
-VLLM_TARGET_DEVICE=empty uv pip install --system --no-deps --no-build-isolation \
+#  源码 build：VLLM_TARGET_DEVICE=empty 跳过 CUDA kernel 编译、只注册 torch.ops.vllm schema
+VLLM_TARGET_DEVICE=empty uv pip install --system \
   -e /root/deps/vllm
 
-# 5. 卸 vllm 装的主线 triton（CUDA 优化版，NPU 上 DFlash JIT 跑不了）
-python3 -m pip uninstall -y triton
-
-# 6. 装 vllm-ascend NPU variant wheel（/variant 子路径拿 aarch64 build）
-python3 -m pip install --no-deps \
+# 装 vllm-ascend NPU variant wheel（/variant 子路径拿 aarch64 build）
+uv pip install --system --no-deps \
   --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi \
   --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi/variant \
   vllm-ascend==0.23.0
 
-# 7. 装 triton-ascend==3.2.2（DFlash proposer JIT 编译依赖）
-python3 -m pip install \
+# 补 vllm-ascend runtime deps：上一步 --no-deps 跳过了 transitive 解析，
+# 但 vllm_ascend 模块 import 时会 import pyyaml / packaging / torch_npu 等；
+# 用源仓 requirements/requirements.txt 比手列更跟版本对齐；
+uv pip install --system \
   --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi \
   --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi/variant \
-  --find-links https://repo.huaweicloud.com/ascend/repos/pypi/triton-ascend/ \
-  triton-ascend==3.2.2
+  -r /root/deps/vllm-ascend/requirements.txt
 
-# 8. 补 vllm runtime deps：VLLM_TARGET_DEVICE=empty 跳过了 install-time 解析（避免 torch 冲突），
-#    但 `from vllm.config import ...` 仍需要 cbor2/pyzmq/xgrammar/opencv-python-headless 等；
-#    numba 是 vllm-ascend 0.23.0 policy_flashlb 顶层 `from numba import njit` 的硬依赖（--no-deps 漏装）
-python3 -m pip install --quiet \
-  -r /root/deps/vllm/requirements/common.txt \
-  numba
 
-# 9. Monkey-patch vllm.triton_utils.HAS_TRITON = True：triton-ascend 3.2.2 的 libtriton.so
-#    是 3.2.0 fork、不带 nvidia/amd symbol，主线 triton import 链触发 ImportError 把
-#    HAS_TRITON 强制改回 False，导致 qkv_rmsnorm_rope op 不注册、QKNormRopeFusionPass
-#    抛 AttributeError（CI 33140922182）。sitecustomize.py 装 site-packages，try/except
-#    避免 Python 启动时 vllm 还没装就抛异常
-cat > /usr/local/python3.12.13/lib/python3.12/site-packages/sitecustomize.py << 'PY'
-try:
-    import vllm.triton_utils
-    vllm.triton_utils.HAS_TRITON = True
-except Exception:
-    pass
-PY
-
-# 验证 qkv_rmsnorm_rope op 注册成功
-python -c "
-import vllm.triton_utils
-vllm.triton_utils.HAS_TRITON = True
-import vllm_ascend.ops.triton.linearnorm.split_qkv_rmsnorm_rope
-import numba
-import torch
-print('HAS_TRITON:', vllm.triton_utils.HAS_TRITON)
-print('qkv_rmsnorm_rope op:', torch.ops.vllm.qkv_rmsnorm_rope)
-print('numba:', numba.__version__)
-"
-
+# 验证版本
 python -c "import importlib.metadata; print(f'vllm={importlib.metadata.version(\"vllm\")}')"
 python -c "import importlib.metadata; print(f'vllm_ascend={importlib.metadata.version(\"vllm-ascend\")}')"
 python -c "import importlib.metadata; print(f'triton_ascend={importlib.metadata.version(\"triton-ascend\")}')"
@@ -188,29 +180,10 @@ python -c "import importlib.metadata; print(f'triton={importlib.metadata.version
 输出结果如下：
 
 ```shell #test-result id="vllm-ascend-install" fuzzy='xxx'
-xxx
-HAS_TRITON: True
-qkv_rmsnorm_rope op: vllm.qkv_rmsnorm_rope
-numba: xxx
 vllm=0.23.0+empty
 vllm_ascend=0.23.0
 triton_ascend=3.2.2
 triton=3.5.0
-```
-
-检查 NPU 设备运行时可用：
-
-```shell #test id="check-npu-runtime"
-python -c "import torch, torch_npu; print(f'torch={torch.__version__}'); print(f'torch_npu={torch_npu.__version__}'); print('is_available:', torch.npu.is_available()); print('count:', torch.npu.device_count())"
-```
-
-输出结果如下：
-
-```shell #test-result id="check-npu-runtime"
-torch=2.10.0+cpu
-torch_npu=2.10.0.post4
-is_available: True
-count: 1
 ```
 
 #### 安装 modelscope
@@ -345,99 +318,187 @@ echo <dflash_path>
 /root/dflash-qwen3-8b-converted
 ```
 
-### Step 2 — 场景 1：Offline Training Data Generation using vLLM-Ascend
+### Step 2 — 场景 1：Training Data Preprocessing
 
-用 vllm-ascend 的 `extract_hidden_states` 离线 API（`vllm.LLM()` + `kv_transfer_config` 配 `ExampleHiddenStatesConnector`，路径与 vllm-ascend `tests/e2e/pull_request/one_card/spec_decode/test_extract_hidden_states.py` 一致）让 verifier 在指定层的 forward pass 输出 hidden states，落到 `/root/dflash-train-data/`：
+用上游 `scripts/prepare_data.py` 把 chat-formatted JSONL tokenize + chat template → HF arrow 数据集写到 `$DATA_DIR`（同 upstream canonical `examples/train/dflash_qwen3_8b_sharegpt_online_5k.sh` 的 Step 1）。train.py 的 `ArrowDataset.load_from_disk($DATA_DIR)` 直接吃。
 
-```shell #test-setup store="hidden_states_path" load="verifier_path>>verifier_path"
+之前这步走的是 vllm-ascend 的 `extract_hidden_states` 离线 API 写单文件 .safetensors —— 但 `load_from_disk` 不吃 safetensors、只看 `dataset.save_to_disk()` 写出来的 `.arrow` shards + `dataset_info.json`（CI 33166102161 之后暴露的第二个 bug），同时文件命名 `0-b124ee50.safetensors` 也不对 FileBackend 期望的 `hs_<idx>.safetensors`。干脆切到上游 prepare_data.py + 在线模式（Step 16 起 vllm server 拉 hidden states）。
+
+```shell #test-setup store="data_path" load="verifier_path>>verifier_path"
+set -euo pipefail
 DATA_DIR=/root/dflash-train-data
 rm -rf "$DATA_DIR"
 mkdir -p "$DATA_DIR"
 
-cat > /tmp/extract_hidden.py << 'PY'
-import os
-os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
+# 10 条 chat samples：每条 user + assistant 都填，否则 loss_mask 全 0、prepare_data.py
+# 默认会因 assistant token 不足 raise。smoke 不指望 loss 真下降，只要 chat template +
+# tokenizer 跑通 + arrow + token_freq.pt 都写出来即可
+# 顶层 key 必须是 "conversations"（不是 "messages"），load_and_preprocess_dataset
+# 直接 examples.get("conversations", [])，messages 字段会全部被 silently drop，
+# 末尾 raise "No samples remain after preprocessing"（CI 33172655874 教训）
+cat > /tmp/prompts.jsonl << 'JSONL'
+{"conversations":[{"role":"user","content":"Briefly describe AI topic #0."},{"role":"assistant","content":"AI is a field of computer science."}]}
+{"conversations":[{"role":"user","content":"Briefly describe AI topic #1."},{"role":"assistant","content":"AI is a field of computer science."}]}
+{"conversations":[{"role":"user","content":"Briefly describe AI topic #2."},{"role":"assistant","content":"AI is a field of computer science."}]}
+{"conversations":[{"role":"user","content":"Briefly describe AI topic #3."},{"role":"assistant","content":"AI is a field of computer science."}]}
+{"conversations":[{"role":"user","content":"Briefly describe AI topic #4."},{"role":"assistant","content":"AI is a field of computer science."}]}
+{"conversations":[{"role":"user","content":"Briefly describe AI topic #5."},{"role":"assistant","content":"AI is a field of computer science."}]}
+{"conversations":[{"role":"user","content":"Briefly describe AI topic #6."},{"role":"assistant","content":"AI is a field of computer science."}]}
+{"conversations":[{"role":"user","content":"Briefly describe AI topic #7."},{"role":"assistant","content":"AI is a field of computer science."}]}
+{"conversations":[{"role":"user","content":"Briefly describe AI topic #8."},{"role":"assistant","content":"AI is a field of computer science."}]}
+{"conversations":[{"role":"user","content":"Briefly describe AI topic #9."},{"role":"assistant","content":"AI is a field of computer science."}]}
+JSONL
 
-from vllm import LLM, SamplingParams
+# 复用 source install 那步 clone 的仓库（cwd 不跨 #test 块，需重新 cd）
+cd /root/speculators
 
-# 必须把 vllm 调用包进 `if __name__ == "__main__":` —— Python multiprocessing
-# spawn 路径要求：spawn 子进程重新 import __main__，父进程顶层还在 bootstrap 时
-# 起新进程会被 `_check_not_importing_main()` 拒掉
-if __name__ == "__main__":
-    # Qwen3-8B 有 36 层，抽 [2, 18, 34] 三层（vllm-ascend test_extract_hidden_states 同值）；
-    # eagle_aux_hidden_state_layer_ids 是 draft_model_config.hf_config 字段，不是 CLI flag
-    llm = LLM(
-        model="<verifier_path>",
-        tensor_parallel_size=1,
-        enable_chunked_prefill=False,
-        speculative_config={
-            "method": "extract_hidden_states",
-            "num_speculative_tokens": 1,
-            "draft_model_config": {
-                "hf_config": {
-                    "eagle_aux_hidden_state_layer_ids": [2, 18, 34],
-                }
-            },
-        },
-        kv_transfer_config={
-            "kv_connector": "ExampleHiddenStatesConnector",
-            "kv_role": "kv_producer",
-            "kv_connector_extra_config": {
-                "shared_storage_path": "/root/dflash-train-data",
-            },
-        },
-    )
+# prepare_data.py 走 chat template + tokenizer，输出 HF arrow 数据集 + token_freq.pt；
+# --seq-length 8192 与 train.py default 对齐
+python scripts/prepare_data.py \
+  --model "<verifier_path>" \
+  --data /tmp/prompts.jsonl \
+  --output "$DATA_DIR" \
+  --max-samples 10 \
+  --seq-length 8192 \
+  --overwrite
 
-    prompts = [f"Briefly describe AI topic #{i}." for i in range(10)]
-    outputs = llm.generate(prompts, SamplingParams(temperature=0, max_tokens=1))
-
-    # 第一个输出的 hidden_states_path 即可代表整批（kv_connector 对每个 prompt 写一个 .safetensors）。
-    # 写到固定文件而不是 print 出来 —— vllm.LLM() teardown 时往 stdout 写
-    # `[ERROR] ... applicaiton exception`（CANN 驱动的 typo 字面量），`tail -1` 抓
-    # 到的就是错误行而不是路径；写文件 + cat 让 capture 完全跟 vllm 输出解耦。
-    with open("/tmp/last_hidden_path.txt", "w") as _f:
-        _f.write(outputs[0].kv_transfer_params["hidden_states_path"])
-PY
-
-# 把 vllm 的 INFO/WARNING 丢到日志文件，否则 `store="hidden_states_path"` 会捕获到
-# vllm INFO + 路径混合多行，下游 `echo <hidden_states_path>` 替换后 bash 把每行当命令
-python /tmp/extract_hidden.py > /tmp/extract.log 2>&1
-cat /tmp/last_hidden_path.txt
+echo "$DATA_DIR"
 ```
 
-> `extract_hidden_states` 是 vllm-ascend 的特殊 spec_decode mode：不真做 decoding、每个请求产出 1 token + 把 hidden states 写到 `shared_storage_path`。`outputs[0].kv_transfer_params["hidden_states_path"]` 是 vllm-ascend v0.23.0 引入的 safetensors 单文件格式。**不靠 `tail -1` 抓路径** —— vllm.LLM() 退出前 CANN 驱动 teardown 同时往 stdout 和 stderr 写一行 `[ERROR] applicaiton exception`（CANN typo 字面量），`tail -1` 抓到的都是错误行。改成 python 端把路径写到固定文件 `/tmp/last_hidden_path.txt`，capture 完全跟 vllm 输出解耦。
-
-```shell #test id="pipeline-step2-extract" load="hidden_states_path>>hidden_states_path"
-echo <hidden_states_path>
-ls -1 /root/dflash-train-data/*.safetensors 2>/dev/null | wc -l
+```shell #test id="pipeline-step2-extract" load="data_path>>data_path"
+echo <data_path>
+python -c "from datasets import load_from_disk; print(len(load_from_disk('<data_path>')))"
+python -c "
+import torch
+from pathlib import Path
+p = Path('<data_path>') / 'token_freq.pt'
+print('exists:', p.exists(), 'size:', p.stat().st_size if p.exists() else 0)
+freq = torch.load(p, weights_only=True)
+print('token_freq keys:', list(freq.keys()) if isinstance(freq, dict) else type(freq).__name__)
+print('len:', len(freq))
+"
 ```
 
 输出结果如下：
 
 ```shell #test-result id="pipeline-step2-extract" fuzzy='xxx'
-/root/dflash-train-data/xxx.safetensors
-xxx
+/root/dflash-train-data
+10
+exists: True size: xxx
+token_freq keys: xxx
+len: xxx
 ```
 
 ### Step 3 — 场景 2：Draft Model Training Support
 
 用上游 `scripts/train.py` + 单卡 `torchrun --nproc_per_node=1` 训 1 epoch × 10 sample（**smoke 验证管线通，不指望 loss 真下降**）：
 
-```shell #test-setup store="checkpoint_path" load="hidden_states_path>>data_path" load="verifier_path>>verifier_path"
-CHECKPOINT_DIR=/root/dflash-trained
-rm -rf "$CHECKPOINT_DIR"
-mkdir -p "$CHECKPOINT_DIR"
+```shell #test-setup store="hs_dir" load="data_path>>data_path" load="verifier_path>>verifier_path"
+set -euo pipefail
 
 # 复用 source install 那步 clone 的 speculators 仓库（cwd 不跨 #test 块，需重新 cd）
 cd /root/speculators
 
-# --speculator-type=dflash 由 train.py 从 SpeculatorModel.registry 动态解析；
-# --target-layer-ids 2 18 34 必须与 Step 2 extract 一致；
-# --on-missing generate --on-generate delete 是 online 模式标志（smoke 下 hidden_states 已落盘，不触发）
+# 离线模式（时间分片替代物理拆 GPU）：先起 vllm 一次性 generate 10 条 hidden_states
+# 落 $HS_DIR/hs_<idx>.safetensors，杀 vllm 释放 64 GB NPU，再 train.py 离线读 cache。
+# 上游 canonical `examples/train/dflash_qwen3_8b_sharegpt_online_5k.sh` 是 4x H100
+# 用 CUDA_VISIBLE_DEVICES 把 vllm 2 GPU + train 2 GPU 物理拆开；我们单 NPU 64 GB
+# 装不下 vllm 16 GB 权重 + KV + train draft 模型 + optimizer 32x padding 激活并发跑
+# （CI 33177074202 → 33193836422 三轮调参 0.9/0.3/0.5 都翻车：OOM / KV cache 不够 /
+# 同样 KV cache 不够）。杀 vllm 后 train 拿满 64 GB 完全够。
+HS_DIR=/tmp/hs-train
+rm -rf "$HS_DIR"
+mkdir -p "$HS_DIR"
+
+# setsid 让 vllm 跑在独立 session + process group，cleanup 用 kill -- -$PGID 整组杀
+setsid nohup python scripts/launch_vllm.py "<verifier_path>" \
+  --target-layer-ids 2 18 34 \
+  --hidden-states-path "$HS_DIR" \
+  -- \
+  --gpu-memory-utilization 0.9 \
+  --max-model-len 4096 \
+  > /tmp/vllm-gen.log 2>&1 < /dev/null &
+VLLM_GEN_PID=$!
+VLLM_GEN_PGID=$(ps -o pgid= -p "$VLLM_GEN_PID" | tr -d ' ')
+# 注意：不能用 `pkill -f "scripts/launch_vllm.py"` ——bash 子进程 cmdline 也含这串、
+# 会把 bash 一起 -9 自杀（CI 33196117621 教训：cleanup 调 pkill → bash 收 SIGKILL →
+# rc=-9 + stderr=0B，看不到任何诊断）。所有 cleanup 必须走 $VLLM_GEN_PID 或更
+# 具体的固定字符串（不含本脚本 cmdline 内容）
+cleanup_vllm_gen() {
+  # 先 SIGTERM 整 vllm 进程组（包括 vllm fork 的 worker 子进程）
+  kill -- -"$VLLM_GEN_PGID" 2>/dev/null || true
+  # 兜底 SIGKILL launcher + engine 子进程（用 launcher 实际 PID，绕开 cmdline 匹配）
+  for _pid in $(pgrep -P "$VLLM_GEN_PID" 2>/dev/null) "$VLLM_GEN_PID"; do
+    kill -9 "$_pid" 2>/dev/null || true
+  done
+  # 最后兜底用绝对固定字符串（vllm 框架内部 module 路径，bash cmdline 不会有）
+  pkill -9 -x "vllm" 2>/dev/null || true
+}
+trap cleanup_vllm_gen EXIT
+
+# 等 /health 200（最长 6 min，裸 vllm-ascend load Qwen3-8B 实测 3-4 min）
+VLLM_READY=0
+for i in {1..180}; do
+  if curl -sf http://127.0.0.1:8000/health > /dev/null; then
+    VLLM_READY=1
+    break
+  fi
+  sleep 2
+done
+if [ "$VLLM_READY" != "1" ]; then
+  echo "vllm server failed to come up within 6 min; tail of vllm-gen.log:"
+  tail -80 /tmp/vllm-gen.log
+  cleanup_vllm_gen
+  exit 1
+fi
+
+# 用上游 data_generation_offline.py 把 10 条 hidden_states 写 $HS_DIR（hs_<idx>.safetensors
+# 命名正好对 FileBackend cache 契约），vllm 释放全部 NPU 后给 train 留出 64 GB 完整空间
+python scripts/data_generation_offline.py \
+  --model "<verifier_path>" \
+  --preprocessed-data "<data_path>" \
+  --output "$HS_DIR" \
+  --max-samples 10 \
+  --concurrency 4 \
+  --validate-outputs >/tmp/hs-gen.log 2>&1 || HS_RC=$?
+HS_RC=${HS_RC:-0}
+tail -30 /tmp/hs-gen.log
+
+HS_COUNT=$(ls -1 "$HS_DIR"/hs_*.safetensors 2>/dev/null | wc -l)
+if [ "$HS_RC" -ne 0 ] || [ "$HS_COUNT" -ne 10 ]; then
+  echo "=== data_generation_offline.py failed (rc=$HS_RC, hs_count=$HS_COUNT/10); full log ==="
+  cat /tmp/hs-gen.log
+  cleanup_vllm_gen
+  exit 1
+fi
+
+# 杀 vllm 释放 NPU 内存给 train.py
+cleanup_vllm_gen
+sleep 5  # 给 vllm worker 完全退出 + NPU 释放
+
+echo "$HS_DIR"
+```
+
+```shell #test-setup store="checkpoint_path" load="hs_dir>>hs_dir" load="data_path>>data_path" load="verifier_path>>verifier_path"
+set -euo pipefail
+CHECKPOINT_DIR=/root/dflash-trained
+rm -rf "$CHECKPOINT_DIR"
+mkdir -p "$CHECKPOINT_DIR"
+
+cd /root/speculators
+
+# 离线训练：--on-missing raise 强制走 FileBackend 读 <hs_dir> 缓存，不再起 vllm endpoint；
+# （train.py 的 argparse choices 是 generate/skip/warn/raise，没有 error；CI 33201184782 教训）
+# 显式不带 --vllm-endpoint，避免 dataloader 误以为有 server 可问。
+# train.py stdout+stderr 全写到 /tmp/train.log，失败时把整 log cat 到 bash stderr——
+# framework 的 ERROR_MARKERS 看到 'Traceback (most recent call last' 会触发 ≤256 KB
+# 全量 dump（CI 33240618205 / 33239422249 历史教训：之前 `2>&1 | tee` 把 traceback
+# 灌到 bash stdout，framework 只 head/tail 2000 字符，train.py 真因被截到 `ker:
+# There appear to be %d '` 这种 partial format string，根本看不出哪儿炸的）。
 torchrun --standalone --nproc_per_node=1 scripts/train.py \
   --verifier-name-or-path "<verifier_path>" \
   --data-path "<data_path>" \
-  --vllm-endpoint "http://127.0.0.1:8000/v1" \
+  --hidden-states-path "<hs_dir>" \
   --save-path "$CHECKPOINT_DIR" \
   --draft-vocab-size 32000 \
   --epochs 1 \
@@ -447,7 +508,19 @@ torchrun --standalone --nproc_per_node=1 scripts/train.py \
   --max-anchors 3072 \
   --num-layers 5 \
   --target-layer-ids 2 18 34 \
-  --on-missing generate --on-generate delete >/dev/null 2>&1
+  --on-missing raise >/tmp/train.log 2>&1 || TRAIN_RC=$?
+TRAIN_RC=${TRAIN_RC:-0}
+
+if [ "$TRAIN_RC" -ne 0 ]; then
+  echo "=== train.py failed (rc=$TRAIN_RC); full train.log follows ===" >&2
+  cat /tmp/train.log >&2
+  exit 1
+fi
+if ! test -f "$CHECKPOINT_DIR/config.json" || ! test -f "$CHECKPOINT_DIR/model.safetensors"; then
+  echo "=== train.py rc=0 但 checkpoint 缺失（config.json / model.safetensors）; full train.log ===" >&2
+  cat /tmp/train.log >&2
+  exit 1
+fi
 
 echo "$CHECKPOINT_DIR"
 ```

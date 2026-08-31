@@ -1,0 +1,31 @@
+# flash-linear-attention Ascend quick-start guard. The shared template owns
+# monitoring, retry state, result validation, artifacts, and cache relay.
+name: flash-linear-attention-quick-start
+
+concurrency:
+  group: ${{ github.event_name == 'schedule' && 'flash-linear-attention-quick-start-schedule' || format('manual-{0}', github.run_id) }}
+  cancel-in-progress: false
+
+on:
+  # Enable after the first successful workflow_dispatch run.
+  # schedule:
+  #   - cron: '25 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  flash-linear-attention-quick-start:
+    uses: ./.github/workflows/quick-start-template.yml
+    with:
+      project: flash-linear-attention
+      test_runner: '["linux-aarch64-a2-1"]'
+      # SWR mirrors the upstream v0.5.2 CANN 9.0 / Python 3.11 image.
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
+      container_options: '--shm-size=16g'
+      timeout_minutes: 120
+      upstream_repo: fla-org/flash-linear-attention
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/flash-linear-attention/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/flash-linear-attention/docs/Quick-start-Ascend.md
+      test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1

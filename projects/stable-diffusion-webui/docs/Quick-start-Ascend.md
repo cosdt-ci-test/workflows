@@ -100,19 +100,35 @@ HEAD xxx
 
 ## 安装依赖
 
+stable-diffusion-webui 的依赖链（`facexlib` → `opencv-python`）在 import 时动态链接 `libGL.so.1` 与 `libglib-2.0`，基础 CANN 镜像不含这些运行库，需先补装（`libgl1` 提供 libGL，`libglib2.0-0` 提供 libglib/libgthread；GUI 相关的 X11/xcb 库 opencv wheel 自带，无需安装）：
+
+```shell #test-setup
+apt-get update -qq && apt-get install -y -qq --no-install-recommends libgl1 libglib2.0-0
+```
+
 stable-diffusion-webui 的依赖 pin 为 py3.10 时代版本（部分包没有 cp312 wheel），因此用 `uv` 建一个**独立的 py3.10 venv**（`uv` 会自动托管下载 CPython 3.10），所有安装与运行都走该 venv：
 
 ```shell #test-setup
-uv venv --python 3.10 --seed /tmp/sd-webui-venv
-/tmp/sd-webui-venv/bin/python -m pip install modelscope
-/tmp/sd-webui-venv/bin/python -m pip install torch==2.9.0 torchvision
-/tmp/sd-webui-venv/bin/python -m pip install torch_npu==2.9.0.post2
-cd stable-diffusion-webui
-/tmp/sd-webui-venv/bin/python -m pip install -r requirements.txt
-/tmp/sd-webui-venv/bin/python -m pip install "setuptools<81" wheel
-/tmp/sd-webui-venv/bin/python -m pip install --no-build-isolation "https://github.com/openai/CLIP/archive/d50d76daa670286dd6cacf3bcd80b5e4823fc8e1.zip"
+if /tmp/sd-webui-venv/bin/python -c "
+import torch, torch_npu, modelscope, gradio, fastapi
+assert torch.__version__.startswith('2.9.0')
+assert torch_npu.__version__.startswith('2.9.0')
+" 2>/dev/null; then
+  echo "venv ready (cached), skipping install"
+else
+  rm -rf /tmp/sd-webui-venv
+  uv venv --python 3.10 --seed /tmp/sd-webui-venv
+  /tmp/sd-webui-venv/bin/python -m pip install modelscope
+  /tmp/sd-webui-venv/bin/python -m pip install torch==2.9.0 torchvision
+  /tmp/sd-webui-venv/bin/python -m pip install torch_npu==2.9.0.post2
+  cd stable-diffusion-webui
+  /tmp/sd-webui-venv/bin/python -m pip install -r requirements.txt
+  /tmp/sd-webui-venv/bin/python -m pip install "setuptools<81" wheel
+  /tmp/sd-webui-venv/bin/python -m pip install --no-build-isolation "https://github.com/openai/CLIP/archive/d50d76daa670286dd6cacf3bcd80b5e4823fc8e1.zip"
+fi
 ```
 
+> - venv 由流水线 bind-mount 持久化在宿主机，二次运行经 import + 版本校验通过后直接复用（`venv ready`），校验不过（首次运行 / venv 损坏 / 版本不匹配）时自动原地重建。
 > - `uv venv` 创建的 venv 默认不含 pip，`--seed` 会预装 pip；`uv` 会自动托管下载 CPython 3.10。
 > - 旧版 CLIP 的 `setup.py` 依赖 `pkg_resources`（新版 setuptools 已移除），因此预装 `setuptools<81` 后用 `--no-build-isolation` 从源码安装；launch.py 检测到 `clip` 已装会自动跳过自身的 github zip 安装。
 > - `torch==2.9.0` + `torch_npu==2.9.0.post2` 与本机 CANN 9.1 配套，且均有 py3.10 wheel；`torch_npu` 来自华为云昇腾源（流水线已注入 extra index）。
@@ -135,7 +151,24 @@ deps ok
 ## 下载模型
 
 ```shell #test-setup store="model_dir"
-/tmp/sd-webui-venv/bin/python -c "from modelscope import snapshot_download; print(snapshot_download('AI-ModelScope/sd-turbo', revision='master'))" | tail -n 1
+/tmp/sd-webui-venv/bin/python -c "
+import time, sys
+from pathlib import Path
+from modelscope import snapshot_download
+d = None
+for i in range(3):
+    try:
+        d = snapshot_download('AI-ModelScope/sd-turbo', revision='master')
+        if (Path(d) / 'sd_turbo.safetensors').is_file():
+            break
+        print('attempt %d/3: file not complete, retrying' % (i+1), file=sys.stderr)
+        d = None
+    except Exception as e:
+        print('attempt %d/3 failed: %s' % (i+1, e), file=sys.stderr)
+        time.sleep(15)
+assert d, 'snapshot_download failed after 3 attempts'
+print(d)
+" > /tmp/sd-turbo-model-dir.txt && tail -n 1 /tmp/sd-turbo-model-dir.txt
 ```
 
 > `tail -n 1` 过滤下载进度输出，仅保留模型目录路径；sd-turbo 为 1 步采样的蒸馏模型，下载约 3.4GB，首次运行请耐心等待。
@@ -146,14 +179,29 @@ deps ok
 
 ```shell #test-setup store="api_pid" load="model_dir>>ckpt"
 cd stable-diffusion-webui
-nohup /tmp/sd-webui-venv/bin/python launch.py --nowebui --skip-torch-cuda-test --no-half --ckpt <ckpt> --port 7861 > /tmp/sdwebui.log 2>&1 &
+mkdir -p db
+export GIT_CONFIG_NOSYSTEM=1
+export STABLE_DIFFUSION_REPO=https://github.com/w-e-w/stablediffusion.git
+python -c "
+p = 'modules/devices.py'
+t = open(p).read()
+t = t.replace(
+    'if has_xpu() or has_mps() or cuda_no_autocast():',
+    'if npu_specific.has_npu or has_xpu() or has_mps() or cuda_no_autocast():'
+)
+open(p, 'w').write(t)
+"
+nohup /tmp/sd-webui-venv/bin/python launch.py --nowebui --skip-torch-cuda-test --ckpt <ckpt>/sd_turbo.safetensors --port 7861 > /tmp/sdwebui.log 2>&1 &
 echo $!
 ```
 
+- `mkdir -p db`：A1111 把图像历史写入 `db/` 下的 SQLite 数据库，全新 clone 里该目录不存在（被 .gitignore），`--nowebui` 启动不自动创建 → 首次 txt2img 报 `OperationalError: unable to open database file`，这里显式建目录。
+- `GIT_CONFIG_NOSYSTEM=1`：launch 会 git clone 数个 assets 仓库，runner 镜像的 `/etc/gitconfig` 把 github.com 重写到需认证的代理，这里让 git 忽略该配置、直连 github。
+- `STABLE_DIFFUSION_REPO`：上游默认指向的 `Stability-AI/stablediffusion` 已被删除（2025.12 起，GitHub 返回 404），官方用社区 fork `w-e-w/stablediffusion` 兜底（commit hash 不变）；此处通过环境变量覆盖，后续上游修复后可移除。
 - `--nowebui`：API 模式（FastAPI，默认端口 7861），无 Gradio 界面，适合自动化与 CI。
 - `--skip-torch-cuda-test`：允许非 CUDA 设备（NPU）。
-- `--no-half`：禁用 fp16（NPU 稳定优先）。
-- `--ckpt <目录>`：sd-turbo 为 diffusers 目录格式，直接指向 ModelScope 下载目录。
+- `python -c ".../npu_specific.has_npu..."`：A1111 的 `autocast()` 只对 CUDA/MPS/XPU 做 `manual_cast`（自动把输入转 fp16），NPU 上落到 `torch.autocast("cuda")`（no-op）→ float32 输入撞上 fp16 权重。补丁把 NPU 纳入 `manual_cast` 分支，且**必须把 `npu_specific.has_npu` 放在链首**：`or` 从左到右短路，`cuda_no_autocast()` 内部会调用 `torch.cuda`，在无 CUDA 的 torch 构建上抛 `AssertionError: Torch not compiled with CUDA enabled`——NPU 判断先行短路后就永远不会碰它（`npu_specific` 已在 `devices.py` 顶部 import），上游未来原生支持后可移除。
+- `--ckpt <目录>/sd_turbo.safetensors`：A1111 的 checkpoint 加载器需要**单文件** .safetensors；ModelScope 快照根目录提供了合并后的 `sd_turbo.safetensors`（其余为 diffusers 分片格式），此处指向该单文件。
 - 设备选择由 `modules/npu_specific.py` 自动完成（检测到 torch_npu 即用 npu:0）。
 
 等待 API 就绪：
@@ -178,7 +226,21 @@ api ready
 curl -s -X POST http://127.0.0.1:7861/sdapi/v1/txt2img \
   -H 'Content-Type: application/json' \
   -d '{"prompt": "a cute cat", "steps": 1, "cfg_scale": 1.0, "width": 512, "height": 512}' \
-  | python -c "import sys, json, base64; r = json.load(sys.stdin); imgs = r['images']; print('txt2img images:', len(imgs)); open('/tmp/sd-turbo-out.png', 'wb').write(base64.b64decode(imgs[0]))"
+  > /tmp/sd-turbo-resp.json
+python -c "
+import json, base64, sys
+try:
+    r = json.load(open('/tmp/sd-turbo-resp.json'))
+    assert 'images' in r, 'txt2img error response: ' + json.dumps(r)[:2000]
+except Exception as e:
+    print('txt2img failed:', e, file=sys.stderr)
+    print('--- /tmp/sdwebui.log tail ---', file=sys.stderr)
+    print(open('/tmp/sdwebui.log').read()[-8000:], file=sys.stderr)
+    raise SystemExit(1)
+imgs = r['images']
+print('txt2img images:', len(imgs))
+open('/tmp/sd-turbo-out.png', 'wb').write(base64.b64decode(imgs[0]))
+"
 ```
 
 输出结果如下：

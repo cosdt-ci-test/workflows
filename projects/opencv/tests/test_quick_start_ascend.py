@@ -64,13 +64,17 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
            SqueezeNet ONNX forward on NPU.
     """
 
-    # 90 min per command: long enough for cold-cache git clone (~250 MB
-    # sparse) + cmake configure (~3 min on cold DNN samples cache) +
-    # `make -j$(nproc)` (~20 min on 32 cores) + `make install` + a few
-    # CLI smokes + SqueezeNet ACL graph build (~30 min cold AOE cache).
-    # 90 min leaves headroom for a full clean build without letting a
-    # hung run sit through the engine default timeout.
-    DEFAULT_COMMAND_TIMEOUT = 5400
+    # 150 min per command: `make -j2` is the long pole — Debug -O0 at
+    # parallelism 2 on the a2-4 runner. With BUILD_LIST (8 modules
+    # instead of main + ~35 contrib) and the all_ops.h -> narrow-header
+    # patch (dnn .text 516MB -> 47MB, per-TU preprocessed size down
+    # ~80%), the full build is ~50-70 min at -j2 (measured locally in
+    # the CANN image on a comparable ARM core). 9000s keeps generous
+    # headroom under the engine's 240-min job budget for install +
+    # cannops gtests + quickstart + first ACL graph build (~30 min
+    # cold AOE cache); a pre-patch build needed 8208s just to die at
+    # the dnn link (CI 33244401262, R_AARCH64_CALL26 overflow).
+    DEFAULT_COMMAND_TIMEOUT = 9000
 
     USER_AGENT = 'cosdt-ci-test/quick-start'  # monitored source is the fork under cosdt-ci-test org
     ERROR_MARKERS = (
@@ -187,15 +191,24 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
               cmake-configure`` / ``opencv-cann-run-tests`` rather than
               being masked by a pre-installed copy.
         """
-        # 1) PYTHONPATH: prepend the source-built OpenCV site-packages
-        # so the doc's Python blocks import the cv2 with HUAWEI_NPU
-        # backend (see _OPENCV_CANN_PYTHONPATH rationale). Use
-        # setdefault so we don't overwrite a PYTHONPATH injected by
-        # jobs.env / steps.env.
-        os.environ.setdefault('PYTHONPATH', cls._OPENCV_CANN_PYTHONPATH)
+        # 1) PYTHONPATH: PREPEND the source-built OpenCV site-packages so
+        # the doc's Python blocks import the cv2 with HUAWEI_NPU backend.
+        # PREPEND, not setdefault: the CANN image itself exports
+        # PYTHONPATH=/usr/local/Ascend/cann-9.1.0/python/site-packages:...
+        # (its TBE/ACL python bits), so setdefault would silently keep the
+        # image value and every subprocess would import nothing (CI
+        # 33286049447: "ModuleNotFoundError: No module named 'cv2'" on the
+        # first quickstart block even though the install log showed
+        # cv2.cpython-312-*.so landing in the right place).
+        _pp = cls._OPENCV_CANN_PYTHONPATH
+        _existing = os.environ.get('PYTHONPATH', '')
+        if _pp not in _existing:
+            os.environ['PYTHONPATH'] = (
+                f'{_pp}:{_existing}' if _existing else _pp
+            )
         print(
-            f'setup: PYTHONPATH -> {cls._OPENCV_CANN_PYTHONPATH} '
-            '(source-built cv2)'
+            f'setup: PYTHONPATH -> {os.environ["PYTHONPATH"]} '
+            '(prepended source-built cv2; kept image entries)'
         )
 
         # 2) CUDA exclusion list + process-level env

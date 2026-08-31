@@ -94,8 +94,8 @@ jobs:
       # speculators is a new project — no legacy workflow to migrate
       # from. The monitor-state-speculators- cache prefix is owned by
       # this workflow alone (first-write wins; subsequent runs read).
-      doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/speculators/docs/Quick-start-Ascend.md
-      doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/speculators/docs/Quick-start-Ascend.md
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/speculators/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/speculators/docs/Quick-start-Ascend.md
       # cwd is workflows/projects/speculators; env contract (MONITORED_DOC_URL /
       # UPSTREAM_REF / NPU_READY) is injected by the engine. All project
       # env prep and installs live in the test subclass's

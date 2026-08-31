@@ -51,8 +51,9 @@ setup_local_gateway() {
   command -v setsid >/dev/null
   command -v ss >/dev/null
 
-  TOOLS="${AIBRIX_TOOLS_DIR:-${PROJECT_ROOT}/.tools}"
+  TOOLS="${AIBRIX_TOOLS_DIR:-/root/.cache/cosdt-ci-test/aibrix/tools}"
   mkdir -p "${TOOLS}/toolchain" "${TOOLS}/bin" "${TOOLS}/src"
+  GH_PROXY=https://gh-proxy.test.osinfra.cn
   if [[ ! -x "${TOOLS}/toolchain/go/bin/go" ]]; then
     curl -fL --connect-timeout 20 --retry 5 --retry-delay 3 --max-time 180 \
       -o "${TOOLS}/go.tar.gz" \
@@ -61,10 +62,21 @@ setup_local_gateway() {
     tar -C "${TOOLS}/toolchain" -xzf "${TOOLS}/go.tar.gz"
   fi
   if [[ ! -x "${TOOLS}/bin/envoy" ]]; then
-    curl -fL --connect-timeout 20 --retry 8 --retry-all-errors --retry-delay 3 --max-time 300 \
-      -C - -o "${TOOLS}/bin/envoy.part" \
-      https://gh.ddlc.top/https://github.com/envoyproxy/envoy/releases/download/v1.39.0/envoy-1.39.0-linux-aarch_64
-    echo 'ee53a4f5375566f15944dc9cb03afb1fc228df38f61737c677f139213215afcf  '"${TOOLS}/bin/envoy.part" | sha256sum -c
+    envoy_url='https://github.com/envoyproxy/envoy/releases/download/v1.39.0/envoy-1.39.0-linux-aarch_64'
+    envoy_ok=0
+    for src in "${GH_PROXY}/${envoy_url}" "$envoy_url"; do
+      if curl -fL --connect-timeout 20 --retry 8 --retry-all-errors --retry-delay 3 --max-time 300 \
+        -C - -o "${TOOLS}/bin/envoy.part" "$src" \
+        && echo 'ee53a4f5375566f15944dc9cb03afb1fc228df38f61737c677f139213215afcf  '"${TOOLS}/bin/envoy.part" | sha256sum -c; then
+        envoy_ok=1
+        break
+      fi
+      rm -f "${TOOLS}/bin/envoy.part"
+    done
+    if [[ "$envoy_ok" -ne 1 ]]; then
+      echo "failed to download Envoy 1.39.0" >&2
+      exit 1
+    fi
     mv "${TOOLS}/bin/envoy.part" "${TOOLS}/bin/envoy"
     chmod +x "${TOOLS}/bin/envoy"
   fi
@@ -104,7 +116,26 @@ setup_local_gateway() {
     torch==2.10.0 torch-npu==2.10.0.post4 torchvision==0.25.0 torchaudio==2.10.0 triton-ascend==3.2.2
   python -m pip install 'cmake>=3.26' nanobind ninja setuptools-rust wheel 'setuptools-scm>=8' 'setuptools>=77,<81'
   if [[ ! -d "${TOOLS}/src/vllm/.git" ]]; then
-    git clone --depth 1 --branch v0.23.0 https://github.com/vllm-project/vllm.git "${TOOLS}/src/vllm"
+    vllm_origin='https://github.com/vllm-project/vllm.git'
+    vllm_ok=0
+    for src in "${GH_PROXY}/${vllm_origin}" "$vllm_origin"; do
+      for _ in 1 2 3; do
+        if GIT_TERMINAL_PROMPT=0 GIT_HTTP_VERSION=HTTP/1.1 \
+          git clone --depth 1 --branch v0.23.0 "$src" "${TOOLS}/src/vllm"; then
+          vllm_ok=1
+          break
+        fi
+        rm -rf "${TOOLS}/src/vllm"
+        sleep 5
+      done
+      if [[ "$vllm_ok" -eq 1 ]]; then
+        break
+      fi
+    done
+    if [[ "$vllm_ok" -ne 1 ]]; then
+      echo "failed to clone vllm v0.23.0" >&2
+      exit 1
+    fi
   fi
   export VLLM_TARGET_DEVICE=empty
   python -m pip install --no-build-isolation -e "${TOOLS}/src/vllm"

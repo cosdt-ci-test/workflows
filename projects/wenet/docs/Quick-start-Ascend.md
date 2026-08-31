@@ -191,9 +191,9 @@ ls -la data/
 
 ```shell #test-result id="link-data"
 ...
-data/dev -> /tmp/wenet-mock/data/dev
-data/test -> /tmp/wenet-mock/data/test
-data/train -> /tmp/wenet-mock/data/train
+dev -> /tmp/wenet-mock/data/dev
+test -> /tmp/wenet-mock/data/test
+train -> /tmp/wenet-mock/data/train
 ```
 
 运行 stage 2（生成字典）和 stage 3（生成 data.list）：

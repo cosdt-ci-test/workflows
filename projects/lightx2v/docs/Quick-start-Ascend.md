@@ -307,6 +307,10 @@ uv pip install --no-deps -v .
 #   - torchaudio    → stub torchaudio(/tmp/stubs/torchaudio),torchada 仍是 NPU 版
 # triton 走真包(上一节已 uv pip install 'triton==3.5.*'),不在例外里
 # torch + torch_npu 在 step 4 check-torch 已装 2.9.0,这里不重复
+# pyzmq:上游 lightx2v.disagg.conn 顶层无条件 `import zmq`(pipeline ->
+# qwen_image_runner -> disagg_mixin -> conn),但上游 pyproject.toml 漏了
+# pyzmq,`pip install .` 后 import lightx2v 一样挂(CI 10:05:14)。aarch64 有
+# cp312 manylinux wheel,补装;import 名是 zmq。
 uv pip install \
     numpy scipy diffusers transformers tokenizers tqdm accelerate safetensors \
     imageio imageio-ffmpeg einops loguru omegaconf peft \
@@ -314,7 +318,7 @@ uv pip install \
     aiohttp pydantic prometheus-client gguf fastapi uvicorn PyJWT requests \
     aio-pika 'asyncpg>=0.27.0' 'aioboto3>=12.0.0' \
     'alibabacloud_dypnsapi20170525==1.2.2' 'redis==6.4.0' tos \
-    av 'torchada>=0.1.10'
+    av 'torchada>=0.1.10' pyzmq
 ```
 
 ```shell #test id="lightx2v-install-verify"

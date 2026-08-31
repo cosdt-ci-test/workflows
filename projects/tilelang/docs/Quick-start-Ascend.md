@@ -107,11 +107,26 @@ export ASCEND_HOME_PATH=${ASCEND_HOME_PATH:-/usr/local/Ascend/ascend-toolkit/lat
 cd tilelang-ascend
 python -m pip install -r requirements-build.txt
 python -m pip install -r requirements.txt
+python - <<'EOF'
+from pathlib import Path
+p = Path('setup.py')
+s = p.read_text()
+subs = [
+    ('int(multiprocessing.cpu_count() * 0.5)', 'min(12, int(multiprocessing.cpu_count() * 0.5))'),
+    ('int(multiprocessing.cpu_count() * 0.75)', 'min(12, int(multiprocessing.cpu_count() * 0.75))'),
+]
+for old, new in subs:
+    assert old in s, f'setup.py patch anchor missing: {old!r} (upstream changed parallelism derivation)'
+    s = s.replace(old, new)
+p.write_text(s)
+print('setup.py build parallelism clamped to <=12')
+EOF
 ./build_wheel_ascend.sh
 python -m pip install dist/tilelang-*.whl
 ```
 
 > - 构建脚本会应用 TVM 子模块补丁、执行 C++ 编译并产出 `dist/tilelang-*.whl`，首次构建需要较长时间，请耐心等待。
+> - `setup.py` 默认按宿主机核数的一半（`cpu_count() * 0.5`，192 核机器即 `-j96`）推导编译并行度，容器内存限额下必 OOM（OOM killer 杀 cc1plus/ld）。上面的补丁把两条并行度推导钳到最高 12 个任务，小核数机器自动取 `cpu_count()` 原值；补丁锚点若被上游改写会直接报错终止，不会静默失效。
 > - 构建脚本内部使用裸 `pip` 安装依赖；上面两步已提前用 `python -m pip` 装好同样的依赖，脚本内对应步骤会显示 already satisfied，保证依赖装进当前 `python` 环境。
 > - `requirements-build.txt` / `requirements.txt` 的详细清单以 tilelang-ascend 仓库为准。
 

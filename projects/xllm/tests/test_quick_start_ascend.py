@@ -141,10 +141,12 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         xllm_build_cache = '/opt/xllm-build'
         xllm_src = '/tmp/xllm-src'
         xllm_version = 'v0.10.1'
+        build_log = '/tmp/xllm-build.log'
 
-        # Check if cached build exists
+        # Check if cached wheel exists
         if os.path.isdir(xllm_build_cache) and any(
-            f.startswith('xllm') for f in os.listdir(xllm_build_cache)
+            f.endswith('.whl') and f.startswith('xllm')
+            for f in os.listdir(xllm_build_cache)
         ):
             print(f'setup: xllm build cache found at {xllm_build_cache}; installing from cache')
             subprocess.run(
@@ -152,7 +154,9 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 check=True,
             )
         else:
-            print(f'setup: building xllm {xllm_version} from source...')
+            print(f'setup: building xllm {xllm_version} from source (this may take 30-60 min)...')
+
+            # Clone and checkout
             subprocess.run(
                 ['git', 'clone', '--branch', xllm_version, '--depth', '1',
                  'https://github.com/xLLM-AI/xllm.git', xllm_src],
@@ -162,11 +166,33 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 ['git', 'submodule', 'update', '--init', '--recursive'],
                 cwd=xllm_src, check=True,
             )
-            # Build wheel
+
+            # Install pre-commit (required by setup.py's pre_build step)
             subprocess.run(
-                ['python', 'setup.py', 'bdist_wheel'],
-                cwd=xllm_src, check=True,
+                ['python', '-m', 'pip', 'install', '-q', 'pre-commit'],
+                check=True,
             )
+
+            # Build with optimizations: skip tests, skip export, redirect logs
+            build_env = os.environ.copy()
+            build_env['SKIP_TEST'] = '1'
+            build_env['SKIP_EXPORT'] = '1'
+
+            print(f'setup: building xllm (log: {build_log})...')
+            with open(build_log, 'w') as log_f:
+                result = subprocess.run(
+                    ['python', 'setup.py', 'bdist_wheel',
+                     '--device', 'npu', '--arch', 'arm'],
+                    cwd=xllm_src, env=build_env,
+                    stdout=log_f, stderr=subprocess.STDOUT,
+                )
+
+            if result.returncode != 0:
+                # Print last 50 lines of log on failure
+                print(f'setup: build failed, last 50 lines of {build_log}:')
+                subprocess.run(['tail', '-50', build_log], check=False)
+                raise RuntimeError(f'xllm build failed (see {build_log})')
+
             # Copy wheel to cache
             os.makedirs(xllm_build_cache, exist_ok=True)
             subprocess.run(

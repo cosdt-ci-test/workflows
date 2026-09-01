@@ -20,7 +20,7 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/mindiesd:v3.0.0-A2-ubuntu22.04-py3.11
 | Python | 3.11 | 随镜像 |
 | torch / torch_npu | 2.9.0（以镜像为准） | 随 vllm-omni 底座 |
 | mindiesd | 3.0.0 | 随镜像 |
-| lightx2v | GitHub main 分支（滚动 main） | 步骤 3 安装 |
+| lightx2v | GitHub main 分支（滚动 main） | 步骤 2 安装 |
 
 > 非容器（裸机）也可以：自带可用的 CANN + torch + torch_npu（参考 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch)）即可跳过环境搭建，后续步骤完全相同。
 
@@ -54,9 +54,9 @@ docker run -it --rm --name=lightx2v --shm-size=1g \
 
 容器内 CANN 环境变量已 export；若非交互式 shell 里 `import torch_npu` 报 `libhccl.so` 缺失，手动 `source /usr/local/Ascend/ascend-toolkit/set_env.sh`（幂等，本文示例命令里都带着）。
 
-### 🐍 Conda 环境搭建
+### 安装 LightX2V（Docker / 裸机通用）
 
-以下步骤 Docker 与 Conda 用户**通用**（mindiesd 镜像不含 LightX2V 源码，容器内同样执行步骤 1、3、5；Conda 用户先创建环境）：
+以下步骤 Docker 容器与裸机**通用**（mindiesd 镜像不含 LightX2V 源码，容器内同样执行）：
 
 1. 克隆项目（`<UPSTREAM_REF>` 换成目标分支/tag/commit，上游零 release 零 tag 默认 `main`；权重放 `$PROJECT_ROOT/models/`，`src/models -> ../models` 软链保持 LightX2V 的 `./models/` 相对路径约定）：
 
@@ -77,14 +77,7 @@ cd src
 ln -sfn ../models models
 ```
 
-2. 创建 conda 虚拟环境（容器用户跳过）：
-
-```shell
-conda create -n lightx2v python=3.11 -y
-conda activate lightx2v
-```
-
-3. 安装依赖及代码（NPU 适配：aarch64 缺 wheel 的 `cv2` / `decord` / `torchaudio` 打空 stub 占位——LightX2V import 链会触发它们但 smoke 不真正调用；`--no-deps` 装源码后按上游 pyproject 补齐其余依赖，`nvidia-*`/`cuda-*` 由排除清单自动屏蔽）：
+2. 安装依赖及代码（NPU 适配：aarch64 缺 wheel 的 `cv2` / `decord` / `torchaudio` 打空 stub 占位——LightX2V import 链会触发它们但 smoke 不真正调用；`--no-deps` 装源码后按上游 pyproject 补齐其余依赖，`nvidia-*`/`cuda-*` 由排除清单自动屏蔽）：
 
 ```shell #test-setup
 export PYTHONPATH=/tmp/stubs:${PYTHONPATH:-}
@@ -124,9 +117,9 @@ uv pip install \
     'modelscope==1.37.0' triton
 ```
 
-4. 安装注意力/量化算子：**NPU 无需安装**。torchada 内置 `npu_flash_attn` / `npu_rope` / `npu_layer_norm` 等 NPU 算子，config 里用 `self_attn_1_type` / `cross_attn_*_type` 等键选择；int8-npu 量化算子同样已含于 torchada。镜像已含 mindiesd——如需 rainfusion 稀疏注意力加速，把 `self_attn_1_type` 改回 `rainfusion_attn` 即可。
+3. 安装注意力/量化算子：**NPU 无需安装**。torchada 内置 `npu_flash_attn` / `npu_rope` / `npu_layer_norm` 等 NPU 算子，config 里用 `self_attn_1_type` / `cross_attn_*_type` 等键选择；int8-npu 量化算子同样已含于 torchada。镜像已含 mindiesd——如需 rainfusion 稀疏注意力加速，把 `self_attn_1_type` 改回 `rainfusion_attn` 即可。
 
-5. 验证安装（没有 `uv` 先 `pip install uv`）：
+4. 验证安装（没有 `uv` 先 `pip install uv`）：
 
 ```shell #test id="lightx2v-install-verify"
 export PROJECT_ROOT=${PROJECT_ROOT:-/home/coder/work/lightx2v-test}

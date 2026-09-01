@@ -78,7 +78,8 @@ cd wenet
 pip install -e .
 pip install torch==2.10.0 torch-npu==2.10.0.post4
 pip install torchaudio==2.10.0 --index-url https://download.pytorch.org/whl/cpu
-pip install deepspeed tensorboardX torchcodec
+pip install deepspeed tensorboardX soundfile
+pip uninstall torchcodec -y
 ```
 
 安装 sox：
@@ -95,14 +96,35 @@ cd wenet
 sed -i 's/from torch.nn.modules.conv import _ConvNd, _size_2_t, Union, _pair, Tensor, Optional/from typing import Optional, Union\nfrom torch import Tensor\nfrom torch.nn.common_types import _size_2_t\nfrom torch.nn.modules.conv import _ConvNd\nfrom torch.nn.modules.utils import _pair/' wenet/models/squeezeformer/conv2d.py
 ```
 
-修复 WeNet 与 torchaudio 2.10.0 的兼容性问题（`torchaudio.info()` 已移除，改用标准库 `wave`）：
+修复 WeNet 与 torchaudio 2.10.0 的兼容性问题（`torchaudio.info()` 已移除，`torchaudio.load()` 依赖 torchcodec，改用标准库 `wave` 和 `soundfile`）：
 
 ```shell #test-setup id="fix-torchaudio-compat"
 cd wenet
-sed -i 's/import torchaudio/import wave\nimport torchaudio/' tools/compute_cmvn_stats.py
-sed -i 's/            sample_rate = torchaudio.info(wav_path).sample_rate/            with wave.open(wav_path, "rb") as wf:\n                sample_rate = wf.getframerate()/' tools/compute_cmvn_stats.py
-sed -i 's/import torchaudio/import wave\nimport torchaudio/' wenet/dataset/processor.py
-sed -i 's/        sample_rate = torchaudio.info(wav_file).sample_rate/        with wave.open(wav_file, "rb") as wf:\n            sample_rate = wf.getframerate()/' wenet/dataset/processor.py
+python -c "
+import re
+# --- compute_cmvn_stats.py ---
+f='tools/compute_cmvn_stats.py'
+c=open(f).read()
+c=c.replace('import torchaudio','import wave\nimport soundfile as sf\nimport torchaudio',1)
+c=c.replace('sample_rate = torchaudio.info(wav_path).sample_rate','with wave.open(wav_path, \"rb\") as wf:\n                sample_rate = wf.getframerate()')
+c=c.replace('''waveform, sample_rate = torchaudio.load(
+                    filepath=wav_path,
+                    num_frames=end_frame - start_frame,
+                    frame_offset=start_frame)''','data, sample_rate = sf.read(wav_path, start=start_frame, frames=end_frame - start_frame)\n                waveform = torch.from_numpy(data).unsqueeze(0)')
+c=c.replace('waveform, sample_rate = torchaudio.load(item[1])','data, sample_rate = sf.read(item[1])\n                waveform = torch.from_numpy(data).unsqueeze(0)')
+open(f,'w').write(c)
+# --- processor.py ---
+f='wenet/dataset/processor.py'
+c=open(f).read()
+c=c.replace('import torchaudio','import wave\nimport soundfile as sf\nimport torchaudio',1)
+c=c.replace('sample_rate = torchaudio.info(wav_file).sample_rate','with wave.open(wav_file, \"rb\") as wf:\n            sample_rate = wf.getframerate()\n        if hasattr(wav_file, \"seek\"):\n            wav_file.seek(0)')
+c=c.replace('''waveform, _ = torchaudio.load(wav_file,
+                                      num_frames=end_frame - start_frame,
+                                      frame_offset=start_frame)''','data, _ = sf.read(wav_file, start=start_frame, frames=end_frame - start_frame)\n        waveform = torch.from_numpy(data).unsqueeze(0)')
+c=c.replace('waveform, sample_rate = torchaudio.load(wav_file)','data, sample_rate = sf.read(wav_file)\n        waveform = torch.from_numpy(data).unsqueeze(0)')
+open(f,'w').write(c)
+print('Done: replaced torchaudio.info() and torchaudio.load() in both files')
+"
 ```
 
 ---

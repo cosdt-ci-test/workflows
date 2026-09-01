@@ -438,7 +438,7 @@ echo "smoke: patches + apt deps applied"
 
 输出结果类似如下（中间省略 patch 应用逐行日志）：
 
-```shell #test-result id="smoke-apply-patches" fuzzy='...'
+```shell #test-result id="smoke-apply-patches" fuzzy='xxx'
 smoke: applying spec-capture patches for sglang xxx
 smoke: patches + apt deps applied
 ```
@@ -537,7 +537,7 @@ exit 1
 
 输出结果类似如下（中间省略 SGLang graph compile / model load 逐行日志）：
 
-```shell #test-result id="smoke-start-sglang" fuzzy='...'
+```shell #test-result id="smoke-start-sglang" fuzzy='xxx'
 smoke: waiting for SGLang /health (up to 600s)
 smoke: sglang ready (pid=xxx)
 ```

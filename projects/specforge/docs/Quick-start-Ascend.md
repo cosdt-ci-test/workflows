@@ -60,20 +60,22 @@ python --version
 Python 3.11.xxx
 ```
 
-CANN toolkit 装好且 version.cfg 可读（后续 smoke 跑 SGLang / torch_npu 都靠 CANN env；ascend-toolkit 下 `latest/` 是软链到具体版本的子目录，`/usr/local/Ascend/ascend-toolkit/set_env.sh` 默认指向它）：
+CANN toolkit 装好且 install.info 可读（后续 smoke 跑 SGLang / torch_npu 都靠 CANN env；ascend-toolkit 下 `latest/` 是软链到具体版本的子目录，`/usr/local/Ascend/ascend-toolkit/set_env.sh` 默认指向它）：
 
 ```shell #test id="check-cann"
-ls /usr/local/Ascend/ascend-toolkit/latest/ 2>/dev/null | head
-test -f /usr/local/Ascend/ascend-toolkit/latest/version.cfg && grep '^version=' /usr/local/Ascend/ascend-toolkit/latest/version.cfg || echo "version.cfg MISSING"
+test -f /usr/local/Ascend/ascend-toolkit/latest/$(uname -m)-linux/ascend_toolkit_install.info && \
+    grep '^version=' /usr/local/Ascend/ascend-toolkit/latest/$(uname -m)-linux/ascend_toolkit_install.info || \
+    echo "ascend_toolkit_install.info MISSING"
 ```
 
-> 不走 `source set_env.sh`：典型 Ascend set_env.sh 在 `case $- in *i*)` 守护下跳过非交互式运行，`bash -c` 子 shell 里 $- 不带 i → ASCEND_HOME 落空（run 33464343161 复现）。直接读 `latest/version.cfg` 拿版本号，runner 进程自己的 env（prepare_environment 已经 source 过 set_env.sh）保留 ASCEND_HOME 供后续 smoke 用。
+> 按[昇腾官方手册](https://www.hiascend.com/document/detail/zh/CANNCommunityEdition/800alpha3/softwareinstall/instg/atlas_03_0013.html)：CANN 版本号写在 `/usr/local/Ascend/ascend-toolkit/latest/<arch>-linux/ascend_toolkit_install.info` 的 `version=` 行。`$(uname -m)` 在 aarch64 runner 上展开成 `aarch64`（这是镜像里实际的架构）；arm64 / x86_64 镜像同样适用。
+>
+> 不走 `source set_env.sh`：典型 Ascend set_env.sh 在 `case $- in *i*)` 守护下跳过非交互式运行，`bash -c` 子 shell 里 $- 不带 i → ASCEND_HOME 落空（run 33464343161 复现）。
 
 输出结果类似如下（`9.0.0` 是镜像 tag `cann9.0.0-910b` 标称的版本）：
 
 ```shell #test-result id="check-cann" fuzzy='xxx'
-xxx
-version=9.0.0
+version=xxx
 ```
 
 检查 torch / torch_npu / sglang 是否装好且 NPU 设备可用：

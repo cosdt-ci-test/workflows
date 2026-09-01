@@ -95,6 +95,16 @@ cd wenet
 sed -i 's/from torch.nn.modules.conv import _ConvNd, _size_2_t, Union, _pair, Tensor, Optional/from typing import Optional, Union\nfrom torch import Tensor\nfrom torch.nn.common_types import _size_2_t\nfrom torch.nn.modules.conv import _ConvNd\nfrom torch.nn.modules.utils import _pair/' wenet/models/squeezeformer/conv2d.py
 ```
 
+修复 WeNet 与 torchaudio 2.10.0 的兼容性问题（`torchaudio.info()` 已移除，改用标准库 `wave`）：
+
+```shell #test-setup id="fix-torchaudio-compat"
+cd wenet
+sed -i 's/import torchaudio/import wave\nimport torchaudio/' tools/compute_cmvn_stats.py
+sed -i 's/            sample_rate = torchaudio.info(wav_path).sample_rate/            with wave.open(wav_path, "rb") as wf:\n                sample_rate = wf.getframerate()/' tools/compute_cmvn_stats.py
+sed -i 's/import torchaudio/import wave\nimport torchaudio/' wenet/dataset/processor.py
+sed -i 's/        sample_rate = torchaudio.info(wav_file).sample_rate/        with wave.open(wav_file, "rb") as wf:\n            sample_rate = wf.getframerate()/' wenet/dataset/processor.py
+```
+
 ---
 
 ## 4. 验证 torch_npu 安装

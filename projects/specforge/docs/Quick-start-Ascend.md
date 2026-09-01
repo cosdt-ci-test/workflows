@@ -1,6 +1,6 @@
 # Quick Start (Ascend NPU)
 
-在 4 卡昇腾 NPU 上把 [SpecForge](https://github.com/sgl-project/SpecForge) 端到端跑通：镜像预装 torch 2.10.0 + torch_npu 2.10.0 + sglang 0.5.18 + CANN 9.1.0 + Python 3.11.15，再装 modelscope 1.37.0 + mooncake-transfer-engine 0.3.13 + specforge 源码（`pip install --no-deps .`），从 ModelScope 拉 `Qwen/Qwen3.5-4B`，起 `mooncake_master` + SGLang capture server + `specforge train` 三件套，跑 1 步训练作为 smoke。
+在 4 卡昇腾 NPU 上把 [SpecForge](https://github.com/sgl-project/SpecForge) 端到端跑通：镜像预装 torch 2.10.0 + torch_npu 2.10.0 + sglang 0.5.18 + CANN 9.0.0 + Python 3.11.15，再装 modelscope 1.37.0 + mooncake-transfer-engine 0.3.13 + specforge 源码（`pip install --no-deps .`），从 ModelScope 拉 `Qwen/Qwen3.5-4B`，起 `mooncake_master` + SGLang capture server + `specforge train` 三件套，跑 1 步训练作为 smoke。
 
 ## 前置条件
 
@@ -33,7 +33,7 @@ swr.cn-southwest-2.myhuaweicloud.com/base_image/dockerhub/lmsysorg/sglang:v0.5.1
 | 组件 | 版本 |
 | --- | --- |
 | Python | 3.11.15 |
-| CANN | 9.1.0 |
+| CANN | 9.0.0 |
 | torch | 2.10.0+cpu |
 | torch_npu | 2.10.0 |
 | sglang | 0.5.18 |
@@ -58,6 +58,21 @@ python --version
 输出结果如下：
 ```shell #test-result id="check-py" fuzzy='xxx'
 Python 3.11.xxx
+```
+
+CANN toolkit 装好且 set_env.sh 可 source（后续 smoke 跑 SGLang / torch_npu 都靠这个）：
+
+```shell #test id="check-cann"
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
+ls /usr/local/Ascend/ascend-toolkit/
+test -f "$ASCEND_HOME/version.cfg" && grep '^version=' "$ASCEND_HOME/version.cfg" || echo "version.cfg MISSING at $ASCEND_HOME"
+```
+
+输出结果类似如下（`9.0.0` 是镜像 tag `cann9.0.0-910b` 标称的版本；`latest/` 是 set_env.sh 默认指向的 toolkit 子目录）：
+
+```shell #test-result id="check-cann" fuzzy='xxx'
+xxx
+version=9.0.0
 ```
 
 检查 torch / torch_npu / sglang 是否装好且 NPU 设备可用：

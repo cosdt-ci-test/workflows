@@ -330,7 +330,42 @@ cd /root/speculators
 # > 192 KB UB），kernel 拒绝编译 → train.py ERR99999 → torchrun ChildFailed。
 # 关 dynamo 后 torch.compile() 返回原函数，BiShengIR 完全不被叫到。10-sample
 # smoke 不差这点 fused kernel 加速。
+# 顺带让 flex_attention 走 unfused 分支（line 1624 那个 "called without
+# torch.compile()" 警告）—— C++ HOP 用 basic matmul+softmax+matmul，torch_npu
+# 都支持，forward + backward 都跑得通（live NPU probe 验证过 Q_LEN=40,
+# KV_LEN=4136 BlockMask backward 正常）。
 export TORCHDYNAMO_DISABLE=1
+
+# 绕 torch 2.10 的 flex_attention device allowlist。torch/nn/attention/flex_attention.py:1329
+# 硬编码 supported_devices={"cuda","cpu","xpu","hpu"}，NPU 不在 → flex_attention
+# 一进就 raise。配合 TORCHDYNAMO_DISABLE=1：绕过之后 flex_attention 走 unfused
+# C++ HOP（basic matmul + softmax），torch_npu 支持；不需要 triton-ascend 编译
+# fused kernel。Live probe：dflash-style BlockMask (Q_LEN=40, KV_LEN=4136)
+# forward OK, backward OK。
+cat > /root/sitecustomize.py << 'PYEOF'
+"""Auto-loaded by Python when PYTHONPATH=/root is set; runs before scripts/train.py.
+
+Patches torch.nn.attention.flex_attention._validate_device to accept "npu".
+Combined with TORCHDYNAMO_DISABLE=1, this lets flex_attention fall back to its
+unfused C++ HOP path (basic matmul + softmax + matmul) on NPU.
+"""
+import sys
+
+try:
+    import torch.nn.attention.flex_attention as _fa_mod
+
+    _orig_validate_device = _fa_mod._validate_device
+
+    def _patched_validate_device(query, key, value):
+        if query.device.type == "npu":
+            return
+        return _orig_validate_device(query, key, value)
+
+    _fa_mod._validate_device = _patched_validate_device
+except Exception as exc:
+    sys.stderr.write(f"[sitecustomize] flex_attention npu patch skipped: {exc!r}\n")
+PYEOF
+export PYTHONPATH=/root:$PYTHONPATH
 
 # --hidden-states-dtype float32：spec v0.7.0 schema 写死 "Model master weights
 # are always kept in fp32"，dflash.forward 内 LN.weight 是 fp32；torch.autocast

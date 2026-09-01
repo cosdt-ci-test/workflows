@@ -281,12 +281,22 @@ Smoke 把 `mooncake_master` / SGLang capture server / `specforge train` 串起�
 ```shell #test-setup id="smoke-download-model" store="model_path"
 set -euo pipefail
 MODEL_ID="${SPECFORGE_MODEL_ID:-Qwen/Qwen3.5-4B}"
-# echo 走 stderr：store="model_path" 抓的是整个 stdout，要把 stdout 留给 snapshot_download
-# 的路径，否则后续 <MODEL_PATH> 替换会带上 echo + modelscope progress 整段 200+ 字节
-# 字符串，--model-path 收到垃圾（run 33486096843 把首行 'smoke: downloading...' 也
-# 一起塞进去了，--model-path 整个错误）。stderr 还是会显示在 CI log 里做诊断。
+# store="model_path" 抓的是整个 stdout，必须只让路径落 stdout。echo 走 stderr 做诊断，
+# modelscope 自身的下载进度 ('Downloading Model from ... to directory: ...') 也走
+# stdout —— run 33507844975 复现：modelscope progress + print(path) 两行都被 store
+# 抓住，<MODEL_PATH> 替换出 200+ 字节多行字符串，--model-path 收到垃圾。
+# contextlib.redirect_stdout(sys.stderr) 在 with 块内把 sys.stdout 指向 stderr，
+# modelscope 进度落 stderr；with 块外的 print(path) 走真 stdout，只有路径被 store
+# 抓住。stderr 的进度仍会出现在 CI log 里做诊断。
 echo "smoke: downloading model $MODEL_ID from ModelScope" >&2
-python -c "from modelscope import snapshot_download; print(snapshot_download('$MODEL_ID'))"
+python - "$MODEL_ID" <<'PY'
+import sys, contextlib
+MODEL_ID = sys.argv[1]
+with contextlib.redirect_stdout(sys.stderr):
+    from modelscope import snapshot_download
+    path = snapshot_download(MODEL_ID)
+print(path)
+PY
 ```
 
 输出结果类似如下（stdout 只有路径，被 store 进 `model_path`，后续 step 4 / 5 用 `<MODEL_PATH>` 引用；stderr 的 echo 不会出现在这里）：
@@ -467,17 +477,22 @@ if ! grep -q 'enable_spec_capture: A\[' "$SERVER_ARGS" \
     # 兜底：python 退出后 grep enable_spec_capture 字段是否落盘，不在就报错并
     # 把 python stderr 一并贴出来。
     python - "$SERVER_ARGS" >/tmp/smoke-py-patch.out 2>/tmp/smoke-py-patch.err <<'PY'
-import sys, re
+import sys, ast
 path = sys.argv[1]
 with open(path) as f:
     src = f.read()
-# Three fields are inserted as a block right after the LAST 'enable_return_routed_experts: A['
-# declaration (matches the v0.5.18 patch anchor context: 'enable_return_routed_experts: A['
-# appears right BEFORE 'enable_spec_capture: A[' in the patch hunk). Inserting after
-# 'enable_return_routed_experts' is structural — it's the same neighbour regardless of
-# upstream sglang's exact line numbers, so this survives the 0.5.18 -> 0.5.x minor drifts
-# the BSD patch is fragile to.
-fields_to_add = '''    enable_spec_capture: A[
+# Three fields are inserted as a block right BEFORE 'enable_return_routed_experts: A['
+# (matches the v0.5.18 patch hunk context: 'enable_spec_capture: A[' sits immediately
+# above 'enable_return_routed_experts: A['). Inserting before the anchor is structural —
+# 'enable_return_routed_experts: A[' is the same neighbour regardless of upstream
+# sglang's exact line numbers, so this survives 0.5.18 -> 0.5.x minor drifts the BSD
+# patch is fragile to. Earlier attempts to insert AFTER 'enable_return_routed_experts'
+# via `src.index('\n', end_of_block)` failed: end_of_block already IS a '\n' (the
+# newline preceding '    ] = ...'), so str.index returns it unchanged — insertion
+# landed between the description line and the closing '    ] = False', orphaning the
+# closing ']' and breaking syntax. Anchor BEFORE sidesteps the closing-line offset
+# arithmetic entirely.
+fields_to_add = """    enable_spec_capture: A[
         bool,
         "Enable server-side speculative-training capture (SpecForge DataFlow layout).",
         NS("exec.features"),
@@ -492,18 +507,26 @@ fields_to_add = '''    enable_spec_capture: A[
         "Capture method for --enable-spec-capture: 'eagle3', 'dflash', or 'dspark'.",
         NS("exec.features"),
     ] = "eagle3"
-'''
+"""
 anchor = 'enable_return_routed_experts: A['
 if anchor not in src:
     sys.exit("anchor 'enable_return_routed_experts: A[' not found in server_args.py")
 if 'enable_spec_capture: A[' in src:
     sys.exit(0)  # already there
-# Insert AFTER the entire enable_return_routed_experts: A[ ... ] = False block.
-# Greedy: find the anchor, then advance past the closing '    ] = <val>\n' line.
+# Insert BEFORE the 'enable_return_routed_experts: A[' line. rfind('\n', 0, idx) gives
+# the '\n' that ends the PREVIOUS line (i.e., the previous field's closing
+# '    ] = <val>\n'). insert_pos = that '\n' + 1 = start of the anchor's line.
 idx = src.index(anchor)
-end_of_block = src.index('\n    ] =', idx)
-advance_to_newline = src.index('\n', end_of_block)
-new_src = src[:advance_to_newline+1] + fields_to_add + src[advance_to_newline+1:]
+prev_newline = src.rfind('\n', 0, idx)
+insert_pos = prev_newline + 1
+new_src = src[:insert_pos] + fields_to_add + src[insert_pos:]
+# Validate syntax BEFORE writing back: ast.parse checks only syntax (names like
+# Optional/List/NS/A don't need to be in scope for the check), so an early
+# SyntaxError caught here is actionable upstream of the smoke step.
+try:
+    ast.parse(new_src)
+except SyntaxError as e:
+    sys.exit(f"smoke: FAILED - inserted code creates SyntaxError at line {e.lineno}: {e.msg} ({e.text!r})")
 with open(path, 'w') as f:
     f.write(new_src)
 print('smoke: server_args.py patched in-place via python (added 3 fields)')

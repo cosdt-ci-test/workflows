@@ -332,12 +332,26 @@ cd /root/speculators
 # smoke 不差这点 fused kernel 加速。
 export TORCHDYNAMO_DISABLE=1
 
+# --hidden-states-dtype float32：spec v0.7.0 schema 写死 "Model master weights
+# are always kept in fp32"，dflash.forward 内 LN.weight 是 fp32；torch.autocast
+# policy 表里 nn.LayerNorm / aten::layer_norm 在 cuda/cpu/npu 全标 _cast_no_op
+# —— 不管 autocast 走哪条，LN(weight=fp32, input=bf16) 输出 fp32。dflash.forward
+# 的 V 不是从 Linear 算出来的，是直接复用 dataloader 来的 hidden_states（默认
+# bf16），所以 Q/K fp32, V bf16 → flex_attention dtype check 挂
+# (torch/nn/attention/flex_attention.py:1473)。
+# 把 V 也 cast 成 fp32 让 Q/K/V 对齐。schema 允许 float32 选项
+# (train.py:548 getattr(torch, args.hidden_states_dtype))。A2 64 GB 装得下
+# 1.9 GB 的 fp32 hidden_states cache（bf16 是 0.5 GB）。
+# 备注：CUDA 上跑同一份 train.py 也会挂同款 dtype mismatch，除非先
+# model.bfloat16() 把 LN.weight 也 cast bf16。spec 跳过了这一步，所以 dtype
+# 对不齐是 spec 架构问题，CUDA 那边只是被 .bfloat16() 绕开了。
 # --on-missing raise 强制走 FileBackend 读 <hs_dir> 缓存；不带 --vllm-endpoint 让
 # dataloader 不会去问不存在的 server
 torchrun --standalone --nproc_per_node=1 scripts/train.py \
   --verifier-name-or-path "<verifier_path>" \
   --data-path "<data_path>" \
   --hidden-states-path "<hs_dir>" \
+  --hidden-states-dtype float32 \
   --save-path "$CHECKPOINT_DIR" \
   --draft-vocab-size 32000 \
   --epochs 1 \

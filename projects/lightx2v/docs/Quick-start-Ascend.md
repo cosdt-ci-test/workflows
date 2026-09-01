@@ -280,7 +280,7 @@ ln -sfn ../models models
 uv pip install --no-deps -v .
 ```
 
-依赖安装说明：直接依赖（除 stub 的三个外）从上游 pyproject.toml 同步过来；故意不写 `uv pip install .` 重做依赖解析——之前已 `--no-deps` 把 lightx2v 装上，再用 constraint 列表一次装齐其余 deps；CUDA 排除清单（`_CUDA_CONSTRAINTS`）通过 `PIP_CONSTRAINT`/`UV_CONSTRAINT` 已在进程环境，自动屏蔽 nvidia-* / cuda-* 等。例外的三个 stub：opencv-python → stub cv2（`/tmp/stubs/cv2`）、decord → stub decord（`/tmp/stubs/decord`）、torchaudio → stub torchaudio（`/tmp/stubs/torchaudio`，torchada 仍是 NPU 版）；triton 走真包（上一节已装 `triton==3.5.*`），不在例外里；torch + torch_npu 在 check-torch 已装 2.9.0，这里不重复。pyzmq 单独补装：上游 lightx2v.disagg.conn 顶层无条件 `import zmq`（pipeline → qwen_image_runner → disagg_mixin → conn），但上游 pyproject.toml 漏声明，`pip install .` 后 import lightx2v 一样挂；aarch64 有 cp312 manylinux wheel，补装，import 名是 zmq。
+依赖安装说明：直接依赖（除 stub 的三个外）从上游 pyproject.toml 同步过来；故意不写 `uv pip install .` 重做依赖解析——之前已 `--no-deps` 把 lightx2v 装上，再用 constraint 列表一次装齐其余 deps；CUDA 排除清单（`_CUDA_CONSTRAINTS`）通过 `PIP_CONSTRAINT`/`UV_CONSTRAINT` 已在进程环境，自动屏蔽 nvidia-* / cuda-* 等。例外的三个 stub：opencv-python → stub cv2（`/tmp/stubs/cv2`）、decord → stub decord（`/tmp/stubs/decord`）、torchaudio → stub torchaudio（`/tmp/stubs/torchaudio`，torchada 仍是 NPU 版）；triton 走真包（上一节已装 `triton==3.5.*`），不在例外里；torch + torch_npu 在 check-torch 已装 2.9.0，这里不重复。pyzmq 单独补装：上游 lightx2v.disagg.conn 顶层无条件 `import zmq`（pipeline → qwen_image_runner → disagg_mixin → conn），但上游 pyproject.toml 漏声明，`pip install .` 后 import lightx2v 一样挂；aarch64 有 cp312 manylinux wheel，补装，import 名是 zmq。soundfile 同类补装：infer.py 顶层无条件 import 全部 runner → wan_dancer.py `import soundfile`，上游 pyproject.toml 同样漏声明；aarch64 有 cp312 manylinux wheel（自带 libsndfile，无需系统库）。
 
 ```shell #test-setup id="lightx2v-install-deps"
 uv pip install \
@@ -290,7 +290,7 @@ uv pip install \
     aiohttp pydantic prometheus-client gguf fastapi uvicorn PyJWT requests \
     aio-pika 'asyncpg>=0.27.0' 'aioboto3>=12.0.0' \
     'alibabacloud_dypnsapi20170525==1.2.2' 'redis==6.4.0' tos \
-    av 'torchada>=0.1.10' pyzmq
+    av 'torchada>=0.1.10' pyzmq soundfile
 ```
 
 ```shell #test id="lightx2v-install-verify"

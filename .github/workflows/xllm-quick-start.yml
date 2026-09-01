@@ -47,7 +47,7 @@ jobs:
       # the cache I/O jobs (restore-cache / publish-and-persist) to
       # GitHub-hosted ubuntu-latest.
       test_runner: '["linux-aarch64-a2-1"]'
-      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/xllm:v0.10.1-ascend
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/xllm-ai:xllm-dev-a2-arm-cann9-20260605
       container_options: >-
         --volume=/data/ci-cache/modelscope/xllm:/root/.cache/modelscope
       timeout_minutes: 60

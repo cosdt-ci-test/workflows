@@ -315,7 +315,7 @@ exp/conformer/epoch_4.pt
 
 ```shell #test-setup id="infer"
 cd wenet/examples/aishell/s0
-bash run_npu.sh --stage 5 --stop_stage 5
+bash run_npu.sh --stage 5 --stop_stage 5 --average_num 5
 ```
 
 验证推理结果：

@@ -323,6 +323,15 @@ mkdir -p "$CHECKPOINT_DIR"
 
 cd /root/speculators
 
+# 关 dynamo —— speculators v0.7.0 src/speculators/models/dflash/core.py:30 有
+# 模块级 _compiled_create_block_mask = torch.compile(create_block_mask)，无
+# 守门。NPU 上首次 forward 触发 inductor fused triton kernel 编译，CANN BiShengIR
+# 报 "ub overflow, requires 3014656 bits while 1572864 bits available"（376 KB
+# > 192 KB UB），kernel 拒绝编译 → train.py ERR99999 → torchrun ChildFailed。
+# 关 dynamo 后 torch.compile() 返回原函数，BiShengIR 完全不被叫到。10-sample
+# smoke 不差这点 fused kernel 加速。
+export TORCHDYNAMO_DISABLE=1
+
 # --on-missing raise 强制走 FileBackend 读 <hs_dir> 缓存；不带 --vllm-endpoint 让
 # dataloader 不会去问不存在的 server
 torchrun --standalone --nproc_per_node=1 scripts/train.py \

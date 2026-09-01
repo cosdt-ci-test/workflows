@@ -105,6 +105,7 @@ npu-smi info
 XLLM_BUILD_CACHE=/opt/xllm-build
 XLLM_SRC=/tmp/xllm-src
 XLLM_VERSION="v0.10.1"
+BUILD_LOG="/tmp/xllm-build.log"
 
 install_xllm_from_cache() {
   local whl
@@ -118,12 +119,28 @@ install_xllm_from_cache() {
 }
 
 build_xllm() {
-  echo "setup: building xllm ${XLLM_VERSION} from source..."
+  echo "setup: building xllm ${XLLM_VERSION} from source (this may take 30-60 min)..."
   git clone --branch "${XLLM_VERSION}" --depth 1 \
     https://github.com/xLLM-AI/xllm.git "${XLLM_SRC}"
   cd "${XLLM_SRC}"
   git submodule update --init --recursive
-  python setup.py bdist_wheel
+
+  # Install pre-commit (required by setup.py's pre_build step)
+  python -m pip install -q pre-commit
+
+  # Build with optimizations: skip tests, skip export, redirect logs
+  export SKIP_TEST=1
+  export SKIP_EXPORT=1
+
+  echo "setup: building xllm (log: ${BUILD_LOG})..."
+  python setup.py bdist_wheel --device npu --arch arm \
+    > "${BUILD_LOG}" 2>&1 || {
+    echo "setup: build failed, last 50 lines of ${BUILD_LOG}:"
+    tail -50 "${BUILD_LOG}"
+    cd -
+    return 1
+  }
+
   mkdir -p "${XLLM_BUILD_CACHE}"
   cp dist/xllm-*.whl "${XLLM_BUILD_CACHE}/"
   python -m pip install "${XLLM_BUILD_CACHE}/xllm-*.whl"

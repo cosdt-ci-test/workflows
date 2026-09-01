@@ -299,7 +299,7 @@ ls exp/conformer/*.pt | head -5
 输出结果如下：
 
 ```shell #test-result id="verify-train"
-exp/conformer/train.yaml
+... exp/conformer/train.yaml
 exp/conformer/epoch_0.pt
 exp/conformer/epoch_1.pt
 exp/conformer/epoch_2.pt

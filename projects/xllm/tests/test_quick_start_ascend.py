@@ -27,7 +27,6 @@ Environment variables (injected by GitHub workflow
 
 from __future__ import annotations
 
-import glob
 import os
 import subprocess
 import unittest
@@ -138,104 +137,14 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 check=True,
             )
 
-        # 2) Clone xllm source tree (with submodules) and build from source.
-        # We no longer rely on a xllm-provided image; the CANN base image is
-        # used and xllm's C++ extension is compiled here. xllm's setup.py does
-        # NOT ship the `examples` package, so the repo must also be on
-        # PYTHONPATH for `python -m examples.generate`.
-        xllm_src = '/tmp/xllm-ai'
-        if not os.path.isdir(xllm_src):
-            upstream_ref = os.environ.get('UPSTREAM_REF') or 'main'
-            print(f'setup: cloning xllm@{upstream_ref} (recursive) to {xllm_src}')
-            subprocess.run(
-                [
-                    'git', 'clone', '--depth', '1', '--branch', upstream_ref,
-                    '--recurse-submodules', '--shallow-submodules',
-                    'https://github.com/xLLM-AI/xllm.git', xllm_src,
-                ],
-                check=True,
-            )
-        # Make `examples` importable in every doc-run subprocess.
-        os.environ['PYTHONPATH'] = xllm_src + os.pathsep + os.environ.get('PYTHONPATH', '')
-
-        # 3) Install build dependencies (CANN base image lacks cmake/rust/vcpkg
-        # and the third_party submodules are needed by the build).
-        print('setup: installing build dependencies')
+        # 2) Verify xllm import (official image pre-installs xllm)
+        print('setup: verifying xllm import')
         subprocess.run(
-            ['bash', '-c',
-             'apt-get update -qq && apt-get install -y --no-install-recommends '
-             'python3-dev libssl-dev pkg-config git '
-             'curl ca-certificates'],
-            check=True,
-        )
-        subprocess.run(
-            ['python', '-m', 'pip', 'install', '-q', 'cmake>=3.27', 'ninja'],
-            check=True,
-        )
-        cmake_bin_dir = os.path.dirname(sys.executable)
-        os.environ['PATH'] = cmake_bin_dir + os.pathsep + os.environ.get('PATH', '')
-        subprocess.run(['cmake', '--version'], check=True)
-
-        # 3.5) Ensure Python 3.11 venv for tilelang cp311 wheel
-        print('setup: installing python3.11 and creating venv')
-        subprocess.run(
-            ['bash', '-c',
-             'apt-get update -qq && apt-get install -y --no-install-recommends '
-             'python3.11 python3.11-venv python3.11-dev'],
-            check=True,
-        )
-        venv_path = '/opt/py311'
-        subprocess.run([f'{venv_path}/bin/python', '-m', 'venv', venv_path], check=True)
-        self._build_python = f'{venv_path}/bin/python'
-
-        subprocess.run(
-            ['bash', '-c',
-             'command -v cargo >/dev/null 2>&1 || '
-             '(curl -fsSL https://rsproxy.cn/rustup-init.sh -o /tmp/rustup-init.sh && '
-             'sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain stable)'],
-            check=True,
-        )
-        os.environ['PATH'] = os.pathsep.join(
-            [os.path.expanduser('~/.cargo/bin'), os.environ.get('PATH', '')])
-        os.environ['RUSTUP_DIST_SERVER'] = 'https://rsproxy.cn'
-        os.environ['RUSTUP_UPDATE_ROOT'] = 'https://rsproxy.cn/rustup'
-        subprocess.run(
-            ['git', 'config', '--global',
-             'url."https://gitcode.com/xLLM-AI/vcpkg.git".insteadOf',
-             'https://github.com/microsoft/vcpkg.git'],
+            ['python', '-c', 'import xllm; print("xllm:", xllm.__version__)'],
             check=True,
         )
 
-        build_log = '/tmp/xllm-build.log'
-        print(f'setup: building xllm wheel (device=npu); full log -> {build_log}')
-        os.environ['SKIP_TEST'] = '1'
-        with open(build_log, 'w') as lf:
-            try:
-                subprocess.run(
-                    [self._build_python, 'setup.py', 'bdist_wheel', '--device', 'npu'],
-                    cwd=xllm_src, check=True, stdout=lf, stderr=subprocess.STDOUT,
-                )
-            except subprocess.CalledProcessError:
-                print(f'!! xllm build failed; tail of {build_log}:')
-                subprocess.run(['tail', '-n', '300', build_log])
-                raise
-        print(f'setup: build done; tail of {build_log}:')
-        subprocess.run(['tail', '-n', '300', build_log])
-        wheels = sorted(glob.glob(os.path.join(xllm_src, 'dist', '*.whl')))
-        if not wheels:
-            raise RuntimeError('xllm wheel was not produced by the build')
-        subprocess.run(
-            [self._build_python, '-m', 'pip', 'install', '--force-reinstall', '--no-deps', wheels[0]],
-            check=True,
-        )
-
-        # 5) Verify the freshly built xllm imports.
-        subprocess.run(
-            [self._build_python, '-c', 'import xllm; print("xllm:", xllm.__version__)'],
-            check=True,
-        )
-
-        # 6) Download the example model once into the mounted CI cache.
+        # 3) Download the example model once into the mounted CI cache.
         model_dir = '/root/.cache/modelscope/Qwen2-7B-Instruct'
         if os.path.isdir(model_dir) and any(os.scandir(model_dir)):
             print(f'setup: model already cached at {model_dir}; skipping download')
@@ -243,13 +152,13 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             print(f'setup: downloading Qwen2-7B-Instruct to {model_dir}')
             subprocess.run(
                 [
-                    self._build_python, '-m', 'pip', 'install', '-q', 'modelscope',
+                    'python', '-m', 'pip', 'install', '-q', 'modelscope',
                 ],
                 check=False,
             )
             subprocess.run(
                 [
-                    self._build_python, '-c',
+                    'python', '-c',
                     "from modelscope import snapshot_download; "
                     "snapshot_download('Qwen/Qwen2-7B-Instruct', "
                     f"local_dir='{model_dir}')",

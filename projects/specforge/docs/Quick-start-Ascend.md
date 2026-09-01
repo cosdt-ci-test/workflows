@@ -509,7 +509,7 @@ MOONCAKE_MASTER_SERVER_ADDR=127.0.0.1:$MOONCAKE_RPC_PORT \
 MOONCAKE_PROTOCOL=tcp \
 MOONCAKE_GLOBAL_SEGMENT_SIZE=$((32<<30)) \
 nohup python -m sglang.launch_server \
-    --model-path "${MODEL_PATH}" \
+    --model-path "<MODEL_PATH>" \
     --trust-remote-code \
     --skip-tokenizer-init \
     --tp-size 1 \
@@ -562,7 +562,7 @@ specforge train -c "$RECIPE" \
     training.save_interval=0 \
     training.log_interval=1 \
     deployment.trainer.nproc_per_node=1 \
-    model.target_model_path="${MODEL_PATH}" \
+    model.target_model_path="<MODEL_PATH>" \
     2>&1 | tee /tmp/smoke-train.log
 TRAIN_RC=${PIPESTATUS[0]}
 popd >/dev/null

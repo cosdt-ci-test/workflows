@@ -396,6 +396,17 @@ projects:
     dir: projects/llm-d
     workflows:
       quick_start: .github/workflows/llm-d-quick-start.yml
+  - name: llm-compressor
+    category: 推理加速
+    support_level: 基础支持
+    upstream_repo: vllm-project/llm-compressor
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/llm-compressor
+    workflows:
+      examples: .github/workflows/llm-compressor-examples.yml
+      quick_start: .github/workflows/llm-compressor-quick-start.yml
+
   # lm-evaluation-harness quickstart exercises the native NPU device path
   # (HFLM --device npu:0, PR #1886) with a single-card arc_easy eval run
   # (--limit 10) on a Qwen2.5-0.5B checkpoint fetched via ModelScope;

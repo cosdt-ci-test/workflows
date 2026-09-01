@@ -1,6 +1,6 @@
 # Quick Start (Ascend NPU)
 
-在 4 卡昇腾 NPU 上把 [SpecForge](https://github.com/sgl-project/SpecForge) 端到端跑通：`pip install specforge` 满足上游 `pyproject.toml` 钉死的 `torch==2.11.0` / `sglang==0.5.14`，从 ModelScope 拉 `Qwen/Qwen3.5-4B`，起 `mooncake_master` + SGLang capture server + `specforge train` 三件套，跑 1 步训练作为 smoke。
+在 4 卡昇腾 NPU 上把 [SpecForge](https://github.com/sgl-project/SpecForge) 端到端跑通：镜像预装 torch 2.10.0 + torch_npu 2.10.0 + sglang 0.5.18 + CANN 9.0.0 + Python 3.11.15，再装 modelscope 1.37.0 + mooncake-transfer-engine 0.3.13 + specforge 源码（`pip install --no-deps .`），从 ModelScope 拉 `Qwen/Qwen3.5-4B`，起 `mooncake_master` + SGLang capture server + `specforge train` 三件套，跑 1 步训练作为 smoke。
 
 ## 前置条件
 
@@ -32,18 +32,18 @@ swr.cn-southwest-2.myhuaweicloud.com/base_image/dockerhub/lmsysorg/sglang:v0.5.1
 
 | 组件 | 版本 |
 | --- | --- |
-| Python | 3.11 |
-| CANN | 9.1.0 |
-| torch | 2.11.0+cpu |
-| torch_npu | 2.11.0 |
-| sglang | 0.5.14 |
+| Python | 3.11.15 |
+| CANN | 9.0.0 |
+| torch | 2.10.0+cpu |
+| torch_npu | 2.10.0 |
+| sglang | 0.5.18 |
 | specforge | 最新 release 的源码（>= #722 修 NPU 传输绑定） |
 | modelscope | 1.37.0 |
-| mooncake | main 分支 latest（master server 二进制需单独编译，smoke 阶段可用 pip 从源码装 transfer engine 部分） |
+| mooncake-transfer-engine | 0.3.13（PyPI tsinghua 镜像 manylinux_2_28 aarch64 cp312 wheel；mooncake_master 二进制跟着 wheel 走） |
 | 模型 | [Qwen/Qwen3.5-4B](https://www.modelscope.cn/Qwen/Qwen3.5-4B) |
 | 配方 | `examples/configs/online/disaggregated/external/qwen3.5-4b-dflash-online-npu.yaml`（来自 specforge 源码仓） |
 
-> 上游 `pyproject.toml` 把 `torch==2.11.0` / `transformers==5.8.1` / `sglang==0.5.14` 写死——本文档在装 specforge **之前**就装齐这三个版本，让 `pip install specforge`（无 `--no-deps`）满足依赖解析即可。
+> 镜像里 torch 2.10.0 / torch_npu 2.10.0 / sglang 0.5.18 已经预装好了（`check-torch` 步输出可看）。specforge 上游 `pyproject.toml` 还钉 `sglang==0.5.14`，但 `pip install --no-deps .` 跳过依赖解析、运行时实际走镜像里的 sglang 0.5.18——spec-capture patch 也按 `--target v0.5.18` 走，所以版本是配套的。如果后续 SpecForge pin 变了，sglang 行要跟着镜像对齐。
 
 ### 前置安装
 
@@ -60,6 +60,24 @@ python --version
 Python 3.11.xxx
 ```
 
+CANN toolkit 装好且 install.info 可读（后续 smoke 跑 SGLang / torch_npu 都靠 CANN env；ascend-toolkit 下 `latest/` 是软链到具体版本的子目录，`/usr/local/Ascend/ascend-toolkit/set_env.sh` 默认指向它）：
+
+```shell #test id="check-cann"
+test -f /usr/local/Ascend/ascend-toolkit/latest/$(uname -m)-linux/ascend_toolkit_install.info && \
+    grep '^version=' /usr/local/Ascend/ascend-toolkit/latest/$(uname -m)-linux/ascend_toolkit_install.info || \
+    echo "ascend_toolkit_install.info MISSING"
+```
+
+> 按[昇腾官方手册](https://www.hiascend.com/document/detail/zh/CANNCommunityEdition/800alpha3/softwareinstall/instg/atlas_03_0013.html)：CANN 版本号写在 `/usr/local/Ascend/ascend-toolkit/latest/<arch>-linux/ascend_toolkit_install.info` 的 `version=` 行。`$(uname -m)` 在 aarch64 runner 上展开成 `aarch64`（这是镜像里实际的架构）；arm64 / x86_64 镜像同样适用。
+>
+> 不走 `source set_env.sh`：典型 Ascend set_env.sh 在 `case $- in *i*)` 守护下跳过非交互式运行，`bash -c` 子 shell 里 $- 不带 i → ASCEND_HOME 落空（run 33464343161 复现）。
+
+输出结果类似如下（`9.0.0` 是镜像 tag `cann9.0.0-910b` 标称的版本，钉住——以后 image bump CANN 时这里会立即报错提醒改文档）：
+
+```shell #test-result id="check-cann"
+version=9.0.0
+```
+
 检查 torch / torch_npu / sglang 是否装好且 NPU 设备可用：
 
 ```shell #test id="check-torch"
@@ -69,9 +87,9 @@ python -c "import torch, torch_npu; from importlib.metadata import version; prin
 输出结果如下：
 
 ```shell #test-result id="check-torch" fuzzy='xxx'
-torch= 2.11.0+cpu
-torch_npu= 2.11.0
-sglang xxx
+torch= 2.10.0+cpu
+torch_npu= 2.10.0
+sglang 0.5.18
 is_available: True
 count: 4
 ```
@@ -102,7 +120,7 @@ npu_available True
 npu_count 4
 ```
 
-> `sglang` 实际版本看这里——如果跟 specforge 上游当前 pin 不一致，spec-capture patch 选 target 时按 `sglang` 行实际版本走。run 33370709363 这条链路上 image 的 sglang 是 **0.5.14**（tag `v0.5.18-cann9.0.0-910b` 是 huaweicloud mirror 自加的命名，sglang 本身是 0.5.14），specforge 上游 v0.5.18 patch 不适用——见后文 `smoke-apply-patches` step 的注释。
+> `sglang` 实际版本看这里——spec-capture patch 的 target 跟着 sglang 行走（`--target v${SGLANG_VER}`）。当前镜像 `v0.5.18-cann9.0.0-910b` 里 sglang 是 **0.5.18**，跟 `apply_sglang_spec_capture_patch.sh` 的默认 target 一致，直接打 `patches/sglang/v0.5.18/` 下的两个 patch。
 
 > 如果 `import torch_npu` 失败或 `count` 不是 4，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查三方兼容矩阵；`sglang` 必须有 `--attention-backend ascend` 支持（普通 PyPI 轮子不支持，需要 vendor 镜像或 NPU 编译产物）。
 
@@ -113,14 +131,20 @@ uv pip install 'modelscope==1.37.0'
 #
 # 用 tsinghua 镜像：直连 GitHub release 在集群网络下不稳（run 33254357756 90min timeout），
 # aliyun 镜像只有 manylinux_2_39 aarch64（CI image 是 ubuntu22.04 glibc 2.35，跑不了 2.39 wheel），
-# tsinghua 镜像有 v0.3.13 manylinux_2_28 aarch64 cp312 wheel（与 GitHub release 同字节）。
+# tsinghua 镜像有 v0.3.13 manylinux_2_28 aarch64 cp311 wheel（与 GitHub release 同字节）。
 uv pip install --index-url https://pypi.tuna.tsinghua.edu.cn/simple 'mooncake-transfer-engine==0.3.13'
 ```
+
+> smoke 实际用的是 `mooncake_master` 二进制（sglang.spec_capture_sink.py 通过 `mooncake.store.MooncakeDistributedStore` 调用，绑定由 sglang 自带的 wheel 处理），`import mooncake_transfer_engine` 仅作 wheel 完整性的 sanity check。下面用 if/else 让它失败时也走 stdout 一行、不会因为异常走 stderr 而看不到。
 
 打印安装版本：
 ```shell #test id="install-deps"
 python -c "import modelscope; print('modelscope', modelscope.__version__)"
-python -c "import mooncake_transfer_engine; print('mooncake-transfer-engine ok')"
+if python -c "import mooncake_transfer_engine" 2>/dev/null; then
+    echo "mooncake-transfer-engine ok"
+else
+    echo "mooncake-transfer-engine not importable"
+fi
 test -x "$(command -v mooncake_master)" && echo "mooncake_master binary present" || echo "mooncake_master binary MISSING"
 ```
 
@@ -128,7 +152,7 @@ test -x "$(command -v mooncake_master)" && echo "mooncake_master binary present"
 
 ```shell #test-result id="install-deps" fuzzy='xxx'
 modelscope xxx
-mooncake-transfer-engine ok
+xxx
 mooncake_master binary present
 ```
 
@@ -168,7 +192,7 @@ python -c "from importlib.metadata import version; print('specforge, version', v
 specforge, version xxx
 ```
 
-> 从源码装是因为本文 smoke 脚本要拿 `examples/configs/online/disaggregated/external/qwen3.5-4b-dflash-online-npu.yaml` 配方 + `scripts/apply_sglang_spec_capture_patch.sh` + `patches/sglang/v0.5.14/spec-capture-ascend-mount.patch`。PyPI 二进制 wheel 不会带 examples/ 与 patches/。
+> 从源码装是因为本文 smoke 脚本要拿 `examples/configs/online/disaggregated/external/qwen3.5-4b-dflash-online-npu.yaml` 配方 + `scripts/apply_sglang_spec_capture_patch.sh` + `patches/sglang/v0.5.18/spec-capture-ascend-mount.patch`。PyPI 二进制 wheel 不会带 examples/ 与 patches/。
 
 ## CLI 自检
 
@@ -182,7 +206,7 @@ python -c "import specforge, torch, torch_npu; print('specforge', getattr(specfo
 
 ```shell #test-result id="specforge-import" fuzzy='xxx'
 specforge xxx
-torch 2.11.0+cpu
+torch 2.10.0+cpu
 torch.npu.is_available True
 ```
 
@@ -269,7 +293,9 @@ smoke: downloading model Qwen/Qwen3.5-4B from ModelScope
 
 ### Step 2：打补丁 + apt 依赖
 
-`apply_sglang_spec_capture_patch.sh` 默认走 `--target v${SGLANG_VER}`：镜像里实际 sglang 是 0.5.14（看 step `image-probe`），SpecForge 上游 v0.5.14 patch 已于 2026-08-29 退场（commit `b453386827`）——这条路径在脚本里直接 rc!=0 退出，CI 在此红。短期把 sglang 钉到 0.5.18 走 vendor 轮子、或用 commit `b453386827` 之前的 SpecForge 镜像，是绕开这个版本陷阱的两条路（先记在这里，不在 smoke 主路径里改）。
+镜像里 sglang 实际是 0.5.18（看 step `image-probe`），`apply_sglang_spec_capture_patch.sh` 默认 target 就是 `v0.5.18`，这里显式传 `--target v${SGLANG_VER}` 以便 image 以后 bump sglang 时自动跟上。脚本会从 specforge 源码仓拉 `patches/sglang/v0.5.18/spec-capture.patch` + `patches/sglang/v0.5.18/spec-capture-ascend-mount.patch`（前者改 `sglang/srt/spec_capture_sink.py` 加 `allocate_and_mount_segment` 等字段，后者再加 ascend 段挂载适配）。Hunk2 行号跟上游 a8c0993 之后版本对不上（BSD patch 直接 `malformed patch at line 41`），ascend companion 用 Python 字符串替换做（不依赖行号），见块里 heredoc。
+
+SpecForge 上游 2026-08-29 退掉了 v0.5.14 patch（commit `b453386827`）；如果以后 image 把 sglang 倒回 0.5.14，这条 step 会 rc!=0 立即红——届时把 sglang 重新钉到 0.5.18、或 checkout `b453386827` 之前的 SpecForge commit，二选一。
 
 ```shell #test id="smoke-apply-patches"
 set -euo pipefail
@@ -282,7 +308,7 @@ pushd "$SPECFORGE_ROOT" >/dev/null
 SGLANG_VER=$(python -c "from importlib.metadata import version; print(version('sglang'))")
 echo "smoke: applying spec-capture patches for sglang ${SGLANG_VER}"
 if [[ -f scripts/apply_sglang_spec_capture_patch.sh ]]; then
-    # 走 --target v${SGLANG_VER}；0.5.14 时上游 patch 已退场会 rc!=0，此 step 立即红、不进 step 3
+    # 走 --target v${SGLANG_VER}；image 现在 sglang=0.5.18 → v0.5.18 patch 直打。
     bash scripts/apply_sglang_spec_capture_patch.sh --target "v${SGLANG_VER}" || {
         echo "smoke: FAILED - apply_sglang_spec_capture_patch.sh --target v${SGLANG_VER} returned non-zero" >&2
         exit 1

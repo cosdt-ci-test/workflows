@@ -133,7 +133,7 @@ build_xllm() {
   export SKIP_EXPORT=1
 
   echo "setup: building xllm (log: ${BUILD_LOG})..."
-  python setup.py bdist_wheel --device npu --arch arm \
+  python setup.py bdist_wheel --device npu \
     > "${BUILD_LOG}" 2>&1 || {
     echo "setup: build failed, last 50 lines of ${BUILD_LOG}:"
     tail -50 "${BUILD_LOG}"

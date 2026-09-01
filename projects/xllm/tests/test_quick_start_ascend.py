@@ -182,7 +182,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             with open(build_log, 'w') as log_f:
                 result = subprocess.run(
                     ['python', 'setup.py', 'bdist_wheel',
-                     '--device', 'npu', '--arch', 'arm'],
+                     '--device', 'npu'],
                     cwd=xllm_src, env=build_env,
                     stdout=log_f, stderr=subprocess.STDOUT,
                 )

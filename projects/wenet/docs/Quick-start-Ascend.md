@@ -96,7 +96,7 @@ cd wenet
 sed -i 's/from torch.nn.modules.conv import _ConvNd, _size_2_t, Union, _pair, Tensor, Optional/from typing import Optional, Union\nfrom torch import Tensor\nfrom torch.nn.common_types import _size_2_t\nfrom torch.nn.modules.conv import _ConvNd\nfrom torch.nn.modules.utils import _pair/' wenet/models/squeezeformer/conv2d.py
 ```
 
-修复 WeNet 与 torchaudio 2.10.0 的兼容性问题（`torchaudio.info()` 已移除，`torchaudio.load()` 依赖 torchcodec，`sox_effects` 已移除，改用标准库 `wave`/`soundfile` 和 `torchaudio.functional.resample`）：
+修复 WeNet 与 torchaudio/torch 2.10.0 的兼容性问题（`torchaudio.info()` 已移除，`torchaudio.load()` 依赖 torchcodec，`sox_effects` 已移除，`ProcessGroup.options` 已移除，改用标准库 `wave`/`soundfile`、`torchaudio.functional.resample` 和 `datetime.timedelta`）：
 
 ```shell #test-setup id="fix-torchaudio-compat"
 cd wenet
@@ -126,7 +126,13 @@ c=c.replace('''wav, _ = torchaudio.sox_effects.apply_effects_tensor(
             waveform, sample_rate,
             [['speed', str(speed)], ['rate', str(sample_rate)]])''','wav = torchaudio.functional.resample(waveform, sample_rate, int(sample_rate * speed))\n        wav = torchaudio.functional.resample(wav, int(sample_rate * speed), sample_rate)')
 open(f,'w').write(c)
-print('Done: replaced torchaudio.info/load/sox_effects in both files')
+# --- train_utils.py ---
+f='wenet/utils/train_utils.py'
+c=open(f).read()
+c=c.replace('import copy\nimport json','import copy\nimport datetime\nimport json',1)
+c=c.replace('timeout=group_join.options._timeout','timeout=datetime.timedelta(seconds=30)')
+open(f,'w').write(c)
+print('Done: replaced torchaudio.info/load/sox_effects and group_join.options')
 "
 ```
 

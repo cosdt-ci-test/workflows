@@ -279,8 +279,8 @@ for i in {1..180}; do
   sleep 2
 done
 if [ "$VLLM_READY" != "1" ]; then
-  echo "vllm server failed to come up within 6 min; tail of vllm-gen.log:"
-  tail -80 /tmp/vllm-gen.log
+  echo "vllm server failed to come up within 6 min; tail of vllm-gen.log:" >&2
+  tail -80 /tmp/vllm-gen.log >&2
   cleanup_vllm_gen
   exit 1
 fi
@@ -293,12 +293,16 @@ python scripts/data_generation_offline.py \
   --concurrency 4 \
   --validate-outputs >/tmp/hs-gen.log 2>&1 || HS_RC=$?
 HS_RC=${HS_RC:-0}
-tail -30 /tmp/hs-gen.log
+# tail 必须走 stderr —— vllm client 在 hs-gen.log 里打 "INFO HTTP Request: ...
+# HTTP/1.1 200 OK"，30 行 ≈ 2.5 KB。store="hs_dir" 全量捕获 stdout（含最终
+# echo "$HS_DIR"），下游 load="h_dir>>h_dir" 把 <h_dir> 塞进 bash 注释，注释
+# 里的换行把 # ... 截断，bash 当命令执行 "HTTP/1.1 200 OK" 就 rc=127 挂掉。
+tail -30 /tmp/hs-gen.log >&2
 
 HS_COUNT=$(ls -1 "$HS_DIR"/hs_*.safetensors 2>/dev/null | wc -l)
 if [ "$HS_RC" -ne 0 ] || [ "$HS_COUNT" -ne 10 ]; then
-  echo "=== data_generation_offline.py failed (rc=$HS_RC, hs_count=$HS_COUNT/10); full log ==="
-  cat /tmp/hs-gen.log
+  echo "=== data_generation_offline.py failed (rc=$HS_RC, hs_count=$HS_COUNT/10); full log ===" >&2
+  cat /tmp/hs-gen.log >&2
   cleanup_vllm_gen
   exit 1
 fi

@@ -229,12 +229,13 @@ head -1 data/train/data.list
 
 ## 7. 训练 5 epochs（stage 4）
 
-使用 `--override_config` 将 `max_epoch` 从 240 缩短到 5：
+创建自定义配置文件，将 `max_epoch` 从 240 缩短到 5：
 
 ```shell #test-setup id="train"
 cd wenet/examples/aishell/s0
-bash run_npu.sh --stage 4 --stop_stage 4 \
-  --override_config "max_epoch 5"
+cp conf/train_conformer.yaml conf/train_conformer_5ep.yaml
+sed -i 's/max_epoch: .*/max_epoch: 5/' conf/train_conformer_5ep.yaml
+bash run_npu.sh --stage 4 --stop_stage 4 --train_config conf/train_conformer_5ep.yaml
 ```
 
 训练完成后检查输出：

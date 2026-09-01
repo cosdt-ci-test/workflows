@@ -22,7 +22,7 @@ Atlas 900 A2 / A3 或 Ascend 950 系列 NPU，至少 1 卡。
 
 swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/vllm-ascend/vllm-ascend:v0.23.0
 
-镜像预装 vllm==0.23.0 + vllm-ascend==0.23.0 + triton-ascend==3.2.2 + torch 2.10.0+cpu + torch_npu 2.10.0.post4 + CANN 9.1.0 + Python 3.12。
+镜像预装 vllm==0.23.0 + vllm-ascend==0.23.0 + triton-ascend==3.2.2 + torch 2.10.0+cpu + torch_npu 2.10.0.post4 + CANN 9.1.0 + Python 3.12；torch + torch_npu 由 `### 前置安装` 的 `#test-setup install-torch` 步骤当场升到 2.13.0+cpu / 2.13.0rc1（仅升 torch 栈，base 镜像本身不变）。
 
 **软件版本**：
 
@@ -30,8 +30,8 @@ swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/vllm-ascend/vllm-ascen
 | --- | --- |
 | Python | 3.12 |
 | CANN | 9.1.0 |
-| torch | 2.10.0+cpu |
-| torch_npu | 2.10.0.post4 |
+| torch | 2.13.0+cpu（`#test-setup install-torch` 从镜像预装的 2.10.0+cpu 升上来） |
+| torch_npu | 2.13.0rc1（`#test-setup install-torch` 从镜像预装的 2.10.0.post4 升上来） |
 | vllm | 0.23.0（镜像预装） |
 | vllm-ascend | 0.23.0（镜像预装） |
 | triton-ascend | 3.2.2（镜像预装） |
@@ -61,6 +61,29 @@ python --version
 Python 3.12.xxx
 ```
 
+升级 torch 栈到 2.13（CPU-only build + torch_npu 2.13.0rc1），保留镜像的 CANN 9.1.0 不动：
+
+```shell #test-setup id="install-torch"
+# torch 2.13.0+cpu（CPU-only build，跟当前 2.10.0+cpu 同形态）：阿里云主 pypi
+# 只发 torch-2.13.0（CUDA build），不发 +cpu 变体；显式走 PyTorch 官方 CPU 索引
+# 拉 +cpu wheel，避免给镜像拽入 CUDA 库。--force-reinstall 因为镜像预装的
+# 2.10.0+cpu 是 PEP 660 不可变缓存的 wheel，--upgrade 在版本跨度大的时候不替换。
+uv pip install --index-url https://download.pytorch.org/whl/cpu \
+  --upgrade --force-reinstall 'torch==2.13.0+cpu'
+
+# torch_npu 2.13.0rc1 修了 flex_attention HOP 在 AutocastPrivateUse1 dispatch
+# key 上没注册 kernel 的问题（torch_npu/utils/patch_flexattention.py::
+# _register_npu_flex_attention_autocast），是这次 smoke 失败的根治版。
+# --no-deps 因为 torch 已经在上一步固定好，且 torch_npu 的依赖声明走 find-links
+# 会跨索引解析冲突（aliyun 索引没有 torch_npu 元数据），用 --no-deps 隔离避免
+# 误判。⚠ vllm-ascend 0.23.0 可能 pin 了 torch_npu 版本约束，Step 2/4 启动 vllm
+# 时如果 import torch_npu 撞版本不兼容，要单独处理（升 vllm-ascend 或同款隔离）。
+uv pip install \
+  --find-links https://mirrors.aliyun.com/pypi/simple/torch-npu/ \
+  --find-links https://mirrors.huaweicloud.com/ascend/repos/pypi/torch-npu/ \
+  --no-deps --upgrade --force-reinstall 'torch_npu==2.13.0rc1'
+```
+
 加载 CANN env 并验证镜像预装的 vllm-ascend 栈（应输出下表的版本号）：
 
 ```shell #test id="verify-vllm-stack"
@@ -75,8 +98,8 @@ python -c "import importlib.metadata; print(f'triton={importlib.metadata.version
 ```
 
 ```shell #test-result id="verify-vllm-stack" fuzzy='xxx'
-torch=2.10.0+cpu
-torch_npu=2.10.0.post4
+torch=2.13.0+cpu
+torch_npu=2.13.0rc1
 is_available: True
 npu_count: xxx
 vllm=0.23.0+empty
@@ -330,48 +353,23 @@ cd /root/speculators
 # > 192 KB UB），kernel 拒绝编译 → train.py ERR99999 → torchrun ChildFailed。
 # 关 dynamo 后 torch.compile() 返回原函数，BiShengIR 完全不被叫到。10-sample
 # smoke 不差这点 fused kernel 加速。
-# 顺带让 flex_attention 走 unfused 分支（line 1624 那个 "called without
-# torch.compile()" 警告）—— C++ HOP 用 basic matmul+softmax+matmul，torch_npu
-# 都支持，forward + backward 都跑得通（live NPU probe 验证过 Q_LEN=40,
-# KV_LEN=4136 BlockMask backward 正常）。
+# 2.13.0rc1 torch_npu/_inductor/select_algorithm.py 引入了 flex_attention 的
+# inductor 选择算法，理论上可开 dynamo；但 BiShengIR UB overflow 是否修了要
+# 单独验证，留待下次跑通后单独验。
 export TORCHDYNAMO_DISABLE=1
 
 # ASCEND_LAUNCH_BLOCKING=1 — 让 NPU kernel 错误同步上浮为 Python 异常；不加的话
 # CANN ERR99999 是 silent kill，Python 进程被 signal 干掉后没有 traceback 进
-# /tmp/train.log（只剩两段无害的 transformers NumPy 告警 + resource_tracker
-# semaphore 清理告警），下次失败没法定位是哪个 op 炸的
+# /tmp/train.log，下次失败没法定位是哪个 op 炸的
 export ASCEND_LAUNCH_BLOCKING=1
 
-# 绕 torch 2.10 的 flex_attention device allowlist。torch/nn/attention/flex_attention.py:1329
-# 硬编码 supported_devices={"cuda","cpu","xpu","hpu"}，NPU 不在 → flex_attention
-# 一进就 raise。配合 TORCHDYNAMO_DISABLE=1：绕过之后 flex_attention 走 unfused
-# C++ HOP（basic matmul + softmax），torch_npu 支持；不需要 triton-ascend 编译
-# fused kernel。Live probe：dflash-style BlockMask (Q_LEN=40, KV_LEN=4136)
-# forward OK, backward OK。
-cat > /root/sitecustomize.py << 'PYEOF'
-"""Auto-loaded by Python when PYTHONPATH=/root is set; runs before scripts/train.py.
-
-Patches torch.nn.attention.flex_attention._validate_device to accept "npu".
-Combined with TORCHDYNAMO_DISABLE=1, this lets flex_attention fall back to its
-unfused C++ HOP path (basic matmul + softmax + matmul) on NPU.
-"""
-import sys
-
-try:
-    import torch.nn.attention.flex_attention as _fa_mod
-
-    _orig_validate_device = _fa_mod._validate_device
-
-    def _patched_validate_device(query, key, value):
-        if query.device.type == "npu":
-            return
-        return _orig_validate_device(query, key, value)
-
-    _fa_mod._validate_device = _patched_validate_device
-except Exception as exc:
-    sys.stderr.write(f"[sitecustomize] flex_attention npu patch skipped: {exc!r}\n")
-PYEOF
-export PYTHONPATH=/root:$PYTHONPATH
+# 不再需要 sitecustomize.py patch：torch_npu 2.13.0rc1 通过
+# _init/patches/npu_patches.py::apply_flex_attention_patch 在 import torch_npu 时
+# 自动调 _patch_flex_attention_device + _register_npu_flex_attention_autocast
+# （torch_npu/utils/patch_flexattention.py），前者等价于原来 doc 自己写的
+# _validate_device allowlist patch，后者把 flex_attention HOP 注册到
+# AutocastPrivateUse1 dispatch key —— 是这次 smoke 失败（NotImplementedError:
+# could not find kernel for HigherOrderOperator flex_attention）的根治。
 
 # --hidden-states-dtype float32：spec v0.7.0 schema 写死 "Model master weights
 # are always kept in fp32"，dflash.forward 内 LN.weight 是 fp32；torch.autocast

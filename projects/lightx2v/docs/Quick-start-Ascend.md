@@ -192,16 +192,9 @@ _s.modules[__name__].__getattr__ = lambda n: _Stub()
 PY
 ```
 
+`triton` **装真包,不 stub**:torch 2.9 配套 triton 3.5.x,3.5 起 PyPI 有 cp312 aarch64 manylinux wheel,且零运行时依赖(不会把 nvidia/cuda 栈拖回来,与 CUDA 排除清单无冲突)。空 stub 路线走不通:stub 让 `import triton` "成功",把 torch 推进真实代码路径——triton_heuristics 拿 triton.Config 当基类继承、读 GPUTarget/knobs,stub 语义对不上逐层炸(AttributeError → TypeError → module() takes at most 2 arguments);而镜像原本"没装 triton"反而没事,torch 的 has_triton_package() 捕获 ImportError 走 HAS_TRITON=False 的无 triton 兜底路径。装真包两边都对。
+
 ```shell #test-setup
-# triton:装真包,不 stub。torch 2.9 配套 triton 3.5.x;3.5 起 PyPI 有
-# cp312 aarch64 manylinux wheel,且零运行时依赖(不会把 nvidia/cuda 栈
-# 拖回来,与 process env 里的 CUDA 排除清单无冲突)。
-# 为什么 run#1~#3 的 stub 路线不行:空 stub 让 `import triton` "成功",
-# 把 torch 推进真实代码路径 —— triton_heuristics 拿 triton.Config 当基类
-# 继承、读 GPUTarget/knobs,stub 语义对不上逐层炸
-# (AttributeError -> TypeError -> module() takes at most 2 arguments)。
-# 而镜像里原本"没装 triton"反而没事:torch 的 has_triton_package() 捕获
-# ImportError 走 HAS_TRITON=False 的无 triton 兜底路径。装真包两边都对。
 uv pip install 'triton==3.5.*'
 ```
 
@@ -221,16 +214,13 @@ print('cv2.INTER_LINEAR=', cv2.INTER_LINEAR)
 print('cv2.COLOR_BGR2RGB=', cv2.COLOR_BGR2RGB)
 print('decord.VideoReader=', decord.VideoReader)
 print('torchaudio.load=', torchaudio.load)
-# triton 真包:镜像 run#1~#3 的失败触点
 import triton
 print('triton.__version__=', triton.__version__)
 import triton.language as tl
 print('triton.language.math=', tl.math)
-class ProbeConfig(triton.Config):  # run#3 挂点:Config 必须可继承
+class ProbeConfig(triton.Config):
     pass
 print('Config subclass ok=', ProbeConfig.__name__)
-# 完整触发 step 17 的同款 import 链(run#1~#3 都挂在这条链上):
-# torch_npu -> _graph_tree -> inductor -> triton_heuristics
 import torch, torch_npu
 print('torch/torch_npu chain ok=', torch.__version__)
 "
@@ -276,41 +266,23 @@ echo "${UPSTREAM_REF}"
 ```
 -->
 
+项目根定在持久卷上（默认 `/home/coder/work/lightx2v-test`，CI 注入 `PROJECT_ROOT` 走别的路径也行）；源码 clone 到 `src` 子目录（避免和 `models/` `save_results/` 平级混淆）；`<UPSTREAM_REF>` 换成目标 分支/tag/commit——上游零 release 零 tag，默认 main，看护流水线会把本次要测的 ref 注入 `UPSTREAM_REF` 环境变量；`ln -sfn ../models models` 软链让 LightX2V 内部 `./models/` 相对路径依然命中；`--no-deps` 装源码时缺 wheel 的几个依赖（cv2 / decord / torchaudio 等）会跳过，真要的依赖看下面 `uv pip install` 单独装，aarch64 走 stub 即可。
+
 ```shell #test-setup id="lightx2v-install-source" load="upstream_ref>>UPSTREAM_REF"
-# 把项目根定在持久卷上,默认 /home/coder/work/lightx2v-test;
-# CI 注入 PROJECT_ROOT 走别的路径也行
 export PROJECT_ROOT=${PROJECT_ROOT:-/home/coder/work/lightx2v-test}
 mkdir -p "$PROJECT_ROOT"
 cd "$PROJECT_ROOT"
 
-# 源码 clone 到 src 子目录(不是项目根,避免和 models/ save_results/ 平级混淆)。
-# <UPSTREAM_REF> 换成目标 分支/tag/commit —— 上游零 release 零 tag,默认 main。
-# 看护流水线会把本次要测的 ref 注入 UPSTREAM_REF 环境变量。
 git clone --depth 1 --branch <UPSTREAM_REF> https://github.com/ModelTC/LightX2V.git src
 cd src
-# 软链 ./models → ../models,LightX2V 内部 ./models/ 相对路径依然命中
 ln -sfn ../models models
 
-# --no-deps 装源码：缺 wheel 的几个依赖（cv2 / decord / torchaudio 等）会跳过,
-# 真要的依赖看下面 `uv pip install` 单独装,aarch64 走 stub 即可
 uv pip install --no-deps -v .
 ```
 
+依赖安装说明：直接依赖（除 stub 的三个外）从上游 pyproject.toml 同步过来；故意不写 `uv pip install .` 重做依赖解析——之前已 `--no-deps` 把 lightx2v 装上，再用 constraint 列表一次装齐其余 deps；CUDA 排除清单（`_CUDA_CONSTRAINTS`）通过 `PIP_CONSTRAINT`/`UV_CONSTRAINT` 已在进程环境，自动屏蔽 nvidia-* / cuda-* 等。例外的三个 stub：opencv-python → stub cv2（`/tmp/stubs/cv2`）、decord → stub decord（`/tmp/stubs/decord`）、torchaudio → stub torchaudio（`/tmp/stubs/torchaudio`，torchada 仍是 NPU 版）；triton 走真包（上一节已装 `triton==3.5.*`），不在例外里；torch + torch_npu 在 check-torch 已装 2.9.0，这里不重复。pyzmq 单独补装：上游 lightx2v.disagg.conn 顶层无条件 `import zmq`（pipeline → qwen_image_runner → disagg_mixin → conn），但上游 pyproject.toml 漏声明，`pip install .` 后 import lightx2v 一样挂；aarch64 有 cp312 manylinux wheel，补装，import 名是 zmq。
+
 ```shell #test-setup id="lightx2v-install-deps"
-# LightX2V 直接依赖（除上面 stub 的三个外），从 pyproject.toml 同步过来。
-# 故意不写 `uv pip install .` 重做依赖解析：之前已经 --no-deps 把 lightx2v 装上,
-# 再用 constraint 列表一次装齐其余 deps;CUDA 排除清单(_CUDA_CONSTRAINTS)
-# 通过 PIP_CONSTRAINT/UV_CONSTRAINT 已在 process env,自动屏蔽 nvidia-* / cuda-* 等。
-# 例外的三个 stub:
-#   - opencv-python → stub cv2(/tmp/stubs/cv2)
-#   - decord        → stub decord(/tmp/stubs/decord)
-#   - torchaudio    → stub torchaudio(/tmp/stubs/torchaudio),torchada 仍是 NPU 版
-# triton 走真包(上一节已 uv pip install 'triton==3.5.*'),不在例外里
-# torch + torch_npu 在 step 4 check-torch 已装 2.9.0,这里不重复
-# pyzmq:上游 lightx2v.disagg.conn 顶层无条件 `import zmq`(pipeline ->
-# qwen_image_runner -> disagg_mixin -> conn),但上游 pyproject.toml 漏了
-# pyzmq,`pip install .` 后 import lightx2v 一样挂(CI 10:05:14)。aarch64 有
-# cp312 manylinux wheel,补装;import 名是 zmq。
 uv pip install \
     numpy scipy diffusers transformers tokenizers tqdm accelerate safetensors \
     imageio imageio-ffmpeg einops loguru omegaconf peft \
@@ -372,13 +344,12 @@ modelscope download \
     --include "models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth" "xlm-roberta-large/*"
 ```
 
+验证口径：目录名断言（`find -maxdepth 1 -type d`，排除 ModelScope 记账目录 `._____temp` 等隐藏条目）+ 下载完整性断言（>100M 大文件字节数精确：T5 11.4 GB + VAE 507 MB），`LC_ALL=C sort` 保证跨机器/跨 locale 排序一致（ls 的排序随 collation 变），权限位/属主/时间戳不进断言。
+
 ```shell #test id="lightx2v-pull-wan22-base-verify"
 export PROJECT_ROOT=${PROJECT_ROOT:-/home/coder/work/lightx2v-test}
-# 目录名断言(-maxdepth 1 -type d,排除 ModelScope 记账目录 ._____temp 等隐藏条目;
-# LC_ALL=C sort 保证跨机器/跨 locale 排序一致,ls 的排序随 collation 变)
 find "$PROJECT_ROOT/models/Wan2.2-I2V-A14B/" -maxdepth 1 -type d ! -name '.*' ! -name 'Wan2.2-I2V-A14B' -printf '%f\n' | LC_ALL=C sort
 echo "---"
-# 下载完整性断言:>100M 大文件字节数精确(T5 11.4 GB + VAE 507 MB),权限位/属主/时间戳不进断言
 find "$PROJECT_ROOT/models/Wan2.2-I2V-A14B/" -maxdepth 1 -type f -size +100M -printf '%s %f\n' | LC_ALL=C sort
 echo "---"
 head -5 "$PROJECT_ROOT/models/Wan2.2-I2V-A14B/google/umt5-xxl/tokenizer_config.json"
@@ -401,11 +372,9 @@ low_noise_model
 
 ### 拉 I2V 蒸馏 ckpt（split blocks）
 
+只拉 I2V int8 两个 split 目录（~30 GB）。仓库还有单文件/fp8/BF16 变体共 335 GB，include 过滤必须带，否则全量下载直接把磁盘打爆；lightx2v 的 load_safetensors 原生支持目录形态（utils.py: load_safetensors_from_dir 遍历目录下所有 block_*.safetensors），split 目录直接当 ckpt 路径用，不用先 merge。
+
 ```shell #test-setup id="lightx2v-pull-wan22-i2v-distill"
-# 只拉 I2V int8 两个 split 目录(~30 GB)。仓库还有单文件/fp8/BF16 变体共 335 GB,
-# include 过滤必须带,否则全量下载直接把磁盘打爆。
-# lightx2v 的 load_safetensors 原生支持目录形态(utils.py: load_safetensors_from_dir
-# 遍历目录下所有 block_*.safetensors),split 目录直接当 ckpt 路径用,不用先 merge。
 export PROJECT_ROOT=${PROJECT_ROOT:-/home/coder/work/lightx2v-test}
 modelscope download \
     --model lightx2v/Wan2.2-Distill-Models \
@@ -419,7 +388,7 @@ export PROJECT_ROOT=${PROJECT_ROOT:-/home/coder/work/lightx2v-test}
 # 展示 split-block 目录列表(每个目录里有 block_0.safetensors ~ block_*.safetensors)
 ls "$PROJECT_ROOT/models/Wan2.2-Distill-Models/" | grep split
 echo "---"
-ls "$PROJECT_ROOT/models/Wan2.2-Distill-Models/wan2.2_i2v_A14b_high_noise_int8_lightx2v_4step_1030_split/" | head -5
+ls "$PROJECT_ROOT/models/Wan2.2-Distill-Models/wan2.2_i2v_A14b_high_noise_int8_lightx2v_4step_1030_split/" | LC_ALL=C sort | head -5
 echo "---"
 ls "$PROJECT_ROOT/models/Wan2.2-Distill-Models/wan2.2_i2v_A14b_high_noise_int8_lightx2v_4step_1030_split/" | wc -l
 ```
@@ -443,16 +412,13 @@ block_12.safetensors
 
 ## 列出 Wan2.2 4 步蒸馏 config
 
-LightX2V 把推理参数(步数、flow shift、offload 策略、LoRA 路径、量化方案等)写到 config JSON 里,`python -m lightx2v.infer --config_json ...` 一次性喂进去。
+LightX2V 把推理参数(步数、flow shift、offload 策略、LoRA 路径、量化方案等)写到 config JSON 里,`python -m lightx2v.infer --config_json ...` 一次性喂进去。在 `$PROJECT_ROOT/src` 下做精确存在性断言——`ls` 多参数按参数序输出,不随上游新增 config 漂移。
 
 ```shell #test id="lightx2v-list-wan22-configs"
 export PROJECT_ROOT=${PROJECT_ROOT:-/home/coder/work/lightx2v-test}
 cd "$PROJECT_ROOT/src"
-# 主线 Wan2.2 config(T2V/I2V 各一个,MoE 高低噪合并)——精确存在性断言,
-# ls 多参数按参数序输出,不随上游新增 config 漂移
 ls configs/wan22/wan_moe_i2v.json configs/wan22/wan_moe_t2v.json
 echo "---"
-# NPU int8 量化专用 config(下面 I2V demo 用的就是它)
 ls configs/distill/wan22/wan_moe_i2v_distill_int8_4step_ulysses_npu.json
 ```
 
@@ -475,6 +441,8 @@ configs/distill/wan22/wan_moe_i2v_distill_int8_4step_ulysses_npu.json
 
 ### 单卡 32 GB 适配：改 config
 
+适配逻辑：`high/low_noise_quantized_ckpt` 换成 `$PROJECT_ROOT/models/` 下 split 目录绝对路径（config 默认值是单文件形态 `models/Wan2.2-Distill-Models/wan2.2_i2v_A14b_*_int8_*.safetensors`，ModelScope 只同步了 split 目录形态，不换路径直接 FileNotFoundError；load_safetensors 原生支持目录）；`clip_original_ckpt` 指向从 Wan2.1-I2V-14B-480P 单拉的 CLIP 文件（Wan2.2 base 仓库不带这文件，不指定的话 runner 走 find_torch_model_path 在 model_path 下找，两处都找不到直接 FileNotFoundError）；720P → 480P（activation/KV 省 ~40%）；开 T5/VAE cpu_offload（不释放这俩 32GB 必 OOM）+ block 粒度 DIT offload 进一步省；单卡 ulysses 没意义删掉 parallel；rife 插帧要单独下模型，不需要就删。
+
 ```shell #test-setup id="lightx2v-i2v-cfg-adapt"
 export PROJECT_ROOT=${PROJECT_ROOT:-/home/coder/work/lightx2v-test}
 cd "$PROJECT_ROOT/src"
@@ -483,29 +451,16 @@ import json, pathlib, os
 cfg_path = pathlib.Path('configs/distill/wan22/wan_moe_i2v_distill_int8_4step_ulysses_npu.json')
 cfg = json.loads(cfg_path.read_text())
 proj_models = os.environ['PROJECT_ROOT'] + '/models'
-# split-block 目录:绝对路径,避免 cwd 依赖。config 默认值是
-# models/Wan2.2-Distill-Models/wan2.2_i2v_A14b_*_int8_*.safetensors
-# (单文件形态),ModelScope 只同步了 split 目录形态,这里必须换路径,
-# 否则 FileNotFoundError。load_safetensors 原生支持目录(utils.py)。
 cfg['high_noise_quantized_ckpt'] = proj_models + '/Wan2.2-Distill-Models/wan2.2_i2v_A14b_high_noise_int8_lightx2v_4step_1030_split'
 cfg['low_noise_quantized_ckpt']  = proj_models + '/Wan2.2-Distill-Models/wan2.2_i2v_A14b_low_noise_int8_lightx2v_4step_split'
-# I2V 的 CLIP image encoder:Wan2.2 base 仓库不带这文件,单独从
-# Wan2.1-I2V-14B-480P 拉的。不指定的话 runner 走 find_torch_model_path
-# 在 model_path 下找 models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth,
-# 两处都找不到直接 FileNotFoundError。
 cfg['clip_original_ckpt'] = proj_models + '/Wan2.1-I2V-14B-480P/models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth'
-# 720P → 480P(activation/KV 省 ~40%)
 cfg['target_height'] = 480
 cfg['target_width']  = 832
-# 开 T5/VAE cpu_offload(关键:不释放这俩,32GB 必 OOM)
 cfg['t5_cpu_offload']  = True
 cfg['vae_cpu_offload'] = True
-# block 粒度 DIT offload(进一步省)
 cfg['cpu_offload']             = True
 cfg['offload_granularity']     = 'block'
-# 单卡 ulysses 没意义,删掉
 cfg.pop('parallel', None)
-# rife 插帧要单独下模型,不需要就删
 cfg.pop('video_frame_interpolation', None)
 cfg_path.write_text(json.dumps(cfg, indent=4))
 print('cfg adapted (单卡 32GB 适配):')

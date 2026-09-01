@@ -110,8 +110,8 @@ c=c.replace('sample_rate = torchaudio.info(wav_path).sample_rate','with wave.ope
 c=c.replace('''waveform, sample_rate = torchaudio.load(
                     filepath=wav_path,
                     num_frames=end_frame - start_frame,
-                    frame_offset=start_frame)''','data, sample_rate = sf.read(wav_path, start=start_frame, frames=end_frame - start_frame)\n                waveform = torch.from_numpy(data).unsqueeze(0)')
-c=c.replace('waveform, sample_rate = torchaudio.load(item[1])','data, sample_rate = sf.read(item[1])\n                waveform = torch.from_numpy(data).unsqueeze(0)')
+                    frame_offset=start_frame)''','data, sample_rate = sf.read(wav_path, start=start_frame, frames=end_frame - start_frame, dtype=\"float32\")\n                waveform = torch.from_numpy(data).unsqueeze(0)')
+c=c.replace('waveform, sample_rate = torchaudio.load(item[1])','data, sample_rate = sf.read(item[1], dtype=\"float32\")\n                waveform = torch.from_numpy(data).unsqueeze(0)')
 open(f,'w').write(c)
 # --- processor.py ---
 f='wenet/dataset/processor.py'
@@ -120,8 +120,8 @@ c=c.replace('import torchaudio','import wave\nimport soundfile as sf\nimport tor
 c=c.replace('sample_rate = torchaudio.info(wav_file).sample_rate','with wave.open(wav_file, \"rb\") as wf:\n            sample_rate = wf.getframerate()\n        if hasattr(wav_file, \"seek\"):\n            wav_file.seek(0)')
 c=c.replace('''waveform, _ = torchaudio.load(wav_file,
                                       num_frames=end_frame - start_frame,
-                                      frame_offset=start_frame)''','data, _ = sf.read(wav_file, start=start_frame, frames=end_frame - start_frame)\n        waveform = torch.from_numpy(data).unsqueeze(0)')
-c=c.replace('waveform, sample_rate = torchaudio.load(wav_file)','data, sample_rate = sf.read(wav_file)\n        waveform = torch.from_numpy(data).unsqueeze(0)')
+                                      frame_offset=start_frame)''','data, _ = sf.read(wav_file, start=start_frame, frames=end_frame - start_frame, dtype=\"float32\")\n        waveform = torch.from_numpy(data).unsqueeze(0)')
+c=c.replace('waveform, sample_rate = torchaudio.load(wav_file)','data, sample_rate = sf.read(wav_file, dtype=\"float32\")\n        waveform = torch.from_numpy(data).unsqueeze(0)')
 c=c.replace('''wav, _ = torchaudio.sox_effects.apply_effects_tensor(
             waveform, sample_rate,
             [['speed', str(speed)], ['rate', str(sample_rate)]])''','wav = torchaudio.functional.resample(waveform, sample_rate, int(sample_rate * speed))\n        wav = torchaudio.functional.resample(wav, int(sample_rate * speed), sample_rate)')

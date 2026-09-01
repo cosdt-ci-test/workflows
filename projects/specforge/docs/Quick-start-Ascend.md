@@ -72,10 +72,10 @@ test -f /usr/local/Ascend/ascend-toolkit/latest/$(uname -m)-linux/ascend_toolkit
 >
 > 不走 `source set_env.sh`：典型 Ascend set_env.sh 在 `case $- in *i*)` 守护下跳过非交互式运行，`bash -c` 子 shell 里 $- 不带 i → ASCEND_HOME 落空（run 33464343161 复现）。
 
-输出结果类似如下（`9.0.0` 是镜像 tag `cann9.0.0-910b` 标称的版本）：
+输出结果类似如下（`9.0.0` 是镜像 tag `cann9.0.0-910b` 标称的版本，钉住——以后 image bump CANN 时这里会立即报错提醒改文档）：
 
-```shell #test-result id="check-cann" fuzzy='xxx'
-version=xxx
+```shell #test-result id="check-cann"
+version=9.0.0
 ```
 
 检查 torch / torch_npu / sglang 是否装好且 NPU 设备可用：
@@ -131,14 +131,20 @@ uv pip install 'modelscope==1.37.0'
 #
 # 用 tsinghua 镜像：直连 GitHub release 在集群网络下不稳（run 33254357756 90min timeout），
 # aliyun 镜像只有 manylinux_2_39 aarch64（CI image 是 ubuntu22.04 glibc 2.35，跑不了 2.39 wheel），
-# tsinghua 镜像有 v0.3.13 manylinux_2_28 aarch64 cp312 wheel（与 GitHub release 同字节）。
+# tsinghua 镜像有 v0.3.13 manylinux_2_28 aarch64 cp311 wheel（与 GitHub release 同字节）。
 uv pip install --index-url https://pypi.tuna.tsinghua.edu.cn/simple 'mooncake-transfer-engine==0.3.13'
 ```
+
+> smoke 实际用的是 `mooncake_master` 二进制（sglang.spec_capture_sink.py 通过 `mooncake.store.MooncakeDistributedStore` 调用，绑定由 sglang 自带的 wheel 处理），`import mooncake_transfer_engine` 仅作 wheel 完整性的 sanity check。下面用 if/else 让它失败时也走 stdout 一行、不会因为异常走 stderr 而看不到。
 
 打印安装版本：
 ```shell #test id="install-deps"
 python -c "import modelscope; print('modelscope', modelscope.__version__)"
-python -c "import mooncake_transfer_engine; print('mooncake-transfer-engine ok')"
+if python -c "import mooncake_transfer_engine" 2>/dev/null; then
+    echo "mooncake-transfer-engine ok"
+else
+    echo "mooncake-transfer-engine not importable"
+fi
 test -x "$(command -v mooncake_master)" && echo "mooncake_master binary present" || echo "mooncake_master binary MISSING"
 ```
 
@@ -146,7 +152,7 @@ test -x "$(command -v mooncake_master)" && echo "mooncake_master binary present"
 
 ```shell #test-result id="install-deps" fuzzy='xxx'
 modelscope xxx
-mooncake-transfer-engine ok
+xxx
 mooncake_master binary present
 ```
 

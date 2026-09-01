@@ -208,6 +208,7 @@ bash run_npu.sh --stage 2 --stop_stage 3
 验证生成的文件：
 
 ```shell #test id="verify-data"
+cd wenet/examples/aishell/s0
 ls -la data/dict/lang_char.txt
 head -5 data/dict/lang_char.txt
 ls -la data/train/data.list
@@ -239,6 +240,7 @@ bash run_npu.sh --stage 4 --stop_stage 4 \
 训练完成后检查输出：
 
 ```shell #test id="verify-train"
+cd wenet/examples/aishell/s0
 ls -la exp/conformer/train.yaml
 ls exp/conformer/*.pt | head -5
 ```
@@ -268,6 +270,7 @@ bash run_npu.sh --stage 5 --stop_stage 5
 验证推理结果：
 
 ```shell #test id="verify-infer"
+cd wenet/examples/aishell/s0
 ls -la exp/conformer/ctc_greedy_search/text
 head -3 exp/conformer/ctc_greedy_search/text
 ```
@@ -288,6 +291,7 @@ BAC009S0002W003 ...
 确认所有关键文件均已生成：
 
 ```shell #test id="verify-all"
+cd wenet/examples/aishell/s0
 echo "=== 数据文件 ==="
 ls data/dict/lang_char.txt data/train/data.list data/dev/data.list data/test/data.list
 echo "=== 训练输出 ==="

@@ -88,8 +88,11 @@ jobs:
       # MindIE-SD docker/omni/Dockerfile.a2.ubuntu + the vllm-omni
       # requirements), so no probe run is needed; anything not in the
       # dependency tree (cv2 / decord / torchaudio / modelscope /
-      # torchada) is covered by the doc's conditional stubs + idempotent
-      # install list. Image lives in the SWR ascendhub namespace - the
+      # torchada) is covered by the doc's minimal unconditional stubs +
+      # pinned install list, and the smoke runs through the official
+      # LightX2VPipeline Python API (create_generator(config_json=...)
+      # + generate(...)) instead of the CLI. Image lives in the SWR
+      # ascendhub namespace - the
       # same registry domain as the previous cann:9.1.0 image, which the
       # runner's host docker daemon already pulls daily.
       image: swr.cn-south-1.myhuaweicloud.com/ascendhub/mindiesd:v3.0.0-A2-ubuntu22.04-py3.11-aarch64

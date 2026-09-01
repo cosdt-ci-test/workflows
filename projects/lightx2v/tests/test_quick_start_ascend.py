@@ -67,11 +67,11 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
     Scope: mindiesd image stack (torch/torch_npu preinstalled, reused via
     a version-agnostic probe) + modelscope + LightX2V source install
-    (with conditional stub packages for cv2 / decord / torchaudio — the
-    stub is created only when the real module cannot import, so the doc
-    works on any image — plus the real triton wheel, since an empty
-    triton stub drives torch._inductor into real triton code paths it
-    cannot survive) + include-filtered
+    (with minimal unconditional stub packages for cv2 / decord /
+    torchaudio — audited absent from the image, and the smoke path never
+    calls them — plus the real triton wheel, since an empty triton stub
+    drives torch._inductor into real triton code paths it cannot
+    survive) + include-filtered
     ModelScope weight pulls (12 GB Wan2.2-I2V-A14B base T5/VAE/
     tokenizer + 4.8 GB CLIP vision encoder from Wan2.1-I2V-14B-480P
     + 30 GB I2V int8 distill split dirs) + I2V single-card smoke

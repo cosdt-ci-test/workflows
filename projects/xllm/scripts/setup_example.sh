@@ -81,58 +81,6 @@ ensure_model() {
 
 # Install the toolchain needed to build xllm from source on the CANN base
 # image (which ships CANN + torch but not cmake/rust/vcpkg).
-ensure_build_deps() {
-  echo "installing build dependencies (cmake/ninja/rust/python3.11)..."
-  apt-get update -qq 2>/dev/null || true
-  apt-get install -y --no-install-recommends \
-    python3-dev libssl-dev pkg-config git curl ca-certificates 2>/dev/null || true
-  python -m pip install -q "cmake>=3.27" ninja
-  CMAKE_BIN_DIR="$(python -c 'import sys,os;print(os.path.dirname(sys.executable))')"
-  export PATH="$CMAKE_BIN_DIR:$PATH"
-  echo "cmake: $(cmake --version | head -n1)"
-
-  # Python 3.11 venv for tilelang cp311 wheel
-  apt-get update -qq 2>/dev/null || true
-  apt-get install -y --no-install-recommends \
-    python3.11 python3.11-venv python3.11-dev 2>/dev/null || true
-  /usr/bin/python3.11 -m venv /opt/py311
-  export PY311="/opt/py311/bin/python"
-  export PATH="/opt/py311/bin:$PATH"
-  echo "python3.11 venv ready: $($PY311 --version)"
-
-  if ! command -v cargo >/dev/null 2>&1; then
-    export RUSTUP_DIST_SERVER=https://rsproxy.cn
-    export RUSTUP_UPDATE_ROOT=https://rsproxy.cn/rustup
-    curl -fsSL https://rsproxy.cn/rustup-init.sh -o /tmp/rustup-init.sh
-    sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain stable
-    export PATH="$HOME/.cargo/bin:$PATH"
-  fi
-  # Redirect vcpkg's github fetch to the gitcode mirror (custom vcpkg, cxx11_abi off).
-  git config --global url."https://gitcode.com/xLLM-AI/vcpkg.git".insteadOf \
-    "https://github.com/microsoft/vcpkg.git" || true
-}
-
-# Build the xllm wheel from a checked-out xllm tree and install it.
-build_xllm() {
-  local root="$1"
-  local build_log=/tmp/xllm-build.log
-  echo "building xllm wheel from $root (device=npu); full log -> $build_log"
-  export SKIP_TEST=1
-  if ( cd "$root" && "$PY311" setup.py bdist_wheel --device npu ) >"$build_log" 2>&1; then
-    echo "build succeeded; tail of $build_log:"
-    tail -n 300 "$build_log"
-  else
-    echo "!! xllm build failed; tail of $build_log:"
-    tail -n 300 "$build_log"
-    exit 1
-  fi
-  local wheel
-  wheel=$(ls "$root"/dist/*.whl 2>/dev/null | head -n1)
-  [ -n "$wheel" ] || { echo "xllm wheel not found after build"; exit 1; }
-  "$PY311" -m pip install --force-reinstall --no-deps "$wheel"
-  "$PY311" -c "import xllm; print('xllm:', xllm.__version__)"
-}
-
 if ! declare -F "setup_${PROFILE}" >/dev/null 2>&1; then
   echo "unknown profile: ${PROFILE} (supported: $(supported_profiles))" >&2
   exit 1
@@ -153,15 +101,13 @@ ensure_torch_stack
 python -c "import torch, torch_npu; print('torch:', torch.__version__, 'torch_npu:', torch_npu.__version__, 'npu_count:', torch.npu.device_count())"
 npu-smi info
 
+# Verify xllm import (official image pre-installs xllm)
+python -c "import xllm; print('xllm version:', xllm.__version__)"
+
 "setup_${PROFILE}"
 
-# Default profile: build xllm from source on the CANN base image (no xllm-
-# provided image). The checked-out target tree at TARGET_ROOT is built and
-# installed; `examples/` is importable because run_example.sh does
-# `cd "$TARGET_ROOT"`.
+# Default profile: official xllm image pre-installs xllm; just verify and ensure model.
 setup_default() {
-  echo "profile=default: building xllm from source on the CANN base image"
-  ensure_build_deps
-  build_xllm "$TARGET_ROOT"
+  echo "profile=default: official xllm image pre-installs xllm"
   ensure_model
 }

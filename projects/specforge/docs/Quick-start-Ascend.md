@@ -438,8 +438,8 @@ echo "smoke: patches + apt deps applied"
 
 输出结果类似如下（中间省略 patch 应用逐行日志）：
 
-```shell #test-result id="smoke-apply-patches" fuzzy='xxx'
-smoke: applying spec-capture patches for sglang xxx
+```shell #test-result id="smoke-apply-patches"
+smoke: applying spec-capture patches for sglang 0.5.18
 smoke: patches + apt deps applied
 ```
 

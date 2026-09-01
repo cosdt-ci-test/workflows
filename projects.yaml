@@ -243,6 +243,15 @@ projects:
     dir: projects/colossalai
     workflows:
       quick_start: .github/workflows/colossalai-quick-start.yml
+  - name: opencompass
+    category: 推理加速
+    support_level: 新兴适配
+    upstream_repo: open-compass/opencompass
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/opencompass
+    workflows:
+      quick_start: .github/workflows/opencompass-quick-start.yml
   - name: aibrix
     category: 推理加速
     support_level: 新兴适配

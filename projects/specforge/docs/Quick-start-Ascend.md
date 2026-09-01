@@ -281,14 +281,18 @@ Smoke 把 `mooncake_master` / SGLang capture server / `specforge train` 串起�
 ```shell #test-setup id="smoke-download-model" store="model_path"
 set -euo pipefail
 MODEL_ID="${SPECFORGE_MODEL_ID:-Qwen/Qwen3.5-4B}"
-echo "smoke: downloading model $MODEL_ID from ModelScope"
+# echo 走 stderr：store="model_path" 抓的是整个 stdout，要把 stdout 留给 snapshot_download
+# 的路径，否则后续 <MODEL_PATH> 替换会带上 echo + modelscope progress 整段 200+ 字节
+# 字符串，--model-path 收到垃圾（run 33486096843 把首行 'smoke: downloading...' 也
+# 一起塞进去了，--model-path 整个错误）。stderr 还是会显示在 CI log 里做诊断。
+echo "smoke: downloading model $MODEL_ID from ModelScope" >&2
 python -c "from modelscope import snapshot_download; print(snapshot_download('$MODEL_ID'))"
 ```
 
-输出结果类似如下（首行是 modelscope 进度，最末行被 store 进 `model_path`，后续 step 4 / 5 用 `<MODEL_PATH>` 引用）：
+输出结果类似如下（stdout 只有路径，被 store 进 `model_path`，后续 step 4 / 5 用 `<MODEL_PATH>` 引用；stderr 的 echo 不会出现在这里）：
 
-```shell #test-result id="smoke-download-model" fuzzy='xxx'
-smoke: downloading model Qwen/Qwen3.5-4B from ModelScope
+```shell #test-result id="smoke-download-model" load="model_path>>MODEL_PATH"
+<MODEL_PATH>
 ```
 
 ### Step 2：打补丁 + apt 依赖
@@ -433,6 +437,24 @@ popd >/dev/null
 apt-get update -qq >/dev/null 2>&1
 apt-get install -qq -y --no-install-recommends \
     libcurl4 libibverbs1 libnuma1 >/dev/null 2>&1
+
+# 防御性 verify：base patch 必须在 server_args.py 引入 enable_spec_capture /
+# spec_capture_aux_layer_ids / spec_capture_method 三个字段，launch_server 的
+# argparse 才能识别 --enable-spec-capture 这一组 CLI flag。run 33486096843
+# apply 脚本 exit 0 但 launch_server 报 'unrecognized arguments:
+# --enable-spec-capture'——patch 显然没真正落到 server_args.py（脚本走
+# git apply 但 SGL_PARENT 可能不是 git 仓、或者命中 already-applied/adopt
+# 早退路径没有 apply_exact）。用 grep 在落盘后的文件里直接确认三个字段：
+SGLANG_DIR=$(python -c "import importlib.util, os; print(os.path.dirname(os.path.dirname(importlib.util.find_spec('sglang').origin)))")
+SERVER_ARGS="$SGLANG_DIR/sglang/srt/server_args.py"
+if ! grep -q 'enable_spec_capture: A\[' "$SERVER_ARGS" \
+   || ! grep -q 'spec_capture_aux_layer_ids: A\[' "$SERVER_ARGS" \
+   || ! grep -q 'spec_capture_method: A\[' "$SERVER_ARGS"; then
+    echo "smoke: FAILED - spec-capture patch did not add enable_spec_capture fields to $SERVER_ARGS" >&2
+    echo "smoke:   (apply_sglang_spec_capture_patch.sh returned 0 but server_args.py lacks the fields)" >&2
+    tail -50 /tmp/smoke-patch.log >&2 || true
+    exit 1
+fi
 echo "smoke: patches + apt deps applied"
 ```
 

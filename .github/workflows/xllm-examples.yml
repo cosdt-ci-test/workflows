@@ -258,9 +258,9 @@ jobs:
       TRIGGER: ${{ needs.monitor.outputs.trigger }}
       TARGET_REPO: ${{ needs.monitor.outputs.target_repo }}
       TARGET_REF: ${{ needs.monitor.outputs.target_ref }}
-      IMAGE: swr.cn-south-1.myhuaweicloud.com/ascendhub/xllm:v0.10.1-ascend
+      IMAGE: swr.cn-south-1.myhuaweicloud.com/ascendhub/xllm-ai:xllm-dev-a2-arm-cann9-20260605
     container:
-      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/xllm:v0.10.1-ascend
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/xllm-ai:xllm-dev-a2-arm-cann9-20260605
       options: >-
         --shm-size=64g
         --device=/dev/davinci_manager --device=/dev/devmm_svm --device=/dev/hisi_hdc

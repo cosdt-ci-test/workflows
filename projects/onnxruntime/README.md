@@ -58,6 +58,10 @@ ORT 从源码编 CANN 要数小时。产物按目标 commit SHA 放。
 
 workflow 的 `max-parallel` 是 1。两条 job 共用这份缓存，并行会抢同一把锁并打满编译机。
 
+## cmake FetchContent 镜像
+
+`setup_example.sh` 在编译前填充 `/root/.cache/cosdt-ci-test/onnxruntime/cmake-mirror/`。布局与 ORT 的 `--cmake_deps_mirror_dir` 约定一致：`cmake/deps.txt` 里每条 `https://` URL 对应 `<mirror>/<去掉 https:// 的 URL>`。github.com 和 codeload.github.com 先走 `https://gh-proxy.test.osinfra.cn/<原 URL>`，失败再直连。下完按 deps.txt 的 SHA1 校验，错了删除。单文件失败只告警，cmake 会回退在线下载。`www.nuget.org` 条目跳过（Windows 遥测，本配置用不到）。已命中 ORT 编译缓存的暖跑不会再填镜像。
+
 ## 触发
 
 `onnxruntime-examples.yml` 有两种入口。`monitor` 跑在 `ubuntu-latest`，不占 NPU。
@@ -76,7 +80,7 @@ monitor 另外盯 `onnxruntime/core/providers/cann`。EP 源码不是 example �
 
 ## Quick Start
 
-文档在 `docs/Quick-start-Ascend.md`。装的是 `onnxruntime-cann==1.24.4`，索引用 `https://repo.huaweicloud.com/repository/pypi/simple`。昇腾专用索引没有这个包。这个 wheel 按 NumPy 1.x 编，文档钉 `numpy<2`。
+文档在 `docs/Quick-start-Ascend.md`。装的是 `onnxruntime-cann==1.24.4`，并装 `decorator`、`scipy>=1.11,<1.15`、`attrs`、`psutil`。索引用 `https://repo.huaweicloud.com/repository/pypi/simple`。昇腾专用索引没有 `onnxruntime-cann`。这个 wheel 按 NumPy 1.x 编，文档钉 `numpy<2`。不装那四个包时，会话能建，`sess.run()` 会在 `aclgrphBuildInitialize` / `aclopCompileAndExecute` 上红——根因是 `import tbe` 缺依赖，不是 wheel 与 CANN 9.1.0 不兼容。
 
 创建会话时只请求 `CANNExecutionProvider`，并关掉 fallback。`get_providers()` 仍可能同时列出 CPU。那是注册表，不是「请求了 CPU」。
 
@@ -84,8 +88,7 @@ monitor 另外盯 `onnxruntime/core/providers/cann`。EP 源码不是 example �
 
 coder 上（A2-910B，CANN 9.1.0，无 docker，不是 CI 镜像）目前测到：
 
-- `onnxruntime-cann==1.24.4` + CPython 3.12 + `numpy<2`：`get_available_providers()` 含 `CANNExecutionProvider`，也能建起关掉 fallback 的 `InferenceSession`。不钉 `numpy<2` 时 import 会炸。
-- 同一 session 上跑最小 Add 图失败：`ge::aclgrphBuildInitialize` 返回 `CANN failure -1`。逻辑卡 0 和 1 都一样。`npu-smi` 两张卡 HBM 约 31 GiB / 32 GiB，进程表是空的。Quick Start 的 `install` / `providers` / `make-model` 三块在 NPU 上按字面通过。完整 unittest 红在 `infer`。文档形状仍是 pip wheel，没有改成源码编 wheel。
+- `onnxruntime-cann==1.24.4` + CPython 3.12 + `numpy<2` + `decorator` / `scipy>=1.11,<1.15` / `attrs` / `psutil`：`get_available_providers()` 含 `CANNExecutionProvider`，关掉 fallback 的最小 Add 推理得到 `[4.0, 6.0]`。不钉 `numpy<2` 时 import 会炸。只装 wheel、不装那四个包时，`import tbe` 失败，`sess.run()` 报 `ge::aclgrphBuildInitialize` 或 `aclopCompileAndExecute("Add")`。
 - `--use_cann` 在 CANN 9.1.0 + gcc-12 + cmake 3.31 上能编过，并链出 `libonnxruntime_providers_cann.so` 和 `onnxruntime_provider_test`。
 - `cann-gtest`：`CannExecutionProviderTest.FunctionTest` 能匹配到并在 NPU=0 上跑。官方 `run_example.sh` 路径上的失败是 `aclrtAllocatorGetByStream failed. Parameter stream is invalid`。环境已就绪（CANN 已 source、`--use_cann` 编过、filter 命中）。这是诚实红，不是「编错二进制」或假绿。空 `--gtest_filter` 被守卫判红（`0 tests from 0 test suites`）。不 source CANN 时加载 `libonnxruntime_providers_cann.so` 失败（缺 `libmsprofiler.so`），不会假绿。
 - `cmake-consumer`：绿。日志有 `ONNX Runtime version: 1.30.0` 和 `Result: PASS`。默认 SessionOptions，没有 NPU 锚点。

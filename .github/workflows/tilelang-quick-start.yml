@@ -1,0 +1,98 @@
+# tilelang quick start guard - project thin trigger.
+#
+# Calls the common engine .github/workflows/quick-start-template.yml;
+# this file only declares what varies per project: schedule,
+# concurrency, runner, container image + options, upstream repo,
+# monitored doc, and the test entry command. The guard loop, cache
+# I/O, state relay and publishing all live in the engine. See the
+# engine's `workflow_call.inputs` block for the full input contract.
+#
+# Engine-fixed behaviours this trigger relies on (declared in the
+# engine, NOT here):
+#   * cache key prefix: monitor-state-tilelang-  (from inputs.project)
+#   * artifact name:    tilelang-quick-start-<run_id>
+#   * result.json is written by the engine and validated against
+#     schemas/result.schema.json before upload.
+#
+# NOTE: only workflow_dispatch is enabled for now (per spec: same
+# onboarding rhythm as llama.cpp / whisper.cpp / trl / timm). Once the
+# pipeline runs green and stable, re-enable the schedule block below
+# to start the periodic monitor loop. Until then, the engine's
+# schedule-only steps (monitor / record-monitor-outcome / cache save)
+# simply never run.
+#
+# No ModelScope bind mount: the doc flow is a pure operator run
+# (random tensors), there are no model weights to cache. The
+# self-hosted NPU runner (linux-aarch64-a2-1) auto-passes /dev/davinci*
+# into the container via the cluster device-plugin.
+#
+# Upstream is tile-ai/tilelang-ascend (the Ascend fork), NOT the main
+# tile-ai/tilelang repo: the main repo has no NPU backend, so guarding
+# it would say nothing about Ascend compatibility. The engine's
+# /releases/latest poll excludes prereleases and resolves to the
+# latest stable tag (e.g. v0.1.1.010-release).
+
+name: tilelang-quick-start
+
+concurrency:
+  # Fixed group (NOT per-run format('manual-{0}', github.run_id)): both
+  # bind-mounts below are host-shared state. /data/ci-cache/pip is
+  # shared with the other projects, and the tilelang wheelhouse gets
+  # mkdir/cp/prune from the doc's build block - concurrent runs would
+  # race on both (pip cache corruption / wheelhouse prune vs cp).
+  # Same convention as lm-evaluation-harness and stable-diffusion-webui.
+  group: ${{ github.event_name == 'schedule' && 'tilelang-quick-start-schedule' || 'tilelang-quick-start-manual' }}
+  # cancel-in-progress: false because (1) a schedule run cancelled
+  # mid-way loses its outcome writeback - the outcome is what makes
+  # the retry mechanism work, and the 'if: always()' guard isn't
+  # enough when the container is being torn down; (2) a queued run
+  # simply waits for the previous one instead of being cancelled.
+  cancel-in-progress: false
+
+on:
+  # schedule: deliberately NOT enabled yet - see the header note.
+  # Enable with e.g. `- cron: '45 */3 * * *'` once the pipeline is
+  # proven stable on manual runs.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tilelang-quick-start:
+    uses: ./.github/workflows/quick-start-template.yml
+    with:
+      # Namespaces cache keys (monitor-state-tilelang-*), artifacts
+      # (tilelang-quick-start-<run_id>) and the test working dir
+      # (workflows/projects/tilelang).
+      project: tilelang
+      # Self-hosted NPU runner for the test job only; the engine pins
+      # the cache I/O jobs (restore-cache / publish-and-persist) to
+      # GitHub-hosted ubuntu-latest.
+      test_runner: '["linux-aarch64-a2-1"]'
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+      # Shared pip wheel cache (cross-project, same convention as
+      # lm-evaluation-harness / stable-diffusion-webui / xllm /
+      # transformers): repeat runs hit the wheel and pip only unpacks.
+      # The tilelang wheelhouse holds source-built wheels keyed by
+      # upstream commit (see the doc's build block): same-commit reruns
+      # skip the ~15 min C++ build entirely. Mounted at a fixed
+      # container path so the doc can probe it with a plain [ -d ].
+      # Still no ModelScope bind mount: pure operator run, no weights.
+      container_options: >-
+        --volume=/data/ci-cache/pip:/root/.cache/pip
+        --volume=/data/ci-cache/tilelang-wheelhouse:/tilelang-wheelhouse
+      # Doc flow builds tilelang-ascend from source (TVM submodule
+      # clone + C++ compile) and JIT-compiles/runs a GEMM kernel;
+      # 180 min covers the cold build with headroom.
+      timeout_minutes: 180
+      upstream_repo: tile-ai/tilelang-ascend
+      # Raw URL the engine's monitor hashes and the test fetches;
+      # doc-hash state lives under the monitor-state-tilelang- cache
+      # prefix.
+      doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/tilelang/docs/Quick-start-Ascend.md
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/tilelang/docs/Quick-start-Ascend.md
+      # cwd is workflows/projects/tilelang; env contract (MONITORED_DOC_URL /
+      # NPU_READY) is injected by the engine. All project env prep and
+      # installs live in the test subclass's prepare_environment hook.
+      test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1

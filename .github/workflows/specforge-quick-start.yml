@@ -64,14 +64,17 @@ jobs:
       # idle for HCCL buffers. A 1-card runner is too small (capture +
       # trainer on one device would OOM on Qwen3.5-4B + activations).
       test_runner: '["linux-aarch64-a2-4"]'
-      image: quay.io/ascend/sglang:v0.5.18-cann9.0.0-910b
+      image: swr.cn-southwest-2.myhuaweicloud.com/base_image/dockerhub/lmsysorg/sglang:v0.5.18-cann9.0.0-910b
       container_options: >-
-      # Doc body does: install torch 2.11.0 + torch_npu 2.11.0 +
-      # sglang 0.5.14 + modelscope + specforge from source, then runs
-      # the inline smoke block in Quick-start-Ascend.md (one big #test
-      # inside <details>) which downloads Qwen3.5-4B from ModelScope,
-      # applies SGLang capture patches, starts mooncake + patched
-      # SGLang capture server + 1-step specforge train. 180 min covers
+      # Doc body does: assume image pre-installed torch 2.10.0 + torch_npu 2.10.0 +
+      # sglang 0.5.18 (validated by check-torch), install modelscope +
+      # mooncake-transfer-engine + specforge from source, then runs
+      # the 5 inline smoke #test blocks in Quick-start-Ascend.md
+      # (smoke-download-model / smoke-apply-patches /
+      # smoke-start-mooncake / smoke-start-sglang / smoke-train) which
+      # download Qwen3.5-4B from ModelScope, apply SGLang capture
+      # patches (--target v0.5.18), start mooncake + patched SGLang
+      # capture server, then run 1-step specforge train. 180 min covers
       # cold-cache model snapshot + SGLang first-time graph compile
       # (5-10 min on NPU) + the 1-step train.
       timeout_minutes: 180

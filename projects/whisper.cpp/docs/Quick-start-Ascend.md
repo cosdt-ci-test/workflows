@@ -92,16 +92,50 @@ build/bin/whisper-cli
 
 ## 4. 准备模型（ggml 格式）
 
-whisper.cpp 的推理输入是 **ggml 格式**的模型文件。上游提供 `models/download-ggml-model.sh` 从 Hugging Face 下载；国内直连 huggingface.co 可能超时，下面改用镜像站 hf-mirror.com 的直链下载 `tiny.en`（英文小模型，约 77 MB），保存到上游约定的 `models/` 目录。
+whisper.cpp 的推理输入是 ggml 格式的模型文件。国内直连 Hugging Face 可能超时，下面从 ModelScope 下载 `tiny.en`（英文小模型，约 77 MB）到上游约定的 `models/` 目录。下载完成后用文件头 magic 校验：正确 ggml 文件的前 4 字节为 `lmgg`；若得到 HTML，说明 URL 错误或下载到了错误页。
 
-下载完成后用文件头 magic 校验——正确 ggml 模型文件的前 4 字节为 `lmgg`；若得到 HTML，说明 URL 错误或下载到了错误页。
+<!--
+```shell #test-setup
+set -euo pipefail
+ci='/root/.cache/cosdt-ci-test/whisper.cpp'
+cached="$ci/ggml-tiny.en.bin"
+sum='921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f'
+mkdir -p whisper.cpp/models
+if [ -f "$cached" ]; then
+  if echo "$sum  $cached" | sha256sum -c >/dev/null 2>&1; then
+    cp -a "$cached" whisper.cpp/models/ggml-tiny.en.bin
+  else
+    rm -f "$cached"
+  fi
+fi
+```
+-->
 
 ```shell #test id="download-model"
 cd whisper.cpp
-curl -fL -o models/ggml-tiny.en.bin \
-  https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin
+mkdir -p models
+if [ ! -f models/ggml-tiny.en.bin ]; then
+  curl -fL --retry 3 --retry-delay 5 --connect-timeout 30 \
+    -o models/ggml-tiny.en.bin \
+    https://www.modelscope.cn/models/cjc1887415157/whisper.cpp/resolve/master/ggml-tiny.en.bin
+fi
 head -c 4 models/ggml-tiny.en.bin
 ```
+
+<!--
+```shell #test-setup
+set -euo pipefail
+ci='/root/.cache/cosdt-ci-test/whisper.cpp'
+src='whisper.cpp/models/ggml-tiny.en.bin'
+sum='921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f'
+echo "$sum  $src" | sha256sum -c
+if [ ! -f "$ci/ggml-tiny.en.bin" ]; then
+  mkdir -p "$ci"
+  cp -a "$src" "$ci/ggml-tiny.en.bin.part"
+  mv "$ci/ggml-tiny.en.bin.part" "$ci/ggml-tiny.en.bin"
+fi
+```
+-->
 
 输出结果如下：
 
@@ -181,6 +215,6 @@ cd whisper.cpp && ASCEND_RT_VISIBLE_DEVICES=0 ./build/bin/whisper-server \
 | --- | --- | --- |
 | `cmake` 报 SoC 探测失败 | 未 `source set_env.sh`，或 `npu-smi` 不在 `PATH` | 重做第 1–2 节 |
 | `head -c 4` 不是 `lmgg` | 下载到了 HTML 错误页或文件被截断 | 检查 URL、网络与磁盘空间后重下 |
-| huggingface.co 下载超时 | 国内直连受限 | 用第 4 节的 hf-mirror.com 直链 |
+| ModelScope 返回 404 或下载失败 | 镜像路径变更 | 改用 `https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin`，或上游 Hugging Face 直链 |
 | 转写退出 0 但无 `CANN0` | NPU 未挂载或 `--device` 指向不可用设备 | 检查 `ASCEND_RT_VISIBLE_DEVICES` 与 `npu-smi info` |
 | 命令打印 usage 后退出 0 | 参数拼写错误（whisper-cli 对未知参数打印用法后以 0 退出） | 对照 `./build/bin/whisper-cli -h` 检查参数 |

@@ -45,51 +45,31 @@ jobs:
       # the cache I/O jobs (restore-cache / publish-and-persist) to
       # GitHub-hosted ubuntu-latest.
       test_runner: '["linux-aarch64-a2-1"]'
-      # Bare CANN 9.1.0 image (matches peft / diffusers / most projects).
-      # Rationale: the doc now does **source build** of vllm (see
-      # ``### 安装 vllm-ascend``): clone vllm@v0.23.0, run
-      # ``VLLM_TARGET_DEVICE=empty uv pip install --no-deps --no-build-isolation
-      # -e /root/deps/vllm``, then install vllm-ascend==0.23.0 wheel from
-      # /variant index, then triton-ascend==3.2.2 from
-      # ``--find-links https://repo.huaweicloud.com/ascend/repos/pypi/triton-ascend/``.
-      # Why source build (not PyPI wheel): PyPI ``vllm==0.23.0`` aarch64 wheel
-      # is CUDA-only (``vllm/_C.abi3.so`` links ``libcuda.so.1`` /
-      # ``libcudart.so.13``, ships ``cumem_allocator.abi3.so`` /
-      # ``_vllm_fa3_C.abi3.so``), and its METADATA pins ``torch==2.11.0``
-      # which collides with the doc's ``torch==2.10.0+cpu``. Empty build
-      # skips CUDA kernel compilation; vllm-ascend registers itself as a
-      # platform plugin via ``vllm.platform_plugins`` entry point and
-      # injects NPU fused ops into ``torch.ops.vllm`` namespace at import.
-      # Why not the ``quay.io/ascend/vllm-ascend:v0.23.0`` image: it ships a
-      # pre-built stack but we want to keep the bare-CANN invariant across
-      # all projects so a single set of cache keys / pip index URLs work
-      # everywhere, and we want the doc's steps to be reproducible locally
-      # without pulling a 4 GB image. Bare CANN lets the doc install the
-      # exact torch stack itself (``prepare_environment`` no longer touches
-      # torch). ``--no-deps`` is load-bearing on the vllm + vllm-ascend
-      # installs: without it pip tries to resolve vllm's ``torch==2.11.0``
-      # against torch_npu's ``torch==2.10.0`` pin and fails with
-      # ResolutionImpossible (CI run 33031352941). Source build is
-      # additionally heavy: ``VLLM_TARGET_DEVICE=empty uv pip install -e
-      # /root/deps/vllm`` alone takes 25-35 min on aarch64 cold; budgeted
-      # in ``timeout_minutes`` below.
-      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+      # Pre-built vllm-ascend v0.23.0 image (Huaweicloud mirror of the
+      # upstream ``quay.io/ascend/vllm-ascend:v0.23.0`` image). Ships
+      # vllm==0.23.0 + vllm-ascend==0.23.0 + triton-ascend==3.2.2 +
+      # triton 3.5.0 + torch 2.10.0+cpu + torch_npu 2.10.0.post4 + CANN
+      # 9.1.0 pre-installed, so the doc's ``## 前置安装`` section only
+      # verifies versions + installs modelscope — no source build, no
+      # pip install of the vllm / vllm-ascend / triton-ascend wheels.
+      # Huaweicloud mirror chosen for cluster egress (cluster can't
+      # reach quay.io directly). New convention for projects whose test
+      # body uses vllm-ascend; bare CANN remains for projects that
+      # don't (peft / diffusers / etc.).
+      image: swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/vllm-ascend/vllm-ascend:v0.23.0
       container_options: >-
         --volume=/data/ci-cache/modelscope/speculators:/root/.cache/modelscope
       # 4-step pipeline budget (convert → extract_hidden_states →
       # torchrun train → vllm-ascend serve + curl smoke):
-      #   vllm source build (cold, 25-35 min on aarch64, ~5 min once cached)
-      #   vllm-ascend wheel + triton-ascend (5 min cold)
       #   Step 2 vllm.LLM() offline: 5-7 min (Qwen3-8B weight load + 10 prompts)
       #   Step 3 torchrun 1 epoch × 10 samples: 8-12 min (single-card A2)
       #   Step 4 vllm-ascend serve + curl: 3-4 min cold + 30s smoke
       # Plus 17 GB ModelScope first-pulls on cold cache (DFlash ~1 GB +
       # Qwen3-8B ~16 GB). DEFAULT_COMMAND_TIMEOUT=1800 (30 min) caps each
-      # #test block. 240 min covers worst-case cold vllm source build +
-      # cold caches + retries without killing the run. Drop back to 180
-      # once vllm build is cached (persistent cluster cache should keep
-      # /root/deps/vllm warm across runs).
-      timeout_minutes: 240
+      # #test block. 180 min covers worst-case cold caches + retries
+      # without killing the run (no more vllm source build on cold path —
+      # image ships it pre-installed).
+      timeout_minutes: 180
       upstream_repo: vllm-project/speculators
       # speculators is a new project — no legacy workflow to migrate
       # from. The monitor-state-speculators- cache prefix is owned by

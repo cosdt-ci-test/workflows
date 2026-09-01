@@ -101,13 +101,47 @@ ensure_torch_stack
 python -c "import torch, torch_npu; print('torch:', torch.__version__, 'torch_npu:', torch_npu.__version__, 'npu_count:', torch.npu.device_count())"
 npu-smi info
 
-# Verify xllm import (official image pre-installs xllm)
+# Build xllm from source (dev image doesn't include xllm)
+XLLM_BUILD_CACHE=/opt/xllm-build
+XLLM_SRC=/tmp/xllm-src
+XLLM_VERSION="v0.10.1"
+
+install_xllm_from_cache() {
+  local whl
+  whl=$(find "$XLLM_BUILD_CACHE" -name "xllm-*.whl" 2>/dev/null | head -1)
+  if [ -n "$whl" ]; then
+    echo "setup: installing xllm from cache: $whl"
+    python -m pip install "$whl"
+    return 0
+  fi
+  return 1
+}
+
+build_xllm() {
+  echo "setup: building xllm ${XLLM_VERSION} from source..."
+  git clone --branch "${XLLM_VERSION}" --depth 1 \
+    https://github.com/xLLM-AI/xllm.git "${XLLM_SRC}"
+  cd "${XLLM_SRC}"
+  git submodule update --init --recursive
+  python setup.py bdist_wheel
+  mkdir -p "${XLLM_BUILD_CACHE}"
+  cp dist/xllm-*.whl "${XLLM_BUILD_CACHE}/"
+  python -m pip install "${XLLM_BUILD_CACHE}/xllm-*.whl"
+  cd -
+}
+
+# Try cache first, then build
+if ! install_xllm_from_cache; then
+  build_xllm
+fi
+
+# Verify xllm import
 python -c "import xllm; print('xllm version:', xllm.__version__)"
 
 "setup_${PROFILE}"
 
-# Default profile: official xllm image pre-installs xllm; just verify and ensure model.
+# Default profile: build xllm and ensure model.
 setup_default() {
-  echo "profile=default: official xllm image pre-installs xllm"
+  echo "profile=default: building xllm from source"
   ensure_model
 }

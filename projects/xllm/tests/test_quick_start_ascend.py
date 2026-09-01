@@ -137,7 +137,49 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 check=True,
             )
 
-        # 2) Verify xllm import (official image pre-installs xllm)
+        # 2) Build xllm from source (dev image doesn't include xllm)
+        xllm_build_cache = '/opt/xllm-build'
+        xllm_src = '/tmp/xllm-src'
+        xllm_version = 'v0.10.1'
+
+        # Check if cached build exists
+        if os.path.isdir(xllm_build_cache) and any(
+            f.startswith('xllm') for f in os.listdir(xllm_build_cache)
+        ):
+            print(f'setup: xllm build cache found at {xllm_build_cache}; installing from cache')
+            subprocess.run(
+                ['bash', '-c', f'python -m pip install {xllm_build_cache}/xllm-*.whl'],
+                check=True,
+            )
+        else:
+            print(f'setup: building xllm {xllm_version} from source...')
+            subprocess.run(
+                ['git', 'clone', '--branch', xllm_version, '--depth', '1',
+                 'https://github.com/xLLM-AI/xllm.git', xllm_src],
+                check=True,
+            )
+            subprocess.run(
+                ['git', 'submodule', 'update', '--init', '--recursive'],
+                cwd=xllm_src, check=True,
+            )
+            # Build wheel
+            subprocess.run(
+                ['python', 'setup.py', 'bdist_wheel'],
+                cwd=xllm_src, check=True,
+            )
+            # Copy wheel to cache
+            os.makedirs(xllm_build_cache, exist_ok=True)
+            subprocess.run(
+                ['bash', '-c', f'cp {xllm_src}/dist/xllm-*.whl {xllm_build_cache}/'],
+                check=True,
+            )
+            # Install from cache
+            subprocess.run(
+                ['bash', '-c', f'python -m pip install {xllm_build_cache}/xllm-*.whl'],
+                check=True,
+            )
+
+        # Verify xllm import
         print('setup: verifying xllm import')
         subprocess.run(
             ['python', '-c', 'import xllm; print("xllm:", xllm.__version__)'],

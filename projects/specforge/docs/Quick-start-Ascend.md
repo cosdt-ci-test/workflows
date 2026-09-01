@@ -337,7 +337,7 @@ fi
 SGLANG_DIR=$(python -c "import importlib.util, os; print(os.path.dirname(os.path.dirname(importlib.util.find_spec('sglang').origin)))")
 SINK_FILE="$SGLANG_DIR/sglang/srt/spec_capture_sink.py"
 if [[ -f "$SINK_FILE" ]] && ! grep -q 'segment_to_mount' "$SINK_FILE"; then
-    if ! python3 - "$SINK_FILE" <<'PY' >/tmp/smoke-ascend.log 2>&1
+    if ! python - "$SINK_FILE" <<'PY' >/tmp/smoke-ascend.log 2>&1
 import sys
 path = sys.argv[1]
 with open(path) as f:
@@ -461,12 +461,12 @@ if ! grep -q 'enable_spec_capture: A\[' "$SERVER_ARGS" \
     echo "smoke:   tail /tmp/smoke-patch.log:" >&2
     tail -50 /tmp/smoke-patch.log >&2 || true
     echo "smoke: last-resort: apply server_args.py hunk directly via Python" >&2
-    # 不能写 python3 ... <<'PY' || { ... }：heredoc body 从 <<'PY' 后一直读到 PY，
+    # 不能写 python ... <<'PY' || { ... }：heredoc body 从 <<'PY' 后一直读到 PY，
     # `||` 和 brace group 都被吞进 stdin 当 python 源码（python 报 syntax error 就
-    # exit 了，brace group 永远不执行）。改用 python3 退出后 recheck grep 的方式
-    # 兜底：python3 退出后 grep enable_spec_capture 字段是否落盘，不在就报错并
-    # 把 python3 stderr 一并贴出来。
-    python3 - "$SERVER_ARGS" >/tmp/smoke-py-patch.out 2>/tmp/smoke-py-patch.err <<'PY'
+    # exit 了，brace group 永远不执行）。改用 python 退出后 recheck grep 的方式
+    # 兜底：python 退出后 grep enable_spec_capture 字段是否落盘，不在就报错并
+    # 把 python stderr 一并贴出来。
+    python - "$SERVER_ARGS" >/tmp/smoke-py-patch.out 2>/tmp/smoke-py-patch.err <<'PY'
 import sys, re
 path = sys.argv[1]
 with open(path) as f:
@@ -510,7 +510,7 @@ print('smoke: server_args.py patched in-place via python (added 3 fields)')
 PY
     if ! grep -q 'enable_spec_capture: A\[' "$SERVER_ARGS"; then
         echo "smoke: FAILED - even direct python patch did not land enable_spec_capture" >&2
-        echo "smoke:   python3 stderr:" >&2
+        echo "smoke:   python stderr:" >&2
         tail -30 /tmp/smoke-py-patch.err >&2 || true
         exit 1
     fi
@@ -543,7 +543,7 @@ nohup mooncake_master \
     >/tmp/smoke-mooncake.log 2>&1 &
 MOONCAKE_PID=$!
 mooncake_ready() {
-    python3 -c "
+    python -c "
 import socket, sys
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 s.settimeout(0.5)

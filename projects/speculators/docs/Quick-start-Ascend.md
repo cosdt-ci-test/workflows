@@ -336,6 +336,12 @@ cd /root/speculators
 # KV_LEN=4136 BlockMask backward 正常）。
 export TORCHDYNAMO_DISABLE=1
 
+# ASCEND_LAUNCH_BLOCKING=1 — 让 NPU kernel 错误同步上浮为 Python 异常；不加的话
+# CANN ERR99999 是 silent kill，Python 进程被 signal 干掉后没有 traceback 进
+# /tmp/train.log（只剩两段无害的 transformers NumPy 告警 + resource_tracker
+# semaphore 清理告警），下次失败没法定位是哪个 op 炸的
+export ASCEND_LAUNCH_BLOCKING=1
+
 # 绕 torch 2.10 的 flex_attention device allowlist。torch/nn/attention/flex_attention.py:1329
 # 硬编码 supported_devices={"cuda","cpu","xpu","hpu"}，NPU 不在 → flex_attention
 # 一进就 raise。配合 TORCHDYNAMO_DISABLE=1：绕过之后 flex_attention 走 unfused

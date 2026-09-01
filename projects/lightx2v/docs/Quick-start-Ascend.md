@@ -441,7 +441,7 @@ configs/distill/wan22/wan_moe_i2v_distill_int8_4step_ulysses_npu.json
 
 ### 单卡 32 GB 适配：改 config
 
-适配逻辑：`high/low_noise_quantized_ckpt` 换成 `$PROJECT_ROOT/models/` 下 split 目录绝对路径（config 默认值是单文件形态 `models/Wan2.2-Distill-Models/wan2.2_i2v_A14b_*_int8_*.safetensors`，ModelScope 只同步了 split 目录形态，不换路径直接 FileNotFoundError；load_safetensors 原生支持目录）；`clip_original_ckpt` 指向从 Wan2.1-I2V-14B-480P 单拉的 CLIP 文件（Wan2.2 base 仓库不带这文件，不指定的话 runner 走 find_torch_model_path 在 model_path 下找，两处都找不到直接 FileNotFoundError）；720P → 480P（activation/KV 省 ~40%）；开 T5/VAE cpu_offload（不释放这俩 32GB 必 OOM）+ block 粒度 DIT offload 进一步省；单卡 ulysses 没意义删掉 parallel；rife 插帧要单独下模型，不需要就删。
+适配逻辑：`high/low_noise_quantized_ckpt` 换成 `$PROJECT_ROOT/models/` 下 split 目录绝对路径（config 默认值是单文件形态 `models/Wan2.2-Distill-Models/wan2.2_i2v_A14b_*_int8_*.safetensors`，ModelScope 只同步了 split 目录形态，不换路径直接 FileNotFoundError；load_safetensors 原生支持目录）；`clip_original_ckpt` 指向从 Wan2.1-I2V-14B-480P 单拉的 CLIP 文件（Wan2.2 base 仓库不带这文件，不指定的话 runner 走 find_torch_model_path 在 model_path 下找，两处都找不到直接 FileNotFoundError）；`self_attn_1_type` 从 `rainfusion_attn` 改为 `npu_flash_attn`——rainfusion 是稀疏注意力加速项,其 NPU 实现依赖 MindIE-SD 套件(华为 MindIE 组件,不在 PyPI、未随 CANN 镜像提供),smoke 功能验证用标准 NPU flash attention 即可,`rainfusion_attn_setting` 一并清除；720P → 480P（activation/KV 省 ~40%）；开 T5/VAE cpu_offload（不释放这俩 32GB 必 OOM）+ block 粒度 DIT offload 进一步省；单卡 ulysses 没意义删掉 parallel；rife 插帧要单独下模型，不需要就删。
 
 ```shell #test-setup id="lightx2v-i2v-cfg-adapt"
 export PROJECT_ROOT=${PROJECT_ROOT:-/home/coder/work/lightx2v-test}
@@ -454,6 +454,8 @@ proj_models = os.environ['PROJECT_ROOT'] + '/models'
 cfg['high_noise_quantized_ckpt'] = proj_models + '/Wan2.2-Distill-Models/wan2.2_i2v_A14b_high_noise_int8_lightx2v_4step_1030_split'
 cfg['low_noise_quantized_ckpt']  = proj_models + '/Wan2.2-Distill-Models/wan2.2_i2v_A14b_low_noise_int8_lightx2v_4step_split'
 cfg['clip_original_ckpt'] = proj_models + '/Wan2.1-I2V-14B-480P/models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth'
+cfg['self_attn_1_type'] = 'npu_flash_attn'
+cfg.pop('rainfusion_attn_setting', None)
 cfg['target_height'] = 480
 cfg['target_width']  = 832
 cfg['t5_cpu_offload']  = True
@@ -464,7 +466,7 @@ cfg.pop('parallel', None)
 cfg.pop('video_frame_interpolation', None)
 cfg_path.write_text(json.dumps(cfg, indent=4))
 print('cfg adapted (单卡 32GB 适配):')
-for k in ['target_height', 'target_width', 'cpu_offload', 't5_cpu_offload', 'vae_cpu_offload', 'high_noise_quantized_ckpt', 'clip_original_ckpt']:
+for k in ['target_height', 'target_width', 'cpu_offload', 't5_cpu_offload', 'vae_cpu_offload', 'high_noise_quantized_ckpt', 'clip_original_ckpt', 'self_attn_1_type']:
     print(f'  {k}: {cfg[k]}')
 "
 ```

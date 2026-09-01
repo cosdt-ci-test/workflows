@@ -440,20 +440,76 @@ apt-get install -qq -y --no-install-recommends \
 
 # 防御性 verify：base patch 必须在 server_args.py 引入 enable_spec_capture /
 # spec_capture_aux_layer_ids / spec_capture_method 三个字段，launch_server 的
-# argparse 才能识别 --enable-spec-capture 这一组 CLI flag。run 33486096843
-# apply 脚本 exit 0 但 launch_server 报 'unrecognized arguments:
-# --enable-spec-capture'——patch 显然没真正落到 server_args.py（脚本走
-# git apply 但 SGL_PARENT 可能不是 git 仓、或者命中 already-applied/adopt
-# 早退路径没有 apply_exact）。用 grep 在落盘后的文件里直接确认三个字段：
+# argparse 才能识别 --enable-spec-capture 这一组 CLI flag。run 33493594121 复现：
+# apply 脚本 stdout 'spec-capture patch v0.5.18 applied at
+# /sgl-workspace/sglang/python/sglang'——但同路径 grep 找不到字段。怀疑
+# `git -C $SGL_PARENT apply` 在 site-packages（非 git 仓）下报成功但
+# server_args.py hunk 没真正落盘。先 dump 现场，再 fallback 到 Python 字
+# 符串替换直接插字段（沿用 ascend companion 的不依赖 git 的稳健路径）。
 SGLANG_DIR=$(python -c "import importlib.util, os; print(os.path.dirname(os.path.dirname(importlib.util.find_spec('sglang').origin)))")
 SERVER_ARGS="$SGLANG_DIR/sglang/srt/server_args.py"
 if ! grep -q 'enable_spec_capture: A\[' "$SERVER_ARGS" \
    || ! grep -q 'spec_capture_aux_layer_ids: A\[' "$SERVER_ARGS" \
    || ! grep -q 'spec_capture_method: A\[' "$SERVER_ARGS"; then
     echo "smoke: FAILED - spec-capture patch did not add enable_spec_capture fields to $SERVER_ARGS" >&2
-    echo "smoke:   (apply_sglang_spec_capture_patch.sh returned 0 but server_args.py lacks the fields)" >&2
+    echo "smoke: diagnostic dump:" >&2
+    echo "smoke:   SGLANG_DIR=$SGLANG_DIR" >&2
+    echo "smoke:   SGLANG_DIR/.git present? $(test -d "$SGLANG_DIR/.git" && echo YES || echo NO)" >&2
+    echo "smoke:   APPLIED_COPY present? $(test -f "$SGLANG_DIR/sglang/.spec_capture_patch.applied" && echo YES || echo NO)" >&2
+    echo "smoke:   server_args.py size: $(wc -c < "$SERVER_ARGS")B" >&2
+    echo "smoke:   enable_spec_capture grep count: $(grep -c 'enable_spec_capture' "$SERVER_ARGS" 2>/dev/null || echo 0)" >&2
+    echo "smoke:   tail /tmp/smoke-patch.log:" >&2
     tail -50 /tmp/smoke-patch.log >&2 || true
-    exit 1
+    echo "smoke: last-resort: apply server_args.py hunk directly via Python" >&2
+    python3 - "$SERVER_ARGS" <<'PY' || {
+        echo "smoke: FAILED - direct python patch of server_args.py also failed" >&2
+        exit 1
+    }
+import sys, re
+path = sys.argv[1]
+with open(path) as f:
+    src = f.read()
+# Three fields are inserted as a block right after the LAST 'enable_return_routed_experts: A['
+# declaration (matches the v0.5.18 patch anchor context: 'enable_return_routed_experts: A['
+# appears right BEFORE 'enable_spec_capture: A[' in the patch hunk). Inserting after
+# 'enable_return_routed_experts' is structural — it's the same neighbour regardless of
+# upstream sglang's exact line numbers, so this survives the 0.5.18 -> 0.5.x minor drifts
+# the BSD patch is fragile to.
+fields_to_add = '''    enable_spec_capture: A[
+        bool,
+        "Enable server-side speculative-training capture (SpecForge DataFlow layout).",
+        NS("exec.features"),
+    ] = False
+    spec_capture_aux_layer_ids: A[
+        Optional[List[int]],
+        "Target layer ids whose hidden states are captured for spec-capture requests.",
+        NS("exec.features"),
+    ] = None
+    spec_capture_method: A[
+        str,
+        "Capture method for --enable-spec-capture: 'eagle3', 'dflash', or 'dspark'.",
+        NS("exec.features"),
+    ] = "eagle3"
+'''
+anchor = 'enable_return_routed_experts: A['
+if anchor not in src:
+    sys.exit("anchor 'enable_return_routed_experts: A[' not found in server_args.py")
+if 'enable_spec_capture: A[' in src:
+    sys.exit(0)  # already there
+# Insert AFTER the entire enable_return_routed_experts: A[ ... ] = False block.
+# Greedy: find the anchor, then advance past the closing '    ] = <val>\n' line.
+idx = src.index(anchor)
+end_of_block = src.index('\n    ] =', idx)
+advance_to_newline = src.index('\n', end_of_block)
+new_src = src[:advance_to_newline+1] + fields_to_add + src[advance_to_newline+1:]
+with open(path, 'w') as f:
+    f.write(new_src)
+print('smoke: server_args.py patched in-place via python (added 3 fields)')
+PY
+    if ! grep -q 'enable_spec_capture: A\[' "$SERVER_ARGS"; then
+        echo "smoke: FAILED - even direct python patch did not land enable_spec_capture" >&2
+        exit 1
+    fi
 fi
 echo "smoke: patches + apt deps applied"
 ```

@@ -300,11 +300,11 @@ ls exp/conformer/*.pt | head -5
 
 ```shell #test-result id="verify-train"
 exp/conformer/train.yaml
+exp/conformer/epoch_0.pt
 exp/conformer/epoch_1.pt
 exp/conformer/epoch_2.pt
 exp/conformer/epoch_3.pt
 exp/conformer/epoch_4.pt
-exp/conformer/epoch_5.pt
 ```
 
 ---

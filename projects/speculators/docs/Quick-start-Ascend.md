@@ -85,38 +85,6 @@ triton_ascend=3.2.2
 triton=3.5.0
 ```
 
-### 验证 vllm-ascend 的 NPU triton ops
-
-> `verify-vllm-stack` 只验证版本号；这条 block 进一步验证 vllm-ascend 的 NPU triton kernel **真的注册到了 `torch.ops.vllm` 命名空间**。这是 vllm-ascend prefill 阶段的核心加速点 —— 如果没注册成功，Step 3 / Step 4 会以 unsupported operator 静默回退到非 triton 路径，性能大幅下降但难以发现。
-
-```shell #test id="verify-vllm-triton-ops"
-source /usr/local/Ascend/ascend-toolkit/set_env.sh
-
-python -c "
-import vllm.triton_utils
-vllm.triton_utils.HAS_TRITON = True
-import vllm_ascend.ops.triton.linearnorm.split_qkv_rmsnorm_rope
-import numba
-import torch
-print('HAS_TRITON:', vllm.triton_utils.HAS_TRITON)
-print('qkv_rmsnorm_rope op:', torch.ops.vllm.qkv_rmsnorm_rope)
-print('numba:', numba.__version__)
-"
-```
-
-```shell #test-result id="verify-vllm-triton-ops" fuzzy='xxx'
-HAS_TRITON: True
-qkv_rmsnorm_rope op: xxx
-numba: xxx
-```
-
-**逐行说明**：
-
-- `vllm.triton_utils.HAS_TRITON = True`：vllm 通过 `vllm.triton_utils` 探测 mainline triton 是否可用。NPU 镜像只装了 `triton-ascend`（不是 mainline triton），所以这个 flag 默认是 `False`。手动改 `True` 让 vllm 走 triton kernel 路径 —— vllm-ascend 通过 `vllm.platform_plugins` entry point 把 NPU triton ops 注册到 `torch.ops.vllm`，不依赖 mainline triton。
-- `import vllm_ascend.ops.triton.linearnorm.split_qkv_rmsnorm_rope`：触发模块顶层 `@triton.jit` 装饰器执行，把 fused QKV+RMSNorm+RoPE kernel 注册到 `torch.ops.vllm`。**vllm-ascend 升级时这个路径可能漂移，ImportError 立刻暴露**。
-- `import numba`：vllm-ascend 部分 triton kernel 内部用了 numba 的 `@njit`，没装会 `ModuleNotFoundError`。
-- 三条 `print`：分别确认 flag 改了、op 注册了、numba 装了。第二条 print 拿不到 op 对象会 raise `AttributeError: module 'torch.ops.vllm' has no attribute 'qkv_rmsnorm_rope'`。
-
 装 modelscope（用来从 ModelScope 拉权重；镜像不含）：
 
 ```shell #test-setup

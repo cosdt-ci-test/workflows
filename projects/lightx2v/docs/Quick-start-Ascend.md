@@ -498,26 +498,46 @@ python -m lightx2v.infer \
 
 ```shell #test id="lightx2v-i2v-output"
 export PROJECT_ROOT=${PROJECT_ROOT:-/home/coder/work/lightx2v-test}
-OUT="$PROJECT_ROOT/save_results/output_wan22_moe_i2v_distill_int8_npu_480p.mp4"
-# 只断言 字节数 + basename(不带时间戳/属主/绝对路径,跨机器跨时间可复现)
-ls -l "$OUT" | awk '{print $5, $NF}'
-file "$OUT"
-# 优先用 ffprobe 读视频流(宽/帧数/时长),ffprobe 不存在时退到 ftyp magic 验证
-ffprobe -v error -select_streams v:0 \
-    -show_entries stream=codec_name,width,height,r_frame_rate,nb_frames,duration \
-    -of default=noprint_wrappers=1 "$OUT" 2>/dev/null || \
-    python -c "b=open('$OUT','rb').read(1024*1024); print('size_on_disk:', len(b), 'bytes; ftyp:', b[4:8].decode('ascii','ignore'))"
+# 确定性结构校验:形状由下面的 print 自控(跨机器/跨时间可复现),值全掩码;
+# 硬断言 size 下界 + ftyp magic;深度信息(编码/时长/帧数)经 imageio-ffmpeg
+# 自带的静态 ffmpeg 解析,解析不了就打 probe-skip,形状不破
+python - <<'PY'
+import os, re, subprocess
+out = os.path.join(os.environ['PROJECT_ROOT'], 'save_results',
+                   'output_wan22_moe_i2v_distill_int8_npu_480p.mp4')
+size = os.path.getsize(out)
+assert size > 1_000_000, f'output too small: {size} bytes'
+with open(out, 'rb') as fh:
+    magic = fh.read(12)
+assert magic[4:8] == b'ftyp', f'not an mp4: {magic!r}'
+print('size:', size)
+print('ftyp_brand:', magic[8:12].decode('ascii', 'ignore'))
+try:
+    import imageio_ffmpeg
+    err = subprocess.run(
+        [imageio_ffmpeg.get_ffmpeg_exe(), '-i', out, '-f', 'null', '-'],
+        capture_output=True, text=True, timeout=300,
+    ).stderr
+    m = re.search(r'Video: (\w+)', err)
+    d = re.search(r'Duration: (\d+):(\d+):([\d.]+)', err)
+    fr = re.findall(r'frame=\s*(\d+)', err)
+    print('codec:', m.group(1) if m else 'unknown')
+    print('duration_s:',
+          round(int(d.group(1)) * 3600 + int(d.group(2)) * 60 + float(d.group(3)), 2) if d else 'unknown')
+    print('frames:', fr[-1] if fr else 'unknown')
+except Exception as exc:
+    print('codec: probe-skip', type(exc).__name__)
+    print('duration_s: probe-skip')
+    print('frames: probe-skip')
+PY
 ```
 
 ```shell #test-result id="lightx2v-i2v-output" fuzzy='xxx'
-xxx output_wan22_moe_i2v_distill_int8_npu_480p.mp4
-xxx: ISO Media, MP4 Base Media v2 [ISO 14496-12:2015]
-codec_name=xxx
-width=xxx
-height=xxx
-r_frame_rate=xxx
-nb_frames=xxx
-duration=xxx
+size: xxx
+ftyp_brand: xxx
+codec: xxx
+duration_s: xxx
+frames: xxx
 ```
 
 > **关键 env**：

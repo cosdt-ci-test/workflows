@@ -51,7 +51,7 @@ jobs:
       container_options: >-
         --volume=/data/ci-cache/modelscope/xllm:/root/.cache/modelscope
         --volume=/data/ci-cache/xllm-build:/opt/xllm-build
-      timeout_minutes: 60
+      timeout_minutes: 180
       upstream_repo: xLLM-AI/xllm
       # Doc URL points to the quick start doc in this repo (cosdt-ci-test/workflows).
       # The monitor hashes it and the test fetches the same URL.

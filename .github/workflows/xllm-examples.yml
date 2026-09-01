@@ -268,6 +268,7 @@ jobs:
         --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
         --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
         --volume=/data/ci-cache/modelscope/xllm:/root/.cache/modelscope
+        --volume=/data/ci-cache/xllm-build:/opt/xllm-build
     steps:
       - name: Checkout workflows
         uses: actions/checkout@v4

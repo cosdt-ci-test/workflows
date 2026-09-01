@@ -50,6 +50,7 @@ jobs:
       image: swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/xllm-ai/xllm-ai:xllm-dev-a2-arm-cann9-20260605
       container_options: >-
         --volume=/data/ci-cache/modelscope/xllm:/root/.cache/modelscope
+        --volume=/data/ci-cache/xllm-build:/opt/xllm-build
       timeout_minutes: 60
       upstream_repo: xLLM-AI/xllm
       # Doc URL points to the quick start doc in this repo (cosdt-ci-test/workflows).

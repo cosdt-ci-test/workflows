@@ -437,7 +437,7 @@ configs/distill/wan22/wan_moe_i2v_distill_int8_4step_ulysses_npu.json
 
 ## I2V 烟囱测试：4 步蒸馏图生视频
 
-参考官方脚本 [`scripts/wan22/distill/run_wan22_moe_i2v_distill_lora_4step.sh`](https://github.com/ModelTC/LightX2V/blob/main/scripts/wan22/distill/run_wan22_moe_i2v_distill_lora_4step.sh) 的标准入口是 `python -m lightx2v.infer --model_cls wan2.2_moe_distill --task i2v --model_path <base> --config_json <cfg> --prompt ... --image_path ... --save_result_path ...`。Wan2.2-I2V-A14B 是 MoE 架构,high noise + low noise 两份 ckpt 都由 config JSON 内部指定(走 lazy block load)。
+参考官方脚本 [`scripts/wan22/distill/run_wan22_moe_i2v_distill_lora_4step.sh`](https://github.com/ModelTC/LightX2V/blob/main/scripts/wan22/distill/run_wan22_moe_i2v_distill_lora_4step.sh) 的标准入口是 `python -m lightx2v.infer --model_cls wan2.2_moe --task i2v --model_path <base> --config_json <cfg> --prompt ... --image_path ... --save_result_path ...`。Wan2.2-I2V-A14B 是 MoE 架构,high noise + low noise 两份 ckpt 都由 config JSON 内部指定(走 lazy block load)。上游 PR #1455 已把蒸馏 runner 统一进基础 runner:不再有 `wan2.2_moe_distill` 这个 model_cls,蒸馏改由 config JSON 驱动(`distill_method: dmd2` + `denoising_step_list` + `high/low_noise_quantized_ckpt` 等键),入口统一用 `wan2.2_moe`。
 
 ### 单卡 32 GB 适配：改 config
 
@@ -484,7 +484,7 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export PYTORCH_ALLOC_CONF=expandable_segments:True
 
 python -m lightx2v.infer \
-    --model_cls wan2.2_moe_distill \
+    --model_cls wan2.2_moe \
     --task i2v \
     --model_path "$PROJECT_ROOT/models/Wan2.2-I2V-A14B" \
     --config_json configs/distill/wan22/wan_moe_i2v_distill_int8_4step_ulysses_npu.json \

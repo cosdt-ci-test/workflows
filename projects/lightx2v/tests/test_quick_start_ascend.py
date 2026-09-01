@@ -305,14 +305,8 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         # 4.5) ASCEND_RT_VISIBLE_DEVICES=0: the cluster's NPU runner
         # label is `linux-aarch64-a2-2` (2 cards); the cluster
         # device-plugin still passes both /dev/davinci* into the
-        # container. The doc's I2V smoke is adapted to single-card
-        # 32 GB so we only want to see one device — the doc's
-        # `## 前置安装` `check-torch` step hardcodes `count: 1` in its
-        # `#test-result` block (the doc itself sets
-        # ASCEND_RT_VISIBLE_DEVICES=0 only inside the smoke step,
-        # not at the check-torch step, so the doc would otherwise
-        # see count=2 at step 4 and fail). Set the env at process
-        # level here so the value is inherited by every doc
+        # container. The doc's smoke is single-card, so pin card 0
+        # at process level here — the value is inherited by every doc
         # subprocess (MarkdownDocTestBase passes ``env=os.environ.copy()``
         # to each subprocess).
         os.environ['ASCEND_RT_VISIBLE_DEVICES'] = '0'

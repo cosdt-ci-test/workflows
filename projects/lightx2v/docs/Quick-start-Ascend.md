@@ -146,73 +146,25 @@ lightx2v version: xxx
 
 ### 📥 模型准备
 
-跑 I2V 蒸馏需要三组权重（**务必带 include 过滤**，全量仓库有几百 GB 无关权重）：
+官方昇腾路线用 [Wan-AI/Wan2.1-T2V-1.3B](https://modelscope.cn/models/Wan-AI/Wan2.1-T2V-1.3B)（~17.6 GB：T5 + VAE + 1.3B DiT + tokenizer，单卡无压力）：
 
-1. **base 模型**（`Wan-AI/Wan2.2-I2V-A14B`）：T5 + VAE + tokenizer + 两份 config.json（~12 GB，**不要下** `high/low_noise_model/` 里各 60 GB 的原始 BF16 权重，被下面量化 ckpt 完全替代）
-2. **CLIP vision encoder**（`Wan-AI/Wan2.1-I2V-14B-480P`）：Wan2.2 仓库不带，单拉一个文件（~4.8 GB）
-3. **蒸馏量化 ckpt**（`lightx2v/Wan2.2-Distill-Models`）：只拉 I2V int8 的两个 split 目录（~30 GB，其余单文件/fp8/BF16 变体共 335 GB 不拉）
-
-```shell #test-setup id="lightx2v-pull-wan22-base"
+```shell #test-setup id="lightx2v-pull-wan21-t2v"
 export PROJECT_ROOT=${PROJECT_ROOT:-/home/coder/work/lightx2v-test}
 mkdir -p "$PROJECT_ROOT/models"
 modelscope download \
-    --model Wan-AI/Wan2.2-I2V-A14B \
-    --local_dir "$PROJECT_ROOT/models/Wan2.2-I2V-A14B" \
-    --include "models_t5_umt5-xxl-enc-bf16.pth" "Wan2.1_VAE.pth" \
-               "google/*" "high_noise_model/config.json" "low_noise_model/config.json"
-
-modelscope download \
-    --model Wan-AI/Wan2.1-I2V-14B-480P \
-    --local_dir "$PROJECT_ROOT/models/Wan2.1-I2V-14B-480P" \
-    --include "models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth" "xlm-roberta-large/*"
+    --model Wan-AI/Wan2.1-T2V-1.3B \
+    --local_dir "$PROJECT_ROOT/models/Wan2.1-T2V-1.3B" \
+    --include "diffusion_pytorch_model.safetensors" "models_t5_umt5-xxl-enc-bf16.pth" \
+               "Wan2.1_VAE.pth" "google/*" "config.json"
 ```
-
-```shell #test-setup id="lightx2v-pull-wan22-i2v-distill"
-export PROJECT_ROOT=${PROJECT_ROOT:-/home/coder/work/lightx2v-test}
-modelscope download \
-    --model lightx2v/Wan2.2-Distill-Models \
-    --local_dir "$PROJECT_ROOT/models/Wan2.2-Distill-Models" \
-    --include "wan2.2_i2v_A14b_high_noise_int8_lightx2v_4step_1030_split/*" \
-               "wan2.2_i2v_A14b_low_noise_int8_lightx2v_4step_split/*"
-```
-
-> ⚠️ split 目录名里的 `_1030` 后缀是 distill 权重版本日期，high noise 带、low noise 不带——以 ModelScope 仓库实际为准。
 
 ### 📁 配置文件与脚本
 
-推理的 [config](https://github.com/ModelTC/LightX2V/tree/main/configs) 与 [scripts](https://github.com/ModelTC/LightX2V/tree/main/scripts) 都在上游仓库。本文用 `configs/distill/wan22/wan_moe_i2v_distill_int8_4step_ulysses_npu.json`（官方默认是 2 卡 720P），**单卡 32 GB 必须适配**：量化 ckpt 换 `$PROJECT_ROOT/models/` 下 split 目录绝对路径、`clip_original_ckpt` 指向单拉的 CLIP 文件、720→480、开 T5/VAE/cpu_offload、删单卡无意义的 ulysses parallel 与 rife 插帧：
-
-```shell #test-setup id="lightx2v-i2v-cfg-adapt"
-export PROJECT_ROOT=${PROJECT_ROOT:-/home/coder/work/lightx2v-test}
-cd "$PROJECT_ROOT/src"
-python -c "
-import json, pathlib, os
-cfg_path = pathlib.Path('configs/distill/wan22/wan_moe_i2v_distill_int8_4step_ulysses_npu.json')
-cfg = json.loads(cfg_path.read_text())
-proj_models = os.environ['PROJECT_ROOT'] + '/models'
-cfg['high_noise_quantized_ckpt'] = proj_models + '/Wan2.2-Distill-Models/wan2.2_i2v_A14b_high_noise_int8_lightx2v_4step_1030_split'
-cfg['low_noise_quantized_ckpt']  = proj_models + '/Wan2.2-Distill-Models/wan2.2_i2v_A14b_low_noise_int8_lightx2v_4step_split'
-cfg['clip_original_ckpt'] = proj_models + '/Wan2.1-I2V-14B-480P/models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth'
-cfg['self_attn_1_type'] = 'npu_flash_attn'
-cfg.pop('rainfusion_attn_setting', None)
-cfg['target_height'] = 480
-cfg['target_width']  = 832
-cfg['t5_cpu_offload']  = True
-cfg['vae_cpu_offload'] = True
-cfg['cpu_offload']             = True
-cfg['offload_granularity']     = 'block'
-cfg.pop('parallel', None)
-cfg.pop('video_frame_interpolation', None)
-cfg_path.write_text(json.dumps(cfg, indent=4))
-print('cfg adapted (单卡 32GB 适配):')
-for k in ['target_height', 'target_width', 'cpu_offload', 't5_cpu_offload', 'vae_cpu_offload', 'high_noise_quantized_ckpt', 'clip_original_ckpt', 'self_attn_1_type']:
-    print(f'  {k}: {cfg[k]}')
-"
-```
+官方为昇腾准备了现成 config：`configs/platforms/ascend_npu/wan_t2v.json`（`npu_flash_attn` 三路注意力、480×832、50 步、cpu_offload 全配好），直接用、零适配；[config](https://github.com/ModelTC/LightX2V/tree/main/configs) 与 [scripts](https://github.com/ModelTC/LightX2V/tree/main/scripts) 都在上游仓库。
 
 ### 🚀 开始推理
 
-官方 [Python API](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/getting_started/quickstart.html#id23) 入口，`create_generator(config_json=...)` 直接吃上面适配好的 config：
+官方 NPU 路线同款（[`scripts/platforms/ascend_npu/run_wan21_t2v.sh`](https://github.com/ModelTC/LightX2V/blob/main/scripts/platforms/ascend_npu/run_wan21_t2v.sh) 的 Python API 版；与官方 quickstart 示例同构，差异仅 `config_json` 用官方昇腾 config——官方示例的 `sage_attn2` 是 CUDA 算子、NPU 不可用）：
 
 ```shell #test-setup id="lightx2v-i2v-smoke-run"
 export PROJECT_ROOT=${PROJECT_ROOT:-/home/coder/work/lightx2v-test}
@@ -228,20 +180,27 @@ import os
 from lightx2v import LightX2VPipeline
 
 root = os.environ['PROJECT_ROOT']
+model_path = root + '/models/Wan2.1-T2V-1.3B'
+save_result_path = root + '/save_results/output_lightx2v_wan_t2v.mp4'
+
 pipe = LightX2VPipeline(
-    model_path=root + '/models/Wan2.2-I2V-A14B',
-    model_cls='wan2.2_moe',
-    task='i2v',
+    model_path=model_path,
+    model_cls='wan2.1',
+    task='t2v',
 )
 pipe.create_generator(
-    config_json='configs/distill/wan22/wan_moe_i2v_distill_int8_4step_ulysses_npu.json'
+    config_json='configs/platforms/ascend_npu/wan_t2v.json'
 )
+
+seed = 42
+prompt = "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage."
+negative_prompt = "镜头晃动，色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
+
 pipe.generate(
-    seed=42,
-    prompt="Summer beach vacation style, a white cat wearing sunglasses sits on a surfboard. The fluffy-furred feline gazes directly at the camera with a relaxed expression. Blurred beach scenery forms the background featuring crystal-clear waters, distant green hills, and a blue sky dotted with white clouds.",
-    negative_prompt="镜头晃动，色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走",
-    image_path=root + '/src/assets/inputs/imgs/img_0.jpg',
-    save_result_path=root + '/save_results/output_wan22_moe_i2v_distill_int8_npu_480p.mp4',
+    seed=seed,
+    prompt=prompt,
+    negative_prompt=negative_prompt,
+    save_result_path=save_result_path,
 )
 PY
 ```
@@ -256,7 +215,7 @@ export PROJECT_ROOT=${PROJECT_ROOT:-/home/coder/work/lightx2v-test}
 python - <<'PY'
 import os, re, subprocess
 out = os.path.join(os.environ['PROJECT_ROOT'], 'save_results',
-                   'output_wan22_moe_i2v_distill_int8_npu_480p.mp4')
+                   'output_lightx2v_wan_t2v.mp4')
 size = os.path.getsize(out)
 assert size > 1_000_000, f'output too small: {size} bytes'
 with open(out, 'rb') as fh:
@@ -298,4 +257,4 @@ frames: xxx
 
 1. 在 [GitHub Issues](https://github.com/ModelTC/LightX2V/issues) 搜索或提交问题
 2. 更多教程：[量化](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/method_tutorials/quantization.html) / [特征缓存](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/method_tutorials/cache.html) / [多卡并行](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/method_tutorials/parallel.html)（单卡跑通后把 `parallel.seq_p_size` 加回 config 并设为 `torch.npu.device_count()`）/ [服务化部署](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/deploy_guides/deploy_service.html)
-3. 其它模型路线（T2V 蒸馏权重仅 HF 有、Qwen-Image-Edit 走 FP8 蒸馏版）见[官方 README](https://github.com/ModelTC/LightX2V/blob/main/README_zh.md)
+3. 其它模型路线（Wan2.2 MoE I2V 4 步蒸馏 int8、Qwen-Image-Edit T2I 等）见[官方 README](https://github.com/ModelTC/LightX2V/blob/main/README_zh.md) 与 [configs/](https://github.com/ModelTC/LightX2V/tree/main/configs)

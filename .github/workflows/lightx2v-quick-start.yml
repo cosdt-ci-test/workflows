@@ -99,13 +99,11 @@ jobs:
       container_options: >-
         --volume=/data/ci-cache/modelscope/lightx2v:/root/.cache/modelscope
         --volume=/data/ci-cache/lightx2v-models:/root/lightx2v-test/models
-      # 4h ceiling: cold run pulls ~47 GB of weights (12 GB Wan2.2 base
-      # T5/VAE/tokenizer + 4.8 GB CLIP from Wan2.1-I2V + 30 GB I2V int8
-      # distill split dirs, all include-filtered) at cluster network
-      # speed + I2V 4-step smoke on a single 910B4 card (4-step
-      # distilled 14B int8 at 480P / 81 frames typically runs in a few
-      # minutes). 4h covers cache-cold downloads + several retries on
-      # dependency flakes.
+      # 4h ceiling: cold run pulls ~18 GB of weights (Wan-AI/
+      # Wan2.1-T2V-1.3B, include-filtered) at cluster network speed +
+      # 50-step 1.3B t2v smoke on a single 910B4 (480P / 81 frames
+      # typically runs in minutes). 4h covers cache-cold downloads +
+      # several retries on dependency flakes.
       timeout_minutes: 240
       upstream_repo: ModelTC/LightX2V
       # LightX2V has zero GitHub Releases and zero tags (verified via

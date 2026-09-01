@@ -76,7 +76,7 @@ git checkout <UPSTREAM_REF>
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 cd wenet
 pip install -e .
-pip install torch==2.12.0 torch-npu==2.12.0
+pip install torch==2.10.0 torch-npu==2.10.0.post4
 ```
 
 安装 sox：
@@ -84,6 +84,13 @@ pip install torch==2.12.0 torch-npu==2.12.0
 ```shell #test-setup
 pip install sox
 apt-get update && apt-get install -y sox libsox-dev || true
+```
+
+修复 WeNet 与 PyTorch 2.10.0 的兼容性问题（`Union` 导入）：
+
+```shell #test-setup id="fix-wenet-compat"
+cd wenet
+sed -i 's/from torch.nn.modules.conv import _ConvNd, _size_2_t, Union, _pair, Tensor, Optional/from typing import Optional, Union\nfrom torch import Tensor\nfrom torch.nn.common_types import _size_2_t\nfrom torch.nn.modules.conv import _ConvNd\nfrom torch.nn.modules.utils import _pair/' wenet/models/squeezeformer/conv2d.py
 ```
 
 ---

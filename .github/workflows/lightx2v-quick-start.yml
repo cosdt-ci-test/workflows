@@ -13,24 +13,24 @@
 # No device mounts: the self-hosted NPU runner (`linux-aarch64-a2-2`,
 # 2-card) auto-passes `/dev/davinci*` into the container via the cluster
 # device-plugin, so container_options stays empty for device binds.
-# The doc's I2V smoke config has been adapted to single-card 32 GB
-# (720P -> 480P, t5/vae cpu_offload on, `parallel` and
-# `video_frame_interpolation` dropped), so only one card is touched;
-# the second card sits idle. This matches the single-card convention
-# used by torchtune / slime / tensordict / pytorch.vision / accelerate /
-# ray / torchtitan / transformers / diffusers / mooncake.
+# The doc smokes t2v with Wan-AI/Wan2.1-T2V-1.3B through the official
+# ascend_npu config, single-card; the second card sits idle. This
+# matches the single-card convention used by torchtune / slime /
+# tensordict / pytorch.vision / accelerate / ray / torchtitan /
+# transformers / diffusers / mooncake.
 #
 # Two bind mounts beyond the defaults:
 #   1. modelscope cache -> /root/.cache/modelscope (default location
 #      modelscope writes to when --local_dir is omitted; some helper
 #      commands like `snapshot_download(..., allow_patterns=...)`
 #      bypass --local_dir and land here). Reused across runs.
-#   2. PROJECT_ROOT/models (default /root/lightx2v-test/models on CI,
-#      set by tests/test_quick_start_ascend.py prepare_environment) ->
+#   2. <doc-cwd>/models (/root/lightx2v-test/models on CI — the test
+#      class chdirs there in prepare_environment; the doc body is
+#      cwd-relative, "wherever you run it is the project root") ->
 #      /data/ci-cache/lightx2v-models. This is where the doc's
-#      `modelscope download --local_dir "$PROJECT_ROOT/models/..."`
-#      commands write. Bind-mount covers persistence + the cache
-#      invalidation contract (purge_corrupt_models walks this dir).
+#      `modelscope download --local_dir models/...` writes. Bind-mount
+#      covers persistence + the cache invalidation contract
+#      (purge_corrupt_models walks this dir).
 # The HF cache bind from earlier iterations was dropped: the doc's
 # e2e scope no longer downloads from HF (Wan2.2 T2V distill and the
 # Qwen-Image-Edit I2I route were cut to pointer-only sections; all
@@ -76,26 +76,16 @@ jobs:
       # /dev/davinci* into the container; ASCEND_RT_VISIBLE_DEVICES=0
       # in the smoke step picks card 0 only).
       test_runner: '["linux-aarch64-a2-2"]'
-      # ascendhub official mindiesd image (MindIE community, 2026/06/30,
-      # 6 GB): FROM quay.io/ascend/vllm-omni:v0.20.0, so the image
-      # preinstalls CANN 8.5.1 + torch 2.9.0 + torch_npu + vllm +
-      # vllm_ascend (torch line matches the previous CANN 9.1 stack, so
-      # torchada int8-npu quantization ops stay known-good), plus
-      # mindiesd / msprobe / msmodelslim / msprof-analyze on top, and -
-      # via the vllm-omni dependency tree - av / soundfile / pyzmq /
-      # diffusers / transformers / imageio[ffmpeg]. Image contents are
-      # audited statically (public Dockerfile at gitcode.com/Ascend/
-      # MindIE-SD docker/omni/Dockerfile.a2.ubuntu + the vllm-omni
-      # requirements), so no probe run is needed; anything not in the
-      # dependency tree (cv2 / decord / torchaudio / modelscope /
-      # torchada) is covered by the doc's minimal unconditional stubs +
-      # pinned install list, and the smoke runs through the official
-      # LightX2VPipeline Python API (create_generator(config_json=...)
-      # + generate(...)) instead of the CLI. Image lives in the SWR
-      # ascendhub namespace - the
-      # same registry domain as the previous cann:9.1.0 image, which the
-      # runner's host docker daemon already pulls daily.
-      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/mindiesd:v3.0.0-A2-ubuntu22.04-py3.11-aarch64
+      # Plain CANN base image (the proven old stack): the image ships
+      # only CANN 9.1.0 - torch 2.9.0 + torch_npu 2.9.0.post2 are
+      # installed by the doc's own `lightx2v-install-torch` #test
+      # block, so the whole install path (torch included) is guarded
+      # by CI instead of being baked into an opaque image. MindIE is
+      # NOT needed by the current route (npu_flash_attn comes from
+      # torchada). Same SWR registry domain as the previous images -
+      # the runner's host docker daemon already pulls this exact tag
+      # daily (it ran the pre-Wan2.2 stack for many green runs).
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
       container_options: >-
         --volume=/data/ci-cache/modelscope/lightx2v:/root/.cache/modelscope
         --volume=/data/ci-cache/lightx2v-models:/root/lightx2v-test/models
@@ -148,7 +138,7 @@ jobs:
       # cwd is workflows/projects/lightx2v; env contract (MONITORED_DOC_URL /
       # UPSTREAM_REF / NPU_READY) is injected by the engine. All project
       # env prep (CANN source, CUDA exclusion list, uv install, torch
-      # stack probe, PROJECT_ROOT=/root/lightx2v-test export, modelscope
-      # cache resolve + safetensors purge) lives in the test subclass's
-      # prepare_environment hook.
+      # stack probe, os.chdir to the doc cwd /root/lightx2v-test, aarch64
+      # stubs, modelscope cache resolve + safetensors purge) lives in the
+      # test subclass's prepare_environment hook.
       test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1

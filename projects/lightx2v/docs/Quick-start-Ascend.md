@@ -374,25 +374,29 @@ modelscope download \
 
 ```shell #test id="lightx2v-pull-wan22-base-verify"
 export PROJECT_ROOT=${PROJECT_ROOT:-/home/coder/work/lightx2v-test}
-ls -la "$PROJECT_ROOT/models/Wan2.2-I2V-A14B/" | grep -v "^total"
+# 目录名断言(-maxdepth 1 -type d,排除 ModelScope 记账目录 ._____temp 等隐藏条目;
+# LC_ALL=C sort 保证跨机器/跨 locale 排序一致,ls 的排序随 collation 变)
+find "$PROJECT_ROOT/models/Wan2.2-I2V-A14B/" -maxdepth 1 -type d ! -name '.*' ! -name 'Wan2.2-I2V-A14B' -printf '%f\n' | LC_ALL=C sort
+echo "---"
+# 下载完整性断言:>100M 大文件字节数精确(T5 11.4 GB + VAE 507 MB),权限位/属主/时间戳不进断言
+find "$PROJECT_ROOT/models/Wan2.2-I2V-A14B/" -maxdepth 1 -type f -size +100M -printf '%s %f\n' | LC_ALL=C sort
 echo "---"
 head -5 "$PROJECT_ROOT/models/Wan2.2-I2V-A14B/google/umt5-xxl/tokenizer_config.json"
 ```
 
 ```shell #test-result id="lightx2v-pull-wan22-base-verify" fuzzy='xxx'
-total xxx
-drwxr-xr-x 2 xxx xxx       64 xxx .
-drwxr-xr-x 4 xxx xxx      128 xxx ..
--rw-r--r-- 1 xxx xxx  11361920418 xxx models_t5_umt5-xxl-enc-bf16.pth
--rw-r--r-- 1 xxx xxx   507609880 xxx Wan2.1_VAE.pth
-drwxr-xr-x 2 xxx xxx       64 xxx google
-drwxr-xr-x 2 xxx xxx       64 xxx high_noise_model
-drwxr-xr-x 2 xxx xxx       64 xxx low_noise_model
-... (省略其余条目)
+google
+high_noise_model
+low_noise_model
+---
+11361920418 models_t5_umt5-xxl-enc-bf16.pth
+507609880 Wan2.1_VAE.pth
 ---
 {
-  ... (tokenizer config json 内容)
-}
+  "added_tokens_decoder": {
+    "0": {
+      "content": xxx,
+      "lstrip": xxx,
 ```
 
 ### 拉 I2V 蒸馏 ckpt（split blocks）
@@ -442,22 +446,23 @@ block_12.safetensors
 LightX2V 把推理参数(步数、flow shift、offload 策略、LoRA 路径、量化方案等)写到 config JSON 里,`python -m lightx2v.infer --config_json ...` 一次性喂进去。
 
 ```shell #test id="lightx2v-list-wan22-configs"
-# 主线 Wan2.2 config(T2V/I2V 各一个,MoE 高低噪合并)
-ls configs/wan22/ | grep -E "moe_(t2v|i2v)"
+export PROJECT_ROOT=${PROJECT_ROOT:-/home/coder/work/lightx2v-test}
+cd "$PROJECT_ROOT/src"
+# 主线 Wan2.2 config(T2V/I2V 各一个,MoE 高低噪合并)——精确存在性断言,
+# ls 多参数按参数序输出,不随上游新增 config 漂移
+ls configs/wan22/wan_moe_i2v.json configs/wan22/wan_moe_t2v.json
 echo "---"
-# 蒸馏 + LoRA config(I2V LoRA 版本,NPU int8 量化版本等)
-ls configs/distill/wan22/
+# NPU int8 量化专用 config(下面 I2V demo 用的就是它)
+ls configs/distill/wan22/wan_moe_i2v_distill_int8_4step_ulysses_npu.json
 ```
 
-输出结果类似：
+输出结果如下：
 
 ```shell #test-result id="lightx2v-list-wan22-configs" fuzzy='xxx'
-wan_moe_i2v.json
-wan_moe_t2v.json
-... (主线 moe 配置)
+configs/wan22/wan_moe_i2v.json
+configs/wan22/wan_moe_t2v.json
 ---
-wan_moe_i2v_distill_int8_4step_ulysses_npu.json
-... (蒸馏配置,含 NPU int8 专用版)
+configs/distill/wan22/wan_moe_i2v_distill_int8_4step_ulysses_npu.json
 ```
 
 下面 I2V demo 用 **`configs/distill/wan22/wan_moe_i2v_distill_int8_4step_ulysses_npu.json`**(NPU int8 量化版本,`self_attn_1_type=rainfusion_attn` + `cross_attn_*=npu_flash_attn`,直走 NPU 算子)。**但默认 config 是为「910B + 2 卡 + 720P」设计的**(720P + 81 帧 + T5/VAE 全常驻 + ulysses 并行 + rife 视频插帧),**单卡 32 GB 必须改**:720→480 + 开 t5/vae cpu_offload + 删 parallel + 删 video_frame_interpolation。改动在下面 I2V smoke 块里完成。
@@ -537,7 +542,8 @@ python -m lightx2v.infer \
 ```shell #test id="lightx2v-i2v-output"
 export PROJECT_ROOT=${PROJECT_ROOT:-/home/coder/work/lightx2v-test}
 OUT="$PROJECT_ROOT/save_results/output_wan22_moe_i2v_distill_int8_npu_480p.mp4"
-ls -la "$OUT"
+# 只断言 字节数 + basename(不带时间戳/属主/绝对路径,跨机器跨时间可复现)
+ls -l "$OUT" | awk '{print $5, $NF}'
 file "$OUT"
 # 优先用 ffprobe 读视频流(宽/帧数/时长),ffprobe 不存在时退到 ftyp magic 验证
 ffprobe -v error -select_streams v:0 \
@@ -547,8 +553,8 @@ ffprobe -v error -select_streams v:0 \
 ```
 
 ```shell #test-result id="lightx2v-i2v-output" fuzzy='xxx'
--rw-r--r-- 1 xxx xxx xxx Aug 29 16:14 /home/coder/work/lightx2v-test/save_results/output_wan22_moe_i2v_distill_int8_npu_480p.mp4
-/home/coder/work/lightx2v-test/save_results/output_wan22_moe_i2v_distill_int8_npu_480p.mp4: ISO Media, MP4 Base Media v2 [ISO 14496-12:2015]
+xxx output_wan22_moe_i2v_distill_int8_npu_480p.mp4
+xxx: ISO Media, MP4 Base Media v2 [ISO 14496-12:2015]
 codec_name=xxx
 width=xxx
 height=xxx

@@ -188,9 +188,9 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 )
 
             if result.returncode != 0:
-                # Print last 50 lines of log on failure
-                print(f'setup: build failed, last 50 lines of {build_log}:')
-                subprocess.run(['tail', '-50', build_log], check=False)
+                print(f'setup: build failed (exit code {result.returncode}), full log:')
+                with open(build_log, 'r') as f:
+                    print(f.read())
                 raise RuntimeError(f'xllm build failed (see {build_log})')
 
             # Copy wheel to cache

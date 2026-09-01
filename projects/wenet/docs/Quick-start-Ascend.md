@@ -96,7 +96,7 @@ cd wenet
 sed -i 's/from torch.nn.modules.conv import _ConvNd, _size_2_t, Union, _pair, Tensor, Optional/from typing import Optional, Union\nfrom torch import Tensor\nfrom torch.nn.common_types import _size_2_t\nfrom torch.nn.modules.conv import _ConvNd\nfrom torch.nn.modules.utils import _pair/' wenet/models/squeezeformer/conv2d.py
 ```
 
-修复 WeNet 与 torchaudio 2.10.0 的兼容性问题（`torchaudio.info()` 已移除，`torchaudio.load()` 依赖 torchcodec，`sox_effects` 已移除，改用标准库 `wave`/`soundfile` 和官方 `torchaudio.transforms.Speed`）：
+修复 WeNet 与 torchaudio 2.10.0 的兼容性问题（`torchaudio.info()` 已移除，`torchaudio.load()` 依赖 torchcodec，`sox_effects` 已移除，改用标准库 `wave`/`soundfile` 和 `torchaudio.functional.resample`）：
 
 ```shell #test-setup id="fix-torchaudio-compat"
 cd wenet
@@ -124,7 +124,7 @@ c=c.replace('''waveform, _ = torchaudio.load(wav_file,
 c=c.replace('waveform, sample_rate = torchaudio.load(wav_file)','data, sample_rate = sf.read(wav_file)\n        waveform = torch.from_numpy(data).unsqueeze(0)')
 c=c.replace('''wav, _ = torchaudio.sox_effects.apply_effects_tensor(
             waveform, sample_rate,
-            [['speed', str(speed)], ['rate', str(sample_rate)]])''','wav = torchaudio.transforms.Speed(factor=speed, orig_freq=sample_rate, new_freq=sample_rate)(waveform)')
+            [['speed', str(speed)], ['rate', str(sample_rate)]])''','wav = torchaudio.functional.resample(waveform, sample_rate, int(sample_rate * speed))\n        wav = torchaudio.functional.resample(wav, int(sample_rate * speed), sample_rate)')
 open(f,'w').write(c)
 print('Done: replaced torchaudio.info/load/sox_effects in both files')
 "

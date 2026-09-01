@@ -76,7 +76,23 @@ jobs:
       # /dev/davinci* into the container; ASCEND_RT_VISIBLE_DEVICES=0
       # in the smoke step picks card 0 only).
       test_runner: '["linux-aarch64-a2-2"]'
-      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+      # ascendhub official mindiesd image (MindIE community, 2026/06/30,
+      # 6 GB): FROM quay.io/ascend/vllm-omni:v0.20.0, so the image
+      # preinstalls CANN 8.5.1 + torch 2.9.0 + torch_npu + vllm +
+      # vllm_ascend (torch line matches the previous CANN 9.1 stack, so
+      # torchada int8-npu quantization ops stay known-good), plus
+      # mindiesd / msprobe / msmodelslim / msprof-analyze on top, and -
+      # via the vllm-omni dependency tree - av / soundfile / pyzmq /
+      # diffusers / transformers / imageio[ffmpeg]. Image contents are
+      # audited statically (public Dockerfile at gitcode.com/Ascend/
+      # MindIE-SD docker/omni/Dockerfile.a2.ubuntu + the vllm-omni
+      # requirements), so no probe run is needed; anything not in the
+      # dependency tree (cv2 / decord / torchaudio / modelscope /
+      # torchada) is covered by the doc's conditional stubs + idempotent
+      # install list. Image lives in the SWR ascendhub namespace - the
+      # same registry domain as the previous cann:9.1.0 image, which the
+      # runner's host docker daemon already pulls daily.
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/mindiesd:v3.0.0-A2-ubuntu22.04-py3.11-aarch64
       container_options: >-
         --volume=/data/ci-cache/modelscope/lightx2v:/root/.cache/modelscope
         --volume=/data/ci-cache/lightx2v-models:/root/lightx2v-test/models

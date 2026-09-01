@@ -65,11 +65,13 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     contract -> run ``#test-setup`` / ``#test`` in order -> compare against
     ``#test-result``.
 
-    Scope: torch + torch_npu + modelscope install + LightX2V source
-    install (with aarch64 stub packages for cv2 / decord / torchaudio
-    that lack usable aarch64 wheels, plus the real triton==3.5.* wheel
-    — an empty triton stub drives torch._inductor into real triton
-    code paths it cannot survive) + include-filtered
+    Scope: mindiesd image stack (torch/torch_npu preinstalled, reused via
+    a version-agnostic probe) + modelscope + LightX2V source install
+    (with conditional stub packages for cv2 / decord / torchaudio — the
+    stub is created only when the real module cannot import, so the doc
+    works on any image — plus the real triton wheel, since an empty
+    triton stub drives torch._inductor into real triton code paths it
+    cannot survive) + include-filtered
     ModelScope weight pulls (12 GB Wan2.2-I2V-A14B base T5/VAE/
     tokenizer + 4.8 GB CLIP vision encoder from Wan2.1-I2V-14B-480P
     + 30 GB I2V int8 distill split dirs) + I2V single-card smoke
@@ -253,15 +255,15 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         # deps (the CUDA constraint list never conflicts), and matches
         # torch 2.9's official triton line.
 
-        # 3) torch stack probe + install: when version matches the image's
-        # pre-installed wheels, reuse them to avoid the cluster cache
-        # triggering ``+cpu`` resolution.
+        # 3) torch stack probe + install: when the image's pre-installed
+        # stack imports and sees the NPU, reuse it (mindiesd image:
+        # vllm-omni base carries torch 2.9.0 + torch_npu, audited from
+        # the public Dockerfile). Version-agnostic on purpose: the doc
+        # no longer installs torch, so any version the image ships is
+        # the version we test against.
         _PROBE_SCRIPT = (
             'import torch, torch_npu\n'
-            "raise SystemExit(0 if "
-            "torch.__version__.startswith('2.9.0') "
-            "and torch_npu.__version__.startswith('2.9.0') "
-            "else 1)"
+            'raise SystemExit(0 if torch.npu.is_available() else 1)\n'
         )
         probe = subprocess.run(
             ['python', '-c', _PROBE_SCRIPT],
@@ -279,14 +281,12 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             )
             print(f'setup: reusing image torch stack ({versions.stdout.strip()})')
         else:
-            # Cold fallback: image's pre-installed wheels have drifted
-            # away from torch 2.9.0 (e.g. newer base image rolled
-            # forward). Pin to the torch-2.9.0-aligned version; the
-            # doc's `## 前置安装` section installs torch + torch_npu
-            # with the same pin explicitly. Doc body handles the
-            # actual install — this branch just records that the
-            # probe didn't match (useful diagnostic in CI logs).
-            print('setup: torch stack not 2.9.0, doc body will reinstall')
+            # Cold fallback: the image's torch stack failed to import or
+            # see the NPU. The doc body no longer reinstalls torch —
+            # its check-torch block will surface the same error; this
+            # branch just records that the probe didn't match (useful
+            # diagnostic in CI logs).
+            print('setup: torch stack probe failed, doc check-torch will surface the error')
 
         # 4) PROJECT_ROOT: CI runs as root on an ephemeral container.
         # The doc body's `mkdir -p "$PROJECT_ROOT"` writes to

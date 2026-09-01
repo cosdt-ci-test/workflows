@@ -307,10 +307,13 @@ fi
 pushd "$SPECFORGE_ROOT" >/dev/null
 SGLANG_VER=$(python -c "from importlib.metadata import version; print(version('sglang'))")
 echo "smoke: applying spec-capture patches for sglang ${SGLANG_VER}"
+# Run base patch (脚本自己的 success msg + ascend companion / apt-get install 的几十行输出都重定向到 /tmp/smoke-*.log，
+# test stdout 只留 echo 的总结行——run 33467285504 在 stdout 60+ 行下 expected 2 行 MISMATCH)
 if [[ -f scripts/apply_sglang_spec_capture_patch.sh ]]; then
     # 走 --target v${SGLANG_VER}；image 现在 sglang=0.5.18 → v0.5.18 patch 直打。
-    bash scripts/apply_sglang_spec_capture_patch.sh --target "v${SGLANG_VER}" || {
+    bash scripts/apply_sglang_spec_capture_patch.sh --target "v${SGLANG_VER}" >/tmp/smoke-patch.log 2>&1 || {
         echo "smoke: FAILED - apply_sglang_spec_capture_patch.sh --target v${SGLANG_VER} returned non-zero" >&2
+        tail -30 /tmp/smoke-patch.log >&2
         exit 1
     }
 else
@@ -330,8 +333,7 @@ fi
 SGLANG_DIR=$(python -c "import importlib.util, os; print(os.path.dirname(os.path.dirname(importlib.util.find_spec('sglang').origin)))")
 SINK_FILE="$SGLANG_DIR/sglang/srt/spec_capture_sink.py"
 if [[ -f "$SINK_FILE" ]] && ! grep -q 'segment_to_mount' "$SINK_FILE"; then
-    echo "smoke: applying ascend companion (inline python; upstream patch's hunk2 is malformed against current spec-capture.patch)"
-    python3 - "$SINK_FILE" <<'PY'
+    if ! python3 - "$SINK_FILE" <<'PY' >/tmp/smoke-ascend.log 2>&1
 import sys
 path = sys.argv[1]
 with open(path) as f:
@@ -413,8 +415,12 @@ src = src.replace(old_post_setup, new_post_setup, 1)
 
 with open(path, 'w') as f:
     f.write(src)
-print("smoke: ascend companion edits applied (3 anchors)")
 PY
+    then
+        echo "smoke: FAILED - ascend companion python failed" >&2
+        tail -30 /tmp/smoke-ascend.log >&2
+        exit 1
+    fi
 fi
 popd >/dev/null
 
@@ -424,8 +430,9 @@ popd >/dev/null
 # 但 libcurl4 / libibverbs1 / libnuma1 没打进 wheel，要走 apt。
 # run 33259780290 直接跑 `mooncake_master` 报
 # `error while loading shared libraries: libibverbs.so.1: cannot open shared object file`。
-apt-get update -qq && apt-get install -y --no-install-recommends \
-    libcurl4 libibverbs1 libnuma1
+apt-get update -qq >/dev/null 2>&1
+apt-get install -qq -y --no-install-recommends \
+    libcurl4 libibverbs1 libnuma1 >/dev/null 2>&1
 echo "smoke: patches + apt deps applied"
 ```
 

@@ -61,28 +61,55 @@ python --version
 Python 3.12.xxx
 ```
 
-升级 torch 栈到 2.13（CPU-only build + torch_npu 2.13.0rc1），保留镜像的 CANN 9.1.0 不动：
+升级 torch 栈到 2.12（CPU-only build + torch_npu 2.12.0rc1），保留镜像的 CANN 9.1.0 不动：
 
 ```shell #test-setup id="install-torch"
-# torch 2.13.0+cpu（CPU-only build，跟当前 2.10.0+cpu 同形态）：阿里云主 pypi
-# 只发 torch-2.13.0（CUDA build），不发 +cpu 变体；显式走 PyTorch 官方 CPU 索引
-# 拉 +cpu wheel，避免给镜像拽入 CUDA 库。--force-reinstall 因为镜像预装的
-# 2.10.0+cpu 是 PEP 660 不可变缓存的 wheel，--upgrade 在版本跨度大的时候不替换。
+# torch 栈必须降到 2.12 而不是 2.13，原因有二：
+# 1) torch_npu 2.13.0rc1 是 rc 包，PyTorch 官方 CPU 索引只有 torch 2.13.0
+#    final，不发 2.13.0rc1+cpu。torch 2.13.0 final 把 aten::_scaled_mm_v2 的
+#    TensorList 参数从 c10::IListRef 改成了 c10::ArrayRef；torch_npu 2.13.0rc1
+#    内核是按 pre-final torch (IListRef) 编的，跟 2.13.0 final CPU kernel 在
+#    dispatcher 注册时直接 "Mismatch in kernel C++ signatures" 报 ImportError。
+# 2) 镜像里 /vllm-workspace/vllm-ascend/vllm_ascend/vllm_ascend_C.cpython-
+#    312-aarch64-linux-gnu.so 的 torch::Library::_def 调的是 std::vector<at::Tag>，
+#    是老 namespace；torch 2.13.0+cpu 已经把 at::Tag 重命名成
+#    torch::headeronly::Tag，符号变成不同的 mangled name，vllm_ascend_C.so
+#    在 2.13 上直接 undefined symbol 无法加载。2.12 上没有 4-arg _def，但
+#    2.12.0rc1 torch_npu + 2.12.0+cpu torch 这套 ABI 自洽，能用。
+# --force-reinstall 因为镜像预装的 2.10.0+cpu 是 PEP 660 不可变缓存的 wheel，
+# --upgrade 在版本跨度大的时候不替换。
 uv pip install --index-url https://download.pytorch.org/whl/cpu \
-  --upgrade --force-reinstall 'torch==2.13.0+cpu'
+  --upgrade --force-reinstall 'torch==2.12.0+cpu' 'torchvision==0.27.0+cpu'
 
-# torch_npu 2.13.0rc1 修了 flex_attention HOP 在 AutocastPrivateUse1 dispatch
-# key 上没注册 kernel 的问题（torch_npu/utils/patch_flexattention.py::
-# _register_npu_flex_attention_autocast），是这次 smoke 失败的根治版。
+# torch_npu 2.12.0 必须跟 torch 2.12.0+cpu 同 minor version；混 2.12 + 2.13rc1 会
+# 在 libtorch_npu.so 报 "undefined symbol:
+# _ZN5torch8autograd10deleteNodeEPNS0_4NodeE"（autograd::Node::deleteNode
+# 在 2.13 改名了）。用 2.12.0 final（不是 2.12.0rc1）—— pypi 上两个都有，
+# final 是带 wheel tag 的稳定版，2.12.0rc1 是 pre-final 候选，PyPI 上
+# torch_npu==2.12.0rc1 在 2026-09 还能下到，2.13.0rc1 也是 pre-final 但跟
+# torch 2.13.0 final CPU kernel 不兼容（_scaled_mm_v2 的 IListRef→ArrayRef
+# ABI 变化）。本栈在 910B4 + CANN 9.1.0 镜像上实测过 torch_npu 2.12.0 final。
 # --no-deps 因为 torch 已经在上一步固定好，且 torch_npu 的依赖声明走 find-links
 # 会跨索引解析冲突（aliyun 索引没有 torch_npu 元数据），用 --no-deps 隔离避免
-# 误判。⚠ vllm-ascend 0.23.0 可能 pin 了 torch_npu 版本约束，Step 2/4 启动 vllm
+# 误判。⚠ vllm-ascend 0.23.0 可能 pin 了 torch_npu 版本约束，Step 3a/4 启动 vllm
 # 时如果 import torch_npu 撞版本不兼容，要单独处理（升 vllm-ascend 或同款隔离）。
 uv pip install \
   --find-links https://mirrors.aliyun.com/pypi/simple/torch-npu/ \
   --find-links https://mirrors.huaweicloud.com/ascend/repos/pypi/torch-npu/ \
-  --no-deps --upgrade --force-reinstall 'torch_npu==2.13.0rc1'
+  --no-deps --upgrade --force-reinstall 'torch_npu==2.12.0'
 ```
+
+> ⚠ Step 3a（launch_vllm）和 Step 4（vllm serve）启动前必须加
+> `TORCHDYNAMO_DISABLE=1` + `--enforce-eager`。vllm_ascend_C.so 在 torch 2.12
+> 上加载失败（`torch::Library::_def` 符号缺失），但 `enable_custom_op()` 的
+> try/except 只对 `libcust_opapi.so` ImportError 走 rpath fallback，其它
+> ImportError 被吞掉、设 `_CUSTOM_OP_ENABLED=False` 返回。要让这条 fallback
+> 真的生效，必须避开 dynamo capture（capture 阶段 flex_attention→enable_custom_op
+> 抛 `torch._dynamo.exc.Unsupported: Import failure`）；`--enforce-eager` +
+> `TORCHDYNAMO_DISABLE=1` 把 dynamo + cudagraph 全关了，eager 路径里
+> `enable_custom_op()` 静默禁用自定义 op，vllm 起来后用 PyTorch 默认
+> eager/SDPA 算子，NPU 上的 attention/silu/layer_norm 走 CANN 算子库。
+> 实测 Step 3a + Step 4 在这套配置下能正常 serve + 推理。
 
 加载 CANN env 并验证镜像预装的 vllm-ascend 栈（应输出下表的版本号）：
 
@@ -98,8 +125,8 @@ python -c "import importlib.metadata; print(f'triton={importlib.metadata.version
 ```
 
 ```shell #test-result id="verify-vllm-stack" fuzzy='xxx'
-torch=2.13.0+cpu
-torch_npu=2.13.0.rc1
+torch=2.12.0+cpu
+torch_npu=2.12.0
 is_available: True
 npu_count: xxx
 vllm=0.23.0+empty
@@ -274,12 +301,21 @@ HS_DIR=/tmp/hs-train
 rm -rf "$HS_DIR"
 mkdir -p "$HS_DIR"
 
+# 关 dynamo + --enforce-eager：见 install-torch 步骤的说明 —— vllm_ascend_C.so
+# 在 torch 2.12 上 undefined symbol，`enable_custom_op()` 必须靠 ImportError
+# fallback 静默禁用自定义 op；dynamo capture 阶段会把这层 fallback 吃掉抛
+# torch._dynamo.exc.Unsupported，关掉就没事。--enforce-eager 同时关 cudagraph
+# capture，进一步避免 _C 扩展的依赖路径。
+export TORCHDYNAMO_DISABLE=1
+rm -rf /root/.cache/vllm/torch_compile_cache 2>/dev/null || true
+
 setsid nohup python scripts/launch_vllm.py "<verifier_path>" \
   --target-layer-ids 2 18 34 \
   --hidden-states-path "$HS_DIR" \
   -- \
   --gpu-memory-utilization 0.9 \
   --max-model-len 4096 \
+  --enforce-eager \
   > /tmp/vllm-gen.log 2>&1 < /dev/null &
 VLLM_GEN_PID=$!
 VLLM_GEN_PGID=$(ps -o pgid= -p "$VLLM_GEN_PID" | tr -d ' ')
@@ -346,16 +382,14 @@ mkdir -p "$CHECKPOINT_DIR"
 
 cd /root/speculators
 
-# 关 dynamo —— speculators v0.7.0 src/speculators/models/dflash/core.py:30 有
-# 模块级 _compiled_create_block_mask = torch.compile(create_block_mask)，无
-# 守门。NPU 上首次 forward 触发 inductor fused triton kernel 编译，CANN BiShengIR
-# 报 "ub overflow, requires 3014656 bits while 1572864 bits available"（376 KB
-# > 192 KB UB），kernel 拒绝编译 → train.py ERR99999 → torchrun ChildFailed。
+# 关 dynamo —— 见 install-torch 步骤的说明。torch 2.12 上 vllm_ascend_C.so
+# 加载不了，enable_custom_op() 走 ImportError fallback 静默禁用自定义 op；
+# dynamo capture 阶段会把这层 fallback 吃掉抛 torch._dynamo.exc.Unsupported，
+# 必须关 dynamo + --enforce-eager 让 train.py 也在 eager 路径跑。另一层：
+# speculators v0.7.0 src/speculators/models/dflash/core.py:30 有模块级
+# _compiled_create_block_mask = torch.compile(create_block_mask)，无守门。
 # 关 dynamo 后 torch.compile() 返回原函数，BiShengIR 完全不被叫到。10-sample
 # smoke 不差这点 fused kernel 加速。
-# 2.13.0rc1 torch_npu/_inductor/select_algorithm.py 引入了 flex_attention 的
-# inductor 选择算法，理论上可开 dynamo；但 BiShengIR UB overflow 是否修了要
-# 单独验证，留待下次跑通后单独验。
 export TORCHDYNAMO_DISABLE=1
 
 # ASCEND_LAUNCH_BLOCKING=1 — 让 NPU kernel 错误同步上浮为 Python 异常；不加的话
@@ -378,6 +412,18 @@ export ASCEND_LAUNCH_BLOCKING=1
 # 对不齐是 spec 架构问题，CUDA 那边只是被 .bfloat16() 绕开了。
 # --on-missing raise 强制走 FileBackend 读 <hs_dir> 缓存；不带 --vllm-endpoint 让
 # dataloader 不会去问不存在的 server
+#
+# 32 GB NPU 备选：`--max-anchors 32 --draft-attn-impl sdpa`。doc 默认
+# `--max-anchors 3072 --draft-attn-impl simple_flex_attention` 在 64 GB 上过；
+# 在 32 GB 上两层都过不去：(a) simple_flex_attention 走 flex_attention HOP，
+# NPU 在 DispatchKey.AutocastPrivateUse1 上没注册 kernel，dynamo 关了也救不了
+# (HOP 跟 dynamo 是两条路)；(b) 退到 eager 后，QK^T 在 fp32 下要 96 GB
+# (seq_len 32768 × num_heads)，OOM。切 sdpa + max-anchors 32 后实测
+# val/loss=6.646，3.5 GB model.safetensors 落盘。注：sdpa 不走 DFlash 那种
+# anchor-block 稀疏 mask，用的是各 draft layer 的 sliding-window (window=2048)
+# —— 这是 spec 的默认全窗口选择，不是 anchor 感知 mask；smoke 只是验证管线通，
+# 真训练 (1k+ anchors) 需要补一个 NPU 上能跑的 flex_attention 后端
+# (torch_npu FlexAttention 算子或 torch.compile 后 inductor fused triton)。
 torchrun --standalone --nproc_per_node=1 scripts/train.py \
   --verifier-name-or-path "<verifier_path>" \
   --data-path "<data_path>" \
@@ -400,8 +446,18 @@ if [ "$TRAIN_RC" -ne 0 ]; then
   cat /tmp/train.log >&2
   exit 1
 fi
+# trainer 把 checkpoint 写到 "$CHECKPOINT_DIR/<step>/" 子目录（如 0/、best/），
+# 不是直接写到 "$CHECKPOINT_DIR"。test pipeline 后面 Step 4 用 <checkpoint_path>
+# 当 draft_model 路径，需要能直接读到 config.json；trainer 又在子目录里放
+# config.json + model.safetensors。把最新子目录的内容拷到 $CHECKPOINT_DIR 根，
+# 下游 Step 4 不用关心 trainer 内部目录命名，test-result 也跟原 doc 对齐
+# (`ls -1 <checkpoint_path>` 直接列 config.json + model.safetensors)。
+LATEST_CKPT=$(ls -1d "$CHECKPOINT_DIR"/*/ 2>/dev/null | sort -V | tail -1)
+if [ -n "$LATEST_CKPT" ] && [ "$LATEST_CKPT" != "$CHECKPOINT_DIR/" ]; then
+  cp -af "$LATEST_CKPT"/. "$CHECKPOINT_DIR"/
+fi
 if ! test -f "$CHECKPOINT_DIR/config.json" || ! test -f "$CHECKPOINT_DIR/model.safetensors"; then
-  echo "=== train.py rc=0 但 checkpoint 缺失 ===" >&2
+  echo "=== train.py rc=0 但 checkpoint 缺失 (looked under $CHECKPOINT_DIR/) ===" >&2
   cat /tmp/train.log >&2
   exit 1
 fi
@@ -427,11 +483,20 @@ model.safetensors
 起 vllm-ascend serve 把训好的 draft 挂上做 chat completion smoke（8 token completion）：
 
 ```shell #test id="pipeline-step4-serve" load="checkpoint_path>>draft_model" load="verifier_path>>verifier_path"
+# 关 dynamo + --enforce-eager：见 install-torch 步骤的说明 —— vllm_ascend_C.so
+# 在 torch 2.12 上 undefined symbol，enable_custom_op() 走 ImportError
+# fallback 静默禁用自定义 op；dynamo capture 阶段会把这层 fallback 吃掉抛
+# torch._dynamo.exc.Unsupported，必须关 dynamo + --enforce-eager 让 vllm
+# serve 在 eager 路径跑通。
+export TORCHDYNAMO_DISABLE=1
+rm -rf /root/.cache/vllm/torch_compile_cache 2>/dev/null || true
+
 # num_speculative_tokens=5：vllm-ascend 限制 (num_speculative_tokens + 1) ≤ 15
 nohup vllm serve "<verifier_path>" \
   --host 127.0.0.1 --port 8000 \
   --served-model-name Qwen/Qwen3-8B \
   --gpu-memory-utilization 0.85 \
+  --enforce-eager \
   --speculative-config '{"method":"dflash","model":"<draft_model>","num_speculative_tokens":5}' \
   > /tmp/vllm-serve.log 2>&1 &
 VLLM_PID=$!

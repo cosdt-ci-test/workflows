@@ -243,6 +243,26 @@ jobs:
       # schedule cycle needs to decide whether to retry. The dispatch
       # branch in `decide` below fetches the latest release tag
       # independently.
+
+      # Engine guard steps (Monitor / Decide) need curl + jq inside the
+      # project container. CANN 9.x images ship them, but older 8.x
+      # images (e.g. cann:8.2.rc1) do not, which breaks the guard loop
+      # with 'curl/jq: command not found' before the doc test ever runs.
+      # Install when missing (idempotent; no-op when already present).
+      # The NPU runner reaches the default ubuntu ports archive slowly,
+      # so point apt at the aliyun arm64 mirror first (same as opencv).
+      - name: Bootstrap curl and jq
+        run: |
+          set -euo pipefail
+          if command -v curl >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+            echo "bootstrap: curl and jq already present"
+            exit 0
+          fi
+          sed -i 's|http://ports.ubuntu.com/ubuntu-ports/|https://mirrors.aliyun.com/ubuntu-ports/|g' /etc/apt/sources.list || true
+          apt-get update -qq
+          apt-get install -y -qq curl jq
+          echo "bootstrap: curl $(curl --version | head -1) jq $(jq --version)"
+
       - name: Monitor upstream release and doc
         id: monitor
         if: github.event_name == 'schedule'

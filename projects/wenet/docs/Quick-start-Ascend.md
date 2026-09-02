@@ -239,6 +239,7 @@ cd wenet/examples/aishell/s0
 cp conf/train_conformer.yaml conf/train_conformer_5ep.yaml
 sed -i 's/max_epoch: .*/max_epoch: 5/' conf/train_conformer_5ep.yaml
 sed -i 's/speed_perturb: true/speed_perturb: false/' conf/train_conformer_5ep.yaml
+sed -i '/--pin_memory/d' run_npu.sh
 bash run_npu.sh --stage 4 --stop_stage 4 --train_config conf/train_conformer_5ep.yaml
 ```
 

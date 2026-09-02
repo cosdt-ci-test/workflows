@@ -78,7 +78,7 @@ cd wenet
 pip install -e .
 pip install torch==2.5.1 torch-npu==2.5.1.post1
 pip install torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cpu
-pip install "deepspeed<0.19.6" tensorboardX
+pip install "deepspeed<0.19.6" tensorboardX "numpy<2"
 ```
 
 安装 sox：

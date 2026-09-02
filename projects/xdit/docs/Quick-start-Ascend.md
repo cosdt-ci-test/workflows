@@ -74,6 +74,7 @@ npu dispatch: npu hccl True
 ```shell #test id="xdit-sd3-smoke"
 cat > sd3_npu.py <<'PY'
 import os
+import sys
 import torch
 import torch_npu
 from modelscope import snapshot_download
@@ -82,13 +83,15 @@ from xfuser import xFuserArgs, xFuserStableDiffusion3Pipeline
 from xfuser.config import FlexibleArgumentParser
 from xfuser.core.distributed import get_runtime_state, get_world_group
 
+model_path = snapshot_download('stabilityai/stable-diffusion-3-medium-diffusers')
+
 parser = FlexibleArgumentParser(description="xFuser SD3 Arguments")
-args = xFuserArgs.add_cli_args(parser).parse_args()
+# --model 为 xfuser 必填参数，注入下载后的本地路径，其余参数仍从命令行读取
+args = xFuserArgs.add_cli_args(parser).parse_args(['--model', model_path] + sys.argv[1:])
 engine_args = xFuserArgs.from_cli_args(args)
 engine_config, input_config = engine_args.create_config()
 local_rank = get_world_group().local_rank
 
-model_path = snapshot_download('stabilityai/stable-diffusion-3-medium-diffusers')
 # T5-XXL 单独按 fp16 预载再传入，避免 pipeline 默认路径重复加载
 text_encoder_3 = T5EncoderModel.from_pretrained(
     model_path, subfolder="text_encoder_3", torch_dtype=torch.float16

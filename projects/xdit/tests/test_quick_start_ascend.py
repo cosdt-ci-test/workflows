@@ -76,7 +76,11 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         ``sd3_npu.py``) resolves the model path via an embedded
         ``modelscope.snapshot_download('stabilityai/
         stable-diffusion-3-medium-diffusers')`` (full repo ~30 GB into
-        the default hub cache, bind-mounted from the host) —
+        the default hub cache, bind-mounted from the host) and
+        injects it as the required ``--model`` arg (0.6.0's CLI
+        parser mandates ``--model``; its built-in download fallback
+        goes through the HF hub, where SD3 medium is gated — so the
+        ModelScope-resolved local path must be fed in) —
         ``torchrun --nproc_per_node=1`` initialises the hccl runtime,
         ``xFuserStableDiffusion3Pipeline`` generates one 256x256
         1-step image, saved to ``results/sd3_npu.png`` and structurally

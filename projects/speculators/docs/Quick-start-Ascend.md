@@ -363,13 +363,119 @@ export TORCHDYNAMO_DISABLE=1
 # /tmp/train.log，下次失败没法定位是哪个 op 炸的
 export ASCEND_LAUNCH_BLOCKING=1
 
-# 不再需要 sitecustomize.py patch：torch_npu 2.13.0rc1 通过
-# _init/patches/npu_patches.py::apply_flex_attention_patch 在 import torch_npu 时
-# 自动调 _patch_flex_attention_device + _register_npu_flex_attention_autocast
-# （torch_npu/utils/patch_flexattention.py），前者等价于原来 doc 自己写的
-# _validate_device allowlist patch，后者把 flex_attention HOP 注册到
-# AutocastPrivateUse1 dispatch key —— 是这次 smoke 失败（NotImplementedError:
-# could not find kernel for HigherOrderOperator flex_attention）的根治。
+# torch_npu 2.13.0rc1 wheel **没有** _patch_flex_attention_device /
+# _register_npu_flex_attention_autocast：实测 wheel 里
+# torch_npu/_init/patches/npu_patches.py 只有 apply_npu_intercept_patch +
+# apply_npu_format_patch，没有 apply_flex_attention_patch 注册；torch_npu/utils/
+# patch_flexattention.py 也不存在。wheel 跟仓库 v26.2.0-beta.1-pytorch2.13.0
+# source 不一致——上游 eager 路径 patch 没打包进 rc1 wheel。
+# 不补这层 patch 的后果：flex_attention(q, k, v) 直接 raise
+#   ValueError: FlexAttention is only supported on CUDA, CPU, HPU, or MPS
+# 跟 CI 撞的 NotImplementedError 是同一面墙的前置关卡。
+#
+# 绕开：把上游 patch_flexattention.py（torch_npu 自带，仅依赖 torch 公开 API，
+# 不依赖 torch_npu 内部）原样 inline 进 sitecustomize.py。c8b66da 删 sitecustomize
+# 是基于源码层假设；本 commit 实测后回填。vendored，等 torch_npu 2.13.0 stable
+# wheel 包含这个文件后删。
+cat > /root/sitecustomize.py << 'PYEOF'
+"""Auto-loaded by Python when PYTHONPATH=/root is set; runs before scripts/train.py.
+
+Re-applies the eager-mode flex_attention patches that torch_npu 2.13.0rc1
+shipped without (wheel gap vs upstream source). Equivalent to
+torch_npu.utils.patch_flexattention._patch_flex_attention_device +
+torch_npu.utils.patch_flexattention._register_npu_flex_attention_autocast.
+
+Original upstream source (BSD-3-Clause, Huawei Technologies Co., Ltd):
+torch_npu/utils/patch_flexattention.py @ v26.2.0-beta.1-pytorch2.13.0
+"""
+from __future__ import annotations
+import sys
+
+import torch
+from torch._C import DispatchKey
+from torch._higher_order_ops.flex_attention import (
+    flex_attention as _flex_attention_hop,
+    flex_attention_backward as _flex_attention_backward_hop,
+)
+from torch.amp.autocast_mode import _cast as _autocast_cast
+
+
+def _flex_attention_autocast_npu(
+    query, key, value, score_mod, block_mask, scale, kernel_options,
+    score_mod_other_buffers=(), mask_mod_other_buffers=(),
+):
+    device_type = query.device.type
+    autocast_dtype = torch.get_autocast_dtype(device_type)
+    query = _autocast_cast(query, device_type, autocast_dtype)
+    key = _autocast_cast(key, device_type, autocast_dtype)
+    value = _autocast_cast(value, device_type, autocast_dtype)
+    autocast_keyset = torch._C.DispatchKeySet(DispatchKey.AutocastPrivateUse1)
+    with torch._C._ExcludeDispatchKeyGuard(autocast_keyset):
+        return _flex_attention_hop(
+            query, key, value, score_mod, block_mask, scale, kernel_options,
+            score_mod_other_buffers, mask_mod_other_buffers,
+        )
+
+
+def _flex_attention_backward_autocast_npu(
+    query, key, value, out, logsumexp, grad_out, grad_logsumexp,
+    fw_graph, joint_graph, block_mask, scale, kernel_options,
+    score_mod_other_buffers=(), mask_mod_other_buffers=(),
+):
+    autocast_keyset = torch._C.DispatchKeySet(DispatchKey.AutocastPrivateUse1)
+    with torch._C._ExcludeDispatchKeyGuard(autocast_keyset):
+        return _flex_attention_backward_hop(
+            query, key, value, out, logsumexp, grad_out, grad_logsumexp,
+            fw_graph, joint_graph, block_mask, scale, kernel_options,
+            score_mod_other_buffers, mask_mod_other_buffers,
+        )
+
+
+def _register_npu_flex_attention_autocast():
+    if not _flex_attention_hop.has_kernel_for_dispatch_key(
+        DispatchKey.AutocastPrivateUse1
+    ):
+        _flex_attention_hop.py_impl(DispatchKey.AutocastPrivateUse1)(
+            _flex_attention_autocast_npu
+        )
+    if not _flex_attention_backward_hop.has_kernel_for_dispatch_key(
+        DispatchKey.AutocastPrivateUse1
+    ):
+        _flex_attention_backward_hop.py_impl(DispatchKey.AutocastPrivateUse1)(
+            _flex_attention_backward_autocast_npu
+        )
+
+
+def _patch_flex_attention_device():
+    try:
+        from torch.nn.attention import flex_attention as _fa_mod
+    except ImportError:
+        return
+    if getattr(_fa_mod, '_npu_device_patched', False):
+        return
+
+    def _npu_valid_device(query, key, value):
+        if query.device.type != "npu":
+            return
+        if query.device != key.device or query.device != value.device:
+            raise ValueError(
+                f"Expected query, key, and value to have the same device, "
+                f"but got query.device: {query.device}, key.device: {key.device}, "
+                f"and value.device: {value.device} instead."
+            )
+
+    _fa_mod._validate_device = _npu_valid_device
+    _fa_mod._npu_device_patched = True
+
+
+try:
+    _patch_flex_attention_device()
+    _register_npu_flex_attention_autocast()
+    sys.stderr.write("[sitecustomize] flex_attention NPU patches applied (vendored from torch_npu 2.13 source)\n")
+except Exception as exc:
+    sys.stderr.write(f"[sitecustomize] flex_attention patch skipped: {exc!r}\n")
+PYEOF
+export PYTHONPATH=/root:$PYTHONPATH
 
 # --hidden-states-dtype float32：spec v0.7.0 schema 写死 "Model master weights
 # are always kept in fp32"，dflash.forward 内 LN.weight 是 fp32；torch.autocast

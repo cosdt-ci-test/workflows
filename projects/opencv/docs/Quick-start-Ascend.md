@@ -411,11 +411,11 @@ cmake -DCMAKE_BUILD_TYPE=Debug \
 
 > `OPENCV_DOWNLOAD_MIRROR_ID=gitcode` 让 cmake configure 阶段拉 ADE / IPPICV / TBB / 字体 / wechat_qrcode 模型时走 gitcode.net 镜像（国内可达）。
 
-`make install` 编译 + 安装是一体的，最终 binary 直接落到 `/usr/local/opencv-cann/bin/`，不要拆成两步（拆开会让中间状态 binary 路径错位）。
+`make install` 编译 + 安装是一体的，最终 binary 直接落到 `/usr/local/opencv-cann/bin/`，不要拆成两步（拆开会让中间状态 binary 路径错位）。用 `cmake --build` 走 cmake-native progress 输出，能看到 `[N/M] Building CXX object ...`，比裸 `make -j2` 的"安静"更友好（裸 make 只在 target 完成才打一行，配合 -j 容易以为卡住）。
 
 ```shell #test-setup
 cd opencv/build
-make install -j2
+cmake --build . --target install --parallel 2
 ```
 
 ## 校验 build 产物

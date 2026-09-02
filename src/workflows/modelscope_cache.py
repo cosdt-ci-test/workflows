@@ -105,6 +105,33 @@ def safetensors_header_ok(path: Path) -> bool:
     return True
 
 
+def _log_mount_info(label: str, path: Path) -> None:
+    """Diagnostic: print disk usage for ``path`` so a failing
+    ``prepare_environment`` call's captured stdout shows the mount
+    state of the cache_root the purge ran on. Distinguishes a
+    tmpfs/overlay tmpdir from a real bind mount like
+    ``/data/ci-cache/modelscope/<project>/`` — exactly the
+    distinction that matters when "disk full" / "stale shards" /
+    "purge didn't help" need root-causing from a CI log alone.
+
+    No-op for inaccessible paths: prints the ``OSError`` name +
+    message instead of raising, matching the no-op spirit of
+    ``test_no_op_when_cache_absent`` (the caller continues
+    regardless).
+    """
+    try:
+        u = shutil.disk_usage(str(path))
+    except OSError as e:
+        print(f'[mount-diag] {label}: {path} -> {type(e).__name__}: {e}')
+        return
+    gb = 1 << 30
+    print(
+        f'[mount-diag] {label}: path={path} '
+        f'total={u.total/gb:.1f}GB used={u.used/gb:.1f}GB '
+        f'free={u.free/gb:.1f}GB'
+    )
+
+
 def purge_corrupt_models(cache_root: Path) -> None:
     """Scan every ``*.safetensors`` file under each model dir and purge
     the model dir if any shard is corrupt. ``modelscope`` will
@@ -138,6 +165,7 @@ def purge_corrupt_models(cache_root: Path) -> None:
         tests with a tmp dir and doesn't carry an implicit dependency
         on a module-level constant.
     """
+    _log_mount_info('cache_root', cache_root)
     hub_models = cache_root / 'hub' / 'models'
     if not hub_models.exists():
         print(f'cache: miss ({hub_models} not present yet); nothing to validate')

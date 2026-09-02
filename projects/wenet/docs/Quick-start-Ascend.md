@@ -79,6 +79,7 @@ pip install -e .
 pip install torch==2.5.1 torch-npu==2.5.1.post1
 pip install torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cpu
 pip install "deepspeed<0.19.6" tensorboardX
+sed -i '/_apply_mstx_patch()/d' "$(python -c 'import torch_npu, os; print(os.path.dirname(torch_npu.__file__))')/__init__.py"
 ```
 
 安装 sox：

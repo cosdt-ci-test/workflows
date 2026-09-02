@@ -18,8 +18,8 @@
 #     通知告警）。
 #
 # schedule 生效时机：GitHub 仅对默认分支上的 workflow 定义执行定时触发。
-# 首次接入暂关 schedule（见下方 on: 注释块），以 workflow_dispatch 手动
-# 验证跑通后再恢复定时调度。
+# 每 6 小时自动检测一轮（UTC 0/6/12/18 点）；亦可在 Actions 页手动
+# workflow_dispatch 触发。
 #
 # 基线持久化：actions/cache（沿用引擎 restore/persist 模式，键前缀
 # upstream-doc-monitor-state-），承载各监控项的哈希、工单链接与频控状态
@@ -35,11 +35,10 @@ concurrency:
   cancel-in-progress: false
 
 on:
-  # schedule 暂关：首次接入先以手动触发（workflow_dispatch）验证跑通，
-  # 稳定后再恢复定时调度（取消下方注释即可，无需其他改动）。
-  # schedule:
-  #   # 每 6 小时一次（UTC 0/6/12/18 点整 = 香港 8/14/20/2 点）
-  #   - cron: '0 */6 * * *'
+  # 定时调度：每 6 小时一次（UTC 0/6/12/18 点整 = 香港 8/14/20/2 点）。
+  # 手动验证已通过（run#1 全 first_seen / run#2 稳态 unchanged+304），恢复定时。
+  schedule:
+    - cron: '0 */6 * * *'
   workflow_dispatch:
 
 permissions:

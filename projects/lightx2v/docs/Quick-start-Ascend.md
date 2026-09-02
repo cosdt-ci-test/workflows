@@ -89,11 +89,7 @@ lightx2v version: xxx
 本文使用 [Wan-AI/Wan2.1-T2V-1.3B](https://modelscope.cn/models/Wan-AI/Wan2.1-T2V-1.3B)（~17.6 GB）：
 
 ```shell #test-setup id="lightx2v-pull-wan21-t2v"
-modelscope download \
-    --model Wan-AI/Wan2.1-T2V-1.3B \
-    --local_dir models/Wan2.1-T2V-1.3B \
-    --include "diffusion_pytorch_model.safetensors" "models_t5_umt5-xxl-enc-bf16.pth" \
-               "Wan2.1_VAE.pth" "google*" "config.json"
+modelscope download --model Wan-AI/Wan2.1-T2V-1.3B --local_dir models/Wan2.1-T2V-1.3B
 ```
 
 ### 🚀 开始推理

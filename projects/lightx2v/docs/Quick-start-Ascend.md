@@ -116,10 +116,9 @@ pipe = LightX2VPipeline(
     model_cls='wan2.1',
     task='t2v',
 )
-pipe.create_generator(
-    # 仓库自带的 NPU 专用配置（npu_flash_attn / 50 步 / cpu_offload 已预调好）
-    config_json=root + '/LightX2V/configs/platforms/ascend_npu/wan_t2v.json'
-)
+# 仓库自带的 NPU 专用配置（npu_flash_attn / 50 步 / cpu_offload 已预调好）
+pipe.config_json = root + '/LightX2V/configs/platforms/ascend_npu/wan_t2v.json'
+pipe.create_generator()
 
 seed = 42
 prompt = "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage."

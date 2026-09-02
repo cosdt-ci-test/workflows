@@ -13,12 +13,11 @@ Environment variables (injected by the quick-start engine workflow
 ``quick-start-template.yml``, triggered by ``xdit-quick-start.yml``):
     ``MONITORED_DOC_URL``         Required; raw URL of the document under test.
     ``UPSTREAM_REF``              Injected by the engine but NOT consumed
-                                  by the doc body: the doc's clone block
-                                  just clones the default branch, exactly
-                                  what a user gets. xDiT has release tags;
-                                  the monitor still resolves the latest
-                                  release id as the change key, it just
-                                  doesn't pin the checkout anymore.
+                                  by the doc body: the doc installs
+                                  ``xfuser`` from PyPI, so there is no
+                                  source checkout to pin. The monitor
+                                  still resolves the latest release id
+                                  as the change key.
     ``NPU_READY=true``            Required, otherwise the class is skipped.
                                   End-to-end tests only run on the NPU runner:
                                   local dev machines / normal ubuntu runners
@@ -26,8 +25,9 @@ Environment variables (injected by the quick-start engine workflow
                                   hard run would fail on ``import torch_npu``.
 
 The doc body is cwd-relative ("wherever you run it is the project
-root"): clone to ``./xDiT``, weights to ``./models``, script + outputs
-to ``./results``. CI pins the execution cwd in
+root"): script + outputs land in the cwd (``./results``); weights go
+to the default modelscope hub cache via the embedded
+``snapshot_download``. CI pins the execution cwd in
 ``prepare_environment`` via ``os.chdir('/root/xdit-test')``.
 """
 
@@ -41,6 +41,7 @@ from workflows.markdown_doc_test_base import MarkdownDocTestBase
 from workflows.modelscope_cache import (
     ensure_safetensors,
     purge_corrupt_models,
+    resolve_modelscope_cache,
 )
 
 
@@ -65,21 +66,26 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
       * The doc installs the pinned torch stack (torch 2.9.0 +
         torch_npu 2.9.0.post2 + triton 3.5.* — xfuser >= 0.6.0 imports
         triton unconditionally in ``core/sparge_attention/block_mask.py``
-        without declaring it) + installs xfuser from source + verifies
-        the NPU dispatch (``xfuser/envs.py`` returns
+        without declaring it) + installs xfuser + modelscope from PyPI
+        (``uv pip install xfuser "modelscope==1.37.0"``; xfuser 0.6.0
+        is a pure-Python wheel, flash-attn is only an optional extra)
+        and verifies the NPU dispatch (``xfuser/envs.py`` returns
         ``get_torch_distributed_backend() == "hccl"``).
-      * Smoke: SD3 medium (~30 GB full repo via ``modelscope download
-        --local_dir``) through a minimal single-card script —
+      * Smoke: a minimal single-card SD3 script (heredoc-written
+        ``sd3_npu.py``) resolves the model path via an embedded
+        ``modelscope.snapshot_download('stabilityai/
+        stable-diffusion-3-medium-diffusers')`` (full repo ~30 GB into
+        the default hub cache, bind-mounted from the host) —
         ``torchrun --nproc_per_node=1`` initialises the hccl runtime,
-        ``xFuserStableDiffusion3Pipeline`` generates one 256x256 1-step
-        image, saved to ``results/sd3_npu.png`` and structurally
+        ``xFuserStableDiffusion3Pipeline`` generates one 256x256
+        1-step image, saved to ``results/sd3_npu.png`` and structurally
         verified (PNG magic + size floor).
       * Multi-card paths (USP / DP / TP) are pointer-only (a doc note
         linking upstream examples); the guard exercises the single-card
         path only.
     """
 
-    DEFAULT_COMMAND_TIMEOUT = 1800  # 30 min baseline; cold SD3 download (~16 GB) rides on the yml-level budget
+    DEFAULT_COMMAND_TIMEOUT = 1800  # 30 min baseline; cold SD3 download (~30 GB) rides on the yml-level budget
     USER_AGENT = 'cosdt-ci-test/quick-start'  # monitored source is the fork under cosdt-ci-test org
     ERROR_MARKERS = (
         *MarkdownDocTestBase.ERROR_MARKERS,  # generic [ERROR] + Traceback
@@ -146,13 +152,13 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     # (CI_IMAGE).
     _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
 
-    # Doc execution cwd for CI: the doc body is cwd-relative (clone
-    # to ./xDiT, weights to ./models, outputs to ./results) so
-    # "wherever the user runs it" is the project root. CI chdirs to
-    # /root/xdit-test — the workflow yml bind-mounts
-    # /data/ci-cache/xdit-models onto the ``models/`` subdir so the
-    # doc's ``modelscope download --local_dir`` output persists
-    # across runs.
+    # Doc execution cwd for CI: the doc body is cwd-relative (the smoke
+    # writes sd3_npu.py and ./results/ into the cwd) so "wherever the
+    # user runs it" is the project root. CI chdirs to /root/xdit-test
+    # to keep the heredoc script + output images out of the checkout
+    # dir. Model weights land in the default modelscope hub cache
+    # (~/.cache/modelscope), which the workflow yml bind-mounts from
+    # the host (/data/ci-cache/modelscope/xdit) for persistence.
     _PROJECT_ROOT = '/root/xdit-test'
 
     # ----------------------------------------------------------
@@ -165,13 +171,13 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     def prepare_environment(cls) -> None:
         """Source CANN env + write CUDA exclusion list + install uv +
         probe torch stack + chdir to the doc cwd + validate the
-        bind-mounted models dir.
+        modelscope cache.
 
         ``xfuser`` itself is NOT installed here — the doc's install
-        block exercises the source install path (``git clone`` +
-        ``uv pip install -e ./xDiT``), so a broken install surfaces as
-        a fuzzy mismatch in the doc's verify block rather than being
-        masked by a pre-installed copy.
+        block exercises the PyPI install path (``uv pip install
+        xfuser``), so a broken release surfaces as a fuzzy mismatch in
+        the doc's verify block rather than being masked by a
+        pre-installed copy.
 
         The doc body is cwd-relative; ``os.chdir(_PROJECT_ROOT)`` here
         makes every doc command run under /root/xdit-test (the engine
@@ -204,8 +210,8 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         os.environ['PIP_CONSTRAINT'] = cls._CONSTRAINTS_FILE
         os.environ['UV_CONSTRAINT'] = cls._CONSTRAINTS_FILE
 
-        # 2) uv: the doc's install blocks call ``uv pip install`` which
-        # handles PEP 517 build deps more reliably than pip. Inherit
+        # 2) uv: the doc's install block calls ``uv pip install xfuser``
+        # which resolves deps with PEP 517 reliability. Inherit
         # ``PIP_INDEX_URL`` + ``PIP_TRUSTED_HOST`` from the yml job-level
         # env (cluster cache path + trusted-host).
         subprocess.run(
@@ -246,11 +252,9 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             print('setup: torch stack probe failed, doc install-torch will install the pinned stack')
 
         # 4) execution cwd: chdir to /root/xdit-test — the doc body is
-        # cwd-relative (./xDiT, ./models, ./results) and the engine runs
-        # every block with cwd=Path.cwd(). The yml bind-mounts the
-        # persistent volume onto the ``models/`` subdir so model
-        # downloads survive across runs. Pre-create the dir first (a
-        # bind-mount onto a missing target dir fails on some kernels).
+        # cwd-relative (the smoke's heredoc script + ./results/ land in
+        # the cwd) and the engine runs every block with
+        # cwd=Path.cwd(). Keeps run artifacts out of the checkout dir.
         try:
             os.makedirs(cls._PROJECT_ROOT, exist_ok=True)
         except OSError as exc:
@@ -267,29 +271,23 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         # to each subprocess).
         os.environ['ASCEND_RT_VISIBLE_DEVICES'] = '0'
 
-        # 5) safetensors + cache validation: persistent host-side bind
-        # mounts can hold truncated safetensors from interrupted
-        # downloads. Walk every shard under the bind-mounted ./models
-        # (the doc's ``modelscope download --local_dir`` target) and
-        # purge on failure; modelscope will re-download cleanly on next
-        # access. The modelscope hub cache is NOT bind-mounted anymore
-        # (the doc's download goes straight to --local_dir; the hub
-        # cache only holds lock files now), so there is nothing to
-        # validate there.
+        # 5) safetensors + cache validation: the modelscope hub cache
+        # is bind-mounted from the host (the doc's embedded
+        # snapshot_download writes the full SD3 repo there, ~30 GB), so
+        # interrupted runs can leave truncated shards behind. Walk every
+        # shard and purge the model dir on failure; modelscope will
+        # re-download cleanly on next access.
         # ensure_safetensors pulls in safetensors (transitive of
         # torch); install defensively in case the CANN base image
         # rolls forward.
         ensure_safetensors()
         try:
-            from pathlib import Path
-            proj_models = Path(cls._PROJECT_ROOT) / 'models'
-            if proj_models.is_dir():
-                purge_corrupt_models(proj_models)
+            purge_corrupt_models(resolve_modelscope_cache())
         except Exception as exc:
             # purge_corrupt_models is best-effort: a permission error
             # or missing dir shouldn't abort the test. Log and
-            # continue; the doc's `modelscope download --local_dir`
-            # will surface real download failures via its own rc.
+            # continue; the doc's snapshot_download will surface real
+            # download failures via its own rc.
             print(f'setup: cache purge skipped ({exc})')
 
     # ----------------------------------------------------------

@@ -14,7 +14,7 @@
 | Python | ≥ 3.10 | 自备环境（CI 镜像为 3.12） |
 | torch / torch_npu | 2.9.0 / 2.9.0.post2 | 下方安装 |
 | triton | 3.5.* | 下方安装（xfuser 导入需要） |
-| xfuser（xDiT） | GitHub 源码 | 下方安装 |
+| xfuser（xDiT） | PyPI 最新（CI 以 0.6.0 验证） | 下方安装 |
 
 > 也可用带 CANN 的昇腾镜像（如 [ascendhub cann 镜像](https://www.hiascend.com/developer/ascendhub)）跳过 CANN 安装，其余步骤相同。
 
@@ -37,11 +37,10 @@ uv pip install "torch==2.9.0" "torch_npu==2.9.0.post2" "triton==3.5.*"
 
 ## 📦 安装 xDiT
 
-**克隆并安装**：
+**安装**（PyPI 包名 `xfuser`）：
 
-```shell #test-setup id="xdit-install-source"
-git clone --depth 1 https://github.com/xdit-project/xDiT.git
-uv pip install -e ./xDiT
+```shell #test-setup id="xdit-install"
+uv pip install xfuser "modelscope==1.37.0"
 ```
 
 **验证安装**（全部就位时输出 `npu hccl True`）：
@@ -68,24 +67,16 @@ npu dispatch: npu hccl True
 
 ## 🎯 文生图
 
-### 📥 模型准备
-
-本文使用 [SD3 medium](https://modelscope.cn/models/stabilityai/stable-diffusion-3-medium-diffusers)（约 30 GB）：
-
-```shell #test-setup id="xdit-pull-sd3"
-uv pip install "modelscope==1.37.0"
-modelscope download --model stabilityai/stable-diffusion-3-medium-diffusers --local_dir models/stable-diffusion-3-medium-diffusers
-```
-
 ### 🚀 开始生成
 
-用 Python API 生成图片（单卡、1 步、256×256；`torchrun` 负责初始化运行时环境）：
+用 [SD3 medium](https://modelscope.cn/models/stabilityai/stable-diffusion-3-medium-diffusers) 生成图片（约 30 GB，首次运行时自动下载到 ModelScope 默认缓存，无需手动下载；单卡、1 步、256×256；`torchrun` 负责初始化运行时环境）：
 
 ```shell #test id="xdit-sd3-smoke"
 cat > sd3_npu.py <<'PY'
 import os
 import torch
 import torch_npu
+from modelscope import snapshot_download
 from transformers import T5EncoderModel
 from xfuser import xFuserArgs, xFuserStableDiffusion3Pipeline
 from xfuser.config import FlexibleArgumentParser
@@ -97,12 +88,13 @@ engine_args = xFuserArgs.from_cli_args(args)
 engine_config, input_config = engine_args.create_config()
 local_rank = get_world_group().local_rank
 
+model_path = snapshot_download('stabilityai/stable-diffusion-3-medium-diffusers')
 # T5-XXL 单独按 fp16 预载再传入，避免 pipeline 默认路径重复加载
 text_encoder_3 = T5EncoderModel.from_pretrained(
-    engine_config.model_config.model, subfolder="text_encoder_3", torch_dtype=torch.float16
+    model_path, subfolder="text_encoder_3", torch_dtype=torch.float16
 )
 pipe = xFuserStableDiffusion3Pipeline.from_pretrained(
-    pretrained_model_name_or_path=engine_config.model_config.model,
+    pretrained_model_name_or_path=model_path,
     engine_config=engine_config,
     torch_dtype=torch.float16,
     text_encoder_3=text_encoder_3,
@@ -125,7 +117,6 @@ if pipe.is_dp_last_group():
 get_runtime_state().destroy_distributed_env()
 PY
 torchrun --nproc_per_node=1 sd3_npu.py \
-    --model "$PWD/models/stable-diffusion-3-medium-diffusers" \
     --prompt "a tiny test sketch" \
     --height 256 --width 256 \
     --num_inference_steps 1 \
@@ -137,6 +128,8 @@ torchrun --nproc_per_node=1 sd3_npu.py \
 ```
 
 ### 输出校验
+
+校验生成的图片完整有效（PNG 文件头魔数 + 大小 >50 KB 下限，防止空图 / 坏图）：
 
 ```shell #test id="xdit-sd3-output"
 python - <<'PY'

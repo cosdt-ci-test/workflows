@@ -14,13 +14,12 @@
 #   * No explicit device mounts: the self-hosted NPU runner
 #     (`linux-aarch64-a2-2`, two 910B4) auto-passes `/dev/davinci*`
 #     into the container via the cluster device-plugin.
-#   * Doc-cwd models bind-mount: the doc body is cwd-relative and the
-#     test class chdirs to /root/xdit-test, so the doc's
-#     `modelscope download --local_dir models/...` writes land under
-#     /root/xdit-test/models. Bind-mounting a host-side persistent
-#     volume (`/data/ci-cache/xdit-models`) there keeps the ~16 GB
-#     SD3 medium pull off every run's wall-clock budget (same
-#     lightx2v-models pattern as lightx2v-quick-start.yml).
+#   * ModelScope hub cache bind-mount: the doc's embedded
+#     `snapshot_download` writes SD3 medium into the default hub
+#     cache (/root/.cache/modelscope). Bind-mounting a host-side
+#     persistent volume (`/data/ci-cache/modelscope/xdit`) there
+#     keeps the ~30 GB pull off every run's wall-clock budget (same
+#     modelscope-cache pattern as lightx2v-quick-start.yml).
 
 name: xdit-quick-start
 
@@ -66,35 +65,34 @@ jobs:
       # ASCEND_RT_VISIBLE_DEVICES=0, leaving the second card idle.
       test_runner: '["linux-aarch64-a2-2"]'
       image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-      # The doc's `modelscope download --local_dir models/...` writes
-      # under the doc cwd (/root/xdit-test, chdir'd by the test class).
-      # Bind-mounting /data/ci-cache/xdit-models onto that `models/`
-      # subdir persists the ~16 GB SD3 medium pull across runs.
-      # `:z` is load-bearing on this SELinux-enforcing cluster; see
-      # ms-swift / diffusers / xtuner / specforge for the same option.
-      # The modelscope hub cache is NOT bind-mounted: with
-      # --local_dir it only holds lock files (container-local is fine).
+      # The doc's embedded `snapshot_download` writes the full SD3
+      # medium repo (~30 GB) into the default modelscope hub cache
+      # (/root/.cache/modelscope). Bind-mounting
+      # /data/ci-cache/modelscope/xdit there persists the pull across
+      # runs. `:z` is load-bearing on this SELinux-enforcing cluster;
+      # see ms-swift / diffusers / xtuner / specforge for the same
+      # option.
       container_options: >-
-        --volume=/data/ci-cache/xdit-models:/root/xdit-test/models:z
+        --volume=/data/ci-cache/modelscope/xdit:/root/.cache/modelscope:z
       # Doc body does: torch 2.9.0 + torch_npu 2.9.0.post2 + triton
       # 3.5.* install (the image ships only CANN 9.1.0, so the whole
       # torch stack is installed and verified by the doc itself;
       # triton is needed by xfuser >= 0.6.0's sparge_attention which
-      # imports it unconditionally without declaring it) + git clone
-      # (depth=1, default branch — plain user-facing clone, the same
-      # command a reader copies from the doc) + `uv pip install -e
-      # ./xDiT` + the install verify block (imports the full xfuser
-      # chain, asserts the NPU dispatch prints `npu hccl True`) +
-      # `modelscope download --local_dir models/
-      # stable-diffusion-3-medium-diffusers` (full repo, ~31 GB) +
-      # a minimal single-card SD3 script (heredoc-written sd3_npu.py,
-      # NPU-native device calls, T5-XXL preloaded fp16) via
-      # `torchrun --nproc_per_node=1` (1 step, 256x256) + a PNG
-      # structural check (magic + size floor) on results/sd3_npu.png.
-      # 90 min covers cold install + first git clone + the
-      # build-from-source `uv pip install -e .` step + SD3
-      # cold-cache download (~31 GB; warm after first run via the
-      # bind-mount) + T5 load + single-card inference.
+      # imports it unconditionally without declaring it) + `uv pip
+      # install xfuser "modelscope==1.37.0"` (PyPI install, no source
+      # checkout; xfuser 0.6.0 is a pure-Python wheel, flash-attn
+      # only an optional extra) + the install verify block (imports
+      # the full xfuser chain, asserts the NPU dispatch prints
+      # `npu hccl True`) + a minimal single-card SD3 script
+      # (heredoc-written sd3_npu.py, embedded `snapshot_download(
+      # 'stabilityai/stable-diffusion-3-medium-diffusers')` into the
+      # default hub cache, full repo ~30 GB; NPU-native device calls,
+      # T5-XXL preloaded fp16) via `torchrun --nproc_per_node=1`
+      # (1 step, 256x256) + a PNG structural check (magic + size
+      # floor) on results/sd3_npu.png.
+      # 90 min covers cold install + SD3 cold-cache download (~30 GB;
+      # warm after first run via the bind-mount) + T5 load +
+      # single-card inference.
       timeout_minutes: 90
       upstream_repo: xdit-project/xDiT
       # GitHub Contents API URL (NOT raw.githubusercontent.com):

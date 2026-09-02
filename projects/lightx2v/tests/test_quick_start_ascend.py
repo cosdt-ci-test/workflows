@@ -237,8 +237,9 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         )
 
         # 2.5) triton: NOT installed here — the doc's deps block
-        # installs the *real* wheel (unpinned ``triton`` line). Two
-        # dead ends ruled a pre-install out empirically:
+        # installs the *real* wheel (``triton==3.5.*``, torch 2.9's
+        # own triton line). Two dead ends ruled a pre-install out
+        # empirically:
         # a `pip install triton<3.0` pin fails the resolver (no 2.x
         # aarch64 wheel on the cluster index), and an empty import-time
         # stub makes ``import triton`` succeed *too well* — torch then

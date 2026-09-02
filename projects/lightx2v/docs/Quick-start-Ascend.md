@@ -49,7 +49,7 @@ git clone --depth 1 https://github.com/ModelTC/LightX2V.git
 **安装依赖及代码**（aarch64 上部分依赖无预编译包，无法自动解析依赖，先装源码再补齐）：
 
 ```shell #test-setup id="lightx2v-install-deps"
-uv pip install --no-deps -v LightX2V
+uv pip install --no-deps -v ./LightX2V
 
 uv pip install \
     numpy scipy diffusers transformers tokenizers tqdm accelerate safetensors \
@@ -59,7 +59,7 @@ uv pip install \
     aio-pika 'asyncpg>=0.27.0' 'aioboto3>=12.0.0' \
     'alibabacloud_dypnsapi20170525==1.2.2' 'redis==6.4.0' tos \
     av 'torchada>=0.1.10' pyzmq soundfile \
-    'modelscope==1.37.0' triton
+    'modelscope==1.37.0' 'triton==3.5.*'
 ```
 
 **验证安装**（没有 `uv` 先 `pip install uv`）：

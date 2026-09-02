@@ -195,7 +195,7 @@ INSERTS = {
     'layers/layer_norm.cpp': ['nn_norm_ops'],
     'layers/lrn_layer.cpp': ['nn_norm_ops'],
     'layers/matmul_layer.cpp': ['matrix_calculation_ops'],
-    'layers/nary_eltwise_layer.cpp': ['elewise_calculation_ops'],
+    'layers/nary_eltwise_layers.cpp': ['elewise_calculation_ops'],
     'layers/padding_layer.cpp': ['pad_ops'],
     'layers/permute_layer.cpp': ['transformation_ops'],
     'layers/pooling_layer.cpp': ['nn_pooling_ops'],

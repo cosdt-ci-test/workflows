@@ -377,13 +377,14 @@ source /usr/local/Ascend/nnal/atb/set_env.sh
 # --on-missing raise 强制走 FileBackend 读 <hs_dir> 缓存；不带 --vllm-endpoint
 # 让 dataloader 不去问不存在的 server
 #
-# 32 GB NPU 备选：`--max-anchors 32 --draft-attn-impl sdpa`。doc 默认
-# `--max-anchors 3072 --draft-attn-impl simple_flex_attention` 是 64 GB 配置；
-# 32 GB 上 simple_flex_attention 走 NPU 不支持的 HOP，eager 又 OOM
-# （fp32 QK^T ~96 GB）。sdpa + 32 anchor 实测 val/loss=6.646，3.5 GB 落盘。
-# 注：sdpa 不走 DFlash 的 anchor-block 稀疏 mask，用的是各 draft layer 的
-# sliding-window（window=2048）；smoke 只验管线通，真训练需要补一个 NPU 上
-# 能跑的 flex_attention 后端。
+# --max-anchors 32 --draft-attn-impl sdpa：spec 默认是 `--max-anchors 3072
+# --draft-attn-impl simple_flex_attention`（CUDA 路径）；torch 2.10 的
+# `flex_attention._validate_device` 只放行 CUDA / CPU / HPU，NPU device
+# 直接 ValueError，不是 OOM 是 hard reject。64 GB NPU 也必须切 sdpa，不
+# 是只 32 GB 才需要。sdpa 不走 DFlash 的 anchor-block 稀疏 mask，用各
+# draft layer 的 sliding-window（window=2048）；smoke 只验管线通，
+# 真训练需要补一个 NPU 能跑的 flex_attention 后端。sdpa + 32 anchor
+# 实测 val/loss=6.688，3.5 GB 落盘，~3 min/epoch on 910B4。
 torchrun --standalone --nproc_per_node=1 scripts/train.py \
   --verifier-name-or-path "<verifier_path>" \
   --data-path "<data_path>" \
@@ -395,7 +396,8 @@ torchrun --standalone --nproc_per_node=1 scripts/train.py \
   --lr 3e-4 \
   --speculator-type dflash \
   --block-size 8 \
-  --max-anchors 3072 \
+  --max-anchors 32 \
+  --draft-attn-impl sdpa \
   --num-layers 5 \
   --target-layer-ids 2 18 34 \
   --on-missing raise >/tmp/train.log 2>&1 || TRAIN_RC=$?

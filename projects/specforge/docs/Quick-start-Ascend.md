@@ -654,7 +654,7 @@ echo "smoke: prepare-data OK ($SHAREGPT_PATH)"
 
 ### 跑 specforge 训练（1 步）
 
-```shell #test id="smoke-train" load="model_path>>MODEL_PATH sharegpt_path>>SHAREGPT_PATH"
+```shell #test id="smoke-train" load="model_path>>MODEL_PATH" load="sharegpt_path>>SHAREGPT_PATH"
 set -euo pipefail
 SPECFORGE_ROOT="${SPECFORGE_ROOT:-SpecForge}"
 TRAINER_DEVICE="${SPECFORGE_TRAINER_DEVICE:-1}"

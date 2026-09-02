@@ -1,0 +1,241 @@
+# Upstream doc monitor — 完全自包含的监控清单
+#
+# 手动指定全部监控项，不依赖 projects.yaml 解析（监控清单与项目注册表
+# 各自独立演进，repo 一致性由本文件的评审保障）。
+#
+# 每个条目 = 一个监控项，字段：
+#   project  展示标签（工单标题与报告分组用；同一标签可出现在多个条目）
+#   owner    处理人 GitHub 用户名（可选但强烈建议填写：该条目产生的工单
+#            会 @owner 并尽力设为 assignee；缺省则工单不 @人）
+#   source   采集源，type 二选一：
+#     type: repo_file → 监控 GitHub 仓库内的单个文档
+#       repo    owner/repo 形式（必填）
+#       path    仓库内文档路径，相对仓库根（必填）
+#       branch  可选，默认上游默认分支
+#     type: web_page → 监控外部官方网页
+#       url     完整 http(s) 地址（必填）
+#
+# 若同一项目未来需要监控第二个文档，增加一个条目即可（标签可重复、
+# 可配不同 owner）。新增条目首轮记 first_seen（不建工单），第二轮起
+# 正常判定变化。
+#
+# TODO(owner): 以下条目尚未指定 owner——请按团队分工补填，否则工单
+# 不会 @到具体处理人。
+
+projects:
+  - project: ms-swift
+    source:
+      type: repo_file
+      repo: modelscope/ms-swift
+      path: README.md
+  - project: tensorflow
+    source:
+      type: repo_file
+      repo: tensorflow/tensorflow
+      path: README.md
+  - project: flash-linear-attention
+    source:
+      type: repo_file
+      repo: fla-org/flash-linear-attention
+      path: README.md
+  - project: llama.cpp
+    source:
+      type: repo_file
+      repo: ggml-org/llama.cpp
+      path: README.md
+  - project: transformers
+    source:
+      type: repo_file
+      repo: huggingface/transformers
+      path: README.md
+  - project: ray
+    source:
+      type: repo_file
+      repo: ray-project/ray
+      path: README.rst
+  - project: deepspeed
+    source:
+      type: repo_file
+      repo: deepspeedai/DeepSpeed
+      path: README.md
+  - project: whisper.cpp
+    source:
+      type: repo_file
+      repo: ggml-org/whisper.cpp
+      path: README.md
+  - project: cache-dit
+    source:
+      type: repo_file
+      repo: vipshop/cache-dit
+      path: README.md
+  - project: accelerate
+    source:
+      type: repo_file
+      repo: huggingface/accelerate
+      path: README.md
+  - project: peft
+    source:
+      type: repo_file
+      repo: huggingface/peft
+      path: README.md
+  - project: diffusers
+    source:
+      type: repo_file
+      repo: huggingface/diffusers
+      path: README.md
+  - project: bitsandbytes
+    source:
+      type: repo_file
+      repo: bitsandbytes-foundation/bitsandbytes
+      path: README.md
+  - project: onnxruntime
+    source:
+      type: repo_file
+      repo: microsoft/onnxruntime
+      path: README.md
+  - project: diffsynth-studio
+    source:
+      type: repo_file
+      repo: modelscope/DiffSynth-Studio
+      path: README.md
+  - project: trl
+    source:
+      type: repo_file
+      repo: huggingface/trl
+      path: README.md
+  - project: torchtune
+    source:
+      type: repo_file
+      repo: meta-pytorch/torchtune
+      path: README.md
+  - project: xtuner
+    source:
+      type: repo_file
+      repo: InternLM/xtuner
+      path: README.md
+  - project: speculators
+    source:
+      type: repo_file
+      repo: vllm-project/speculators
+      path: README.md
+  - project: slime
+    source:
+      type: repo_file
+      repo: THUDM/slime
+      path: README.md
+  - project: specforge
+    source:
+      type: repo_file
+      repo: sgl-project/SpecForge
+      path: README.md
+  - project: torchtitan
+    source:
+      type: repo_file
+      repo: pytorch/torchtitan
+      path: README.md
+  - project: colossalai
+    source:
+      type: repo_file
+      repo: hpcaitech/ColossalAI
+      path: README.md
+  - project: opencompass
+    source:
+      type: repo_file
+      repo: open-compass/opencompass
+      path: README.md
+  - project: aibrix
+    source:
+      type: repo_file
+      repo: vllm-project/aibrix
+      path: README.md
+  - project: tensordict
+    source:
+      type: repo_file
+      repo: pytorch/tensordict
+      path: README.md
+  - project: torch.vision
+    source:
+      type: repo_file
+      repo: Ascend/vision
+      path: README.zh.md
+  - project: opencv
+    source:
+      type: repo_file
+      repo: opencv/opencv
+      path: README.md
+  - project: timm
+    source:
+      type: repo_file
+      repo: huggingface/pytorch-image-models
+      path: README.md
+  - project: xllm
+    source:
+      type: repo_file
+      repo: xLLM-AI/xllm
+      path: README.md
+  - project: xdit
+    source:
+      type: repo_file
+      repo: xdit-project/xDiT
+      path: README.md
+  - project: fastchat
+    source:
+      type: repo_file
+      repo: lm-sys/FastChat
+      path: README.md
+  - project: ktransformers
+    source:
+      type: repo_file
+      repo: kvcache-ai/ktransformers
+      path: README.md
+  - project: mooncake
+    source:
+      type: repo_file
+      repo: kvcache-ai/Mooncake
+      path: README.md
+  - project: flagscale
+    source:
+      type: repo_file
+      repo: flagos-ai/FlagScale
+      path: README.md
+  - project: stable-diffusion-webui
+    source:
+      type: repo_file
+      repo: AUTOMATIC1111/stable-diffusion-webui
+      path: README.md
+  - project: llm-d
+    source:
+      type: repo_file
+      repo: llm-d/llm-d
+      path: README.md
+  - project: llm-compressor
+    source:
+      type: repo_file
+      repo: vllm-project/llm-compressor
+      path: README.md
+  - project: lm-evaluation-harness
+    source:
+      type: repo_file
+      repo: EleutherAI/lm-evaluation-harness
+      path: README.md
+  - project: tilelang
+    source:
+      type: repo_file
+      repo: tile-ai/tilelang-ascend
+      path: README.md
+  - project: wenet
+    source:
+      type: repo_file
+      repo: wenet-e2e/wenet
+      path: README.md
+  - project: modelscope
+    source:
+      type: repo_file
+      repo: modelscope/modelscope
+      path: README.md
+  # 官方网页监控示例（ascend.github.io 社区文档页，URL 已核实可达）。
+  # 其他项目的社区文档页核实路径后按同款方式追加。
+  - project: lm-eval-ascend-doc
+    source:
+      type: web_page
+      url: https://ascend.github.io/docs/sources/lm_evaluation/quick_start.html

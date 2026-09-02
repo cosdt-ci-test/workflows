@@ -76,10 +76,10 @@ git checkout <UPSTREAM_REF>
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 cd wenet
 pip install -e .
-pip install torch==2.5.1 torch-npu==2.5.1.post1
-pip install torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cpu
-pip install "deepspeed<0.19.6" tensorboardX "numpy<2"
-echo 'def _apply_mstx_patch(): pass' > "$(python -c 'import torch_npu.profiler._add_mstx_patch as m; print(m.__file__)')"
+pip install torch==2.2.0 torch-npu==2.2.0.post2
+pip install torchaudio==0.17.0 --index-url https://download.pytorch.org/whl/cpu
+pip install "deepspeed<0.19.6" tensorboardX
+pip install "numpy<2"
 ```
 
 安装 sox：

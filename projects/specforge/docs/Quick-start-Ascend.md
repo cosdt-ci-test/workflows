@@ -140,13 +140,20 @@ MOONCAKE_REF=v0.3.13
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"
-# 编译依赖（与 projects/mooncake/scripts/setup_example.sh 一致）。
+# 编译依赖。前 11 个与 projects/mooncake/scripts/setup_example.sh 一致（仅编
+# transfer_engine_ascend_direct_perf 二进制够用）；WITH_STORE=ON 还会拉进
+# store + pybind11 binding + wheel 打包，额外要 6 个 cmake 包（缺一个 cmake configure
+# 直接 abort：Boost/Asio/ZMQ/msgpack/xxHash/ZSTD）+ 2 个 wheel 打包工具
+# （patchelf 给 .so 写 RPATH、file 给 wheel 写 platform-tag，缺了 build_wheel.sh 直接
+# command-not-found）。
 apt-get update -qq >/dev/null 2>&1
 apt-get install -qq -y --no-install-recommends \
     build-essential cmake git pkg-config \
     libgoogle-glog-dev libgflags-dev libibverbs-dev \
     libjsoncpp-dev libnuma-dev libyaml-cpp-dev \
     libssl-dev libcurl4-openssl-dev \
+    libzstd-dev libxxhash-dev libzmq3-dev libasio-dev \
+    libboost-dev libmsgpack-dev patchelf file \
     >/dev/null 2>&1 \
     || { echo "build-mooncake: FAILED - apt install build deps" >&2; exit 1; }
 git clone --depth 1 https://github.com/kvcache-ai/Mooncake.git \
@@ -387,6 +394,19 @@ PY
 ### Step 2：打补丁 + apt 依赖
 
 镜像里 sglang 实际是 0.5.18（看 step `image-probe`），`apply_sglang_spec_capture_patch.sh` 默认 target 就是 `v0.5.18`，这里显式传 `--target v${SGLANG_VER}` 以便 image 以后 bump sglang 时自动跟上。脚本会从 specforge 源码仓拉 `patches/sglang/v0.5.18/spec-capture.patch` + `patches/sglang/v0.5.18/spec-capture-ascend-mount.patch`（前者改 `sglang/srt/spec_capture_sink.py` 加 `allocate_and_mount_segment` 等字段，后者再加 ascend 段挂载适配）。Hunk2 行号跟上游 a8c0993 之后版本对不上（BSD patch 直接 `malformed patch at line 41`），ascend companion 用 Python 字符串替换做（不依赖行号），见块里 heredoc。
+
+> `apply_sglang_spec_capture_patch.sh` 内部用 `git apply -v -p2`，对 git-editable
+> 装的 sglang（`pip install -e` / 镜像预装，working tree 根在 `python/`）会**全
+> 12 个文件静默 Skipped patch**——因为 patch header 是 `a/python/sglang/...`，
+> `-p2` 剥成 `sglang/...`，git 找不到路径直接 silent skip，但脚本的"已应用"判定
+> （`cmp -s APPLIED_COPY PATCH && check_reverse`）依然通过，run 显示 rc=0 实际
+> 一行没写。失败后必须用 `git apply -p1` 重新打（`-p1` 只剥 `a/` → `python/sglang/...`）
+> 才是 spec-capture hook 真正落地。SMOKE 的 server_args.py 防御性 fallback（下面
+> heredoc 末尾那段 `python -c "..."`）可以补上 `enable_spec_capture` 等三个字段
+> 让 launch_server 不崩，但 logits_processor / scheduler / model_runner 等 hook
+> 不会自动恢复——`smoke-start-sglang` 会因为缺 patch 在 forward 早期就 ValueError。
+> 治本：要么改脚本把 `git apply -p2` 换成 `git apply -p1`、要么别用脚本、直接
+> 在 sglang repo 里 `git apply -p1 patches/sglang/v0.5.18/spec-capture.patch`。
 
 SpecForge 上游 2026-08-29 退掉了 v0.5.14 patch（commit `b453386827`）；如果以后 image 把 sglang 倒回 0.5.14，这条 step 会 rc!=0 立即红——届时把 sglang 重新钉到 0.5.18、或 checkout `b453386827` 之前的 SpecForge commit，二选一。
 
@@ -858,6 +878,18 @@ MOONCAKE_METADATA_SERVER=http://127.0.0.1:$MOONCAKE_HTTP_PORT/metadata \
 MOONCAKE_MASTER_SERVER_ADDR=127.0.0.1:$MOONCAKE_RPC_PORT \
 MOONCAKE_PROTOCOL=tcp \
 MOONCAKE_GLOBAL_SEGMENT_SIZE=$((32<<30)) \
+# Qwen3.5-4B 是 hybrid Mamba/GDN 模型，forward 时 torch_npu 的 op_plugin.atb 会 lazy
+# load libatb.so（Ascend Transcend Boost runtime）；CANN set_env.sh 把 atb bin 加进 PATH
+# 但 lib 路径没进 LD_LIBRARY_PATH，sglang graph capture 阶段一调
+# `torch_npu._npu_reshape_and_cache` 就 OSError: libatb.so: cannot open shared object。
+ATB_LIB=/usr/local/Ascend/nnal/atb/9.0.0/atb/cxx_abi_1/lib
+if [[ -d "$ATB_LIB" ]]; then
+    export LD_LIBRARY_PATH="$ATB_LIB:${LD_LIBRARY_PATH:-}"
+fi
+# --enable-spec-capture 要求单遍 prefill（chunked=4096 会把一请求切成多段，
+# captured hidden states 只覆盖首段，后续段的 spec-capture sink 拿不到）。specforge
+# scheduler 在 __init__ 阶段硬性 assert --chunked-prefill-size -1，否则直接
+# ValueError 退出 server 启动。
 nohup python -m sglang.launch_server \
     --model-path "<MODEL_PATH>" \
     --trust-remote-code \
@@ -865,6 +897,7 @@ nohup python -m sglang.launch_server \
     --tp-size 1 \
     --mem-fraction-static 0.5 \
     --context-length 1024 \
+    --chunked-prefill-size -1 \
     --attention-backend ascend \
     --enable-spec-capture --spec-capture-method dflash \
     --spec-capture-aux-layer-ids 1 8 15 22 29 \
@@ -900,6 +933,17 @@ SPECFORGE_ROOT="${SPECFORGE_ROOT:-SpecForge}"
 TRAINER_DEVICE="${SPECFORGE_TRAINER_DEVICE:-1}"
 RECIPE="${SPECFORGE_RECIPE:-examples/configs/online/disaggregated/external/qwen3.5-4b-dflash-online-npu.yaml}"
 pushd "$SPECFORGE_ROOT" >/dev/null
+# 配方 output_dir 里残留的上次 producer_claim / failed 标记会让这次启动直接
+# ValueError 拒绝继续（disaggregated.py:_claim_fresh_control_path 硬性 assert 控制路径干净）。
+# smoke 1 步训练不需要 checkpoint，先删再跑。
+rm -rf outputs/qwen3.5-4b-dflash-npu-online
+# recipe 默认 tracking.report_to=tensorboard，没装 tensorboard 就 ValueError；
+# smoke 1 步训练不开 tracker。
+# Qwen3.5-4B 是多模态 Qwen3_5ForConditionalGeneration，权重前缀是
+# `model.language_model.*`（不是纯 LLM 的 `model.*`），specforge dflash 加载
+# embed_tokens 默认找 `model.embed_tokens.weight` 直接报
+# `ValueError: Required target weight keys are missing from the checkpoint index`；
+# 显式覆盖 embedding_key 指到多模态 layout 的真实位置。
 ASCEND_RT_VISIBLE_DEVICES=$TRAINER_DEVICE \
 HCCL_CONNECT_TIMEOUT=7200 HCCL_EXEC_TIMEOUT=7200 \
 PYTORCH_NPU_ALLOC_CONF=expandable_segments:True \
@@ -911,8 +955,10 @@ specforge train -c "$RECIPE" \
     training.num_anchors=32 \
     training.save_interval=0 \
     training.log_interval=1 \
+    tracking.report_to=none \
     deployment.trainer.nproc_per_node=1 \
     model.target_model_path="<MODEL_PATH>" \
+    model.embedding_key="model.language_model.embed_tokens.weight" \
     2>&1 | tee /tmp/smoke-train.log
 TRAIN_RC=${PIPESTATUS[0]}
 popd >/dev/null

@@ -228,13 +228,26 @@ modelscope download --model damo/nlp_structbert_word-segmentation_chinese-base
 
 ```shell #test id="ms-pipeline-word-seg"
 python - <<'PY'
-from modelscope.pipelines import pipeline
+import sys
 
-word_segmentation = pipeline(
-    'word-segmentation',
-    model='damo/nlp_structbert_word-segmentation_chinese-base')
-result = word_segmentation(' 今天天气不错，适合出去游玩 ')
-print('output:', result['output'])
+def show_ms(label):
+    ms = sys.modules.get('modelscope')
+    print(f'[{label}] type={type(ms).__name__}', file=sys.stderr)
+    if hasattr(ms, '_class_to_module'):
+        print(f'[{label}] _class_to_module keys={list(ms._class_to_module.keys())[:5]}...', file=sys.stderr)
+    else:
+        print(f'[{label}] NO _class_to_module attr', file=sys.stderr)
+    print(f'[{label}] has __getattr__={hasattr(type(ms), "__getattr__")}', file=sys.stderr)
+
+show_ms('before-pipelines-import')
+
+try:
+    from modelscope.pipelines import pipeline
+except Exception as e:
+    print(f'pipeline import error: {type(e).__name__}: {e}', file=sys.stderr)
+
+show_ms('after-pipelines-import')
+print(f'same object: {sys.modules.get("modelscope") is not None}', file=sys.stderr)
 PY
 ```
 

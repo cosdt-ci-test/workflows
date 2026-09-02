@@ -610,9 +610,51 @@ smoke: waiting for SGLang /health (up to 600s)
 smoke: sglang ready (pid=xxx)
 ```
 
+### 准备训练数据
+
+`qwen3.5-4b-dflash-online-npu.yaml` 默认 `data.train_data_path: ./cache/dataset/train_regen.jsonl`——上游流程是 `scripts/regenerate_train_data.py` 拿 sglang `/v1/chat/completions` 重生成 assistant（draft 与 target 分布对齐，质量更高），代价是 ~30s HTTP round-trip + `openai` 依赖。smoke 1 步不做数据质量优化：直接写一条 user→assistant 多轮对话进去，assistant 段 ~270 词足够提供 dflash `num_anchors=32` 上限（_sample_anchor_positions 需要 32 个 consecutive supervised token）；下面 `smoke-train` 用 `data.train_data_path=...` CLI override 把 recipe 默认路径指过来，schema 与 regen 文件一致（都是 `{id, conversations}` JSONL，trainer 不区分）。
+
+```shell #test-setup id="smoke-prepare-data" store="sharegpt_path"
+set -euo pipefail
+SPECFORGE_ROOT="${SPECFORGE_ROOT:-SpecForge}"
+if [[ ! -d "$SPECFORGE_ROOT" ]]; then
+    echo "smoke: FAILED - $SPECFORGE_ROOT/ missing; specforge-install-source first"
+    exit 1
+fi
+mkdir -p "$SPECFORGE_ROOT/cache/dataset"
+if ! python - "$SPECFORGE_ROOT/cache/dataset/sharegpt_train.jsonl" >/tmp/smoke-prep.log 2>&1 <<'PY'
+import json, os, sys
+path = sys.argv[1]
+os.makedirs(os.path.dirname(path), exist_ok=True)
+row = {
+    "id": "smoke_1",
+    "conversations": [
+        {"role": "user", "content": "Explain the difference between supervised and unsupervised learning in machine learning. Cover what types of problems each paradigm is suited for, give at least three concrete algorithm examples for each, and discuss practical considerations for choosing between them when you have a new dataset to model."},
+        {"role": "assistant", "content": "Supervised learning and unsupervised learning are the two foundational paradigms in machine learning, distinguished by the form of feedback the learning algorithm receives during training. In supervised learning the algorithm is given a labeled dataset, where each training example is paired with a target output, and adjusts its parameters to minimize a loss between its predictions and the ground truth; the two main task families are classification and regression, with concrete algorithms including linear regression for predicting continuous targets, logistic regression for binary classification, decision trees and random forests for tabular data, support vector machines for image classification, and deep neural networks for high-dimensional perceptual inputs. In unsupervised learning the algorithm receives only raw unlabeled inputs and must find structure on its own, with common tasks including clustering, dimensionality reduction, density estimation, and representation learning; concrete algorithms include k-means clustering for customer segmentation, hierarchical clustering for bioinformatics, principal component analysis for visualization, independent component analysis for signal separation, autoencoders for compact latent representations, and generative adversarial networks for synthesizing new samples. Choosing between the two depends on whether you have labeled data and a well defined prediction target: supervised learning delivers higher accuracy on the specific labeled task but requires costly annotation and does not generalize beyond seen labels, while unsupervised learning is preferable when labels are scarce or the goal is exploratory or structural. In modern practice the two are often combined, with unsupervised pretraining learning useful representations from large unlabeled corpora and supervised fine tuning specializing them for downstream tasks, an approach that underlies most large language model training pipelines today."},
+    ],
+}
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(row, f, ensure_ascii=False)
+    f.write("\n")
+print(f"wrote {path}")
+PY
+then
+    echo "smoke: FAILED - prepare conversations JSONL:" >&2
+    tail -20 /tmp/smoke-prep.log >&2
+    exit 1
+fi
+SHAREGPT_PATH="$SPECFORGE_ROOT/cache/dataset/sharegpt_train.jsonl"
+ls -la "$SHAREGPT_PATH"
+echo "smoke: prepare-data OK ($SHAREGPT_PATH)"
+```
+
+```shell #test-result id="smoke-prepare-data" load="sharegpt_path>>SHAREGPT_PATH"
+<SHAREGPT_PATH>
+```
+
 ### 跑 specforge 训练（1 步）
 
-```shell #test id="smoke-train" load="model_path>>MODEL_PATH"
+```shell #test id="smoke-train" load="model_path>>MODEL_PATH sharegpt_path>>SHAREGPT_PATH"
 set -euo pipefail
 SPECFORGE_ROOT="${SPECFORGE_ROOT:-SpecForge}"
 TRAINER_DEVICE="${SPECFORGE_TRAINER_DEVICE:-1}"
@@ -631,6 +673,7 @@ specforge train -c "$RECIPE" \
     training.batch_size=1 \
     training.accumulation_steps=1 \
     data.max_length=512 \
+    data.train_data_path="$SHAREGPT_PATH" \
     training.num_anchors=32 \
     training.save_interval=0 \
     training.log_interval=1 \

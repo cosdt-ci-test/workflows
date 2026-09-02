@@ -1,6 +1,6 @@
 # 快速开始
 
-在单卡昇腾 NPU 上完成 OpenCV 5.0.0 源码构建（开启 Huawei Ascend CANN 后端，`WITH_CANN=ON`），并跑 CPU 基础 API + NPU DNN 推理各一遍。
+在单卡昇腾 NPU 上完成 OpenCV 最新 release 源码构建（开启 Huawei Ascend CANN 后端，`WITH_CANN=ON`），并跑 CPU 基础 API + NPU DNN 推理各一遍。
 
 ## 前置条件
 
@@ -20,11 +20,11 @@ Atlas 900 A2 / A3 训练系列产品或 Ascend 950 系列，已挂载 `/dev/davi
 
 | 项目 | 值 |
 | --- | --- |
-| 机器 | Atlas 900 A2 PODc（Ascend 910B4，64 GB × 1）|
+| 机器 | Atlas 900 A2 PODc|
 | OS | Ubuntu 22.04 arm64 |
 | 镜像 | swr.cn-south-1.cloud-apeng.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12 |
 | Python / CANN / CMake / GCC | 3.12 / 9.1.0 / ≥ 3.18 / 11 |
-| OpenCV | 5.0.0 源码（`WITH_CANN=ON`）|
+| OpenCV | 最新 release 源码（`WITH_CANN=ON`）|
 | opencv_contrib | 与 OpenCV 同 release tag |
 
 ### 前置安装
@@ -77,7 +77,7 @@ apt-get update -qq && apt-get install -y -qq git build-essential cmake pkg-confi
 
 ## clone OpenCV + opencv_contrib
 
-runner 通过下面隐藏的 `#test-setup` 把最新 release tag 注入 `<ref>`；手动跑直接填 tag（今天 `5.0.0`）。
+把最新 release tag 注入 `<ref>`；手动跑直接填 tag。
 
 <!--
 ```shell #test-setup store="upstream_ref"
@@ -92,7 +92,7 @@ git clone --depth 1 --branch <ref> https://github.com/opencv/opencv_contrib.git
 
 ## 打 4 个源码补丁
 
-OpenCV 5.0.0 mainline 与 CANN 9.1.0 / aarch64 有 4 处不兼容。按顺序跑这 4 段脚本（幂等，已打过会断言跳过）。
+OpenCV mainline 与 CANN 9.1.0 / aarch64 有 4 处不兼容（4 个 patch 脚本假设 runner resolve 到 `5.0.0` tag；其它 tag 上 `assert old in s` 会抛错，需要重写 patch 适配）。按顺序跑这 4 段脚本（幂等，已打过会断言跳过）。
 
 ### 4a. `cv::MatShape` 改了类型
 
@@ -375,7 +375,7 @@ cmake --build . --target install --parallel 2
 
 输出结果如下：
 ```shell #test-result id="opencv-verify-build" fuzzy='xxx'
-5.0.0
+xxx
 xxx
 ```
 
@@ -405,7 +405,7 @@ exit $rc
 [  PASSED  ] 53 tests.
 ```
 
-> 不要加 `--gtest_brief`：OpenCV 5.0.0 vendored gtest 没实现这个 flag，加上后零用例执行但 rc=0，假绿。
+> 不要加 `--gtest_brief`：OpenCV vendored gtest 没实现这个 flag，加上后零用例执行但 rc=0，假绿。
 
 ## OpenCV Python quickstart
 
@@ -426,13 +426,14 @@ ok = cv2.imwrite('/tmp/opencv_quickstart.png', img)
 print('imwrite ok:', ok)
 print('shape:', img.shape, 'dtype:', img.dtype)
 PY
-ls -la /tmp/opencv_quickstart.png
+ls /tmp/opencv_quickstart.png
 ```
 
 输出结果如下：
 ```shell #test-result id="quickstart-imread-imwrite"
 imwrite ok: True
 shape: (100, 100, 3) dtype: uint8
+/tmp/opencv_quickstart.png
 ```
 
 ### 9b. 颜色空间转换
@@ -486,12 +487,13 @@ cv2.putText(img, 'Hello OpenCV', (50, 110), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255,
 print('rect+text drawn, image mean:', float(img.mean()))
 cv2.imwrite('/tmp/opencv_draw.png', img)
 PY
-ls -la /tmp/opencv_draw.png
+ls /tmp/opencv_draw.png
 ```
 
 输出结果如下：
 ```shell #test-result id="quickstart-draw" fuzzy='xxx'
 rect+text drawn, image mean: xxx
+/tmp/opencv_draw.png
 ```
 
 ### 9e. 视频写入

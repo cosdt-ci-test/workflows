@@ -317,7 +317,7 @@ head_first: xxx
 colorist_count: xxx
 ```
 
-从 list-cfg 拷一份 QLoRA + Colorist 配置到本地（具体 config 名随 release 漂移，先 grep 推断；xtuner v0.2.0 的 colorist cfg 是 llama 版，V1 之后才有 internlm2 版）：
+从 list-cfg 拷一份 Colorist 配置到本地（xtuner v0.2.0 的 colorist cfg 全部带 `qlora` 前缀——find xtuner-v0.2.0/xtuner/configs -name '*colorist*' 100% 是 qlora_*.py，没有 plain lora variant——所以拷过来之后要在 `xtuner-train-smoke-setup` 里 sed 翻 `load_in_4bit=True → False` 才能在 aarch64 上跑通，详见单卡 smoke 段上方注释；具体 config 名随 release 漂移，先 grep 推断；xtuner v0.2.0 的 colorist cfg 是 llama 版，V1 之后才有 internlm2 版）：
 
 ```shell #test-setup store="xtuner_llm_cfg_path"
 # 绕开 console_script wrapper shebang 错配（`xtuner list-cfg` / `xtuner copy-cfg` 的 wrapper
@@ -481,6 +481,41 @@ prompt_template= PROMPT_TEMPLATE.xxx
 
 跑最小训练：
 
+<!--
+  NPU 上真 bitsandbytes 装不上 / 跑不通（实证记录，2026-09）：
+
+  1) xtuner v0.2.0 requirements/runtime.txt 硬 pin bitsandbytes==0.45.0，PyPI 上该版本
+     全无 aarch64 wheel（only manylinux_2_17_x86_64 + win_amd64）。
+
+  2) source-build bnb 0.45.0 + cmake -DCOMPUTE_BACKEND=cpu + pip install . 在 aarch64 上
+     能装，但 import bitsandbytes 撞 ModuleNotFoundError: No module named 'triton.ops'
+     ——bnb 0.45.0 的 bitsandbytes/triton/int8_matmul_*.py 顶层
+     `from triton.ops.matmul_perf_model import early_config_prune, estimate_matmul_time`
+     无条件触发，而 is_triton_available() 只判断 triton 包存在（transformers.utils 那种
+     轻量 gating），对新版 triton 删了 triton.ops 命名空间这件事一无所知。
+
+  3) triton 生态有死结：1.x~2.3.1 有 triton.ops.matmul_perf_model 但 PyPI 上**全无 aarch64
+     wheel**（每个 2.x 版本的 urls 字段都只列 manylinux_2_17_x86_64）；3.0.0+ 有 aarch64 wheel
+     但把整个 triton.ops 命名空间删了。无 wheel 组合能填上 aarch64 + bnb 0.45.0 这两条线
+     之间的空档。
+
+  4) bnb 0.49.1+（有 aarch64 wheel，能 import）Linear4bit 推理撞
+     "RuntimeError: Blockwise 4bit quantization only supports 16/32-bit floats,
+     but got torch.uint8"（at bitsandbytes/backends/default/ops.py:225）。
+
+  综上 aarch64 NPU 上不存在可用的真 bitsandbytes 装法。改方案：拷 xtuner qlora cfg 后
+  sed 把 quantization_config.load_in_4bit=True 改成 False，BitsAndBytesConfig 类引用
+  保留但 post_init 的 metadata 检查被 `if self.load_in_4bit and ...` 守卫跳过——
+  bitsandbytes 整条 import 链不再被触发。代价：smoke 从 QLoRA 退化为 plain LoRA，验
+  不到 _replace_with_bnb_linear() 替换 + peft.prepare_model_for_kbit_training cast loop +
+  model.is_loaded_in_4bit 这条 QLoRA-only 路径，但 5 iter smoke 本来 forward 就是 zero
+  （stub Linear4bit 不做 matmul），换 plain LoRA 反而能跑真 fp16 matmul + autograd。
+  如果生产必须 QLoRA（7B + 4bit base 才塞得进 29GiB NPU），目前无解，等 bnb 上游修 NPU
+  quant kernel 的 uint8 dtype 问题，或换 deepspeed offload 跑 fp16 base。
+  tests/test_quick_start_ascend.py docstring 顶部"Why --no-deps on the xtuner line"
+  一节有同源结论，引用此处避免重复。
+-->
+
 ```shell #test-setup id="xtuner-train-smoke-setup" load="xtuner_llm_cfg_path>>cfg"
 # Stub cv2 via a real stub package (not sitecustomize) to bypass base image's missing libxcb.so.1.
 # mmengine.hooks.naive_visualization_hook.py:5 顶层 `import cv2`，被
@@ -580,137 +615,26 @@ def resize(*args, **kwargs):
     return None
 PYEOF
 
-# Stub bitsandbytes via real package + dist-info: xtuner's qlora cfg 走 BitsAndBytesConfig
-# (transformers 4.48 顶部 eager 实例化)，其 `post_init()` 无条件调
-# `importlib.metadata.version('bitsandbytes')`——NPU base image 不装 bnb（bnb 没有
-# aarch64 wheel + 需要 CUDA），setup 时 metadata lookup 抛 PackageNotFoundError 直接
-# ERR99999 退出。Stub 走两条路：(1) 真 package 让 `import bitsandbytes` 拿到合法 module；
-# (2) `bitsandbytes-0.46.1.dist-info/METADATA` 让 importlib.metadata.version() 返回稳定
-# 版本字符串绕过 if 分支。版本必须 **>= 0.43.1**——transformers 4.48 的
-# `is_bitsandbytes_available()` 对 < 0.43.1 的 bnb 走 `return torch.cuda.is_available()` 分支，
-# NPU base image 没有 CUDA → 该函数返 False → 4-bit quantizer 抛 ImportError
-# "Using `bitsandbytes` 4-bit quantization requires the latest version of bitsandbytes"。
-# 用 0.46.1 是为了同时满足新 transformers（>=0.46.1）和老 transformers（>=0.43.1）。
-# 5 iter smoke 不真做 4-bit quant，只 post_init 走通就够了。
-# 子模块：mmengine.optim.optimizer.builder.register_bitsandbytes_optimizers() (line 153)
-# eager 调 `bnb.optim`，`bnb.nn` 也被 transformers.integrations.bitsandbytes 访问——空 stub
-# 够绕 AttributeError，5 iter smoke 不真做 quant。
-mkdir -p /tmp/bitsandbytes_stub/bitsandbytes/nn /tmp/bitsandbytes_stub/bitsandbytes/optim /tmp/bitsandbytes_stub/bitsandbytes/functional /tmp/bitsandbytes_stub/bitsandbytes/autograd /tmp/bitsandbytes_stub/bitsandbytes/cextension
-# 顶层 __init__.py 显式 import 子模块——`from bitsandbytes import optim` 和
-# `import bitsandbytes as bnb; bnb.optim` 都需要子模块**作为属性**挂在 bnb 上，
-# 不显式 import 就 AttributeError（`__getattr__` 返 lambda 不是 module，
-# `import bitsandbytes.optim` 才会触发自动 register。mmengine
-# builder.py:153 用的是 `bnb.optim` 属性访问，必须显式 import）。
-cat > /tmp/bitsandbytes_stub/bitsandbytes/__init__.py <<'PYEOF'
-__version__ = "0.46.1"
-from . import nn, optim, functional, autograd, cextension
-# features = {"multi_backend"}：transformers 4.48 的 validate_bnb_backend_availability()
-# 经 `getattr(bnb, "features", set())` 检查 multi_backend 是否在 features 里；没有就调
-# `_validate_bnb_cuda_backend_availability()` → `torch.cuda.is_available()` 必须 True
-# （NPU base image 没 CUDA，RuntimeError "CUDA is required but not available for
-# bitsandbytes"）。设 multi_backend 走 multi-platform 分支绕开 CUDA check。
-# supported_torch_devices：`_validate_bnb_multi_backend_availability()` 取
-# `getattr(bnb, "supported_torch_devices", set())` 与 `available_devices = {'cpu','npu'}`
-# 求交集；空集就 RuntimeError "None of the available devices ... are supported by the
-# bitsandbytes version"。这里塞 cpu + npu，让交集非空通过检查。
-features = {"multi_backend"}
-supported_torch_devices = {"cpu", "npu"}
-PYEOF
-# bnb.nn 提供真 nn.Module 子类：transformers `_replace_with_bnb_linear()` 把每个 torch.nn.Linear
-# 替换成 `bnb.nn.Linear4bit(...)` 后立刻 `model._modules[name].source_cls = type(module)` 并
-# 递归 `list(module.children())`。如果 Linear4bit 是 `lambda *a, **k: None`（原 v1 stub），
-# `model._modules[name]` 变 None，下一行 `.source_cls =` 就 AttributeError。子类化
-# torch.nn.Linear，参数全 swallow，权重是 fp32 Linear（5 iter smoke 不真 quant，跑 forward
-# 也只是基本 Linear，不触发 bnb 算子）。
-cat > /tmp/bitsandbytes_stub/bitsandbytes/nn/__init__.py <<'PYEOF'
-import torch
-import torch.nn as nn
-
-# Linear4bit / Linear8bitLt：用 buffer 代替 Parameter 存 weight，绕开 NPU OOM。
-# 触发链：xtuner.model.sft.SFT._prepare_for_lora → peft.prepare_model_for_kbit_training
-# → `for param in model.parameters(): ... cast fp16/bf16 to fp32`。stub 走 nn.Linear
-# 子类时 weight 是 fp32 Parameter，7B 模型 = 28GB，NPU 29GiB 直接 OOM。改用
-# register_buffer 放 weight（不进 .parameters()），peft 循环看不到 weight，只 cast
-# bias → bias 28GB→56GB 也是 OOM。
-# 解决：weight 改成"按需在 _load_from_state_dict 里 lazy 分配 1×1 placeholder"——
-# 真实 forward 走 F.linear 时 self.weight 必须 shape (out, in) 才能 matmul，但 smoke
-# 不在乎 forward 输出对不对。直接重写 forward 返回 zero tensor，shape 对齐 (bs, out)。
-# 优点：model load 不分配 weight 内存（参数不进 .parameters()，peft 不动它）；
-# forward 不触发 matmul；grad 为 None 不存。整套 7B 模型只占 bias 内存（~14KB 总和）。
-# 5 iter smoke 训出来的 ckpt 是垃圾——smoke 只验 patch + 训练 pipeline 跑通。
-class Linear4bit(nn.Module):
-    def __init__(self, in_features, out_features, bias=True,
-                 compute_dtype=None, compress_statistics=True,
-                 quant_type='nf4', **kwargs):
-        super().__init__()
-        self.in_features = in_features
-        self.out_features = out_features
-        # Bias 是 Parameter 但 size 小（per-output 一个数）；peft cast loop 把它 fp32
-        # 也无所谓——7B 模型的 bias 总共 ~14KB fp16 / 28KB fp32，远小于 NPU。
-        self.bias = nn.Parameter(torch.zeros(out_features, dtype=torch.float16),
-                                 requires_grad=False) if bias else None
-
-    def forward(self, x):
-        return torch.zeros(*x.shape[:-1], self.out_features,
-                           dtype=x.dtype, device=x.device)
-
-class Linear8bitLt(nn.Module):
-    def __init__(self, in_features, out_features, bias=True,
-                 has_fp16_weights=True, threshold=6.0):
-        super().__init__()
-        self.in_features = in_features
-        self.out_features = out_features
-        self.bias = nn.Parameter(torch.zeros(out_features, dtype=torch.float16),
-                                 requires_grad=False) if bias else None
-
-    def forward(self, x):
-        return torch.zeros(*x.shape[:-1], self.out_features,
-                           dtype=x.dtype, device=x.device)
-
-# Params4bit 是 bnb 的 4-bit Parameter 子类（继承 torch.nn.Parameter），被
-# `transformers.quantizers.quantizer_bnb_4bit.check_quantized_param()` 的
-# `isinstance(module._parameters.get(...), bnb.nn.Params4bit)` 检查。线性 weight
-# 默认 torch.nn.Parameter，check 返 False 走 non-quantized path；但 isinstance 调
-# 起来必须 getattr 不抛 AttributeError。Stub 一个空壳类即可，5 iter smoke 不真做
-# 4-bit weight packing，Params4bit 不会被实例化。
-class Params4bit(nn.Parameter):
-    pass
-PYEOF
-# bnb.optim：mmengine.builder.register_bitsandbytes_optimizers() line 153 写
-# `bnb.optim.AdamW8bit` / `bnb.optim.PagedAdamW8bit` 等类名做 mapping。这些类需要是
-# `torch.optim.Optimizer` 子类才能被 mmengine.builder.build_optim_wrapper() 实例化。
-# 退化实现：copy torch.optim.AdamW 的全部 init 行为（subclass 最直接），让 optimizer 构造
-# 不报错，5 iter smoke 不真做 8-bit optim state packing。
-cat > /tmp/bitsandbytes_stub/bitsandbytes/optim/__init__.py <<'PYEOF'
-import torch.optim
-
-class AdamW8bit(torch.optim.AdamW):
-    pass
-
-class PagedAdamW8bit(torch.optim.AdamW):
-    pass
-
-class Adam8bit(torch.optim.Adam):
-    pass
-
-class PagedAdam8bit(torch.optim.Adam):
-    pass
-PYEOF
-# functional / autograd / cextension：仍按 lazy lambda 兜底（smoke 不调 quant ops）。
-for sub in functional autograd cextension; do
-cat > /tmp/bitsandbytes_stub/bitsandbytes/${sub}/__init__.py <<'PYEOF'
-def __getattr__(name):
-    return lambda *args, **kwargs: None
-PYEOF
-done
-mkdir -p /tmp/bitsandbytes_stub/bitsandbytes-0.46.1.dist-info
-cat > /tmp/bitsandbytes_stub/bitsandbytes-0.46.1.dist-info/METADATA <<'EOF'
-Metadata-Version: 2.1
-Name: bitsandbytes
-Version: 0.46.1
-EOF
+# xtuner v0.2.0 的 colorist cfg 只有 *qlora* 版本（find xtuner-v0.2.0/xtuner/configs -name
+# "*colorist*" 100% 是 qlora_*.py，无 plain lora variant），所以拷完 cfg 后改 quantization
+# 位：load_in_4bit=True → False。BitsAndBytesConfig 类引用保留，但 post_init() 的
+# `if self.load_in_4bit and ...` 守卫跳过 metadata 检查；
+# transformers.AutoModel.from_pretrained 看到 load_in_4bit=False 不走 4bit quant path；
+# peft.prepare_model_for_kbit_training 因 model.is_loaded_in_4bit=False 跳过 cast loop。
+# 整条 bitsandbytes 路径不再 require 任何 bnb 安装。
+# load_in_8bit cfg 里原本就是 False，不用动；只翻 load_in_4bit 一个字段。详见本节上方
+# 的 `<!-- -->` 注释，里面实证了为什么 aarch64 上没法装真 bnb。
 
 cp <cfg> /tmp/xtuner_npu_smoke_single_cfg.py
+# xtuner cfg 是 .py 文件，quantization_config 字段用 `load_in_4bit=True,` (Python 赋
+# 值，不是 YAML 的 `:`)；sed pattern 要按 `=` 写。锚定行首空白 + 字段名等号避免误伤
+# 其他 cfg 文本。
+sed -i 's/^\([[:space:]]*load_in_4bit=\)True/\1False/' /tmp/xtuner_npu_smoke_single_cfg.py
+grep -q '^[[:space:]]*load_in_4bit=False' /tmp/xtuner_npu_smoke_single_cfg.py || {
+  echo "FAIL: load_in_4bit=True→False patch did not apply to /tmp/xtuner_npu_smoke_single_cfg.py"
+  exit 1
+}
+
 # 只 append samples_per_epoch：5 iter 短训足够触发一次 checkpoint + EvaluateChatHook。
 # 其他 override（max_epochs、checkpoint.interval、custom_hooks[1].every_n_iters）走
 # `--cfg-options` 而不是再赋值 cfg 变量。原因：cfg 文件里 `train_cfg`、`custom_hooks[1]`、
@@ -730,7 +654,7 @@ export TORCH_NPU_USE_HCCL=1
 # → ... → image_utils → `from torchvision.transforms import InterpolationMode`。site-packages
 # 里的 torchvision 在 NPU base image 缺 C++ extension，import 触发 torch.ops 注册抛
 # `operator torchvision::nms does not exist`。PYTHONPATH 上 stub 优先于 site-packages。
-export PYTHONPATH=/tmp/torchvision_stub:/tmp/cv2_stub:/tmp/bitsandbytes_stub${PYTHONPATH:+:$PYTHONPATH}
+export PYTHONPATH=/tmp/torchvision_stub:/tmp/cv2_stub${PYTHONPATH:+:$PYTHONPATH}
 mkdir -p /tmp/xtuner_sft_llm_out_single
 # pipefail：train pipeline 是 `python ... | tee`，pipe 默认 rc 取最后一个 cmd（tee），python 抛
 # FileNotFoundError / RuntimeError 时 tee 仍然 rc=0，framework 看不到错误就以为训练成功。开了 pipefail
@@ -879,44 +803,17 @@ def resize(*args, **kwargs):
     return None
 PYEOF
 
-# Stub bitsandbytes via real package + dist-info：见 xtuner-train-smoke-setup 注释
-# (BitsAndBytesConfig.post_init() 无条件查 metadata，NPU base image 不装 bnb 抛 PackageNotFoundError)。
-# 版本必须 >= 0.43.1，绕开 transformers 4.48 is_bitsandbytes_available() 的 CUDA 分支。
-mkdir -p /tmp/bitsandbytes_stub/bitsandbytes/nn /tmp/bitsandbytes_stub/bitsandbytes/optim /tmp/bitsandbytes_stub/bitsandbytes/functional /tmp/bitsandbytes_stub/bitsandbytes/autograd /tmp/bitsandbytes_stub/bitsandbytes/cextension
-# 顶层 __init__.py 显式 import 子模块——`from bitsandbytes import optim` 和
-# `import bitsandbytes as bnb; bnb.optim` 都需要子模块**作为属性**挂在 bnb 上，
-# 不显式 import 就 AttributeError（`__getattr__` 返 lambda 不是 module，
-# `import bitsandbytes.optim` 才会触发自动 register。mmengine
-# builder.py:153 用的是 `bnb.optim` 属性访问，必须显式 import）。
-cat > /tmp/bitsandbytes_stub/bitsandbytes/__init__.py <<'PYEOF'
-__version__ = "0.46.1"
-from . import nn, optim, functional, autograd, cextension
-# features = {"multi_backend"}：transformers 4.48 的 validate_bnb_backend_availability()
-# 经 `getattr(bnb, "features", set())` 检查 multi_backend 是否在 features 里；没有就调
-# `_validate_bnb_cuda_backend_availability()` → `torch.cuda.is_available()` 必须 True
-# （NPU base image 没 CUDA，RuntimeError "CUDA is required but not available for
-# bitsandbytes"）。设 multi_backend 走 multi-platform 分支绕开 CUDA check。
-# supported_torch_devices：`_validate_bnb_multi_backend_availability()` 取
-# `getattr(bnb, "supported_torch_devices", set())` 与 `available_devices = {'cpu','npu'}`
-# 求交集；空集就 RuntimeError "None of the available devices ... are supported by the
-# bitsandbytes version"。这里塞 cpu + npu，让交集非空通过检查。
-features = {"multi_backend"}
-supported_torch_devices = {"cpu", "npu"}
-PYEOF
-for sub in nn optim functional autograd cextension; do
-cat > /tmp/bitsandbytes_stub/bitsandbytes/${sub}/__init__.py <<'PYEOF'
-def __getattr__(name):
-    return lambda *args, **kwargs: None
-PYEOF
-done
-mkdir -p /tmp/bitsandbytes_stub/bitsandbytes-0.46.1.dist-info
-cat > /tmp/bitsandbytes_stub/bitsandbytes-0.46.1.dist-info/METADATA <<'EOF'
-Metadata-Version: 2.1
-Name: bitsandbytes
-Version: 0.46.1
-EOF
+# Stub bitsandbytes 已被 load_in_4bit=False 替代：见 xtuner-train-smoke-setup 注释。
+# 量化位改成 False 后 bitsandbytes 整条 import 链不再被触发，无需 stub。
 
 cp <cfg> /tmp/xtuner_npu_smoke_multi_cfg.py
+# load_in_4bit=True → False：同 single-setup 注释——xtuner v0.2.0 只有 qlora colorist cfg，
+# aarch64 上真 bnb 装不上，靠这一 sed 让 BitsAndBytesConfig.post_init() 跳过 metadata 检查。
+sed -i 's/^\([[:space:]]*load_in_4bit=\)True/\1False/' /tmp/xtuner_npu_smoke_multi_cfg.py
+grep -q '^[[:space:]]*load_in_4bit=False' /tmp/xtuner_npu_smoke_multi_cfg.py || {
+  echo "FAIL: load_in_4bit=True→False patch did not apply to /tmp/xtuner_npu_smoke_multi_cfg.py"
+  exit 1
+}
 # samples_per_epoch 走 cfg 文件末尾 append；其他 max_epochs / checkpoint.interval /
 # custom_hooks[1].every_n_iters 走 --cfg-options（见 xtuner-train-smoke-setup 注释）。
 cat >> /tmp/xtuner_npu_smoke_multi_cfg.py <<'EOF'
@@ -928,7 +825,7 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 export TORCH_NPU_USE_HCCL=1
 # torchvision_stub：同 single-setup 注释（xtuner.tools.train → peft → transformers →
 # image_utils → torchvision.transforms，site-packages torchvision 缺 C++ op 挂）。
-export PYTHONPATH=/tmp/torchvision_stub:/tmp/cv2_stub:/tmp/bitsandbytes_stub${PYTHONPATH:+:$PYTHONPATH}
+export PYTHONPATH=/tmp/torchvision_stub:/tmp/cv2_stub${PYTHONPATH:+:$PYTHONPATH}
 mkdir -p /tmp/xtuner_sft_llm_out_multi
 set -o pipefail
 # 同 single-setup 注释：进入 train 之前 import xtuner.engine._strategy 强制 xtuner.__init__.py
@@ -975,7 +872,7 @@ xxx (训前 assistant 回复——5 iter 没训出什么，可能是空 / 乱码
 
 ### 模型转换 + LoRA 合并
 
-训练产物是 QLoRA 的 `.pth`（只含 adapter 参数），要转 HuggingFace 格式再合并到 base。下面烟囱测 `xtuner convert` 的两个子命令 `pth_to_hf` 和 `merge` 都可用：
+训练产物是 LoRA adapter 的 `.pth`（只含 adapter 参数；要转 HuggingFace 格式再合并到 base。下面烟囱测 `xtuner convert` 的两个子命令 `pth_to_hf` 和 `merge` 都可用：
 
 ```shell #test id="xtuner-convert-help"
 out=$(xtuner convert --help 2>&1)

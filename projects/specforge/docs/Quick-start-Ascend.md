@@ -90,7 +90,7 @@ uv pip install 'modelscope==1.37.0'
 
 ## 源码编译 mooncake
 
-`mooncake-transfer-engine` **从源码编译**。`-DUSE_ASCEND_DIRECT=ON` 把 transport 切到 ADXL/HIXL（CANN 内置），整链不再链 libcuda；`-DWITH_STORE=ON` 同时产出 Python `mooncake.store` 模块（specforge eager-import 要它）+ `mooncake_master` 二进制。`-DBUILD_BENCHMARK=OFF` 跳过 tebench 二进制（它把 `libllm_datadist.so` 链进自己，CANN 9.0.0 镜像缺 `libadxl.so` / `libhixl.so` 那些 runtime 符号，链接报 `undefined reference to adxl::* / llm::HcclAdapter::* / hixl::EngineFactory`；specforge 只用 `mooncake.store` + `mooncake_master`，不影响功能）。`GH_MIRROR` 在 git clone 与 cmake FetchContent（`FindYLT.cmake` 的 `${GH_MIRROR}URL` 模式，下载 yalantinglibs）之间共享——直连 GitHub 不通时切到 `https://ghfast.top/`（coder pod 历史性被防火墙挡过、CI runner 直连 OK）。cmake flags 与 `projects/mooncake/docs/Quick-start-Ascend.md` + `scripts/setup_example.sh` + `release-npu.yaml` 一致。
+`mooncake-transfer-engine` **从源码编译**。`-DUSE_ASCEND_DIRECT=ON` 把 transport 切到 ADXL/HIXL（CANN 内置），整链不再链 libcuda；`-DWITH_STORE=ON` 同时产出 Python `mooncake.store` 模块（specforge eager-import 要它）+ `mooncake_master` 二进制。`-DBUILD_BENCHMARK=OFF` 跳过 tebench 二进制（它把 `libllm_datadist.so` 链进自己，CANN 9.0.0 镜像缺 `libadxl.so` / `libhixl.so` 那些 runtime 符号，链接报 `undefined reference to adxl::* / llm::HcclAdapter::* / hixl::EngineFactory`；specforge 只用 `mooncake.store` + `mooncake_master`，不影响功能）。cmake flags 与 `projects/mooncake/docs/Quick-start-Ascend.md` + `scripts/setup_example.sh` + `release-npu.yaml` 一致。
 
 ```shell #test-setup id="build-mooncake"
 set -euo pipefail
@@ -99,16 +99,6 @@ MOONCAKE_REF=v0.3.13
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"
-# GitHub 直连不通时把 clone URL 和 cmake FetchContent 都改走 ghfast.top 镜像：
-# 直连 OK（CI runner）→ GH_MIRROR=''；不通（coder pod）→ 'https://ghfast.top/'。
-# 注意用 `git ls-remote` 而不是 `curl` 探测：coder pod 上 `curl https://github.com` 返 200，
-# 但 git https transport 在 TLS/HTTP2 上 hang（症状是 submodule init 卡死），只有真跑 git 才能
-# 暴露。前缀拼接后 clone URL 形如 'https://ghfast.top/https://github.com/.../Mooncake.git'，
-# FindYLT.cmake 把 ${GH_MIRROR}URL 解析为 'URL https://ghfast.top/https://github.com/.../yalantinglibs.tar.gz'。
-GH_MIRROR=""
-if ! timeout 10 git ls-remote https://github.com/kvcache-ai/Mooncake.git HEAD >/dev/null 2>&1; then
-    GH_MIRROR="https://ghfast.top/"
-fi
 # 前 11 个与 mooncake/setup_example.sh 一致（仅编 transfer_engine_ascend_direct_perf 够用）；
 # WITH_STORE=ON 额外要 6 个 cmake 包（缺一个 cmake configure 直接 abort）+ 2 个 wheel 打包工具。
 apt-get update -qq >/dev/null 2>&1
@@ -121,16 +111,14 @@ apt-get install -qq -y --no-install-recommends \
     libboost-dev libmsgpack-dev patchelf file \
     >/dev/null 2>&1 \
     || { echo "build-mooncake: FAILED - apt install build deps" >&2; exit 1; }
-git clone --depth 1 "${GH_MIRROR}https://github.com/kvcache-ai/Mooncake.git" \
+git clone --depth 1 https://github.com/kvcache-ai/Mooncake.git \
     >/tmp/build-mooncake-clone.log 2>&1 \
-    || { echo "build-mooncake: FAILED - mooncake clone (GH_MIRROR='$GH_MIRROR'):" >&2; tail -20 /tmp/build-mooncake-clone.log >&2; exit 1; }
+    || { echo "build-mooncake: FAILED - mooncake clone:" >&2; tail -20 /tmp/build-mooncake-clone.log >&2; exit 1; }
 cd Mooncake
 git fetch --depth 1 origin "$MOONCAKE_REF" >/dev/null 2>&1
 git checkout FETCH_HEAD >/dev/null 2>&1
-# 直连 GitHub 拉 pybind11 失败（或 hang）时降级到 ghfast.top 镜像：
-# `timeout 60` 是因为 coder pod 上 `git submodule update` 偶尔会在 TLS 层挂死——`if !` 在 hang
-# 状态下不会触发，必须 timeout 强制 exit 才能进 fallback。
-if ! timeout 60 git submodule update --init --depth 1 extern/pybind11 >/dev/null 2>&1; then
+# 直连 GitHub 拉 pybind11 失败时降级到 ghfast.top 镜像（与 mooncake setup_example.sh 同款）。
+if ! git submodule update --init --depth 1 extern/pybind11 >/dev/null 2>&1; then
     expect=$(git ls-tree HEAD extern/pybind11 | awk '{print $3}')
     if [[ ! "$expect" =~ ^[0-9a-f]{40}$ ]]; then
         echo "build-mooncake: FAILED - cannot read pybind11 SHA from tree" >&2
@@ -155,9 +143,8 @@ cmake -S . -B build \
     -DWITH_P2P_STORE=OFF \
     -DUSE_ETCD=OFF \
     -DUSE_REDIS=OFF \
-    -DGH_MIRROR="${GH_MIRROR}" \
     >/tmp/build-mooncake-cmake.log 2>&1 \
-    || { echo "build-mooncake: FAILED - cmake configure (GH_MIRROR='$GH_MIRROR'):" >&2; tail -50 /tmp/build-mooncake-cmake.log >&2; exit 1; }
+    || { echo "build-mooncake: FAILED - cmake configure:" >&2; tail -50 /tmp/build-mooncake-cmake.log >&2; exit 1; }
 cmake --build build -j"$(nproc)" \
     >/tmp/build-mooncake-build.log 2>&1 \
     || { echo "build-mooncake: FAILED - cmake build:" >&2; tail -50 /tmp/build-mooncake-build.log >&2; exit 1; }

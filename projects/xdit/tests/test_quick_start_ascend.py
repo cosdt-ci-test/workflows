@@ -34,6 +34,7 @@ to the default modelscope hub cache via the embedded
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import unittest
 
@@ -218,6 +219,22 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             ['python', '-m', 'pip', 'install', 'uv'],
             check=True,
         )
+
+        # 2.5) purge the image's pre-baked xfuser: the CI image ships a
+        # stale editable xfuser (0.0.0.dev1, checkout at
+        # /root/xdit-test/xDiT) so ``uv pip install xfuser`` resolves to
+        # "already satisfied" and never installs the PyPI release — the
+        # doc's install block would be a no-op and the smoke would run
+        # the stale snapshot. Uninstall it (plus drop the stale
+        # checkout) so the doc installs and tests the real PyPI wheel.
+        subprocess.run(
+            ['uv', 'pip', 'uninstall', '-y', 'xfuser'],
+            capture_output=True, text=True, check=False,
+        )
+        stale_checkout = os.path.join(cls._PROJECT_ROOT, 'xDiT')
+        if os.path.isdir(stale_checkout):
+            shutil.rmtree(stale_checkout, ignore_errors=True)
+            print('setup: removed stale xDiT checkout from doc cwd')
 
         # 3) torch stack probe: when a pre-installed stack imports and
         # sees the NPU, reuse it (bare-metal / images that ship torch).

@@ -33,7 +33,7 @@ source ~/Ascend/ascend-toolkit/set_env.sh
 
 ```shell #test-setup id="lightx2v-install-torch"
 pip install uv
-uv pip install "torch==2.9.0" "torch_npu==2.9.0.post2"
+uv pip install "torch==2.9.0" "torchvision==0.24.*" "torch_npu==2.9.0.post2"
 ```
 
 ### 安装 LightX2V

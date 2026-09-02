@@ -255,8 +255,8 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         # sees the NPU, reuse it (bare-metal / images that ship torch).
         # The plain CANN base image ships none - the probe fails and
         # the doc's `lightx2v-install-torch` #test block installs the
-        # pinned stack (torch 2.9.0 + torch_npu 2.9.0.post2), which is
-        # then what we test against.
+        # pinned stack (torch 2.9.0 + torchvision 0.24.* +
+        # torch_npu 2.9.0.post2), which is then what we test against.
         _PROBE_SCRIPT = (
             'import torch, torch_npu\n'
             'raise SystemExit(0 if torch.npu.is_available() else 1)\n'

@@ -429,6 +429,20 @@ projects:
     dir: projects/lm-evaluation-harness
     workflows:
       quick_start: .github/workflows/lm-evaluation-harness-quick-start.yml
+  # lightx2v quickstart installs upstream from source (rolling main,
+  # zero releases / zero tags -> trigger pins fixed_ref: main) and runs
+  # the Wan2.2-I2V-A14B 4-step int8 distill I2V smoke on a single
+  # 910B4; weights are include-filtered ModelScope pulls (~47 GB of
+  # the ~385 GB full repos).
+  - name: lightx2v
+    category: 推理加速
+    support_level: 新兴适配
+    upstream_repo: ModelTC/LightX2V
+    phase: A
+    runner: linux-aarch64-a2-2
+    dir: projects/lightx2v
+    workflows:
+      quick_start: .github/workflows/lightx2v-quick-start.yml
   # tilelang quickstart builds the tilelang-ascend wheel from source
   # (ascendc_pto route; TVM submodule + ASCEND_HOME_PATH toolchain)
   # and runs the GEMM example end-to-end on a single Ascend NPU card.

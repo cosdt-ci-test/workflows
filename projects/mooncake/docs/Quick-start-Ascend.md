@@ -73,19 +73,6 @@ apt-get install -y --no-install-recommends \
 ls /usr/include/glog/logging.h /usr/include/gflags/gflags.h
 ```
 
-> **要编 Store / pybind11 / wheel（`-DWITH_STORE=ON`）还要 8 个包**：6 个 cmake 链接库
-> （Boost/Asio/ZMQ/msgpack/xxHash/ZSTD，缺一个 cmake configure 直接 abort）+ 2 个 wheel 打包工具
-> （patchelf 写 RPATH、file 写 platform-tag）。本节只编 `transfer_engine_ascend_direct_perf`
-> 二进制（`-DWITH_STORE=OFF`）够用，不列；走 `mooncake.store` Python wheel + `mooncake_master`
-> 二进制路径的下游用户（参见 [specforge Quick-start-Ascend](../../specforge/docs/Quick-start-Ascend.md)
-> 的 `build-mooncake` 块）需要把这 8 个加上：
->
-> ```shell
-> apt-get install -y --no-install-recommends \
->     libzstd-dev libxxhash-dev libzmq3-dev libasio-dev \
->     libboost-dev libmsgpack-dev patchelf file
-> ```
-
 输出结果如下：
 
 ```shell #test-result id="deps"

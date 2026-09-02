@@ -93,7 +93,7 @@ modelscope download \
     --model Wan-AI/Wan2.1-T2V-1.3B \
     --local_dir models/Wan2.1-T2V-1.3B \
     --include "diffusion_pytorch_model.safetensors" "models_t5_umt5-xxl-enc-bf16.pth" \
-               "Wan2.1_VAE.pth" "google/*" "config.json"
+               "Wan2.1_VAE.pth" "google*" "config.json"
 ```
 
 ### 🚀 开始推理

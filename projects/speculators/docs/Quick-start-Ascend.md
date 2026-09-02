@@ -363,14 +363,6 @@ export TORCHDYNAMO_DISABLE=1
 # /tmp/train.log，下次失败没法定位是哪个 op 炸的
 export ASCEND_LAUNCH_BLOCKING=1
 
-# 不再需要 sitecustomize.py patch：torch_npu 2.13.0rc1 通过
-# _init/patches/npu_patches.py::apply_flex_attention_patch 在 import torch_npu 时
-# 自动调 _patch_flex_attention_device + _register_npu_flex_attention_autocast
-# （torch_npu/utils/patch_flexattention.py），前者等价于原来 doc 自己写的
-# _validate_device allowlist patch，后者把 flex_attention HOP 注册到
-# AutocastPrivateUse1 dispatch key —— 是这次 smoke 失败（NotImplementedError:
-# could not find kernel for HigherOrderOperator flex_attention）的根治。
-
 # --hidden-states-dtype float32：spec v0.7.0 schema 写死 "Model master weights
 # are always kept in fp32"，dflash.forward 内 LN.weight 是 fp32；torch.autocast
 # policy 表里 nn.LayerNorm / aten::layer_norm 在 cuda/cpu/npu 全标 _cast_no_op
@@ -438,6 +430,7 @@ model.safetensors
 # num_speculative_tokens=5：vllm-ascend 限制 (num_speculative_tokens + 1) ≤ 15
 nohup vllm serve "<verifier_path>" \
   --host 127.0.0.1 --port 8000 \
+  --served-model-name Qwen/Qwen3-8B \
   --gpu-memory-utilization 0.85 \
   --speculative-config '{"method":"dflash","model":"<draft_model>","num_speculative_tokens":5}' \
   > /tmp/vllm-serve.log 2>&1 &

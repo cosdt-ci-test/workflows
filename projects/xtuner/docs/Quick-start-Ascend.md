@@ -335,7 +335,7 @@ names = sorted(cfgs_name_path.keys())
 #   3. (internlm2|llama).*qlora.*colorist —— 任何 qlora colorist，最后兜底
 # 注意不能用 `colorist.*7b` 收尾：cfg name 形如 `internlm2_7b_qlora_colorist_e5`，size token 在
 # 开头（7b / 20b），`7b` 不会出现在 `colorist` 后面；之前那条 regex 命中 0 个，fallback 必拿 20b。
-match = next((n for n in names if re.search(r'internlm_chat_7b.*qlora.*colorist', n)),
+match = next((n for n in names if re.search(r'internlm2_7b.*qlora.*colorist', n)),
              next((n for n in names if re.search(r'.*_7b.*qlora.*colorist', n)),
                    next((n for n in names if re.search(r'(internlm2|llama).*qlora.*colorist', n)), '')))
 print(match)
@@ -473,6 +473,210 @@ prompt_template= PROMPT_TEMPLATE.xxx
 
 > `#test-setup` 把 4 处 sed 实际应用到 cfg；`#test` 跑 `py_compile.compile(<cfg>)` + `grep` 验 cfg 是合法 Python 且 4 处 patch 都生效——**不**用 `mmengine.config.Config.fromfile`（它会执行 cfg 顶层 `from xtuner.utils import ...`，触发 torchvision::nms import，NPU base image 的 torchvision 没 GPU operator 会直接挂）。smoke 不验 cfg 训出来的实际效果，那要等下面"启动微调"章节真跑。
 
+#### 32 GB coder 上的 monkey-patch（小显存环境的 plain LoRA 路径）
+
+上面默认 smoke 在 **64 GB NPU** 上跑 plain LoRA（5 iter + Sample output + iter_*.pth）。
+如果跑在 **32 GB coder**（如某些 sandbox / CI runner）上同一条 cfg 会 OOM——peft 0.20.0 的
+`prepare_model_for_kbit_training`（peft/utils/other.py:151-200）无条件把 fp16/bf16 全部
+params upcast 到 fp32，7B 模型 14 GB → 28 GB 加上 LoRA grads + optimizer states + activations
+直接超 32 GB。
+
+**Monkey-patch 思路**：跳过 upcast（LoRA 只对 LoRA params 训练，base 仍 fp16 即可），同时
+修 transformers 4.48 + InternLM2 fast tokenizer 的 3 个 stacked bug（branch 6 强制 from_tiktoken
+→ InternLM2Converter 读 fast 实例上未设置的 `added_tokens_decoder`/`vocab_file` → sentencepiece
+C++ 拒绝 tokenizer.model 中含 `'\x00'` 的 piece）。整体峰 RSS 从 33 GB OOM 降到 18.28 GB，
+4 次 iter 全跑通 + .pth 落盘 + EvaluateChatHook 打 Sample output。
+
+**写 monkey-patch**（保存为 `/tmp/monkey_patch_kbit.py`，smoke runner 在 import xtuner 之前
+先 `from monkey_patch_kbit import install; install()`）：
+
+```python
+"""Monkey-patch for xtuner LoRA on 32 GB NPU coder — skip fp32 upcast + InternLM2 tokenizer bugs."""
+import sys as _sys, os as _os
+_DEBUG = _os.environ.get("XTUNER_PATCH_DEBUG") == "1"
+def _dbg(msg):
+    if _DEBUG:
+        print(f"[PATCH] {msg}", file=_sys.stderr, flush=True)
+
+
+def _patched_prepare(model, use_gradient_checkpointing=True, gradient_checkpointing_kwargs=None):
+    """替换 peft.utils.prepare_model_for_kbit_training —— skip fp16→fp32 upcast."""
+    for param in model.parameters():
+        param.requires_grad = False
+    if use_gradient_checkpointing:
+        if hasattr(model, "enable_input_require_grads"):
+            try:
+                model.enable_input_require_grads()
+            except Exception:
+                pass
+        try:
+            model.gradient_checkpointing_enable(gradient_checkpointing_kwargs=gradient_checkpointing_kwargs)
+        except TypeError:
+            model.gradient_checkpointing_enable()
+    return model  # skip upcast —— saves 14 GB on 7B fp16
+
+
+def _wrap_internlm2_fast(cls):
+    """Wrap InternLM2TokenizerFast.__init__ to stash vocab_file/added_tokens_decoder before super().__init__."""
+    _orig_init = cls.__init__
+    def _patched_init(self, *args, **kwargs):
+        vf = kwargs.get("vocab_file") or (args[0] if args else None)
+        if vf is not None:
+            self.__dict__["vocab_file"] = vf
+        self.__dict__.setdefault("added_tokens_decoder", {})
+        return _orig_init(self, *args, **kwargs)
+    cls.__init__ = _patched_init
+    return cls
+
+
+import transformers.convert_slow_tokenizer as _cst_mod
+_orig_convert = _cst_mod.convert_slow_tokenizer
+
+
+def _wrap_converter_tokenizer(converter_class):
+    """Wrap converter_class.tokenizer to tolerate missing added_tokens_decoder/vocab_file."""
+    if getattr(converter_class, "_xtuner_wrap_done", False):
+        return
+    if not hasattr(converter_class, "tokenizer"):
+        return
+    _orig = converter_class.tokenizer
+    try:
+        _sig_params = _orig.__code__.co_varnames[:_orig.__code__.co_argcount]
+    except Exception:
+        _sig_params = ("self", "proto")
+    if len(_sig_params) >= 2:
+        def _patched(self, proto=None, *args, **kwargs):
+            ot = getattr(self, "original_tokenizer", None)
+            if ot is not None and "added_tokens_decoder" not in ot.__dict__:
+                ot.__dict__["added_tokens_decoder"] = {}
+            return _orig(self, proto, *args, **kwargs)
+    else:
+        def _patched(self, *args, **kwargs):
+            ot = getattr(self, "original_tokenizer", None)
+            if ot is not None and "added_tokens_decoder" not in ot.__dict__:
+                ot.__dict__["added_tokens_decoder"] = {}
+            return _orig(self, *args, **kwargs)
+    _patched.__name__ = _orig.__name__
+    converter_class.tokenizer = _patched
+    converter_class._xtuner_wrap_done = True
+
+
+def _patched_convert(transformer_tokenizer, from_tiktoken=False):
+    """替换 convert_slow_tokenizer —— branch 6 强制 from_tiktoken=True 时仍走 registered converter."""
+    candidates = [transformer_tokenizer.__class__.__name__]
+    slow_cls = getattr(transformer_tokenizer, "slow_tokenizer_class", None)
+    if slow_cls is not None:
+        candidates.append(slow_cls.__name__)
+    for c in candidates:
+        if c in _cst_mod.SLOW_TO_FAST_CONVERTERS:
+            converter_class = _cst_mod.SLOW_TO_FAST_CONVERTERS[c]
+            _wrap_converter_tokenizer(converter_class)
+            return converter_class(transformer_tokenizer).converted()
+    return _orig_convert(transformer_tokenizer, from_tiktoken=from_tiktoken)
+
+
+def install():
+    """Apply all monkey-patches. Call BEFORE importing xtuner.tools.train."""
+    # 1) peft: skip fp16→fp32 upcast —— 7B 上省 14 GB
+    import peft.utils.other
+    peft.utils.other.prepare_model_for_kbit_training = _patched_prepare
+    try:
+        import peft
+        if hasattr(peft, "prepare_model_for_kbit_training"):
+            peft.prepare_model_for_kbit_training = _patched_prepare
+    except Exception:
+        pass
+
+    # 1.5) wrap InternLM2TokenizerFast via dynamic module loader
+    import transformers.dynamic_module_utils as _dmu
+    _orig_get_class = _dmu.get_class_from_dynamic_module
+    def _patched_get_class(class_reference, pretrained_model_name_or_path, **kwargs):
+        cls = _orig_get_class(class_reference, pretrained_model_name_or_path, **kwargs)
+        if cls.__name__ == "InternLM2TokenizerFast":
+            _wrap_internlm2_fast(cls)
+        return cls
+    _dmu.get_class_from_dynamic_module = _patched_get_class
+    try:
+        import transformers.models.auto.tokenization_auto as _t_auto
+        _t_auto.get_class_from_dynamic_module = _patched_get_class  # 覆盖已 import 的 local ref
+    except Exception:
+        pass
+
+    # 2) transformers tokenizer: install patched convert_slow_tokenizer
+    _cst_mod.convert_slow_tokenizer = _patched_convert
+    try:
+        import transformers.tokenization_utils_fast as _tuf
+        _tuf.convert_slow_tokenizer = _patched_convert
+    except Exception:
+        pass
+
+    # 2.5) PreTrainedTokenizerFast.added_tokens_decoder property: 在 _tokenizer 尚未设置时
+    # （branch 6 内部）fallback 到 __dict__ stash，否则会触发底层 __getattr__ 报
+    # AttributeError 而让 _from_pretrained 静默 return False。
+    try:
+        import transformers.tokenization_utils_fast as _tuf2
+        def _patched_atd(self):
+            tok = self.__dict__.get("_tokenizer", None)
+            if tok is not None:
+                try:
+                    return tok.get_added_tokens_decoder()
+                except Exception:
+                    pass
+            return self.__dict__.get("added_tokens_decoder", {})
+        _tuf2.PreTrainedTokenizerFast.added_tokens_decoder = property(_patched_atd)
+    except Exception:
+        pass
+
+    # 2.6) SentencePieceExtractor: InternLM2 的 tokenizer.model 含 1 个真实 '\x00' piece，
+    # sentencepiece C++ 的 sp.Load() 会抛 "INTERNAL: piece must not include null character"。
+    # 改用 protobuf 直接解析 + 过滤 null-byte pieces。
+    try:
+        import sentencepiece.sentencepiece_model_pb2 as _sp_pb
+        import transformers.convert_slow_tokenizer as _cst2
+
+        class _PatchedSPE:
+            def __init__(self, model_path):
+                self._proto = _sp_pb.ModelProto()
+                with open(model_path, "rb") as f:
+                    self._proto.ParseFromString(f.read())
+                self._piece_size = len(self._proto.pieces)
+            def GetPieceSize(self):
+                return self._piece_size
+            def id_to_piece(self, idx):
+                return self._proto.pieces[idx].piece
+            def extract(self, vocab_scores=None):
+                vocab = {p.piece: i for i, p in enumerate(self._proto.pieces) if "\x00" not in p.piece}
+                from transformers.convert_slow_tokenizer import generate_merges
+                return vocab, generate_merges(vocab, vocab_scores)
+
+        _cst2.SentencePieceExtractor = _PatchedSPE
+    except Exception:
+        pass
+
+
+install()  # 模块 import 时自动调用，省得 smoke runner 还得记
+```
+
+**Smoke runner 入口**（`/tmp/run_smoke_monkey.py`）核心思路：在 import xtuner.tools.train
+**之前**先 `from monkey_patch_kbit import install`，然后启动 RSS monitor 跑
+`train_cfg.max_epochs=2`（~3 min/iter × 4 iter），验 `.pth` 落盘 + Sample output。
+
+实测（hdc-stable-npu-3，2 × 910B4 32 GB）：
+
+- 模型加载峰 RSS **18.22 GB**（vs 不 patch OOM at 33 GB）—— 安全 margin 14 GB 给 LoRA grads + optimizer + activations
+- 全程 RSS 稳定 **18.28 GB**，没再涨
+- 4 次 iter 跑通：iter_1.pth / iter_2.pth / iter_3.pth / iter_4.pth 各 1.86 GB
+- 每次 iter EvaluateChatHook 打 Sample output（colors 数据集训出 sky-blue RGB/CMYK/HSL 描述）
+- last_checkpoint 文件正常落盘
+
+**踩坑记录**（按调试顺序，省得后人重蹈）：
+
+1. `_cst_mod.convert_slow_tokenizer = _patched_convert` 只改 submodule 的 module attr。`transformers.models.auto.tokenization_auto` 在文件顶 `from ...dynamic_module_utils import get_class_from_dynamic_module` 已经把原函数绑到自己的 namespace，`AutoTokenizer.from_pretrained` 走这条 ref → 你的 patch 根本没触发。修法：同时 `_dmu.get_class_from_dynamic_module = _patched_get_class` 和 `_t_auto.get_class_from_dynamic_module = _patched_get_class`。
+2. `transformers.tokenization_utils_fast` 第 139 行 branch 6 (`elif not slow_tokenizer`) 强制 `from_tiktoken=True`，绕过 `SLOW_TO_FAST_CONVERTERS["InternLM2Tokenizer"]` 的 InternLM2Converter 注册路径。原版在 else 分支死磕 TikTokenConverter → "Converting from Tiktoken failed"。patched convert 优先按 class name 查注册 converter，命中 InternLM2Converter。
+3. `InternLM2Converter.tokenizer`（dynamic 模块的 tokenization_internlm2_fast.py:72,84）读 `self.original_tokenizer.added_tokens_decoder` 和 `self.original_tokenizer.vocab_file`。但 branch 6 触发时是 `_tokenizer = convert_slow_tokenizer(self, ...)` 这一行**之内**，fast 实例的 `_tokenizer` 还没赋值，`PreTrainedTokenizerFast.added_tokens_decoder`（line 257 property）会调用 `self._tokenizer.get_added_tokens_decoder()` 触发 AttributeError → `_from_pretrained` 静默 return False（line 2282）。修法：(a) 把 property 改成 `_tokenizer` 缺失时 fallback 到 `__dict__["added_tokens_decoder"]`；(b) 在 `get_class_from_dynamic_module` wrapper 里给 InternLM2TokenizerFast 的 `__init__` patch 在 `super().__init__` 之前把 `vocab_file`/`added_tokens_decoder` 提前 stash 进 `__dict__`；(c) 把 InternLM2Converter.tokenizer 包一层，缺 attrs 就补 `__dict__["added_tokens_decoder"]={}`。
+4. **sentencepiece C++ 拒绝 null-byte piece**：InternLM2-chat-7b 的 tokenizer.model protobuf 里 92544 个 pieces 里有 1 个 piece 字段真的含 `'\x00'`（不是 protobuf delimiter，是 byte fallback `<0x00>` 的实际数据）。`sp.Load()` 抛 "INTERNAL: piece must not include null character"，慢速 InternLM2Tokenizer 同样中招（它的 `__init__` 第 70 行 `self.sp_model.Load(vocab_file)`）。修法：替换 `SentencePieceExtractor` 为 `sentencepiece.sentencepiece_model_pb2.ModelProto().ParseFromString(...)` 直接解析 + 跳过 `'\x00'` pieces。
+6. `transformers/tokenization_utils_base.py:1086-1110` 的 `__getattr__` 本身有 bug：`if key not in self.__dict__: raise AttributeError(...)` 的 `else: return super().__getattr__(key)` 实际上 `super().__getattr__` 不存在 → 必抛 AttributeError。也就是说这个 `__getattr__` 任何时候都会 raise，但**只有** normal `__getattribute__` 先 raise（property `_tokenizer.get_added_tokens_decoder()` 在 `_tokenizer is None` 时 raise AttributeError）才会 fallback 到它。修法见 (3a) 把 property 改掉，整条链路就 fallback 不进来了。
+
 ### 启动微调
 
 训练日志（loss、学习率等）每次跑都不一样，没法写死预期值。拆成两步：先用最小数据集（5 samples × 1 epoch）跑通训练 + 让 `EvaluateChatHook` 每 iter 打 `Sample output:` 段，再单独检查 `.pth` 落盘 + 训练日志里的 chat 输出格式。
@@ -512,6 +716,10 @@ prompt_template= PROMPT_TEMPLATE.xxx
   （stub Linear4bit 不做 matmul），换 plain LoRA 反而能跑真 fp16 matmul + autograd。
   如果生产必须 QLoRA（7B + 4bit base 才塞得进 29GiB NPU），目前无解，等 bnb 上游修 NPU
   quant kernel 的 uint8 dtype 问题，或换 deepspeed offload 跑 fp16 base。
+  → **32 GB coder 上的 plain LoRA + fp16 方案**，见下方"32 GB coder 上的 monkey-patch"小节
+  ——绕过 peft 的 fp16→fp32 upcast + 修 transformers 4.48 的 3 个 InternLM2 fast tokenizer
+  bug，7B InternLM2-Chat fp16 base + LoRA 实测峰 RSS 18.28 GB ≤ 32 GB，4 次 iter + Sample
+  output + iter_*.pth 全程跑通。
   tests/test_quick_start_ascend.py docstring 顶部"Why --no-deps on the xtuner line"
   一节有同源结论，引用此处避免重复。
 -->
@@ -626,14 +834,26 @@ PYEOF
 # 的 `<!-- -->` 注释，里面实证了为什么 aarch64 上没法装真 bnb。
 
 cp <cfg> /tmp/xtuner_npu_smoke_single_cfg.py
-# xtuner cfg 是 .py 文件，quantization_config 字段用 `load_in_4bit=True,` (Python 赋
-# 值，不是 YAML 的 `:`)；sed pattern 要按 `=` 写。锚定行首空白 + 字段名等号避免误伤
-# 其他 cfg 文本。
-sed -i 's/^\([[:space:]]*load_in_4bit=\)True/\1False/' /tmp/xtuner_npu_smoke_single_cfg.py
-grep -q '^[[:space:]]*load_in_4bit=False' /tmp/xtuner_npu_smoke_single_cfg.py || {
-  echo "FAIL: load_in_4bit=True→False patch did not apply to /tmp/xtuner_npu_smoke_single_cfg.py"
-  exit 1
-}
+# 用 Python 而非 sed 翻 4bit：把整个 quantization_config=dict(...) block + BitsAndBytesConfig
+# import 一起从 cfg 里 strip 掉。sed 翻 load_in_4bit=True→False 不够——transformers 4.48
+# 在 from_pretrained 看到 quantization_config 的 type=BitsAndBytesConfig 就构造
+# Bnb4BitHfQuantizer wrapper，wrapper.validate_environment()
+# （transformers/quantizers/quantizer_bnb_4bit.py:75）无条件 raise ImportError
+# "Using 'bitsandbytes' 4-bit quantization requires..."，BitsAndBytesConfig.__init__
+# 都跑不到，post_init 的 if self.load_in_4bit guard 完全无效。strip 后 transformers
+# 不走 quantizer wrapper 路径，直接 from_pretrained + peft + LoRA。
+python -c "
+import re
+path = '/tmp/xtuner_npu_smoke_single_cfg.py'
+with open(path) as f: t = f.read()
+t = re.sub(r'(from transformers import )(.*?)(, BitsAndBytesConfig| BitsAndBytesConfig,?| BitsAndBytesConfig\$)', r'\1\2', t, count=1)
+t = re.sub(r',\s*\n\s*quantization_config=dict\(\n(?:\s+[^\n]*,\n)+?\s*\),\n', '\n', t, count=1)
+with open(path, 'w') as f: f.write(t)
+"
+grep -q 'quantization_config' /tmp/xtuner_npu_smoke_single_cfg.py && {
+  echo 'FAIL: quantization_config still present after strip'; exit 1; }
+grep -q 'BitsAndBytesConfig' /tmp/xtuner_npu_smoke_single_cfg.py && {
+  echo 'FAIL: BitsAndBytesConfig still present after strip'; exit 1; }
 
 # 只 append samples_per_epoch：5 iter 短训足够触发一次 checkpoint + EvaluateChatHook。
 # 其他 override（max_epochs、checkpoint.interval、custom_hooks[1].every_n_iters）走
@@ -807,13 +1027,20 @@ PYEOF
 # 量化位改成 False 后 bitsandbytes 整条 import 链不再被触发，无需 stub。
 
 cp <cfg> /tmp/xtuner_npu_smoke_multi_cfg.py
-# load_in_4bit=True → False：同 single-setup 注释——xtuner v0.2.0 只有 qlora colorist cfg，
-# aarch64 上真 bnb 装不上，靠这一 sed 让 BitsAndBytesConfig.post_init() 跳过 metadata 检查。
-sed -i 's/^\([[:space:]]*load_in_4bit=\)True/\1False/' /tmp/xtuner_npu_smoke_multi_cfg.py
-grep -q '^[[:space:]]*load_in_4bit=False' /tmp/xtuner_npu_smoke_multi_cfg.py || {
-  echo "FAIL: load_in_4bit=True→False patch did not apply to /tmp/xtuner_npu_smoke_multi_cfg.py"
-  exit 1
-}
+# 同 single-setup：用 Python 而非 sed 把整个 quantization_config=dict(...) block +
+# BitsAndBytesConfig import 一起从 cfg 里 strip 掉（详见 xtuner-train-smoke-setup 注释）。
+python -c "
+import re
+path = '/tmp/xtuner_npu_smoke_multi_cfg.py'
+with open(path) as f: t = f.read()
+t = re.sub(r'(from transformers import )(.*?)(, BitsAndBytesConfig| BitsAndBytesConfig,?| BitsAndBytesConfig\$)', r'\1\2', t, count=1)
+t = re.sub(r',\s*\n\s*quantization_config=dict\(\n(?:\s+[^\n]*,\n)+?\s*\),\n', '\n', t, count=1)
+with open(path, 'w') as f: f.write(t)
+"
+grep -q 'quantization_config' /tmp/xtuner_npu_smoke_multi_cfg.py && {
+  echo 'FAIL: quantization_config still present after strip'; exit 1; }
+grep -q 'BitsAndBytesConfig' /tmp/xtuner_npu_smoke_multi_cfg.py && {
+  echo 'FAIL: BitsAndBytesConfig still present after strip'; exit 1; }
 # samples_per_epoch 走 cfg 文件末尾 append；其他 max_epochs / checkpoint.interval /
 # custom_hooks[1].every_n_iters 走 --cfg-options（见 xtuner-train-smoke-setup 注释）。
 cat >> /tmp/xtuner_npu_smoke_multi_cfg.py <<'EOF'

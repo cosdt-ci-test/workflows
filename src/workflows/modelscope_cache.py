@@ -105,31 +105,183 @@ def safetensors_header_ok(path: Path) -> bool:
     return True
 
 
-def _log_mount_info(label: str, path: Path) -> None:
-    """Diagnostic: print disk usage for ``path`` so a failing
-    ``prepare_environment`` call's captured stdout shows the mount
-    state of the cache_root the purge ran on. Distinguishes a
-    tmpfs/overlay tmpdir from a real bind mount like
-    ``/data/ci-cache/modelscope/<project>/`` — exactly the
-    distinction that matters when "disk full" / "stale shards" /
-    "purge didn't help" need root-causing from a CI log alone.
+def diagnose_mount_environment(cache_root: Path | None = None) -> None:
+    """Probe the container's view of ``cache_root`` to disambiguate
+    "the bind mount isn't visible" cases.
 
-    No-op for inaccessible paths: prints the ``OSError`` name +
-    message instead of raising, matching the no-op spirit of
-    ``test_no_op_when_cache_absent`` (the caller continues
-    regardless).
+    Companion to ``purge_corrupt_models`` — called at the entry of
+    ``purge_corrupt_models`` so every ``prepare_environment``
+    invocation captures the cache_root's environment context
+    regardless of cache-state outcome (HIT / PARTIAL / CORRUPT /
+    miss).
+
+    Each probe answers a specific question:
+
+    - ``findmnt -T <path>`` — canonical "is this a mountpoint".
+      Empty output means it isn't. Reveals the underlying
+      ``SOURCE`` (``nfs ...:ascend-ci-share`` vs ``/dev/sdXN`` vs
+      ``overlay``) and ``FSTYPE`` so the CI log itself can answer
+      "what disk is this on" without ops-side debugging.
+    - ``stat`` on the path *and* its parent (dev/inode) —
+      mountpoint detection without ``findmnt``: a separate
+      mountpoint lives on a different ``st_dev`` than its parent.
+      Bind-mount targets nested deeper than the actual
+      mount-point typically show ``same`` device — confirms with
+      (3) below.
+    - ``/proc/self/mountinfo`` — kernel-level mount table, more
+      authoritative than ``mount`` (which reads ``/etc/mtab`` /
+      ``/proc/mounts`` and can be filtered in some runtimes).
+    - ``hostname`` + ``/proc/1/cgroup`` — confirm we're inside a
+      Kubernetes pod (cgroup paths contain ``kubepods/``);
+      bind-mount behavior and capability drops differ there.
+    - ``CapBnd`` from ``/proc/self/status`` — ``CAP_SYS_ADMIN``
+      (bit 21) is required for bind mounts on most runtimes;
+      absence explains silent bind-mount failures and missing
+      ``findmnt`` detail.
+    - ``df -h`` — backing filesystem / size for when the path
+      *is* a mountpoint (sanity check that it's actually
+      persistent, and matches ``shutil.disk_usage`` results
+      against the fs backing store).
+
+    All probes are read-only and have 5 s timeouts; missing tools
+    print ``(not available)`` rather than raising, matching the
+    no-op spirit of the unit tests' ``test_no_op_when_cache_absent``.
     """
+    cache_root = cache_root or resolve_modelscope_cache()
+    print('mount-diag: probing container mount environment')
+
+    # findmnt — canonical "is this a mountpoint"
+    print(f'  findmnt -T {cache_root}:')
     try:
-        u = shutil.disk_usage(str(path))
+        out = subprocess.run(
+            ['findmnt', '-T', str(cache_root)],
+            capture_output=True, text=True, check=False, timeout=5,
+        )
+        if out.returncode == 0 and out.stdout.strip():
+            for line in out.stdout.splitlines():
+                print(f'    {line}')
+        elif out.returncode == 0:
+            print('    (empty — path is NOT a mountpoint)')
+        else:
+            print(
+                f'    findmnt failed (rc={out.returncode}): '
+                f'{out.stderr.strip()[:200]}'
+            )
+    except FileNotFoundError:
+        print('    (findmnt not available)')
+    except subprocess.TimeoutExpired:
+        print('    (findmnt timed out)')
+
+    # stat (dev, inode) — corroborating mountpoint check
+    print(f'  stat -c "%d:%i" {cache_root} vs parent:')
+    try:
+        path_stat = cache_root.stat()
+        parent_stat = cache_root.parent.stat()
+        print(
+            f'    {cache_root}: '
+            f'dev={path_stat.st_dev} inode={path_stat.st_ino}'
+        )
+        print(
+            f'    {cache_root.parent}: '
+            f'dev={parent_stat.st_dev} inode={parent_stat.st_ino}'
+        )
+        if path_stat.st_dev != parent_stat.st_dev:
+            print(
+                '    → different device than parent → mountpoint '
+                '(separate filesystem)'
+            )
+        else:
+            print(
+                '    → same device as parent → NOT a mountpoint '
+                '(regular directory on the parent fs)'
+            )
     except OSError as e:
-        print(f'[mount-diag] {label}: {path} -> {type(e).__name__}: {e}')
-        return
-    gb = 1 << 30
-    print(
-        f'[mount-diag] {label}: path={path} '
-        f'total={u.total/gb:.1f}GB used={u.used/gb:.1f}GB '
-        f'free={u.free/gb:.1f}GB'
-    )
+        print(f'    stat failed: {e}')
+
+    # /proc/self/mountinfo — kernel view
+    print(f'  /proc/self/mountinfo entries for {cache_root}:')
+    try:
+        with open('/proc/self/mountinfo', encoding='utf-8') as fh:
+            matches = [
+                line.rstrip() for line in fh if str(cache_root) in line
+            ]
+        if matches:
+            for line in matches:
+                print(f'    {line}')
+        else:
+            print(f'    (no entry for {cache_root})')
+    except OSError as e:
+        print(f'    read /proc/self/mountinfo failed: {e}')
+
+    # host identity — K8s detection
+    print('  host identity:')
+    try:
+        out = subprocess.run(
+            ['hostname'],
+            capture_output=True, text=True, check=False, timeout=5,
+        )
+        if out.returncode == 0 and out.stdout.strip():
+            print(f'    hostname: {out.stdout.strip()}')
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    try:
+        with open('/proc/1/cgroup', encoding='utf-8') as fh:
+            cgroup_lines = fh.read().splitlines()
+        is_k8s = any('kubepods' in line for line in cgroup_lines)
+        print(
+            f'    /proc/1/cgroup: {"K8s pod" if is_k8s else "non-K8s"}'
+        )
+        for line in cgroup_lines[:5]:
+            print(f'      {line}')
+        if len(cgroup_lines) > 5:
+            print(f'      ... and {len(cgroup_lines) - 5} more')
+    except OSError as e:
+        print(f'    read /proc/1/cgroup failed: {e}')
+
+    # capabilities — CAP_SYS_ADMIN (bit 21) required for bind mounts
+    print('  capabilities (from /proc/self/status):')
+    try:
+        cap_lines: list[str] = []
+        cap_bnd: int | None = None
+        with open('/proc/self/status', encoding='utf-8') as fh:
+            for line in fh:
+                if line.startswith('Cap'):
+                    cap_lines.append(line.rstrip())
+                if line.startswith('CapBnd:'):
+                    cap_bnd = int(line.split()[1], 16)
+        if cap_lines:
+            for line in cap_lines:
+                print(f'    {line}')
+        else:
+            print('    (no Cap lines in /proc/self/status)')
+        if cap_bnd is not None:
+            has_sys_admin = bool(cap_bnd & (1 << 21))
+            print(
+                f'    CAP_SYS_ADMIN (bit 21): '
+                f'{"YES" if has_sys_admin else "NO"} '
+                f'(CapBnd=0x{cap_bnd:x})'
+            )
+    except OSError as e:
+        print(f'    read /proc/self/status failed: {e}')
+
+    # df — backing filesystem / size
+    print(f'  df -h {cache_root}:')
+    try:
+        out = subprocess.run(
+            ['df', '-h', str(cache_root)],
+            capture_output=True, text=True, check=False, timeout=5,
+        )
+        if out.returncode == 0 and out.stdout.strip():
+            for line in out.stdout.splitlines():
+                print(f'    {line}')
+        elif out.returncode == 0:
+            print('    (empty)')
+        else:
+            print(f'    df failed: {out.stderr.strip()[:200]}')
+    except FileNotFoundError:
+        print('    (df not available)')
+    except subprocess.TimeoutExpired:
+        print('    (df timed out)')
 
 
 def purge_corrupt_models(cache_root: Path) -> None:
@@ -165,7 +317,7 @@ def purge_corrupt_models(cache_root: Path) -> None:
         tests with a tmp dir and doesn't carry an implicit dependency
         on a module-level constant.
     """
-    _log_mount_info('cache_root', cache_root)
+    diagnose_mount_environment(cache_root)
     hub_models = cache_root / 'hub' / 'models'
     if not hub_models.exists():
         print(f'cache: miss ({hub_models} not present yet); nothing to validate')

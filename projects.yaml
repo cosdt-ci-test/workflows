@@ -317,24 +317,22 @@ projects:
     workflows:
       examples: .github/workflows/xllm-examples.yml
       quick_start: .github/workflows/xllm-quick-start.yml
-  # xDiT dispatch path on NPU goes through xfuser/envs.py's `_is_npu()`
-  # + `get_torch_distributed_backend() == "hccl"` (mainline already
-  # has both). Doc body never references flash-attn because xfuser
-  # logs "flash_attn is not ready on torch_npu for now" and falls
-  # back to yunchang ring. Use the Contents API URL (same as xtuner /
-  # specforge / aibrix / colossalai) so doc-hash monitoring sees
-  # edits with matching auth headers. Doc exercises BOTH single-card
-  # (`--ulysses_degree 1 --ring_degree 1`) and 2-card
-  # (`--ulysses_degree 2 --ring_degree 1`) — xfuser.cli auto-spawns
-  # `torchrun --nproc_per_node=2` so the 2-card path needs an
-  # `a2-2` runner. PR #566 only adds single-node multi-card
-  # support (USP / DP / CFG-parallel; no PipeFusion), so the doc
-  # never sets `--pipefusion_parallel_degree > 1`.
-  # timeout_minutes=90 covers cold install + git clone +
-  # `pip install -e . --no-deps` build-from-source + SD3 medium
-  # cold-cache download (~4 GB; warm after first run via the
-  # bind-mount) + single-card inference + multi-card HCCL init
-  # + multi-card inference.
+  # xDiT guard scope: single-card SD3 medium smoke on NPU through a
+  # minimal script (torchrun --nproc_per_node=1, hccl runtime,
+  # xFuserStableDiffusion3Pipeline). The doc installs the pinned torch
+  # stack itself (torch 2.9.0 + torch_npu 2.9.0.post2 + triton 3.5.* —
+  # xfuser >= 0.6.0 imports triton unconditionally without declaring
+  # it) and installs xfuser from PyPI (no source checkout, no
+  # UPSTREAM_REF pinning). Weights are pulled by the script's embedded
+  # `snapshot_download('stabilityai/stable-diffusion-3-medium-diffusers')`
+  # into the default modelscope hub cache (full repo ~30 GB; persisted
+  # on /data/ci-cache/modelscope/xdit).
+  # xfuser's NPU dispatch (envs.py `_is_npu()` / hccl) is verified by
+  # the install-verify block. Multi-card (USP / DP / TP) is
+  # pointer-only in the doc. Use the Contents API URL (same as xtuner
+  # / specforge / aibrix / colossalai) so doc-hash monitoring sees
+  # edits with matching auth headers. timeout_minutes=90 covers cold
+  # install + 30 GB cold-cache download + T5 load + inference.
   - name: xdit
     category: 推理加速
     support_level: 新兴适配

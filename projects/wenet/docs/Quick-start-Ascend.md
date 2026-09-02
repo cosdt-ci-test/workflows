@@ -237,7 +237,7 @@ head -1 data/train/data.list
 cd wenet/examples/aishell/s0
 cp conf/train_conformer.yaml conf/train_conformer_5ep.yaml
 sed -i 's/max_epoch: .*/max_epoch: 5/' conf/train_conformer_5ep.yaml
-bash run_npu.sh --stage 4 --stop_stage 4 --train_config conf/train_conformer_5ep.yaml
+bash run_npu.sh --stage 4 --stop_stage 4 --num_workers 0 --train_config conf/train_conformer_5ep.yaml
 ```
 
 训练完成后检查输出：

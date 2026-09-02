@@ -99,7 +99,7 @@ python -c "import importlib.metadata; print(f'triton={importlib.metadata.version
 
 ```shell #test-result id="verify-vllm-stack" fuzzy='xxx'
 torch=2.13.0+cpu
-torch_npu=2.13.0rc1
+torch_npu=2.13.0.rc1
 is_available: True
 npu_count: xxx
 vllm=0.23.0+empty

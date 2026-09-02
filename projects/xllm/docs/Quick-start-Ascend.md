@@ -20,7 +20,7 @@ Atlas 900 A2 训练系列产品或者 Ascend 910B 系列产品，并按需完成
 
 **配套镜像**：
 
-swr.cn-south-1.myhuaweicloud.com/ascendhub/xllm-ai:xllm-dev-a2-arm-cann9-20260605
+quay.io/jd_xllm/xllm-ai:xllm-dev-a2-arm-cann9-20260605
 
 **软件版本**：
 
@@ -33,7 +33,7 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/xllm-ai:xllm-dev-a2-arm-cann9-2026060
 | xllm | 官方镜像预装 (v0.10.1) |
 | 模型 | [Qwen2-7B-Instruct](https://www.modelscope.cn/models/Qwen/Qwen2-7B-Instruct) |
 
-> 说明：CI 使用 xllm 官方 NPU 镜像 `swr.cn-south-1.myhuaweicloud.com/ascendhub/xllm-ai:xllm-dev-a2-arm-cann9-20260605`，**已预装 xllm v0.10.1 及其依赖**（含 torch 2.9.0、torch_npu 2.9.0.post2、CANN 9.1.0 运行时），无需从源码编译，启动即用。
+> 说明：CI 使用 xllm 官方 NPU 镜像 `quay.io/jd_xllm/xllm-ai:xllm-dev-a2-arm-cann9-20260605`，**已预装 xllm v0.10.1 及其依赖**（含 torch 2.9.0、torch_npu 2.9.0.post2、CANN 9.1.0 运行时），无需从源码编译，启动即用。
 
 ### 前置安装
 

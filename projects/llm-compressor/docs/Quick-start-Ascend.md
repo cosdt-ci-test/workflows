@@ -98,7 +98,11 @@ npu_available True
 
 将 `<UPSTREAM_REF>` 换成目标 **PyPI 版本号**（撰写时最新正式版是 `0.13.0`）。
 
-
+<!--
+```shell #test-setup store="upstream_ref"
+echo "${UPSTREAM_REF}"
+```
+-->
 
 ```shell #test id="install-llmcompressor" load="upstream_ref>>UPSTREAM_REF"
 python -m pip install --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi/variant \

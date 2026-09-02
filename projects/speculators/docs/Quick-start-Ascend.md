@@ -22,7 +22,7 @@ Atlas 900 A2 / A3 或 Ascend 950 系列 NPU，至少 1 卡。
 
 swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/vllm-ascend/vllm-ascend:v0.23.0
 
-镜像预装 vllm==0.23.0 + vllm-ascend==0.23.0 + triton-ascend==3.2.2 + torch 2.10.0+cpu + torch_npu 2.10.0.post4 + CANN 9.1.0 + Python 3.12。
+镜像预装 vllm==0.23.0 + vllm-ascend==0.23.0 + triton-ascend==3.2.2 + torch 2.10.0+cpu + torch_npu 2.10.0.post4 + CANN 9.1.0 + Python 3.12；torch + torch_npu 由 `### 前置安装` 的 `#test-setup install-torch` 步骤当场升到 2.13.0+cpu / 2.13.0rc1（仅升 torch 栈，base 镜像本身不变）。
 
 **软件版本**：
 
@@ -30,8 +30,8 @@ swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/vllm-ascend/vllm-ascen
 | --- | --- |
 | Python | 3.12 |
 | CANN | 9.1.0 |
-| torch | 2.10.0+cpu |
-| torch_npu | 2.10.0.post4 |
+| torch | 2.13.0+cpu（`#test-setup install-torch` 从镜像预装的 2.10.0+cpu 升上来） |
+| torch_npu | 2.13.0rc1（`#test-setup install-torch` 从镜像预装的 2.10.0.post4 升上来） |
 | vllm | 0.23.0（镜像预装） |
 | vllm-ascend | 0.23.0（镜像预装） |
 | triton-ascend | 3.2.2（镜像预装） |
@@ -61,6 +61,29 @@ python --version
 Python 3.12.xxx
 ```
 
+升级 torch 栈到 2.13（CPU-only build + torch_npu 2.13.0rc1），保留镜像的 CANN 9.1.0 不动：
+
+```shell #test-setup id="install-torch"
+# torch 2.13.0+cpu（CPU-only build，跟当前 2.10.0+cpu 同形态）：阿里云主 pypi
+# 只发 torch-2.13.0（CUDA build），不发 +cpu 变体；显式走 PyTorch 官方 CPU 索引
+# 拉 +cpu wheel，避免给镜像拽入 CUDA 库。--force-reinstall 因为镜像预装的
+# 2.10.0+cpu 是 PEP 660 不可变缓存的 wheel，--upgrade 在版本跨度大的时候不替换。
+uv pip install --index-url https://download.pytorch.org/whl/cpu \
+  --upgrade --force-reinstall 'torch==2.13.0+cpu'
+
+# torch_npu 2.13.0rc1 修了 flex_attention HOP 在 AutocastPrivateUse1 dispatch
+# key 上没注册 kernel 的问题（torch_npu/utils/patch_flexattention.py::
+# _register_npu_flex_attention_autocast），是这次 smoke 失败的根治版。
+# --no-deps 因为 torch 已经在上一步固定好，且 torch_npu 的依赖声明走 find-links
+# 会跨索引解析冲突（aliyun 索引没有 torch_npu 元数据），用 --no-deps 隔离避免
+# 误判。⚠ vllm-ascend 0.23.0 可能 pin 了 torch_npu 版本约束，Step 2/4 启动 vllm
+# 时如果 import torch_npu 撞版本不兼容，要单独处理（升 vllm-ascend 或同款隔离）。
+uv pip install \
+  --find-links https://mirrors.aliyun.com/pypi/simple/torch-npu/ \
+  --find-links https://mirrors.huaweicloud.com/ascend/repos/pypi/torch-npu/ \
+  --no-deps --upgrade --force-reinstall 'torch_npu==2.13.0rc1'
+```
+
 加载 CANN env 并验证镜像预装的 vllm-ascend 栈（应输出下表的版本号）：
 
 ```shell #test id="verify-vllm-stack"
@@ -75,8 +98,8 @@ python -c "import importlib.metadata; print(f'triton={importlib.metadata.version
 ```
 
 ```shell #test-result id="verify-vllm-stack" fuzzy='xxx'
-torch=2.10.0+cpu
-torch_npu=2.10.0.post4
+torch=2.13.0+cpu
+torch_npu=2.13.0.rc1
 is_available: True
 npu_count: xxx
 vllm=0.23.0+empty
@@ -330,14 +353,36 @@ cd /root/speculators
 # > 192 KB UB），kernel 拒绝编译 → train.py ERR99999 → torchrun ChildFailed。
 # 关 dynamo 后 torch.compile() 返回原函数，BiShengIR 完全不被叫到。10-sample
 # smoke 不差这点 fused kernel 加速。
+# 2.13.0rc1 torch_npu/_inductor/select_algorithm.py 引入了 flex_attention 的
+# inductor 选择算法，理论上可开 dynamo；但 BiShengIR UB overflow 是否修了要
+# 单独验证，留待下次跑通后单独验。
 export TORCHDYNAMO_DISABLE=1
 
+# ASCEND_LAUNCH_BLOCKING=1 — 让 NPU kernel 错误同步上浮为 Python 异常；不加的话
+# CANN ERR99999 是 silent kill，Python 进程被 signal 干掉后没有 traceback 进
+# /tmp/train.log，下次失败没法定位是哪个 op 炸的
+export ASCEND_LAUNCH_BLOCKING=1
+
+# --hidden-states-dtype float32：spec v0.7.0 schema 写死 "Model master weights
+# are always kept in fp32"，dflash.forward 内 LN.weight 是 fp32；torch.autocast
+# policy 表里 nn.LayerNorm / aten::layer_norm 在 cuda/cpu/npu 全标 _cast_no_op
+# —— 不管 autocast 走哪条，LN(weight=fp32, input=bf16) 输出 fp32。dflash.forward
+# 的 V 不是从 Linear 算出来的，是直接复用 dataloader 来的 hidden_states（默认
+# bf16），所以 Q/K fp32, V bf16 → flex_attention dtype check 挂
+# (torch/nn/attention/flex_attention.py:1473)。
+# 把 V 也 cast 成 fp32 让 Q/K/V 对齐。schema 允许 float32 选项
+# (train.py:548 getattr(torch, args.hidden_states_dtype))。A2 64 GB 装得下
+# 1.9 GB 的 fp32 hidden_states cache（bf16 是 0.5 GB）。
+# 备注：CUDA 上跑同一份 train.py 也会挂同款 dtype mismatch，除非先
+# model.bfloat16() 把 LN.weight 也 cast bf16。spec 跳过了这一步，所以 dtype
+# 对不齐是 spec 架构问题，CUDA 那边只是被 .bfloat16() 绕开了。
 # --on-missing raise 强制走 FileBackend 读 <hs_dir> 缓存；不带 --vllm-endpoint 让
 # dataloader 不会去问不存在的 server
 torchrun --standalone --nproc_per_node=1 scripts/train.py \
   --verifier-name-or-path "<verifier_path>" \
   --data-path "<data_path>" \
   --hidden-states-path "<hs_dir>" \
+  --hidden-states-dtype float32 \
   --save-path "$CHECKPOINT_DIR" \
   --draft-vocab-size 32000 \
   --epochs 1 \
@@ -385,6 +430,7 @@ model.safetensors
 # num_speculative_tokens=5：vllm-ascend 限制 (num_speculative_tokens + 1) ≤ 15
 nohup vllm serve "<verifier_path>" \
   --host 127.0.0.1 --port 8000 \
+  --served-model-name Qwen/Qwen3-8B \
   --gpu-memory-utilization 0.85 \
   --speculative-config '{"method":"dflash","model":"<draft_model>","num_speculative_tokens":5}' \
   > /tmp/vllm-serve.log 2>&1 &

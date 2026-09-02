@@ -52,9 +52,28 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     USER_AGENT = 'cosdt-ci-test/quick-start'
     _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
 
+    # Process-level CUDA exclusion list to prevent NVIDIA/CUDA packages
+    # from being pulled in as transitive dependencies.
+    _CUDA_CONSTRAINTS = (
+        'cuda-toolkit<0',
+        'cuda-python<0',
+        'cuda-bindings<0',
+        'nvidia-cublas<0',
+        'nvidia-cuda-runtime<0',
+        'nvidia-cudnn<0',
+        'nvidia-nccl<0',
+    )
+    _CONSTRAINTS_FILE = '/tmp/wenet_npu_constraints.txt'
+
     @classmethod
     def prepare_environment(cls) -> None:
-        """Source CANN env once so later ``bash -c`` blocks inherit it.
+        """Source CANN env + CUDA exclusion list + torch stack probe.
+
+        The doc's ``## 3. 克隆 WeNet 并安装依赖`` section installs WeNet
+        and torch/torch-npu as the canonical user path. This method only
+        handles infrastructure bootstrap: CANN env, CUDA exclusion, and
+        a probe-and-fallback for torch/torch-npu to avoid redundant
+        installation when the image already has the correct versions.
 
         Class-level setup: run once per test class, triggered by
         ``setUpClass``. Each labeled fence is a new subprocess, so a
@@ -65,6 +84,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         if path_dirs not in current_path:
             os.environ['PATH'] = f'{path_dirs}:{current_path}'
 
+        # 0) CANN env: source set_env.sh and merge env into os.environ
         if os.path.isfile(cls._CANN_SET_ENV):
             merged = subprocess.run(
                 ['bash', '-c', f'source {cls._CANN_SET_ENV} >/dev/null 2>&1; env'],
@@ -79,6 +99,45 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         else:
             print(
                 f'setup: skipping CANN env source ({cls._CANN_SET_ENV} not present)'
+            )
+
+        # 1) CUDA exclusion list
+        with open(cls._CONSTRAINTS_FILE, 'w', encoding='utf-8') as fh:
+            fh.write('\n'.join(cls._CUDA_CONSTRAINTS) + '\n')
+        os.environ['PIP_CONSTRAINT'] = cls._CONSTRAINTS_FILE
+
+        # 2) torch stack probe + install: when version matches the image's
+        # pre-installed wheels, reuse them to avoid redundant installation.
+        _PROBE_SCRIPT = (
+            'import torch, torch_npu\n'
+            "raise SystemExit(0 if "
+            "torch.__version__.startswith('2.5.1') "
+            "and torch_npu.__version__.startswith('2.5.1') "
+            "else 1)"
+        )
+        probe = subprocess.run(
+            ['python', '-c', _PROBE_SCRIPT],
+            capture_output=True,
+            check=False,
+        )
+        if probe.returncode == 0:
+            _VERSIONS_SCRIPT = (
+                'import torch, torch_npu; '
+                'print(torch.__version__, torch_npu.__version__)'
+            )
+            versions = subprocess.run(
+                ['python', '-c', _VERSIONS_SCRIPT],
+                capture_output=True, text=True, check=True,
+            )
+            print(f'setup: reusing image torch stack ({versions.stdout.strip()})')
+        else:
+            print('setup: installing torch==2.5.1 torch-npu==2.5.1.post1')
+            subprocess.run(
+                [
+                    'python', '-m', 'pip', 'install',
+                    'torch==2.5.1', 'torch-npu==2.5.1.post1',
+                ],
+                check=True,
             )
 
     @classmethod

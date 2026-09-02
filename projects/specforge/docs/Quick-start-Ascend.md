@@ -124,26 +124,97 @@ npu_count 4
 
 > 如果 `import torch_npu` 失败或 `count` 不是 4，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查三方兼容矩阵；`sglang` 必须有 `--attention-backend ascend` 支持（普通 PyPI 轮子不支持，需要 vendor 镜像或 NPU 编译产物）。
 
-装 `modelscope`+ `mooncake-transfer-engine`：
+装 `modelscope`：
 
 ```shell #test-setup
 uv pip install 'modelscope==1.37.0'
-#
-# 用 tsinghua 镜像：直连 GitHub release 在集群网络下不稳（run 33254357756 90min timeout），
-# aliyun 镜像只有 manylinux_2_39 aarch64（CI image 是 ubuntu22.04 glibc 2.35，跑不了 2.39 wheel），
-# tsinghua 镜像有 v0.3.13 manylinux_2_28 aarch64 cp311 wheel（与 GitHub release 同字节）。
-uv pip install --index-url https://pypi.tuna.tsinghua.edu.cn/simple 'mooncake-transfer-engine==0.3.13'
 ```
 
-> smoke 实际用的是 `mooncake_master` 二进制（sglang.spec_capture_sink.py 通过 `mooncake.store.MooncakeDistributedStore` 调用，绑定由 sglang 自带的 wheel 处理），`import mooncake_transfer_engine` 仅作 wheel 完整性的 sanity check。下面用 if/else 让它失败时也走 stdout 一行、不会因为异常走 stderr 而看不到。
+`mooncake-transfer-engine` **从源码编译**（不要装 PyPI wheel：PyPI 只有 CUDA 变体，`store.so` 在 DT_NEEDED 同时链 `libcuda.so.1` + `libcudart.so.12`，NPU image 没 CUDA → `import mooncake.store` 在 specforge train 启动时必撞 `ImportError`）。`-DUSE_ASCEND_DIRECT=ON` 把 transport 切到 ADXL/HIXL（CANN 内置），整链不再链 libcuda——这是 mooncake 项目自身在 `projects/mooncake/docs/Quick-start-Ascend.md` + `scripts/setup_example.sh` + `.github/workflows/release-npu.yaml` 的同一套 cmake flags，只是把 `WITH_STORE` 从 OFF 改 ON 来同时产出 Python `mooncake.store` 模块（specforge eager-import 要它）。
+
+```shell #test-setup id="build-mooncake"
+set -euo pipefail
+# 把 build dir 钉到 /tmp（避免污染 specforge 项目目录 + 跑完清理方便）。
+BUILD_DIR="${MOONCAKE_BUILD_DIR:-/tmp/build-mooncake}"
+MOONCAKE_REF=v0.3.13
+rm -rf "$BUILD_DIR"
+mkdir -p "$BUILD_DIR"
+cd "$BUILD_DIR"
+# 编译依赖（与 projects/mooncake/scripts/setup_example.sh 一致）。
+apt-get update -qq >/dev/null 2>&1
+apt-get install -qq -y --no-install-recommends \
+    build-essential cmake git pkg-config \
+    libgoogle-glog-dev libgflags-dev libibverbs-dev \
+    libjsoncpp-dev libnuma-dev libyaml-cpp-dev \
+    libssl-dev libcurl4-openssl-dev \
+    >/dev/null 2>&1 \
+    || { echo "build-mooncake: FAILED - apt install build deps" >&2; exit 1; }
+git clone --depth 1 https://github.com/kvcache-ai/Mooncake.git \
+    >/tmp/build-mooncake-clone.log 2>&1 \
+    || { echo "build-mooncake: FAILED - mooncake clone:" >&2; tail -20 /tmp/build-mooncake-clone.log >&2; exit 1; }
+cd Mooncake
+git fetch --depth 1 origin "$MOONCAKE_REF" >/dev/null 2>&1
+git checkout FETCH_HEAD >/dev/null 2>&1
+# pybind11 子模块（直连 GitHub 失败时降级到 ghfast.top 镜像，与 mooncake setup_example.sh 同款 fallback）。
+if ! git submodule update --init --depth 1 extern/pybind11 >/dev/null 2>&1; then
+    expect=$(git ls-tree HEAD extern/pybind11 | awk '{print $3}')
+    if [[ ! "$expect" =~ ^[0-9a-f]{40}$ ]]; then
+        echo "build-mooncake: FAILED - cannot read pybind11 SHA from tree" >&2
+        exit 1
+    fi
+    rm -rf extern/pybind11
+    mkdir -p extern/pybind11
+    git -C extern/pybind11 init -q
+    git -C extern/pybind11 remote add origin https://ghfast.top/https://github.com/pybind/pybind11.git
+    git -C extern/pybind11 fetch --depth 1 origin "$expect" >/dev/null 2>&1 \
+        || { echo "build-mooncake: FAILED - pybind11 fetch via mirror" >&2; exit 1; }
+    git -C extern/pybind11 checkout --detach FETCH_HEAD -q
+fi
+# cmake configure。flags 与 .github/workflows/release-npu.yaml 一致：USE_ASCEND_DIRECT=ON 是核心；
+# USE_ETCD/USE_REDIS/WITH_EP/WITH_P2P_STORE 全 OFF 缩小编译时间和依赖面（specforge 不需要 HA metadata
+# 后端、不需要 EP、不需要 P2P）；WITH_STORE=ON 让 mooncake-wheel/mooncake/store.so 这一坨也被编出来
+# （PyPI 默认 ON，mooncake docs 为省时关 OFF 是因为只验 transfer_engine_ascend_direct_perf 二进制）。
+cmake -S . -B build \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DUSE_ASCEND_DIRECT=ON \
+    -DBUILD_UNIT_TESTS=OFF \
+    -DWITH_STORE=ON \
+    -DWITH_STORE_RUST=OFF \
+    -DWITH_EP=OFF \
+    -DWITH_P2P_STORE=OFF \
+    -DUSE_ETCD=OFF \
+    -DUSE_REDIS=OFF \
+    >/tmp/build-mooncake-cmake.log 2>&1 \
+    || { echo "build-mooncake: FAILED - cmake configure:" >&2; tail -50 /tmp/build-mooncake-cmake.log >&2; exit 1; }
+cmake --build build -j"$(nproc)" \
+    >/tmp/build-mooncake-build.log 2>&1 \
+    || { echo "build-mooncake: FAILED - cmake build:" >&2; tail -50 /tmp/build-mooncake-build.log >&2; exit 1; }
+# 走 mooncake 自带的 scripts/build_wheel.sh 把 store.so / mooncake_master / ascend_transport.so 拷
+# 进 mooncake-wheel/mooncake/，再走 setuptools 打 wheel（与 release-npu.yaml 的 NPU_BUILD=1 等价）。
+NPU_BUILD=1 OUTPUT_DIR=dist ./scripts/build_wheel.sh \
+    >/tmp/build-mooncake-wheel.log 2>&1 \
+    || { echo "build-mooncake: FAILED - build_wheel.sh:" >&2; tail -50 /tmp/build-mooncake-wheel.log >&2; exit 1; }
+WHL=$(ls mooncake-wheel/dist/*.whl | head -1)
+if [[ -z "$WHL" || ! -f "$WHL" ]]; then
+    echo "build-mooncake: FAILED - no wheel produced in mooncake-wheel/dist/" >&2
+    ls -la mooncake-wheel/dist/ >&2 || true
+    exit 1
+fi
+uv pip install "$WHL" \
+    >/tmp/build-mooncake-pip.log 2>&1 \
+    || { echo "build-mooncake: FAILED - pip install wheel:" >&2; tail -20 /tmp/build-mooncake-pip.log >&2; exit 1; }
+echo "build-mooncake: installed $WHL"
+```
+
+> specforge eager-import 的 `mooncake.store`（`MooncakeFeatureStore.__init__` → `_connect_store`）和 `mooncake_master` 二进制现在都来自源码编译产物。NPU_BUILD=1 走的是 `release-npu.yaml` 同一 cmake flags，所以 `mooncake-wheel/mooncake/ascend_transport.so`（ADXL/HIXL transport）+ `mooncake-wheel/mooncake/store.so`（pybind11 binding）一并打进了 wheel；编译耗时 5-10 分钟（NPU 上首次冷编 glog/gflags/transfer-engine/store/pybind 几坨），90 min smoke 余量装得下。
 
 打印安装版本：
 ```shell #test id="install-deps"
 python -c "import modelscope; print('modelscope', modelscope.__version__)"
-if python -c "import mooncake_transfer_engine" 2>/dev/null; then
-    echo "mooncake-transfer-engine ok"
+if python -c "import mooncake.store" 2>/dev/null; then
+    echo "mooncake.store imports clean"
 else
-    echo "mooncake-transfer-engine not importable"
+    echo "mooncake.store NOT importable"
 fi
 test -x "$(command -v mooncake_master)" && echo "mooncake_master binary present" || echo "mooncake_master binary MISSING"
 ```
@@ -181,6 +252,14 @@ else
 fi
 cd SpecForge
 uv pip install --no-deps .
+# specforge 的 `--no-deps .` 也跳过了 accelerate，但 specforge/cli.py:114 的
+# _train() 在 specforge train 启动时才 lazy-import `from accelerate.utils
+# import set_seed` —— specforge-import 只 `import specforge` 不会触发，到
+# smoke-train 才暴露 ModuleNotFoundError。补一行 --no-deps accelerate：image
+# 已有 torch/numpy/packaging/psutil/pyyaml（accelerate 的 transitive deps），
+# --no-deps 只装 accelerate 自身不扰 torch 栈。run 33578505226 复现过这个
+# MissingModule 现象，specforge train rc=1 立刻退出、tail 日志拿到完整 traceback。
+uv pip install --no-deps accelerate
 python -c "from importlib.metadata import version; print('specforge, version', version('specforge'))"
 ```
 
@@ -269,7 +348,7 @@ Smoke 把 `mooncake_master` / SGLang capture server / `specforge train` 串起�
 | Step | 块 id | 干啥 |
 | --- | --- | --- |
 | 1 | `smoke-download-model` | 从 ModelScope 拉 `Qwen/Qwen3.5-4B`，把模型路径存入 store `model_path` |
-| 2 | `smoke-apply-patches` | 跑 `apply_sglang_spec_capture_patch.sh` + 内联 ascend companion + `apt-get install libcurl4/libibverbs1/libnuma1` |
+| 2 | `smoke-apply-patches` | 跑 `apply_sglang_spec_capture_patch.sh` + 内联 ascend companion + `apt-get install libcurl4/libibverbs1/libnuma1` + 防御性 libcuda.so.1/libcudart.so.12 stub 兜底（主路径在前面 `build-mooncake` 块里 `-DUSE_ASCEND_DIRECT=ON` 源码编译已经消掉 libcuda 依赖；stub 仅在 source build 异常时 fire） |
 | 3 | `smoke-start-mooncake` | `nohup mooncake_master`，socket 探活 35551 |
 | 4 | `smoke-start-sglang` | `nohup sglang.launch_server`，curl `/health` 探活 30000 |
 | 5 | `smoke-train` | `specforge train ... max_steps=1`，断言 stdout 出现 `step.*loss` |
@@ -281,14 +360,28 @@ Smoke 把 `mooncake_master` / SGLang capture server / `specforge train` 串起�
 ```shell #test-setup id="smoke-download-model" store="model_path"
 set -euo pipefail
 MODEL_ID="${SPECFORGE_MODEL_ID:-Qwen/Qwen3.5-4B}"
-echo "smoke: downloading model $MODEL_ID from ModelScope"
-python -c "from modelscope import snapshot_download; print(snapshot_download('$MODEL_ID'))"
+# store="model_path" 抓的是整个 stdout，必须只让路径落 stdout。echo 走 stderr 做诊断，
+# modelscope 自身的下载进度 ('Downloading Model from ... to directory: ...') 也走
+# stdout —— run 33507844975 复现：modelscope progress + print(path) 两行都被 store
+# 抓住，<MODEL_PATH> 替换出 200+ 字节多行字符串，--model-path 收到垃圾。
+# contextlib.redirect_stdout(sys.stderr) 在 with 块内把 sys.stdout 指向 stderr，
+# modelscope 进度落 stderr；with 块外的 print(path) 走真 stdout，只有路径被 store
+# 抓住。stderr 的进度仍会出现在 CI log 里做诊断。
+echo "smoke: downloading model $MODEL_ID from ModelScope" >&2
+python - "$MODEL_ID" <<'PY'
+import sys, contextlib
+MODEL_ID = sys.argv[1]
+with contextlib.redirect_stdout(sys.stderr):
+    from modelscope import snapshot_download
+    path = snapshot_download(MODEL_ID)
+print(path)
+PY
 ```
 
-输出结果类似如下（首行是 modelscope 进度，最末行被 store 进 `model_path`，后续 step 4 / 5 用 `<MODEL_PATH>` 引用）：
+输出结果类似如下（stdout 只有路径，被 store 进 `model_path`，后续 step 4 / 5 用 `<MODEL_PATH>` 引用；stderr 的 echo 不会出现在这里）：
 
-```shell #test-result id="smoke-download-model" fuzzy='xxx'
-smoke: downloading model Qwen/Qwen3.5-4B from ModelScope
+```shell #test-result id="smoke-download-model" load="model_path>>MODEL_PATH"
+<MODEL_PATH>
 ```
 
 ### Step 2：打补丁 + apt 依赖
@@ -333,7 +426,7 @@ fi
 SGLANG_DIR=$(python -c "import importlib.util, os; print(os.path.dirname(os.path.dirname(importlib.util.find_spec('sglang').origin)))")
 SINK_FILE="$SGLANG_DIR/sglang/srt/spec_capture_sink.py"
 if [[ -f "$SINK_FILE" ]] && ! grep -q 'segment_to_mount' "$SINK_FILE"; then
-    if ! python3 - "$SINK_FILE" <<'PY' >/tmp/smoke-ascend.log 2>&1
+    if ! python - "$SINK_FILE" <<'PY' >/tmp/smoke-ascend.log 2>&1
 import sys
 path = sys.argv[1]
 with open(path) as f:
@@ -433,13 +526,270 @@ popd >/dev/null
 apt-get update -qq >/dev/null 2>&1
 apt-get install -qq -y --no-install-recommends \
     libcurl4 libibverbs1 libnuma1 >/dev/null 2>&1
+
+# 主路径是前面 `build-mooncake` 块：`cmake -DUSE_ASCEND_DIRECT=ON -DWITH_STORE=ON ...`
+# 编出来的 `store.so` 走 Ascend Direct transport，整链不链 libcuda.so.1 + libcudart.so.12
+# → `import mooncake.store` 直接成功。run 33580124477 的 `ImportError: libcuda.so.1`
+# 来源是上一版 `uv pip install mooncake-transfer-engine==0.3.13`（PyPI 只有 CUDA 变体，
+# store.so DT_NEEDED 同时链 libcuda.so.1 / libcudart.so.12，NPU image 没 CUDA）；现在 PyPI
+# wheel 已经不再装，改从源码编，链库自然不带 CUDA。spec-capture-ascend-mount.patch 把
+# local_buffer_size=0 + global_segment_size=0 + location="cpu"——零拷贝 GPU buffer 全 bypass，
+# mooncake 走纯 host memory + TCP/RDMA，不依赖真实 GPU 行为。
+#
+# 下面这段 stub 是防御性 fallback（不是主路径）：万一 `build-mooncake` 失败、CI 跑到这
+# 里时 `import mooncake.store` 仍然撞 libcuda 缺失（极端回归），再编两个 SONAME 正确的
+# .so 丢进 wheel 的 `mooncake_transfer_engine.libs/`——store.so 的 RPATH
+# `$ORIGIN:$ORIGIN/../mooncake_transfer_engine.libs` 会找到。stub 函数统一返回 0
+# （CUDA_SUCCESS），输出参数填非 NULL dummy 地址（防止调用方后续解引用崩）。原版 stub
+# 列表照 store.so 的 `objdump -T | awk '/UND/'` 拉出，再覆盖 _v2 变体——万一未来 moon
+# cake.store 升级引入新 cuMemGetAddressRange_v2 之类的走这里，多 10 行 C 不亏。
+STUB_LIBS_DIR="$(python -c 'import os, mooncake.store; print(os.path.join(os.path.dirname(mooncake.store.__file__), "..", "mooncake_transfer_engine.libs"))' 2>/dev/null)"
+if [[ -z "$STUB_LIBS_DIR" || ! -d "$STUB_LIBS_DIR" ]]; then
+    echo "smoke: FAILED - could not locate mooncake_transfer_engine.libs (mooncake.store import failed or path missing)" >&2
+    exit 1
+fi
+if python -c 'import mooncake.store' 2>/dev/null; then
+    echo "smoke: mooncake.store imports clean (libcuda already satisfied)"
+else
+    # sglang image 通常不带 gcc。补装：gcc 依赖链会带上 libc6-dev/cpp/binutils，
+    # ~150MB。-qq 压进度条，>/dev/null 压正常输出到 log。
+    if ! command -v gcc >/dev/null 2>&1; then
+        apt-get install -qq -y --no-install-recommends gcc >/dev/null 2>&1 \
+            || { echo "smoke: FAILED - apt-get install gcc failed" >&2; exit 1; }
+    fi
+    # stub 列表照 store.so 的 `objdump -T | awk '/UND/'` 拉出，再覆盖原版 + _v2
+    # 变体——万一未来 mooncake.store 升级引入新 cuMemGetAddressRange_v2 之类的
+    # 走这里，多 10 行 C 不亏。
+    cat > /tmp/mooncake_cuda_stub.c <<'CUEOF'
+/* Stub libcuda.so.1 + libcudart.so.12 for mooncake-transfer-engine on NPU.
+ *
+ * Only need to satisfy the dynamic-linker stage of `import mooncake.store`;
+ * spec-capture-ascend-mount.patch forces local_buffer_size=0 /
+ * global_segment_size=0 / location="cpu", so no real GPU buffer is ever
+ * allocated. Functions all return 0 (CUDA_SUCCESS); output params receive
+ * a non-NULL dummy address (preventing caller dereference crashes). */
+#include <stddef.h>
+/* CUDA driver API (libcuda.so.1) */
+int cuInit(unsigned int f) { return 0; }
+int cuDeviceGet(int *d, int o) { if (d) *d = 0; return 0; }
+int cuDeviceGetAttribute(int *v, int a, int d) { if (v) *v = 0; return 0; }
+int cuDeviceGetCount(int *c) { if (c) *c = 0; return 0; }
+int cuDeviceGetName(char *n, int l, int d) { return 0; }
+int cuDeviceComputeCapability(int *m, int *n, int d) { if (m) *m = 0; if (n) *n = 0; return 0; }
+int cuDevicePrimaryCtxRetain(void **c, int d) { if (c) *c = (void*)0x1; return 0; }
+int cuDevicePrimaryCtxRelease_v2(int d) { return 0; }
+int cuCtxCreate(void **c, unsigned int f, int d) { if (c) *c = (void*)0x2; return 0; }
+int cuCtxCreate_v2(void **c, unsigned int f, int d) { if (c) *c = (void*)0x2; return 0; }
+int cuCtxDestroy(void *c) { return 0; }
+int cuCtxSetCurrent(void *c) { return 0; }
+int cuCtxGetCurrent(void **c) { if (c) *c = (void*)0x2; return 0; }
+int cuCtxGetDevice(int *d) { if (d) *d = 0; return 0; }
+int cuMemAlloc(void **p, size_t s) { if (p) *p = (void*)0x1000; return 0; }
+int cuMemAllocHost(void **p, size_t s, unsigned int f) { if (p) *p = (void*)0x2000; return 0; }
+int cuMemFree(void *p) { return 0; }
+int cuMemFreeHost(void *p) { return 0; }
+int cuMemcpyHtoD(void *d, const void *s, size_t n) { return 0; }
+int cuMemcpyDtoH(void *d, const void *s, size_t n) { return 0; }
+int cuMemcpyDtoD(void *d, const void *s, size_t n) { return 0; }
+int cuMemcpyHtoDAsync(void *d, const void *s, size_t n, void *st) { return 0; }
+int cuMemcpyDtoHAsync(void *d, const void *s, size_t n, void *st) { return 0; }
+int cuMemcpyDtoDAsync(void *d, const void *s, size_t n, void *st) { return 0; }
+int cuMemsetD8(void *d, unsigned char v, size_t n) { return 0; }
+int cuMemsetD16(void *d, unsigned short v, size_t n) { return 0; }
+int cuMemsetD32(void *d, unsigned int v, size_t n) { return 0; }
+int cuStreamCreate(void **s, unsigned int f) { if (s) *s = (void*)0x3000; return 0; }
+int cuStreamDestroy(void *s) { return 0; }
+int cuStreamSynchronize(void *s) { return 0; }
+int cuStreamQuery(void *s) { return 0; }
+int cuEventCreate(void **e, unsigned int f) { if (e) *e = (void*)0x4000; return 0; }
+int cuEventDestroy(void *e) { return 0; }
+int cuEventRecord(void *e, void *s) { return 0; }
+int cuEventSynchronize(void *e) { return 0; }
+int cuEventQuery(void *e) { return 0; }
+int cuMemAddressReserve(void **p, size_t s, size_t a, void *b, unsigned long long f) { if (p) *p = (void*)0x5000; return 0; }
+int cuMemAddressFree(void *p, size_t s) { return 0; }
+int cuMemCreate(void **h, size_t s, void *p, unsigned long long f) { if (h) *h = (void*)0x6000; return 0; }
+int cuMemRelease(void *h) { return 0; }
+int cuMemMap(void *p, size_t s, size_t o, void *h) { return 0; }
+int cuMemUnmap(void *p, size_t s) { return 0; }
+int cuMemSetAccess(void *p, size_t s, void *d, int c) { return 0; }
+int cuMemGetAccess(unsigned long long *f, void *l, void *p) { if (f) *f = 0; return 0; }
+int cuMemGetAllocationGranularity(size_t *g, void *p, int o) { if (g) *g = 1; return 0; }
+int cuMemGetAddressRange_v2(void **b, size_t *s, size_t p) { if (b) *b = (void*)0x7000; if (s) *s = 0; return 0; }
+int cuMemRetainAllocationHandle(void **h, void *p) { if (h) *h = (void*)0x8000; return 0; }
+int cuMemGetHandleForAddressRange(void *h, void *p, size_t s, int o, unsigned long long f) { return 0; }
+int cuMemExportToShareableHandle(void *o, void *h, int t, unsigned long long f) { return 0; }
+int cuMemImportFromShareableHandle(void **h, void *i, int t) { if (h) *h = (void*)0xB000; return 0; }
+int cuPointerGetAttribute(void *d, int a, void *p) { return 0; }
+int cuPointerSetAttribute(void *d, int a, void *p) { return 0; }
+int cuGetErrorName(int e, const char **n) { if (n) *n = "stub"; return 0; }
+int cuGetErrorString(int e, const char **s) { if (s) *s = "stub"; return 0; }
+/* CUDA runtime API (libcudart.so.12) */
+int cudaMalloc(void **p, size_t s) { if (p) *p = (void*)0x1000; return 0; }
+int cudaMallocHost(void **p, size_t s, unsigned int f) { if (p) *p = (void*)0x2000; return 0; }
+int cudaMallocManaged(void **p, size_t s, unsigned int f) { if (p) *p = (void*)0x1000; return 0; }
+int cudaFree(void *p) { return 0; }
+int cudaFreeHost(void *p) { return 0; }
+int cudaMemcpy(void *d, const void *s, size_t n, int k) { return 0; }
+int cudaMemcpyAsync(void *d, const void *s, size_t n, int k, void *st) { return 0; }
+int cudaMemcpyBatchAsync(void *d, void **s, size_t *n, size_t c, void *a, void *st) { return 0; }
+int cudaMemset(void *p, int v, size_t n) { return 0; }
+int cudaMemsetAsync(void *p, int v, size_t n, void *st) { return 0; }
+int cudaStreamCreateWithFlags(void **s, unsigned int f) { if (s) *s = (void*)0x3000; return 0; }
+int cudaStreamDestroy(void *s) { return 0; }
+int cudaStreamQuery(void *s) { return 0; }
+int cudaStreamSynchronize(void *s) { return 0; }
+int cudaEventCreateWithFlags(void **e, unsigned int f) { if (e) *e = (void*)0x4000; return 0; }
+int cudaEventDestroy(void *e) { return 0; }
+int cudaEventRecord(void *e, void *s) { return 0; }
+int cudaEventSynchronize(void *e) { return 0; }
+int cudaEventQuery(void *e) { return 0; }
+int cudaGetDevice(int *d) { if (d) *d = 0; return 0; }
+int cudaGetDeviceCount(int *c) { if (c) *c = 0; return 0; }
+int cudaSetDevice(int d) { return 0; }
+int cudaGetDeviceProperties_v2(void *p, int d) { return 0; }
+int cudaDeviceCanAccessPeer(int *c, int d, int p) { if (c) *c = 0; return 0; }
+int cudaDeviceEnablePeerAccess(int p, unsigned int f) { return 0; }
+int cudaDeviceDisablePeerAccess(int p) { return 0; }
+int cudaDeviceGetPCIBusId(char *b, int l, int d) { return 0; }
+int cudaHostAlloc(void **p, size_t s, unsigned int f) { if (p) *p = (void*)0x2000; return 0; }
+int cudaHostGetDevicePointer(void **d, void *h, unsigned int f) { if (d) *d = (void*)0x1000; return 0; }
+int cudaHostRegister(void *p, size_t s, unsigned int f) { return 0; }
+int cudaHostUnregister(void *p) { return 0; }
+int cudaGetLastError(void) { return 0; }
+int cudaPeekAtLastError(void) { return 0; }
+int cudaGetErrorString(int e, const char **s) { if (s) *s = "stub"; return 0; }
+int cudaGetErrorName(int e, const char **n) { if (n) *n = "stub"; return 0; }
+int cudaPointerGetAttributes(void *a, void *p) { return 0; }
+int cudaIpcGetMemHandle(void *h, void *d) { return 0; }
+int cudaIpcOpenMemHandle(void **d, void *h, unsigned int f) { if (d) *d = (void*)0x1000; return 0; }
+int cudaIpcCloseMemHandle(void *d) { return 0; }
+int cudaLaunchHostFunc(void *s, void *f, void *a) { return 0; }
+CUEOF
+    gcc -shared -fPIC -Wl,-soname,libcuda.so.1 \
+        -o "$STUB_LIBS_DIR/libcuda.so.1" /tmp/mooncake_cuda_stub.c 2>/tmp/smoke-cuda-stub.err \
+        || { echo "smoke: FAILED - libcuda.so.1 stub compile failed:" >&2
+             tail -20 /tmp/smoke-cuda-stub.err >&2 || true
+             exit 1; }
+    gcc -shared -fPIC -Wl,-soname,libcudart.so.12 \
+        -o "$STUB_LIBS_DIR/libcudart.so.12" /tmp/mooncake_cuda_stub.c 2>/tmp/smoke-cuda-stub.err \
+        || { echo "smoke: FAILED - libcudart.so.12 stub compile failed:" >&2
+             tail -20 /tmp/smoke-cuda-stub.err >&2 || true
+             exit 1; }
+    # 校验：mooncake.store 必须能 import 不报 libcuda 缺失。store.so 的 UND 符号
+    # 列表将来若扩展（mooncake-transfer-engine 升级），stub 这里得跟着加。
+    if ! python -c 'import mooncake.store' 2>/tmp/smoke-cuda-stub.err; then
+        echo "smoke: FAILED - mooncake.store still fails after CUDA stub install:" >&2
+        tail -10 /tmp/smoke-cuda-stub.err >&2 || true
+        exit 1
+    fi
+    echo "smoke: cuda stub installed (libcuda.so.1 + libcudart.so.12 -> $STUB_LIBS_DIR)"
+fi
+
+# 主路径在前面 `build-mooncake` 块里：`cmake -DUSE_ASCEND_DIRECT=ON -DWITH_STORE=ON ...`
+# 把 store.so 切到 Ascend Direct transport，整链不再链 libcuda.so.1 + libcudart.so.12 → `import
+# mooncake.store` 直接成功。这里再写一段 stub 兜底不是为了当前 source build 链路，而是防
+# 极端回归（build-mooncake 块失败、CI 跑到这里 store.so 不知怎么又链上了 CUDA），import 失
+# 败时走 libcuda stub 救场（commit 1b90212 的方案——stub 是 fallback，build-mooncake 是首选；
+# 不要倒退回纯 stub 路径）。
+
+# 防御性 verify：base patch 必须在 server_args.py 引入 enable_spec_capture /
+# spec_capture_aux_layer_ids / spec_capture_method 三个字段，launch_server 的
+# argparse 才能识别 --enable-spec-capture 这一组 CLI flag。run 33493594121 复现：
+# apply 脚本 stdout 'spec-capture patch v0.5.18 applied at
+# /sgl-workspace/sglang/python/sglang'——但同路径 grep 找不到字段。怀疑
+# `git -C $SGL_PARENT apply` 在 site-packages（非 git 仓）下报成功但
+# server_args.py hunk 没真正落盘。先 dump 现场，再 fallback 到 Python 字
+# 符串替换直接插字段（沿用 ascend companion 的不依赖 git 的稳健路径）。
+SGLANG_DIR=$(python -c "import importlib.util, os; print(os.path.dirname(os.path.dirname(importlib.util.find_spec('sglang').origin)))")
+SERVER_ARGS="$SGLANG_DIR/sglang/srt/server_args.py"
+if ! grep -q 'enable_spec_capture: A\[' "$SERVER_ARGS" \
+   || ! grep -q 'spec_capture_aux_layer_ids: A\[' "$SERVER_ARGS" \
+   || ! grep -q 'spec_capture_method: A\[' "$SERVER_ARGS"; then
+    echo "smoke: FAILED - spec-capture patch did not add enable_spec_capture fields to $SERVER_ARGS" >&2
+    echo "smoke: diagnostic dump:" >&2
+    echo "smoke:   SGLANG_DIR=$SGLANG_DIR" >&2
+    echo "smoke:   SGLANG_DIR/.git present? $(test -d "$SGLANG_DIR/.git" && echo YES || echo NO)" >&2
+    echo "smoke:   APPLIED_COPY present? $(test -f "$SGLANG_DIR/sglang/.spec_capture_patch.applied" && echo YES || echo NO)" >&2
+    echo "smoke:   server_args.py size: $(wc -c < "$SERVER_ARGS")B" >&2
+    echo "smoke:   enable_spec_capture grep count: $(grep -c 'enable_spec_capture' "$SERVER_ARGS" 2>/dev/null || echo 0)" >&2
+    echo "smoke:   tail /tmp/smoke-patch.log:" >&2
+    tail -50 /tmp/smoke-patch.log >&2 || true
+    echo "smoke: last-resort: apply server_args.py hunk directly via Python" >&2
+    # 不能写 python ... <<'PY' || { ... }：heredoc body 从 <<'PY' 后一直读到 PY，
+    # `||` 和 brace group 都被吞进 stdin 当 python 源码（python 报 syntax error 就
+    # exit 了，brace group 永远不执行）。改用 python 退出后 recheck grep 的方式
+    # 兜底：python 退出后 grep enable_spec_capture 字段是否落盘，不在就报错并
+    # 把 python stderr 一并贴出来。
+    python - "$SERVER_ARGS" >/tmp/smoke-py-patch.out 2>/tmp/smoke-py-patch.err <<'PY'
+import sys, ast
+path = sys.argv[1]
+with open(path) as f:
+    src = f.read()
+# Three fields are inserted as a block right BEFORE 'enable_return_routed_experts: A['
+# (matches the v0.5.18 patch hunk context: 'enable_spec_capture: A[' sits immediately
+# above 'enable_return_routed_experts: A['). Inserting before the anchor is structural —
+# 'enable_return_routed_experts: A[' is the same neighbour regardless of upstream
+# sglang's exact line numbers, so this survives 0.5.18 -> 0.5.x minor drifts the BSD
+# patch is fragile to. Earlier attempts to insert AFTER 'enable_return_routed_experts'
+# via `src.index('\n', end_of_block)` failed: end_of_block already IS a '\n' (the
+# newline preceding '    ] = ...'), so str.index returns it unchanged — insertion
+# landed between the description line and the closing '    ] = False', orphaning the
+# closing ']' and breaking syntax. Anchor BEFORE sidesteps the closing-line offset
+# arithmetic entirely.
+fields_to_add = """    enable_spec_capture: A[
+        bool,
+        "Enable server-side speculative-training capture (SpecForge DataFlow layout).",
+        NS("exec.features"),
+    ] = False
+    spec_capture_aux_layer_ids: A[
+        Optional[List[int]],
+        "Target layer ids whose hidden states are captured for spec-capture requests.",
+        NS("exec.features"),
+    ] = None
+    spec_capture_method: A[
+        str,
+        "Capture method for --enable-spec-capture: 'eagle3', 'dflash', or 'dspark'.",
+        NS("exec.features"),
+    ] = "eagle3"
+"""
+anchor = 'enable_return_routed_experts: A['
+if anchor not in src:
+    sys.exit("anchor 'enable_return_routed_experts: A[' not found in server_args.py")
+if 'enable_spec_capture: A[' in src:
+    sys.exit(0)  # already there
+# Insert BEFORE the 'enable_return_routed_experts: A[' line. rfind('\n', 0, idx) gives
+# the '\n' that ends the PREVIOUS line (i.e., the previous field's closing
+# '    ] = <val>\n'). insert_pos = that '\n' + 1 = start of the anchor's line.
+idx = src.index(anchor)
+prev_newline = src.rfind('\n', 0, idx)
+insert_pos = prev_newline + 1
+new_src = src[:insert_pos] + fields_to_add + src[insert_pos:]
+# Validate syntax BEFORE writing back: ast.parse checks only syntax (names like
+# Optional/List/NS/A don't need to be in scope for the check), so an early
+# SyntaxError caught here is actionable upstream of the smoke step.
+try:
+    ast.parse(new_src)
+except SyntaxError as e:
+    sys.exit(f"smoke: FAILED - inserted code creates SyntaxError at line {e.lineno}: {e.msg} ({e.text!r})")
+with open(path, 'w') as f:
+    f.write(new_src)
+print('smoke: server_args.py patched in-place via python (added 3 fields)')
+PY
+    if ! grep -q 'enable_spec_capture: A\[' "$SERVER_ARGS"; then
+        echo "smoke: FAILED - even direct python patch did not land enable_spec_capture" >&2
+        echo "smoke:   python stderr:" >&2
+        tail -30 /tmp/smoke-py-patch.err >&2 || true
+        exit 1
+    fi
+fi
 echo "smoke: patches + apt deps applied"
 ```
 
 输出结果类似如下（中间省略 patch 应用逐行日志）：
 
-```shell #test-result id="smoke-apply-patches" fuzzy='...'
-smoke: applying spec-capture patches for sglang xxx
+```shell #test-result id="smoke-apply-patches"
+smoke: applying spec-capture patches for sglang 0.5.18
 smoke: patches + apt deps applied
 ```
 
@@ -461,7 +811,7 @@ nohup mooncake_master \
     >/tmp/smoke-mooncake.log 2>&1 &
 MOONCAKE_PID=$!
 mooncake_ready() {
-    python3 -c "
+    python -c "
 import socket, sys
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 s.settimeout(0.5)
@@ -509,7 +859,7 @@ MOONCAKE_MASTER_SERVER_ADDR=127.0.0.1:$MOONCAKE_RPC_PORT \
 MOONCAKE_PROTOCOL=tcp \
 MOONCAKE_GLOBAL_SEGMENT_SIZE=$((32<<30)) \
 nohup python -m sglang.launch_server \
-    --model-path "${MODEL_PATH}" \
+    --model-path "<MODEL_PATH>" \
     --trust-remote-code \
     --skip-tokenizer-init \
     --tp-size 1 \
@@ -537,7 +887,7 @@ exit 1
 
 输出结果类似如下（中间省略 SGLang graph compile / model load 逐行日志）：
 
-```shell #test-result id="smoke-start-sglang" fuzzy='...'
+```shell #test-result id="smoke-start-sglang" fuzzy='xxx'
 smoke: waiting for SGLang /health (up to 600s)
 smoke: sglang ready (pid=xxx)
 ```
@@ -557,12 +907,12 @@ specforge train -c "$RECIPE" \
     training.max_steps=1 \
     training.batch_size=1 \
     training.accumulation_steps=1 \
-    training.max_length=512 \
+    data.max_length=512 \
     training.num_anchors=32 \
     training.save_interval=0 \
     training.log_interval=1 \
     deployment.trainer.nproc_per_node=1 \
-    model.target_model_path="${MODEL_PATH}" \
+    model.target_model_path="<MODEL_PATH>" \
     2>&1 | tee /tmp/smoke-train.log
 TRAIN_RC=${PIPESTATUS[0]}
 popd >/dev/null
@@ -586,4 +936,4 @@ echo "smoke: OK - 1-step training completed (exit=$TRAIN_RC)"
 smoke: OK - 1-step training completed (exit=0)
 ```
 
-> 卡 0 跑 capture server，卡 1 跑 trainer，卡 2/3 空闲给 HCCL buffer。Smoke 的 `--context-length 1024 --mem-fraction-static 0.5` 把 SGLang KV池压住（sglang 0.5.x 把 `--max-model-len` 改名成 `--context-length`，server_args.py `context_length` 字段），`training.max_steps=1 training.batch_size=1 training.max_length=512 training.num_anchors=32 deployment.trainer.nproc_per_node=1` 把训练侧压到 1 步最小数据。
+> 卡 0 跑 capture server，卡 1 跑 trainer，卡 2/3 空闲给 HCCL buffer。Smoke 的 `--context-length 1024 --mem-fraction-static 0.5` 把 SGLang KV池压住（sglang 0.5.x 把 `--max-model-len` 改名成 `--context-length`，server_args.py `context_length` 字段），`training.max_steps=1 training.batch_size=1 data.max_length=512 training.num_anchors=32 deployment.trainer.nproc_per_node=1` 把训练侧压到 1 步最小数据。

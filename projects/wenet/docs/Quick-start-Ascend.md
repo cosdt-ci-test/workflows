@@ -76,7 +76,9 @@ git checkout <UPSTREAM_REF>
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 cd wenet
 pip install -e .
-pip install torch==2.12.0 torch-npu==2.12.0
+pip install torch==2.5.1 torch-npu==2.5.1.post1
+pip install torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cpu
+pip install "deepspeed<0.19.6" tensorboardX
 ```
 
 安装 sox：
@@ -174,7 +176,7 @@ BAC009S0002W003 语音识别很有意思
 
 ---
 
-## 6. 准备 WeNet 数据格式（stage 2-3）
+## 6. 准备 WeNet 数据格式（stage 1-3）
 
 进入 aishell/s0 目录，将 mock 数据链接到 WeNet 期望的位置：
 
@@ -198,11 +200,11 @@ lrwxrwxrwx 1 root root   25 ... test -> /tmp/wenet-mock/data/test
 lrwxrwxrwx 1 root root   26 ... train -> /tmp/wenet-mock/data/train
 ```
 
-运行 stage 2（生成字典）和 stage 3（生成 data.list）：
+运行 stage 1-3 (准备训练数据)：
 
 ```shell #test-setup id="prepare-data"
 cd wenet/examples/aishell/s0
-bash run_npu.sh --stage 2 --stop_stage 3
+bash run_npu.sh --stage 1 --stop_stage 3
 ```
 
 验证生成的文件：
@@ -249,12 +251,12 @@ ls exp/conformer/*.pt | head -5
 输出结果如下：
 
 ```shell #test-result id="verify-train"
-exp/conformer/train.yaml
+... exp/conformer/train.yaml
+exp/conformer/epoch_0.pt
 exp/conformer/epoch_1.pt
 exp/conformer/epoch_2.pt
 exp/conformer/epoch_3.pt
 exp/conformer/epoch_4.pt
-exp/conformer/epoch_5.pt
 ```
 
 ---
@@ -265,7 +267,7 @@ exp/conformer/epoch_5.pt
 
 ```shell #test-setup id="infer"
 cd wenet/examples/aishell/s0
-bash run_npu.sh --stage 5 --stop_stage 5
+bash run_npu.sh --stage 5 --stop_stage 5 --average_num 5
 ```
 
 验证推理结果：

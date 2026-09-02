@@ -317,14 +317,15 @@ projects:
     workflows:
       examples: .github/workflows/xllm-examples.yml
       quick_start: .github/workflows/xllm-quick-start.yml
-  # xDiT guard scope: single-card SD3 medium smoke on NPU through the
-  # minimalised script of upstream NPU-support PR #566 (torchrun
-  # --nproc_per_node=1, hccl runtime, xFuserStableDiffusion3Pipeline).
-  # The doc installs the pinned torch stack itself (torch 2.9.0 +
-  # torch_npu 2.9.0.post2 + triton 3.5.* — xfuser >= 0.6.0 imports
-  # triton unconditionally without declaring it) and pulls weights via
-  # `modelscope download --local_dir models/...` (~16 GB, fp16
-  # duplicates excluded; persisted on /data/ci-cache/xdit-models).
+  # xDiT guard scope: single-card SD3 medium smoke on NPU through a
+  # minimal script (torchrun --nproc_per_node=1, hccl runtime,
+  # xFuserStableDiffusion3Pipeline). The doc installs the pinned torch
+  # stack itself (torch 2.9.0 + torch_npu 2.9.0.post2 + triton 3.5.* —
+  # xfuser >= 0.6.0 imports triton unconditionally without declaring
+  # it), clones the default branch (plain user-facing clone, no
+  # UPSTREAM_REF pinning) and pulls weights via `modelscope download
+  # --local_dir models/...` (full repo ~31 GB; persisted on
+  # /data/ci-cache/xdit-models).
   # xfuser's NPU dispatch (envs.py `_is_npu()` / hccl) is verified by
   # the install-verify block. Multi-card (USP / DP / TP) is
   # pointer-only in the doc. Use the Contents API URL (same as xtuner

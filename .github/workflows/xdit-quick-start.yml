@@ -81,19 +81,19 @@ jobs:
       # torch stack is installed and verified by the doc itself;
       # triton is needed by xfuser >= 0.6.0's sparge_attention which
       # imports it unconditionally without declaring it) + git clone
-      # (depth=1, ref = latest release tag via ${UPSTREAM_REF:-main}
-      # bash expansion) + `uv pip install -e ./xDiT` + the install
-      # verify block (imports the full xfuser chain, asserts the NPU
-      # dispatch prints `npu hccl True`) + `modelscope download
-      # --local_dir models/stable-diffusion-3-medium-diffusers
-      # --exclude <fp16 duplicates + demo images>` (~16 GB) + the
-      # PR #566 minimalised SD3 script (heredoc-written sd3_npu.py,
+      # (depth=1, default branch — plain user-facing clone, the same
+      # command a reader copies from the doc) + `uv pip install -e
+      # ./xDiT` + the install verify block (imports the full xfuser
+      # chain, asserts the NPU dispatch prints `npu hccl True`) +
+      # `modelscope download --local_dir models/
+      # stable-diffusion-3-medium-diffusers` (full repo, ~31 GB) +
+      # a minimal single-card SD3 script (heredoc-written sd3_npu.py,
       # NPU-native device calls, T5-XXL preloaded fp16) via
       # `torchrun --nproc_per_node=1` (1 step, 256x256) + a PNG
       # structural check (magic + size floor) on results/sd3_npu.png.
       # 90 min covers cold install + first git clone + the
       # build-from-source `uv pip install -e .` step + SD3
-      # cold-cache download (~16 GB; warm after first run via the
+      # cold-cache download (~31 GB; warm after first run via the
       # bind-mount) + T5 load + single-card inference.
       timeout_minutes: 90
       upstream_repo: xdit-project/xDiT

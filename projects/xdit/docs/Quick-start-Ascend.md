@@ -6,7 +6,7 @@
 
 - **硬件**：Atlas 900 A2 / A3 训练系列产品（Ascend 910B4 / 910B 等），单卡 32 GB HBM 可跑本文全部内容
 - **操作系统**：Linux（Ubuntu 22.04）
-- **存储**：至少 25 GB 可用空间
+- **存储**：至少 40 GB 可用空间
 
 | 组件 | 版本 | 来源 |
 | --- | --- | --- |
@@ -37,14 +37,14 @@ uv pip install "torch==2.9.0" "torch_npu==2.9.0.post2" "triton==3.5.*"
 
 ## 📦 安装 xDiT
 
-**克隆项目并安装**（先进入想放置项目的目录，后续步骤都在该目录下执行；`UPSTREAM_REF` 未设置时克隆 main 分支）：
+**克隆并安装**：
 
 ```shell #test-setup id="xdit-install-source"
-git clone --depth 1 --branch "${UPSTREAM_REF:-main}" https://github.com/xdit-project/xDiT.git
+git clone --depth 1 https://github.com/xdit-project/xDiT.git
 uv pip install -e ./xDiT
 ```
 
-**验证安装**（xfuser 的导入链在 NPU 上走 hccl 分发，全部就位时输出 `npu hccl True`）：
+**验证安装**（全部就位时输出 `npu hccl True`）：
 
 ```shell #test id="xdit-install-verify"
 python -c "
@@ -70,18 +70,16 @@ npu dispatch: npu hccl True
 
 ### 📥 模型准备
 
-本文使用 [SD3 medium](https://modelscope.cn/models/stabilityai/stable-diffusion-3-medium-diffusers)（约 16 GB；仓库同时含 fp16 重复权重与演示图，用 `--exclude` 排除）：
+本文使用 [SD3 medium](https://modelscope.cn/models/stabilityai/stable-diffusion-3-medium-diffusers)（约 30 GB）：
 
 ```shell #test-setup id="xdit-pull-sd3"
 uv pip install "modelscope==1.37.0"
-modelscope download --model stabilityai/stable-diffusion-3-medium-diffusers \
-    --local_dir models/stable-diffusion-3-medium-diffusers \
-    --exclude "*.fp16.safetensors" "*.fp16-*" "*.fp16.json" "sd3demo.jpg" "mmdit.png"
+modelscope download --model stabilityai/stable-diffusion-3-medium-diffusers --local_dir models/stable-diffusion-3-medium-diffusers
 ```
 
 ### 🚀 开始生成
 
-下面是 xDiT [官方 NPU 支持 PR #566](https://github.com/xdit-project/xDiT/pull/566) 验证脚本的最小化版本（单卡、1 步、256×256；`torchrun` 负责注入分布式环境并初始化 hccl 运行时）：
+用 Python API 生成图片（单卡、1 步、256×256；`torchrun` 负责初始化运行时环境）：
 
 ```shell #test id="xdit-sd3-smoke"
 cat > sd3_npu.py <<'PY'
@@ -156,4 +154,4 @@ PY
 size: xxx
 ```
 
-> **注意**：如新开终端执行生成，先 `source ~/Ascend/ascend-toolkit/set_env.sh`。多卡并行（`--ulysses_degree` / `--tensor_parallel_degree` 等）与更多模型见[上游 examples](https://github.com/xdit-project/xDiT/tree/main/examples)。
+> **注意**：如新开终端执行生成，先 `source ~/Ascend/ascend-toolkit/set_env.sh`。更多用法（多卡并行、更多模型）见 [xDiT examples](https://github.com/xdit-project/xDiT/tree/main/examples)。

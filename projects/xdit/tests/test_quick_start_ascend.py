@@ -12,11 +12,13 @@ Run: ``python -m unittest tests.test_quick_start_ascend -v 2>&1``
 Environment variables (injected by the quick-start engine workflow
 ``quick-start-template.yml``, triggered by ``xdit-quick-start.yml``):
     ``MONITORED_DOC_URL``         Required; raw URL of the document under test.
-    ``UPSTREAM_REF``              Latest upstream release tag, consumed by the
-                                  doc's clone block directly via bash env
-                                  expansion (``--branch "${UPSTREAM_REF:-main}"``)
-                                  — no store/capture block involved. Local
-                                  users without the var fall back to main.
+    ``UPSTREAM_REF``              Injected by the engine but NOT consumed
+                                  by the doc body: the doc's clone block
+                                  just clones the default branch, exactly
+                                  what a user gets. xDiT has release tags;
+                                  the monitor still resolves the latest
+                                  release id as the change key, it just
+                                  doesn't pin the checkout anymore.
     ``NPU_READY=true``            Required, otherwise the class is skipped.
                                   End-to-end tests only run on the NPU runner:
                                   local dev machines / normal ubuntu runners
@@ -66,13 +68,12 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         without declaring it) + installs xfuser from source + verifies
         the NPU dispatch (``xfuser/envs.py`` returns
         ``get_torch_distributed_backend() == "hccl"``).
-      * Smoke: SD3 medium (~16 GB via ``modelscope download --local_dir``
-        with fp16 duplicates excluded) through the minimalised script of
-        upstream NPU-support PR #566 — ``torchrun --nproc_per_node=1``
-        initialises the hccl runtime, ``xFuserStableDiffusion3Pipeline``
-        generates one 256x256 1-step image, saved to
-        ``results/sd3_npu.png`` and structurally verified (PNG magic +
-        size floor).
+      * Smoke: SD3 medium (~30 GB full repo via ``modelscope download
+        --local_dir``) through a minimal single-card script —
+        ``torchrun --nproc_per_node=1`` initialises the hccl runtime,
+        ``xFuserStableDiffusion3Pipeline`` generates one 256x256 1-step
+        image, saved to ``results/sd3_npu.png`` and structurally
+        verified (PNG magic + size floor).
       * Multi-card paths (USP / DP / TP) are pointer-only (a doc note
         linking upstream examples); the guard exercises the single-card
         path only.

@@ -2,7 +2,7 @@
 
 本目录是 [xDiT](https://github.com/xdit-project/xDiT)（PyPI 包名 [xfuser](https://pypi.org/project/xfuser/)）的看护配套数据，不是 xDiT 源码。流水线在 [.github/workflows/xdit-quick-start.yml](../../.github/workflows/xdit-quick-start.yml)。注册信息见根目录 [projects.yaml](../../projects.yaml)（分类：推理加速；支持程度：新兴适配；阶段 A）。
 
-在单卡昇腾 NPU 上跑通 xfuser：文档自装 torch 栈（torch 2.9.0 + torch_npu 2.9.0.post2 + triton 3.5.*）→ 源码安装 xfuser（`git clone` + `uv pip install -e ./xDiT`，ref 经 `${UPSTREAM_REF:-main}` 展开，CI 测最新 release tag、本地用户落 main）→ 验证 NPU 分发（`xfuser/envs.py` 输出 `npu hccl True`）→ `modelscope download --local_dir` 拉 SD3 medium（~16 GB，排除 fp16 重复权重）→ 用上游 [NPU 支持 PR #566](https://github.com/xdit-project/xDiT/pull/566) 验证脚本的最小化版本经 `torchrun --nproc_per_node=1` 生成一张 256×256 单步图片并做 PNG 结构校验。多卡并行（USP / DP / TP）为文档内指引链接，不在看护范围。
+在单卡昇腾 NPU 上跑通 xfuser：文档自装 torch 栈（torch 2.9.0 + torch_npu 2.9.0.post2 + triton 3.5.*）→ 源码安装 xfuser（`git clone` 默认分支 + `uv pip install -e ./xDiT`）→ 验证 NPU 分发（`xfuser/envs.py` 输出 `npu hccl True`）→ `modelscope download --local_dir` 拉 SD3 medium（全仓 ~30 GB）→ 最小单卡脚本经 `torchrun --nproc_per_node=1` 生成一张 256×256 单步图片并做 PNG 结构校验。多卡并行（USP / DP / TP）为文档内指引链接，不在看护范围。
 
 ## 触发
 

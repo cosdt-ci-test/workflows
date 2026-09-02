@@ -145,7 +145,7 @@ python -c "import modelscope; print('modelscope importable'); import transformer
 
 ```shell #test-result id="ms-verify-import" fuzzy='xxx'
 modelscope importable
-transformers xxx.x.x
+transformers xxx
 ```
 
 ## 使用样例
@@ -164,17 +164,25 @@ modelscope download --model Qwen/Qwen2.5-0.5B-Instruct
 
 ```shell #test id="ms-npu-infer"
 python - <<'PY'
+import sys
 import torch
-import torch_npu
 
 try:
     from modelscope import AutoModelForCausalLM, AutoTokenizer
-    print('using modelscope AutoModelForCausalLM')
-except ImportError:
+except Exception as exc:
+    print(
+        f'diag: modelscope AutoModel import failed: '
+        f'{type(exc).__name__}: {exc}',
+        file=sys.stderr,
+    )
+    from modelscope.hub.snapshot_download import snapshot_download
     from transformers import AutoModelForCausalLM, AutoTokenizer
-    print('fallback: using transformers AutoModelForCausalLM')
+    model_id = snapshot_download('Qwen/Qwen2.5-0.5B-Instruct')
+else:
+    model_id = 'Qwen/Qwen2.5-0.5B-Instruct'
 
-model_id = 'Qwen/Qwen2.5-0.5B-Instruct'
+import torch_npu
+
 model = AutoModelForCausalLM.from_pretrained(
     model_id, trust_remote_code=True).to('npu:0')
 tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)

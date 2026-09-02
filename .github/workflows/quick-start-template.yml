@@ -251,16 +251,16 @@ jobs:
       # Install when missing (idempotent; no-op when already present).
       # The NPU runner reaches the default ubuntu ports archive slowly,
       # so point apt at the aliyun arm64 mirror first (same as opencv).
-      - name: Bootstrap curl and jq
+      - name: Bootstrap curl, jq, and git
         run: |
           set -euo pipefail
-          if command -v curl >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
-            echo "bootstrap: curl and jq already present"
+          if command -v curl >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 && command -v git >/dev/null 2>&1; then
+            echo "bootstrap: curl, jq, and git already present"
             exit 0
           fi
           apt-get update -qq
-          apt-get install -y -qq curl jq
-          echo "bootstrap: curl $(curl --version | head -1) jq $(jq --version)"
+          apt-get install -y -qq curl jq git
+          echo "bootstrap: curl $(curl --version | head -1) jq $(jq --version) git $(git --version)"
 
       - name: Monitor upstream release and doc
         id: monitor

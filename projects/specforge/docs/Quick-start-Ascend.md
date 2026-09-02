@@ -277,7 +277,7 @@ Smoke 把 `mooncake_master` / SGLang capture server / `specforge train` 串起�
 | Step | 块 id | 干啥 |
 | --- | --- | --- |
 | 1 | `smoke-download-model` | 从 ModelScope 拉 `Qwen/Qwen3.5-4B`，把模型路径存入 store `model_path` |
-| 2 | `smoke-apply-patches` | 跑 `apply_sglang_spec_capture_patch.sh` + 内联 ascend companion + `apt-get install libcurl4/libibverbs1/libnuma1` |
+| 2 | `smoke-apply-patches` | 跑 `apply_sglang_spec_capture_patch.sh` + 内联 ascend companion + `apt-get install libcurl4/libibverbs1/libnuma1` + 编 libcuda.so.1/libcudart.so.12 stub 丢 wheel 的 .libs/（specforge eager `import mooncake.store` 撞 NPU image 没 CUDA；sglang 这边是 lazy 不触发） |
 | 3 | `smoke-start-mooncake` | `nohup mooncake_master`，socket 探活 35551 |
 | 4 | `smoke-start-sglang` | `nohup sglang.launch_server`，curl `/health` 探活 30000 |
 | 5 | `smoke-train` | `specforge train ... max_steps=1`，断言 stdout 出现 `step.*loss` |
@@ -455,6 +455,168 @@ popd >/dev/null
 apt-get update -qq >/dev/null 2>&1
 apt-get install -qq -y --no-install-recommends \
     libcurl4 libibverbs1 libnuma1 >/dev/null 2>&1
+
+# mooncake-transfer-engine v0.3.13 PyPI wheel 的 store.so 在 DT_NEEDED 同时链
+# libcuda.so.1（CUDA driver API）+ libcudart.so.12（CUDA runtime API）——PyPI 只
+# 发 CUDA wheel，NPU image（CANN 9.0.0 + Ubuntu 22.04）没 CUDA。run 33580124477
+# 挂在 smoke-train 的 specforge 启动时 `specforge/runtime/data_plane/mooncake
+# _store.py:153` 的 `from mooncake.store import MooncakeDistributedStore,
+# ReplicateConfig`（报 `ImportError: libcuda.so.1: cannot open shared object
+# file`）。sglang 这边同 import 是 lazy（spec_capture_sink.SpecCaptureSink
+# ._connect() 函数体里），smoke 期间没人发 capture 请求就不触发；specforge
+# 是 MooncakeFeatureStore.__init__() → _connect_store() 顶层 eager import，所以
+# 必触发。
+#
+# 不需要真 CUDA：spec-capture-ascend-mount.patch 把 local_buffer_size=0 +
+# global_segment_size=0 + location="cpu"——零拷贝 GPU buffer 全 bypass，mooncake
+# 走纯 host memory + TCP/RDMA。`import mooncake.store` 这个动作本身只要求
+# DT_NEEDED 解析成功 + 所有 UND 符号在 stub .so 里能找到（objdump -T store.so
+# 列出的 cu* / cuda* 两类），不需要真实 GPU 行为。编两个 SONAME 正确的 .so 丢进
+# mooncake_transfer_engine.libs/——store.so 的 RPATH `$ORIGIN:$ORIGIN/../moon
+# cake_transfer_engine.libs` 会找到。stub 函数统一返回 0（CUDA_SUCCESS），输出
+# 参数填非 NULL dummy 地址（防止调用方后续解引用崩）。
+STUB_LIBS_DIR="$(python -c 'import os, mooncake.store; print(os.path.join(os.path.dirname(mooncake.store.__file__), "..", "mooncake_transfer_engine.libs"))' 2>/dev/null)"
+if [[ -z "$STUB_LIBS_DIR" || ! -d "$STUB_LIBS_DIR" ]]; then
+    echo "smoke: FAILED - could not locate mooncake_transfer_engine.libs (mooncake.store import failed or path missing)" >&2
+    exit 1
+fi
+if python -c 'import mooncake.store' 2>/dev/null; then
+    echo "smoke: mooncake.store imports clean (libcuda already satisfied)"
+else
+    # sglang image 通常不带 gcc。补装：gcc 依赖链会带上 libc6-dev/cpp/binutils，
+    # ~150MB。-qq 压进度条，>/dev/null 压正常输出到 log。
+    if ! command -v gcc >/dev/null 2>&1; then
+        apt-get install -qq -y --no-install-recommends gcc >/dev/null 2>&1 \
+            || { echo "smoke: FAILED - apt-get install gcc failed" >&2; exit 1; }
+    fi
+    # stub 列表照 store.so 的 `objdump -T | awk '/UND/'` 拉出，再覆盖原版 + _v2
+    # 变体——万一未来 mooncake.store 升级引入新 cuMemGetAddressRange_v2 之类的
+    # 走这里，多 10 行 C 不亏。
+    cat > /tmp/mooncake_cuda_stub.c <<'CUEOF'
+/* Stub libcuda.so.1 + libcudart.so.12 for mooncake-transfer-engine on NPU.
+ *
+ * Only need to satisfy the dynamic-linker stage of `import mooncake.store`;
+ * spec-capture-ascend-mount.patch forces local_buffer_size=0 /
+ * global_segment_size=0 / location="cpu", so no real GPU buffer is ever
+ * allocated. Functions all return 0 (CUDA_SUCCESS); output params receive
+ * a non-NULL dummy address (preventing caller dereference crashes). */
+#include <stddef.h>
+/* CUDA driver API (libcuda.so.1) */
+int cuInit(unsigned int f) { return 0; }
+int cuDeviceGet(int *d, int o) { if (d) *d = 0; return 0; }
+int cuDeviceGetAttribute(int *v, int a, int d) { if (v) *v = 0; return 0; }
+int cuDeviceGetCount(int *c) { if (c) *c = 0; return 0; }
+int cuDeviceGetName(char *n, int l, int d) { return 0; }
+int cuDeviceComputeCapability(int *m, int *n, int d) { if (m) *m = 0; if (n) *n = 0; return 0; }
+int cuDevicePrimaryCtxRetain(void **c, int d) { if (c) *c = (void*)0x1; return 0; }
+int cuDevicePrimaryCtxRelease_v2(int d) { return 0; }
+int cuCtxCreate(void **c, unsigned int f, int d) { if (c) *c = (void*)0x2; return 0; }
+int cuCtxCreate_v2(void **c, unsigned int f, int d) { if (c) *c = (void*)0x2; return 0; }
+int cuCtxDestroy(void *c) { return 0; }
+int cuCtxSetCurrent(void *c) { return 0; }
+int cuCtxGetCurrent(void **c) { if (c) *c = (void*)0x2; return 0; }
+int cuCtxGetDevice(int *d) { if (d) *d = 0; return 0; }
+int cuMemAlloc(void **p, size_t s) { if (p) *p = (void*)0x1000; return 0; }
+int cuMemAllocHost(void **p, size_t s, unsigned int f) { if (p) *p = (void*)0x2000; return 0; }
+int cuMemFree(void *p) { return 0; }
+int cuMemFreeHost(void *p) { return 0; }
+int cuMemcpyHtoD(void *d, const void *s, size_t n) { return 0; }
+int cuMemcpyDtoH(void *d, const void *s, size_t n) { return 0; }
+int cuMemcpyDtoD(void *d, const void *s, size_t n) { return 0; }
+int cuMemcpyHtoDAsync(void *d, const void *s, size_t n, void *st) { return 0; }
+int cuMemcpyDtoHAsync(void *d, const void *s, size_t n, void *st) { return 0; }
+int cuMemcpyDtoDAsync(void *d, const void *s, size_t n, void *st) { return 0; }
+int cuMemsetD8(void *d, unsigned char v, size_t n) { return 0; }
+int cuMemsetD16(void *d, unsigned short v, size_t n) { return 0; }
+int cuMemsetD32(void *d, unsigned int v, size_t n) { return 0; }
+int cuStreamCreate(void **s, unsigned int f) { if (s) *s = (void*)0x3000; return 0; }
+int cuStreamDestroy(void *s) { return 0; }
+int cuStreamSynchronize(void *s) { return 0; }
+int cuStreamQuery(void *s) { return 0; }
+int cuEventCreate(void **e, unsigned int f) { if (e) *e = (void*)0x4000; return 0; }
+int cuEventDestroy(void *e) { return 0; }
+int cuEventRecord(void *e, void *s) { return 0; }
+int cuEventSynchronize(void *e) { return 0; }
+int cuEventQuery(void *e) { return 0; }
+int cuMemAddressReserve(void **p, size_t s, size_t a, void *b, unsigned long long f) { if (p) *p = (void*)0x5000; return 0; }
+int cuMemAddressFree(void *p, size_t s) { return 0; }
+int cuMemCreate(void **h, size_t s, void *p, unsigned long long f) { if (h) *h = (void*)0x6000; return 0; }
+int cuMemRelease(void *h) { return 0; }
+int cuMemMap(void *p, size_t s, size_t o, void *h) { return 0; }
+int cuMemUnmap(void *p, size_t s) { return 0; }
+int cuMemSetAccess(void *p, size_t s, void *d, int c) { return 0; }
+int cuMemGetAccess(unsigned long long *f, void *l, void *p) { if (f) *f = 0; return 0; }
+int cuMemGetAllocationGranularity(size_t *g, void *p, int o) { if (g) *g = 1; return 0; }
+int cuMemGetAddressRange_v2(void **b, size_t *s, size_t p) { if (b) *b = (void*)0x7000; if (s) *s = 0; return 0; }
+int cuMemRetainAllocationHandle(void **h, void *p) { if (h) *h = (void*)0x8000; return 0; }
+int cuMemGetHandleForAddressRange(void *h, void *p, size_t s, int o, unsigned long long f) { return 0; }
+int cuMemExportToShareableHandle(void *o, void *h, int t, unsigned long long f) { return 0; }
+int cuMemImportFromShareableHandle(void **h, void *i, int t) { if (h) *h = (void*)0xB000; return 0; }
+int cuPointerGetAttribute(void *d, int a, void *p) { return 0; }
+int cuPointerSetAttribute(void *d, int a, void *p) { return 0; }
+int cuGetErrorName(int e, const char **n) { if (n) *n = "stub"; return 0; }
+int cuGetErrorString(int e, const char **s) { if (s) *s = "stub"; return 0; }
+/* CUDA runtime API (libcudart.so.12) */
+int cudaMalloc(void **p, size_t s) { if (p) *p = (void*)0x1000; return 0; }
+int cudaMallocHost(void **p, size_t s, unsigned int f) { if (p) *p = (void*)0x2000; return 0; }
+int cudaMallocManaged(void **p, size_t s, unsigned int f) { if (p) *p = (void*)0x1000; return 0; }
+int cudaFree(void *p) { return 0; }
+int cudaFreeHost(void *p) { return 0; }
+int cudaMemcpy(void *d, const void *s, size_t n, int k) { return 0; }
+int cudaMemcpyAsync(void *d, const void *s, size_t n, int k, void *st) { return 0; }
+int cudaMemcpyBatchAsync(void *d, void **s, size_t *n, size_t c, void *a, void *st) { return 0; }
+int cudaMemset(void *p, int v, size_t n) { return 0; }
+int cudaMemsetAsync(void *p, int v, size_t n, void *st) { return 0; }
+int cudaStreamCreateWithFlags(void **s, unsigned int f) { if (s) *s = (void*)0x3000; return 0; }
+int cudaStreamDestroy(void *s) { return 0; }
+int cudaStreamQuery(void *s) { return 0; }
+int cudaStreamSynchronize(void *s) { return 0; }
+int cudaEventCreateWithFlags(void **e, unsigned int f) { if (e) *e = (void*)0x4000; return 0; }
+int cudaEventDestroy(void *e) { return 0; }
+int cudaEventRecord(void *e, void *s) { return 0; }
+int cudaEventSynchronize(void *e) { return 0; }
+int cudaEventQuery(void *e) { return 0; }
+int cudaGetDevice(int *d) { if (d) *d = 0; return 0; }
+int cudaGetDeviceCount(int *c) { if (c) *c = 0; return 0; }
+int cudaSetDevice(int d) { return 0; }
+int cudaGetDeviceProperties_v2(void *p, int d) { return 0; }
+int cudaDeviceCanAccessPeer(int *c, int d, int p) { if (c) *c = 0; return 0; }
+int cudaDeviceEnablePeerAccess(int p, unsigned int f) { return 0; }
+int cudaDeviceDisablePeerAccess(int p) { return 0; }
+int cudaDeviceGetPCIBusId(char *b, int l, int d) { return 0; }
+int cudaHostAlloc(void **p, size_t s, unsigned int f) { if (p) *p = (void*)0x2000; return 0; }
+int cudaHostGetDevicePointer(void **d, void *h, unsigned int f) { if (d) *d = (void*)0x1000; return 0; }
+int cudaHostRegister(void *p, size_t s, unsigned int f) { return 0; }
+int cudaHostUnregister(void *p) { return 0; }
+int cudaGetLastError(void) { return 0; }
+int cudaPeekAtLastError(void) { return 0; }
+int cudaGetErrorString(int e, const char **s) { if (s) *s = "stub"; return 0; }
+int cudaGetErrorName(int e, const char **n) { if (n) *n = "stub"; return 0; }
+int cudaPointerGetAttributes(void *a, void *p) { return 0; }
+int cudaIpcGetMemHandle(void *h, void *d) { return 0; }
+int cudaIpcOpenMemHandle(void **d, void *h, unsigned int f) { if (d) *d = (void*)0x1000; return 0; }
+int cudaIpcCloseMemHandle(void *d) { return 0; }
+int cudaLaunchHostFunc(void *s, void *f, void *a) { return 0; }
+CUEOF
+    gcc -shared -fPIC -Wl,-soname,libcuda.so.1 \
+        -o "$STUB_LIBS_DIR/libcuda.so.1" /tmp/mooncake_cuda_stub.c 2>/tmp/smoke-cuda-stub.err \
+        || { echo "smoke: FAILED - libcuda.so.1 stub compile failed:" >&2
+             tail -20 /tmp/smoke-cuda-stub.err >&2 || true
+             exit 1; }
+    gcc -shared -fPIC -Wl,-soname,libcudart.so.12 \
+        -o "$STUB_LIBS_DIR/libcudart.so.12" /tmp/mooncake_cuda_stub.c 2>/tmp/smoke-cuda-stub.err \
+        || { echo "smoke: FAILED - libcudart.so.12 stub compile failed:" >&2
+             tail -20 /tmp/smoke-cuda-stub.err >&2 || true
+             exit 1; }
+    # 校验：mooncake.store 必须能 import 不报 libcuda 缺失。store.so 的 UND 符号
+    # 列表将来若扩展（mooncake-transfer-engine 升级），stub 这里得跟着加。
+    if ! python -c 'import mooncake.store' 2>/tmp/smoke-cuda-stub.err; then
+        echo "smoke: FAILED - mooncake.store still fails after CUDA stub install:" >&2
+        tail -10 /tmp/smoke-cuda-stub.err >&2 || true
+        exit 1
+    fi
+    echo "smoke: cuda stub installed (libcuda.so.1 + libcudart.so.12 -> $STUB_LIBS_DIR)"
+fi
 
 # 防御性 verify：base patch 必须在 server_args.py 引入 enable_spec_capture /
 # spec_capture_aux_layer_ids / spec_capture_method 三个字段，launch_server 的

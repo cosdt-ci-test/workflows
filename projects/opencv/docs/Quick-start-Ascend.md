@@ -426,12 +426,14 @@ ok = cv2.imwrite('/tmp/opencv_quickstart.png', img)
 print('imwrite ok:', ok)
 print('shape:', img.shape, 'dtype:', img.dtype)
 PY
+ls -la /tmp/opencv_quickstart.png
 ```
 
 输出结果如下：
 ```shell #test-result id="quickstart-imread-imwrite"
 imwrite ok: True
 shape: (100, 100, 3) dtype: uint8
+xxx
 ```
 
 ### 9b. 颜色空间转换
@@ -485,11 +487,13 @@ cv2.putText(img, 'Hello OpenCV', (50, 110), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255,
 print('rect+text drawn, image mean:', float(img.mean()))
 cv2.imwrite('/tmp/opencv_draw.png', img)
 PY
+ls -la /tmp/opencv_draw.png
 ```
 
 输出结果如下：
 ```shell #test-result id="quickstart-draw" fuzzy='xxx'
 rect+text drawn, image mean: xxx
+xxx
 ```
 
 ### 9e. 视频写入

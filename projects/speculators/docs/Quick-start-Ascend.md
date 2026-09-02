@@ -438,6 +438,7 @@ model.safetensors
 # num_speculative_tokens=5：vllm-ascend 限制 (num_speculative_tokens + 1) ≤ 15
 nohup vllm serve "<verifier_path>" \
   --host 127.0.0.1 --port 8000 \
+  --served-model-name Qwen/Qwen3-8B \
   --gpu-memory-utilization 0.85 \
   --speculative-config '{"method":"dflash","model":"<draft_model>","num_speculative_tokens":5}' \
   > /tmp/vllm-serve.log 2>&1 &

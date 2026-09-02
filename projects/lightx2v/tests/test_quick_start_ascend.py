@@ -359,6 +359,22 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             # will surface real download failures via its own rc.
             print(f'setup: cache purge skipped ({exc})')
 
+        # 5.5) diagnostic: inventory the model dir the smoke will read.
+        # The scheduler needs <model_dir>/config.json (arch keys like
+        # dim/num_heads merge into the runtime config); when it goes
+        # missing the failure surfaces as a scheduler KeyError far
+        # away from the download step, so log the dir state here.
+        model_dir = os.path.join(cls._PROJECT_ROOT, 'models',
+                                 'Wan2.1-T2V-1.3B')
+        if os.path.isdir(model_dir):
+            entries = sorted(os.listdir(model_dir))
+            cfg = os.path.join(model_dir, 'config.json')
+            cfg_stat = (f'config.json size={os.path.getsize(cfg)}'
+                        if os.path.isfile(cfg) else 'config.json MISSING')
+            print(f'setup: model dir ({len(entries)} entries): {entries}; {cfg_stat}')
+        else:
+            print(f'setup: model dir missing: {model_dir}')
+
     # ----------------------------------------------------------
     # test entry
     # ----------------------------------------------------------

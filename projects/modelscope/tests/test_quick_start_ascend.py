@@ -203,6 +203,16 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         ensure_safetensors()
         purge_corrupt_models(resolve_modelscope_cache())
 
+        # 5) Post-install diagnostic: verify transformers is importable.
+        #    modelscope's lazy import for AutoModelForCausalLM depends on
+        #    transformers being available; if this fails, the doc's
+        #    ``#test id="ms-verify-import"`` block will surface it clearly.
+        try:
+            import transformers as _tf
+            print(f'setup: transformers {_tf.__version__} importable')
+        except Exception as exc:
+            print(f'setup: WARNING transformers not importable: {exc}')
+
     # ----------------------------------------------------------
     # test entry
     # ----------------------------------------------------------

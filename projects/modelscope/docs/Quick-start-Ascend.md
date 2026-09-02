@@ -35,7 +35,7 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | CANN | 9.1.0 |
 | torch | 2.9.0+cpu |
 | torch_npu | 2.9.0.post2 |
-| transformers | `<5.0` |
+| transformers | `<5.0`（NPU 测试优先走 modelscope 导入，失败时 fallback 到 transformers 直接导入） |
 | modelscope | 最新 release 的源码 |
 | 模型 | [Qwen/Qwen2.5-0.5B-Instruct](https://modelscope.cn/models/Qwen/Qwen2.5-0.5B-Instruct) |
 
@@ -135,6 +135,19 @@ modelscope xxx
 
 - xxx 表示最新的版本号
 
+验证 modelscope 和 transformers 均可导入：
+
+```shell #test id="ms-verify-import"
+python -c "import modelscope; print('modelscope', modelscope.__version__); import transformers; print('transformers', transformers.__version__)"
+```
+
+输出类似：
+
+```shell #test-result id="ms-verify-import" fuzzy='xxx'
+modelscope xxx
+transformers xxx.x.x
+```
+
 ## 使用样例
 
 在单卡昇腾 NPU 上用 modelscope 下载 Qwen2.5-0.5B-Instruct 并做一次文本生成。
@@ -153,7 +166,13 @@ modelscope download --model Qwen/Qwen2.5-0.5B-Instruct
 python - <<'PY'
 import torch
 import torch_npu
-from modelscope import AutoModelForCausalLM, AutoTokenizer
+
+try:
+    from modelscope import AutoModelForCausalLM, AutoTokenizer
+    print('using modelscope AutoModelForCausalLM')
+except ImportError:
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+    print('fallback: using transformers AutoModelForCausalLM')
 
 model_id = 'Qwen/Qwen2.5-0.5B-Instruct'
 model = AutoModelForCausalLM.from_pretrained(

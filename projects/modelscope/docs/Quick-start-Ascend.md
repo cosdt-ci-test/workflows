@@ -229,25 +229,32 @@ modelscope download --model damo/nlp_structbert_word-segmentation_chinese-base
 ```shell #test id="ms-pipeline-word-seg"
 python - <<'PY'
 import sys
+print('step 0: starting', file=sys.stderr)
 
-def show_ms(label):
-    ms = sys.modules.get('modelscope')
-    print(f'[{label}] type={type(ms).__name__}', file=sys.stderr)
-    if hasattr(ms, '_class_to_module'):
-        print(f'[{label}] _class_to_module keys={list(ms._class_to_module.keys())[:5]}...', file=sys.stderr)
-    else:
-        print(f'[{label}] NO _class_to_module attr', file=sys.stderr)
-    print(f'[{label}] has __getattr__={hasattr(type(ms), "__getattr__")}', file=sys.stderr)
+try:
+    import modelscope
+    print(f'step 1: modelscope imported, type={type(modelscope).__name__}', file=sys.stderr)
+except Exception as e:
+    print(f'step 1: FAILED: {type(e).__name__}: {e}', file=sys.stderr)
+    sys.exit(1)
 
-show_ms('before-pipelines-import')
+try:
+    from modelscope.utils.logger import get_logger
+    print('step 2: get_logger from utils.logger OK', file=sys.stderr)
+except Exception as e:
+    print(f'step 2: FAILED: {type(e).__name__}: {e}', file=sys.stderr)
+
+try:
+    from modelscope import get_logger
+    print('step 3: get_logger from modelscope OK', file=sys.stderr)
+except Exception as e:
+    print(f'step 3: FAILED: {type(e).__name__}: {e}', file=sys.stderr)
 
 try:
     from modelscope.pipelines import pipeline
+    print('step 4: pipeline import OK', file=sys.stderr)
 except Exception as e:
-    print(f'pipeline import error: {type(e).__name__}: {e}', file=sys.stderr)
-
-show_ms('after-pipelines-import')
-print(f'same object: {sys.modules.get("modelscope") is not None}', file=sys.stderr)
+    print(f'step 4: FAILED: {type(e).__name__}: {e}', file=sys.stderr)
 PY
 ```
 

@@ -433,7 +433,7 @@ ls -la /tmp/opencv_quickstart.png
 ```shell #test-result id="quickstart-imread-imwrite"
 imwrite ok: True
 shape: (100, 100, 3) dtype: uint8
-xxx
+xxx /tmp/opencv_quickstart.png
 ```
 
 ### 9b. 颜色空间转换
@@ -493,7 +493,7 @@ ls -la /tmp/opencv_draw.png
 输出结果如下：
 ```shell #test-result id="quickstart-draw" fuzzy='xxx'
 rect+text drawn, image mean: xxx
-xxx
+xxx /tmp/opencv_draw.png
 ```
 
 ### 9e. 视频写入

@@ -246,8 +246,9 @@ jobs:
 
       # Engine guard steps (Monitor / Decide) need curl + jq inside the
       # project container. CANN 9.x images ship them, but older 8.x
-      # images (e.g. cann:8.2.rc1) do not, which breaks the guard loop
+      # images (e.g. cann:8.0.0) do not, which breaks the guard loop
       # with 'curl/jq: command not found' before the doc test ever runs.
+      # git is also needed by project tests that clone upstream repos.
       # Install when missing (idempotent; no-op when already present).
       # The NPU runner reaches the default ubuntu ports archive slowly,
       # so point apt at the aliyun arm64 mirror first (same as opencv).

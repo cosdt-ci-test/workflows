@@ -47,6 +47,7 @@ npu-smi info
 ### 2.2 确认 CANN 与 Python
 
 ```shell #test-setup
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
 test -n "$ASCEND_HOME_PATH"
 command -v npu-smi
 python --version
@@ -94,6 +95,7 @@ apt-get update && apt-get install -y sox libsox-dev || true
 ## 4. 验证 torch_npu 安装
 
 ```shell #test id="check-npu"
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
 python -c "import torch, torch_npu; print('torch:', torch.__version__); print('torch_npu:', torch_npu.__version__); print('npu available:', torch.npu.is_available()); print('npu count:', torch.npu.device_count())"
 ```
 
@@ -204,6 +206,7 @@ lrwxrwxrwx 1 root root   26 ... train -> /tmp/wenet-mock/data/train
 运行 stage 1-3 (准备训练数据)：
 
 ```shell #test-setup id="prepare-data"
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
 cd wenet/examples/aishell/s0
 bash run_npu.sh --stage 1 --stop_stage 3
 ```
@@ -235,6 +238,7 @@ head -1 data/train/data.list
 创建自定义配置文件，将 `max_epoch` 从 240 缩短到 5：
 
 ```shell #test-setup id="train"
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
 cd wenet/examples/aishell/s0
 cp conf/train_conformer.yaml conf/train_conformer_5ep.yaml
 sed -i 's/max_epoch: .*/max_epoch: 5/' conf/train_conformer_5ep.yaml
@@ -267,6 +271,7 @@ exp/conformer/epoch_4.pt
 使用训练好的模型对测试数据进行推理验证：
 
 ```shell #test-setup id="infer"
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
 cd wenet/examples/aishell/s0
 bash run_npu.sh --stage 5 --stop_stage 5 --average_num 5
 ```

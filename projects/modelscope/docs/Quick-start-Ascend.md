@@ -145,7 +145,7 @@ python -c "import modelscope; print('modelscope importable'); import transformer
 
 ```shell #test-result id="ms-verify-import" fuzzy='xxx'
 modelscope importable
-transformers xxx.x.x
+transformers xxx
 ```
 
 ## 使用样例

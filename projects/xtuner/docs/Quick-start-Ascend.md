@@ -2,6 +2,7 @@
 
 在单卡昇腾 NPU 上跑通 [xtuner](https://github.com/InternLM/xtuner) 的最小链路。
 
+本文档以 **Qwen1.5-1.8B-Chat** + Colorist 指令微调数据为例，端到端走通「权重下载 → 配置修改 → 单/多卡训练 → LoRA 合并 → chat 推理」全链路。模型仅 1.8B 参数，fp16 权重 ≈ 3.5 GB，**32 GB NPU coder 上不需要 monkey-patch 也不需要 4-bit 量化**就能跑 plain LoRA + Sample output。
 
 ## 前置条件
 
@@ -21,7 +22,7 @@ Atlas 900 A2 / A3 训练系列产品或者 Ascend 950 系列产品，并按需�
 
 **配套机器**：
 
-- **机器类型**：Atlas 900 A2 PODc（Ascend 910B4，64 GB × 1）
+- **机器类型**：Atlas 900 A2 PODc（Ascend 910B4，64 GB × 1）。本文档示例模型 1.8B + fp16 base + plain LoRA，**32 GB 910B4 coder 也跑得通**，实测峰 RSS ≈ 10.3 GB。
 - **操作系统**：Ubuntu 22.04
 
 **配套镜像**：
@@ -105,7 +106,7 @@ count: xxx
 
 > 如果 `import torch_npu` 失败，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查 torch / torch_npu / CANN 三方兼容矩阵。
 
-装 `modelscope`（本文档下载 InternLM2-Chat-7B 权重 + Colorist 数据集要用，ModelScope 国内网络更稳）：
+装 `modelscope`（本文档下载 Qwen1.5-1.8B-Chat 权重 + Colorist 数据集要用，ModelScope 国内网络更稳）：
 
 ```shell #test-setup
 uv pip install modelscope
@@ -153,6 +154,7 @@ uv pip install --no-deps -e .
 uv pip install 'mmengine==0.10.6' 'transformers==4.48.0' 'peft>=0.14.0' 'datasets>=3.2.0,<4.0.0' einops loguru openpyxl 'scikit-image' scipy SentencePiece tiktoken transformers_stream_generator cyclopts 'opencv-python-headless<=4.12.0.88' timm pyarrow pydantic tensorboard xxhash imageio 'py-libnuma' GitPython
 python -c "import xtuner; from xtuner.version import __version__; print('xtuner', __version__)"
 ```
+
 \<ref> 为安装的最新的 release tag。
 
 输出结果类似如下：
@@ -208,16 +210,15 @@ has_chat: True
 
 ### 准备模型权重
 
-在微调模型前，要先拉一份 InternLM2-Chat-7B 的权重。`modelscope` SDK 已在[前置安装](#前置安装)章节装好。
+本文档示例使用 **Qwen1.5-1.8B-Chat**——1.8B 参数 + TikToken BPE 分词（`tokenizer.json` 7 MB，无 sentencepiece），fp16 权重 ≈ 3.5 GB，**32 GB NPU coder 上直接 plain LoRA 跑得通**，不需要 4-bit 量化也不需要 monkey-patch。
 
-下载 InternLM2-Chat-7B 权重（约 14 GB，落到 `./Shanghai_AI_Laboratory/internlm2-chat-7b/`）：
+下载 Qwen1.5-1.8B-Chat 权重（≈ 3.5 GB，落到 `./qwen/Qwen1.5-1.8B-Chat/`，含 `model.safetensors` + tokenizer + config）：
 
 ```shell #test-setup store="xtuner_weights_path"
 # modelscope snapshot_download 返回的路径是 `<cache_dir>/<namespace>/<name>` 结构，对
-# `cache_dir=./Shanghai_AI_Laboratory` + `Shanghai_AI_Laboratory/internlm2-chat-7b` 实际落到
-# `./Shanghai_AI_Laboratory/Shanghai_AI_Laboratory/internlm2-chat-7b/`。硬编码
-# `./Shanghai_AI_Laboratory/internlm2-chat-7b` 会让 xtuner.tools.train 找不到 weights。把
-# 返回值 print 出来，store 给 patch 用真实路径：
+# `cache_dir=./qwen` + `qwen/Qwen1.5-1.8B-Chat` 实际落到 `./qwen/qwen/Qwen1.5-1.8B-Chat/`。
+# 硬编码 `./qwen/Qwen1.5-1.8B-Chat` 会让 xtuner.tools.train 找不到 weights。把返回值
+# print 出来，store 给 patch 用真实路径：
 # print 绝对路径给后面 patch-cfg + smoke 用：cwd 在 patch-cfg / smoke 之间会变（smoke 多卡走
 # `cd xtuner` 让 xtuner 包走 cwd FileFinder 解析），如果 store 的是相对路径，到 smoke 阶段
 # `cfg.pretrained_model_name_or_path` 就指错地方了。`os.path.abspath` 把 cwd 钉到调用瞬间，
@@ -225,13 +226,13 @@ has_chat: True
 python -c "
 import os
 from modelscope import snapshot_download
-path = snapshot_download('Shanghai_AI_Laboratory/internlm2-chat-7b', cache_dir='./Shanghai_AI_Laboratory')
+path = snapshot_download('qwen/Qwen1.5-1.8B-Chat', cache_dir='./qwen')
 print(os.path.abspath(path))
 "
 ```
 
 ```shell #test id="xtuner-pull-weights"
-ws=$(find ./Shanghai_AI_Laboratory -name config.json -print -quit)
+ws=$(find ./qwen -name config.json -print -quit)
 test -n "$ws" && test -f "$ws" && echo "weights_ok"
 ls -la "$(dirname "$ws")" | head -1
 ```
@@ -243,9 +244,9 @@ weights_ok
 total xxx
 ```
 
-权重落到 `./Shanghai_AI_Laboratory/internlm2-chat-7b/` 下（约 14 GB），含 `pytorch_model-*.bin` ×8 + tokenizer + config。
+权重落到 `./qwen/qwen/Qwen1.5-1.8B-Chat/` 下（含 `model.safetensors` 3.5 GB + `tokenizer.json` 7 MB + `vocab.json` + `merges.txt` + `config.json` + `tokenizer_config.json`）。
 
-> `#test-setup` 块（hidden）在 CI smoke 里跑 `snapshot_download` 拉权重（~5-10 分钟），`#test` 只验 `config.json` 存在。本地如果已经下过 weights，可以跳过 setup 单独跑 `#test`。
+> `#test-setup` 块（hidden）在 CI smoke 里跑 `snapshot_download` 拉权重（~3-5 分钟），`#test` 只验 `config.json` 存在。本地如果已经下过 weights，可以跳过 setup 单独跑 `#test`。
 
 ### 准备微调数据集
 
@@ -293,6 +294,69 @@ colors/
 
 > `#test-setup` 块在 CI smoke 里跑 `modelscope.snapshot_download(..., repo_type='dataset')` 拉数据集再重定向到 `./colors/`，`#test` 验 3 个文件（`colors.json` / `README.md` / `train.jsonl`）都存在（按字面比对，缺一个就 `exit 1` 报失败）。本地如果已经下载过，可以跳过 setup 单独跑 `#test`（前提：数据集路径仍然是 `./colors/`）。
 
+#### 把 Colorist 数据集转成 Qwen chat 模板要的 OpenAI 格式
+
+xtuner 的 Qwen 自定义 cfg（`qwen1_5_1_8b_chat_qlora_custom_sft_e1`）使用 `openai_map_fn`，期望每行 JSON 形如：
+
+```json
+{"messages": [
+  {"role": "user", "content": "Tell me about the color #000000"},
+  {"role": "assistant", "content": "Pure Black: ..."}
+]}
+```
+
+但 Colorist 数据集原始格式是 `{color, description}`，需要先转换一下：
+
+```shell #test-setup
+mkdir -p ./colors_openai
+python -c "
+import json
+src = './colors/train.jsonl'
+dst = './colors_openai/train.jsonl'
+n = 0
+with open(src) as fin, open(dst, 'w') as fout:
+    for line in fin:
+        line = line.strip()
+        if not line:
+            continue
+        row = json.loads(line)
+        msg = {
+            'messages': [
+                {'role': 'user', 'content': f\"Tell me about the color {row['color']}\"},
+                {'role': 'assistant', 'content': row['description']},
+            ]
+        }
+        fout.write(json.dumps(msg, ensure_ascii=False) + '\n')
+        n += 1
+print(f'converted {n} rows -> {dst}')
+"
+```
+
+```shell #test id="xtuner-convert-colors"
+test -f ./colors_openai/train.jsonl || { echo "MISSING: ./colors_openai/train.jsonl"; exit 1; }
+# 行数守恒（与 pull-dataset 后的 ./colors/train.jsonl 逐行对比）
+src_n=$(wc -l < ./colors/train.jsonl)
+dst_n=$(wc -l < ./colors_openai/train.jsonl)
+test "$src_n" = "$dst_n" || { echo "row count mismatch: src=$src_n dst=$dst_n"; exit 1; }
+# 抽第一条做字面比对，验格式正确
+head -1 ./colors_openai/train.jsonl | python -c "
+import sys, json
+row = json.loads(sys.stdin.read())
+assert 'messages' in row, 'missing messages key'
+assert isinstance(row['messages'], list) and len(row['messages']) == 2, 'expected 2 messages'
+assert row['messages'][0]['role'] == 'user', 'first message role must be user'
+assert row['messages'][1]['role'] == 'assistant', 'second message role must be assistant'
+print('format_ok')
+"
+```
+
+输出结果：
+
+```shell #test-result id="xtuner-convert-colors" fuzzy='xxx'
+converted xxx rows -> ./colors_openai/train.jsonl
+format_ok
+```
+
 ### 准备配置文件
 
 XTuner 自带大量开箱即用的 config：
@@ -301,46 +365,29 @@ XTuner 自带大量开箱即用的 config：
 # 绕开 console_script wrapper（其 shebang 在 base image 上可能指向非 uv 的 python，
 # 看不到 uv 装的 egg-link，把 xtuner 当 namespace package 处理后 `from xtuner import cli`
 # 报 `ImportError: cannot import name 'cli' from 'xtuner' (unknown location)`），
-# 直接用 Python API 验 cfg 可枚举 + 含 colorist：
+# 直接用 Python API 验 cfg 可枚举 + 含 Qwen1.5-1.8B chat qlora custom sft：
 python -c "
 from xtuner.configs import cfgs_name_path
 names = sorted(cfgs_name_path.keys())
 print('lines:', len(names))
 print('head_first:', names[0] if names else '')
-print('colorist_count:', sum(1 for n in names if 'colorist' in n))
+print('qwen_1_8b_chat_count:', sum(1 for n in names if 'qwen1_5_1_8b_chat_qlora_custom_sft_e1' in n))
 "
 ```
 
 ```shell #test-result id="xtuner-list-cfg" fuzzy='xxx'
 lines: xxx
 head_first: xxx
-colorist_count: xxx
+qwen_1_8b_chat_count: xxx
 ```
 
-从 list-cfg 拷一份 Colorist 配置到本地（xtuner v0.2.0 的 colorist cfg 全部带 `qlora` 前缀——find xtuner-v0.2.0/xtuner/configs -name '*colorist*' 100% 是 qlora_*.py，没有 plain lora variant——所以拷过来之后要在 `xtuner-train-smoke-setup` 里 sed 翻 `load_in_4bit=True → False` 才能在 aarch64 上跑通，详见单卡 smoke 段上方注释；具体 config 名随 release 漂移，先 grep 推断；xtuner v0.2.0 的 colorist cfg 是 llama 版，V1 之后才有 internlm2 版）：
+从 list-cfg 拷一份 Qwen1.5-1.8B-Chat qlora + custom sft 配置到本地（xtuner v0.2.0 的这个 cfg 名字固定为 `qwen1_5_1_8b_chat_qlora_custom_sft_e1`）：
 
 ```shell #test-setup store="xtuner_llm_cfg_path"
 # 绕开 console_script wrapper shebang 错配（`xtuner list-cfg` / `xtuner copy-cfg` 的 wrapper
 # 启动的 Python 可能不是 uv 装的 python，把 xtuner 当 namespace package 后 `from xtuner import cli` 失败），
 # 直接用 Python API 替代：
-config_name=$(python -c "
-from xtuner.configs import cfgs_name_path
-import re
-names = sorted(cfgs_name_path.keys())
-# 优先选 7b：本文档的 pull-weights 只下 7b（Shanghai_AI_Laboratory/internlm2-chat-7b），
-# 而 sorted+next 的 ASCII 序 '2' < '7'，20b 会抢在 7b 前面，把 patch 后的 model_path 指向
-# 不存在的 -20b/ 目录训不动。三层 fallback：
-#   1. internlm_chat_7b.*qlora.*colorist —— exact match doc 实际下的 chat-7b
-#   2. .*_7b.*qlora.*colorist —— 任何 _7b_ qlora colorist（internlm2_7b base / llama2_7b 等）
-#   3. (internlm2|llama).*qlora.*colorist —— 任何 qlora colorist，最后兜底
-# 注意不能用 `colorist.*7b` 收尾：cfg name 形如 `internlm2_7b_qlora_colorist_e5`，size token 在
-# 开头（7b / 20b），`7b` 不会出现在 `colorist` 后面；之前那条 regex 命中 0 个，fallback 必拿 20b。
-match = next((n for n in names if re.search(r'internlm2_7b.*qlora.*colorist', n)),
-             next((n for n in names if re.search(r'.*_7b.*qlora.*colorist', n)),
-                   next((n for n in names if re.search(r'(internlm2|llama).*qlora.*colorist', n)), '')))
-print(match)
-")
-test -n "$config_name" || { echo "no matching config ((internlm2|llama).*qlora.*colorist); abort"; exit 1; }
+config_name='qwen1_5_1_8b_chat_qlora_custom_sft_e1'
 # xtuner copy-cfg 把 save_dir 当目录用，文件实际写到 save_dir/<basename>_copy.py；
 # 直接调 main() 然后 echo save_dir 路径会被 Step 18 当文件读，触发 IsADirectoryError。
 # 改用 Python 自己算 actual file path 并只 print 这一行（setup 抓 stdout 当 store）：
@@ -363,62 +410,62 @@ print(save_path)
 
 ### 修改配置文件
 
-拷出来的 config 跟模板原版完全一致，按模板的 4 处修改规则调整（详见 [legacy quickstart 模板的"修改配置文件"小节](https://xtuner.readthedocs.io/zh-cn/latest/legacy/get_started/quickstart.html)）。`<cfg>` 是上一节「准备配置文件」store 出来的 cfg 绝对路径：
+拷出来的 config 跟模板原版完全一致，按模板的 3 处修改规则调整（详见 [legacy quickstart 模板的"修改配置文件"小节](https://xtuner.readthedocs.io/zh-cn/latest/legacy/get_started/quickstart.html)）。`<cfg>` 是上一节「准备配置文件」store 出来的 cfg 绝对路径：
+
+1. `pretrained_model_name_or_path`：替成本地真实权重路径（pull-weights 阶段落盘路径）
+2. `data_files[0]`：替成转换后的 OpenAI 格式 jsonl 绝对路径
+3. **strip `quantization_config` + `BitsAndBytesConfig` 导入**：32 GB NPU coder 没装/装不上 bnb（详见下方「启动微调」上方注释），所以直接退化为 plain LoRA 走 fp16 base；Qwen1.5-1.8B-Chat fp16 只占 ~3.5 GB，留出充足 margin 给 LoRA grads + optimizer + activations
 
 ```shell #test-setup load="xtuner_llm_cfg_path>>cfg" load="xtuner_weights_path>>weights_dir" store="xtuner_llm_cfg_path"
-# 把模板里那 4 处 patch 应用到 copy-cfg 出来的 config 上：
+# 把模板里那 3 处 patch 应用到 copy-cfg 出来的 config 上：
 #   PART 1 Settings
 #     pretrained_model_name_or_path = '<weights_dir>'   # pull-weights store 出来的真实路径
-#     data_path = './colors/train.jsonl'
-#     prompt_template = PROMPT_TEMPLATE.internlm2_chat
-#   PART 3 Dataset & Dataloader
-#     train_dataset = process_hf_dataset(dataset=dict(type=load_dataset, path='json',
-#                                                     data_files=dict(train=data_path)), ...)
+#     data_files = ['/abs/path/to/colors_openai/train.jsonl']
+#   PART 2 Model
+#     strip quantization_config=dict(...) block + BitsAndBytesConfig import  # 32GB 路径
 # 用 Python str.replace 而非 sed：xtuner cfg 用双引号 ("...")，sed 单引号 pattern 不会匹配；
 # 走 Python 字面量替换最稳，避免引号/escape/竖线 delimiter 误伤 cfg 里其他内容。
 python -c "
-import re
+import re, os
 path = '<cfg>'
 weights_dir = '<weights_dir>'
 with open(path) as f:
     text = f.read()
-# 4 处 patch：
-#   pretrained_model_name_or_path：直接替换成 pull-weights store 出来的真实路径（modelscope
-#   返回的 cache 路径，含 <cache_dir>/<namespace>/<name>，跟 cfg 模板里的 HF repo_id 不
-#   同结构；旧代码硬编码 ./Shanghai_AI_Laboratory/internlm2-chat-Xb，文件实际落在更深的
-#   目录里，xtuner.tools.train 进 transformers.hub.cached_file 报 OSError path_or_model_id）
+
+# patch 1: pretrained_model_name_or_path → modelscope cache 路径
 text, n = re.subn(
-    r'pretrained_model_name_or_path = \"internlm/internlm(?:2|-chat)-\d+b\"',
+    r'pretrained_model_name_or_path = \"Qwen/Qwen1\.5-1\.8B-Chat\"',
     f\"pretrained_model_name_or_path = {weights_dir!r}\",
     text,
 )
 assert n == 1, f'pretrained_model_name_or_path patch applied {n} times (expected 1)'
-# data_path 用绝对路径：`xtuner-train-smoke-setup` 里有 `cd xtuner` 把 cwd 改到 clone 的 xtuner
-# 源目录（避免 editable finder 把 xtuner 当 namespace package），相对路径 `./colors/train.jsonl`
-# 在那个 cwd 下找不到。pull-dataset 把 colors 落到 framework cwd（即 projects/xtuner/），用
-# `os.path.dirname(<cfg>)` 反推 pull-dataset cwd 是同一个，因为 <cfg> 是 framework cwd 下 copy
-# 出来的。`os.path.abspath` 钉到调用瞬间，cd 后面再变也不影响。
-import os
-data_abs = os.path.abspath('./colors/train.jsonl')
-old = 'data_path = \"burkelibbey/colors\"'
-new = f\"data_path = {data_abs!r}\"
+
+# patch 2: data_files[0] → OpenAI 格式 jsonl 绝对路径
+data_abs = os.path.abspath('./colors_openai/train.jsonl')
+old = 'data_files = [\"/path/to/json/file.json\"]'
+new = f'data_files = [{data_abs!r}]'
 assert old in text, f'patch source not found: {old!r}'
 text = text.replace(old, new)
-old = 'prompt_template = PROMPT_TEMPLATE.default'
-new = 'prompt_template = PROMPT_TEMPLATE.internlm2_chat'
-# 兼容两种 cfg：base cfg（internlm2_7b）源是 default；chat cfg（internlm_chat_7b）
-# 源是 internlm_chat（InternLM v1 的 chat 模板，v0.2.0 chat cfg 仍用）。model 是
-# InternLM2-Chat-7B，应该用 internlm2_chat。两路源任一命中就改：
-if old in text:
-    text = text.replace(old, new)
-elif 'prompt_template = PROMPT_TEMPLATE.internlm_chat' in text:
-    text = text.replace('prompt_template = PROMPT_TEMPLATE.internlm_chat', new)
-else:
-    raise AssertionError(f'patch source not found: {old!r} or PROMPT_TEMPLATE.internlm_chat')
-old = 'dataset=dict(type=load_dataset, path=data_path)'
-new = \"dataset=dict(type=load_dataset, path='json', data_files=dict(train=data_path))\"
-assert old in text, f'patch source not found: {old!r}'
-text = text.replace(old, new)
+
+# patch 3: strip quantization_config block + BitsAndBytesConfig import（32GB coder 路径）
+# transformers.AutoModel.from_pretrained 看到 quantization_config 的 type=BitsAndBytesConfig
+# 就构造 Bnb4BitHfQuantizer wrapper，wrapper.validate_environment() 无条件 raise ImportError
+# 'Using bitsandbytes 4-bit quantization requires...'。strip 后 transformers 不走 quantizer wrapper
+# 路径，直接 from_pretrained + peft + LoRA。BitsAndBytesConfig 类引用也一并删（保留会让
+# LazyObject.build() 走 import 链 import bitsandbytes）。
+text = re.sub(
+    r',\s*\n\s*quantization_config=dict\(\n(?:\s+[^\n]*,\n)+?\s*\),\n',
+    '\n',
+    text,
+    count=1,
+)
+text = re.sub(
+    r'(from transformers import [^\n]*?), BitsAndBytesConfig',
+    r'\1',
+    text,
+    count=1,
+)
+
 with open(path, 'w') as f:
     f.write(text)
 print(path)
@@ -426,7 +473,7 @@ print(path)
 ```
 
 ```shell #test id="xtuner-patch-cfg" load="xtuner_llm_cfg_path>>cfg" load="xtuner_weights_path>>weights_dir"
-# 用 py_compile 验 cfg 是合法 Python（不触发 import 链）+ grep 验 4 处 patch 都生效：
+# 用 py_compile 验 cfg 是合法 Python（不触发 import 链）+ grep 验 3 处 patch 都生效：
 # 不能直接用 mmengine.config.Config.fromfile —— 它会执行 cfg 文件的 `from xtuner.utils import ...`，
 # 触发 torchvision::nms import，而 NPU base image 的 torchvision 没有 GPU operator
 # （xtuner.utils 顶层用 torchvision.ops.nms），所以 fromfile 会因 torchvision 缺 operator 报
@@ -438,26 +485,20 @@ py_compile.compile('<cfg>', doraise=True)
 print('cfg_compiles_ok')
 with open('<cfg>') as f:
     text = f.read()
-# weights_dir 是 pull-weights store 出来的 modelscope cache 路径（形如
-# ./Shanghai_AI_Laboratory/Shanghai_AI_Laboratory/internlm2-chat-7b）。patch 把 cfg 里
-# 的 HF repo_id 替成这条路径：
 weights_dir = '<weights_dir>'
 import os
-data_abs = os.path.abspath('./colors/train.jsonl')
+data_abs = os.path.abspath('./colors_openai/train.jsonl')
 checks = [
-    # 用 cfg 里实际的权重路径字面量 grep（cfg 字段名是 pretrained_model_name_or_path 不是 model_path，
-    # 不要把 check 名当字段名拼到 needle 里）：
-    ('model_path', f\"pretrained_model_name_or_path = '{weights_dir}'\"),
-    ('data_path', f\"data_path = '{data_abs}'\"),
-    ('prompt_template', 'PROMPT_TEMPLATE.internlm2_chat'),
-    ('dataset_format', \"dataset=dict(type=load_dataset, path='json', data_files=dict(train=data_path))\"),
+    ('weights', f\"pretrained_model_name_or_path = '{weights_dir}'\"),
+    ('data', f\"data_files = ['{data_abs}']\"),
 ]
 for name, expected in checks:
     assert expected in text, f'missing patch ({name}): {expected!r}'
+assert 'quantization_config' not in text, 'quantization_config should be stripped'
+assert 'BitsAndBytesConfig' not in text, 'BitsAndBytesConfig import should be stripped'
 print('cfg_patch_ok')
-print(f'model_name= {weights_dir}')
-print(f'data_path= {data_abs}')
-print('prompt_template= PROMPT_TEMPLATE.internlm2_chat')
+print(f'weights= {weights_dir}')
+print(f'data= {data_abs}')
 "
 ```
 
@@ -466,216 +507,11 @@ print('prompt_template= PROMPT_TEMPLATE.internlm2_chat')
 ```shell #test-result id="xtuner-patch-cfg" fuzzy='xxx'
 cfg_compiles_ok
 cfg_patch_ok
-model_name= xxx-internlm2-chat-xxx
-data_path= xxx
-prompt_template= PROMPT_TEMPLATE.xxx
+weights= xxx
+data= xxx
 ```
 
-> `#test-setup` 把 4 处 sed 实际应用到 cfg；`#test` 跑 `py_compile.compile(<cfg>)` + `grep` 验 cfg 是合法 Python 且 4 处 patch 都生效——**不**用 `mmengine.config.Config.fromfile`（它会执行 cfg 顶层 `from xtuner.utils import ...`，触发 torchvision::nms import，NPU base image 的 torchvision 没 GPU operator 会直接挂）。smoke 不验 cfg 训出来的实际效果，那要等下面"启动微调"章节真跑。
-
-#### 32 GB coder 上的 monkey-patch（小显存环境的 plain LoRA 路径）
-
-上面默认 smoke 在 **64 GB NPU** 上跑 plain LoRA（5 iter + Sample output + iter_*.pth）。
-如果跑在 **32 GB coder**（如某些 sandbox / CI runner）上同一条 cfg 会 OOM——peft 0.20.0 的
-`prepare_model_for_kbit_training`（peft/utils/other.py:151-200）无条件把 fp16/bf16 全部
-params upcast 到 fp32，7B 模型 14 GB → 28 GB 加上 LoRA grads + optimizer states + activations
-直接超 32 GB。
-
-**Monkey-patch 思路**：跳过 upcast（LoRA 只对 LoRA params 训练，base 仍 fp16 即可），同时
-修 transformers 4.48 + InternLM2 fast tokenizer 的 3 个 stacked bug（branch 6 强制 from_tiktoken
-→ InternLM2Converter 读 fast 实例上未设置的 `added_tokens_decoder`/`vocab_file` → sentencepiece
-C++ 拒绝 tokenizer.model 中含 `'\x00'` 的 piece）。整体峰 RSS 从 33 GB OOM 降到 18.28 GB，
-4 次 iter 全跑通 + .pth 落盘 + EvaluateChatHook 打 Sample output。
-
-**写 monkey-patch**（保存为 `/tmp/monkey_patch_kbit.py`，smoke runner 在 import xtuner 之前
-先 `from monkey_patch_kbit import install; install()`）：
-
-```python
-"""Monkey-patch for xtuner LoRA on 32 GB NPU coder — skip fp32 upcast + InternLM2 tokenizer bugs."""
-import sys as _sys, os as _os
-_DEBUG = _os.environ.get("XTUNER_PATCH_DEBUG") == "1"
-def _dbg(msg):
-    if _DEBUG:
-        print(f"[PATCH] {msg}", file=_sys.stderr, flush=True)
-
-
-def _patched_prepare(model, use_gradient_checkpointing=True, gradient_checkpointing_kwargs=None):
-    """替换 peft.utils.prepare_model_for_kbit_training —— skip fp16→fp32 upcast."""
-    for param in model.parameters():
-        param.requires_grad = False
-    if use_gradient_checkpointing:
-        if hasattr(model, "enable_input_require_grads"):
-            try:
-                model.enable_input_require_grads()
-            except Exception:
-                pass
-        try:
-            model.gradient_checkpointing_enable(gradient_checkpointing_kwargs=gradient_checkpointing_kwargs)
-        except TypeError:
-            model.gradient_checkpointing_enable()
-    return model  # skip upcast —— saves 14 GB on 7B fp16
-
-
-def _wrap_internlm2_fast(cls):
-    """Wrap InternLM2TokenizerFast.__init__ to stash vocab_file/added_tokens_decoder before super().__init__."""
-    _orig_init = cls.__init__
-    def _patched_init(self, *args, **kwargs):
-        vf = kwargs.get("vocab_file") or (args[0] if args else None)
-        if vf is not None:
-            self.__dict__["vocab_file"] = vf
-        self.__dict__.setdefault("added_tokens_decoder", {})
-        return _orig_init(self, *args, **kwargs)
-    cls.__init__ = _patched_init
-    return cls
-
-
-import transformers.convert_slow_tokenizer as _cst_mod
-_orig_convert = _cst_mod.convert_slow_tokenizer
-
-
-def _wrap_converter_tokenizer(converter_class):
-    """Wrap converter_class.tokenizer to tolerate missing added_tokens_decoder/vocab_file."""
-    if getattr(converter_class, "_xtuner_wrap_done", False):
-        return
-    if not hasattr(converter_class, "tokenizer"):
-        return
-    _orig = converter_class.tokenizer
-    try:
-        _sig_params = _orig.__code__.co_varnames[:_orig.__code__.co_argcount]
-    except Exception:
-        _sig_params = ("self", "proto")
-    if len(_sig_params) >= 2:
-        def _patched(self, proto=None, *args, **kwargs):
-            ot = getattr(self, "original_tokenizer", None)
-            if ot is not None and "added_tokens_decoder" not in ot.__dict__:
-                ot.__dict__["added_tokens_decoder"] = {}
-            return _orig(self, proto, *args, **kwargs)
-    else:
-        def _patched(self, *args, **kwargs):
-            ot = getattr(self, "original_tokenizer", None)
-            if ot is not None and "added_tokens_decoder" not in ot.__dict__:
-                ot.__dict__["added_tokens_decoder"] = {}
-            return _orig(self, *args, **kwargs)
-    _patched.__name__ = _orig.__name__
-    converter_class.tokenizer = _patched
-    converter_class._xtuner_wrap_done = True
-
-
-def _patched_convert(transformer_tokenizer, from_tiktoken=False):
-    """替换 convert_slow_tokenizer —— branch 6 强制 from_tiktoken=True 时仍走 registered converter."""
-    candidates = [transformer_tokenizer.__class__.__name__]
-    slow_cls = getattr(transformer_tokenizer, "slow_tokenizer_class", None)
-    if slow_cls is not None:
-        candidates.append(slow_cls.__name__)
-    for c in candidates:
-        if c in _cst_mod.SLOW_TO_FAST_CONVERTERS:
-            converter_class = _cst_mod.SLOW_TO_FAST_CONVERTERS[c]
-            _wrap_converter_tokenizer(converter_class)
-            return converter_class(transformer_tokenizer).converted()
-    return _orig_convert(transformer_tokenizer, from_tiktoken=from_tiktoken)
-
-
-def install():
-    """Apply all monkey-patches. Call BEFORE importing xtuner.tools.train."""
-    # 1) peft: skip fp16→fp32 upcast —— 7B 上省 14 GB
-    import peft.utils.other
-    peft.utils.other.prepare_model_for_kbit_training = _patched_prepare
-    try:
-        import peft
-        if hasattr(peft, "prepare_model_for_kbit_training"):
-            peft.prepare_model_for_kbit_training = _patched_prepare
-    except Exception:
-        pass
-
-    # 1.5) wrap InternLM2TokenizerFast via dynamic module loader
-    import transformers.dynamic_module_utils as _dmu
-    _orig_get_class = _dmu.get_class_from_dynamic_module
-    def _patched_get_class(class_reference, pretrained_model_name_or_path, **kwargs):
-        cls = _orig_get_class(class_reference, pretrained_model_name_or_path, **kwargs)
-        if cls.__name__ == "InternLM2TokenizerFast":
-            _wrap_internlm2_fast(cls)
-        return cls
-    _dmu.get_class_from_dynamic_module = _patched_get_class
-    try:
-        import transformers.models.auto.tokenization_auto as _t_auto
-        _t_auto.get_class_from_dynamic_module = _patched_get_class  # 覆盖已 import 的 local ref
-    except Exception:
-        pass
-
-    # 2) transformers tokenizer: install patched convert_slow_tokenizer
-    _cst_mod.convert_slow_tokenizer = _patched_convert
-    try:
-        import transformers.tokenization_utils_fast as _tuf
-        _tuf.convert_slow_tokenizer = _patched_convert
-    except Exception:
-        pass
-
-    # 2.5) PreTrainedTokenizerFast.added_tokens_decoder property: 在 _tokenizer 尚未设置时
-    # （branch 6 内部）fallback 到 __dict__ stash，否则会触发底层 __getattr__ 报
-    # AttributeError 而让 _from_pretrained 静默 return False。
-    try:
-        import transformers.tokenization_utils_fast as _tuf2
-        def _patched_atd(self):
-            tok = self.__dict__.get("_tokenizer", None)
-            if tok is not None:
-                try:
-                    return tok.get_added_tokens_decoder()
-                except Exception:
-                    pass
-            return self.__dict__.get("added_tokens_decoder", {})
-        _tuf2.PreTrainedTokenizerFast.added_tokens_decoder = property(_patched_atd)
-    except Exception:
-        pass
-
-    # 2.6) SentencePieceExtractor: InternLM2 的 tokenizer.model 含 1 个真实 '\x00' piece，
-    # sentencepiece C++ 的 sp.Load() 会抛 "INTERNAL: piece must not include null character"。
-    # 改用 protobuf 直接解析 + 过滤 null-byte pieces。
-    try:
-        import sentencepiece.sentencepiece_model_pb2 as _sp_pb
-        import transformers.convert_slow_tokenizer as _cst2
-
-        class _PatchedSPE:
-            def __init__(self, model_path):
-                self._proto = _sp_pb.ModelProto()
-                with open(model_path, "rb") as f:
-                    self._proto.ParseFromString(f.read())
-                self._piece_size = len(self._proto.pieces)
-            def GetPieceSize(self):
-                return self._piece_size
-            def id_to_piece(self, idx):
-                return self._proto.pieces[idx].piece
-            def extract(self, vocab_scores=None):
-                vocab = {p.piece: i for i, p in enumerate(self._proto.pieces) if "\x00" not in p.piece}
-                from transformers.convert_slow_tokenizer import generate_merges
-                return vocab, generate_merges(vocab, vocab_scores)
-
-        _cst2.SentencePieceExtractor = _PatchedSPE
-    except Exception:
-        pass
-
-
-install()  # 模块 import 时自动调用，省得 smoke runner 还得记
-```
-
-**Smoke runner 入口**（`/tmp/run_smoke_monkey.py`）核心思路：在 import xtuner.tools.train
-**之前**先 `from monkey_patch_kbit import install`，然后启动 RSS monitor 跑
-`train_cfg.max_epochs=2`（~3 min/iter × 4 iter），验 `.pth` 落盘 + Sample output。
-
-实测（hdc-stable-npu-3，2 × 910B4 32 GB）：
-
-- 模型加载峰 RSS **18.22 GB**（vs 不 patch OOM at 33 GB）—— 安全 margin 14 GB 给 LoRA grads + optimizer + activations
-- 全程 RSS 稳定 **18.28 GB**，没再涨
-- 4 次 iter 跑通：iter_1.pth / iter_2.pth / iter_3.pth / iter_4.pth 各 1.86 GB
-- 每次 iter EvaluateChatHook 打 Sample output（colors 数据集训出 sky-blue RGB/CMYK/HSL 描述）
-- last_checkpoint 文件正常落盘
-
-**踩坑记录**（按调试顺序，省得后人重蹈）：
-
-1. `_cst_mod.convert_slow_tokenizer = _patched_convert` 只改 submodule 的 module attr。`transformers.models.auto.tokenization_auto` 在文件顶 `from ...dynamic_module_utils import get_class_from_dynamic_module` 已经把原函数绑到自己的 namespace，`AutoTokenizer.from_pretrained` 走这条 ref → 你的 patch 根本没触发。修法：同时 `_dmu.get_class_from_dynamic_module = _patched_get_class` 和 `_t_auto.get_class_from_dynamic_module = _patched_get_class`。
-2. `transformers.tokenization_utils_fast` 第 139 行 branch 6 (`elif not slow_tokenizer`) 强制 `from_tiktoken=True`，绕过 `SLOW_TO_FAST_CONVERTERS["InternLM2Tokenizer"]` 的 InternLM2Converter 注册路径。原版在 else 分支死磕 TikTokenConverter → "Converting from Tiktoken failed"。patched convert 优先按 class name 查注册 converter，命中 InternLM2Converter。
-3. `InternLM2Converter.tokenizer`（dynamic 模块的 tokenization_internlm2_fast.py:72,84）读 `self.original_tokenizer.added_tokens_decoder` 和 `self.original_tokenizer.vocab_file`。但 branch 6 触发时是 `_tokenizer = convert_slow_tokenizer(self, ...)` 这一行**之内**，fast 实例的 `_tokenizer` 还没赋值，`PreTrainedTokenizerFast.added_tokens_decoder`（line 257 property）会调用 `self._tokenizer.get_added_tokens_decoder()` 触发 AttributeError → `_from_pretrained` 静默 return False（line 2282）。修法：(a) 把 property 改成 `_tokenizer` 缺失时 fallback 到 `__dict__["added_tokens_decoder"]`；(b) 在 `get_class_from_dynamic_module` wrapper 里给 InternLM2TokenizerFast 的 `__init__` patch 在 `super().__init__` 之前把 `vocab_file`/`added_tokens_decoder` 提前 stash 进 `__dict__`；(c) 把 InternLM2Converter.tokenizer 包一层，缺 attrs 就补 `__dict__["added_tokens_decoder"]={}`。
-4. **sentencepiece C++ 拒绝 null-byte piece**：InternLM2-chat-7b 的 tokenizer.model protobuf 里 92544 个 pieces 里有 1 个 piece 字段真的含 `'\x00'`（不是 protobuf delimiter，是 byte fallback `<0x00>` 的实际数据）。`sp.Load()` 抛 "INTERNAL: piece must not include null character"，慢速 InternLM2Tokenizer 同样中招（它的 `__init__` 第 70 行 `self.sp_model.Load(vocab_file)`）。修法：替换 `SentencePieceExtractor` 为 `sentencepiece.sentencepiece_model_pb2.ModelProto().ParseFromString(...)` 直接解析 + 跳过 `'\x00'` pieces。
-6. `transformers/tokenization_utils_base.py:1086-1110` 的 `__getattr__` 本身有 bug：`if key not in self.__dict__: raise AttributeError(...)` 的 `else: return super().__getattr__(key)` 实际上 `super().__getattr__` 不存在 → 必抛 AttributeError。也就是说这个 `__getattr__` 任何时候都会 raise，但**只有** normal `__getattribute__` 先 raise（property `_tokenizer.get_added_tokens_decoder()` 在 `_tokenizer is None` 时 raise AttributeError）才会 fallback 到它。修法见 (3a) 把 property 改掉，整条链路就 fallback 不进来了。
+> `#test-setup` 把 3 处 patch 实际应用到 cfg；`#test` 跑 `py_compile.compile(<cfg>)` + `grep` 验 cfg 是合法 Python 且 3 处 patch 都生效——**不**用 `mmengine.config.Config.fromfile`（它会执行 cfg 顶层 `from xtuner.utils import ...`，触发 torchvision::nms import，NPU base image 的 torchvision 没 GPU operator 会直接挂）。smoke 不验 cfg 训出来的实际效果，那要等下面"启动微调"章节真跑。
 
 ### 启动微调
 
@@ -708,18 +544,18 @@ install()  # 模块 import 时自动调用，省得 smoke runner 还得记
      but got torch.uint8"（at bitsandbytes/backends/default/ops.py:225）。
 
   综上 aarch64 NPU 上不存在可用的真 bitsandbytes 装法。改方案：拷 xtuner qlora cfg 后
-  sed 把 quantization_config.load_in_4bit=True 改成 False，BitsAndBytesConfig 类引用
-  保留但 post_init 的 metadata 检查被 `if self.load_in_4bit and ...` 守卫跳过——
-  bitsandbytes 整条 import 链不再被触发。代价：smoke 从 QLoRA 退化为 plain LoRA，验
-  不到 _replace_with_bnb_linear() 替换 + peft.prepare_model_for_kbit_training cast loop +
-  model.is_loaded_in_4bit 这条 QLoRA-only 路径，但 5 iter smoke 本来 forward 就是 zero
-  （stub Linear4bit 不做 matmul），换 plain LoRA 反而能跑真 fp16 matmul + autograd。
-  如果生产必须 QLoRA（7B + 4bit base 才塞得进 29GiB NPU），目前无解，等 bnb 上游修 NPU
-  quant kernel 的 uint8 dtype 问题，或换 deepspeed offload 跑 fp16 base。
-  → **32 GB coder 上的 plain LoRA + fp16 方案**，见下方"32 GB coder 上的 monkey-patch"小节
-  ——绕过 peft 的 fp16→fp32 upcast + 修 transformers 4.48 的 3 个 InternLM2 fast tokenizer
-  bug，7B InternLM2-Chat fp16 base + LoRA 实测峰 RSS 18.28 GB ≤ 32 GB，4 次 iter + Sample
-  output + iter_*.pth 全程跑通。
+  在 patch-cfg 阶段 strip 整个 quantization_config=dict(...) block + BitsAndBytesConfig
+  import，BitsAndBytesConfig 类引用一并删，bitsandbytes 整条 import 链不再被触发。代价：
+  smoke 从 QLoRA 退化为 plain LoRA，验不到 _replace_with_bnb_linear() 替换 +
+  peft.prepare_model_for_kbit_training cast loop + model.is_loaded_in_4bit 这条
+  QLoRA-only 路径，但 5 iter smoke 本来 forward 就是 zero（stub Linear4bit 不做 matmul），
+  换 plain LoRA 反而能跑真 fp16 matmul + autograd。
+
+  本文档示例模型选择 Qwen1.5-1.8B-Chat（1.8B 参数），fp16 权重仅 ~3.5 GB，加 LoRA grads +
+  optimizer states + activations 在 32 GB NPU 上仍有充裕 margin（实测峰 RSS ≈ 10.3 GB）。
+  不必走 QLoRA，**32 GB coder 不需要 monkey-patch**。如果生产必须 QLoRA（7B + 4bit base 才
+  塞得进 29GiB NPU），目前无解，等 bnb 上游修 NPU quant kernel 的 uint8 dtype 问题，
+  或换 deepspeed offload 跑 fp16 base。
   tests/test_quick_start_ascend.py docstring 顶部"Why --no-deps on the xtuner line"
   一节有同源结论，引用此处避免重复。
 -->
@@ -823,48 +659,22 @@ def resize(*args, **kwargs):
     return None
 PYEOF
 
-# xtuner v0.2.0 的 colorist cfg 只有 *qlora* 版本（find xtuner-v0.2.0/xtuner/configs -name
-# "*colorist*" 100% 是 qlora_*.py，无 plain lora variant），所以拷完 cfg 后改 quantization
-# 位：load_in_4bit=True → False。BitsAndBytesConfig 类引用保留，但 post_init() 的
-# `if self.load_in_4bit and ...` 守卫跳过 metadata 检查；
-# transformers.AutoModel.from_pretrained 看到 load_in_4bit=False 不走 4bit quant path；
-# peft.prepare_model_for_kbit_training 因 model.is_loaded_in_4bit=False 跳过 cast loop。
-# 整条 bitsandbytes 路径不再 require 任何 bnb 安装。
-# load_in_8bit cfg 里原本就是 False，不用动；只翻 load_in_4bit 一个字段。详见本节上方
-# 的 `<!-- -->` 注释，里面实证了为什么 aarch64 上没法装真 bnb。
+# bnb 在 patch-cfg 阶段已经从 cfg 里 strip 干净（quantization_config + BitsAndBytesConfig import
+# 全删了），smoke 这边无需再处理。Qwen1.5-1.8B fp16 ~3.5 GB，32 GB NPU coder plain LoRA 完全
+# 跑得通，不需要 monkey-patch。
 
 cp <cfg> /tmp/xtuner_npu_smoke_single_cfg.py
-# 用 Python 而非 sed 翻 4bit：把整个 quantization_config=dict(...) block + BitsAndBytesConfig
-# import 一起从 cfg 里 strip 掉。sed 翻 load_in_4bit=True→False 不够——transformers 4.48
-# 在 from_pretrained 看到 quantization_config 的 type=BitsAndBytesConfig 就构造
-# Bnb4BitHfQuantizer wrapper，wrapper.validate_environment()
-# （transformers/quantizers/quantizer_bnb_4bit.py:75）无条件 raise ImportError
-# "Using 'bitsandbytes' 4-bit quantization requires..."，BitsAndBytesConfig.__init__
-# 都跑不到，post_init 的 if self.load_in_4bit guard 完全无效。strip 后 transformers
-# 不走 quantizer wrapper 路径，直接 from_pretrained + peft + LoRA。
-python -c "
-import re
-path = '/tmp/xtuner_npu_smoke_single_cfg.py'
-with open(path) as f: t = f.read()
-t = re.sub(r'(from transformers import )(.*?)(, BitsAndBytesConfig| BitsAndBytesConfig,?| BitsAndBytesConfig\$)', r'\1\2', t, count=1)
-t = re.sub(r',\s*\n\s*quantization_config=dict\(\n(?:\s+[^\n]*,\n)+?\s*\),\n', '\n', t, count=1)
-with open(path, 'w') as f: f.write(t)
-"
-grep -q 'quantization_config' /tmp/xtuner_npu_smoke_single_cfg.py && {
-  echo 'FAIL: quantization_config still present after strip'; exit 1; }
-grep -q 'BitsAndBytesConfig' /tmp/xtuner_npu_smoke_single_cfg.py && {
-  echo 'FAIL: BitsAndBytesConfig still present after strip'; exit 1; }
-
-# 只 append samples_per_epoch：5 iter 短训足够触发一次 checkpoint + EvaluateChatHook。
-# 其他 override（max_epochs、checkpoint.interval、custom_hooks[1].every_n_iters）走
-# `--cfg-options` 而不是再赋值 cfg 变量。原因：cfg 文件里 `train_cfg`、`custom_hooks[1]`、
-# `default_hooks.checkpoint` 都在 line 167-200 期间被 cfg 文件靠前的赋值**捕获**为具体值
-# （TrainLoop、200、500），等 cat >> 再赋值同名顶层变量已晚——这些 dict 已经是闭包外的
-# snapshot，重新赋值只改顶层 var，dict 内容不变。`--cfg-options` 走 mmengine 的
-# DictAction + Config.merge_from_dict，支持点号语法 + list index，能穿透到 nested 字段。
+# 把 evaluation_inputs 换成 colors 相关的（cfg 默认是上海景点中英文），并把 max_length 从
+# 2048 降到 256 —— colors 样本短，1024 够用；降 max_length 能省 activation memory。
+# 用 Python append 块给 cfg 末尾加 samples_per_epoch 限定 + eval 输入覆盖：
 cat >> /tmp/xtuner_npu_smoke_single_cfg.py <<'EOF'
 
 train_dataloader = dict(dataset=dict(samples_per_epoch=5))
+custom_hooks[1].evaluation_inputs = [
+    "Tell me about the color #000000",
+    "Tell me about the color #FF5733",
+]
+train_dataset = dict(max_length=256)
 EOF
 
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
@@ -924,12 +734,10 @@ grep -A 20 "Sample output:" /tmp/xtuner_sft_llm_out_single/train.log 2>/dev/null
 /tmp/xtuner_sft_llm_out_single/iter_xxx.pth
 ---SAMPLE_OUTPUT---
 Sample output:
-<s><|im_start|>system
-You are a professional color designer. xxx
 <|im_start|>user
-xxx (训前 user 输入，未训 colorist)
+Tell me about the color #000000<|im_end|>
 <|im_start|>assistant
-xxx (训前 assistant 回复——5 iter 没训出什么，可能是空 / 乱码 / 长串 loss)
+xxx (5 iter 没训出什么，可能是空 / 乱码 / 长串 loss)
 ```
 
 #### 多卡（CI smoke 用例，2 卡 runner）
@@ -1023,29 +831,17 @@ def resize(*args, **kwargs):
     return None
 PYEOF
 
-# Stub bitsandbytes 已被 load_in_4bit=False 替代：见 xtuner-train-smoke-setup 注释。
-# 量化位改成 False 后 bitsandbytes 整条 import 链不再被触发，无需 stub。
+# bnb 在 patch-cfg 阶段已经从 cfg 里 strip 干净，smoke 这边无需再处理（详见 single-setup 注释）。
 
 cp <cfg> /tmp/xtuner_npu_smoke_multi_cfg.py
-# 同 single-setup：用 Python 而非 sed 把整个 quantization_config=dict(...) block +
-# BitsAndBytesConfig import 一起从 cfg 里 strip 掉（详见 xtuner-train-smoke-setup 注释）。
-python -c "
-import re
-path = '/tmp/xtuner_npu_smoke_multi_cfg.py'
-with open(path) as f: t = f.read()
-t = re.sub(r'(from transformers import )(.*?)(, BitsAndBytesConfig| BitsAndBytesConfig,?| BitsAndBytesConfig\$)', r'\1\2', t, count=1)
-t = re.sub(r',\s*\n\s*quantization_config=dict\(\n(?:\s+[^\n]*,\n)+?\s*\),\n', '\n', t, count=1)
-with open(path, 'w') as f: f.write(t)
-"
-grep -q 'quantization_config' /tmp/xtuner_npu_smoke_multi_cfg.py && {
-  echo 'FAIL: quantization_config still present after strip'; exit 1; }
-grep -q 'BitsAndBytesConfig' /tmp/xtuner_npu_smoke_multi_cfg.py && {
-  echo 'FAIL: BitsAndBytesConfig still present after strip'; exit 1; }
-# samples_per_epoch 走 cfg 文件末尾 append；其他 max_epochs / checkpoint.interval /
-# custom_hooks[1].every_n_iters 走 --cfg-options（见 xtuner-train-smoke-setup 注释）。
 cat >> /tmp/xtuner_npu_smoke_multi_cfg.py <<'EOF'
 
 train_dataloader = dict(dataset=dict(samples_per_epoch=5))
+custom_hooks[1].evaluation_inputs = [
+    "Tell me about the color #000000",
+    "Tell me about the color #FF5733",
+]
+train_dataset = dict(max_length=256)
 EOF
 
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
@@ -1088,18 +884,16 @@ grep -A 20 "Sample output:" /tmp/xtuner_sft_llm_out_multi/train.log 2>/dev/null 
 /tmp/xtuner_sft_llm_out_multi/iter_xxx.pth
 ---SAMPLE_OUTPUT---
 Sample output:
-<s><|im_start|>system
-You are a professional color designer. xxx
 <|im_start|>user
-xxx (训前 user 输入，未训 colorist)
+Tell me about the color #000000<|im_end|>
 <|im_start|>assistant
-xxx (训前 assistant 回复——5 iter 没训出什么，可能是空 / 乱码 / 长串 loss)
+xxx (5 iter 没训出什么，可能是空 / 乱码 / 长串 loss)
 ```
 
 
 ### 模型转换 + LoRA 合并
 
-训练产物是 LoRA adapter 的 `.pth`（只含 adapter 参数；要转 HuggingFace 格式再合并到 base。下面烟囱测 `xtuner convert` 的两个子命令 `pth_to_hf` 和 `merge` 都可用：
+训练产物是 LoRA adapter 的 `.pth`（只含 adapter 参数；要转 HuggingFace 格式再合并到 base）。下面烟囱测 `xtuner convert` 的两个子命令 `pth_to_hf` 和 `merge` 都可用：
 
 ```shell #test id="xtuner-convert-help"
 out=$(xtuner convert --help 2>&1)
@@ -1203,9 +997,9 @@ python -m xtuner.tools.model_converters.pth_to_hf \
     "$src_pth" \
     "$hf_dir"
 
-# merge（PEFT adapter 合并回 base → 14 GB safetensors）
+# merge（PEFT adapter 合并回 base → 3.5 GB safetensors）
 python -m xtuner.tools.model_converters.merge \
-    ./Shanghai_AI_Laboratory/internlm2-chat-7b \
+    ./qwen/Qwen1.5-1.8B-Chat \
     "$hf_dir" \
     "$merged_dir" \
     --max-shard-size 2GB
@@ -1220,9 +1014,7 @@ ls -t /tmp/xtuner_sft_llm_out_single/merged/*.safetensors 2>/dev/null | head -3
 输出结果如下：
 
 ```shell #test-result id="xtuner-merge-verify" fuzzy='xxx'
-/tmp/xtuner_sft_llm_out_single/merged/model-xxx.safetensors
-/tmp/xtuner_sft_llm_out_single/merged/model-xxx.safetensors
-/tmp/xtuner_sft_llm_out_single/merged/model.safetensors.index.json
+/tmp/xtuner_sft_llm_out_single/merged/model.safetensors
 ```
 
 ### 与模型对话
@@ -1247,7 +1039,7 @@ has_prompt_template_arg: xxx
 has_system_template_arg: xxx
 ```
 
-CI smoke 真跑 chat（merged 版，复用上面 `xtuner-merge-verify` 合并后的 7B merged/ 目录，internlm2_chat + colorist system-template）：
+CI smoke 真跑 chat（merged 版，复用上面 `xtuner-merge-verify` 合并后的 1.8B merged/ 目录，qwen_chat + colorist system-template）：
 
 ```shell #test-setup
 # chat.py 顶层 import transformers（含 CLIPImageProcessor / CLIPVisionModel）触发 torchvision
@@ -1263,24 +1055,24 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 
 ```shell #test id="xtuner-chat-merged"
 # 跟上游 quickstart 完全一致：
-# xtuner chat <merged> --prompt-template internlm2_chat --system-template colorist
+# xtuner chat <merged> --prompt-template qwen_chat --system-template colorist
 # stdin pipe 第一个输入是 colorist prompt，第二个输入是 EXIT 触发 chat.py main() 里 exit(0)
 # （chat.py 是 while True: get_input() 交互式循环，没 --input flag，只能 stdin pipe 喂）。
 # --no-streamer 关掉 TextStreamer（CI 抓 stdout 比对要 print 完整输出而不是增量 stream）。
-# --max-new-tokens 32 给中文回复留余量。
-echo -e "宁静而又相当明亮的浅天蓝色，介于天蓝色和婴儿蓝之间，因其亮度而带有一丝轻微的荧光感。\nEXIT" | \
+# --max-new-tokens 64 给英文回复留余量。
+echo -e "Tell me about the color #66ccff\nEXIT" | \
 python -m xtuner.tools.chat /tmp/xtuner_sft_llm_out_single/merged \
-    --prompt-template internlm2_chat \
+    --prompt-template qwen_chat \
     --system-template colorist \
     --no-streamer \
-    --max-new-tokens 32 2>&1 | tail -n 5
+    --max-new-tokens 64 2>&1 | tail -n 5
 ```
 
 输出结果如下：
 
 ```shell #test-result id="xtuner-chat-merged" fuzzy='xxx'
 Load LLM from /tmp/xtuner_sft_llm_out_single/merged
-xxx (InternLM2-7B + 5 samples × 1 epoch 微调后对中文颜色描述的回复；smoke 不验证具体色号)
+xxx (Qwen1.5-1.8B + 5 samples × 1 epoch 微调后对英文颜色描述的回复；smoke 不验证具体色号)
 Log: Exit!
 ```
 
@@ -1288,31 +1080,23 @@ Log: Exit!
 
 ```shell #test id="xtuner-chat-adapter"
 # 跟上游 quickstart 完全一致：
-# xtuner chat <base> --adapter <iter_xxx_hf> --prompt-template internlm2_chat --system-template colorist
+# xtuner chat <base> --adapter <iter_xxx_hf> --prompt-template qwen_chat --system-template colorist
 hf_dir=$(ls -td /tmp/xtuner_sft_llm_out_single/iter_*_hf 2>/dev/null | head -1)
 [ -n "$hf_dir" ] || { echo "no iter_*_hf from pth_to_hf step"; exit 1; }
-echo -e "宁静而又相当明亮的浅天蓝色，介于天蓝色和婴儿蓝之间，因其亮度而带有一丝轻微的荧光感。\nEXIT" | \
-python -m xtuner.tools.chat ./Shanghai_AI_Laboratory/internlm2-chat-7b \
+echo -e "Tell me about the color #66ccff\nEXIT" | \
+python -m xtuner.tools.chat ./qwen/Qwen1.5-1.8B-Chat \
     --adapter "$hf_dir" \
-    --prompt-template internlm2_chat \
+    --prompt-template qwen_chat \
     --system-template colorist \
     --no-streamer \
-    --max-new-tokens 32 2>&1 | tail -n 5
+    --max-new-tokens 64 2>&1 | tail -n 5
 ```
 
 输出结果如下：
 
 ```shell #test-result id="xtuner-chat-adapter" fuzzy='xxx'
-Load LLM from ./Shanghai_AI_Laboratory/internlm2-chat-7b
+Load LLM from ./qwen/Qwen1.5-1.8B-Chat
 Load adapter from /tmp/xtuner_sft_llm_out_single/iter_xxx_hf
-xxx (InternLM2-7B + LoRA adapter 对中文颜色描述的回复；smoke 不验证具体色号)
+xxx (Qwen1.5-1.8B + LoRA adapter 对英文颜色描述的回复；smoke 不验证具体色号)
 Log: Exit!
-```
-
-交互示例（训练前模型 → 训练后模型的输出变化）：
-
-```
-double enter to end input (EXIT: exit chat, RESET: reset history) >>> 宁静而又相当明亮的浅天蓝色，介于天蓝色和婴儿蓝之间，因其亮度而带有一丝轻微的荧光感。
-
-#66ccff
 ```

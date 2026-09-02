@@ -77,7 +77,7 @@ apt-get update -qq && apt-get install -y -qq git build-essential cmake pkg-confi
 
 ## clone OpenCV + opencv_contrib
 
-runner 通过下面隐藏的 `#test-setup` 把最新 release tag 注入 `<ref>`；手动跑直接填 tag。
+把最新 release tag 注入 `<ref>`；手动跑直接填 tag。
 
 <!--
 ```shell #test-setup store="upstream_ref"

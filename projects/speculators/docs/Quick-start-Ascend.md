@@ -363,20 +363,10 @@ export TORCHDYNAMO_DISABLE=1
 # /tmp/train.log，下次失败没法定位是哪个 op 炸的
 export ASCEND_LAUNCH_BLOCKING=1
 
-# torch_npu 2.13.0rc1 wheel **没有** _patch_flex_attention_device /
-# _register_npu_flex_attention_autocast：实测 wheel 里
-# torch_npu/_init/patches/npu_patches.py 只有 apply_npu_intercept_patch +
-# apply_npu_format_patch，没有 apply_flex_attention_patch 注册；torch_npu/utils/
-# patch_flexattention.py 也不存在。wheel 跟仓库 v26.2.0-beta.1-pytorch2.13.0
-# source 不一致——上游 eager 路径 patch 没打包进 rc1 wheel。
-# 不补这层 patch 的后果：flex_attention(q, k, v) 直接 raise
-#   ValueError: FlexAttention is only supported on CUDA, CPU, HPU, or MPS
-# 跟 CI 撞的 NotImplementedError 是同一面墙的前置关卡。
-#
-# 绕开：把上游 patch_flexattention.py（torch_npu 自带，仅依赖 torch 公开 API，
-# 不依赖 torch_npu 内部）原样 inline 进 sitecustomize.py。c8b66da 删 sitecustomize
-# 是基于源码层假设；本 commit 实测后回填。vendored，等 torch_npu 2.13.0 stable
-# wheel 包含这个文件后删。
+# torch_npu 2.13.0rc1 wheel 没打包 torch_npu/utils/patch_flexattention.py（仓库源码
+# 里有、wheel 里没），不补这层 eager patch，flex_attention(q, k, v) 仍然 NotImplError。
+# 下面是上游源文件原样 vendored，依赖只动 torch 公开 API。等 torch_npu 2.13.0 stable
+# wheel 含这文件后删。
 cat > /root/sitecustomize.py << 'PYEOF'
 """Auto-loaded by Python when PYTHONPATH=/root is set; runs before scripts/train.py.
 

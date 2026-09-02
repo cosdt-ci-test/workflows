@@ -258,7 +258,6 @@ jobs:
             echo "bootstrap: curl and jq already present"
             exit 0
           fi
-          sed -i 's|http://ports.ubuntu.com/ubuntu-ports/|https://mirrors.aliyun.com/ubuntu-ports/|g' /etc/apt/sources.list || true
           apt-get update -qq
           apt-get install -y -qq curl jq
           echo "bootstrap: curl $(curl --version | head -1) jq $(jq --version)"

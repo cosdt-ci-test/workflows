@@ -457,3 +457,17 @@ projects:
     dir: projects/wenet
     workflows:
       quick_start: .github/workflows/wenet-quick-start.yml
+  # modelscope quickstart exercises the ModelScope Hub download +
+  # transformers AutoModel loading + torch_npu text generation on a
+  # single 910B4 card. Note the doc's NPU smoke goes through
+  # from_pretrained(...).to('npu:0') (not pipeline(device=...)):
+  # modelscope's verify_device only accepts cpu/cuda/gpu.
+  - name: modelscope
+    category: 推理加速
+    support_level: 新兴适配
+    upstream_repo: modelscope/modelscope
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/modelscope
+    workflows:
+      quick_start: .github/workflows/modelscope-quick-start.yml

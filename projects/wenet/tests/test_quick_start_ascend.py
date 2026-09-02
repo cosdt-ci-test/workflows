@@ -111,8 +111,8 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         _PROBE_SCRIPT = (
             'import torch, torch_npu\n'
             "raise SystemExit(0 if "
-            "torch.__version__.startswith('2.10.0') "
-            "and torch_npu.__version__.startswith('2.10.0') "
+            "torch.__version__.startswith('2.5.1') "
+            "and torch_npu.__version__.startswith('2.5.1') "
             "else 1)"
         )
         probe = subprocess.run(
@@ -131,11 +131,11 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             )
             print(f'setup: reusing image torch stack ({versions.stdout.strip()})')
         else:
-            print('setup: installing torch==2.10.0 torch-npu==2.10.0.post4')
+            print('setup: installing torch==2.5.1 torch-npu==2.5.1.post1')
             subprocess.run(
                 [
                     'python', '-m', 'pip', 'install',
-                    'torch==2.10.0', 'torch-npu==2.10.0.post4',
+                    'torch==2.5.1', 'torch-npu==2.5.1.post1',
                 ],
                 check=True,
             )

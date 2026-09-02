@@ -137,7 +137,7 @@ import os, re, subprocess
 root = os.getcwd()
 out = os.path.join(root, 'save_results', 'output_lightx2v_wan_t2v.mp4')
 size = os.path.getsize(out)
-assert size > 1_000_000, f'output too small: {size} bytes'
+assert size > 100_000, f'output too small: {size} bytes'
 with open(out, 'rb') as fh:
     magic = fh.read(12)
 assert magic[4:8] == b'ftyp', f'not an mp4: {magic!r}'

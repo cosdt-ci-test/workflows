@@ -70,7 +70,7 @@ Python 3.12.xxx
 ```shell #test-setup id="install-torch"
 # torch / torchvision 从 PyTorch 官方 CPU 索引拉。--force-reinstall：镜像预装
 # 的 2.10 是 PEP 660 不可变缓存 wheel，--upgrade 在大跨度不替换。
-uv pip install --index-url https://download.pytorch.org/whl/cpu \
+uv pip install -f https://mirrors.aliyun.com/pytorch-wheels/cpu \
   --upgrade --force-reinstall 'torch==2.12.0+cpu' 'torchvision==0.27.0+cpu'
 
 # torch_npu 从华为 / 阿里云 torch-npu 镜像拉，版本必须跟 torch 同 minor。

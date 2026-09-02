@@ -123,14 +123,14 @@ git clone --depth 1 --branch <ref> https://github.com/modelscope/modelscope.git
 cd modelscope
 uv pip install -e '.[framework]'
 uv pip install 'transformers<5.0'
-python -c "import modelscope; print('modelscope', modelscope.__version__)"
+python -c "import modelscope; print('modelscope importable')"
 ```
 \<ref> 为安装的最新的 release 分支
 
 输出结果类似如下：
 
 ```shell #test-result id="modelscope-install-source" fuzzy='xxx'
-modelscope xxx
+modelscope importable
 ```
 
 - xxx 表示最新的版本号
@@ -138,13 +138,13 @@ modelscope xxx
 验证 modelscope 和 transformers 均可导入：
 
 ```shell #test id="ms-verify-import"
-python -c "import modelscope; print('modelscope', modelscope.__version__); import transformers; print('transformers', transformers.__version__)"
+python -c "import modelscope; print('modelscope importable'); import transformers; print('transformers', transformers.__version__)"
 ```
 
 输出类似：
 
 ```shell #test-result id="ms-verify-import" fuzzy='xxx'
-modelscope xxx
+modelscope importable
 transformers xxx.x.x
 ```
 

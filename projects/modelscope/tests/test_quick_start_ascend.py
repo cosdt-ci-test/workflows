@@ -208,6 +208,11 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         #    transformers being available; if this fails, the doc's
         #    ``#test id="ms-verify-import"`` block will surface it clearly.
         try:
+            import modelscope
+            print('setup: modelscope importable')
+        except Exception as exc:
+            print(f'setup: WARNING modelscope not importable: {exc}')
+        try:
             import transformers as _tf
             print(f'setup: transformers {_tf.__version__} importable')
         except Exception as exc:

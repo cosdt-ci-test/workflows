@@ -124,26 +124,97 @@ npu_count 4
 
 > 如果 `import torch_npu` 失败或 `count` 不是 4，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查三方兼容矩阵；`sglang` 必须有 `--attention-backend ascend` 支持（普通 PyPI 轮子不支持，需要 vendor 镜像或 NPU 编译产物）。
 
-装 `modelscope`+ `mooncake-transfer-engine`：
+装 `modelscope`：
 
 ```shell #test-setup
 uv pip install 'modelscope==1.37.0'
-#
-# 用 tsinghua 镜像：直连 GitHub release 在集群网络下不稳（run 33254357756 90min timeout），
-# aliyun 镜像只有 manylinux_2_39 aarch64（CI image 是 ubuntu22.04 glibc 2.35，跑不了 2.39 wheel），
-# tsinghua 镜像有 v0.3.13 manylinux_2_28 aarch64 cp311 wheel（与 GitHub release 同字节）。
-uv pip install --index-url https://pypi.tuna.tsinghua.edu.cn/simple 'mooncake-transfer-engine==0.3.13'
 ```
 
-> smoke 实际用的是 `mooncake_master` 二进制（sglang.spec_capture_sink.py 通过 `mooncake.store.MooncakeDistributedStore` 调用，绑定由 sglang 自带的 wheel 处理），`import mooncake_transfer_engine` 仅作 wheel 完整性的 sanity check。下面用 if/else 让它失败时也走 stdout 一行、不会因为异常走 stderr 而看不到。
+`mooncake-transfer-engine` **从源码编译**（不要装 PyPI wheel：PyPI 只有 CUDA 变体，`store.so` 在 DT_NEEDED 同时链 `libcuda.so.1` + `libcudart.so.12`，NPU image 没 CUDA → `import mooncake.store` 在 specforge train 启动时必撞 `ImportError`）。`-DUSE_ASCEND_DIRECT=ON` 把 transport 切到 ADXL/HIXL（CANN 内置），整链不再链 libcuda——这是 mooncake 项目自身在 `projects/mooncake/docs/Quick-start-Ascend.md` + `scripts/setup_example.sh` + `.github/workflows/release-npu.yaml` 的同一套 cmake flags，只是把 `WITH_STORE` 从 OFF 改 ON 来同时产出 Python `mooncake.store` 模块（specforge eager-import 要它）。
+
+```shell #test-setup id="build-mooncake"
+set -euo pipefail
+# 把 build dir 钉到 /tmp（避免污染 specforge 项目目录 + 跑完清理方便）。
+BUILD_DIR="${MOONCAKE_BUILD_DIR:-/tmp/build-mooncake}"
+MOONCAKE_REF=v0.3.13
+rm -rf "$BUILD_DIR"
+mkdir -p "$BUILD_DIR"
+cd "$BUILD_DIR"
+# 编译依赖（与 projects/mooncake/scripts/setup_example.sh 一致）。
+apt-get update -qq >/dev/null 2>&1
+apt-get install -qq -y --no-install-recommends \
+    build-essential cmake git pkg-config \
+    libgoogle-glog-dev libgflags-dev libibverbs-dev \
+    libjsoncpp-dev libnuma-dev libyaml-cpp-dev \
+    libssl-dev libcurl4-openssl-dev \
+    >/dev/null 2>&1 \
+    || { echo "build-mooncake: FAILED - apt install build deps" >&2; exit 1; }
+git clone --depth 1 https://github.com/kvcache-ai/Mooncake.git \
+    >/tmp/build-mooncake-clone.log 2>&1 \
+    || { echo "build-mooncake: FAILED - mooncake clone:" >&2; tail -20 /tmp/build-mooncake-clone.log >&2; exit 1; }
+cd Mooncake
+git fetch --depth 1 origin "$MOONCAKE_REF" >/dev/null 2>&1
+git checkout FETCH_HEAD >/dev/null 2>&1
+# pybind11 子模块（直连 GitHub 失败时降级到 ghfast.top 镜像，与 mooncake setup_example.sh 同款 fallback）。
+if ! git submodule update --init --depth 1 extern/pybind11 >/dev/null 2>&1; then
+    expect=$(git ls-tree HEAD extern/pybind11 | awk '{print $3}')
+    if [[ ! "$expect" =~ ^[0-9a-f]{40}$ ]]; then
+        echo "build-mooncake: FAILED - cannot read pybind11 SHA from tree" >&2
+        exit 1
+    fi
+    rm -rf extern/pybind11
+    mkdir -p extern/pybind11
+    git -C extern/pybind11 init -q
+    git -C extern/pybind11 remote add origin https://ghfast.top/https://github.com/pybind/pybind11.git
+    git -C extern/pybind11 fetch --depth 1 origin "$expect" >/dev/null 2>&1 \
+        || { echo "build-mooncake: FAILED - pybind11 fetch via mirror" >&2; exit 1; }
+    git -C extern/pybind11 checkout --detach FETCH_HEAD -q
+fi
+# cmake configure。flags 与 .github/workflows/release-npu.yaml 一致：USE_ASCEND_DIRECT=ON 是核心；
+# USE_ETCD/USE_REDIS/WITH_EP/WITH_P2P_STORE 全 OFF 缩小编译时间和依赖面（specforge 不需要 HA metadata
+# 后端、不需要 EP、不需要 P2P）；WITH_STORE=ON 让 mooncake-wheel/mooncake/store.so 这一坨也被编出来
+# （PyPI 默认 ON，mooncake docs 为省时关 OFF 是因为只验 transfer_engine_ascend_direct_perf 二进制）。
+cmake -S . -B build \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DUSE_ASCEND_DIRECT=ON \
+    -DBUILD_UNIT_TESTS=OFF \
+    -DWITH_STORE=ON \
+    -DWITH_STORE_RUST=OFF \
+    -DWITH_EP=OFF \
+    -DWITH_P2P_STORE=OFF \
+    -DUSE_ETCD=OFF \
+    -DUSE_REDIS=OFF \
+    >/tmp/build-mooncake-cmake.log 2>&1 \
+    || { echo "build-mooncake: FAILED - cmake configure:" >&2; tail -50 /tmp/build-mooncake-cmake.log >&2; exit 1; }
+cmake --build build -j"$(nproc)" \
+    >/tmp/build-mooncake-build.log 2>&1 \
+    || { echo "build-mooncake: FAILED - cmake build:" >&2; tail -50 /tmp/build-mooncake-build.log >&2; exit 1; }
+# 走 mooncake 自带的 scripts/build_wheel.sh 把 store.so / mooncake_master / ascend_transport.so 拷
+# 进 mooncake-wheel/mooncake/，再走 setuptools 打 wheel（与 release-npu.yaml 的 NPU_BUILD=1 等价）。
+NPU_BUILD=1 OUTPUT_DIR=dist ./scripts/build_wheel.sh \
+    >/tmp/build-mooncake-wheel.log 2>&1 \
+    || { echo "build-mooncake: FAILED - build_wheel.sh:" >&2; tail -50 /tmp/build-mooncake-wheel.log >&2; exit 1; }
+WHL=$(ls mooncake-wheel/dist/*.whl | head -1)
+if [[ -z "$WHL" || ! -f "$WHL" ]]; then
+    echo "build-mooncake: FAILED - no wheel produced in mooncake-wheel/dist/" >&2
+    ls -la mooncake-wheel/dist/ >&2 || true
+    exit 1
+fi
+uv pip install "$WHL" \
+    >/tmp/build-mooncake-pip.log 2>&1 \
+    || { echo "build-mooncake: FAILED - pip install wheel:" >&2; tail -20 /tmp/build-mooncake-pip.log >&2; exit 1; }
+echo "build-mooncake: installed $WHL"
+```
+
+> specforge eager-import 的 `mooncake.store`（`MooncakeFeatureStore.__init__` → `_connect_store`）和 `mooncake_master` 二进制现在都来自源码编译产物。NPU_BUILD=1 走的是 `release-npu.yaml` 同一 cmake flags，所以 `mooncake-wheel/mooncake/ascend_transport.so`（ADXL/HIXL transport）+ `mooncake-wheel/mooncake/store.so`（pybind11 binding）一并打进了 wheel；编译耗时 5-10 分钟（NPU 上首次冷编 glog/gflags/transfer-engine/store/pybind 几坨），90 min smoke 余量装得下。
 
 打印安装版本：
 ```shell #test id="install-deps"
 python -c "import modelscope; print('modelscope', modelscope.__version__)"
-if python -c "import mooncake_transfer_engine" 2>/dev/null; then
-    echo "mooncake-transfer-engine ok"
+if python -c "import mooncake.store" 2>/dev/null; then
+    echo "mooncake.store imports clean"
 else
-    echo "mooncake-transfer-engine not importable"
+    echo "mooncake.store NOT importable"
 fi
 test -x "$(command -v mooncake_master)" && echo "mooncake_master binary present" || echo "mooncake_master binary MISSING"
 ```
@@ -277,7 +348,7 @@ Smoke 把 `mooncake_master` / SGLang capture server / `specforge train` 串起�
 | Step | 块 id | 干啥 |
 | --- | --- | --- |
 | 1 | `smoke-download-model` | 从 ModelScope 拉 `Qwen/Qwen3.5-4B`，把模型路径存入 store `model_path` |
-| 2 | `smoke-apply-patches` | 跑 `apply_sglang_spec_capture_patch.sh` + 内联 ascend companion + `apt-get install libcurl4/libibverbs1/libnuma1` + 编 libcuda.so.1/libcudart.so.12 stub 丢 wheel 的 .libs/（specforge eager `import mooncake.store` 撞 NPU image 没 CUDA；sglang 这边是 lazy 不触发） |
+| 2 | `smoke-apply-patches` | 跑 `apply_sglang_spec_capture_patch.sh` + 内联 ascend companion + `apt-get install libcurl4/libibverbs1/libnuma1` + 防御性 libcuda.so.1/libcudart.so.12 stub 兜底（主路径在前面 `build-mooncake` 块里 `-DUSE_ASCEND_DIRECT=ON` 源码编译已经消掉 libcuda 依赖；stub 仅在 source build 异常时 fire） |
 | 3 | `smoke-start-mooncake` | `nohup mooncake_master`，socket 探活 35551 |
 | 4 | `smoke-start-sglang` | `nohup sglang.launch_server`，curl `/health` 探活 30000 |
 | 5 | `smoke-train` | `specforge train ... max_steps=1`，断言 stdout 出现 `step.*loss` |
@@ -456,25 +527,22 @@ apt-get update -qq >/dev/null 2>&1
 apt-get install -qq -y --no-install-recommends \
     libcurl4 libibverbs1 libnuma1 >/dev/null 2>&1
 
-# mooncake-transfer-engine v0.3.13 PyPI wheel 的 store.so 在 DT_NEEDED 同时链
-# libcuda.so.1（CUDA driver API）+ libcudart.so.12（CUDA runtime API）——PyPI 只
-# 发 CUDA wheel，NPU image（CANN 9.0.0 + Ubuntu 22.04）没 CUDA。run 33580124477
-# 挂在 smoke-train 的 specforge 启动时 `specforge/runtime/data_plane/mooncake
-# _store.py:153` 的 `from mooncake.store import MooncakeDistributedStore,
-# ReplicateConfig`（报 `ImportError: libcuda.so.1: cannot open shared object
-# file`）。sglang 这边同 import 是 lazy（spec_capture_sink.SpecCaptureSink
-# ._connect() 函数体里），smoke 期间没人发 capture 请求就不触发；specforge
-# 是 MooncakeFeatureStore.__init__() → _connect_store() 顶层 eager import，所以
-# 必触发。
+# 主路径是前面 `build-mooncake` 块：`cmake -DUSE_ASCEND_DIRECT=ON -DWITH_STORE=ON ...`
+# 编出来的 `store.so` 走 Ascend Direct transport，整链不链 libcuda.so.1 + libcudart.so.12
+# → `import mooncake.store` 直接成功。run 33580124477 的 `ImportError: libcuda.so.1`
+# 来源是上一版 `uv pip install mooncake-transfer-engine==0.3.13`（PyPI 只有 CUDA 变体，
+# store.so DT_NEEDED 同时链 libcuda.so.1 / libcudart.so.12，NPU image 没 CUDA）；现在 PyPI
+# wheel 已经不再装，改从源码编，链库自然不带 CUDA。spec-capture-ascend-mount.patch 把
+# local_buffer_size=0 + global_segment_size=0 + location="cpu"——零拷贝 GPU buffer 全 bypass，
+# mooncake 走纯 host memory + TCP/RDMA，不依赖真实 GPU 行为。
 #
-# 不需要真 CUDA：spec-capture-ascend-mount.patch 把 local_buffer_size=0 +
-# global_segment_size=0 + location="cpu"——零拷贝 GPU buffer 全 bypass，mooncake
-# 走纯 host memory + TCP/RDMA。`import mooncake.store` 这个动作本身只要求
-# DT_NEEDED 解析成功 + 所有 UND 符号在 stub .so 里能找到（objdump -T store.so
-# 列出的 cu* / cuda* 两类），不需要真实 GPU 行为。编两个 SONAME 正确的 .so 丢进
-# mooncake_transfer_engine.libs/——store.so 的 RPATH `$ORIGIN:$ORIGIN/../moon
-# cake_transfer_engine.libs` 会找到。stub 函数统一返回 0（CUDA_SUCCESS），输出
-# 参数填非 NULL dummy 地址（防止调用方后续解引用崩）。
+# 下面这段 stub 是防御性 fallback（不是主路径）：万一 `build-mooncake` 失败、CI 跑到这
+# 里时 `import mooncake.store` 仍然撞 libcuda 缺失（极端回归），再编两个 SONAME 正确的
+# .so 丢进 wheel 的 `mooncake_transfer_engine.libs/`——store.so 的 RPATH
+# `$ORIGIN:$ORIGIN/../mooncake_transfer_engine.libs` 会找到。stub 函数统一返回 0
+# （CUDA_SUCCESS），输出参数填非 NULL dummy 地址（防止调用方后续解引用崩）。原版 stub
+# 列表照 store.so 的 `objdump -T | awk '/UND/'` 拉出，再覆盖 _v2 变体——万一未来 moon
+# cake.store 升级引入新 cuMemGetAddressRange_v2 之类的走这里，多 10 行 C 不亏。
 STUB_LIBS_DIR="$(python -c 'import os, mooncake.store; print(os.path.join(os.path.dirname(mooncake.store.__file__), "..", "mooncake_transfer_engine.libs"))' 2>/dev/null)"
 if [[ -z "$STUB_LIBS_DIR" || ! -d "$STUB_LIBS_DIR" ]]; then
     echo "smoke: FAILED - could not locate mooncake_transfer_engine.libs (mooncake.store import failed or path missing)" >&2
@@ -617,6 +685,13 @@ CUEOF
     fi
     echo "smoke: cuda stub installed (libcuda.so.1 + libcudart.so.12 -> $STUB_LIBS_DIR)"
 fi
+
+# 主路径在前面 `build-mooncake` 块里：`cmake -DUSE_ASCEND_DIRECT=ON -DWITH_STORE=ON ...`
+# 把 store.so 切到 Ascend Direct transport，整链不再链 libcuda.so.1 + libcudart.so.12 → `import
+# mooncake.store` 直接成功。这里再写一段 stub 兜底不是为了当前 source build 链路，而是防
+# 极端回归（build-mooncake 块失败、CI 跑到这里 store.so 不知怎么又链上了 CUDA），import 失
+# 败时走 libcuda stub 救场（commit 1b90212 的方案——stub 是 fallback，build-mooncake 是首选；
+# 不要倒退回纯 stub 路径）。
 
 # 防御性 verify：base patch 必须在 server_args.py 引入 enable_spec_capture /
 # spec_capture_aux_layer_ids / spec_capture_method 三个字段，launch_server 的

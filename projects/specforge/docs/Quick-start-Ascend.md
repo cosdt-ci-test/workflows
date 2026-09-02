@@ -181,6 +181,14 @@ else
 fi
 cd SpecForge
 uv pip install --no-deps .
+# specforge 的 `--no-deps .` 也跳过了 accelerate，但 specforge/cli.py:114 的
+# _train() 在 specforge train 启动时才 lazy-import `from accelerate.utils
+# import set_seed` —— specforge-import 只 `import specforge` 不会触发，到
+# smoke-train 才暴露 ModuleNotFoundError。补一行 --no-deps accelerate：image
+# 已有 torch/numpy/packaging/psutil/pyyaml（accelerate 的 transitive deps），
+# --no-deps 只装 accelerate 自身不扰 torch 栈。run 33578505226 复现过这个
+# MissingModule 现象，specforge train rc=1 立刻退出、tail 日志拿到完整 traceback。
+uv pip install --no-deps accelerate
 python -c "from importlib.metadata import version; print('specforge, version', version('specforge'))"
 ```
 

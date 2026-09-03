@@ -121,75 +121,30 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     )
     _CONSTRAINTS_FILE = '/tmp/xtuner_npu_constraints.txt'
 
-    # Cluster-internal nginx PyPI cache + Huawei Cloud ascend dual-source.
-    _CLUSTER_INDEX = 'http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple'
-    _ASCEND_EXTRA = 'https://repo.huaweicloud.com/ascend/repos/pypi'
-
     # CANN toolkit: source once to get ASCEND_HOME / LD_LIBRARY_PATH etc.
     # Path is hard-coded, tied to the container image pinned by the
     # ``image:`` input of ``xtuner-quick-start.yml``.
     _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
 
     # ----------------------------------------------------------
-    # prepare_environment: CANN env + CUDA constraints + torch stack probe
-    # (xtuner itself + its v1.0.1 runtime deps are installed by the doc's
-    #  `## 安装 xtuner` blocks via `uv pip install --no-deps xtuner` +
-    #  manual dep install; no model download, so no modelscope cache binding)
+    # prepare_environment: CANN env + CUDA constraints + uv install
+    # (torch + xtuner install are owned by the doc's `#test-setup` / `#test`
+    #  blocks)
     # ----------------------------------------------------------
 
     @classmethod
     def prepare_environment(cls) -> None:
-        """Source CANN env + write CUDA exclusion list + install uv + torch stack probe.
+        """Source CANN env, write the cuda/nvidia exclusion list, install uv.
 
-        The doc's ``## 安装 xtuner`` section is the single source of truth
-        for which xtuner version gets installed; this class only handles
-        ``torch`` / ``torch_npu`` here (via the cluster cache + Huawei
-        ascend dual-source). All other packages — ``xtuner`` itself plus
-        its v1.0.1 runtime deps (``mmengine==0.11.0rc2`` /
-        ``transformers==5.2.0`` / ``peft>=0.14.0`` etc.) — install
-        themselves in document order via the ``#test`` machinery
-        (``xtuner-install-binary`` / ``xtuner-install-source``).
+        ``torch / torch_npu`` and ``xtuner`` are owned by the doc's
+        ``#test-setup`` / ``#test`` blocks; this method only does the
+        runner-side scaffolding that has to happen before those blocks run.
 
-        Why ``--no-deps`` on the xtuner line: ``bitsandbytes==0.45.0``
-        (xtuner v0.2.0 + v1.0.1 hard pin) has no aarch64 wheel on PyPI
-        (only manylinux_2_24_x86_64 + win_amd64), so a normal
-        ``pip install xtuner`` on the aarch64 NPU runner hits
-        ``ResolutionImpossible``. ``import xtuner`` itself never
-        touches bitsandbytes (xtuner/__init__.py only does
-        ``from mmengine.utils import digit_version`` +
-        ``from .entry_point import cli``), and the two V1 SFT smoke
-        runs (LLM ``Qwen3Dense8BConfig(num_hidden_layers=3,
-        hidden_size=512)`` and MLLM ``InternS1MiniConfig(text_config=
-        Qwen3Dense8BConfig(vocab_size=300, ...))``) both end up on
-        ``xtuner/v1/train/toy_tokenizer.UTF8ByteTokenizer`` (Trainer
-        fallback when ``tokenizer_path=None``) — neither embeds nor
-        forward pass ever touches bitsandbytes. The doc body mirrors
-        this rationale and installs the v1.0.1 runtime deps
-        (mmengine + transformers + peft + datasets + einops + loguru +
-        openpyxl + scikit-image + scipy + SentencePiece + tiktoken +
-        transformers_stream_generator + cyclopts + opencv-python-headless +
-        timm + pyarrow + pydantic + tensorboard + xxhash + imageio +
-        py-libnuma + GitPython) explicitly.
-
-        No modelscope cache bind-mount: the LLM/MLLM SFT smoke uses
-        xtuner's own toy model configs (``examples/v1/config/
-        sft_qwen3_tiny.py``, ``examples/v1/config/
-        sft_intern_s1_tiny_config.py``) plus the toy datasets
-        (``tests/resource/openai_sft.jsonl``,
-        ``tests/resource/mllm_sft_text_example_data.jsonl``,
-        ``tests/resource/mllm_sft_single_image_example_data.jsonl``,
-        ``tests/resource/mscoco_dog_000000319154.jpg``), all shipped
-        in the xtuner source tree after ``git clone`` + ``git checkout
-        <ref>`` — no HF / ModelScope model download, so the host cache
-        is not touched.
-
-        Class-level setup: run once per test class, triggered by
-        ``setUpClass``. Not the same as ``unittest.TestCase.setUp`` —
-        that lifecycle hook fires before every test method, which is
-        wrong for a one-shot install.
+        Class-level setup, triggered by ``setUpClass`` (not
+        ``unittest.TestCase.setUp``, which fires per test method).
         """
-        # 0) CANN env: source set_env.sh and merge the env stream into
-        # os.environ
+        # 0) CANN env: source set_env.sh and merge into os.environ.
+        # Workflow-level jobs.env / steps.env wins over CANN's defaults.
         if os.path.isfile(cls._CANN_SET_ENV):
             merged = subprocess.run(
                 ['bash', '-c', f'source {cls._CANN_SET_ENV} >/dev/null 2>&1; env'],
@@ -199,9 +154,6 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 if '=' not in line:
                     continue
                 key, _, value = line.partition('=')
-                # Don't overwrite envs explicitly injected by the
-                # workflow (jobs.env / steps.env); only fill in CANN
-                # keys that are missing, to avoid conflicts.
                 os.environ.setdefault(key, value)
             print('setup: sourced CANN env from set_env.sh')
         else:
@@ -209,7 +161,8 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 f'setup: skipping CANN env source ({cls._CANN_SET_ENV} not present)'
             )
 
-        # 1) CUDA exclusion list + process-level env
+        # 1) CUDA exclusion list: block cuda-toolkit / nvidia-* <0 so a
+        # transitive dep can't drag a CUDA runtime onto the NPU runner.
         with open(cls._CONSTRAINTS_FILE, 'w', encoding='utf-8') as fh:
             fh.write('\n'.join(cls._CUDA_CONSTRAINTS) + '\n')
         os.environ['PIP_CONSTRAINT'] = cls._CONSTRAINTS_FILE
@@ -224,69 +177,13 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             check=True,
         )
 
-        # 3) torch stack probe + install: when version matches the image's
-        # pre-installed wheels, reuse them to avoid the cluster cache
-        # triggering ``+cpu`` resolution.
-        _PROBE_SCRIPT = (
-            'import torch, torch_npu\n'
-            "raise SystemExit(0 if "
-            "torch.__version__.startswith('2.9.0') "
-            "and torch_npu.__version__.startswith('2.9.0') "
-            "else 1)"
-        )
-        probe = subprocess.run(
-            ['python', '-c', _PROBE_SCRIPT],
-            capture_output=True,
-            check=False,  # probe's success/failure is the branch signal — don't raise
-        )
-        if probe.returncode == 0:
-            _VERSIONS_SCRIPT = (
-                'import torch, torch_npu; '
-                'print(torch.__version__, torch_npu.__version__)'
-            )
-            versions = subprocess.run(
-                ['python', '-c', _VERSIONS_SCRIPT],
-                capture_output=True, text=True, check=True,
-            )
-            print(f'setup: reusing image torch stack ({versions.stdout.strip()})')
-        else:
-            # Cold fallback: image's pre-installed wheels have drifted
-            # away from torch 2.9.0 (e.g. newer base image rolled
-            # forward). Installing torch + torch_npu without their
-            # ABI-matched siblings leaves MLLM broken — Intern-S1's
-            # vision tower pulls torchvision at import time, and the
-            # upstream `examples/v1/config/sft_intern_s1_tiny_config.py`
-            # imports timm via xtuner.v1.model. Pin all three to the
-            # torch-2.9.0-aligned versions; the doc's `## 安装 xtuner`
-            # section installs the rest of v1.0.1's deps explicitly.
-            print('setup: installing torch==2.9.0 torch_npu==2.9.0.post2 torchvision==0.24.0 timm')
-            subprocess.run(
-                [
-                    'python', '-m', 'pip', 'install',
-                    '--index-url', cls._CLUSTER_INDEX,
-                    '--extra-index-url', cls._ASCEND_EXTRA,
-                    'torch==2.9.0', 'torch_npu==2.9.0.post2',
-                    'torchvision==0.24.0', 'timm',
-                ],
-                check=True,
-            )
-
-        # 4) xtuner itself is NOT installed here — the doc's
-        # ``## 安装 xtuner`` blocks ``xtuner-install-binary`` /
-        # ``xtuner-install-source`` exercise both binary and source install
-        # paths against the upstream release tag injected by the workflow,
-        # so a broken install block surfaces here as a fuzzy mismatch
-        # against ``xtuner xxx`` rather than being masked by a
-        # pre-installed copy.
-
     # ----------------------------------------------------------
     # test entry
     # ----------------------------------------------------------
 
     @classmethod
     def setUpClass(cls) -> None:
-        """Run env setup once per test class: CANN env + CUDA constraints + uv +
-        torch stack.
+        """Run env setup once per test class: CANN env + CUDA constraints + uv.
 
         ``xtuner`` is NOT installed here — see ``prepare_environment`` for why.
 

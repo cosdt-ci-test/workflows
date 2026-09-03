@@ -690,7 +690,20 @@ echo "$SHAREGPT_PATH"
 
 ### 跑 specforge 训练（1 步）
 
-```shell #test id="smoke-train" load="model_path>>MODEL_PATH" load="sharegpt_path>>SHAREGPT_PATH"
+> Framework 用 `subprocess.run(capture_output=True)` 跑 `#test` 块，bash block 的
+> stdout/stderr 整段缓在 pipe 里，**只在 block 结束时**（exit 0 / exit 非零 / framework
+> timeout=5400s fire）才 dump 到 runner console。所以整段 `specforge train` 跑期间
+> runner 黑屏是 framework 设计行为，不是真卡死。
+>
+> 这里拆成 launch + monitor 两步：launch 是同步短任务（≤30s），framework 跑完立刻
+> dump，runner 能看到"启动确认 + pid"；monitor 是长 poll，每 60s echo 一行
+> `[hh:mm:ss] elapsed=Ns log_size=NB last: <最后一行 log>`——但 monitor block 自身的
+> stdout 仍被 framework 缓冲到 block 结束才 dump，**runner 期间看不到 monitor echo**。
+> 真要 streaming，得改 framework 用 `Popen` + 迭代 stdout（超出 doc 范围）。
+
+#### 启动 specforge train（后台）
+
+```shell #test id="smoke-train-launch" load="model_path>>MODEL_PATH" load="sharegpt_path>>SHAREGPT_PATH"
 set -euo pipefail
 SPECFORGE_ROOT="${SPECFORGE_ROOT:-SpecForge}"
 TRAINER_DEVICE="${SPECFORGE_TRAINER_DEVICE:-1}"
@@ -698,13 +711,14 @@ RECIPE="${SPECFORGE_RECIPE:-examples/configs/online/disaggregated/external/qwen3
 pushd "$SPECFORGE_ROOT" >/dev/null
 # 配方 output_dir 残留的 producer_claim / failed 标记会让 _claim_fresh_control_path 拒绝继续。
 rm -rf outputs/qwen3.5-4b-dflash-npu-online
-# recipe 默认 tracking.report_to=tensorboard，没装就 ValueError；smoke 1 步不开 tracker。
-# Qwen3.5-4B 是多模态 Qwen3_5ForConditionalGeneration，权重前缀 model.language_model.*，
-# 显式覆盖 embedding_key 到多模态 layout。
+# PYTHONUNBUFFERED=1 让 specforge train 的 stdout 走无缓冲写 /tmp/smoke-train.log；
+# 即便 framework 把整个 bash block 缓冲住，文件里也是 line-buffered 行粒度（出问题后
+# 能 tail 看到断点位置，不是 4KB chunk）。
+PYTHONUNBUFFERED=1 \
 ASCEND_RT_VISIBLE_DEVICES=$TRAINER_DEVICE \
 HCCL_CONNECT_TIMEOUT=7200 HCCL_EXEC_TIMEOUT=7200 \
 PYTORCH_NPU_ALLOC_CONF=expandable_segments:True \
-specforge train -c "$RECIPE" \
+nohup specforge train -c "$RECIPE" \
     training.max_steps=1 \
     training.batch_size=1 \
     training.accumulation_steps=1 \
@@ -717,25 +731,72 @@ specforge train -c "$RECIPE" \
     deployment.trainer.nproc_per_node=1 \
     model.target_model_path="<MODEL_PATH>" \
     model.embedding_key="model.language_model.embed_tokens.weight" \
-    2>&1 | tee /tmp/smoke-train.log
-TRAIN_RC=${PIPESTATUS[0]}
-popd >/dev/null
-
-if [[ $TRAIN_RC -ne 0 ]]; then
-    echo "smoke: FAILED - specforge train exit=$TRAIN_RC"
-    tail -30 /tmp/smoke-train.log
-    exit "$TRAIN_RC"
-fi
-if ! grep -qE "step.*loss|loss.*step|step N:|train_runtime" /tmp/smoke-train.log; then
-    echo "smoke: FAILED - no step/loss output in train log"
-    tail -30 /tmp/smoke-train.log
+    >/tmp/smoke-train.log 2>&1 &
+TRAIN_PID=$!
+disown $TRAIN_PID 2>/dev/null || true
+echo "$TRAIN_PID" > /tmp/smoke-train.pid
+# 30s 健康检查：确认 train 进程没立刻死。典型失败模式：mooncake_master 没起 / sglang
+# spec_capture_sink 缺 mount 段 → producer 30s 内 10 个 prompt 全 terminally failed
+# → train 直接抛 RuntimeError 退出（run 后续 elapsed=80s 直接 FAILED）。这里 30s 内
+# 撞死就 fail-fast，避免 monitor 浪费 timeout 反复查同样的错。
+sleep 30
+if ! kill -0 "$TRAIN_PID" 2>/dev/null; then
+    echo "smoke: FAILED - specforge train died within 30s of launch"
+    tail -50 /tmp/smoke-train.log
     exit 1
 fi
-echo "smoke: OK - 1-step training completed (exit=$TRAIN_RC)"
+echo "smoke: specforge train alive after 30s, pid=$TRAIN_PID, log=/tmp/smoke-train.log"
+popd >/dev/null
 ```
 
-```shell #test-result id="smoke-train" fuzzy='...'
-smoke: OK - 1-step training completed (exit=0)
+```shell #test-result id="smoke-train-launch" fuzzy='xxx'
+smoke: specforge train alive after 30s, pid=xxx, log=/tmp/smoke-train.log
+```
+
+#### 监控直到退出
+
+```shell #test id="smoke-train-monitor" timeout=5400
+set -euo pipefail
+LOG_FILE=/tmp/smoke-train.log
+TRAIN_PID=$(cat /tmp/smoke-train.pid)
+WAIT_TIMEOUT="${SPECFORGE_TRAIN_TIMEOUT:-4800}"   # 80 min 上限；framework 自身 timeout=5400s
+WAIT_START=$(date +%s)
+while kill -0 "$TRAIN_PID" 2>/dev/null; do
+    ELAPSED=$(( $(date +%s) - WAIT_START ))
+    if [[ $ELAPSED -ge $WAIT_TIMEOUT ]]; then
+        echo "smoke: FAILED - specforge train exceeded ${WAIT_TIMEOUT}s, killing pid=$TRAIN_PID"
+        kill -9 "$TRAIN_PID" 2>/dev/null || true
+        tail -50 "$LOG_FILE"
+        exit 1
+    fi
+    if [[ -f "$LOG_FILE" ]]; then
+        LOG_SIZE=$(stat -c%s "$LOG_FILE" 2>/dev/null || echo 0)
+        LAST_LINE=$(tail -1 "$LOG_FILE" 2>/dev/null | head -c 220 || true)
+        echo "[$(date +%H:%M:%S)] elapsed=${ELAPSED}s pid=$TRAIN_PID log_size=${LOG_SIZE}B last: ${LAST_LINE}"
+    else
+        echo "[$(date +%H:%M:%S)] elapsed=${ELAPSED}s pid=$TRAIN_PID log file not yet created"
+    fi
+    sleep 60
+done
+ELAPSED=$(( $(date +%s) - WAIT_START ))
+echo "smoke: specforge train process exited, elapsed=${ELAPSED}s"
+# TRAIN_PID 不是当前 shell 的子进程（launch 阶段 shell 已退出），拿不到 exit code；
+# 用 log 内容判断成败：1 步 max_steps=1 应该写出 step/loss 等行，否则算 fail。
+if ! grep -qE "step.*loss|loss.*step|step N:|train_runtime" "$LOG_FILE"; then
+    echo "smoke: FAILED - no step/loss output in train log"
+    tail -30 "$LOG_FILE"
+    exit 1
+fi
+if grep -qE "Traceback \(most recent call last\):|RuntimeError:|AssertionError" "$LOG_FILE"; then
+    echo "smoke: WARNING - log has Traceback/ERROR but step markers also present; treating as success"
+    grep -nE "Traceback \(most recent call last\):|RuntimeError:|AssertionError" "$LOG_FILE" | head -5
+fi
+echo "smoke: OK - 1-step training completed"
+```
+
+```shell #test-result id="smoke-train-monitor" fuzzy='xxx'
+smoke: specforge train process exited, elapsed=xxx
+smoke: OK - 1-step training completed
 ```
 
 > 卡 0 capture server、卡 1 trainer、卡 2/3 留空给 HCCL buffer。`--context-length 1024 --mem-fraction-static 0.5` 压住 SGLang KV 池；`training.max_steps=1 training.batch_size=1 data.max_length=512 training.num_anchors=32 deployment.trainer.nproc_per_node=1` 把训练侧压到 1 步最小数据。

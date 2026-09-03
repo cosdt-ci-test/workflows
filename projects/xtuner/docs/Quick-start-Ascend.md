@@ -740,8 +740,10 @@ ls -t /tmp/xtuner_sft_llm_out_single/*.pth 2>/dev/null | head -1
 echo "---SAMPLE_OUTPUT---"
 # mmengine 把每条 log 都加 "MM/DD HH:MM:SS - mmengine - LEVEL - " 前缀。原始 `Sample output:`
 # 是 logger.info("Sample output:") 输出的，但 grep 抓出来的同时带上 timestamp + logger name。
-# 走 sed 把行首的 mmengine prefix strip 掉，留下纯 `Sample output:`。
-grep -A 20 "Sample output:" /tmp/xtuner_sft_llm_out_single/train.log 2>/dev/null | sed -E 's/^[0-9]{2}\/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} - +//' | head -25
+# 走 sed 把整段 "MM/DD HH:MM:SS - mmengine - LEVEL - " 都 strip 掉，留下纯 `Sample output:`。
+# every_n_iters=1 × 5 iter × 2 prompt 会触发多次 Sample output 块，grep -m 1 取首个块避免 #test-result
+# 出现多次 Sample output: 与单次预期对不上。
+grep -m 1 -A 20 "Sample output:" /tmp/xtuner_sft_llm_out_single/train.log 2>/dev/null | sed -E 's/^[0-9]{2}\/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} - mmengine - (INFO|WARNING|ERROR|DEBUG) - //' | head -25
 ```
 
 输出结果如下：
@@ -886,7 +888,8 @@ train.main()
 ```shell #test id="xtuner-train-smoke-multi"
 ls -t /tmp/xtuner_sft_llm_out_multi/*.pth 2>/dev/null | head -1
 echo "---SAMPLE_OUTPUT---"
-grep -A 20 "Sample output:" /tmp/xtuner_sft_llm_out_multi/train.log 2>/dev/null | sed -E 's/^[0-9]{2}\/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} - +//' | head -25
+# 跟 xtuner-train-smoke 同样的 sed + grep -m 1 修复
+grep -m 1 -A 20 "Sample output:" /tmp/xtuner_sft_llm_out_multi/train.log 2>/dev/null | sed -E 's/^[0-9]{2}\/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} - mmengine - (INFO|WARNING|ERROR|DEBUG) - //' | head -25
 ```
 
 输出结果如下：

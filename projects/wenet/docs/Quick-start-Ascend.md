@@ -311,11 +311,11 @@ BAC009S0002W003 ...
 ```shell #test id="verify-all"
 cd wenet/examples/aishell/s0
 echo "=== 数据文件 ==="
-ls data/dict/lang_char.txt data/train/data.list data/dev/data.list data/test/data.list
+ls data/dict/lang_char.txt data/train/data.list data/dev/data.list data/test/data.list | sort
 echo "=== 训练输出 ==="
-ls exp/conformer/train.yaml exp/conformer/final.pt
+ls exp/conformer/train.yaml exp/conformer/final.pt | sort
 echo "=== 推理输出 ==="
-ls exp/conformer/ctc_greedy_search/text exp/conformer/ctc_prefix_beam_search/text
+ls exp/conformer/ctc_greedy_search/text exp/conformer/ctc_prefix_beam_search/text | sort
 echo "=== 流程完成 ==="
 ```
 

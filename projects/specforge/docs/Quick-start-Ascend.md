@@ -673,7 +673,7 @@ specforge train -c "$RECIPE" \
     training.batch_size=1 \
     training.accumulation_steps=1 \
     data.max_length=512 \
-    data.train_data_path="$SHAREGPT_PATH" \
+    data.train_data_path="<SHAREGPT_PATH>" \
     training.num_anchors=32 \
     training.save_interval=0 \
     training.log_interval=1 \

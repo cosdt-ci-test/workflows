@@ -287,7 +287,17 @@ rm -rf /root/.cache/vllm/torch_compile_cache 2>/dev/null || true
 # extension (`/usr/local/.../libop_plugin_atb.so`)，缺 LD_LIBRARY_PATH 里的
 # `libatb.so` 直接 `OSError: libatb.so: cannot open shared object file`。
 # ascend-toolkit/set_env.sh 不含 nnal 的 atb 路径，必须单独 source。
+#
+# atb/set_env.sh 是 zsh 写的，里面有两处在 bash + `set -u` 下报错：
+#   line 12 `until [[ -z "$1" ]]`（$1 没传时 unbound）
+#   line 43 `if [[ -n "$ZSH_VERSION" ]]`（ZSH_VERSION 没设时 unbound）
+# CI test framework 会自动 prepend `set -euo pipefail`，所以 source 前
+# 必须 `set +u` 关掉 nounset，source 完再 `set -u` 恢复 —— 单 pre-export
+# ZSH_VERSION 顶不住 $1 那个坑
+set +u
+export ZSH_VERSION="${ZSH_VERSION:-}"
 source /usr/local/Ascend/nnal/atb/set_env.sh
+set -u
 
 setsid nohup python scripts/launch_vllm.py "<verifier_path>" \
   --target-layer-ids 2 18 34 \
@@ -366,8 +376,11 @@ export TORCHDYNAMO_DISABLE=1
 export ASCEND_LAUNCH_BLOCKING=1
 
 # CANN env：torch_npu 的 atb extension 需要 `libatb.so`；Step 3a 已 source，
-# 同一个 shell 状态如果跨 step 中断了就要再 source 一次（bash 子 shell 不继承）
+# 同一个 shell 状态如果跨 step 中断了就要再 source 一次（bash 子 shell 不继承）。
+# set +u / set -u：见 Step 3a 注释（atb 是 zsh 写的，bash + set -u 会撞）
+set +u
 source /usr/local/Ascend/nnal/atb/set_env.sh
+set -u
 
 # --hidden-states-dtype float32：spec 把 LN.weight 写死 fp32，autocast 不会
 # cast LN；而 dflash.forward 复用的 V 来自 hidden_states 缓存（默认 bf16），
@@ -447,7 +460,10 @@ export TORCHDYNAMO_DISABLE=1
 rm -rf /root/.cache/vllm/torch_compile_cache 2>/dev/null || true
 
 # CANN env：见 Step 3a 注释 —— `libatb.so` 不在 ascend-toolkit 默认 LD path 里
+# set +u / set -u：见 Step 3a 注释（atb 是 zsh 写的）
+set +u
 source /usr/local/Ascend/nnal/atb/set_env.sh
+set -u
 
 # num_speculative_tokens=5：vllm-ascend 限制 (num_speculative_tokens + 1) ≤ 15
 nohup vllm serve "<verifier_path>" \

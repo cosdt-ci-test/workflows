@@ -519,3 +519,18 @@ projects:
     dir: projects/modelscope
     workflows:
       quick_start: .github/workflows/modelscope-quick-start.yml
+  # axolotl quickstart installs the latest GitHub release from PyPI
+  # (--no-build-isolation --no-deps, no CUDA extras) on CANN 9.1.0 +
+  # torch 2.11 / torch_npu 2.11, then runs a 3-step LoRA SFT of
+  # Qwen2.5-0.5B-Instruct on one 910B4 card. Upstream check_npu_config
+  # rejects flash-attn / sdpa / 8-bit optimizers / 4-8bit load, so the
+  # doc uses eager attention, adamw_torch, and lora_*_kernel: false.
+  - name: axolotl
+    category: 训练加速
+    support_level: 新兴适配
+    upstream_repo: axolotl-ai-cloud/axolotl
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/axolotl
+    workflows:
+      quick_start: .github/workflows/axolotl-quick-start.yml

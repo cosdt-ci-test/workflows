@@ -72,10 +72,11 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         fork + ``git submodule update --init --recursive`` +
         ``bash script/build_dgl_ascend.sh`` (CMake ``-DUSE_ASCEND=ON
         -DUSE_CUDA=OFF``, SOC=910B4) + ``pip install -e .``.
-      * Smoke: LightGCN trains one epoch on gowalla (``wget`` the
-        official dgl-data zip + ``unzip`` + ``python main.py
-        --dataset gowalla --batch 2048 --recdim 64 --epochs 1
-        --device npu``), asserted via the ``Average BPR Loss`` log line.
+      * Smoke: LightGCN trains one epoch on gowalla (``wget`` train.txt
+        + test.txt from the RecZoo ``Gowalla_m1`` HF dataset via
+        hf-mirror + ``python main.py --dataset gowalla --batch 2048
+        --recdim 64 --epochs 1 --device npu``), asserted via the
+        ``Average BPR Loss`` log line.
     """
 
     DEFAULT_COMMAND_TIMEOUT = 7200  # 2h baseline; source build of DGL rides on this

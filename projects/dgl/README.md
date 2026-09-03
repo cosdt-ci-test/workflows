@@ -11,6 +11,6 @@
 - `schedule`：每 6 小时轮询上游 fork 一次，文档 / 上游 HEAD 有变化才在 NPU 上跑 `tests.test_quick_start_ascend`（当前暂时注释，适配跑通后恢复）。
 - `workflow_dispatch`：手动 trigger。
 
-cwd 是 `workflows/projects/dgl`（测试类 chdir 到 `/root/dgl-test` 钉文档执行目录，clone + 编译产物落这里；gowalla 示例数据每次从官方 dgl-data bucket 重新拉取，不跨 run 持久化）。环境契约：`MONITORED_DOC_URL` / `UPSTREAM_REF` / `NPU_READY` 由 engine 注入，测试逻辑都在这个 `tests/` 目录下。
+cwd 是 `workflows/projects/dgl`（测试类 chdir 到 `/root/dgl-test` 钉文档执行目录，clone + 编译产物落这里；gowalla 示例数据每次从 hf-mirror 的 RecZoo ``Gowalla_m1`` 数据拉取 train/test.txt，不跨 run 持久化）。环境契约：`MONITORED_DOC_URL` / `UPSTREAM_REF` / `NPU_READY` 由 engine 注入，测试逻辑都在这个 `tests/` 目录下。
 
 详细 trigger 模式与 cache I/O 流程参见父引擎 [quick-start-template.yml](../../.github/workflows/quick-start-template.yml) 与项目文档说明 [docs/guarding-examples.md](../../docs/guarding-examples.md)。

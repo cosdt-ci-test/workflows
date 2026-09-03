@@ -48,3 +48,8 @@ projects:
       type: repo_file
       repo: lltiaor/doc-test
       path: doc.md
+  - project: page-test
+    owner: lltiaor
+    source:
+      type: web_page
+      url: https://lltiaor.github.io/doc-test/

@@ -331,6 +331,35 @@ if [[ -f scripts/apply_sglang_spec_capture_patch.sh ]]; then
 else
     echo "smoke: WARNING - apply_sglang_spec_capture_patch.sh missing; assuming already patched"
 fi
+# 治本：apply_sglang_spec_capture_patch.sh 的 -p2 在 sglang git toplevel（镜像装在
+# python 子目录但仓库根在上一级）上静默 skip——patch header a/python/sglang/... 经
+# -p2 剥成 sglang/... 找不到路径，git apply --check 全文件 silently skipped；脚本
+# `cmp -s APPLIED_COPY PATCH && check_reverse PATCH` 也 rc=0（--reverse 同样找不到
+# 文件 rc=0），误判"已应用"，APPLIED_COPY 落盘但 12 个 patch 文件全没落盘。
+# 后果：smoke-start-sglang 启动后 --enable-spec-capture 字段被 server_args.py 解析
+# 但 spec_capture_sink.py 等 11 个文件缺失，/generate 返回 meta_info 无 spec_capture，
+# specforge producer 标 10 terminally failed prompts。
+# 治本：强制清掉 APPLIED_COPY、用正确 -p1 + --reject 重 apply（git toplevel 是
+# SGLANG_DIR 的父目录），--reject 容忍已被 Python fallback / 旧 apply 部分修改的文件。
+SGLANG_DIR=$(python -c "import importlib.util, os; print(os.path.dirname(os.path.dirname(importlib.util.find_spec('sglang').origin)))")
+APPLIED_COPY="$SGLANG_DIR/sglang/.spec_capture_patch.applied"
+SINK_FILE="$SGLANG_DIR/sglang/srt/spec_capture_sink.py"
+PATCH="$(pwd)/patches/sglang/v0.5.18/spec-capture.patch"
+if [[ ! -f "$SINK_FILE" ]] || ! grep -q 'class SpecCaptureSink' "$SINK_FILE"; then
+    echo "smoke: spec-capture sink missing or incomplete - forcing re-apply via git apply -p1 --reject" >&2
+    rm -f "$APPLIED_COPY"
+    if ! git -C "$SGLANG_DIR/.." apply -p1 --reject "$PATCH" >/tmp/smoke-reapply.log 2>&1; then
+        echo "smoke: FAILED - git apply -p1 --reject failed:" >&2
+        tail -30 /tmp/smoke-reapply.log >&2
+        exit 1
+    fi
+    cp "$PATCH" "$APPLIED_COPY"
+    if [[ ! -f "$SINK_FILE" ]] || ! grep -q 'class SpecCaptureSink' "$SINK_FILE"; then
+        echo "smoke: FAILED - spec_capture_sink.py still missing after re-apply" >&2
+        exit 1
+    fi
+    echo "smoke: spec-capture re-apply OK (12 files)" >&2
+fi
 # ascend companion 替换（脚本自己的 hunk2 在 a8c0993 之后版本 BSD patch 直接 malformed）。
 # 锚点字符串是 spec-capture.patch 引入的多行 unique 子串，不依赖行号。
 # 用 find_spec 而非 import：sglang.__init__ 会拉 sglang.lang → IPython → traitlets，

@@ -4,6 +4,23 @@
 
 本文档以 **Qwen1.5-1.8B-Chat** + Colorist 指令微调数据为例，端到端走通「权重下载 → 配置修改 → 单/多卡训练 → LoRA 合并 → chat 推理」全链路。模型仅 1.8B 参数，fp16 权重 ≈ 3.5 GB，**32 GB NPU coder 上不需要 monkey-patch 也不需要 4-bit 量化**就能跑 plain LoRA + Sample output。
 
+## 你会做什么
+
+按顺序走完 6 步，每步都有 `#test` 烟囱测试验证通过才进下一步：
+
+1. **装环境**——CANN + torch + torch_npu + xtuner
+2. **下权重**——Qwen1.5-1.8B-Chat（≈ 3.5 GB）
+3. **下数据**——Colorist 颜色描述数据集，几 MB
+4. **改 cfg**——拷 xtuner 模板 cfg，改 4 处（路径 / 数据 / 量化 / epoch）
+5. **跑训练**——5 iter smoke（30 秒），验证整条 train 链路 + Sample output
+6. **merge + chat**——LoRA adapter 合并回 base，跟合并后 / adapter 模型对话
+
+**你不需要懂**：bitsandbytes 4-bit 量化、模型量化 kernel、CUDA。Qwen1.5-1.8B 跑 plain LoRA fp16 在 32 GB NPU 上完全够用。
+
+**你需要懂**：xtuner 的 cfg 是 Python 文件（不是 YAML）；`xtuner train <cfg>` 走 mmengine runner，每个 hook（checkpoint / eval / logger）按 cfg 注册；adapter 是 PEFT 格式，要 `pth → hf → merge` 才能跟纯 base 模型对话。
+
+跑通后看[文末附录 A](appendix-bnb)了解为什么本文档用 plain LoRA 而不是 QLoRA。
+
 ## 前置条件
 
 ### 硬件
@@ -155,7 +172,7 @@ uv pip install 'mmengine==0.10.6' 'transformers==4.48.0' 'peft>=0.14.0' 'dataset
 python -c "import xtuner; from xtuner.version import __version__; print('xtuner', __version__)"
 ```
 
-\<ref> 为安装的最新的 release tag。
+\<ref> 是 xtuner 最新 release tag（在跑前从 https://github.com/InternLM/xtuner/releases 取）。
 
 输出结果类似如下：
 
@@ -206,7 +223,7 @@ has_chat: True
 
 ## LLM 大模型微调
 
-本文档的训练入口是 `xtuner train <config>`（基于 mmengine runner）。下面按 [xtuner legacy 快速上手模板](https://xtuner.readthedocs.io/zh-cn/latest/legacy/get_started/quickstart.html) 的顺序展开，每个章节都挂一个 `#test` 块做烟囱测试。
+本文档的训练按 [xtuner legacy 快速上手模板](https://xtuner.readthedocs.io/zh-cn/latest/legacy/get_started/quickstart.html) 的顺序展开。
 
 ### 准备模型权重
 
@@ -215,14 +232,9 @@ has_chat: True
 下载 Qwen1.5-1.8B-Chat 权重（≈ 3.5 GB，落到 `./qwen/Qwen1.5-1.8B-Chat/`，含 `model.safetensors` + tokenizer + config）：
 
 ```shell #test-setup store="xtuner_weights_path"
-# modelscope snapshot_download 返回的路径是 `<cache_dir>/<namespace>/<name>` 结构，对
-# `cache_dir=./qwen` + `qwen/Qwen1.5-1.8B-Chat` 实际落到 `./qwen/qwen/Qwen1.5-1.8B-Chat/`。
-# 硬编码 `./qwen/Qwen1.5-1.8B-Chat` 会让 xtuner.tools.train 找不到 weights。把返回值
-# print 出来，store 给 patch 用真实路径：
-# print 绝对路径给后面 patch-cfg + smoke 用：cwd 在 patch-cfg / smoke 之间会变（smoke 多卡走
-# `cd xtuner` 让 xtuner 包走 cwd FileFinder 解析），如果 store 的是相对路径，到 smoke 阶段
-# `cfg.pretrained_model_name_or_path` 就指错地方了。`os.path.abspath` 把 cwd 钉到调用瞬间，
-# 后面 cat-relative/cat-absolute 都能用。
+# modelscope 把权重落到 `<cache_dir>/<namespace>/<name>/`，所以 `./qwen` + `qwen/Qwen1.5-1.8B-Chat`
+# 实际落到 `./qwen/qwen/Qwen1.5-1.8B-Chat/`。用绝对路径存给 patch-cfg / smoke 用，避免 cwd 切换后
+# cfg 里的相对路径指错地方。
 python -c "
 import os
 from modelscope import snapshot_download
@@ -245,8 +257,6 @@ total xxx
 ```
 
 权重落到 `./qwen/qwen/Qwen1.5-1.8B-Chat/` 下（含 `model.safetensors` 3.5 GB + `tokenizer.json` 7 MB + `vocab.json` + `merges.txt` + `config.json` + `tokenizer_config.json`）。
-
-> `#test-setup` 块（hidden）在 CI smoke 里跑 `snapshot_download` 拉权重（~3-5 分钟），`#test` 只验 `config.json` 存在。本地如果已经下过 weights，可以跳过 setup 单独跑 `#test`。
 
 ### 准备微调数据集
 
@@ -292,11 +302,11 @@ colors/
 └── train.jsonl
 ```
 
-> `#test-setup` 块在 CI smoke 里跑 `modelscope.snapshot_download(..., repo_type='dataset')` 拉数据集再重定向到 `./colors/`，`#test` 验 3 个文件（`colors.json` / `README.md` / `train.jsonl`）都存在（按字面比对，缺一个就 `exit 1` 报失败）。本地如果已经下载过，可以跳过 setup 单独跑 `#test`（前提：数据集路径仍然是 `./colors/`）。
+> `#test-setup` 在 CI 里跑 `snapshot_download` 拉数据集（几 MB，几秒）；本地跳过 setup 时确保 `./colors/` 还在。
 
 #### 把 Colorist 数据集转成 Qwen chat 模板要的 OpenAI 格式
 
-xtuner 的 Qwen 自定义 cfg（`qwen1_5_1_8b_chat_qlora_custom_sft_e1`）使用 `openai_map_fn`，期望每行 JSON 形如：
+xtuner 的 Qwen 自定义 cfg 用 `openai_map_fn`，要求每行 JSON 形如：
 
 ```json
 {"messages": [
@@ -363,10 +373,9 @@ format_ok
 XTuner 自带大量开箱即用的 config：
 
 ```shell #test id="xtuner-list-cfg"
-# 绕开 console_script wrapper（其 shebang 在 base image 上可能指向非 uv 的 python，
-# 看不到 uv 装的 egg-link，把 xtuner 当 namespace package 处理后 `from xtuner import cli`
-# 报 `ImportError: cannot import name 'cli' from 'xtuner' (unknown location)`），
-# 直接用 Python API 验 cfg 可枚举 + 含 Qwen1.5-1.8B chat qlora custom sft：
+# 直接调 Python API 验 cfg 可枚举 + 含 Qwen 1.8B chat qlora custom sft cfg：
+# 绕开 console_script wrapper（其 shebang 可能指向非 uv 的 python，
+# 把 xtuner 当 namespace package 后 `from xtuner import cli` 报 ImportError）。
 python -c "
 from xtuner.configs import cfgs_name_path
 names = sorted(cfgs_name_path.keys())
@@ -385,13 +394,10 @@ qwen_1_8b_chat_count: xxx
 从 list-cfg 拷一份 Qwen1.5-1.8B-Chat qlora + custom sft 配置到本地（xtuner v0.2.0 的这个 cfg 名字固定为 `qwen1_5_1_8b_chat_qlora_custom_sft_e1`）：
 
 ```shell #test-setup store="xtuner_llm_cfg_path"
-# 绕开 console_script wrapper shebang 错配（`xtuner list-cfg` / `xtuner copy-cfg` 的 wrapper
-# 启动的 Python 可能不是 uv 装的 python，把 xtuner 当 namespace package 后 `from xtuner import cli` 失败），
-# 直接用 Python API 替代：
+# 同样绕开 console_script wrapper，直接调 Python API 拷 cfg。
+# `xtuner copy-cfg` 把 save_dir 当目录，文件实际写到 save_dir/<basename>_copy.py；
+# 只 print 实际文件路径，让 setup 的 store= 抓到这一行。
 config_name='qwen1_5_1_8b_chat_qlora_custom_sft_e1'
-# xtuner copy-cfg 把 save_dir 当目录用，文件实际写到 save_dir/<basename>_copy.py；
-# 直接调 main() 然后 echo save_dir 路径会被 Step 18 当文件读，触发 IsADirectoryError。
-# 改用 Python 自己算 actual file path 并只 print 这一行（setup 抓 stdout 当 store）：
 python -c "
 import os
 import os.path as osp
@@ -411,21 +417,23 @@ print(save_path)
 
 ### 修改配置文件
 
-拷出来的 config 跟模板原版完全一致，按模板的 3 处修改规则调整（详见 [legacy quickstart 模板的"修改配置文件"小节](https://xtuner.readthedocs.io/zh-cn/latest/legacy/get_started/quickstart.html)）。`<cfg>` 是上一节「准备配置文件」store 出来的 cfg 绝对路径：
+拷出来的 config 跟模板原版完全一致，按下面 4 处修改规则调整。
+
+**占位符说明**：
+- `<cfg>` = 上一节「准备配置文件」拷 cfg 那一步落到的文件绝对路径，典型值 `/tmp/xtuner_npu_llm_cfg.py/qwen1_5_1_8b_chat_qlora_custom_sft_e1_copy.py`。**本地手动跑**：自己跑 `xtuner copy-cfg qwen1_5_1_8b_chat_qlora_custom_sft_e1 /tmp/xtuner_npu_llm_cfg.py`，然后 `ls /tmp/xtuner_npu_llm_cfg.py/` 找 `_copy.py` 后缀的那个文件路径替换。
+- `<weights_dir>` = 「准备模型权重」下权重那一步落到的 Qwen 权重绝对路径，典型值 `./qwen/qwen/Qwen1.5-1.8B-Chat`。**本地手动跑**：用前一步 `xtuner-pull-weights` 块里 `find ./qwen -name config.json -print -quit` 的 `dirname` 结果替换。
 
 1. `pretrained_model_name_or_path`：替成本地真实权重路径（pull-weights 阶段落盘路径）
 2. `data_files[0]`：替成转换后的 OpenAI 格式 jsonl 绝对路径
-3. **strip `quantization_config` + `BitsAndBytesConfig` 导入**：32 GB NPU coder 没装/装不上 bnb（详见下方「启动微调」上方注释），所以直接退化为 plain LoRA 走 fp16 base；Qwen1.5-1.8B-Chat fp16 只占 ~3.5 GB，留出充足 margin 给 LoRA grads + optimizer + activations
+3. **strip `quantization_config` + `BitsAndBytesConfig` 导入**：QLoRA 路径需要 bnb，aarch64 NPU 上装不上（见[附录 A](#appendix-bnb)），所以退化为 plain LoRA 走 fp16 base
+4. **strip `train_cfg` 里的 `max_epochs`**：`xtuner train_cfg` 强制 `max_iters` 和 `max_epochs` 二选一，smoke 用 `max_iters=5` 限 iter
 
 ```shell #test-setup load="xtuner_llm_cfg_path>>cfg" load="xtuner_weights_path>>weights_dir" store="xtuner_llm_cfg_path"
-# 把模板里那 3 处 patch 应用到 copy-cfg 出来的 config 上：
-#   PART 1 Settings
-#     pretrained_model_name_or_path = '<weights_dir>'   # pull-weights store 出来的真实路径
-#     data_files = ['/abs/path/to/colors_openai/train.jsonl']
-#   PART 2 Model
-#     strip quantization_config=dict(...) block + BitsAndBytesConfig import  # 32GB 路径
-# 用 Python str.replace 而非 sed：xtuner cfg 用双引号 ("...")，sed 单引号 pattern 不会匹配；
-# 走 Python 字面量替换最稳，避免引号/escape/竖线 delimiter 误伤 cfg 里其他内容。
+# 对 cfg 模板做 4 处 patch（用 Python str/re 比 sed 稳：cfg 全用双引号，sed 引号易踩坑）：
+#   1) pretrained_model_name_or_path → 本地权重绝对路径
+#   2) data_files[0]               → OpenAI 格式 jsonl 绝对路径
+#   3) strip quantization_config   + BitsAndBytesConfig import（plain LoRA 路径，见附录 A）
+#   4) strip train_cfg 里 max_epochs（TrainLoop 强制 max_iters / max_epochs 二选一）
 python -c "
 import re, os
 path = '<cfg>'
@@ -433,27 +441,22 @@ weights_dir = '<weights_dir>'
 with open(path) as f:
     text = f.read()
 
-# patch 1: pretrained_model_name_or_path → modelscope cache 路径
+# patch 1: pretrained_model_name_or_path → 本地权重路径
 text, n = re.subn(
     r'pretrained_model_name_or_path = \"Qwen/Qwen1\.5-1\.8B-Chat\"',
     f\"pretrained_model_name_or_path = {weights_dir!r}\",
     text,
 )
-assert n == 1, f'pretrained_model_name_or_path patch applied {n} times (expected 1)'
+assert n == 1, f'patch 1 applied {n} times (expected 1)'
 
-# patch 2: data_files[0] → OpenAI 格式 jsonl 绝对路径
+# patch 2: data_files[0] → OpenAI jsonl 绝对路径
 data_abs = os.path.abspath('./colors_openai/train.jsonl')
 old = 'data_files = [\"/path/to/json/file.json\"]'
 new = f'data_files = [{data_abs!r}]'
-assert old in text, f'patch source not found: {old!r}'
+assert old in text, f'patch 2 source not found: {old!r}'
 text = text.replace(old, new)
 
-# patch 3: strip quantization_config block + BitsAndBytesConfig import（32GB coder 路径）
-# transformers.AutoModel.from_pretrained 看到 quantization_config 的 type=BitsAndBytesConfig
-# 就构造 Bnb4BitHfQuantizer wrapper，wrapper.validate_environment() 无条件 raise ImportError
-# 'Using bitsandbytes 4-bit quantization requires...'。strip 后 transformers 不走 quantizer wrapper
-# 路径，直接 from_pretrained + peft + LoRA。BitsAndBytesConfig 类引用也一并删（保留会让
-# LazyObject.build() 走 import 链 import bitsandbytes）。
+# patch 3: strip quantization_config block + BitsAndBytesConfig import
 text = re.sub(
     r',\s*\n\s*quantization_config=dict\(\n(?:\s+[^\n]*,\n)+?\s*\),\n',
     '\n',
@@ -467,17 +470,13 @@ text = re.sub(
     count=1,
 )
 
-# patch 4: strip `, max_epochs=max_epochs` from train_cfg dict。xtuner TrainLoop 强制
-# `Only one of max_iters or max_epochs can exist in train_cfg`（loops.py:22）。Qwen cfg 模板里
-# `train_cfg = dict(type=TrainLoop, max_epochs=max_epochs)` 写死了 max_epochs，但 smoke
-# 跑 max_iters=5 限 iter，所以 train_cfg 里不能留 max_epochs。`max_epochs` 顶层变量 param_scheduler
-# 还在用（warmup_ratio * max_epochs），不删。
+# patch 4: train_cfg 去掉 max_epochs（TrainLoop 强制二选一；smoke 用 max_iters=5）
 text, n = re.subn(
     r'train_cfg = dict\(type=TrainLoop, max_epochs=max_epochs\)',
     'train_cfg = dict(type=TrainLoop)',
     text,
 )
-assert n == 1, f'train_cfg max_epochs patch applied {n} times (expected 1)'
+assert n == 1, f'patch 4 applied {n} times (expected 1)'
 
 with open(path, 'w') as f:
     f.write(text)
@@ -485,15 +484,12 @@ print(path)
 "
 ```
 
+<!-- # py_compile 验 cfg 是合法 Python + 4 处 patch 都生效（grep 关键串）。
+# 不用 mmengine.config.Config.fromfile：它会执行 cfg 顶层 import 触发 torchvision::nms，
+# NPU base image 的 torchvision 缺 C++ op 直接 RuntimeError。 -->
 ```shell #test id="xtuner-patch-cfg" load="xtuner_llm_cfg_path>>cfg" load="xtuner_weights_path>>weights_dir"
-# 用 py_compile 验 cfg 是合法 Python（不触发 import 链）+ grep 验 3 处 patch 都生效：
-# 不能直接用 mmengine.config.Config.fromfile —— 它会执行 cfg 文件的 `from xtuner.utils import ...`，
-# 触发 torchvision::nms import，而 NPU base image 的 torchvision 没有 GPU operator
-# （xtuner.utils 顶层用 torchvision.ops.nms），所以 fromfile 会因 torchvision 缺 operator 报
-# `RuntimeError: operator torchvision::nms does not exist`。smoke 只验 patch + 语法足矣。
 python -c "
 import py_compile
-import re
 py_compile.compile('<cfg>', doraise=True)
 print('cfg_compiles_ok')
 with open('<cfg>') as f:
@@ -507,9 +503,9 @@ checks = [
 ]
 for name, expected in checks:
     assert expected in text, f'missing patch ({name}): {expected!r}'
-assert 'quantization_config' not in text, 'quantization_config should be stripped'
-assert 'BitsAndBytesConfig' not in text, 'BitsAndBytesConfig import should be stripped'
-assert 'train_cfg = dict(type=TrainLoop, max_epochs=max_epochs)' not in text, 'train_cfg max_epochs should be stripped'
+assert 'quantization_config' not in text
+assert 'BitsAndBytesConfig' not in text
+assert 'train_cfg = dict(type=TrainLoop, max_epochs=max_epochs)' not in text
 print('cfg_patch_ok')
 print(f'weights= {weights_dir}')
 print(f'data= {data_abs}')
@@ -525,66 +521,31 @@ weights= xxx
 data= xxx
 ```
 
-> `#test-setup` 把 3 处 patch 实际应用到 cfg；`#test` 跑 `py_compile.compile(<cfg>)` + `grep` 验 cfg 是合法 Python 且 3 处 patch 都生效——**不**用 `mmengine.config.Config.fromfile`（它会执行 cfg 顶层 `from xtuner.utils import ...`，触发 torchvision::nms import，NPU base image 的 torchvision 没 GPU operator 会直接挂）。smoke 不验 cfg 训出来的实际效果，那要等下面"启动微调"章节真跑。
+> `#test-setup` 把 4 处 patch 实际应用到 cfg；`#test` 跑 `py_compile.compile(<cfg>)` + `grep` 验 cfg 是合法 Python 且 patch 都生效。**不**用 `mmengine.config.Config.fromfile`，否则它会执行 cfg 顶层 import 触发 torchvision 链（见[附录 B](#appendix-bnb)）。smoke 不验 cfg 训出来的实际效果，那要等下面"启动微调"章节真跑。
 
 ### 启动微调
 
-训练日志（loss、学习率等）每次跑都不一样，没法写死预期值。拆成两步：先用最小数据集（5 samples × 1 epoch）跑通训练 + 让 `EvaluateChatHook` 每 iter 打 `Sample output:` 段，再单独检查 `.pth` 落盘 + 训练日志里的 chat 输出格式。
+训练日志（loss、学习率）每次跑都不一样，没法写死预期值。本文档只跑 5 iter smoke 验证整条 train 链路（30 秒，~10 GB 峰 RSS），不指望训出有意义结果。`EvaluateChatHook` 每 iter 打 `Sample output:` 段，下面 `#test` 单独检查 `.pth` 落盘 + Sample output 段格式。
 
 #### 单卡
 
 跑最小训练：
 
 <!--
-  NPU 上真 bitsandbytes 装不上 / 跑不通（实证记录，2026-09）：
+  本文档示例用 plain LoRA 而不是 QLoRA，因为 aarch64 NPU 上没有可用的 bitsandbytes
+  装法（PyPI bnb 0.45.0 无 aarch64 wheel；source-build 撞 triton.ops 死锁；新版 bnb
+  Linear4bit 撞 torch.uint8 dtype 错）。详见文末附录 A。Qwen1.5-1.8B fp16 ~3.5 GB，
+  plain LoRA 在 32 GB NPU 上有充裕 margin（实测峰 RSS ≈ 10.3 GB），无需量化。
 
-  1) xtuner v0.2.0 requirements/runtime.txt 硬 pin bitsandbytes==0.45.0，PyPI 上该版本
-     全无 aarch64 wheel（only manylinux_2_17_x86_64 + win_amd64）。
-
-  2) source-build bnb 0.45.0 + cmake -DCOMPUTE_BACKEND=cpu + pip install . 在 aarch64 上
-     能装，但 import bitsandbytes 撞 ModuleNotFoundError: No module named 'triton.ops'
-     ——bnb 0.45.0 的 bitsandbytes/triton/int8_matmul_*.py 顶层
-     `from triton.ops.matmul_perf_model import early_config_prune, estimate_matmul_time`
-     无条件触发，而 is_triton_available() 只判断 triton 包存在（transformers.utils 那种
-     轻量 gating），对新版 triton 删了 triton.ops 命名空间这件事一无所知。
-
-  3) triton 生态有死结：1.x~2.3.1 有 triton.ops.matmul_perf_model 但 PyPI 上**全无 aarch64
-     wheel**（每个 2.x 版本的 urls 字段都只列 manylinux_2_17_x86_64）；3.0.0+ 有 aarch64 wheel
-     但把整个 triton.ops 命名空间删了。无 wheel 组合能填上 aarch64 + bnb 0.45.0 这两条线
-     之间的空档。
-
-  4) bnb 0.49.1+（有 aarch64 wheel，能 import）Linear4bit 推理撞
-     "RuntimeError: Blockwise 4bit quantization only supports 16/32-bit floats,
-     but got torch.uint8"（at bitsandbytes/backends/default/ops.py:225）。
-
-  综上 aarch64 NPU 上不存在可用的真 bitsandbytes 装法。改方案：拷 xtuner qlora cfg 后
-  在 patch-cfg 阶段 strip 整个 quantization_config=dict(...) block + BitsAndBytesConfig
-  import，BitsAndBytesConfig 类引用一并删，bitsandbytes 整条 import 链不再被触发。代价：
-  smoke 从 QLoRA 退化为 plain LoRA，验不到 _replace_with_bnb_linear() 替换 +
-  peft.prepare_model_for_kbit_training cast loop + model.is_loaded_in_4bit 这条
-  QLoRA-only 路径，但 5 iter smoke 本来 forward 就是 zero（stub Linear4bit 不做 matmul），
-  换 plain LoRA 反而能跑真 fp16 matmul + autograd。
-
-  本文档示例模型选择 Qwen1.5-1.8B-Chat（1.8B 参数），fp16 权重仅 ~3.5 GB，加 LoRA grads +
-  optimizer states + activations 在 32 GB NPU 上仍有充裕 margin（实测峰 RSS ≈ 10.3 GB）。
-  不必走 QLoRA，**32 GB coder 不需要 monkey-patch**。如果生产必须 QLoRA（7B + 4bit base 才
-  塞得进 29GiB NPU），目前无解，等 bnb 上游修 NPU quant kernel 的 uint8 dtype 问题，
-  或换 deepspeed offload 跑 fp16 base。
-  tests/test_quick_start_ascend.py docstring 顶部"Why --no-deps on the xtuner line"
-  一节有同源结论，引用此处避免重复。
+  # 装 cv2 + torchvision stub：NPU base image 的 cv2 缺 libxcb.so.1（headless 也救不回来，.so 链接还在），
+# torchvision 缺 C++ op（任何 torch.ops.torchvision.* 都 RuntimeError）。mmengine 顶层 import cv2，
+# transformers.bloom 顶层 import torchvision.transforms，所以训练入口加载时就会撞。
+# 走 PYTHONPATH 让 Python FileFinder 命中 /tmp/*_stub/ 里真正的 stub package（自带 __spec__，
+# sitecustomize 注入的 ModuleType 没 __spec__ 会被 find_spec 拒）。
+# 5 iter smoke 不真做图像增强，stub no-op 够用。merge-setup / chat-setup 也复用同一组 stub。
 -->
 
 ```shell #test-setup id="xtuner-train-smoke-setup" load="xtuner_llm_cfg_path>>cfg"
-# Stub cv2 via a real stub package (not sitecustomize) to bypass base image's missing libxcb.so.1.
-# mmengine.hooks.naive_visualization_hook.py:5 顶层 `import cv2`，被
-# `python -m xtuner.tools.train` → `from mmengine.runner import Runner` → ... → naive_visualization_hook
-# 这条 eager import 链触发。cv2 .so 间接链接 libxcb.so.1，NPU base image 缺这个 lib，
-# 走 `opencv-python-headless` 也救不回来（headless 只剥 GUI binding，.so 的 libxcb 引用还在）。
-# 走 PYTHONPATH 让 Python 用 FileFinder 解析 `/tmp/cv2_stub/cv2/__init__.py`——这是真正的
-# importable package，module 自带合法 `__spec__`。这样 `transformers.utils.import_utils:115`
-# 的 `_cv2_available = importlib.util.find_spec("cv2") is not None` 走正常路径返回 spec
-# （不会被之前 sitecustomize 注入的 `types.ModuleType('cv2')` 那种 `__spec__ is None` 状态
-# 引发 ValueError）。5 iter smoke 不真正做可视化，stub 够用。
 mkdir -p /tmp/cv2_stub/cv2
 cat > /tmp/cv2_stub/cv2/__init__.py <<'PYEOF'
 __version__ = "4.12.0"
@@ -605,12 +566,6 @@ def setNumThreads(*args, **kwargs):
     return None
 PYEOF
 
-# Stub torchvision via real package: NPU base image 的 torchvision 缺 C++ extension，
-# 任何 torch.ops.torchvision.* 调用都会抛 `RuntimeError: operator torchvision::nms does
-# not exist`。触发链：xtuner.tools.train → peft → transformers.bloom → ... → image_utils →
-# `from torchvision.transforms import InterpolationMode` / `from torchvision.transforms
-# import functional as F`。PYTHONPATH 上的 stub 优先于 site-packages，避开坏 torchvision。
-# 注意：merge-setup 后面也会建同名 stub——这里先建好让 smoke setup 立即能用。
 mkdir -p /tmp/torchvision_stub/torchvision/ops /tmp/torchvision_stub/torchvision/transforms
 cat > /tmp/torchvision_stub/torchvision/__init__.py <<'PYEOF'
 __version__ = "0.24.0"
@@ -646,11 +601,6 @@ def CenterCrop(*args, **kwargs):
 def Normalize(*args, **kwargs):
     return None
 PYEOF
-# `from torchvision.transforms.v2 import functional as tvF` 是 transformers.image_processing_utils
-# 顶层 eager import，bloom.modeling_bloom 走 image_utils 这条链触发；peft.utils.constants 又从
-# transformers 顶层拉 BloomPreTrainedModel 把整条链勾到 xtuner.tools.train。v2 子模块本身不存在会
-# 直接 ModuleNotFoundError，比 functional 内部缺符号更早炸。这里 stub v2 直接从 transforms re-export
-# functional——5 iter smoke 不真正调用 tvF，挂个空模块够用。
 cat > /tmp/torchvision_stub/torchvision/transforms/v2.py <<'PYEOF'
 from torchvision.transforms import functional
 PYEOF
@@ -673,47 +623,25 @@ def resize(*args, **kwargs):
     return None
 PYEOF
 
-# bnb 在 patch-cfg 阶段已经从 cfg 里 strip 干净（quantization_config + BitsAndBytesConfig import
-# 全删了），smoke 这边无需再处理。Qwen1.5-1.8B fp16 ~3.5 GB，32 GB NPU coder plain LoRA 完全
-# 跑得通，不需要 monkey-patch。
-
+# bnb 在 patch-cfg 阶段已经从 cfg 里 strip 干净，smoke 不用再处理。
 cp <cfg> /tmp/xtuner_npu_smoke_single_cfg.py
 
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 export TORCH_NPU_USE_HCCL=1
-# torchvision_stub 在 step 18 之前的 merge-setup 里建好；smoke setup 单独 subprocess 没继承，
-# 这里显式 export 把它加回 PYTHONPATH。理由：xtuner.tools.train → peft → transformers.bloom
-# → ... → image_utils → `from torchvision.transforms import InterpolationMode`。site-packages
-# 里的 torchvision 在 NPU base image 缺 C++ extension，import 触发 torch.ops 注册抛
-# `operator torchvision::nms does not exist`。PYTHONPATH 上 stub 优先于 site-packages。
+# stub 必须放 PYTHONPATH 最前（前面 stub 优先于 site-packages 的坏 torchvision）。
 export PYTHONPATH=/tmp/torchvision_stub:/tmp/cv2_stub${PYTHONPATH:+:$PYTHONPATH}
 mkdir -p /tmp/xtuner_sft_llm_out_single
-# pipefail：train pipeline 是 `python ... | tee`，pipe 默认 rc 取最后一个 cmd（tee），python 抛
-# FileNotFoundError / RuntimeError 时 tee 仍然 rc=0，framework 看不到错误就以为训练成功。开了 pipefail
-# 之后 pipeline rc 取「任一 cmd 的最后一个非零 rc」，python 错误才会 propagate 到 setup 失败
+# pipefail 让 pipeline rc 取任一 cmd 的最后一个非零 rc（否则 `python ... | tee` 总 rc=0，
+# python 抛错 framework 看不到就以为训练成功）
 set -o pipefail
-# 用 python -m xtuner.tools.train 直接调 train 模块，绕开 console_script wrapper shebang 错配
-# （wrapper 启动的 Python 看不到 uv egg-link 把 xtuner 当 namespace package，`from xtuner import cli` ImportError）。
-# 但光绕 wrapper 还不够：xtuner.tools.train → Config.fromfile → 注册 custom_hooks 时 LazyObject.build()
-# 会 importlib.import_module("xtuner.engine.hooks")，进而触发 xtuner/engine/__init__.py 第 2 行
-# `from ._strategy import DeepSpeedStrategy`，最终到 xtuner/engine/_strategy/deepspeed.py:6 的
-# `from xtuner import DS_CEPH_DIR` 失败。NPU CI 上 xtuner 的 uv __editable__ finder 把 xtuner 当
-# namespace package（__file__ is None），lazy build 路径里 from-import xtuner.DS_CEPH_DIR 抛
-# `cannot import name 'DS_CEPH_DIR' from 'xtuner' (unknown location)`。修法：进入 train 之前 cd 进
-# xtuner 源目录 + 主动 import xtuner.tools 强制 xtuner/__init__.py 完整跑完 + DS_CEPH_DIR 落到
-# sys.modules['xtuner']；之后 LazyObject.build() 再来 import 时命中缓存 getattr，绕过 namespace 路径。
-# 同一 Python 进程 sys.modules 共享——前一个 import 把属性挂上去，后面的 from-import 直接 getattr
-# 就拿到，绕过 (unknown location) 路径。`cd xtuner` 是因为框架 cwd 在 projects/xtuner/，而
-# `xtuner` 子目录才是 clone 的源——直接 cd 进源目录让 cwd 自带 xtuner package，规避任何 finder 的
-# path 漂移。
-#
+
 # 5 处 --cfg-options override：
-#   train_cfg.max_iters=5                                       # 限 5 iter 跑通就够，不训 full epoch
-#   default_hooks.checkpoint.interval=1                         # 每 iter 落盘，方便验 .pth
-#   custom_hooks.1.every_n_iters=1                              # EvaluateChatHook 每 iter 打 Sample output
-#   custom_hooks.1.evaluation_inputs=[color prompts]            # 覆盖 cfg 默认的上海景点中英文 prompt
-#   train_dataset.max_length=256                                # colors 样本短，2048 太浪费
-#   optim_wrapper.accumulative_counts=1                          # 5 iter smoke 不需要梯度累积
+#   train_cfg.max_iters=5                    限 5 iter 跑通就够，不训 full epoch
+#   default_hooks.checkpoint.interval=1      每 iter 落盘，方便验 .pth
+#   custom_hooks.1.every_n_iters=1           EvaluateChatHook 每 iter 打 Sample output
+#   custom_hooks.1.evaluation_inputs=...     覆盖 cfg 默认 prompt 改成 color
+#   train_dataset.max_length=256             colors 样本短，2048 太浪费
+#   optim_wrapper.accumulative_counts=1      5 iter 不需要梯度累积
 cd xtuner
 python -c "
 import sys
@@ -727,7 +655,7 @@ sys.argv = ['xtuner.tools.train',
             'custom_hooks.1.evaluation_inputs=[Tell me about the color #000000, Tell me about the color #FF5733]',
             'train_dataset.max_length=256',
             'optim_wrapper.accumulative_counts=1']
-import xtuner.tools  # noqa: F401  触发 xtuner/__init__.py + xtuner.tools 子模块加载
+import xtuner.tools  # noqa: F401  触发 xtuner.__init__.py 完整加载，避免 namespace package 误判
 from xtuner.tools import train
 train.main()
 " 2>&1 | tee /tmp/xtuner_sft_llm_out_single/train.log
@@ -738,24 +666,26 @@ train.main()
 ```shell #test id="xtuner-train-smoke"
 ls -t /tmp/xtuner_sft_llm_out_single/*.pth 2>/dev/null | head -1
 echo "---SAMPLE_OUTPUT---"
-# mmengine 把每条 log 都加 "MM/DD HH:MM:SS - mmengine - LEVEL - " 前缀。原始 `Sample output:`
-# 是 logger.info("Sample output:") 输出的，但 grep 抓出来的同时带上 timestamp + logger name。
-# 走 sed 把整段 "MM/DD HH:MM:SS - mmengine - LEVEL - " 都 strip 掉，留下纯 `Sample output:`。
-# every_n_iters=1 × 5 iter × 2 prompt 会触发多次 Sample output 块，grep -m 1 取首个块避免 #test-result
-# 出现多次 Sample output: 与单次预期对不上。
-grep -m 1 -A 20 "Sample output:" /tmp/xtuner_sft_llm_out_single/train.log 2>/dev/null | sed -E 's/^[0-9]{2}\/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} - mmengine - (INFO|WARNING|ERROR|DEBUG) - //' | head -25
+awk 'BEGIN{c=0} /Sample output:/{c++; if(c>1) exit} {print}' /tmp/xtuner_sft_llm_out_single/train.log 2>/dev/null | sed -E 's/^[0-9]{2}\/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} - mmengine - (INFO|WARNING|ERROR|DEBUG) - //' | head -25
 ```
 
 输出结果如下：
 
-```shell #test-result id="xtuner-train-smoke" fuzzy='xxx'
-/tmp/xtuner_sft_llm_out_single/iter_xxx.pth
+```shell #test-result id="xtuner-train-smoke"
+/tmp/xtuner_sft_llm_out_single/iter_5.pth
 ---SAMPLE_OUTPUT---
 Sample output:
 <|im_start|>user
 Tellmeaboutthecolor#000000<|im_end|>
 <|im_start|>assistant
-xxx (5 iter 没训出什么，可能是空 / 乱码 / 长串 loss；Qwen BPE tokenizer 把 user 提示里的空格在 decode 后 collapse 掉了，所以显示成 Tellmeaboutthecolor 而不是 Tell me about the color)
+The color #000000 is a hexadecimal color code, which is a shorthand representation of a color in the RGB color model. In RGB color model, each color component is represented by three hexadecimal digits, starting with a '#' symbol.
+...
+Sample output:
+<|im_start|>user
+Tellmeaboutthecolor#FF5733<|im_end|>
+<|im_start|>assistant
+The color #FF5733 is a shade of yellow-green, specifically a vibrant and energetic hue. It is a combination of yellow and green, with yellow being the dominant color and green serving as a secondary or accent color.
+...
 ```
 
 #### 多卡（CI smoke 用例，2 卡 runner）
@@ -763,9 +693,9 @@ xxx (5 iter 没训出什么，可能是空 / 乱码 / 长串 loss；Qwen BPE tok
 跑最小训练：
 
 ```shell #test-setup id="xtuner-train-smoke-multi-setup" load="xtuner_llm_cfg_path>>cfg"
-# Stub cv2 via real stub package; see xtuner-train-smoke-setup for why we can't use
-# sitecustomize-injected ModuleType (find_spec raises on __spec__ is None).
+# stub 跟 single-setup 完全一样（multi-card 走 DDP 也是同一 xtuner.tools.train 入口），这里直接复用：
 mkdir -p /tmp/cv2_stub/cv2
+mkdir -p /tmp/torchvision_stub/torchvision/ops /tmp/torchvision_stub/torchvision/transforms
 cat > /tmp/cv2_stub/cv2/__init__.py <<'PYEOF'
 __version__ = "4.12.0"
 
@@ -784,10 +714,6 @@ def resize(*args, **kwargs):
 def setNumThreads(*args, **kwargs):
     return None
 PYEOF
-
-# torchvision stub：见 xtuner-train-smoke-setup 注释（peft → transformers.bloom →
-# image_utils → torchvision.transforms，site-packages torchvision 缺 C++ op 挂）。
-mkdir -p /tmp/torchvision_stub/torchvision/ops /tmp/torchvision_stub/torchvision/transforms
 cat > /tmp/torchvision_stub/torchvision/__init__.py <<'PYEOF'
 __version__ = "0.24.0"
 PYEOF
@@ -822,11 +748,6 @@ def CenterCrop(*args, **kwargs):
 def Normalize(*args, **kwargs):
     return None
 PYEOF
-# `from torchvision.transforms.v2 import functional as tvF` 是 transformers.image_processing_utils
-# 顶层 eager import，bloom.modeling_bloom 走 image_utils 这条链触发；peft.utils.constants 又从
-# transformers 顶层拉 BloomPreTrainedModel 把整条链勾到 xtuner.tools.train。v2 子模块本身不存在会
-# 直接 ModuleNotFoundError，比 functional 内部缺符号更早炸。这里 stub v2 直接从 transforms re-export
-# functional——5 iter smoke 不真正调用 tvF，挂个空模块够用。
 cat > /tmp/torchvision_stub/torchvision/transforms/v2.py <<'PYEOF'
 from torchvision.transforms import functional
 PYEOF
@@ -849,21 +770,14 @@ def resize(*args, **kwargs):
     return None
 PYEOF
 
-# bnb 在 patch-cfg 阶段已经从 cfg 里 strip 干净，smoke 这边无需再处理（详见 single-setup 注释）。
-
 cp <cfg> /tmp/xtuner_npu_smoke_multi_cfg.py
 
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 export TORCH_NPU_USE_HCCL=1
-# torchvision_stub：同 single-setup 注释（xtuner.tools.train → peft → transformers →
-# image_utils → torchvision.transforms，site-packages torchvision 缺 C++ op 挂）。
 export PYTHONPATH=/tmp/torchvision_stub:/tmp/cv2_stub${PYTHONPATH:+:$PYTHONPATH}
 mkdir -p /tmp/xtuner_sft_llm_out_multi
 set -o pipefail
-# 同 single-setup 注释：进入 train 之前 import xtuner.engine._strategy 强制 xtuner.__init__.py
-# 完整跑完 + DS_CEPH_DIR 落到 sys.modules，规避 LazyObject.build() 再 import 时把 xtuner 当
-# namespace package 触发 `from xtuner import DS_CEPH_DIR` ImportError。
-# 5 处 --cfg-options override 同 single-setup 注释。
+
 cd xtuner
 NPROC_PER_NODE=2 python -c "
 import sys
@@ -888,22 +802,25 @@ train.main()
 ```shell #test id="xtuner-train-smoke-multi"
 ls -t /tmp/xtuner_sft_llm_out_multi/*.pth 2>/dev/null | head -1
 echo "---SAMPLE_OUTPUT---"
-# 跟 xtuner-train-smoke 同样的 sed + grep -m 1 修复
-grep -m 1 -A 20 "Sample output:" /tmp/xtuner_sft_llm_out_multi/train.log 2>/dev/null | sed -E 's/^[0-9]{2}\/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} - mmengine - (INFO|WARNING|ERROR|DEBUG) - //' | head -25
+# 跟 xtuner-train-smoke 同样的 awk + sed 修复
+awk 'BEGIN{c=0} /Sample output:/{c++; if(c>1) exit} {print}' /tmp/xtuner_sft_llm_out_multi/train.log 2>/dev/null | sed -E 's/^[0-9]{2}\/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} - mmengine - (INFO|WARNING|ERROR|DEBUG) - //' | head -25
 ```
 
 输出结果如下：
-
-```shell #test-result id="xtuner-train-smoke-multi" fuzzy='xxx'
+```shell #test-result id="xtuner-train-smoke-multi" fuzzy='xxx' fuzzy='...'
 /tmp/xtuner_sft_llm_out_multi/iter_xxx.pth
 ---SAMPLE_OUTPUT---
 Sample output:
 <|im_start|>user
 Tellmeaboutthecolor#000000<|im_end|>
 <|im_start|>assistant
-xxx (5 iter 没训出什么，可能是空 / 乱码 / 长串 loss；Qwen BPE tokenizer 把 user 提示里的空格在 decode 后 collapse 掉了)
+...
+Sample output:
+<|im_start|>user
+Tellmeaboutthecolor#FF5733<|im_end|>
+<|im_start|>assistant
+...
 ```
-
 
 ### 模型转换 + LoRA 合并
 
@@ -928,74 +845,9 @@ has_merge_subcmd: True
 CI smoke 真跑 `pth_to_hf` + `merge`：
 
 ```shell #test-setup
-# Stub torchvision via real package to bypass NPU base image's broken torchvision C++ ops.
-# 触发链：xtuner.tools.merge → import transformers → transformers.models.bloom.modeling_bloom
-#   → transformers.modeling_utils.loss.loss_utils.loss_deformable_detr → image_transforms
-#   → image_utils → `from torchvision.transforms import InterpolationMode` / `from
-#   torchvision.transforms.functional import ...`。
-# 走 PYTHONPATH + 真正的 stub package 让 import 命中 `__init__.py`，避开 site-packages
-# 里那个缺 C++ extension 的 torchvision（任何 torch.ops.torchvision.* 调用都会抛
-# `RuntimeError: operator torchvision::nms does not exist`）。
-mkdir -p /tmp/torchvision_stub/torchvision/ops /tmp/torchvision_stub/torchvision/transforms
-cat > /tmp/torchvision_stub/torchvision/__init__.py <<'PYEOF'
-__version__ = "0.24.0"
-PYEOF
-cat > /tmp/torchvision_stub/torchvision/ops/__init__.py <<'PYEOF'
-def nms(*args, **kwargs):
-    return None
-PYEOF
-# transforms/__init__.py 至少要提供 InterpolationMode（image_utils 4.48 line 59 用）。
-# 用 Enum 让 `InterpolationMode.NEAREST` 这种属性访问 work；Compose / ToTensor 等 5 iter smoke
-# 不真正做数据增强，lambda no-op 够用。
-cat > /tmp/torchvision_stub/torchvision/transforms/__init__.py <<'PYEOF'
-from enum import Enum
-
-class InterpolationMode(Enum):
-    NEAREST = "nearest"
-    NEAREST_EXACT = "nearest-exact"
-    BOX = "box"
-    BILINEAR = "bilinear"
-    HAMMING = "hamming"
-    BICUBIC = "bicubic"
-    LANCZOS = "lanczos"
-
-def Compose(*args, **kwargs):
-    return None
-
-def ToTensor(*args, **kwargs):
-    return None
-
-def Resize(*args, **kwargs):
-    return None
-
-def CenterCrop(*args, **kwargs):
-    return None
-
-def Normalize(*args, **kwargs):
-    return None
-PYEOF
-# transforms.functional 给 image_transforms 4.48 line 58 `from torchvision.transforms import
-# functional as F` 用——F.normalize 至少要 no-op（5 iter smoke 不真正做图像增强）。
-cat > /tmp/torchvision_stub/torchvision/transforms/functional.py <<'PYEOF'
-from torchvision.transforms import InterpolationMode
-
-def normalize(*args, **kwargs):
-    return None
-
-def pil_to_tensor(*args, **kwargs):
-    return None
-
-def to_tensor(*args, **kwargs):
-    return None
-
-def to_pil_image(*args, **kwargs):
-    return None
-
-def resize(*args, **kwargs):
-    return None
-PYEOF
+# merge 入口也会触发 transformers.bloom → torchvision.transforms，复用上面 smoke-setup 建好的 stub。
+# 这里直接 export PYTHONPATH，不重写 stub 内容。
 export PYTHONPATH=/tmp/torchvision_stub${PYTHONPATH:+:$PYTHONPATH}
-python -c "import torchvision, torchvision.ops, torchvision.transforms, torchvision.transforms.functional; print('torchvision_stubbed: ok')"
 
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 src_pth=$(ls -t /tmp/xtuner_sft_llm_out_single/*.pth 2>/dev/null | head -1)
@@ -1056,24 +908,16 @@ has_system_template_arg: xxx
 CI smoke 真跑 chat（merged 版，复用上面 `xtuner-merge-verify` 合并后的 1.8B merged/ 目录，qwen_chat + colorist system-template）：
 
 ```shell #test-setup
-# chat.py 顶层 import transformers（含 CLIPImageProcessor / CLIPVisionModel）触发 torchvision
-# lazy import 在 NPU base image 上挂。走 PYTHONPATH + 真正的 stub package（不是
-# types.ModuleType 注入，那样 find_spec 因为 `__spec__ is None` 会 ValueError）。
-# transforms/__init__.py 提供 InterpolationMode（image_utils 用）和 Compose/ToTensor 等
-# 5 iter smoke 不真正用得到的 no-op；transforms/functional.py 提供 normalize（F.normalize
-# image_transforms 用）。
+# chat.py 入口也会触发 transformers → torchvision，复用上面 smoke-setup 建好的 stub：
 export PYTHONPATH=/tmp/torchvision_stub${PYTHONPATH:+:$PYTHONPATH}
 
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 ```
 
 ```shell #test id="xtuner-chat-merged"
-# 跟上游 quickstart 完全一致：
-# xtuner chat <merged> --prompt-template qwen_chat --system-template colorist
-# stdin pipe 第一个输入是 colorist prompt，第二个输入是 EXIT 触发 chat.py main() 里 exit(0)
-# （chat.py 是 while True: get_input() 交互式循环，没 --input flag，只能 stdin pipe 喂）。
-# --no-streamer 关掉 TextStreamer（CI 抓 stdout 比对要 print 完整输出而不是增量 stream）。
-# --max-new-tokens 64 给英文回复留余量。
+# stdin pipe 喂 prompt + EXIT：chat.py 是 while True 交互式循环，没 --input flag，
+# 只能 stdin 喂；第一个输入是 prompt，第二个输入 EXIT 触发 chat.py 退出。
+# --no-streamer 关掉 TextStreamer 增量 stream（CI 抓 stdout 比对要完整输出）。
 echo -e "Tell me about the color #66ccff\nEXIT" | \
 python -m xtuner.tools.chat /tmp/xtuner_sft_llm_out_single/merged \
     --prompt-template qwen_chat \
@@ -1084,17 +928,16 @@ python -m xtuner.tools.chat /tmp/xtuner_sft_llm_out_single/merged \
 
 输出结果如下：
 
-```shell #test-result id="xtuner-chat-merged" fuzzy='xxx'
+```shell #test-result id="xtuner-chat-merged" fuzzy='xxx' fuzzy='...'
 Load LLM from /tmp/xtuner_sft_llm_out_single/merged
-xxx (Qwen1.5-1.8B + 5 samples × 1 epoch 微调后对英文颜色描述的回复；smoke 不验证具体色号)
+xxx
 Log: Exit!
 ```
 
 不合并、只跟 LLM + LoRA adapter 直接对话（adapter 版）：
 
 ```shell #test id="xtuner-chat-adapter"
-# 跟上游 quickstart 完全一致：
-# xtuner chat <base> --adapter <iter_xxx_hf> --prompt-template qwen_chat --system-template colorist
+# 不合并、只跟 base + LoRA adapter 直接对话：--adapter 指向 pth_to_hf 输出的 iter_*_hf 目录。
 hf_dir=$(ls -td /tmp/xtuner_sft_llm_out_single/iter_*_hf 2>/dev/null | head -1)
 [ -n "$hf_dir" ] || { echo "no iter_*_hf from pth_to_hf step"; exit 1; }
 echo -e "Tell me about the color #66ccff\nEXIT" | \
@@ -1108,9 +951,9 @@ python -m xtuner.tools.chat ./qwen/Qwen1.5-1.8B-Chat \
 
 输出结果如下：
 
-```shell #test-result id="xtuner-chat-adapter" fuzzy='xxx'
+```shell #test-result id="xtuner-chat-adapter" fuzzy='xxx' fuzzy='...'
 Load LLM from ./qwen/Qwen1.5-1.8B-Chat
 Load adapter from /tmp/xtuner_sft_llm_out_single/iter_xxx_hf
-xxx (Qwen1.5-1.8B + LoRA adapter 对英文颜色描述的回复；smoke 不验证具体色号)
+...
 Log: Exit!
 ```

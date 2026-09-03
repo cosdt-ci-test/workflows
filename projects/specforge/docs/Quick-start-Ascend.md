@@ -644,6 +644,10 @@ then
     exit 1
 fi
 SHAREGPT_PATH="$SPECFORGE_ROOT/cache/dataset/sharegpt_train.jsonl"
+# 后续 smoke-train 会 `pushd "$SPECFORGE_ROOT"` 把 cwd 切到 SpecForge/，相对路径会变成
+# SpecForge/SpecForge/cache/dataset/...。此处用 realpath 转绝对，下游 <SHAREGPT_PATH>
+# placeholder 替换后 specforge train 不管 cwd 都能找到文件。
+SHAREGPT_PATH="$(realpath "$SHAREGPT_PATH")"
 ls -la "$SHAREGPT_PATH" >&2
 echo "smoke: prepare-data OK ($SHAREGPT_PATH)" >&2
 # store="sharegpt_path" 只抓最后一行 stdout 给下游 placeholder 替换，

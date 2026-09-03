@@ -32,7 +32,7 @@ swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/vllm-ascend/vllm-ascen
 | CANN | 9.1.0 |
 | torch | 2.10.0+cpu（镜像预装） |
 | torch_npu | 2.10.0.post4（镜像预装） |
-| torchvision | 0.25.0+cpu（镜像预装，vllm-ascend Required-by） |
+| torchvision | 0.25.0+cpu（镜像预装） |
 | torchaudio | 2.10.0+cpu（镜像预装） |
 | vllm | 0.23.0（镜像预装） |
 | vllm-ascend | 0.23.0（镜像预装） |
@@ -66,21 +66,7 @@ python --version
 Python 3.12.xxx
 ```
 
-确认镜像预装的 torch / torch_npu stack 不被改过（防御性 rollback：万一之前有人 `pip install torch` 升到 2.12 撞 ABI，这里强制拉回 2.10.0+cpu）：
-
-```shell #test-setup id="check-torch-stack"
-pip install --force-reinstall --no-deps \
-  -f https://mirrors.aliyun.com/pytorch-wheels/cpu \
-  'torch==2.10.0+cpu'
-```
-
-> ⚠ **Step 3a（launch_vllm）和 Step 4（vllm serve）启动前必须设 `TORCHDYNAMO_DISABLE=1` + `--enforce-eager`。**
->
-> flex_attention 在 dynamo capture 阶段会撞 torch_npu 不支持的 HOP / UB，trace 时直接抛 `Unsupported: Import failure`；关掉 dynamo + cudagraph，让 vllm 走纯 eager 路径就稳。`TORCHDYNAMO_DISABLE=1` 必须 export 在 shell 里、不能塞进 vllm 进程命令行（vllm 自己 fork 之后才会去读 env）。
->
-> **torch / torch_npu 不要 pip install 升级**：vllm_ascend_C.so 是按 torch 2.10 的 `at::Tag` namespace 编的；torch 2.11 / 2.12 公网没有任何镜像能下 torch_npu post 版本（Aliyun / Tsinghua / Huawei 全 404），所以连「升 torch + 升 torch_npu」这条路都走不通。
-
-加载 CANN env 并验证镜像预装的 vllm-ascend 栈（含 torch / torch_npu / torchvision / torchaudio / transformers / vllm / vllm-ascend / triton*）：
+检查 CANN env 并验证镜像预装的 vllm-ascend 栈（含 torch / torch_npu / torchvision / torchaudio / transformers / vllm / vllm-ascend / triton*）：
 
 ```shell #test id="verify-vllm-stack"
 source /usr/local/Ascend/ascend-toolkit/set_env.sh

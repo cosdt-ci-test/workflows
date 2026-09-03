@@ -383,7 +383,10 @@ xxx
 
 ## 跑 CANN 单元测试
 
-`opencv_test_cannops` 共 78 个用例；25 个因 CANN 9.1.0 / 910B1 的已知不兼容被排除（4 个 resize、17 个 cvtColor 融合算术、3 个 AscendC threshold、1 个 SRC_TYPE_FLIP 上游已修）。剩 53 个应全过。
+`opencv_test_cannops` 共 78 个用例；25 个因 CANN 9.1.0 / 910B 的已知缺陷或数值抖动被排除（910B1 CI 与 910B4 实测失败集一致：23 个稳定失败 + 2 个 flaky）。剩 53 个应全过。
+
+- `CVT_COLOR` 的 XYZ / YCrCb / YUV 系 18 个 + threshold 系 3 个（`MAT_THRESHOLD` / `MAT_THRESHOLD_ASCENDC` / `ASCENDC_KERNEL.THRESHOLD`）共 21 个同根因：cvtColor 对非 32F 输入用两次 threshold 截断饱和中间结果（color.cpp 的 THRESH_TRUNC + THRESH_TO_ZERO），与 threshold 系用例落在同一个 AscendC kernel 上，该 kernel 在 910B 上 AI Core 越界（VEC 指令 UB 地址越界，kernel 源码 bug）；纯 32F 融合算术路径实测全过。
+- resize 系 4 个：`CORE.RESIZE` 是 ResizeArea 算子 GE shape 推断失败（稳定挂）；`CORE.CROP_RESIZE` 与 CPU 参考稳定差 2 超容差 1；`CORE.RESIZE_NEW` / `CORE.CROP_RESIZE_MAKE_BORDER` 是数值抖动 flaky（后者容差 1e-10 近似逐位比较，910B4 上稳定挂）。
 
 ```shell #test id="opencv-cann-run-tests"
 set -o pipefail

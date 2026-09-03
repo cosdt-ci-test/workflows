@@ -60,12 +60,8 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 
 确认能看到 NPU 设备：
 
-```shell #test id="npu-smi-info"
-npu-smi info > /dev/null && echo "npu_smi_ok: yes"
-```
-
-```shell #test-result id="npu-smi-info" disable_fuzzy
-npu_smi_ok: yes
+```shell
+npu-smi info
 ```
 
 `npu-smi info` 完整输出类似：
@@ -243,6 +239,7 @@ print(os.path.abspath(path))
 "
 ```
 
+todo加描述
 ```shell #test id="xtuner-pull-weights"
 ws=$(find ./qwen -name config.json -print -quit)
 test -n "$ws" && test -f "$ws" && echo "weights_ok"

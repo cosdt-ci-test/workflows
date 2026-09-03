@@ -490,6 +490,21 @@ projects:
     dir: projects/wenet
     workflows:
       quick_start: .github/workflows/wenet-quick-start.yml
+  # comfyui quickstart exercises the native NPU device path
+  # (model_management auto-detects torch_npu -> torch.device("npu")) via
+  # the upstream API example script_examples/basic_api_example.py:
+  # headless server on port 8188 + default SD 1.5 text2img workflow
+  # (v1-5-pruned-emaonly.safetensors fetched via ModelScope, ~4.3 GB),
+  # verified by polling /queue and checking the output PNG.
+  - name: comfyui
+    category: 推理加速
+    support_level: 新兴适配
+    upstream_repo: comfyanonymous/ComfyUI
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/comfyui
+    workflows:
+      quick_start: .github/workflows/comfyui-quick-start.yml
   # modelscope quickstart exercises the ModelScope Hub download +
   # transformers AutoModel loading + torch_npu text generation on a
   # single 910B4 card. Note the doc's NPU smoke goes through

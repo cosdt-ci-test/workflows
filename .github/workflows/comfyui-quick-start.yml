@@ -1,0 +1,97 @@
+# ComfyUI quick start guard - project thin trigger.
+#
+# Calls the common engine .github/workflows/quick-start-template.yml;
+# this file only declares what varies per project: schedule,
+# concurrency, runner, container image + options, upstream repo,
+# monitored doc, and the test entry command. The guard loop, cache
+# I/O, state relay and publishing all live in the engine. See the
+# engine's `workflow_call.inputs` block for the full input contract.
+#
+# Engine-fixed behaviours this trigger relies on (declared in the
+# engine, NOT here):
+#   * cache key prefix: monitor-state-comfyui-  (from inputs.project)
+#   * artifact name:    comfyui-quick-start-<run_id>
+#   * result.json is written by the engine and validated against
+#     schemas/result.schema.json before upload.
+#
+# NOTE: only workflow_dispatch is enabled for now (per spec: same
+# onboarding rhythm as llama.cpp / whisper.cpp / lm-evaluation-harness).
+# Once the pipeline runs green and stable, re-enable the schedule block
+# below to start the periodic monitor loop. Until then, the engine's
+# schedule-only steps (monitor / record-monitor-outcome / cache save)
+# simply never run.
+#
+# Bind mounts: two host-side caches persist across runs (see the
+# container_options block below for the volume list). The self-hosted
+# NPU runner (linux-aarch64-a2-1) auto-passes /dev/davinci* into the
+# container via the cluster device-plugin. No HF cache mount needed:
+# the doc flow loads the SD 1.5 checkpoint from a local file
+# (ModelScope download), so nothing touches huggingface.co.
+#
+# ComfyUI note: upstream auto-detects NPU (torch_npu import +
+# torch.npu.is_available() -> torch.device("npu")), so the doc's server
+# start needs no device flag. The test verifies that via
+# comfy.model_management.get_torch_device() == npu:0.
+
+name: comfyui-quick-start
+
+concurrency:
+  # Fixed group: manual and schedule runs share one serial queue. The
+  # pip wheel cache and the ModelScope cache are bind-mounted on the
+  # host and shared across runs, so concurrent runs would race on them;
+  # this also matches the single-NPU physical constraint of the runner
+  # (same rationale as the lm-evaluation-harness trigger).
+  group: comfyui-quick-start
+  # cancel-in-progress: false because (1) a schedule run cancelled
+  # mid-way loses its outcome writeback - the outcome is what makes
+  # the retry mechanism work, and the 'if: always()' guard isn't
+  # enough when the container is being torn down; (2) queueing is the
+  # desired behaviour here - back-to-back dispatches on the
+  # single-card runner should run one after another.
+  cancel-in-progress: false
+
+on:
+  # schedule: deliberately NOT enabled yet - see the header note.
+  # Enable with e.g. `- cron: '15 */6 * * *'` once the pipeline is
+  # proven stable on manual runs.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  comfyui-quick-start:
+    uses: ./.github/workflows/quick-start-template.yml
+    with:
+      # Namespaces cache keys (monitor-state-comfyui-*),
+      # artifacts (comfyui-quick-start-<run_id>) and the
+      # test working dir (workflows/projects/comfyui).
+      project: comfyui
+      # Self-hosted NPU runner for the test job only; the engine pins
+      # the cache I/O jobs (restore-cache / publish-and-persist) to
+      # GitHub-hosted ubuntu-latest.
+      test_runner: '["linux-aarch64-a2-1"]'
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+      container_options: >-
+        --volume=/data/ci-cache/modelscope/comfyui:/root/.cache/modelscope
+        --volume=/data/ci-cache/pip:/root/.cache/pip
+      # Two bind mounts persist caches on the host across runs:
+      # 1. ModelScope weights (AI-ModelScope/stable-diffusion-v1-5
+      #    v1-5-pruned-emaonly.safetensors, ~4.3 GB, downloaded by the
+      #    doc flow on the first run only);
+      # 2. pip wheel cache, shared across projects (transformers /
+      #    lm-evaluation-harness precedent) - repeat runs hit the
+      #    wheels for ComfyUI requirements / torchvision / torchaudio /
+      #    modelscope, pip only unpacks.
+      timeout_minutes: 120
+      upstream_repo: comfyanonymous/ComfyUI
+      # Raw URL the engine's monitor hashes and the test fetches;
+      # doc-hash state lives under the monitor-state-comfyui- cache
+      # prefix.
+      doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/comfyui/docs/Quick-start-Ascend.md
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/comfyui/docs/Quick-start-Ascend.md
+      # cwd is workflows/projects/comfyui; env contract
+      # (MONITORED_DOC_URL / NPU_READY) is injected by the engine. All
+      # project env prep (CANN / torch stack) lives in the test
+      # subclass's prepare_environment hook.
+      test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1

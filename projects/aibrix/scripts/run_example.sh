@@ -26,12 +26,25 @@ if [[ ! -f "${EXAMPLE_PATH}" ]]; then
   exit 1
 fi
 
+# CI-only patch on the temporary checkout: upstream waits only 10s for the
+# Envoy listener, which the shared ARC runner exceeded while envoy was alive
+# and healthy (config parsed, no error). Widen to 60s. Never committed back.
+# Fail loudly if upstream rewrote this loop, so the patch gets re-reviewed
+# instead of silently dropping back to 10s. Done before vLLM starts so a
+# stale patch costs seconds, not a model load.
+if ! grep -qF 'seq 1 10' "${EXAMPLE_PATH}"; then
+  echo "upstream ${EXAMPLE_REL} no longer has the 10s Envoy readiness loop; re-review the CI patch" >&2
+  exit 1
+fi
+sed -i 's/seq 1 10/seq 1 60/; s/-eq 10 \]/-eq 60 ]/; s/not ready after 10s/not ready after 60s/' "${EXAMPLE_PATH}"
+grep -qF 'seq 1 60' "${EXAMPLE_PATH}"
+
 mkdir -p "${CI_OUTPUT_DIR}"
 RUN_LOG="${CI_OUTPUT_DIR}/run.log"
 VLLM_LOG="${CI_OUTPUT_DIR}/vllm.log"
 VLLM_PID_FILE="${CI_OUTPUT_DIR}/vllm.pid"
 ENDPOINTS="${CI_OUTPUT_DIR}/endpoints.yaml"
-TOOLS="${AIBRIX_TOOLS_DIR:-${PROJECT_ROOT}/.tools}"
+TOOLS="${AIBRIX_TOOLS_DIR:-/root/.cache/cosdt-ci-test/aibrix/tools}"
 
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:${TOOLS}/bin:${TOOLS}/toolchain/go/bin:${PATH}"
 set +u
@@ -103,9 +116,17 @@ models:
       - "127.0.0.1:8000"
 YAML
 
+rc=0
 bash "${PROJECT_ROOT}/scripts/with_free_pprof.sh" \
   bash "${EXAMPLE_PATH}" -e "${ENDPOINTS}" \
-  2>&1 | tee "${RUN_LOG}"
+  2>&1 | tee "${RUN_LOG}" || rc=$?
+if [[ "${rc}" -ne 0 ]]; then
+  echo "run-local.sh exited ${rc}; listener snapshot:" >&2
+  ss -ltnp 2>/dev/null | grep -E ':(10080|9901|50052|8080) ' || true
+  echo "envoy.log tail:" >&2
+  tail -n 50 "${TARGET_ROOT}/deployment/local/logs/envoy.log" 2>/dev/null || true
+  exit "${rc}"
+fi
 
 if ! grep -F 'AIBrix gateway is running!' "${RUN_LOG}" >/dev/null; then
   echo "run-local.sh did not print the ready banner" >&2

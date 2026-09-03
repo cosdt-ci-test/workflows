@@ -17,6 +17,24 @@ projects:
     workflows:
       examples: .github/workflows/ms-swift-examples.yml
       quick_start: .github/workflows/ms-swift-quick-start.yml
+  - name: tensorflow
+    category: 训练加速
+    support_level: 基础支持
+    upstream_repo: tensorflow/tensorflow
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/tensorflow
+    workflows:
+      quick_start: .github/workflows/tensorflow-quick-start.yml
+  - name: flash-linear-attention
+    category: 训练加速
+    support_level: 基础支持
+    upstream_repo: fla-org/flash-linear-attention
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/flash-linear-attention
+    workflows:
+      quick_start: .github/workflows/flash-linear-attention-quick-start.yml
   - name: llama.cpp
     category: 推理加速
     support_level: 基础支持
@@ -225,6 +243,15 @@ projects:
     dir: projects/colossalai
     workflows:
       quick_start: .github/workflows/colossalai-quick-start.yml
+  - name: opencompass
+    category: 推理加速
+    support_level: 新兴适配
+    upstream_repo: open-compass/opencompass
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/opencompass
+    workflows:
+      quick_start: .github/workflows/opencompass-quick-start.yml
   - name: aibrix
     category: 推理加速
     support_level: 新兴适配
@@ -290,24 +317,22 @@ projects:
     workflows:
       examples: .github/workflows/xllm-examples.yml
       quick_start: .github/workflows/xllm-quick-start.yml
-  # xDiT dispatch path on NPU goes through xfuser/envs.py's `_is_npu()`
-  # + `get_torch_distributed_backend() == "hccl"` (mainline already
-  # has both). Doc body never references flash-attn because xfuser
-  # logs "flash_attn is not ready on torch_npu for now" and falls
-  # back to yunchang ring. Use the Contents API URL (same as xtuner /
-  # specforge / aibrix / colossalai) so doc-hash monitoring sees
-  # edits with matching auth headers. Doc exercises BOTH single-card
-  # (`--ulysses_degree 1 --ring_degree 1`) and 2-card
-  # (`--ulysses_degree 2 --ring_degree 1`) — xfuser.cli auto-spawns
-  # `torchrun --nproc_per_node=2` so the 2-card path needs an
-  # `a2-2` runner. PR #566 only adds single-node multi-card
-  # support (USP / DP / CFG-parallel; no PipeFusion), so the doc
-  # never sets `--pipefusion_parallel_degree > 1`.
-  # timeout_minutes=90 covers cold install + git clone +
-  # `pip install -e . --no-deps` build-from-source + SD3 medium
-  # cold-cache download (~4 GB; warm after first run via the
-  # bind-mount) + single-card inference + multi-card HCCL init
-  # + multi-card inference.
+  # xDiT guard scope: single-card SD3 medium smoke on NPU through a
+  # minimal script (torchrun --nproc_per_node=1, hccl runtime,
+  # xFuserStableDiffusion3Pipeline). The doc installs the pinned torch
+  # stack itself (torch 2.9.0 + torch_npu 2.9.0.post2 + triton 3.5.* —
+  # xfuser >= 0.6.0 imports triton unconditionally without declaring
+  # it) and installs xfuser from PyPI (no source checkout, no
+  # UPSTREAM_REF pinning). Weights are pulled by the script's embedded
+  # `snapshot_download('stabilityai/stable-diffusion-3-medium-diffusers')`
+  # into the default modelscope hub cache (full repo ~30 GB; persisted
+  # on /data/ci-cache/modelscope/xdit).
+  # xfuser's NPU dispatch (envs.py `_is_npu()` / hccl) is verified by
+  # the install-verify block. Multi-card (USP / DP / TP) is
+  # pointer-only in the doc. Use the Contents API URL (same as xtuner
+  # / specforge / aibrix / colossalai) so doc-hash monitoring sees
+  # edits with matching auth headers. timeout_minutes=90 covers cold
+  # install + 30 GB cold-cache download + T5 load + inference.
   - name: xdit
     category: 推理加速
     support_level: 新兴适配
@@ -356,3 +381,105 @@ projects:
     dir: projects/flagscale
     workflows:
       quick_start: .github/workflows/flagscale-quick-start.yml
+  # stable-diffusion-webui quickstart exercises the native NPU device path
+  # (modules/npu_specific.py + torch_npu) with a headless txt2img call
+  # against the --nowebui API server, using an SD-Turbo checkpoint
+  # fetched via ModelScope.
+  - name: stable-diffusion-webui
+    category: 推理加速
+    support_level: 新兴适配
+    upstream_repo: AUTOMATIC1111/stable-diffusion-webui
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/stable-diffusion-webui
+    workflows:
+      quick_start: .github/workflows/stable-diffusion-webui-quick-start.yml
+  - name: llm-d
+    category: 推理加速
+    support_level: 新兴适配
+    upstream_repo: llm-d/llm-d
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/llm-d
+    workflows:
+      quick_start: .github/workflows/llm-d-quick-start.yml
+  - name: llm-compressor
+    category: 推理加速
+    support_level: 基础支持
+    upstream_repo: vllm-project/llm-compressor
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/llm-compressor
+    workflows:
+      examples: .github/workflows/llm-compressor-examples.yml
+      quick_start: .github/workflows/llm-compressor-quick-start.yml
+
+  # lm-evaluation-harness quickstart exercises the native NPU device path
+  # (HFLM --device npu:0, PR #1886) with a single-card arc_easy eval run
+  # (--limit 10) on a Qwen2.5-0.5B checkpoint fetched via ModelScope;
+  # datasets are served through HF_ENDPOINT=https://hf-mirror.com.
+  - name: lm-evaluation-harness
+    category: 推理加速
+    support_level: 新兴适配
+    upstream_repo: EleutherAI/lm-evaluation-harness
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/lm-evaluation-harness
+    workflows:
+      quick_start: .github/workflows/lm-evaluation-harness-quick-start.yml
+  # lightx2v quickstart installs upstream from source (rolling main,
+  # zero releases / zero tags -> trigger pins fixed_ref: main) and runs
+  # the Wan2.2-I2V-A14B 4-step int8 distill I2V smoke on a single
+  # 910B4; weights are include-filtered ModelScope pulls (~47 GB of
+  # the ~385 GB full repos).
+  - name: lightx2v
+    category: 推理加速
+    support_level: 新兴适配
+    upstream_repo: ModelTC/LightX2V
+    phase: A
+    runner: linux-aarch64-a2-2
+    dir: projects/lightx2v
+    workflows:
+      quick_start: .github/workflows/lightx2v-quick-start.yml
+  # tilelang quickstart builds the tilelang-ascend wheel from source
+  # (ascendc_pto route; TVM submodule + ASCEND_HOME_PATH toolchain)
+  # and runs the GEMM example end-to-end on a single Ascend NPU card.
+  # Upstream points at the tile-ai/tilelang-ascend fork because the
+  # main tile-ai/tilelang repo has no NPU backend of its own.
+  - name: tilelang
+    category: 算子库和编程
+    support_level: 新兴适配
+    upstream_repo: tile-ai/tilelang-ascend
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/tilelang
+    workflows:
+      quick_start: .github/workflows/tilelang-quick-start.yml
+  # wenet quickstart exercises the full ASR pipeline on Ascend NPU:
+  # mock data generation (sox) -> data prep (stage 2-3) -> training
+  # (stage 4, 5 epochs via --override_config) -> inference (stage 5).
+  # No real dataset download needed; validates torch-npu compatibility
+  # and end-to-end training/inference flow.
+  - name: wenet
+    category: 推理加速
+    support_level: 新兴适配
+    upstream_repo: wenet-e2e/wenet
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/wenet
+    workflows:
+      quick_start: .github/workflows/wenet-quick-start.yml
+  # modelscope quickstart exercises the ModelScope Hub download +
+  # transformers AutoModel loading + torch_npu text generation on a
+  # single 910B4 card. Note the doc's NPU smoke goes through
+  # from_pretrained(...).to('npu:0') (not pipeline(device=...)):
+  # modelscope's verify_device only accepts cpu/cuda/gpu.
+  - name: modelscope
+    category: 推理加速
+    support_level: 新兴适配
+    upstream_repo: modelscope/modelscope
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/modelscope
+    workflows:
+      quick_start: .github/workflows/modelscope-quick-start.yml

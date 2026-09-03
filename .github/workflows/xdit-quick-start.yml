@@ -14,15 +14,12 @@
 #   * No explicit device mounts: the self-hosted NPU runner
 #     (`linux-aarch64-a2-2`, two 910B4) auto-passes `/dev/davinci*`
 #     into the container via the cluster device-plugin.
-#   * ModelScope cache bind-mount: the doc's `#test-setup
-#     store="model_path"` step runs `snapshot_download
-#     ('stabilityai/stable-diffusion-3-medium-diffusers', ...)`, which
-#     pulls ~4 GB of bf16 weights into `~/.cache/modelscope/.../`.
-#     Bind-mounting a host-side persistent cache (`/data/ci-cache/
-#     modelscope/xdit`) keeps that download off the run's wall-clock
-#     budget across runs; without it the 6-hour schedule would
-#     re-download the same ~4 GB on every fire. Same `<project>`
-#     token used by ms-swift / diffusers / xtuner / specforge.
+#   * ModelScope hub cache bind-mount: the doc's embedded
+#     `snapshot_download` writes SD3 medium into the default hub
+#     cache (/root/.cache/modelscope). Bind-mounting a host-side
+#     persistent volume (`/data/ci-cache/modelscope/xdit`) there
+#     keeps the ~30 GB pull off every run's wall-clock budget (same
+#     modelscope-cache pattern as lightx2v-quick-start.yml).
 
 name: xdit-quick-start
 
@@ -39,14 +36,13 @@ concurrency:
   cancel-in-progress: false
 
 on:
-  schedule:
-    # Run every 6 hours: '0 */6 * * *' fires at minute 0 of every
-    # 6th hour (00:00, 06:00, 12:00, 18:00). Cadence is loose enough
-    # for an upstream that releases a few times a year (xDiT current
-    # stable line is 0.4.x: 0.4.5 was the most recent stable on
-    # 2026-08; 0.4.6rc1 is in flight), but tight enough that doc
-    # fixes propagate within a day.
-    - cron: '0 */6 * * *'
+  # Schedule temporarily disabled while the 0.6.0 adaptation is being
+  # stabilised (40 consecutive red cycles burned the retry loop).
+  # Re-enable after the first green workflow_dispatch run (same
+  # convention as lightx2v / upstream-doc-monitor).
+  # schedule:
+  #   # Every 6 hours: 00:00 / 06:00 / 12:00 / 18:00 UTC.
+  #   - cron: '0 */6 * * *'
   workflow_dispatch:
 
 permissions:
@@ -62,53 +58,41 @@ jobs:
       project: xdit
       # Self-hosted NPU runner for the test job only; the engine
       # pins the cache I/O jobs (restore-cache / publish-and-persist)
-      # to GitHub-hosted ubuntu-latest. 2-card label is required
-      # because xDiT's PR #566 NPU support is single-node multi-card
-      # (USP / DP / CFG-parallel on xfuser, no PipeFusion), and the
-      # doc exercises that path with `xdit --ulysses_degree 2
-      # --ring_degree 1 ...` which `xfuser.cli.get_nproc_from_args`
-      # auto-expands into `torchrun --nproc_per_node=2 -m
-      # xfuser.runner ...`. Single-card (`a2-1`) cannot init the
-      # HCCL distributed process group with `--nproc_per_node=2`.
+      # to GitHub-hosted ubuntu-latest. The doc's smoke is single-card
+      # (PR #566 minimalised SD3 script via `torchrun
+      # --nproc_per_node=1`); the 2-card runner is the existing
+      # allocation and the test class pins card 0 via
+      # ASCEND_RT_VISIBLE_DEVICES=0, leaving the second card idle.
       test_runner: '["linux-aarch64-a2-2"]'
       image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-      # ModelScope cache bind-mount: persistent host-side cache at
-      # `/data/ci-cache/modelscope/xdit` is reused across runs so the
-      # `snapshot_download('stabilityai/stable-diffusion-3-medium-
-      # diffusers')` step in the doc only fetches weights once.
-      # `:z` is load-bearing on this SELinux-enforcing cluster; see
-      # ms-swift / diffusers / xtuner / specforge for the same
-      # option. The mount point inside the container is
-      # `/root/.cache/modelscope`, which is where the modelscope
-      # SDK resolves its cache by default — `MODELSCOPE_CACHE` env
-      # is not required.
+      # The doc's embedded `snapshot_download` writes the full SD3
+      # medium repo (~30 GB) into the default modelscope hub cache
+      # (/root/.cache/modelscope). Bind-mounting
+      # /data/ci-cache/modelscope/xdit there persists the pull across
+      # runs. `:z` is load-bearing on this SELinux-enforcing cluster;
+      # see ms-swift / diffusers / xtuner / specforge for the same
+      # option.
       container_options: >-
         --volume=/data/ci-cache/modelscope/xdit:/root/.cache/modelscope:z
-      # Doc body does: torch / torch_npu install + verify + diffusers /
-      # transformers / accelerate install + git clone (depth=1, ref =
-      # upstream release tag) + `uv pip install -e . --no-deps` (xfuser
-      # 0.4.x setup.py) + `uv pip install yunchang distvae av` (the
-      # deps skipped by --no-deps that NPU smoke actually needs) +
-      # `xdit --help` parse + the `xfuser-detect-npu` import smoke
-      # (verifies xfuser/envs.py's _is_npu() / hccl dispatch) +
-      # `snapshot_download(stable-diffusion-3-medium-diffusers)` to
-      # stage SD3 medium into the bind-mounted ModelScope cache +
-      # single-card `xdit --ulysses_degree 1 --ring_degree 1 ...`
-      # inference + multi-card `xdit --ulysses_degree 2
-      # --ring_degree 1 ...` inference (xfuser.cli auto-launches
-      # `torchrun --nproc_per_node=2`). `--no-deps` here is
-      # load-bearing: xfuser setup.py's `install_requires` includes
-      # `accelerate>=0.33.0`, `transformers>=4.39.1`, `diffusers>=0.33.0`
-      # which on aarch64 NPU pulls nvidia-* CUDA wheels transitively
-      # via cluster-cache resolution; we install those ourselves in
-      # the doc's ## 前置安装 with PIP_CONSTRAINT= blocking CUDA,
-      # matching upstream ascend_npu.md's pattern.
-      # 90 min covers cold install + first git clone + the
-      # build-from-source `pip install -e . --no-deps` step +
-      # SD3 medium cold-cache download (~4 GB; warm after first run
-      # via the bind-mount) + the always-on import / CLI smoke +
-      # single-card inference (~30s warm) + multi-card inference
-      # (~30-60s warm; HCCL init adds ~10-15s on the first run).
+      # Doc body does: torch 2.9.0 + torch_npu 2.9.0.post2 + triton
+      # 3.5.* install (the image ships only CANN 9.1.0, so the whole
+      # torch stack is installed and verified by the doc itself;
+      # triton is needed by xfuser >= 0.6.0's sparge_attention which
+      # imports it unconditionally without declaring it) + `uv pip
+      # install xfuser "modelscope==1.37.0"` (PyPI install, no source
+      # checkout; xfuser 0.6.0 is a pure-Python wheel, flash-attn
+      # only an optional extra) + the install verify block (imports
+      # the full xfuser chain, asserts the NPU dispatch prints
+      # `npu hccl True`) + a minimal single-card SD3 script
+      # (heredoc-written sd3_npu.py, embedded `snapshot_download(
+      # 'stabilityai/stable-diffusion-3-medium-diffusers')` into the
+      # default hub cache, full repo ~30 GB; NPU-native device calls,
+      # T5-XXL preloaded fp16) via `torchrun --nproc_per_node=1`
+      # (1 step, 256x256) + a PNG structural check (magic + size
+      # floor) on results/sd3_npu.png.
+      # 90 min covers cold install + SD3 cold-cache download (~30 GB;
+      # warm after first run via the bind-mount) + T5 load +
+      # single-card inference.
       timeout_minutes: 90
       upstream_repo: xdit-project/xDiT
       # GitHub Contents API URL (NOT raw.githubusercontent.com):

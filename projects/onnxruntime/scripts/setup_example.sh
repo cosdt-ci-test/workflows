@@ -165,6 +165,86 @@ compile_ort() {
   stage_ort_products "$TARGET_ROOT/build/Linux/Release" "$part"
 }
 
+file_sha1() {
+  sha1sum "$1" | awk '{print $1}'
+}
+
+# github.com / codeload.github.com: org proxy first, then direct.
+# Other https hosts: direct only. Keep going until SHA1 matches.
+download_cmake_dep() {
+  local url="$1"
+  local part="$2"
+  local expected_sha="$3"
+  local -a sources=()
+  case "$url" in
+    https://github.com/*|https://codeload.github.com/*)
+      sources+=("https://gh-proxy.test.osinfra.cn/${url}" "$url")
+      ;;
+    *)
+      sources+=("$url")
+      ;;
+  esac
+  local src
+  for src in "${sources[@]}"; do
+    rm -f "$part"
+    echo "cmake-mirror fetching $src"
+    if curl -fL --http1.1 --retry 5 --retry-delay 3 --connect-timeout 30 \
+      -C - -o "$part" "$src" \
+      && [[ "$(file_sha1 "$part")" == "$expected_sha" ]]; then
+      return 0
+    fi
+    echo "cmake-mirror download or checksum failed: $src" >&2
+  done
+  return 1
+}
+
+# Layout matches ORT --cmake_deps_mirror_dir: <mirror>/<url with https:// stripped>.
+# A missing file is a warning; cmake falls back to the network.
+populate_cmake_mirror() {
+  local deps="$TARGET_ROOT/cmake/deps.txt"
+  if [[ ! -f "$deps" ]]; then
+    echo "cmake/deps.txt missing at $deps; cmake will fetch online" >&2
+    return 0
+  fi
+  mkdir -p "$CMAKE_MIRROR_DIR"
+  local line name rest url sha1 dest part
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    [[ -z "$line" || "$line" == \#* ]] && continue
+    name="${line%%;*}"
+    rest="${line#*;}"
+    url="${rest%%;*}"
+    sha1="${rest#*;}"
+    sha1="${sha1%%;*}"
+    sha1="${sha1//[$'\t\r\n ']/}"
+    [[ "$url" == https://* ]] || continue
+    case "$url" in
+      https://www.nuget.org/*)
+        echo "cmake-mirror skip nuget dep ${name}"
+        continue
+        ;;
+    esac
+    dest="$CMAKE_MIRROR_DIR/${url#https://}"
+    if [[ -f "$dest" ]] && [[ "$(file_sha1 "$dest")" == "$sha1" ]]; then
+      echo "cmake-mirror hit $dest"
+      continue
+    fi
+    if [[ -f "$dest" ]]; then
+      echo "cmake-mirror corrupt $dest; re-downloading" >&2
+      rm -f "$dest"
+    fi
+    mkdir -p "$(dirname "$dest")"
+    part="$dest.part"
+    if download_cmake_dep "$url" "$part" "$sha1"; then
+      mv -f "$part" "$dest"
+      echo "cmake-mirror stored $name -> $dest"
+    else
+      echo "warning: failed to populate cmake-mirror for ${name} ($url); cmake will fetch online" >&2
+      rm -f "$part"
+    fi
+  done < "$deps"
+}
+
 restore_ort_products() {
   local cache_dir="$1"
   local dest="$TARGET_ROOT/build/Linux/Release"
@@ -191,6 +271,7 @@ build_or_restore_ort() {
     else
       rm -rf "$part_dir"
       mkdir -p "$part_dir"
+      populate_cmake_mirror
       compile_ort "$part_dir"
       rm -rf "$cache_dir"
       mv "$part_dir" "$cache_dir"

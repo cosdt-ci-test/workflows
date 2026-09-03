@@ -9,39 +9,39 @@ Document under test: ``projects/xdit/docs/Quick-start-Ascend.md``
 
 Run: ``python -m unittest tests.test_quick_start_ascend -v 2>&1``
 
-Environment variables (injected by GitHub workflow
-``xdit-quick-start.yml``):
+Environment variables (injected by the quick-start engine workflow
+``quick-start-template.yml``, triggered by ``xdit-quick-start.yml``):
     ``MONITORED_DOC_URL``         Required; raw URL of the document under test.
-    ``UPSTREAM_REF``              Required; bash reads ``$UPSTREAM_REF`` to get
-                                  the latest release tag. The value is
-                                  captured into ``captures`` via the
-                                  ``#test-setup store="upstream_ref"`` block's
-                                  stdout, then substituted into the doc
-                                  command body where ``<ref>`` appears.
+    ``UPSTREAM_REF``              Injected by the engine but NOT consumed
+                                  by the doc body: the doc installs
+                                  ``xfuser`` from PyPI, so there is no
+                                  source checkout to pin. The monitor
+                                  still resolves the latest release id
+                                  as the change key.
     ``NPU_READY=true``            Required, otherwise the class is skipped.
                                   End-to-end tests only run on the NPU runner:
                                   local dev machines / normal ubuntu runners
                                   have no ``/dev/davinci*`` device, and the
                                   hard run would fail on ``import torch_npu``.
-    ``NPU_COUNT``                 Optional; number of visible NPU devices the
-                                  CI runner surfaces. ``0`` / unset -> skip.
-                                  1 -> single-card mode; >=2 -> multi-card
-                                  mode. The doc drives both blocks; the
-                                  engine injects this so the test can short-
-                                  circuit the multi-card block on 1-card
-                                  runners without parsing the doc twice.
+
+The doc body is cwd-relative ("wherever you run it is the project
+root"): script + outputs land in the cwd (``./results``); weights go
+to the default modelscope hub cache via the embedded
+``snapshot_download``. CI pins the execution cwd in
+``prepare_environment`` via ``os.chdir('/root/xdit-test')``.
 """
 
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import unittest
 
 from workflows.markdown_doc_test_base import MarkdownDocTestBase
-from workflows.model_cache import (
+from workflows.modelscope_cache import (
     ensure_safetensors,
-    purge_modelscope_corrupt,
+    purge_corrupt_models,
     resolve_modelscope_cache,
 )
 
@@ -63,24 +63,34 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     contract -> run ``#test-setup`` / ``#test`` in order -> compare against
     ``#test-result``.
 
-    Scope (single + multi-card):
-      * Single-card smoke: ``xdit --ulysses_degree 1 --ring_degree 1`` on
-        SD 3.5 medium (ModelScope snapshot). Brings the install +
-        import + xfuser runtime + runner init + ``epoch time`` print
-        round-trip online on 1 card.
-      * Multi-card smoke (>=2 NPU): ``xdit --ulysses_degree 2
-        --ring_degree 1`` runs ``torchrun --nproc_per_node=2 -m
-        xfuser.runner ...`` so xfuser's CLI bridge auto-spawns
-        ``torch.distributed.run``; two ranks then ``init_process_group
-        (backend="hccl")`` and ``xfuser/envs.get_torch_distributed_backend
-        ()`` returns ``"hccl"`` (verified by the doc's
-        ``xfuser-detect-npu`` block). PR #566 / mainline restrict NPU
-        paths to single-node DP / USP / CFG-parallel (no PipeFusion),
-        which the doc's ``--ulysses_degree 2 --ring_degree 1
-        --pipefusion_parallel_degree 1`` (default) keeps within.
+    Scope (single card):
+      * The doc installs the pinned torch stack (torch 2.9.0 +
+        torch_npu 2.9.0.post2 + triton 3.5.* — xfuser >= 0.6.0 imports
+        triton unconditionally in ``core/sparge_attention/block_mask.py``
+        without declaring it) + installs xfuser + modelscope from PyPI
+        (``uv pip install xfuser "modelscope==1.37.0"``; xfuser 0.6.0
+        is a pure-Python wheel, flash-attn is only an optional extra)
+        and verifies the NPU dispatch (``xfuser/envs.py`` returns
+        ``get_torch_distributed_backend() == "hccl"``).
+      * Smoke: a minimal single-card SD3 script (heredoc-written
+        ``sd3_npu.py``) resolves the model path via an embedded
+        ``modelscope.snapshot_download('stabilityai/
+        stable-diffusion-3-medium-diffusers')`` (full repo ~30 GB into
+        the default hub cache, bind-mounted from the host) and
+        injects it as the required ``--model`` arg (0.6.0's CLI
+        parser mandates ``--model``; its built-in download fallback
+        goes through the HF hub, where SD3 medium is gated — so the
+        ModelScope-resolved local path must be fed in) —
+        ``torchrun --nproc_per_node=1`` initialises the hccl runtime,
+        ``xFuserStableDiffusion3Pipeline`` generates one 256x256
+        1-step image, saved to ``results/sd3_npu.png`` and structurally
+        verified (PNG magic + size floor).
+      * Multi-card paths (USP / DP / TP) are pointer-only (a doc note
+        linking upstream examples); the guard exercises the single-card
+        path only.
     """
 
-    DEFAULT_COMMAND_TIMEOUT = 1800  # 30 min baseline; subclass hooks may bump per block
+    DEFAULT_COMMAND_TIMEOUT = 1800  # 30 min baseline; cold SD3 download (~30 GB) rides on the yml-level budget
     USER_AGENT = 'cosdt-ci-test/quick-start'  # monitored source is the fork under cosdt-ci-test org
     ERROR_MARKERS = (
         *MarkdownDocTestBase.ERROR_MARKERS,  # generic [ERROR] + Traceback
@@ -147,44 +157,36 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     # (CI_IMAGE).
     _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
 
-    # ModelScope cache root used by the doc's ``#test-setup
-    # store="model_path"`` step (snapshot_download). The CI runner
-    # bind-mounts a host-side persistent cache here so SD 3.5 medium
-    # weights (~4 GB) survive across runs.
-    #
-    # The mount is provided by the workflow's ``container_options::
-    # --volume=/data/ci-cache/modelscope/xdit:/root/.cache/modelscope``.
-    # Inheriting the standard env (``MODELSCOPE_CACHE``) keeps the same
-    # resolution path users have locally and matches the rest of the
-    # guard repo's projects (ms-swift, diffusers, xtuner, etc.).
-    _MODELSCOPE_CACHE_SUBDIR = 'xdit'  # the ``<project>`` token in the bind-mount path
+    # Doc execution cwd for CI: the doc body is cwd-relative (the smoke
+    # writes sd3_npu.py and ./results/ into the cwd) so "wherever the
+    # user runs it" is the project root. CI chdirs to /root/xdit-test
+    # to keep the heredoc script + output images out of the checkout
+    # dir. Model weights land in the default modelscope hub cache
+    # (~/.cache/modelscope), which the workflow yml bind-mounts from
+    # the host (/data/ci-cache/modelscope/xdit) for persistence.
+    _PROJECT_ROOT = '/root/xdit-test'
 
     # ----------------------------------------------------------
-    # prepare_environment: CANN env + CUDA constraints + uv + modelscope cache validation
+    # prepare_environment: CANN env + CUDA constraints + uv +
+    # torch stack probe + doc execution cwd + card pin + cache
+    # validation (xfuser install + model pull live in the doc body)
     # ----------------------------------------------------------
 
     @classmethod
     def prepare_environment(cls) -> None:
-        """Install CANN env + CUDA constraints + uv + modelscope cache
-        validation in one go.
+        """Source CANN env + write CUDA exclusion list + install uv +
+        probe torch stack + chdir to the doc cwd + validate the
+        modelscope cache.
 
-        Class-level setup: run once per test class, triggered by
-        ``setUpClass``. Not the same as ``unittest.TestCase.setUp`` —
-        that lifecycle hook fires before every test method, which is
-        wrong for a one-shot install.
+        ``xfuser`` itself is NOT installed here — the doc's install
+        block exercises the PyPI install path (``uv pip install
+        xfuser``), so a broken release surfaces as a fuzzy mismatch in
+        the doc's verify block rather than being masked by a
+        pre-installed copy.
 
-        xfuser itself + its NPU-critical transitive deps
-        (``diffusers`` / ``transformers`` / ``accelerate`` / ``peft`` /
-        ``einops`` / ``sentencepiece`` / ``beautifulsoup4`` /
-        ``modelscope`` / ``yunchang`` / ``distvae`` / ``av``) install
-        themselves in document order via the ``#test`` machinery; this
-        class only handles torch stack + uv + modelscope cache health.
-        ``torch`` / ``torch_npu`` already ship in the CANN 9.1.0 base
-        image (`torch==2.9.0+cpu` / `torch_npu==2.9.0.post2`) so the
-        doc's install step is a no-op idempotent reinstall against the
-        cluster cache — this keeps the doc's install instructions
-        honest (a user running on a bare Ubuntu CANN image still gets
-        the right torch pinned).
+        The doc body is cwd-relative; ``os.chdir(_PROJECT_ROOT)`` here
+        makes every doc command run under /root/xdit-test (the engine
+        executes each block with ``cwd=Path.cwd()``).
         """
         # 0) CANN env: source set_env.sh and merge the env stream into
         # os.environ
@@ -213,24 +215,101 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         os.environ['PIP_CONSTRAINT'] = cls._CONSTRAINTS_FILE
         os.environ['UV_CONSTRAINT'] = cls._CONSTRAINTS_FILE
 
-        # 2) uv: the doc's ``xfuser-install-source`` block calls
-        # ``uv pip install -e .`` which handles PEP 517 build deps more
-        # reliably than pip. Inherit ``PIP_INDEX_URL`` +
-        # ``PIP_TRUSTED_HOST`` from the yml job-level env (cluster cache
-        # path + trusted-host).
+        # 2) uv: the doc's install block calls ``uv pip install xfuser``
+        # which resolves deps with PEP 517 reliability. Inherit
+        # ``PIP_INDEX_URL`` + ``PIP_TRUSTED_HOST`` from the yml job-level
+        # env (cluster cache path + trusted-host).
         subprocess.run(
             ['python', '-m', 'pip', 'install', 'uv'],
             check=True,
         )
 
-        # 3) modelscope cache: persistent host-side bind mount can hold
-        # truncated safetensors from interrupted runs. Walk every shard
-        # under each model dir and purge it on failure; modelscope
-        # will re-download cleanly on next access. Implementation
-        # lives in workflows.model_cache; see that module's
-        # docstring for the full rationale.
+        # 2.5) purge the image's pre-baked xfuser: the CI image ships a
+        # stale editable xfuser (0.0.0.dev1, checkout at
+        # /root/xdit-test/xDiT) so ``uv pip install xfuser`` resolves to
+        # "already satisfied" and never installs the PyPI release — the
+        # doc's install block would be a no-op and the smoke would run
+        # the stale snapshot. Uninstall it (plus drop the stale
+        # checkout) so the doc installs and tests the real PyPI wheel.
+        subprocess.run(
+            ['uv', 'pip', 'uninstall', '-y', 'xfuser'],
+            capture_output=True, text=True, check=False,
+        )
+        stale_checkout = os.path.join(cls._PROJECT_ROOT, 'xDiT')
+        if os.path.isdir(stale_checkout):
+            shutil.rmtree(stale_checkout, ignore_errors=True)
+            print('setup: removed stale xDiT checkout from doc cwd')
+
+        # 3) torch stack probe: when a pre-installed stack imports and
+        # sees the NPU, reuse it (bare-metal / images that ship torch).
+        # The plain CANN base image ships none - the probe fails and
+        # the doc's `xdit-install-torch` #test-setup block installs the
+        # pinned stack (torch 2.9.0 + torch_npu 2.9.0.post2 +
+        # triton 3.5.*), which is then what we test against.
+        _PROBE_SCRIPT = (
+            'import torch, torch_npu\n'
+            'raise SystemExit(0 if torch.npu.is_available() else 1)\n'
+        )
+        probe = subprocess.run(
+            ['python', '-c', _PROBE_SCRIPT],
+            capture_output=True,
+            check=False,  # probe's success/failure is the branch signal — don't raise
+        )
+        if probe.returncode == 0:
+            _VERSIONS_SCRIPT = (
+                'import torch, torch_npu; '
+                'print(torch.__version__, torch_npu.__version__)'
+            )
+            versions = subprocess.run(
+                ['python', '-c', _VERSIONS_SCRIPT],
+                capture_output=True, text=True, check=True,
+            )
+            print(f'setup: reusing image torch stack ({versions.stdout.strip()})')
+        else:
+            # Cold fallback: no usable torch stack yet (the plain CANN
+            # base image ships none). The doc's install-torch block
+            # installs the pinned stack; this branch just records that
+            # the probe didn't match (useful diagnostic in CI logs).
+            print('setup: torch stack probe failed, doc install-torch will install the pinned stack')
+
+        # 4) execution cwd: chdir to /root/xdit-test — the doc body is
+        # cwd-relative (the smoke's heredoc script + ./results/ land in
+        # the cwd) and the engine runs every block with
+        # cwd=Path.cwd(). Keeps run artifacts out of the checkout dir.
+        try:
+            os.makedirs(cls._PROJECT_ROOT, exist_ok=True)
+        except OSError as exc:
+            print(f'setup: doc cwd mkdir failed: {exc}')
+        os.chdir(cls._PROJECT_ROOT)
+        print(f'setup: cwd -> {os.getcwd()}')
+
+        # 4.5) ASCEND_RT_VISIBLE_DEVICES=0: the cluster's NPU runner
+        # label is `linux-aarch64-a2-2` (2 cards); the cluster
+        # device-plugin still passes both /dev/davinci* into the
+        # container. The doc's smoke is single-card, so pin card 0 at
+        # process level here — the value is inherited by every doc
+        # subprocess (MarkdownDocTestBase passes ``env=os.environ.copy()``
+        # to each subprocess).
+        os.environ['ASCEND_RT_VISIBLE_DEVICES'] = '0'
+
+        # 5) safetensors + cache validation: the modelscope hub cache
+        # is bind-mounted from the host (the doc's embedded
+        # snapshot_download writes the full SD3 repo there, ~30 GB), so
+        # interrupted runs can leave truncated shards behind. Walk every
+        # shard and purge the model dir on failure; modelscope will
+        # re-download cleanly on next access.
+        # ensure_safetensors pulls in safetensors (transitive of
+        # torch); install defensively in case the CANN base image
+        # rolls forward.
         ensure_safetensors()
-        purge_modelscope_corrupt(resolve_modelscope_cache())
+        try:
+            purge_corrupt_models(resolve_modelscope_cache())
+        except Exception as exc:
+            # purge_corrupt_models is best-effort: a permission error
+            # or missing dir shouldn't abort the test. Log and
+            # continue; the doc's snapshot_download will surface real
+            # download failures via its own rc.
+            print(f'setup: cache purge skipped ({exc})')
 
     # ----------------------------------------------------------
     # test entry
@@ -239,7 +318,10 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         """Run env setup once per test class: CANN env + CUDA
-        constraints + uv + modelscope cache validation.
+        constraints + uv + torch probe + doc cwd chdir + cache validation.
+
+        ``xfuser`` is NOT installed here — see ``prepare_environment``
+        for why.
 
         ``@unittest.skipIf`` only skips the test *method* —
         ``setUpClass`` itself always runs. The ``if _e2e_enabled()``

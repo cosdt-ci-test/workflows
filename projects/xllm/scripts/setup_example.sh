@@ -48,8 +48,8 @@ except urllib.error.HTTPError:
 }
 
 ensure_torch_stack() {
-  # The xllm dev image comes with torch/torch_npu pre-installed.
-  # Just verify the versions match what we expect.
+  # The CANN base image usually ships torch/torch_npu; verify the versions
+  # match what xllm expects (2.9.0 / 2.9.0.post2) and reinstall if not.
   if python -c "
 import torch, torch_npu
 print('found torch', torch.__version__, 'torch_npu', torch_npu.__version__)
@@ -79,6 +79,8 @@ ensure_model() {
   python -c "from modelscope import snapshot_download; snapshot_download('Qwen/Qwen2-7B-Instruct', local_dir='$model_dir')"
 }
 
+# Install the toolchain needed to build xllm from source on the CANN base
+# image (which ships CANN + torch but not cmake/rust/vcpkg).
 if ! declare -F "setup_${PROFILE}" >/dev/null 2>&1; then
   echo "unknown profile: ${PROFILE} (supported: $(supported_profiles))" >&2
   exit 1
@@ -99,14 +101,64 @@ ensure_torch_stack
 python -c "import torch, torch_npu; print('torch:', torch.__version__, 'torch_npu:', torch_npu.__version__, 'npu_count:', torch.npu.device_count())"
 npu-smi info
 
+# Build xllm from source (dev image doesn't include xllm)
+XLLM_BUILD_CACHE=/opt/xllm-build
+XLLM_SRC=/tmp/xllm-src
+XLLM_VERSION="v0.10.1"
+BUILD_LOG="/tmp/xllm-build.log"
+
+install_xllm_from_cache() {
+  local whl
+  whl=$(find "$XLLM_BUILD_CACHE" -name "xllm-*.whl" 2>/dev/null | head -1)
+  if [ -n "$whl" ]; then
+    echo "setup: installing xllm from cache: $whl"
+    python -m pip install "$whl"
+    return 0
+  fi
+  return 1
+}
+
+build_xllm() {
+  echo "setup: building xllm ${XLLM_VERSION} from source (this may take 30-60 min)..."
+  git clone --branch "${XLLM_VERSION}" --depth 1 \
+    https://github.com/xLLM-AI/xllm.git "${XLLM_SRC}"
+  cd "${XLLM_SRC}"
+  git submodule update --init --recursive
+
+  # Install pre-commit (required by setup.py's pre_build step)
+  python -m pip install -q pre-commit
+
+  # Build with optimizations: skip tests, skip export, redirect logs
+  export SKIP_TEST=1
+  export SKIP_EXPORT=1
+
+  echo "setup: building xllm (log: ${BUILD_LOG})..."
+  python setup.py bdist_wheel --device npu \
+    > "${BUILD_LOG}" 2>&1 || {
+    echo "setup: build failed, last 50 lines of ${BUILD_LOG}:"
+    tail -50 "${BUILD_LOG}"
+    cd -
+    return 1
+  }
+
+  mkdir -p "${XLLM_BUILD_CACHE}"
+  cp dist/xllm-*.whl "${XLLM_BUILD_CACHE}/"
+  python -m pip install "${XLLM_BUILD_CACHE}/xllm-*.whl"
+  cd -
+}
+
+# Try cache first, then build
+if ! install_xllm_from_cache; then
+  build_xllm
+fi
+
+# Verify xllm import
+python -c "import xllm; print('xllm version:', xllm.__version__)"
+
 "setup_${PROFILE}"
 
-# Default profile: the xllm dev image ships xllm pre-installed, so we only
-# verify the import (never build here) and make sure the example model is
-# cached. `examples/` lives in the checked-out target tree; run_example.sh
-# does `cd "$TARGET_ROOT"` so it is importable without extra PYTHONPATH.
+# Default profile: build xllm and ensure model.
 setup_default() {
-  echo "profile=default: xllm is pre-installed in the image; verifying import"
-  python -c "import xllm; print('xllm:', xllm.__version__)"
+  echo "profile=default: building xllm from source"
   ensure_model
 }

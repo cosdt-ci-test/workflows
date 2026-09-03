@@ -20,18 +20,20 @@ Atlas 900 A2 训练系列产品或者 Ascend 910B 系列产品，并按需完成
 
 **配套镜像**：
 
-quay.nju.edu.cn/jd_xllm/xllm-ai:xllm-dev-a2-arm-cann9-20260605
+quay.io/jd_xllm/xllm-ai:xllm-dev-a2-arm-cann9-20260605
 
 **软件版本**：
 
 | 组件 | 版本 |
 | --- | --- |
-| Python | 3.11 |
+| Python | 3.12 |
 | CANN | 9.1.0 |
 | torch | 2.9.0 |
 | torch_npu | 2.9.0.post2 |
-| xllm | 预装在镜像中 |
+| xllm | 官方镜像预装 (v0.10.1) |
 | 模型 | [Qwen2-7B-Instruct](https://www.modelscope.cn/models/Qwen/Qwen2-7B-Instruct) |
+
+> 说明：CI 使用 xllm 官方 NPU 镜像 `quay.io/jd_xllm/xllm-ai:xllm-dev-a2-arm-cann9-20260605`，**已预装 xllm v0.10.1 及其依赖**（含 torch 2.9.0、torch_npu 2.9.0.post2、CANN 9.1.0 运行时），无需从源码编译，启动即用。
 
 ### 前置安装
 
@@ -87,7 +89,7 @@ count: 1
 
 ## 验证 xllm 安装
 
-xllm 已预装在镜像中，验证版本：
+xllm 由 CI 从源码编译安装，验证版本：
 
 ```shell #test id="check-xllm"
 python -c "import xllm; print('xllm version:', xllm.__version__)"

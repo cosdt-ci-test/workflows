@@ -31,6 +31,13 @@ import os
 import subprocess
 import unittest
 
+import sys
+
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+_SRC = os.path.join(_REPO_ROOT, 'src')
+if _SRC not in sys.path:
+    sys.path.insert(0, _SRC)
+
 from workflows.markdown_doc_test_base import MarkdownDocTestBase
 
 
@@ -130,30 +137,82 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 check=True,
             )
 
-        # 2) Verify xllm is available (image pre-installs it; never build here)
+        # 2) Build xllm from source (dev image doesn't include xllm)
+        xllm_build_cache = '/opt/xllm-build'
+        xllm_src = '/tmp/xllm-src'
+        xllm_version = 'v0.10.1'
+        build_log = '/tmp/xllm-build.log'
+
+        # Check if cached wheel exists
+        if os.path.isdir(xllm_build_cache) and any(
+            f.endswith('.whl') and f.startswith('xllm')
+            for f in os.listdir(xllm_build_cache)
+        ):
+            print(f'setup: xllm build cache found at {xllm_build_cache}; installing from cache')
+            subprocess.run(
+                ['bash', '-c', f'python -m pip install {xllm_build_cache}/xllm-*.whl'],
+                check=True,
+            )
+        else:
+            print(f'setup: building xllm {xllm_version} from source (this may take 30-60 min)...')
+
+            # Clone and checkout
+            subprocess.run(
+                ['git', 'clone', '--branch', xllm_version, '--depth', '1',
+                 'https://github.com/xLLM-AI/xllm.git', xllm_src],
+                check=True,
+            )
+            subprocess.run(
+                ['git', 'submodule', 'update', '--init', '--recursive'],
+                cwd=xllm_src, check=True,
+            )
+
+            # Install pre-commit (required by setup.py's pre_build step)
+            subprocess.run(
+                ['python', '-m', 'pip', 'install', '-q', 'pre-commit'],
+                check=True,
+            )
+
+            # Build with optimizations: skip tests, skip export, redirect logs
+            build_env = os.environ.copy()
+            build_env['SKIP_TEST'] = '1'
+            build_env['SKIP_EXPORT'] = '1'
+
+            print(f'setup: building xllm (log: {build_log})...')
+            with open(build_log, 'w') as log_f:
+                result = subprocess.run(
+                    ['python', 'setup.py', 'bdist_wheel',
+                     '--device', 'npu'],
+                    cwd=xllm_src, env=build_env,
+                    stdout=log_f, stderr=subprocess.STDOUT,
+                )
+
+            if result.returncode != 0:
+                print(f'setup: build failed (exit code {result.returncode}), full log:')
+                with open(build_log, 'r') as f:
+                    print(f.read())
+                raise RuntimeError(f'xllm build failed (see {build_log})')
+
+            # Copy wheel to cache
+            os.makedirs(xllm_build_cache, exist_ok=True)
+            subprocess.run(
+                ['bash', '-c', f'cp {xllm_src}/dist/xllm-*.whl {xllm_build_cache}/'],
+                check=True,
+            )
+            # Install from cache
+            subprocess.run(
+                ['bash', '-c', f'python -m pip install {xllm_build_cache}/xllm-*.whl'],
+                check=True,
+            )
+
+        # Verify xllm import
+        print('setup: verifying xllm import')
         subprocess.run(
             ['python', '-c', 'import xllm; print("xllm:", xllm.__version__)'],
             check=True,
         )
 
-        # 3) Clone xllm source tree (no build) so the `examples` package is
-        # importable for `python -m examples.generate`. setup.py does NOT ship
-        # `examples`, so we must provide the repo on PYTHONPATH.
-        xllm_src = '/tmp/xllm-ai'
-        if not os.path.isdir(xllm_src):
-            upstream_ref = os.environ.get('UPSTREAM_REF') or 'main'
-            print(f'setup: cloning xllm@{upstream_ref} to {xllm_src}')
-            subprocess.run(
-                [
-                    'git', 'clone', '--depth', '1', '--branch', upstream_ref,
-                    'https://github.com/xLLM-AI/xllm.git', xllm_src,
-                ],
-                check=True,
-            )
-        # Make `examples` importable in every doc-run subprocess.
-        os.environ['PYTHONPATH'] = xllm_src + os.pathsep + os.environ.get('PYTHONPATH', '')
-
-        # 4) Download the example model once into the mounted CI cache.
+        # 3) Download the example model once into the mounted CI cache.
         model_dir = '/root/.cache/modelscope/Qwen2-7B-Instruct'
         if os.path.isdir(model_dir) and any(os.scandir(model_dir)):
             print(f'setup: model already cached at {model_dir}; skipping download')

@@ -47,10 +47,10 @@ jobs:
       # the cache I/O jobs (restore-cache / publish-and-persist) to
       # GitHub-hosted ubuntu-latest.
       test_runner: '["linux-aarch64-a2-1"]'
-      image: quay.nju.edu.cn/jd_xllm/xllm-ai:xllm-dev-a2-arm-cann9-20260605
+      image: swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/xllm-ai/xllm-ai:xllm-dev-a2-arm-cann9-20260605
       container_options: >-
-        --volume=/data/ci-cache/models:/export/home/models
         --volume=/data/ci-cache/modelscope/xllm:/root/.cache/modelscope
+        --volume=/data/ci-cache/xllm-build:/opt/xllm-build
       timeout_minutes: 180
       upstream_repo: xLLM-AI/xllm
       # Doc URL points to the quick start doc in this repo (cosdt-ci-test/workflows).
@@ -58,7 +58,5 @@ jobs:
       doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/xllm/docs/Quick-start-Ascend.md
       doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/xllm/docs/Quick-start-Ascend.md
       # cwd is workflows/projects/xllm; env contract (MONITORED_DOC_URL /
-      # UPSTREAM_REF / NPU_READY) is injected by the engine. All project
-      # env prep and installs live in the test subclass's
-      # prepare_environment hook.
-      test_command: PYTHONPATH=/__w/workflows/workflows/src:/tmp/xllm-ai:$PYTHONPATH python -m unittest tests.test_quick_start_ascend -v 2>&1
+      # UPSTREAM_REF / NPU_READY) is injected by the engine.
+      test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1

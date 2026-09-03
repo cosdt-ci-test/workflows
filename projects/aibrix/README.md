@@ -25,7 +25,9 @@ python3 scripts/bootstrap_manifest.py \
 
 ## 绿灯含义
 
-- `local_gateway`（路径 `deployment/local/run-local.sh`）。先用文档同一套 vLLM-Ascend 栈在 `127.0.0.1:8000` 拉起 `Qwen/Qwen2.5-0.5B-Instruct`，日志必须出现 `backend=hccl`，再原样执行上游 `run-local.sh`，经 Envoy `:10080` 拿到 HTTP 200 且 `choices[0].message.content` 非空。**绿灯 = 昇腾后端上跑过一次经 AIBrix local mode 转发的 completion，不是“Go 编过了”或“网关进程还活着”。**
+- `local_gateway`（路径 `deployment/local/run-local.sh`）。先用文档同一套 vLLM-Ascend 栈在 `127.0.0.1:8000` 拉起 `Qwen/Qwen2.5-0.5B-Instruct`，日志必须出现 `backend=hccl`，再执行上游 `run-local.sh`，经 Envoy `:10080` 拿到 HTTP 200 且 `choices[0].message.content` 非空。**绿灯 = 昇腾后端上跑过一次经 AIBrix local mode 转发的 completion，不是“Go 编过了”或“网关进程还活着”。**
+
+  一处 CI 侧工作副本补丁（不提交回上游）：上游脚本等 Envoy 监听 `:10080` 的就绪窗口硬编码 10 秒，共享 ARC runner 上 Envoy 进程健康但 10 秒内未完成绑定（2026-08-31 run 33365752486）。`run_example.sh` 在启动 vLLM 之前把工作副本里的该窗口 sed 成 60 秒；若上游改写了这个循环导致补丁打不上，脚本立即非 0 退出要求复查，而不是静默回到 10 秒。
 
 ## Quick Start 看护范围
 
@@ -47,6 +49,12 @@ python3 scripts/bootstrap_manifest.py \
 - `source` CANN / ATB 的说明块（测试的 `prepare_environment` 会加载同一对 `set_env.sh`，和文档语义等价）
 
 CI 容器里如果 `127.0.0.1:6060` 已被占用（例如本机调试时的 coder agent），文档里有一段隐藏的 `#test-setup` 只给 `gateway-plugins` 套一层 `localhost -> 127.0.0.2` 的 hosts remap。vLLM 仍在主机网络里跑。example 线用 `scripts/with_free_pprof.sh` 只包 `run-local.sh`。用户文档不写这一步。用户机器上 6060 空闲时，原样 `run-local.sh` 即可。
+
+## 缓存与下载源
+
+example 线工具目录默认 `/root/.cache/cosdt-ci-test/aibrix/tools`（可用 `AIBRIX_TOOLS_DIR` 覆盖）。Go 工具链、Envoy、`GOPATH` / `GOCACHE`、vllm 源码树都在这里跨 run 复用。Envoy 和 vllm clone 的主源是组织代理 `https://gh-proxy.test.osinfra.cn/<原 GitHub URL>`，失败再直连 GitHub。
+
+Quick Start 文档的可见命令仍写官方 GitHub URL。跨 run 复用只在隐藏 `#test-setup` 里，路径是 `/root/.cache/cosdt-ci-test/aibrix/`（Envoy `envoy/1.39.0/envoy`，源码 `src/aibrix-<ref>` 和 `src/vllm-v0.23.0`）。workflow 把该目录按同路径挂进容器。Envoy 的隐藏 restore 块在缓存未命中时会经组织代理下载（CI 直连 GitHub Release 只有十几 KB/s，可见块必然超 1200 秒块超时），sha256 校验后原子写入缓存再预置工作目录；代理也失败则该块直接非 0，秒级失败，不再烧一个块超时。
 
 ## 触发
 

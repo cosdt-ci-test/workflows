@@ -1,0 +1,105 @@
+# lm-evaluation-harness quick start guard - project thin trigger.
+#
+# Calls the common engine .github/workflows/quick-start-template.yml;
+# this file only declares what varies per project: schedule,
+# concurrency, runner, container image + options, upstream repo,
+# monitored doc, and the test entry command. The guard loop, cache
+# I/O, state relay and publishing all live in the engine. See the
+# engine's `workflow_call.inputs` block for the full input contract.
+#
+# Engine-fixed behaviours this trigger relies on (declared in the
+# engine, NOT here):
+#   * cache key prefix: monitor-state-lm-evaluation-harness-  (from inputs.project)
+#   * artifact name:    lm-evaluation-harness-quick-start-<run_id>
+#   * result.json is written by the engine and validated against
+#     schemas/result.schema.json before upload.
+#
+# NOTE: only workflow_dispatch is enabled for now (per spec: same
+# onboarding rhythm as llama.cpp / whisper.cpp / trl / timm / fastchat).
+# Once the pipeline runs green and stable, re-enable the schedule block
+# below to start the periodic monitor loop. Until then, the engine's
+# schedule-only steps (monitor / record-monitor-outcome / cache save)
+# simply never run.
+#
+# Bind mounts: three host-side caches persist across runs (see the
+# container_options block below for the volume list). The self-hosted
+# NPU runner (linux-aarch64-a2-1) auto-passes /dev/davinci* into the
+# container via the cluster device-plugin.
+#
+# HF endpoint: the eval run downloads the arc_easy dataset
+# (allenai/ai2_arc) via datasets.load_dataset, and huggingface.co is
+# unreachable from this cluster. The endpoint is injected inside the
+# doc's run block (export HF_ENDPOINT=..., user-facing, cache-dit
+# precedent) and by the test subclass's prepare_environment hook
+# (subprocess inheritance) - NOT here, because a reusable-workflow
+# caller cannot reliably propagate job-level env into the engine.
+# With the HF cache bind-mounted (mount 3), these only hit the
+# network on a cache miss: the first successful run populates it and
+# repeat runs load the dataset from disk.
+
+name: lm-evaluation-harness-quick-start
+
+concurrency:
+  # Fixed group: manual and schedule runs share one serial queue. The
+  # pip wheel cache and the HF cache are bind-mounted on the host and
+  # shared across runs, so concurrent runs would race on them; this
+  # also matches the single-NPU physical constraint of the runner
+  # (same rationale as the stable-diffusion-webui perf commit 14cf553).
+  group: lm-evaluation-harness-quick-start
+  # cancel-in-progress: false because (1) a schedule run cancelled
+  # mid-way loses its outcome writeback - the outcome is what makes
+  # the retry mechanism work, and the 'if: always()' guard isn't
+  # enough when the container is being torn down; (2) queueing is the
+  # desired behaviour here - back-to-back dispatches on the
+  # single-card runner should run one after another, so cancelling a
+  # queued run would be pointless anyway.
+  cancel-in-progress: false
+
+on:
+  # schedule: deliberately NOT enabled yet - see the header note.
+  # Enable with e.g. `- cron: '45 */3 * * *'` once the pipeline is
+  # proven stable on manual runs.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lm-evaluation-harness-quick-start:
+    uses: ./.github/workflows/quick-start-template.yml
+    with:
+      # Namespaces cache keys (monitor-state-lm-evaluation-harness-*),
+      # artifacts (lm-evaluation-harness-quick-start-<run_id>) and the
+      # test working dir (workflows/projects/lm-evaluation-harness).
+      project: lm-evaluation-harness
+      # Self-hosted NPU runner for the test job only; the engine pins
+      # the cache I/O jobs (restore-cache / publish-and-persist) to
+      # GitHub-hosted ubuntu-latest.
+      test_runner: '["linux-aarch64-a2-1"]'
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+      container_options: >-
+        --volume=/data/ci-cache/modelscope/lm-evaluation-harness:/root/.cache/modelscope
+        --volume=/data/ci-cache/pip:/root/.cache/pip
+        --volume=/data/ci-cache/hf/lm-evaluation-harness:/root/.cache/huggingface
+      # Three bind mounts persist caches on the host across runs:
+      # 1. ModelScope weights (Qwen/Qwen2.5-0.5B-Instruct, ~1 GB,
+      #    downloaded by the doc flow on the first run only);
+      # 2. pip wheel cache, shared across projects (transformers /
+      #    ms-swift / xllm precedent) - repeat runs hit the wheels for
+      #    lm_eval[hf] / transformers / modelscope, pip only unpacks;
+      # 3. HF hub + datasets cache (per-project subdir) - the arc_easy
+      #    parquet and the processed arrow cache persist, so repeat runs
+      #    skip the dataset download entirely (removes the run#4 Xet
+      #    CDN timeout flake surface).
+      timeout_minutes: 120
+      upstream_repo: EleutherAI/lm-evaluation-harness
+      # Raw URL the engine's monitor hashes and the test fetches;
+      # doc-hash state lives under the monitor-state-lm-evaluation-harness-
+      # cache prefix.
+      doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/lm-evaluation-harness/docs/Quick-start-Ascend.md
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/lm-evaluation-harness/docs/Quick-start-Ascend.md
+      # cwd is workflows/projects/lm-evaluation-harness; env contract
+      # (MONITORED_DOC_URL / NPU_READY) is injected by the engine. All
+      # project env prep (CANN / CUDA constraints / HF_ENDPOINT / torch
+      # stack) lives in the test subclass's prepare_environment hook.
+      test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1

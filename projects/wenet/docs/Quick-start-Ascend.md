@@ -323,13 +323,13 @@ echo "=== 流程完成 ==="
 
 ```shell #test-result id="verify-all"
 === 数据文件 ===
-data/dict/lang_char.txt
-data/train/data.list
 data/dev/data.list
+data/dict/lang_char.txt
 data/test/data.list
+data/train/data.list
 === 训练输出 ===
-exp/conformer/train.yaml
 exp/conformer/final.pt
+exp/conformer/train.yaml
 === 推理输出 ===
 exp/conformer/ctc_greedy_search/text
 exp/conformer/ctc_prefix_beam_search/text

@@ -38,9 +38,9 @@ import unittest
 from pathlib import Path
 
 from workflows.markdown_doc_test_base import MarkdownDocTestBase
-from workflows.modelscope_cache import (
+from workflows.model_cache import (
     ensure_safetensors,
-    purge_corrupt_models,
+    purge_modelscope_corrupt,
     resolve_modelscope_cache,
 )
 
@@ -268,9 +268,9 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         # truncated safetensors from interrupted runs. Walk every shard
         # under each model dir and purge it on failure; modelscope
         # will re-download cleanly on next access. Implementation
-        # lives in workflows.modelscope_cache; see that module's
+        # lives in workflows.model_cache; see that module's
         # docstring for the full rationale.
-        purge_corrupt_models(resolve_modelscope_cache())
+        purge_modelscope_corrupt(resolve_modelscope_cache())
 
         # 6) transformers / peft / modelscope are installed by the doc's
         # ``### 前置安装`` block (``install-deps`` carries the install +

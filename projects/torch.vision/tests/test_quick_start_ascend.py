@@ -51,8 +51,8 @@ The doc verifies:
 
 Model download / ModelScope cache is **not** in scope — torchvision
 transforms work on plain PIL images, no checkpoints are fetched. So the
-test does **not** call ``purge_corrupt_models`` or ``ensure_safetensors``
-(those helpers in ``workflows.modelscope_cache`` are only meaningful when
+test does **not** call ``purge_modelscope_corrupt`` or ``ensure_safetensors``
+(those helpers in ``workflows.model_cache`` are only meaningful when
 a ``snapshot_download`` is in the pipeline).
 """
 

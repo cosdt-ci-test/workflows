@@ -30,7 +30,7 @@
 #      /data/ci-cache/lightx2v-models. This is where the doc's
 #      `modelscope download --local_dir "$PROJECT_ROOT/models/..."`
 #      commands write. Bind-mount covers persistence + the cache
-#      invalidation contract (purge_corrupt_models walks this dir).
+#      invalidation contract (purge_modelscope_corrupt walks this dir).
 #   3. HF cache -> /root/.cache/huggingface, for the doc's optional
 #      T2V fallback `huggingface-cli download lightx2v/Wan2.2-Distill-Models`
 #      when ModelScope doesn't carry the T2V distill weights.

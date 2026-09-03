@@ -35,9 +35,9 @@ import subprocess
 import unittest
 
 from workflows.markdown_doc_test_base import MarkdownDocTestBase
-from workflows.modelscope_cache import (
+from workflows.model_cache import (
     ensure_safetensors,
-    purge_corrupt_models,
+    purge_modelscope_corrupt,
     resolve_modelscope_cache,
 )
 
@@ -326,16 +326,16 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         # rolls forward.
         ensure_safetensors()
         try:
-            purge_corrupt_models(resolve_modelscope_cache())
+            purge_modelscope_corrupt(resolve_modelscope_cache())
             # Also walk the bind-mounted $PROJECT_ROOT/models since
             # the doc's --local_dir outputs land there, not in the
             # default modelscope cache.
             from pathlib import Path
             proj_models = Path(cls._PROJECT_ROOT) / 'models'
             if proj_models.is_dir():
-                purge_corrupt_models(proj_models)
+                purge_modelscope_corrupt(proj_models)
         except Exception as exc:
-            # purge_corrupt_models is best-effort: a permission error
+            # purge_modelscope_corrupt is best-effort: a permission error
             # or missing dir shouldn't abort the test. Log and
             # continue; the doc's `modelscope download --local_dir`
             # will surface real download failures via its own rc.

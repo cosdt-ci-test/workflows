@@ -738,7 +738,10 @@ train.main()
 ```shell #test id="xtuner-train-smoke"
 ls -t /tmp/xtuner_sft_llm_out_single/*.pth 2>/dev/null | head -1
 echo "---SAMPLE_OUTPUT---"
-grep -A 20 "Sample output:" /tmp/xtuner_sft_llm_out_single/train.log 2>/dev/null | head -25
+# mmengine 把每条 log 都加 "MM/DD HH:MM:SS - mmengine - LEVEL - " 前缀。原始 `Sample output:`
+# 是 logger.info("Sample output:") 输出的，但 grep 抓出来的同时带上 timestamp + logger name。
+# 走 sed 把行首的 mmengine prefix strip 掉，留下纯 `Sample output:`。
+grep -A 20 "Sample output:" /tmp/xtuner_sft_llm_out_single/train.log 2>/dev/null | sed -E 's/^[0-9]{2}\/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} - +//' | head -25
 ```
 
 输出结果如下：
@@ -748,9 +751,9 @@ grep -A 20 "Sample output:" /tmp/xtuner_sft_llm_out_single/train.log 2>/dev/null
 ---SAMPLE_OUTPUT---
 Sample output:
 <|im_start|>user
-Tell me about the color #000000<|im_end|>
+Tellmeaboutthecolor#000000<|im_end|>
 <|im_start|>assistant
-xxx (5 iter 没训出什么，可能是空 / 乱码 / 长串 loss)
+xxx (5 iter 没训出什么，可能是空 / 乱码 / 长串 loss；Qwen BPE tokenizer 把 user 提示里的空格在 decode 后 collapse 掉了，所以显示成 Tellmeaboutthecolor 而不是 Tell me about the color)
 ```
 
 #### 多卡（CI smoke 用例，2 卡 runner）
@@ -883,7 +886,7 @@ train.main()
 ```shell #test id="xtuner-train-smoke-multi"
 ls -t /tmp/xtuner_sft_llm_out_multi/*.pth 2>/dev/null | head -1
 echo "---SAMPLE_OUTPUT---"
-grep -A 20 "Sample output:" /tmp/xtuner_sft_llm_out_multi/train.log 2>/dev/null | head -25
+grep -A 20 "Sample output:" /tmp/xtuner_sft_llm_out_multi/train.log 2>/dev/null | sed -E 's/^[0-9]{2}\/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} - +//' | head -25
 ```
 
 输出结果如下：
@@ -893,9 +896,9 @@ grep -A 20 "Sample output:" /tmp/xtuner_sft_llm_out_multi/train.log 2>/dev/null 
 ---SAMPLE_OUTPUT---
 Sample output:
 <|im_start|>user
-Tell me about the color #000000<|im_end|>
+Tellmeaboutthecolor#000000<|im_end|>
 <|im_start|>assistant
-xxx (5 iter 没训出什么，可能是空 / 乱码 / 长串 loss)
+xxx (5 iter 没训出什么，可能是空 / 乱码 / 长串 loss；Qwen BPE tokenizer 把 user 提示里的空格在 decode 后 collapse 掉了)
 ```
 
 

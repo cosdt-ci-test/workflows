@@ -528,7 +528,7 @@ kill "$VLLM_PID" 2>/dev/null || true
 输出结果如下：
 
 ```shell #test-result id="pipeline-step4-serve" fuzzy='xxx'
-{"id":"chatcmpl-xxx","object":"chat.completion","created":xxx,"model":"Qwen/Qwen3-8B","choices":[{"index":0,"message":{"role":"assistant","content":"xxx"},"finish_reason":"length"}]}
+{"id":"chatcmpl-xxx","object":"chat.completion","created":xxx,"model":"Qwen/Qwen3-8B","choices":[{"index":0,"message":{"role":"assistant","content":"xxx","refusal":null,"annotations":null,"audio":null,"function_call":null,"reasoning":null},"logprobs":null,"finish_reason":"length","stop_reason":null,"token_ids":null,"routed_experts":null}],"service_tier":null,"system_fingerprint":"vllm-xxx","usage":{"prompt_tokens":xxx,"total_tokens":xxx,"completion_tokens":xxx,"prompt_tokens_details":null,"completion_tokens_details":null},"prompt_logprobs":null,"prompt_token_ids":null,"prompt_text":null,"kv_transfer_params":null}
 ```
 
 ### 编程式入口：SpeculatorsConfig / TokenProposalConfig

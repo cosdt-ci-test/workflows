@@ -259,7 +259,7 @@ print('png ok:', paths[0], len(data), 'bytes')
 输出结果如下：
 
 ```shell #test-result id="check-png" fuzzy='...' fuzzy='xxx'
-png ok: ... ComfyUI_000xxx bytes
+png ok: ...ComfyUI_000xxx bytes
 ```
 
 > 校验 PNG 魔数与体积下限，确保 NPU 上产出的不是空图或损坏文件。

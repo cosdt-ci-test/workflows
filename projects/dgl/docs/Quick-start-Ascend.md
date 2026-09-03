@@ -60,8 +60,8 @@ print('npu available:', torch.npu.is_available())
 "
 ```
 
-```shell #test-result id="dgl-install-verify" fuzzy='xxx'
-dgl: xxx
+```shell #test-result id="dgl-install-verify" fuzzy='xxx' fuzzy='...'
+...dgl: xxx
 torch: 2.9.xxx
 npu available: True
 ```

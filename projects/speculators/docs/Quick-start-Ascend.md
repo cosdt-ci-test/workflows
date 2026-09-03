@@ -441,7 +441,13 @@ fi
 # val_metrics.json、checkpoint_best/epoch0_end symlinks、checkpoint
 # 子目录），只留 config.json + model.safetensors 给下游 pipeline-step3-train
 # test 做精确 ls 对账。
-LATEST_CKPT=$(ls -1d "$CHECKPOINT_DIR"/*/ 2>/dev/null | sort -V | tail -1)
+#
+# LATEST_CKPT 只看数字子目录（[0-9]*），不吸 symlink-to-dir：
+# `ls -1d "$CHECKPOINT_DIR"/*/` 会把 checkpoint_best -> 0 / epoch0_end
+# -> 0 这类 symlink-to-dir 也列出来，sort -V 还会把 epoch0_end 排
+# 在 0 后面，结果拿到一个 symlink path 让 cp 间接跟链；改用 [0-9]*
+# glob 直接锁 trainer 自己创建的 step 子目录
+LATEST_CKPT=$(ls -1d "$CHECKPOINT_DIR"/[0-9]*/ 2>/dev/null | sort -V | tail -1)
 if [ -n "$LATEST_CKPT" ] && [ "$LATEST_CKPT" != "$CHECKPOINT_DIR/" ]; then
   cp -af "$LATEST_CKPT"/. "$CHECKPOINT_DIR"/
 fi
@@ -453,7 +459,7 @@ fi
 # 清 trainer 元数据：symlinks / 子目录 / optimizer & scheduler state /
 # run.yaml / training_state.json / val_metrics.json / config.py
 rm -f "$CHECKPOINT_DIR"/checkpoint_best "$CHECKPOINT_DIR"/epoch0_end
-rm -rf "$CHECKPOINT_DIR"/*/
+rm -rf "$CHECKPOINT_DIR"/[0-9]*/
 rm -f "$CHECKPOINT_DIR"/optimizer_state_dict.pt \
       "$CHECKPOINT_DIR"/scheduler_state_dict.pt \
       "$CHECKPOINT_DIR"/run.yaml \

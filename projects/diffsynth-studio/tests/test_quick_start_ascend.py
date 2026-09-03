@@ -10,9 +10,9 @@ import subprocess
 import unittest
 
 from workflows.markdown_doc_test_base import MarkdownDocTestBase
-from workflows.modelscope_cache import (
+from workflows.model_cache import (
     ensure_safetensors,
-    purge_corrupt_models,
+    purge_modelscope_corrupt,
     resolve_modelscope_cache,
 )
 
@@ -66,7 +66,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             'DIFFSYNTH_MODEL_BASE_PATH',
             str(cache_root / 'hub' / 'models'),
         )
-        purge_corrupt_models(cache_root)
+        purge_modelscope_corrupt(cache_root)
 
     @classmethod
     def setUpClass(cls) -> None:

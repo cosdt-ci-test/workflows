@@ -16,7 +16,7 @@
 # shared modelscope cache root, NOT the shared root itself) so this
 # project's 58 GB never collides with other projects' cache entries.
 # Stale/corrupt leftovers are handled by the test's prepare_environment
-# (workflows.modelscope_cache.purge_corrupt_models: safetensors header
+# (workflows.model_cache.purge_modelscope_corrupt: safetensors header
 # validation per shard, model dir wiped on failure), so a dirty cache
 # self-heals instead of failing the run.
 
@@ -59,8 +59,7 @@ jobs:
       # GitHub-hosted ubuntu-latest.
       test_runner: '["linux-aarch64-a2-2"]'
       image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-      container_options: >-
-        --volume=/data/ci-cache/modelscope/diffusers:/root/.cache/modelscope
+      container_options: ''
       # 4h: the test's per-command timeout is 2h (first cold-cache run
       # downloads ~28 GB at ~3.4 MB/s cluster egress ≈ 2.3h worst case);
       # the job budget must exceed the single slowest command plus the

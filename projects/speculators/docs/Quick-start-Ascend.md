@@ -1,4 +1,4 @@
-# Quick Start (Ascend NPU)
+# 快速开始
 
 在单卡昇腾 NPU 上跑 [Speculators](https://github.com/vllm-project/speculators) 端到端：转换 DFlash draft → 抽训练数据 → torchrun 训 draft → `vllm serve` 挂载 draft 做推理 smoke。
 
@@ -174,7 +174,7 @@ python -c "from modelscope import snapshot_download; print(snapshot_download('z-
 python -c "from modelscope import snapshot_download; print(snapshot_download('Qwen/Qwen3-8B'))" | tail -n 1
 ```
 
-### Step 1：convert（DFlash 算法）
+### convert（DFlash 算法）
 
 `speculators convert` 把本地 draft + verifier 读进来按 DFlash 算法重映射权重、写到 `/root/dflash-qwen3-8b-converted/`。CLI 的 `--algorithm` 不支持 `dflash`，走 Python API：
 
@@ -209,7 +209,7 @@ echo <dflash_path>
 /root/dflash-qwen3-8b-converted
 ```
 
-### Step 2：训练数据预处理
+### 训练数据预处理
 
 用上游 `scripts/prepare_data.py` 把 JSONL chat 数据 tokenize 写到 `/root/dflash-train-data/`（HF arrow 数据集）：
 
@@ -219,7 +219,6 @@ DATA_DIR=/root/dflash-train-data
 rm -rf "$DATA_DIR"
 mkdir -p "$DATA_DIR"
 
-# 顶层 key 必须是 "conversations"（不是 "messages"）；每条 user + assistant 都要填
 cat > /tmp/prompts.jsonl << 'JSONL'
 {"conversations":[{"role":"user","content":"Briefly describe AI topic #0."},{"role":"assistant","content":"AI is a field of computer science."}]}
 {"conversations":[{"role":"user","content":"Briefly describe AI topic #1."},{"role":"assistant","content":"AI is a field of computer science."}]}
@@ -272,7 +271,7 @@ token_freq keys: xxx
 len: xxx
 ```
 
-### Step 3：训练（单卡 torchrun）
+### 训练（单卡 torchrun）
 
 单卡 64 GB NPU 装不下「vllm 16 GB 权重 + KV + train draft 模型 + optimizer 激活」并发跑，所以拆成两步：先生成 hidden_states 缓存，再离线训。
 
@@ -287,22 +286,9 @@ HS_DIR=/tmp/hs-train
 rm -rf "$HS_DIR"
 mkdir -p "$HS_DIR"
 
-# 关 dynamo + --enforce-eager：见 install-torch 步骤的 ⚠ 说明 —— 避开
-# dynamo capture 把 enable_custom_op() 的 fallback 吃掉触雷
 export TORCHDYNAMO_DISABLE=1
 rm -rf /root/.cache/vllm/torch_compile_cache 2>/dev/null || true
 
-# CANN env：vllm 进程 fork 出 EngineCore 后会动态 load torch_npu 的 atb
-# extension (`/usr/local/.../libop_plugin_atb.so`)，缺 LD_LIBRARY_PATH 里的
-# `libatb.so` 直接 `OSError: libatb.so: cannot open shared object file`。
-# ascend-toolkit/set_env.sh 不含 nnal 的 atb 路径，必须单独 source。
-#
-# atb/set_env.sh 是 zsh 写的，里面有两处在 bash + `set -u` 下报错：
-#   line 12 `until [[ -z "$1" ]]`（$1 没传时 unbound）
-#   line 43 `if [[ -n "$ZSH_VERSION" ]]`（ZSH_VERSION 没设时 unbound）
-# CI test framework 会自动 prepend `set -euo pipefail`，所以 source 前
-# 必须 `set +u` 关掉 nounset，source 完再 `set -u` 恢复 —— 单 pre-export
-# ZSH_VERSION 顶不住 $1 那个坑
 set +u
 export ZSH_VERSION="${ZSH_VERSION:-}"
 source /usr/local/Ascend/nnal/atb/set_env.sh
@@ -378,35 +364,13 @@ mkdir -p "$CHECKPOINT_DIR"
 
 cd /root/speculators
 
-# 关 dynamo + ASCEND_LAUNCH_BLOCKING=1：见 install-torch 步骤的 ⚠ 说明。
-# ASCEND_LAUNCH_BLOCKING=1 让 NPU kernel 错误同步上抛（不设的话 CANN 错误是
-# silent kill，下次失败看不到 traceback）
 export TORCHDYNAMO_DISABLE=1
 export ASCEND_LAUNCH_BLOCKING=1
 
-# CANN env：torch_npu 的 atb extension 需要 `libatb.so`；Step 3a 已 source，
-# 同一个 shell 状态如果跨 step 中断了就要再 source 一次（bash 子 shell 不继承）。
-# set +u / set -u：见 Step 3a 注释（atb 是 zsh 写的，bash + set -u 会撞）
 set +u
 source /usr/local/Ascend/nnal/atb/set_env.sh
 set -u
 
-# --hidden-states-dtype float32：spec 把 LN.weight 写死 fp32，autocast 不会
-# cast LN；而 dflash.forward 复用的 V 来自 hidden_states 缓存（默认 bf16），
-# Q/K fp32 + V bf16 会撞 flex_attention 的 dtype check。把 V 也 cast fp32
-# 让 Q/K/V 对齐。A2 64 GB 装得下 1.9 GB fp32 缓存。备注：CUDA 跑同一份
-# train.py 也会有这个 dtype 不匹配，spec 是先有 CUDA 路径后迁到 NPU。
-# --on-missing raise 强制走 FileBackend 读 <hs_dir> 缓存；不带 --vllm-endpoint
-# 让 dataloader 不去问不存在的 server
-#
-# --max-anchors 32 --draft-attn-impl sdpa：spec 默认是 `--max-anchors 3072
-# --draft-attn-impl simple_flex_attention`（CUDA 路径）；torch 2.10 的
-# `flex_attention._validate_device` 只放行 CUDA / CPU / HPU，NPU device
-# 直接 ValueError，不是 OOM 是 hard reject。64 GB NPU 也必须切 sdpa，不
-# 是只 32 GB 才需要。sdpa 不走 DFlash 的 anchor-block 稀疏 mask，用各
-# draft layer 的 sliding-window（window=2048）；smoke 只验管线通，
-# 真训练需要补一个 NPU 能跑的 flex_attention 后端。sdpa + 32 anchor
-# 实测 val/loss=6.688，3.5 GB 落盘，~3 min/epoch on 910B4。
 torchrun --standalone --nproc_per_node=1 scripts/train.py \
   --verifier-name-or-path "<verifier_path>" \
   --data-path "<data_path>" \
@@ -430,19 +394,7 @@ if [ "$TRAIN_RC" -ne 0 ]; then
   cat /tmp/train.log >&2
   exit 1
 fi
-# trainer 把 checkpoint 写到 "$CHECKPOINT_DIR/<step>/" 子目录；Step 4 用
-# <checkpoint_path> 当 draft_model 路径，需要直接读 config.json /
-# model.safetensors，把最新子目录的内容拷到根，然后清掉 trainer 的
-# 元数据（optimizer/scheduler state、run.yaml、training_state.json、
-# val_metrics.json、checkpoint_best/epoch0_end symlinks、checkpoint
-# 子目录），只留 config.json + model.safetensors 给下游 pipeline-step3-train
-# test 做精确 ls 对账。
-#
-# LATEST_CKPT 只看数字子目录（[0-9]*），不吸 symlink-to-dir：
-# `ls -1d "$CHECKPOINT_DIR"/*/` 会把 checkpoint_best -> 0 / epoch0_end
-# -> 0 这类 symlink-to-dir 也列出来，sort -V 还会把 epoch0_end 排
-# 在 0 后面，结果拿到一个 symlink path 让 cp 间接跟链；改用 [0-9]*
-# glob 直接锁 trainer 自己创建的 step 子目录
+
 LATEST_CKPT=$(ls -1d "$CHECKPOINT_DIR"/[0-9]*/ 2>/dev/null | sort -V | tail -1)
 if [ -n "$LATEST_CKPT" ] && [ "$LATEST_CKPT" != "$CHECKPOINT_DIR/" ]; then
   cp -af "$LATEST_CKPT"/. "$CHECKPOINT_DIR"/
@@ -472,6 +424,9 @@ echo "$CHECKPOINT_DIR"
 ```shell #test id="pipeline-step3-train" load="checkpoint_path>>checkpoint_path"
 echo <checkpoint_path>
 ls -1 <checkpoint_path>
+head -10 /tmp/train.log
+
+tail -10 /tmp/train.log
 ```
 
 输出结果如下：
@@ -480,9 +435,10 @@ ls -1 <checkpoint_path>
 /root/dflash-trained
 config.json
 model.safetensors
+...
 ```
 
-### Step 4：`vllm serve` 挂 draft 做推理
+### `vllm serve` 挂 draft 做推理
 
 起 vllm-ascend serve 把训好的 draft 挂上做 chat completion smoke（8 token completion）：
 

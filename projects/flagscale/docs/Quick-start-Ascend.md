@@ -327,13 +327,13 @@ dist_backend hccl
 <!--
 ```shell #test-setup
 python - <<'PY'
-from workflows.modelscope_cache import (
+from workflows.model_cache import (
     ensure_safetensors,
-    purge_corrupt_models,
+    purge_modelscope_corrupt,
     resolve_modelscope_cache,
 )
 ensure_safetensors()
-purge_corrupt_models(resolve_modelscope_cache())
+purge_modelscope_corrupt(resolve_modelscope_cache())
 PY
 ```
 -->

@@ -1,4 +1,4 @@
-"""Regression tests for workflows.modelscope_cache.purge_corrupt_models
+"""Regression tests for workflows.model_cache.purge_modelscope_corrupt
 plus diagnostic pinning for the cache mount / disk-usage layer.
 
 The masked-dir + symlink layout is what modelscope 1.37.0 actually
@@ -10,9 +10,9 @@ produces for dotted model ids (verified against a real
 
 Two test groups:
 
-- ``TestPurgeCorruptModels`` pins the purge behavior on that layout:
-  the symlink entry must be skipped, the masked dir purged once,
-  and the purge must not crash on ``shutil.rmtree(symlink)``.
+- ``TestPurgeModelscopeCorrupt`` pins the purge behavior on that
+  layout: the symlink entry must be skipped, the masked dir purged
+  once, and the purge must not crash on ``shutil.rmtree(symlink)``.
 - ``TestMountDiagnostics`` pins ``_log_mount_info`` so each test's
   captured stdout carries a ``[mount-diag]`` line showing what
   disk the cache_root was on — distinguishes a tmpfs/overlay
@@ -33,7 +33,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'src'))
 
-from workflows.modelscope_cache import purge_corrupt_models  # noqa: E402
+from workflows.model_cache import purge_modelscope_corrupt  # noqa: E402
 
 
 def _log_mount_info(label: str, path: Path) -> None:
@@ -87,7 +87,7 @@ def _make_model_cache(root: Path) -> tuple[Path, Path]:
     return masked, link
 
 
-class TestPurgeCorruptModels(unittest.TestCase):
+class TestPurgeModelscopeCorrupt(unittest.TestCase):
 
     def test_symlink_entry_skipped_on_healthy_cache(self) -> None:
         """Dotted-id model: masked dir + symlink both exist, shards healthy.
@@ -100,7 +100,7 @@ class TestPurgeCorruptModels(unittest.TestCase):
             _log_mount_info('test-tmp', root)
             masked, _link = _make_model_cache(root)
             # Purge must not crash and must not delete anything.
-            purge_corrupt_models(root)
+            purge_modelscope_corrupt(root)
             self.assertTrue(masked.exists())
 
     def test_purge_survives_symlink_and_removes_masked_dir(self) -> None:
@@ -120,7 +120,7 @@ class TestPurgeCorruptModels(unittest.TestCase):
             (masked / 'model-00001.safetensors').write_bytes(
                 _CORRUPT_SAFETENSORS
             )
-            purge_corrupt_models(root)
+            purge_modelscope_corrupt(root)
             # Masked dir purged -> modelscope re-downloads next run.
             self.assertFalse(masked.exists())
             # Symlink now dangles; modelscope recreates it on re-download.
@@ -129,7 +129,7 @@ class TestPurgeCorruptModels(unittest.TestCase):
     def test_no_op_when_cache_absent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             _log_mount_info('test-tmp', Path(tmp))
-            purge_corrupt_models(Path(tmp) / 'nope')  # must not raise
+            purge_modelscope_corrupt(Path(tmp) / 'nope')  # must not raise
 
     def test_undotted_model_without_symlink_still_purged(self) -> None:
         """Ids without '.' (no masking, no symlink) keep working."""
@@ -140,7 +140,7 @@ class TestPurgeCorruptModels(unittest.TestCase):
             model = org / 'stable-diffusion-v1-5'
             model.mkdir()
             (model / 'shard.safetensors').write_bytes(_CORRUPT_SAFETENSORS)
-            purge_corrupt_models(Path(tmp))
+            purge_modelscope_corrupt(Path(tmp))
             self.assertFalse(model.exists())
 
 

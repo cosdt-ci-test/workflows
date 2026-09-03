@@ -345,7 +345,7 @@ SGLANG_DIR=$(python -c "import importlib.util, os; print(os.path.dirname(os.path
 APPLIED_COPY="$SGLANG_DIR/sglang/.spec_capture_patch.applied"
 SINK_FILE="$SGLANG_DIR/sglang/srt/spec_capture_sink.py"
 PATCH="$(pwd)/patches/sglang/v0.5.18/spec-capture.patch"
-if [[ ! -f "$SINK_FILE" ]] || ! grep -q 'def publish_spec_capture' "$SINK_FILE"; then
+if [[ ! -f "$SINK_FILE" ]] || ! grep -q 'class SpecCaptureSink' "$SINK_FILE"; then
     echo "smoke: spec-capture sink missing or incomplete - forcing re-apply via git apply -p1 --reject" >&2
     rm -f "$APPLIED_COPY"
     if ! git -C "$SGLANG_DIR/.." apply -p1 --reject "$PATCH" >/tmp/smoke-reapply.log 2>&1; then
@@ -354,7 +354,7 @@ if [[ ! -f "$SINK_FILE" ]] || ! grep -q 'def publish_spec_capture' "$SINK_FILE";
         exit 1
     fi
     cp "$PATCH" "$APPLIED_COPY"
-    if [[ ! -f "$SINK_FILE" ]] || ! grep -q 'def publish_spec_capture' "$SINK_FILE"; then
+    if [[ ! -f "$SINK_FILE" ]] || ! grep -q 'class SpecCaptureSink' "$SINK_FILE"; then
         echo "smoke: FAILED - spec_capture_sink.py still missing after re-apply" >&2
         exit 1
     fi

@@ -344,7 +344,7 @@ fi
 SGLANG_DIR=$(python -c "import importlib.util, os; print(os.path.dirname(os.path.dirname(importlib.util.find_spec('sglang').origin)))")
 APPLIED_COPY="$SGLANG_DIR/sglang/.spec_capture_patch.applied"
 SINK_FILE="$SGLANG_DIR/sglang/srt/spec_capture_sink.py"
-PATCH="$SPECFORGE_ROOT/patches/sglang/v0.5.18/spec-capture.patch"
+PATCH="$(pwd)/patches/sglang/v0.5.18/spec-capture.patch"
 if [[ ! -f "$SINK_FILE" ]] || ! grep -q 'def publish_spec_capture' "$SINK_FILE"; then
     echo "smoke: spec-capture sink missing or incomplete - forcing re-apply via git apply -p1 --reject" >&2
     rm -f "$APPLIED_COPY"

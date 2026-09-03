@@ -137,14 +137,7 @@ xtuner 同时支持 PyPI 二进制安装与源码安装。
 
 ```shell #test id="xtuner-install-binary"
 uv pip install --index-url https://mirrors.aliyun.com/pypi/simple --no-deps xtuner
-# 第二行必须显式 pin torch==2.11.0+cpu + -f pytorch-wheels：否则 uv resolver 看到 transformers
-# metadata 里 torch<2.10 会把 torch 从 2.11 降到 2.9，导致 torch_npu 2.11 的 .so 找不到 torch 2.9
-# ABI 的 _ZNK3c1010TensorImpl15decref_pyobjectEv 符号 ImportError。
-# transformers 升到 4.56+ 是因为 4.48（2025-02）metadata cap torch<2.10，跟 torch 2.11 不兼容。
-uv pip install --index-url https://mirrors.aliyun.com/pypi/simple \
-                -f https://mirrors.aliyun.com/pytorch-wheels/cpu \
-                'torch==2.11.0+cpu' \
-                'mmengine==0.10.6' 'transformers>=4.56.0,<5.0.0' 'peft>=0.14.0' 'datasets>=3.2.0,<4.0.0' einops loguru openpyxl 'scikit-image' scipy SentencePiece tiktoken transformers_stream_generator cyclopts 'opencv-python-headless<=4.12.0.88' timm pyarrow pydantic tensorboard xxhash imageio 'py-libnuma' GitPython
+uv pip install 'mmengine==0.10.6' 'transformers==4.48.0' 'peft>=0.14.0' 'datasets>=3.2.0,<4.0.0' einops loguru openpyxl 'scikit-image' scipy SentencePiece tiktoken transformers_stream_generator cyclopts 'opencv-python-headless<=4.12.0.88' timm pyarrow pydantic tensorboard xxhash imageio 'py-libnuma' GitPython
 python -c "import xtuner; from xtuner.version import __version__; print('xtuner', __version__)"
 ```
 

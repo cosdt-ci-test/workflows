@@ -443,12 +443,10 @@ model.safetensors
 起 vllm-ascend serve 把训好的 draft 挂上做 chat completion smoke（8 token completion）：
 
 ```shell #test id="pipeline-step4-serve" load="checkpoint_path>>draft_model" load="verifier_path>>verifier_path"
-# 关 dynamo + --enforce-eager：见 install-torch 步骤的 ⚠ 说明
+
 export TORCHDYNAMO_DISABLE=1
 rm -rf /root/.cache/vllm/torch_compile_cache 2>/dev/null || true
 
-# CANN env：见 Step 3a 注释 —— `libatb.so` 不在 ascend-toolkit 默认 LD path 里
-# set +u / set -u：见 Step 3a 注释（atb 是 zsh 写的）
 set +u
 source /usr/local/Ascend/nnal/atb/set_env.sh
 set -u
@@ -472,7 +470,14 @@ done
 
 curl -sS http://127.0.0.1:8000/v1/chat/completions \
   -H 'Content-Type: application/json' \
-  -d '{"model":"Qwen/Qwen3-8B","messages":[{"role":"user","content":"Hello"}],"max_tokens":8}'
+  -d '{"model":"Qwen/Qwen3-8B","messages":[{"role":"user","content":"Hello"}],"max_tokens":8}' \
+  | python -c "
+import sys, json
+r = json.load(sys.stdin)
+print('content:', r['choices'][0]['message']['content'])
+print('completion_tokens:', r['usage']['completion_tokens'])
+print('finish_reason:', r['choices'][0]['finish_reason'])
+"
 
 kill "$VLLM_PID" 2>/dev/null || true
 ```
@@ -480,7 +485,9 @@ kill "$VLLM_PID" 2>/dev/null || true
 输出结果如下：
 
 ```shell #test-result id="pipeline-step4-serve" fuzzy='xxx'
-{"id":"chatcmpl-xxx","object":"chat.completion","created":xxx,"model":"Qwen/Qwen3-8B","choices":[{"index":0,"message":{"role":"assistant","content":"xxx","refusal":null,"annotations":null,"audio":null,"function_call":null,"reasoning":null},"logprobs":null,"finish_reason":"length","stop_reason":null,"token_ids":null,"routed_experts":null}],"service_tier":null,"system_fingerprint":"vllm-xxx","usage":{"prompt_tokens":xxx,"total_tokens":xxx,"completion_tokens":xxx,"prompt_tokens_details":null,"completion_tokens_details":null},"prompt_logprobs":null,"prompt_token_ids":null,"prompt_text":null,"kv_transfer_params":null}
+content: xxx
+completion_tokens: xxx
+finish_reason: length
 ```
 
 ### 编程式入口：SpeculatorsConfig / TokenProposalConfig

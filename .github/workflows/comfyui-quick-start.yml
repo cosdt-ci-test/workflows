@@ -51,8 +51,8 @@ concurrency:
   cancel-in-progress: false
 
 on:
-  # schedule: deliberately NOT enabled yet - see the header note.
-  # Enable with e.g. `- cron: '15 */6 * * *'` once the pipeline is
+  schedule:
+  - cron: '15 */12 * * *'
   # proven stable on manual runs.
   workflow_dispatch:
 

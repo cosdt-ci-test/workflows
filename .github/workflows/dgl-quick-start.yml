@@ -16,8 +16,8 @@
 #   * No bind-mounts needed: the doc clones the fork and builds
 #     DGL-Ascend from source each run (build artifacts are not
 #     persisted across runs — source builds are inherently cold), and
-#     the LightGCN gowalla dataset (~tens of MB) is re-fetched from the
-#     official dgl-data bucket inside the smoke block.
+#     the LightGCN gowalla dataset (~6 MB) is re-fetched from the
+#     RecZoo Gowalla_m1 HF dataset via hf-mirror inside the smoke block.
 
 name: dgl-quick-start
 
@@ -50,6 +50,9 @@ jobs:
       # card 0 via ASCEND_RT_VISIBLE_DEVICES=0.
       test_runner: '["linux-aarch64-a2-2"]'
       image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+      # No extra bind-mounts: the doc clones the fork and builds from
+      # source each run; gowalla is re-fetched inside the smoke block.
+      container_options: ''
       # Doc body does: torch 2.9.0 + torch_npu 2.9.0.post2 install (the
       # image ships only CANN 9.1.0, so the whole torch stack is
       # installed and verified by the doc itself — deliberately reusing
@@ -59,9 +62,10 @@ jobs:
       # script/build_dgl_ascend.sh` (CMake -DUSE_ASCEND=ON
       # -DUSE_CUDA=OFF, SOC=910B4) + `pip install -e .` + the install
       # verify block (imports dgl, asserts `npu available: True`) +
-      # a LightGCN smoke (`wget` the official dgl-data gowalla zip +
-      # `unzip` + `python main.py --dataset gowalla --batch 2048
-      # --recdim 64 --epochs 1 --device npu`) asserted via the
+      # a LightGCN smoke (``wget`` train.txt + test.txt from the RecZoo
+      # Gowalla_m1 HF dataset via hf-mirror + ``python main.py
+      # --dataset gowalla --batch 2048 --recdim 64 --epochs 1
+      # --device npu``) asserted via the
       # `Average BPR Loss` log line.
       # 240 min covers cold install + full DGL C++/Cython source build
       # (dominant cost) + gowalla download + single-card LightGCN.

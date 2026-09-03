@@ -74,6 +74,8 @@ npu available: True
 cd dgl-ascend/examples/pytorch/lightgcn
 wget https://s3.us-west-2.amazonaws.com/dgl-data/dataset/gowalla.zip
 unzip gowalla.zip
+# 图里存在孤立节点，关闭 GraphConv 的 0 入度检查
+sed -i 's/weight=False, bias=False)/weight=False, bias=False, allow_zero_in_degree=True)/' model.py
 python main.py --dataset gowalla --batch 2048 --recdim 64 --epochs 1 --device npu
 ```
 

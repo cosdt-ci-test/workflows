@@ -738,24 +738,30 @@ train.main()
 ```shell #test id="xtuner-train-smoke"
 ls -t /tmp/xtuner_sft_llm_out_single/*.pth 2>/dev/null | head -1
 echo "---SAMPLE_OUTPUT---"
-# mmengine 把每条 log 都加 "MM/DD HH:MM:SS - mmengine - LEVEL - " 前缀。原始 `Sample output:`
-# 是 logger.info("Sample output:") 输出的，但 grep 抓出来的同时带上 timestamp + logger name。
-# 走 sed 把整段 "MM/DD HH:MM:SS - mmengine - LEVEL - " 都 strip 掉，留下纯 `Sample output:`。
-# every_n_iters=1 × 5 iter × 2 prompt 会触发多次 Sample output 块，grep -m 1 取首个块避免 #test-result
-# 出现多次 Sample output: 与单次预期对不上。
 grep -m 1 -A 20 "Sample output:" /tmp/xtuner_sft_llm_out_single/train.log 2>/dev/null | sed -E 's/^[0-9]{2}\/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} - mmengine - (INFO|WARNING|ERROR|DEBUG) - //' | head -25
 ```
 
 输出结果如下：
 
-```shell #test-result id="xtuner-train-smoke" fuzzy='xxx'
-/tmp/xtuner_sft_llm_out_single/iter_xxx.pth
+```shell #test-result id="xtuner-train-smoke"
+/tmp/xtuner_sft_llm_out_single/iter_5.pth
 ---SAMPLE_OUTPUT---
 Sample output:
 <|im_start|>user
 Tellmeaboutthecolor#000000<|im_end|>
 <|im_start|>assistant
-xxx (5 iter 没训出什么，可能是空 / 乱码 / 长串 loss；Qwen BPE tokenizer 把 user 提示里的空格在 decode 后 collapse 掉了，所以显示成 Tellmeaboutthecolor 而不是 Tell me about the color)
+The color #000000 is a hexadecimal color code, which is a shorthand representation of a color in the RGB color model. In RGB color model, each color component is represented by three hexadecimal digits, starting with a '#' symbol.
+...
+Sample output:
+<|im_start|>user
+Tellmeaboutthecolor#FF5733<|im_end|>
+<|im_start|>assistant
+The color #FF5733 is a shade of yellow-green, specifically a vibrant and energetic hue. It is a combination of yellow and green, with yellow being the dominant color and green serving as a secondary or accent color.
+...
+Sample output:
+<|im_start|>user
+Tellmeaboutthecolor#000000<|im_end|>
+...
 ```
 
 #### 多卡（CI smoke 用例，2 卡 runner）
@@ -888,8 +894,8 @@ train.main()
 ```shell #test id="xtuner-train-smoke-multi"
 ls -t /tmp/xtuner_sft_llm_out_multi/*.pth 2>/dev/null | head -1
 echo "---SAMPLE_OUTPUT---"
-# 跟 xtuner-train-smoke 同样的 sed + grep -m 1 修复
-grep -m 1 -A 20 "Sample output:" /tmp/xtuner_sft_llm_out_multi/train.log 2>/dev/null | sed -E 's/^[0-9]{2}\/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} - mmengine - (INFO|WARNING|ERROR|DEBUG) - //' | head -25
+# 跟 xtuner-train-smoke 同样的 awk + sed 修复
+awk 'BEGIN{c=0} /Sample output:/{c++; if(c>1) exit} {print}' /tmp/xtuner_sft_llm_out_multi/train.log 2>/dev/null | sed -E 's/^[0-9]{2}\/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} - mmengine - (INFO|WARNING|ERROR|DEBUG) - //' | head -25
 ```
 
 输出结果如下：

@@ -408,8 +408,13 @@ def _doc_links(entry: dict) -> tuple[str, str | None]:
     return entry["url"], None
 
 
-def _ticket_intro(entry: dict) -> str:
-    lines = [
+def _ticket_intro(entry: dict, mention: str) -> str:
+    lines = []
+    if mention:
+        # @owner 仅出现在正文顶部一次：建票是该轮唯一 GitHub 事件，
+        # 处理人只收 1 封邮件（首事件详情就在本正文里）。
+        lines += [mention, ""]
+    lines += [
         "## 监控项",
         "",
         f"- 项目：`{entry['project']}`",
@@ -724,19 +729,29 @@ def _sync_events(syncer: IssueSync, entry: dict, prior: dict, events: list[str],
         # 状态由调用方置 ok 即可。
         if events == ["recovery"]:
             return None, "none"
-        intro = _ticket_intro(entry)
-        issue_url = syncer.create(title, intro)
+        # 首事件（本轮全部事件）并入正文：建票成为唯一 GitHub 事件，
+        # 处理人只收 1 封邮件；后续轮次的事件才走评论追加。
+        sections = []
+        for event in events:
+            section = _event_comment(event, res, entry, error, run_id,
+                                     observed_at, "")
+            if section:
+                sections.append(section)
+        body = _ticket_intro(entry, mention)
+        if sections:
+            body = body.rstrip("\n") + "\n\n" + "\n\n".join(sections) + "\n"
+        issue_url = syncer.create(title, body)
         if not issue_url:
             print(f"ticket: WARN create failed for {entry['key']}", file=sys.stderr)
             return None, "none"
         created = True
         print(f"ticket: created {title}")
-
-    for event in events:
-        body = _event_comment(event, res, entry, error, run_id, observed_at,
-                              mention)
-        if body and syncer.comment(issue_url, body):
-            print(f"ticket: commented '{event}' → {issue_url}")
+    else:
+        for event in events:
+            body = _event_comment(event, res, entry, error, run_id,
+                                  observed_at, mention)
+            if body and syncer.comment(issue_url, body):
+                print(f"ticket: commented '{event}' → {issue_url}")
     action = "created" if created else "commented"
     tickets[action] = tickets.get(action, 0) + 1
     return issue_url, action

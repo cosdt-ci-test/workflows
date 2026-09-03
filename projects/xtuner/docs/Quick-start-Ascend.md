@@ -19,8 +19,6 @@
 
 **你需要懂**：xtuner 的 cfg 是 Python 文件（不是 YAML）；`xtuner train <cfg>` 走 mmengine runner，每个 hook（checkpoint / eval / logger）按 cfg 注册；adapter 是 PEFT 格式，要 `pth → hf → merge` 才能跟纯 base 模型对话。
 
-跑通后看[文末附录 A](appendix-bnb)了解为什么本文档用 plain LoRA 而不是 QLoRA。
-
 ## 前置条件
 
 ### 硬件
@@ -225,12 +223,13 @@ has_chat: True
 
 本文档示例使用 **Qwen1.5-1.8B-Chat**——1.8B 参数 + TikToken BPE 分词（`tokenizer.json` 7 MB，无 sentencepiece），fp16 权重 ≈ 3.5 GB，**32 GB NPU coder 上直接 plain LoRA 跑得通**，不需要 4-bit 量化也不需要 monkey-patch。
 
-下载 Qwen1.5-1.8B-Chat 权重（≈ 3.5 GB，落到 `./qwen/Qwen1.5-1.8B-Chat/`，含 `model.safetensors` + tokenizer + config）：
+下载 Qwen1.5-1.8B-Chat 权重（≈ 3.5 GB，落到 `./qwen` 下的 modelscope cache 目录，含 `model.safetensors` + tokenizer + config）：
 
 ```shell #test-setup store="xtuner_weights_path"
-# modelscope 把权重落到 `<cache_dir>/<namespace>/<name>/`，所以 `./qwen` + `qwen/Qwen1.5-1.8B-Chat`
-# 实际落到 `./qwen/qwen/Qwen1.5-1.8B-Chat/`。用绝对路径存给 patch-cfg / smoke 用，避免 cwd 切换后
-# cfg 里的相对路径指错地方。
+# modelscope 把权重落到自己的 cache 目录结构里（新版布局是
+# `./qwen/models/qwen--Qwen1.5-1.8B-Chat/snapshots/master/`，随 modelscope 版本变化）。
+# 用 snapshot_download 的返回值（绝对路径）存给 patch-cfg / merge / chat 用，
+# 避免 cwd 切换后相对路径指错地方，也不依赖具体 cache 布局。
 python -c "
 import os
 from modelscope import snapshot_download
@@ -239,7 +238,10 @@ print(os.path.abspath(path))
 "
 ```
 
-todo加描述
+权重落盘校验——modelscope 的 cache 目录结构随版本变化（新版是
+`./qwen/models/qwen--Qwen1.5-1.8B-Chat/snapshots/master/`），所以用 `find` 定位
+`config.json` 而不是写死路径：
+
 ```shell #test id="xtuner-pull-weights"
 ws=$(find ./qwen -name config.json -print -quit)
 test -n "$ws" && test -f "$ws" && echo "weights_ok"
@@ -253,7 +255,7 @@ weights_ok
 total xxx
 ```
 
-权重落到 `./qwen/qwen/Qwen1.5-1.8B-Chat/` 下（含 `model.safetensors` 3.5 GB + `tokenizer.json` 7 MB + `vocab.json` + `merges.txt` + `config.json` + `tokenizer_config.json`）。
+权重落到 `./qwen` 下的 modelscope cache 目录（新版布局 `./qwen/models/qwen--Qwen1.5-1.8B-Chat/snapshots/master/`，含 `model.safetensors` 3.5 GB + `tokenizer.json` 7 MB + `vocab.json` + `merges.txt` + `config.json` + `tokenizer_config.json`；目录结构随 modelscope 版本变化，所以后续步骤统一用 `find` 定位或 `snapshot_download` 的返回值）。
 
 ### 准备微调数据集
 
@@ -418,7 +420,7 @@ print(save_path)
 
 **占位符说明**：
 - `<cfg>` = 上一节「准备配置文件」拷 cfg 那一步落到的文件绝对路径，典型值 `/tmp/xtuner_npu_llm_cfg.py/qwen1_5_1_8b_chat_qlora_custom_sft_e1_copy.py`。**本地手动跑**：自己跑 `xtuner copy-cfg qwen1_5_1_8b_chat_qlora_custom_sft_e1 /tmp/xtuner_npu_llm_cfg.py`，然后 `ls /tmp/xtuner_npu_llm_cfg.py/` 找 `_copy.py` 后缀的那个文件路径替换。
-- `<weights_dir>` = 「准备模型权重」下权重那一步落到的 Qwen 权重绝对路径，典型值 `./qwen/qwen/Qwen1.5-1.8B-Chat`。**本地手动跑**：用前一步 `xtuner-pull-weights` 块里 `find ./qwen -name config.json -print -quit` 的 `dirname` 结果替换。
+- `<weights_dir>` = 「准备模型权重」下权重那一步落到的 Qwen 权重绝对路径，典型值 `./qwen/models/qwen--Qwen1.5-1.8B-Chat/snapshots/master`（modelscope cache 布局，随版本变化）。**本地手动跑**：用前一步 `xtuner-pull-weights` 块里 `find ./qwen -name config.json -print -quit` 的 `dirname` 结果替换。
 
 1. `pretrained_model_name_or_path`：替成本地真实权重路径（pull-weights 阶段落盘路径）
 2. `data_files[0]`：替成转换后的 OpenAI 格式 jsonl 绝对路径
@@ -663,25 +665,26 @@ train.main()
 ```shell #test id="xtuner-train-smoke"
 ls -t /tmp/xtuner_sft_llm_out_single/*.pth 2>/dev/null | head -1
 echo "---SAMPLE_OUTPUT---"
-awk 'BEGIN{c=0} /Sample output:/{c++; if(c>1) exit} {print}' /tmp/xtuner_sft_llm_out_single/train.log 2>/dev/null | sed -E 's/^[0-9]{2}\/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} - mmengine - (INFO|WARNING|ERROR|DEBUG) - //' | head -25
+# EvaluateChatHook 每个 prompt 打一个 "Sample output:" 段（两个 evaluation_inputs 相邻成对）。
+# awk 从第一个 "Sample output:" 行开始打印（跳过 mmengine 环境信息 dump 等 ~480 行前导日志），
+# 到第 3 个段头（即下一轮 eval）截断——正好覆盖第一轮 eval 的两个 prompt 段。
+awk '/Sample output:/{c++; if(c>2) exit} c>=1 {print}' /tmp/xtuner_sft_llm_out_single/train.log 2>/dev/null | sed -E 's/^[0-9]{2}\/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} - mmengine - (INFO|WARNING|ERROR|DEBUG) - //' | head -25
 ```
 
-输出结果如下：
+输出结果如下（`...` 通配模型生成的具体内容——未训练模型的采样输出每次运行都不同，不能字面比对）：
 
-```shell #test-result id="xtuner-train-smoke"
+```shell #test-result id="xtuner-train-smoke" fuzzy='...'
 /tmp/xtuner_sft_llm_out_single/iter_5.pth
 ---SAMPLE_OUTPUT---
 Sample output:
 <|im_start|>user
 Tellmeaboutthecolor#000000<|im_end|>
 <|im_start|>assistant
-The color #000000 is a hexadecimal color code, which is a shorthand representation of a color in the RGB color model. In RGB color model, each color component is represented by three hexadecimal digits, starting with a '#' symbol.
 ...
 Sample output:
 <|im_start|>user
 Tellmeaboutthecolor#FF5733<|im_end|>
 <|im_start|>assistant
-The color #FF5733 is a shade of yellow-green, specifically a vibrant and energetic hue. It is a combination of yellow and green, with yellow being the dominant color and green serving as a secondary or accent color.
 ...
 ```
 
@@ -799,8 +802,9 @@ train.main()
 ```shell #test id="xtuner-train-smoke-multi"
 ls -t /tmp/xtuner_sft_llm_out_multi/*.pth 2>/dev/null | head -1
 echo "---SAMPLE_OUTPUT---"
-# 跟 xtuner-train-smoke 同样的 awk + sed 修复
-awk 'BEGIN{c=0} /Sample output:/{c++; if(c>1) exit} {print}' /tmp/xtuner_sft_llm_out_multi/train.log 2>/dev/null | sed -E 's/^[0-9]{2}\/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} - mmengine - (INFO|WARNING|ERROR|DEBUG) - //' | head -25
+# 跟 xtuner-train-smoke 同样的 awk + sed 修复：从第一个 "Sample output:" 段头开始打印，
+# 第 3 个段头截断，覆盖第一轮 eval 的两个 prompt 段。
+awk '/Sample output:/{c++; if(c>2) exit} c>=1 {print}' /tmp/xtuner_sft_llm_out_multi/train.log 2>/dev/null | sed -E 's/^[0-9]{2}\/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} - mmengine - (INFO|WARNING|ERROR|DEBUG) - //' | head -25
 ```
 
 输出结果如下：
@@ -824,6 +828,11 @@ Tellmeaboutthecolor#FF5733<|im_end|>
 训练产物是 LoRA adapter 的 `.pth`（只含 adapter 参数；要转 HuggingFace 格式再合并到 base）。下面烟囱测 `xtuner convert` 的两个子命令 `pth_to_hf` 和 `merge` 都可用：
 
 ```shell #test id="xtuner-convert-help"
+# cd 进 clone 目录再调 console script：CANN 的 set_env.sh 给 PYTHONPATH 留了尾部空 entry，
+# 等于把 cwd 挂进 sys.path；从 clone 的父目录跑 `xtuner` 会把 clone 根目录（无 __init__.py）
+# 误判成 namespace package，`from xtuner import cli` 直接 ImportError。cd 进 clone 后
+# cwd 上命中的是真正的 xtuner 包，console script 正常（list-cfg 块同理绕开 wrapper）。
+cd xtuner
 out=$(xtuner convert --help 2>&1)
 echo "lines: $(echo "$out" | wc -l)"
 echo "has_pth_to_hf_subcmd: $(xtuner convert pth_to_hf --help >/dev/null 2>&1 && echo True || echo False)"
@@ -841,10 +850,12 @@ has_merge_subcmd: True
 
 CI smoke 真跑 `pth_to_hf` + `merge`：
 
-```shell #test-setup
+```shell #test-setup load="xtuner_llm_cfg_path>>cfg" load="xtuner_weights_path>>weights_dir"
 # merge 入口也会触发 transformers.bloom → torchvision.transforms，复用上面 smoke-setup 建好的 stub。
-# 这里直接 export PYTHONPATH，不重写 stub 内容。
-export PYTHONPATH=/tmp/torchvision_stub${PYTHONPATH:+:$PYTHONPATH}
+# pth_to_hf 的第一个参数是 cfg 文件（copy-cfg 存下的 <cfg>），不是 /tmp/xtuner_npu_llm_cfg.py 目录；
+# merge 的 LLM 参数用 pull-weights 存下的 <weights_dir>——modelscope cache 目录结构随版本变化
+# （新版是 ./qwen/models/qwen--Qwen1.5-1.8B-Chat/snapshots/master/），不能写死字面路径。
+export PYTHONPATH=/tmp/torchvision_stub:/tmp/cv2_stub${PYTHONPATH:+:$PYTHONPATH}
 
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 src_pth=$(ls -t /tmp/xtuner_sft_llm_out_single/*.pth 2>/dev/null | head -1)
@@ -854,15 +865,15 @@ merged_dir=/tmp/xtuner_sft_llm_out_single/merged
 rm -rf "$hf_dir" "$merged_dir"
 mkdir -p "$hf_dir" "$merged_dir"
 
-# pth → hf（PEFT 格式：adapter_config.json + adapter_model.safetensors）
+# pth → hf（PEFT 格式：adapter_config.json + adapter_model.bin）
 python -m xtuner.tools.model_converters.pth_to_hf \
-    /tmp/xtuner_npu_llm_cfg.py \
+    <cfg> \
     "$src_pth" \
     "$hf_dir"
 
-# merge（PEFT adapter 合并回 base → 3.5 GB safetensors）
+# merge（PEFT adapter 合并回 base → sharded pytorch_model-*.bin，~3.5 GB）
 python -m xtuner.tools.model_converters.merge \
-    ./qwen/Qwen1.5-1.8B-Chat \
+    <weights_dir> \
     "$hf_dir" \
     "$merged_dir" \
     --max-shard-size 2GB
@@ -871,13 +882,13 @@ python -m xtuner.tools.model_converters.merge \
 验合并产物落盘：
 
 ```shell #test id="xtuner-merge-verify"
-ls -t /tmp/xtuner_sft_llm_out_single/merged/*.safetensors 2>/dev/null | head -3
+ls -t /tmp/xtuner_sft_llm_out_single/merged/*.bin 2>/dev/null | head -3
 ```
 
-输出结果如下：
+输出结果如下（`xxx` 通配 shard 编号与个数；1.8B fp16 ≈ 3.5 GB 按 2GB 分片）：
 
 ```shell #test-result id="xtuner-merge-verify" fuzzy='xxx'
-/tmp/xtuner_sft_llm_out_single/merged/model.safetensors
+/tmp/xtuner_sft_llm_out_single/merged/pytorch_modelxxx.bin
 ```
 
 ### 与模型对话
@@ -885,6 +896,8 @@ ls -t /tmp/xtuner_sft_llm_out_single/merged/*.safetensors 2>/dev/null | head -3
 合并完权重后，可以直接用 `xtuner chat` 跟模型对话。下面烟囱测 `xtuner chat --help` 退出码 0 + 关键参数 `--adapter` / `--prompt-template` / `--system-template` 都存在：
 
 ```shell #test id="xtuner-chat-help"
+# 同 xtuner-convert-help：cd 进 clone 目录，避开 cwd 上 namespace package 的坑。
+cd xtuner
 out=$(xtuner chat --help 2>&1)
 echo "lines: $(echo "$out" | wc -l)"
 echo "has_adapter_arg: $(echo "$out" | grep -c -- '--adapter')"
@@ -904,53 +917,52 @@ has_system_template_arg: xxx
 
 CI smoke 真跑 chat（merged 版，复用上面 `xtuner-merge-verify` 合并后的 1.8B merged/ 目录，qwen_chat + colorist system-template）：
 
-```shell #test-setup
-# chat.py 入口也会触发 transformers → torchvision，复用上面 smoke-setup 建好的 stub：
-export PYTHONPATH=/tmp/torchvision_stub${PYTHONPATH:+:$PYTHONPATH}
-
-source /usr/local/Ascend/ascend-toolkit/set_env.sh
-```
-
 ```shell #test id="xtuner-chat-merged"
-# stdin pipe 喂 prompt + EXIT：chat.py 是 while True 交互式循环，没 --input flag，
-# 只能 stdin 喂；第一个输入是 prompt，第二个输入 EXIT 触发 chat.py 退出。
+# chat.py 顶层 import 链会撞坏 torchvision（timm 拉进来的 torchvision 在 NPU 上缺 C++ op），
+# 用 smoke-setup 建好的 stub 放 PYTHONPATH 最前绕开。export 必须写在本块里——
+# 每个代码块都是独立 bash，上一个 setup 块的 export 不会带过来。
+export PYTHONPATH=/tmp/torchvision_stub:/tmp/cv2_stub${PYTHONPATH:+:$PYTHONPATH}
+# chat.py 的 get_input() 用 iter(input, '') 收输入：空行（double enter）提交 prompt，
+# 再输 EXIT + 空行退出；只喂 "prompt\nEXIT" 会在等空行时 EOF 崩溃。
+# 生成内容每次不同，用 grep 只抓确定性标记行（模型加载行 + 干净退出行）。
 # --no-streamer 关掉 TextStreamer 增量 stream（CI 抓 stdout 比对要完整输出）。
-echo -e "Tell me about the color #66ccff\nEXIT" | \
+echo -e "Tell me about the color #66ccff\n\nEXIT\n" | \
 python -m xtuner.tools.chat /tmp/xtuner_sft_llm_out_single/merged \
     --prompt-template qwen_chat \
     --system-template colorist \
     --no-streamer \
-    --max-new-tokens 64 2>&1 | tail -n 5
+    --max-new-tokens 64 2>&1 | grep -E "^Load LLM from|Log: Exit!"
 ```
 
 输出结果如下：
 
-```shell #test-result id="xtuner-chat-merged" fuzzy='xxx' fuzzy='...'
+```shell #test-result id="xtuner-chat-merged"
 Load LLM from /tmp/xtuner_sft_llm_out_single/merged
-xxx
-Log: Exit!
+...Log: Exit!
 ```
 
 不合并、只跟 LLM + LoRA adapter 直接对话（adapter 版）：
 
-```shell #test id="xtuner-chat-adapter"
-# 不合并、只跟 base + LoRA adapter 直接对话：--adapter 指向 pth_to_hf 输出的 iter_*_hf 目录。
+```shell #test id="xtuner-chat-adapter" load="xtuner_weights_path>>weights_dir"
+# 不合并、只跟 base + LoRA adapter 直接对话：--adapter 指向 pth_to_hf 输出的 iter_*_hf 目录，
+# base 模型用 pull-weights 存下的 <weights_dir>（modelscope cache 目录结构，不能写死字面路径）。
+# stub PYTHONPATH + double-enter stdin 的原因同 xtuner-chat-merged。
+export PYTHONPATH=/tmp/torchvision_stub:/tmp/cv2_stub${PYTHONPATH:+:$PYTHONPATH}
 hf_dir=$(ls -td /tmp/xtuner_sft_llm_out_single/iter_*_hf 2>/dev/null | head -1)
 [ -n "$hf_dir" ] || { echo "no iter_*_hf from pth_to_hf step"; exit 1; }
-echo -e "Tell me about the color #66ccff\nEXIT" | \
-python -m xtuner.tools.chat ./qwen/Qwen1.5-1.8B-Chat \
+echo -e "Tell me about the color #66ccff\n\nEXIT\n" | \
+python -m xtuner.tools.chat <weights_dir> \
     --adapter "$hf_dir" \
     --prompt-template qwen_chat \
     --system-template colorist \
     --no-streamer \
-    --max-new-tokens 64 2>&1 | tail -n 5
+    --max-new-tokens 64 2>&1 | grep -E "^Load LLM from|^Load adapter from|Log: Exit!"
 ```
 
 输出结果如下：
 
-```shell #test-result id="xtuner-chat-adapter" fuzzy='xxx' fuzzy='...'
-Load LLM from ./qwen/Qwen1.5-1.8B-Chat
+```shell #test-result id="xtuner-chat-adapter" load="xtuner_weights_path>>weights_dir" fuzzy='xxx' fuzzy='...'
+Load LLM from <weights_dir>
 Load adapter from /tmp/xtuner_sft_llm_out_single/iter_xxx_hf
-...
-Log: Exit!
+...Log: Exit!
 ```

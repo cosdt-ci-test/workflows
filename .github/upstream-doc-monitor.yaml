@@ -39,3 +39,12 @@ projects:
     source:
       type: web_page
       url: https://ascend.github.io/docs/sources/lm_evaluation/quick_start.html
+  # CI 效果验证用条目：监控 lltiaor 自己的测试仓库文档（public），
+  # 改 doc.md 内容 → 下一轮 dispatch 触发 changed → 建工单 @lltiaor。
+  # 验证完成后删除本条目。
+  - project: ci-test
+    owner: lltiaor
+    source:
+      type: repo_file
+      repo: lltiaor/doc-test
+      path: doc.md

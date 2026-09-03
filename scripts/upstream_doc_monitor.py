@@ -353,7 +353,7 @@ class IssueSync:
             return payload.get("state")
         return None
 
-    def create(self, title: str, body: str, owner: str | None) -> str | None:
+    def create(self, title: str, body: str) -> str | None:
         """新建工单，返回 issue API url；失败返回 None（不中断）。"""
         url = f"{API_BASE}/repos/{self.repo}/issues"
         try:
@@ -370,10 +370,7 @@ class IssueSync:
             print(f"issue-sync: WARN create returned HTTP {status}", file=sys.stderr)
             return None
         data = json.loads(resp_body) if resp_body else {}
-        api_url = data.get("url")
-        if api_url and owner:
-            self._try_assign(api_url, owner)
-        return api_url
+        return data.get("url")
 
     def comment(self, issue_api_url: str, body: str) -> bool:
         try:
@@ -388,15 +385,6 @@ class IssueSync:
             print(f"issue-sync: WARN comment failed: {exc}", file=sys.stderr)
             return False
         return status == 201
-
-    def _try_assign(self, issue_api_url: str, owner: str) -> None:
-        """尽力设置 assignee；非协作者会被 GitHub 拒绝，静默跳过。"""
-        try:
-            http_with_retry(issue_api_url, method="PATCH", token=self.token,
-                            headers=gh_headers(),
-                            data=json.dumps({"assignees": [owner]}).encode("utf-8"))
-        except Exception:  # noqa: BLE001 - assignee 是尽力而为
-            pass
 
 
 # ---------------------------------------------------------------------------
@@ -420,16 +408,13 @@ def _doc_links(entry: dict) -> tuple[str, str | None]:
     return entry["url"], None
 
 
-def _ticket_intro(entry: dict, mention: str) -> str:
-    lines = []
-    if mention:
-        lines.append(mention)
-    lines += [
+def _ticket_intro(entry: dict) -> str:
+    lines = [
         "## 监控项",
         "",
         f"- 项目：`{entry['project']}`",
         f"- 文档：{_doc_target(entry)}",
-        f"- 处理人：{'@' + entry['owner'] if entry['owner'] else '（未指定）'}",
+        f"- 处理人：{entry['owner'] if entry['owner'] else '（未指定）'}",
         "",
         "> 本工单由 `upstream-doc-monitor` 自动维护：该文档的内容变化与检测"
         "异常都会以评论追加到这里。处理完成后请关闭本工单；下次事件会新建新工单。",
@@ -739,8 +724,8 @@ def _sync_events(syncer: IssueSync, entry: dict, prior: dict, events: list[str],
         # 状态由调用方置 ok 即可。
         if events == ["recovery"]:
             return None, "none"
-        intro = _ticket_intro(entry, mention)
-        issue_url = syncer.create(title, intro, entry["owner"])
+        intro = _ticket_intro(entry)
+        issue_url = syncer.create(title, intro)
         if not issue_url:
             print(f"ticket: WARN create failed for {entry['key']}", file=sys.stderr)
             return None, "none"

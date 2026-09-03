@@ -1,6 +1,6 @@
 # Quick Start (Ascend NPU)
 
-在单卡昇腾 NPU 上跑 [Speculators](https://github.com/vllm-project/speculators) 端到端：转换 DFlash draft → 抽训练数据 → torchrun 训 draft → `vllm serve` 挂载 draft 做推理 smoke。配套 vllm-ascend 0.23.0 + vLLM 0.23.0。
+在单卡昇腾 NPU 上跑 [Speculators](https://github.com/vllm-project/speculators) 端到端：转换 DFlash draft → 抽训练数据 → torchrun 训 draft → `vllm serve` 挂载 draft 做推理 smoke。
 
 ## 前置条件
 
@@ -22,7 +22,7 @@ Atlas 900 A2 / A3 或 Ascend 950 系列 NPU，至少 1 卡。
 
 swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/vllm-ascend/vllm-ascend:v0.23.0
 
-镜像预装 vllm 0.23.0 + vllm-ascend 0.23.0 + triton-ascend 3.2.2 + torch 2.10.0+cpu + torch_npu 2.10.0.post4 + CANN 9.1.0 + Python 3.12，**直接用**——`vllm_ascend_C.so` 是按 torch 2.10 的 `at::Tag` namespace 编的，跟镜像预装 torch 自洽；不要 `pip install` 升 torch / torch_npu，torch_npu 2.11 / 2.12 公网没有任何镜像能下到（Aliyun / Tsinghua / Huawei 全 404）。
+镜像预装 vllm 0.23.0 + vllm-ascend 0.23.0 + triton-ascend 3.2.2 + torch 2.10.0+cpu + torch_npu 2.10.0.post4 + torchvision 0.25.0+cpu + torchaudio 2.10.0+cpu + transformers 5.5.4 + modelscope 1.39.1 + CANN 9.1.0 + Python 3.12。
 
 **软件版本**：
 
@@ -30,14 +30,16 @@ swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/vllm-ascend/vllm-ascen
 | --- | --- |
 | Python | 3.12 |
 | CANN | 9.1.0 |
-| torch | 2.10.0+cpu（镜像预装，不要动） |
-| torch_npu | 2.10.0.post4（镜像预装，不要动） |
+| torch | 2.10.0+cpu（镜像预装） |
+| torch_npu | 2.10.0.post4（镜像预装） |
+| torchvision | 0.25.0+cpu（镜像预装，vllm-ascend Required-by） |
+| torchaudio | 2.10.0+cpu（镜像预装） |
 | vllm | 0.23.0（镜像预装） |
 | vllm-ascend | 0.23.0（镜像预装） |
 | triton-ascend | 3.2.2（镜像预装） |
 | triton | 3.5.0（镜像预装） |
-| transformers | 由 `speculators` 透传拉入（>=4.56.1,<5.15.0） |
-| modelscope | 1.37.0 |
+| transformers | 5.5.4（镜像预装；speculators 透传范围 >=4.56.1,<5.15.0） |
+| modelscope | 1.39.1（镜像预装；下面步骤会钉到 1.37.0） |
 | speculators | 最新 release |
 | draft 模型 | z-lab/Qwen3-8B-DFlash-b16 |
 | verifier | Qwen/Qwen3-8B |
@@ -64,39 +66,35 @@ python --version
 Python 3.12.xxx
 ```
 
-确认镜像预装的 torch / torch_npu stack 不被改过：
+确认镜像预装的 torch / torch_npu stack 不被改过（防御性 rollback：万一之前有人 `pip install torch` 升到 2.12 撞 ABI，这里强制拉回 2.10.0+cpu）：
 
 ```shell #test-setup id="check-torch-stack"
-# torch 2.10.0+cpu + torch_npu 2.10.0.post4 是镜像预装；这两个的
-# `at::Tag` namespace 跟 vllm_ascend_C.so 对得上。如果之前有人 pip
-# install 过 torch / torch_npu（试图升级到 2.12），这里会被撞出
-# torch_npu dlopen 失败（libtorch_cpu.so 的 _def 用了新 namespace）。
-# 镜像预装 wheel 是 PEP 660 不可变缓存 wheel，--upgrade 在大跨度不替换，
-# 所以 --force-reinstall 还得带上版本号才能拉回镜像原版。
 pip install --force-reinstall --no-deps \
   -f https://mirrors.aliyun.com/pytorch-wheels/cpu \
   'torch==2.10.0+cpu'
-# torchvision 0.25+cpu 是 torch 2.10 的 ABI 匹配版本（vllm 加载
-# transformers qwen2_vl image_processor 会强 import torchvision；
-# text-only Qwen3 也会走这条 import 路径触发 ModuleNotFoundError）。
-# 不要装 torchvision 0.26/0.27+cpu——那是 torch 2.11/2.12 ABI，会让
-# `import vllm_ascend` 抛 `RuntimeError: operator torchvision::nms
-# does not exist`
-pip install --no-deps \
-  -f https://mirrors.aliyun.com/pytorch-wheels/cpu \
-  'torchvision==0.25.0+cpu'
 ```
 
 > ⚠ **Step 3a（launch_vllm）和 Step 4（vllm serve）启动前必须设 `TORCHDYNAMO_DISABLE=1` + `--enforce-eager`。**
 >
 > flex_attention 在 dynamo capture 阶段会撞 torch_npu 不支持的 HOP / UB，trace 时直接抛 `Unsupported: Import failure`；关掉 dynamo + cudagraph，让 vllm 走纯 eager 路径就稳。`TORCHDYNAMO_DISABLE=1` 必须 export 在 shell 里、不能塞进 vllm 进程命令行（vllm 自己 fork 之后才会去读 env）。
+>
+> **torch / torch_npu 不要 pip install 升级**：vllm_ascend_C.so 是按 torch 2.10 的 `at::Tag` namespace 编的；torch 2.11 / 2.12 公网没有任何镜像能下 torch_npu post 版本（Aliyun / Tsinghua / Huawei 全 404），所以连「升 torch + 升 torch_npu」这条路都走不通。
 
-加载 CANN env 并验证镜像预装的 vllm-ascend 栈（应输出下表的版本号）：
+加载 CANN env 并验证镜像预装的 vllm-ascend 栈（含 torch / torch_npu / torchvision / torchaudio / transformers / vllm / vllm-ascend / triton*）：
 
 ```shell #test id="verify-vllm-stack"
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 
-python -c "import torch, torch_npu; print(f'torch={torch.__version__}'); print(f'torch_npu={torch_npu.__version__}'); print('is_available:', torch.npu.is_available()); print('npu_count:', torch.npu.device_count())"
+python -c "
+import torch, torch_npu, torchvision, torchaudio, transformers
+print(f'torch={torch.__version__}')
+print(f'torch_npu={torch_npu.__version__}')
+print(f'torchvision={torchvision.__version__}')
+print(f'torchaudio={torchaudio.__version__}')
+print(f'transformers={transformers.__version__}')
+print('is_available:', torch.npu.is_available())
+print('npu_count:', torch.npu.device_count())
+"
 
 python -c "import importlib.metadata; print(f'vllm={importlib.metadata.version(\"vllm\")}')"
 python -c "import importlib.metadata; print(f'vllm_ascend={importlib.metadata.version(\"vllm-ascend\")}')"
@@ -109,6 +107,9 @@ python -c "import importlib.metadata; print(f'triton={importlib.metadata.version
 ```shell #test-result id="verify-vllm-stack" fuzzy='xxx'
 torch=2.10.0+cpu
 torch_npu=2.10.0.post4
+torchvision=0.25.0+cpu
+torchaudio=2.10.0+cpu
+transformers=xxx
 is_available: True
 npu_count: xxx
 vllm=0.23.0+empty
@@ -117,15 +118,10 @@ triton_ascend=3.2.2
 triton=3.5.0
 ```
 
-装 modelscope（用来从 ModelScope 拉权重；镜像不含）：
-
-```shell #test-setup
-uv pip install 'modelscope==1.37.0'
-```
-
-确认 modelscope 版本：
+装 modelscope：
 
 ```shell #test id="install-deps"
+uv pip install 'modelscope==1.37.0'
 python -c "import modelscope; print(f'modelscope={modelscope.__version__}')"
 ```
 

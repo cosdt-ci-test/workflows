@@ -244,6 +244,7 @@ ls output/ComfyUI_*.png | tail -n 1
 ## 检查生成结果
 
 ```shell #test id="check-png"
+cd ComfyUI
 python -c "
 import glob
 paths = glob.glob('output/ComfyUI_*.png')

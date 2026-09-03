@@ -665,18 +665,6 @@ PYEOF
 # 跑得通，不需要 monkey-patch。
 
 cp <cfg> /tmp/xtuner_npu_smoke_single_cfg.py
-# 把 evaluation_inputs 换成 colors 相关的（cfg 默认是上海景点中英文），并把 max_length 从
-# 2048 降到 256 —— colors 样本短，1024 够用；降 max_length 能省 activation memory。
-# 用 Python append 块给 cfg 末尾加 samples_per_epoch 限定 + eval 输入覆盖：
-cat >> /tmp/xtuner_npu_smoke_single_cfg.py <<'EOF'
-
-train_dataloader = dict(dataset=dict(samples_per_epoch=5))
-custom_hooks[1].evaluation_inputs = [
-    "Tell me about the color #000000",
-    "Tell me about the color #FF5733",
-]
-train_dataset = dict(max_length=256)
-EOF
 
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 export TORCH_NPU_USE_HCCL=1
@@ -705,6 +693,14 @@ set -o pipefail
 # 就拿到，绕过 (unknown location) 路径。`cd xtuner` 是因为框架 cwd 在 projects/xtuner/，而
 # `xtuner` 子目录才是 clone 的源——直接 cd 进源目录让 cwd 自带 xtuner package，规避任何 finder 的
 # path 漂移。
+#
+# 5 处 --cfg-options override：
+#   train_cfg.max_iters=5                                       # 限 5 iter 跑通就够，不训 full epoch
+#   default_hooks.checkpoint.interval=1                         # 每 iter 落盘，方便验 .pth
+#   custom_hooks.1.every_n_iters=1                              # EvaluateChatHook 每 iter 打 Sample output
+#   custom_hooks.1.evaluation_inputs=[color prompts]            # 覆盖 cfg 默认的上海景点中英文 prompt
+#   train_dataset.max_length=256                                # colors 样本短，2048 太浪费
+#   optim_wrapper.accumulative_counts=1                          # 5 iter smoke 不需要梯度累积
 cd xtuner
 python -c "
 import sys
@@ -712,9 +708,12 @@ sys.argv = ['xtuner.tools.train',
             '/tmp/xtuner_npu_smoke_single_cfg.py',
             '--work-dir', '/tmp/xtuner_sft_llm_out_single',
             '--cfg-options',
-            'train_cfg.max_epochs=1',
+            'train_cfg.max_iters=5',
             'default_hooks.checkpoint.interval=1',
-            'custom_hooks.1.every_n_iters=1']
+            'custom_hooks.1.every_n_iters=1',
+            'custom_hooks.1.evaluation_inputs=[Tell me about the color #000000, Tell me about the color #FF5733]',
+            'train_dataset.max_length=256',
+            'optim_wrapper.accumulative_counts=1']
 import xtuner.tools  # noqa: F401  触发 xtuner/__init__.py + xtuner.tools 子模块加载
 from xtuner.tools import train
 train.main()
@@ -835,15 +834,6 @@ PYEOF
 # bnb 在 patch-cfg 阶段已经从 cfg 里 strip 干净，smoke 这边无需再处理（详见 single-setup 注释）。
 
 cp <cfg> /tmp/xtuner_npu_smoke_multi_cfg.py
-cat >> /tmp/xtuner_npu_smoke_multi_cfg.py <<'EOF'
-
-train_dataloader = dict(dataset=dict(samples_per_epoch=5))
-custom_hooks[1].evaluation_inputs = [
-    "Tell me about the color #000000",
-    "Tell me about the color #FF5733",
-]
-train_dataset = dict(max_length=256)
-EOF
 
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 export TORCH_NPU_USE_HCCL=1
@@ -855,6 +845,7 @@ set -o pipefail
 # 同 single-setup 注释：进入 train 之前 import xtuner.engine._strategy 强制 xtuner.__init__.py
 # 完整跑完 + DS_CEPH_DIR 落到 sys.modules，规避 LazyObject.build() 再 import 时把 xtuner 当
 # namespace package 触发 `from xtuner import DS_CEPH_DIR` ImportError。
+# 5 处 --cfg-options override 同 single-setup 注释。
 cd xtuner
 NPROC_PER_NODE=2 python -c "
 import sys
@@ -862,9 +853,12 @@ sys.argv = ['xtuner.tools.train',
             '/tmp/xtuner_npu_smoke_multi_cfg.py',
             '--work-dir', '/tmp/xtuner_sft_llm_out_multi',
             '--cfg-options',
-            'train_cfg.max_epochs=1',
+            'train_cfg.max_iters=5',
             'default_hooks.checkpoint.interval=1',
-            'custom_hooks.1.every_n_iters=1']
+            'custom_hooks.1.every_n_iters=1',
+            'custom_hooks.1.evaluation_inputs=[Tell me about the color #000000, Tell me about the color #FF5733]',
+            'train_dataset.max_length=256',
+            'optim_wrapper.accumulative_counts=1']
 import xtuner.tools  # noqa: F401
 from xtuner.tools import train
 train.main()

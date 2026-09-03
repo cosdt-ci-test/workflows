@@ -174,7 +174,7 @@ python -c "from modelscope import snapshot_download; print(snapshot_download('z-
 python -c "from modelscope import snapshot_download; print(snapshot_download('Qwen/Qwen3-8B'))" | tail -n 1
 ```
 
-### Step 1：convert（DFlash 算法）
+### convert（DFlash 算法）
 
 `speculators convert` 把本地 draft + verifier 读进来按 DFlash 算法重映射权重、写到 `/root/dflash-qwen3-8b-converted/`。CLI 的 `--algorithm` 不支持 `dflash`，走 Python API：
 
@@ -209,7 +209,7 @@ echo <dflash_path>
 /root/dflash-qwen3-8b-converted
 ```
 
-### Step 2：训练数据预处理
+### 训练数据预处理
 
 用上游 `scripts/prepare_data.py` 把 JSONL chat 数据 tokenize 写到 `/root/dflash-train-data/`（HF arrow 数据集）：
 
@@ -272,7 +272,7 @@ token_freq keys: xxx
 len: xxx
 ```
 
-### Step 3：训练（单卡 torchrun）
+### 训练（单卡 torchrun）
 
 单卡 64 GB NPU 装不下「vllm 16 GB 权重 + KV + train draft 模型 + optimizer 激活」并发跑，所以拆成两步：先生成 hidden_states 缓存，再离线训。
 
@@ -473,40 +473,20 @@ echo "$CHECKPOINT_DIR"
 echo <checkpoint_path>
 ls -1 <checkpoint_path>
 head -10 /tmp/train.log
-echo "..."
+
 tail -10 /tmp/train.log
 ```
 
 输出结果如下：
 
-```shell #test-result id="pipeline-step3-train" fuzzy='xxx'
+```shell #test-result id="pipeline-step3-train"
 /root/dflash-trained
 config.json
 model.safetensors
-xxx
-xxx
-xxx
-xxx
-xxx
-xxx
-xxx
-xxx
-xxx
-xxx
 ...
-xxx
-xxx
-xxx
-xxx
-xxx
-xxx
-xxx
-xxx
-xxx
-xxx
 ```
 
-### Step 4：`vllm serve` 挂 draft 做推理
+### `vllm serve` 挂 draft 做推理
 
 起 vllm-ascend serve 把训好的 draft 挂上做 chat completion smoke（8 token completion）：
 

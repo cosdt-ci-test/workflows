@@ -57,6 +57,9 @@ npu-smi info
 ```shell #test id="check-py"
 python --version
 ```
+
+输出结果如下：
+
 ```shell #test-result id="check-py" fuzzy='xxx'
 Python 3.12.xxx
 ```
@@ -101,6 +104,8 @@ python -c "import importlib.metadata; print(f'triton_ascend={importlib.metadata.
 python -c "import importlib.metadata; print(f'triton={importlib.metadata.version(\"triton\")}')"
 ```
 
+输出结果如下：
+
 ```shell #test-result id="verify-vllm-stack" fuzzy='xxx'
 torch=2.10.0+cpu
 torch_npu=2.10.0.post4
@@ -123,6 +128,8 @@ uv pip install 'modelscope==1.37.0'
 ```shell #test id="install-deps"
 python -c "import modelscope; print(f'modelscope={modelscope.__version__}')"
 ```
+
+输出结果如下：
 
 ```shell #test-result id="install-deps"
 modelscope=1.37.0
@@ -147,6 +154,8 @@ uv pip install -e .
 speculators --version
 python -c "from importlib.metadata import version; print('speculators', version('speculators'))"
 ```
+
+输出结果如下：
 
 ```shell #test-result id="speculators-install-source" fuzzy='xxx'
 speculators version: xxx
@@ -195,6 +204,8 @@ echo "/root/dflash-qwen3-8b-converted"
 ls -1 <dflash_path>/config.json <dflash_path>/model.safetensors
 echo <dflash_path>
 ```
+
+输出结果如下：
 
 ```shell #test-result id="pipeline-step1-convert"
 /root/dflash-qwen3-8b-converted/config.json
@@ -254,6 +265,8 @@ print('token_freq keys:', list(freq.keys()) if isinstance(freq, dict) else type(
 print('len:', len(freq))
 "
 ```
+
+输出结果如下：
 
 ```shell #test-result id="pipeline-step2-extract" fuzzy='xxx'
 /root/dflash-train-data
@@ -459,6 +472,8 @@ echo <checkpoint_path>
 ls -1 <checkpoint_path>
 ```
 
+输出结果如下：
+
 ```shell #test-result id="pipeline-step3-train"
 /root/dflash-trained
 config.json
@@ -504,6 +519,8 @@ curl -sS http://127.0.0.1:8000/v1/chat/completions \
 kill "$VLLM_PID" 2>/dev/null || true
 ```
 
+输出结果如下：
+
 ```shell #test-result id="pipeline-step4-serve" fuzzy='xxx'
 {"id":"chatcmpl-xxx","object":"chat.completion","created":xxx,"model":"Qwen/Qwen3-8B","choices":[{"index":0,"message":{"role":"assistant","content":"xxx"},"finish_reason":"length"}]}
 ```
@@ -534,6 +551,7 @@ print("proposal speculative_tokens:", proposal.speculative_tokens)
 PY
 ```
 
+输出结果如下：
 ```shell #test-result id="config-import"
 verifier: /root/.cache/modelscope/hub/models/Qwen/Qwen3-8B
 verifier architectures: ['Qwen3ForCausalLM']

@@ -77,7 +77,7 @@ git checkout <UPSTREAM_REF>
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 cd wenet
 pip install -e .
-pip install torch==2.2.0 torch-npu==2.2.0.post2
+pip install torch==2.2.0 torch-npu==2.2.0
 pip install torchaudio==2.2.0 --index-url https://download.pytorch.org/whl/cpu
 pip install "deepspeed==0.14.4" tensorboardX
 pip install "numpy<2"

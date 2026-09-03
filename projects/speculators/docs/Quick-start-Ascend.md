@@ -472,14 +472,20 @@ echo "$CHECKPOINT_DIR"
 ```shell #test id="pipeline-step3-train" load="checkpoint_path>>checkpoint_path"
 echo <checkpoint_path>
 ls -1 <checkpoint_path>
+# 训练日志行数 + 最后一条 loss/epoch 类行（验 trainer 真在跑、loss 真在出）
+# `|| echo ...` 防 grep 0 命中在 set -euo pipefail 下整块 abort
+grep -c -E "(loss|epoch)" /tmp/train.log || echo "0"
+grep -E "(loss|epoch)" /tmp/train.log | tail -1 || echo "(no loss line)"
 ```
 
 输出结果如下：
 
-```shell #test-result id="pipeline-step3-train"
+```shell #test-result id="pipeline-step3-train" fuzzy='xxx'
 /root/dflash-trained
 config.json
 model.safetensors
+xxx
+xxx
 ```
 
 ### Step 4：`vllm serve` 挂 draft 做推理

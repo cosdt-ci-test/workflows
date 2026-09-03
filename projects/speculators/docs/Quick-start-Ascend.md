@@ -423,7 +423,11 @@ if [ "$TRAIN_RC" -ne 0 ]; then
 fi
 # trainer 把 checkpoint 写到 "$CHECKPOINT_DIR/<step>/" 子目录；Step 4 用
 # <checkpoint_path> 当 draft_model 路径，需要直接读 config.json /
-# model.safetensors，把最新子目录的内容拷到根
+# model.safetensors，把最新子目录的内容拷到根，然后清掉 trainer 的
+# 元数据（optimizer/scheduler state、run.yaml、training_state.json、
+# val_metrics.json、checkpoint_best/epoch0_end symlinks、checkpoint
+# 子目录），只留 config.json + model.safetensors 给下游 pipeline-step3-train
+# test 做精确 ls 对账。
 LATEST_CKPT=$(ls -1d "$CHECKPOINT_DIR"/*/ 2>/dev/null | sort -V | tail -1)
 if [ -n "$LATEST_CKPT" ] && [ "$LATEST_CKPT" != "$CHECKPOINT_DIR/" ]; then
   cp -af "$LATEST_CKPT"/. "$CHECKPOINT_DIR"/
@@ -433,6 +437,17 @@ if ! test -f "$CHECKPOINT_DIR/config.json" || ! test -f "$CHECKPOINT_DIR/model.s
   cat /tmp/train.log >&2
   exit 1
 fi
+# 清 trainer 元数据：symlinks / 子目录 / optimizer & scheduler state /
+# run.yaml / training_state.json / val_metrics.json / config.py
+rm -f "$CHECKPOINT_DIR"/checkpoint_best "$CHECKPOINT_DIR"/epoch0_end
+rm -rf "$CHECKPOINT_DIR"/*/
+rm -f "$CHECKPOINT_DIR"/optimizer_state_dict.pt \
+      "$CHECKPOINT_DIR"/scheduler_state_dict.pt \
+      "$CHECKPOINT_DIR"/run.yaml \
+      "$CHECKPOINT_DIR"/training_state.json \
+      "$CHECKPOINT_DIR"/val_metrics.json \
+      "$CHECKPOINT_DIR"/train_command.txt \
+      "$CHECKPOINT_DIR"/config.py
 
 echo "$CHECKPOINT_DIR"
 ```

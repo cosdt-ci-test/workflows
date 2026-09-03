@@ -21,6 +21,18 @@
 
 跑通后看[文末附录 A](appendix-bnb)了解为什么本文档用 plain LoRA 而不是 QLoRA。
 
+## 占位符约定
+
+文档里 `xxx` 是 fuzzy 匹配（实际值任意），下面 3 个 `<尖括号>` 是**前序步骤的输出值**，每步替换成实际值：
+
+| 占位符 | 来源 | 典型值 |
+| --- | --- | --- |
+| `<ref>` | 工作流引擎自动注入的 xtuner 最新 release tag（CI 在跑前会从 GitHub releases 取）。**本地手动跑**：到 https://github.com/InternLM/xtuner/releases 拿最新 tag（如 `v0.2.0`）替换 | `v0.2.0` |
+| `<cfg>` | 「准备配置文件」步骤 `#test-setup` 的输出（store=`xtuner_llm_cfg_path`），是拷出来的 cfg 文件绝对路径。**本地手动跑**：自己跑 `xtuner copy-cfg qwen1_5_1_8b_chat_qlora_custom_sft_e1 /tmp/xtuner_npu_llm_cfg.py` 后用 `ls /tmp/xtuner_npu_llm_cfg.py/` 找 `_copy.py` 后缀的那个文件路径替换 | `/tmp/xtuner_npu_llm_cfg.py/qwen1_5_1_8b_chat_qlora_custom_sft_e1_copy.py` |
+| `<weights_dir>` | 「准备模型权重」步骤 `#test-setup` 的输出（store=`xtuner_weights_path`），是 modelscope 落盘的 Qwen 权重绝对路径。**本地手动跑**：用前一步 `xtuner-pull-weights` 块里 `find ./qwen -name config.json -print -quit` 出来的 `dirname` 结果替换 | `./qwen/qwen/Qwen1.5-1.8B-Chat` |
+
+注意：`<...>` 只在 **shell 命令**里出现（要被实际值替换才能执行）；**正文 prose** 里的 `<cfg>` 字面字符串读起来不代表一个文件路径，只是指代"上面表格里那一行的占位符"。
+
 ## 前置条件
 
 ### 硬件
@@ -172,7 +184,7 @@ uv pip install 'mmengine==0.10.6' 'transformers==4.48.0' 'peft>=0.14.0' 'dataset
 python -c "import xtuner; from xtuner.version import __version__; print('xtuner', __version__)"
 ```
 
-\<ref> 为安装的最新的 release tag。
+\<ref> 为安装的最新 xtuner release tag（详见上方「占位符约定」一节）。
 
 输出结果类似如下：
 
@@ -419,7 +431,7 @@ print(save_path)
 
 ### 修改配置文件
 
-拷出来的 config 跟模板原版完全一致，按下面 4 处修改规则调整。`<cfg>` 是上一节「准备配置文件」store 出来的 cfg 绝对路径：
+拷出来的 config 跟模板原版完全一致，按下面 4 处修改规则调整。`<cfg>` 是上一节「准备配置文件」的输出（详见上方「占位符约定」一节）：
 
 1. `pretrained_model_name_or_path`：替成本地真实权重路径（pull-weights 阶段落盘路径）
 2. `data_files[0]`：替成转换后的 OpenAI 格式 jsonl 绝对路径

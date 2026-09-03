@@ -473,8 +473,8 @@ text = re.sub(
 # 跑 max_iters=5 限 iter，所以 train_cfg 里不能留 max_epochs。`max_epochs` 顶层变量 param_scheduler
 # 还在用（warmup_ratio * max_epochs），不删。
 text, n = re.subn(
-    r"train_cfg = dict\(type=TrainLoop, max_epochs=max_epochs\)",
-    "train_cfg = dict(type=TrainLoop)",
+    r'train_cfg = dict\(type=TrainLoop, max_epochs=max_epochs\)',
+    'train_cfg = dict(type=TrainLoop)',
     text,
 )
 assert n == 1, f'train_cfg max_epochs patch applied {n} times (expected 1)'

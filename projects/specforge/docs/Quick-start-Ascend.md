@@ -88,86 +88,32 @@ npu_count 4
 uv pip install 'modelscope==1.37.0'
 ```
 
-## 源码编译 mooncake
+## 安装 mooncake
 
-`mooncake-transfer-engine` **从源码编译**。`-DUSE_ASCEND_DIRECT=ON` 把 transport 切到 ADXL/HIXL（CANN 内置），整链不再链 libcuda；`-DWITH_STORE=ON` 同时产出 Python `mooncake.store` 模块（specforge eager-import 要它）+ `mooncake_master` 二进制。`-DBUILD_BENCHMARK=OFF` 跳过 tebench 二进制（它把 `libllm_datadist.so` 链进自己，CANN 9.0.0 镜像缺 `libadxl.so` / `libhixl.so` 那些 runtime 符号，链接报 `undefined reference to adxl::* / llm::HcclAdapter::* / hixl::EngineFactory`；specforge 只用 `mooncake.store` + `mooncake_master`，不影响功能）。cmake flags 与 `projects/mooncake/docs/Quick-start-Ascend.md` + `scripts/setup_example.sh` + `release-npu.yaml` 一致。
+直接用 PyPI 上 Mooncake 维护者发布的 `mooncake-transfer-engine-npu` prebuilt wheel（v0.3.13.post1），等价于源码编 `-DUSE_ASCEND_DIRECT=ON`：
+- `mooncake/ascend_transport.so` 已链 ADXL/HIXL（`libascendcl.so` / `libllm_datadist.so` / `libmetadef.so`），无 `libcuda.so.*` DT_NEEDED；
+- auditwheel 把 8 个 bundled libs（libasio / libetcd_wrapper / libgflags / libglog / libjsoncpp / libxxhash / libyaml-cpp / libzstd）打到 site-packages/mooncake/，所有 .so 设 RPATH=$ORIGIN，**不用手动 export LD_LIBRARY_PATH**；
+- `mooncake_master` / `mooncake_client` / `transfer_engine_bench` 作为 console_scripts 自动装到 venv/bin/。
+
+`.post1` 是维护者 PyPI re-upload 时打的 patch（v0.3.13 tag 没 merge），与 source build 同源（[kvcache-ai/Mooncake](https://github.com/kvcache-ai/Mooncake)），glibc 2.35 = manylinux_2_35 匹配 coder jammy。
 
 ```shell #test-setup id="build-mooncake"
 set -euo pipefail
-BUILD_DIR="${MOONCAKE_BUILD_DIR:-/tmp/build-mooncake}"
-MOONCAKE_REF=v0.3.13
-rm -rf "$BUILD_DIR"
-mkdir -p "$BUILD_DIR"
-cd "$BUILD_DIR"
-# 前 11 个与 mooncake/setup_example.sh 一致（仅编 transfer_engine_ascend_direct_perf 够用）；
-# WITH_STORE=ON 额外要 6 个 cmake 包（缺一个 cmake configure 直接 abort）+ 2 个 wheel 打包工具。
+# wheel 不带 libibverbs / libcurl / libnuma，apt 补（libtransfer_engine.so / libmooncake_store.so DT_NEEDED）。
 apt-get update -qq >/dev/null 2>&1
 apt-get install -qq -y --no-install-recommends \
-    build-essential cmake git pkg-config \
-    libgoogle-glog-dev libgflags-dev libibverbs-dev \
-    libjsoncpp-dev libnuma-dev libyaml-cpp-dev \
-    libssl-dev libcurl4-openssl-dev \
-    libzstd-dev libxxhash-dev libzmq3-dev libasio-dev \
-    libboost-dev libmsgpack-dev patchelf file \
-    >/dev/null 2>&1 \
-    || { echo "build-mooncake: FAILED - apt install build deps" >&2; exit 1; }
-git clone --depth 1 https://github.com/kvcache-ai/Mooncake.git \
-    >/tmp/build-mooncake-clone.log 2>&1 \
-    || { echo "build-mooncake: FAILED - mooncake clone:" >&2; tail -20 /tmp/build-mooncake-clone.log >&2; exit 1; }
-cd Mooncake
-git fetch --depth 1 origin "$MOONCAKE_REF" >/dev/null 2>&1
-git checkout FETCH_HEAD >/dev/null 2>&1
-# 直连 GitHub 拉 pybind11 失败时降级到 ghfast.top 镜像（与 mooncake setup_example.sh 同款）。
-if ! git submodule update --init --depth 1 extern/pybind11 >/dev/null 2>&1; then
-    expect=$(git ls-tree HEAD extern/pybind11 | awk '{print $3}')
-    if [[ ! "$expect" =~ ^[0-9a-f]{40}$ ]]; then
-        echo "build-mooncake: FAILED - cannot read pybind11 SHA from tree" >&2
-        exit 1
-    fi
-    rm -rf extern/pybind11
-    mkdir -p extern/pybind11
-    git -C extern/pybind11 init -q
-    git -C extern/pybind11 remote add origin https://ghfast.top/https://github.com/pybind/pybind11.git
-    git -C extern/pybind11 fetch --depth 1 origin "$expect" >/dev/null 2>&1 \
-        || { echo "build-mooncake: FAILED - pybind11 fetch via mirror" >&2; exit 1; }
-    git -C extern/pybind11 checkout --detach FETCH_HEAD -q
-fi
-cmake -S . -B build \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DUSE_ASCEND_DIRECT=ON \
-    -DBUILD_BENCHMARK=OFF \
-    -DBUILD_UNIT_TESTS=OFF \
-    -DWITH_STORE=ON \
-    -DWITH_STORE_RUST=OFF \
-    -DWITH_EP=OFF \
-    -DWITH_P2P_STORE=OFF \
-    -DUSE_ETCD=OFF \
-    -DUSE_REDIS=OFF \
-    >/tmp/build-mooncake-cmake.log 2>&1 \
-    || { echo "build-mooncake: FAILED - cmake configure:" >&2; tail -50 /tmp/build-mooncake-cmake.log >&2; exit 1; }
-cmake --build build -j"$(nproc)" \
-    >/tmp/build-mooncake-build.log 2>&1 \
-    || { echo "build-mooncake: FAILED - cmake build:" >&2; tail -50 /tmp/build-mooncake-build.log >&2; exit 1; }
-NPU_BUILD=1 OUTPUT_DIR=dist ./scripts/build_wheel.sh \
-    >/tmp/build-mooncake-wheel.log 2>&1 \
-    || { echo "build-mooncake: FAILED - build_wheel.sh:" >&2; tail -50 /tmp/build-mooncake-wheel.log >&2; exit 1; }
-WHL=$(ls mooncake-wheel/dist/*.whl | head -1)
-if [[ -z "$WHL" || ! -f "$WHL" ]]; then
-    echo "build-mooncake: FAILED - no wheel produced in mooncake-wheel/dist/" >&2
-    ls -la mooncake-wheel/dist/ >&2 || true
-    exit 1
-fi
-uv pip install "$WHL" \
+    libibverbs1 libcurl4 libnuma1 >/dev/null 2>&1 \
+    || { echo "build-mooncake: FAILED - apt install runtime deps" >&2; exit 1; }
+# Aliyun mirror 同步 PyPI；pip 找不到则退回 PyPI。装 -U 覆盖之前 source build 残留的
+# mooncake-transfer-engine-npu==0.3.13（同包名，PyPI 0.3.13 不发布 NPU wheel；.post1 是当前 latest）。
+uv pip install --upgrade \
+    'mooncake-transfer-engine-npu==0.3.13.post1' \
+    --index-url https://mirrors.aliyun.com/pypi/simple/ \
+    --extra-index-url https://pypi.org/simple/ \
     >/tmp/build-mooncake-pip.log 2>&1 \
-    || { echo "build-mooncake: FAILED - pip install wheel:" >&2; tail -20 /tmp/build-mooncake-pip.log >&2; exit 1; }
-echo "build-mooncake: installed $WHL"
-# 把 wheel 自带的 bundled libs（libtransfer_engine.so / libmooncake_store.so / libasio / libglog 等 8 个）
-# 所在目录加进 LD_LIBRARY_PATH。store.so 与 libmooncake_store.so 都 RPATH=$ORIGIN，但当从 site-packages/mooncake
-# 之外的进程 import（如 specforge 启动时 Python 走 dlopen），动态链接器解析 NEEDED 时不一定走 RPATH 链——
-# 显式 export 最稳。用 sysconfig 拿 purelib 路径，对 venv / system python 都能找到。
-SITE_PACKAGES="$(python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
-export LD_LIBRARY_PATH="${SITE_PACKAGES}/mooncake:${LD_LIBRARY_PATH:-}"
-echo "build-mooncake: LD_LIBRARY_PATH includes ${SITE_PACKAGES}/mooncake"
+    || { echo "build-mooncake: FAILED - pip install:" >&2; tail -20 /tmp/build-mooncake-pip.log >&2; exit 1; }
+INSTALLED=$(python -c "from importlib.metadata import version; print(version('mooncake-transfer-engine-npu'))")
+echo "build-mooncake: installed mooncake-transfer-engine-npu==${INSTALLED}"
 ```
 
 ```shell #test id="install-deps"
@@ -460,11 +406,11 @@ apt-get update -qq >/dev/null 2>&1
 apt-get install -qq -y --no-install-recommends \
     libcurl4 libibverbs1 libnuma1 >/dev/null 2>&1
 
-# 防御性 verify：前面 build-mooncake 已 export LD_LIBRARY_PATH=.../mooncake... 显式让
-# site-packages/mooncake/ 进搜索路径（store.so 与 libmooncake_store.so 的 RPATH=$ORIGIN 在
-# site-packages 之外的进程 dlopen 时不一定生效）；这里再做一次 import 自检，撞 fail 把 stderr
-# 整段打出来好排查（典型错误：libmooncake_store.so 的 libascendcl.so 找不到 → CANN set_env.sh
-# 没 source；libtransfer_engine.so 的 libibverbs.so.1 找不到 → apt install 那一段没跑）。
+# 防御性 verify：wheel 把所有 bundled libs 打到 site-packages/mooncake/ + RPATH=$ORIGIN，import
+# 时 dlopen libmooncake_store.so → libascendcl.so 自动在 $ORIGIN 找不到则回落 CANN 路径
+#（依赖前面 source setenv.bash 把 ASCEND_HOME 加进搜索路径）；libtransfer_engine.so 的
+# libibverbs.so.1 找不到 → build-mooncake 段的 apt install 没跑。这里再做一次 import 自检，
+# 撞 fail 把 stderr 整段打出来好排查。
 if ! python -c 'import mooncake.store' 2>/tmp/smoke-stub.err; then
     echo "smoke: FAILED - mooncake.store import still broken:" >&2
     tail -10 /tmp/smoke-stub.err >&2 || true

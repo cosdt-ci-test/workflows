@@ -468,6 +468,7 @@ for i in {1..180}; do
   sleep 2
 done
 
+echo "input: Hello"
 curl -sS http://127.0.0.1:8000/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{"model":"Qwen/Qwen3-8B","messages":[{"role":"user","content":"Hello"}],"max_tokens":8}' \
@@ -485,6 +486,7 @@ kill "$VLLM_PID" 2>/dev/null || true
 输出结果如下：
 
 ```shell #test-result id="pipeline-step4-serve" fuzzy='xxx'
+input: Hello
 content: xxx
 completion_tokens: xxx
 finish_reason: length

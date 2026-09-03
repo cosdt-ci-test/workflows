@@ -424,9 +424,7 @@ echo "$CHECKPOINT_DIR"
 ```shell #test id="pipeline-step3-train" load="checkpoint_path>>checkpoint_path"
 echo <checkpoint_path>
 ls -1 <checkpoint_path>
-head -10 /tmp/train.log
-
-tail -10 /tmp/train.log
+cat /tmp/train.log
 ```
 
 输出结果如下：

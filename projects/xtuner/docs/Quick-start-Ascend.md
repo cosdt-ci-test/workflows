@@ -467,6 +467,18 @@ text = re.sub(
     count=1,
 )
 
+# patch 4: strip `, max_epochs=max_epochs` from train_cfg dict。xtuner TrainLoop 强制
+# `Only one of max_iters or max_epochs can exist in train_cfg`（loops.py:22）。Qwen cfg 模板里
+# `train_cfg = dict(type=TrainLoop, max_epochs=max_epochs)` 写死了 max_epochs，但 smoke
+# 跑 max_iters=5 限 iter，所以 train_cfg 里不能留 max_epochs。`max_epochs` 顶层变量 param_scheduler
+# 还在用（warmup_ratio * max_epochs），不删。
+text, n = re.subn(
+    r"train_cfg = dict\(type=TrainLoop, max_epochs=max_epochs\)",
+    "train_cfg = dict(type=TrainLoop)",
+    text,
+)
+assert n == 1, f'train_cfg max_epochs patch applied {n} times (expected 1)'
+
 with open(path, 'w') as f:
     f.write(text)
 print(path)
@@ -497,6 +509,7 @@ for name, expected in checks:
     assert expected in text, f'missing patch ({name}): {expected!r}'
 assert 'quantization_config' not in text, 'quantization_config should be stripped'
 assert 'BitsAndBytesConfig' not in text, 'BitsAndBytesConfig import should be stripped'
+assert 'train_cfg = dict(type=TrainLoop, max_epochs=max_epochs)' not in text, 'train_cfg max_epochs should be stripped'
 print('cfg_patch_ok')
 print(f'weights= {weights_dir}')
 print(f'data= {data_abs}')

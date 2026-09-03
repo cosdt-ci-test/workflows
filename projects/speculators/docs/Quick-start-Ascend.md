@@ -22,7 +22,7 @@ Atlas 900 A2 / A3 或 Ascend 950 系列 NPU，至少 1 卡。
 
 swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/vllm-ascend/vllm-ascend:v0.23.0
 
-镜像预装 vllm 0.23.0 + vllm-ascend 0.23.0 + triton-ascend 3.2.2 + torch 2.10.0+cpu + torch_npu 2.10.0.post4 + CANN 9.1.0 + Python 3.12。镜像预装的 torch 2.10 跟 vllm-ascend 0.23.0 ABI 不匹配，由 `### 前置安装` 的 `#test-setup install-torch` 步骤当场升到 torch 2.12.0+cpu / torch_npu 2.12.0（只动 torch 栈，base 镜像其它部分不变）。
+镜像预装 vllm 0.23.0 + vllm-ascend 0.23.0 + triton-ascend 3.2.2 + torch 2.10.0+cpu + torch_npu 2.10.0.post4 + CANN 9.1.0 + Python 3.12，**直接用**——`vllm_ascend_C.so` 是按 torch 2.10 的 `at::Tag` namespace 编的，跟镜像预装 torch 自洽；不要 `pip install` 升 torch / torch_npu，torch_npu 2.11 / 2.12 公网没有任何镜像能下到（Aliyun / Tsinghua / Huawei 全 404）。
 
 **软件版本**：
 
@@ -30,8 +30,8 @@ swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/vllm-ascend/vllm-ascen
 | --- | --- |
 | Python | 3.12 |
 | CANN | 9.1.0 |
-| torch | 2.12.0+cpu（`#test-setup install-torch` 从镜像预装的 2.10 升上来） |
-| torch_npu | 2.12.0（`#test-setup install-torch` 从镜像预装的 2.10.0.post4 升上来） |
+| torch | 2.10.0+cpu（镜像预装，不要动） |
+| torch_npu | 2.10.0.post4（镜像预装，不要动） |
 | vllm | 0.23.0（镜像预装） |
 | vllm-ascend | 0.23.0（镜像预装） |
 | triton-ascend | 3.2.2（镜像预装） |
@@ -61,29 +61,32 @@ python --version
 Python 3.12.xxx
 ```
 
-升级 torch 栈到 2.12，保留镜像的 CANN 9.1.0 不动。
+确认镜像预装的 torch / torch_npu stack 不被改过：
 
-为什么要升：vllm-ascend 0.23.0 自带的 `vllm_ascend_C.so` 是按 torch 2.12 编的；镜像预装的 torch 2.10 上加载这个 `.so` 会撞 ABI（自定义 op 注册路径不匹配，推理时直接报 `vllm.qkv_rmsnorm_rope` AttributeError），所以必须先升 torch。
-
-为什么选 2.12 而不是 2.13：torch_npu 没有 2.13 final wheel，只有 2.13.0rc1 pre-final；torch 2.13.0+cpu final 的 aten kernel 跟 2.13.0rc1 torch_npu 的 kernel 不兼容（`_scaled_mm_v2` 的 C++ signature 在 final 改了），混装直接 ImportError。2.12 这套（torch 2.12.0+cpu + torch_npu 2.12.0 final）在 910B4 + CANN 9.1.0 上端到端实测通过。
-
-```shell #test-setup id="install-torch"
-# torch / torchvision 从 PyTorch 官方 CPU 索引拉。--force-reinstall：镜像预装
-# 的 2.10 是 PEP 660 不可变缓存 wheel，--upgrade 在大跨度不替换。
-uv pip install -f https://mirrors.aliyun.com/pytorch-wheels/cpu \
-  --upgrade --force-reinstall 'torch==2.12.0+cpu' 'torchvision==0.27.0+cpu'
-
-# torch_npu 从华为 / 阿里云 torch-npu 镜像拉，版本必须跟 torch 同 minor。
-# --no-deps：torch_npu 的依赖声明在 find-links 上跨索引解析会冲突，隔离掉。
-uv pip install \
-  --find-links https://mirrors.aliyun.com/pypi/simple/torch-npu/ \
-  --find-links https://mirrors.huaweicloud.com/ascend/repos/pypi/torch-npu/ \
-  --no-deps --upgrade --force-reinstall 'torch_npu==2.12.0'
+```shell #test-setup id="check-torch-stack"
+# torch 2.10.0+cpu + torch_npu 2.10.0.post4 是镜像预装；这两个的
+# `at::Tag` namespace 跟 vllm_ascend_C.so 对得上。如果之前有人 pip
+# install 过 torch / torch_npu（试图升级到 2.12），这里会被撞出
+# torch_npu dlopen 失败（libtorch_cpu.so 的 _def 用了新 namespace）。
+# 镜像预装 wheel 是 PEP 660 不可变缓存 wheel，--upgrade 在大跨度不替换，
+# 所以 --force-reinstall 还得带上版本号才能拉回镜像原版。
+pip install --force-reinstall --no-deps \
+  -f https://mirrors.aliyun.com/pytorch-wheels/cpu \
+  'torch==2.10.0+cpu'
+# torchvision 0.25+cpu 是 torch 2.10 的 ABI 匹配版本（vllm 加载
+# transformers qwen2_vl image_processor 会强 import torchvision；
+# text-only Qwen3 也会走这条 import 路径触发 ModuleNotFoundError）。
+# 不要装 torchvision 0.26/0.27+cpu——那是 torch 2.11/2.12 ABI，会让
+# `import vllm_ascend` 抛 `RuntimeError: operator torchvision::nms
+# does not exist`
+pip install --no-deps \
+  -f https://mirrors.aliyun.com/pytorch-wheels/cpu \
+  'torchvision==0.25.0+cpu'
 ```
 
 > ⚠ **Step 3a（launch_vllm）和 Step 4（vllm serve）启动前必须设 `TORCHDYNAMO_DISABLE=1` + `--enforce-eager`。**
 >
-> vllm_ascend_C.so 在 torch 2.12 上部分自定义 op 符号缺失；`enable_custom_op()` 会静默 fallback、关掉缺失的 op、用 PyTorch 默认实现（SDPA / 算子库）。但 dynamo capture 阶段会把这层 fallback 吃掉直接抛 `Unsupported: Import failure`，所以要把 dynamo + cudagraph 全关，让 vllm 走纯 eager 路径。
+> flex_attention 在 dynamo capture 阶段会撞 torch_npu 不支持的 HOP / UB，trace 时直接抛 `Unsupported: Import failure`；关掉 dynamo + cudagraph，让 vllm 走纯 eager 路径就稳。`TORCHDYNAMO_DISABLE=1` 必须 export 在 shell 里、不能塞进 vllm 进程命令行（vllm 自己 fork 之后才会去读 env）。
 
 加载 CANN env 并验证镜像预装的 vllm-ascend 栈（应输出下表的版本号）：
 
@@ -99,8 +102,8 @@ python -c "import importlib.metadata; print(f'triton={importlib.metadata.version
 ```
 
 ```shell #test-result id="verify-vllm-stack" fuzzy='xxx'
-torch=2.12.0+cpu
-torch_npu=2.12.0
+torch=2.10.0+cpu
+torch_npu=2.10.0.post4
 is_available: True
 npu_count: xxx
 vllm=0.23.0+empty
@@ -280,6 +283,12 @@ mkdir -p "$HS_DIR"
 export TORCHDYNAMO_DISABLE=1
 rm -rf /root/.cache/vllm/torch_compile_cache 2>/dev/null || true
 
+# CANN env：vllm 进程 fork 出 EngineCore 后会动态 load torch_npu 的 atb
+# extension (`/usr/local/.../libop_plugin_atb.so`)，缺 LD_LIBRARY_PATH 里的
+# `libatb.so` 直接 `OSError: libatb.so: cannot open shared object file`。
+# ascend-toolkit/set_env.sh 不含 nnal 的 atb 路径，必须单独 source。
+source /usr/local/Ascend/nnal/atb/set_env.sh
+
 setsid nohup python scripts/launch_vllm.py "<verifier_path>" \
   --target-layer-ids 2 18 34 \
   --hidden-states-path "$HS_DIR" \
@@ -356,6 +365,10 @@ cd /root/speculators
 export TORCHDYNAMO_DISABLE=1
 export ASCEND_LAUNCH_BLOCKING=1
 
+# CANN env：torch_npu 的 atb extension 需要 `libatb.so`；Step 3a 已 source，
+# 同一个 shell 状态如果跨 step 中断了就要再 source 一次（bash 子 shell 不继承）
+source /usr/local/Ascend/nnal/atb/set_env.sh
+
 # --hidden-states-dtype float32：spec 把 LN.weight 写死 fp32，autocast 不会
 # cast LN；而 dflash.forward 复用的 V 来自 hidden_states 缓存（默认 bf16），
 # Q/K fp32 + V bf16 会撞 flex_attention 的 dtype check。把 V 也 cast fp32
@@ -364,13 +377,14 @@ export ASCEND_LAUNCH_BLOCKING=1
 # --on-missing raise 强制走 FileBackend 读 <hs_dir> 缓存；不带 --vllm-endpoint
 # 让 dataloader 不去问不存在的 server
 #
-# 32 GB NPU 备选：`--max-anchors 32 --draft-attn-impl sdpa`。doc 默认
-# `--max-anchors 3072 --draft-attn-impl simple_flex_attention` 是 64 GB 配置；
-# 32 GB 上 simple_flex_attention 走 NPU 不支持的 HOP，eager 又 OOM
-# （fp32 QK^T ~96 GB）。sdpa + 32 anchor 实测 val/loss=6.646，3.5 GB 落盘。
-# 注：sdpa 不走 DFlash 的 anchor-block 稀疏 mask，用的是各 draft layer 的
-# sliding-window（window=2048）；smoke 只验管线通，真训练需要补一个 NPU 上
-# 能跑的 flex_attention 后端。
+# --max-anchors 32 --draft-attn-impl sdpa：spec 默认是 `--max-anchors 3072
+# --draft-attn-impl simple_flex_attention`（CUDA 路径）；torch 2.10 的
+# `flex_attention._validate_device` 只放行 CUDA / CPU / HPU，NPU device
+# 直接 ValueError，不是 OOM 是 hard reject。64 GB NPU 也必须切 sdpa，不
+# 是只 32 GB 才需要。sdpa 不走 DFlash 的 anchor-block 稀疏 mask，用各
+# draft layer 的 sliding-window（window=2048）；smoke 只验管线通，
+# 真训练需要补一个 NPU 能跑的 flex_attention 后端。sdpa + 32 anchor
+# 实测 val/loss=6.688，3.5 GB 落盘，~3 min/epoch on 910B4。
 torchrun --standalone --nproc_per_node=1 scripts/train.py \
   --verifier-name-or-path "<verifier_path>" \
   --data-path "<data_path>" \
@@ -382,7 +396,8 @@ torchrun --standalone --nproc_per_node=1 scripts/train.py \
   --lr 3e-4 \
   --speculator-type dflash \
   --block-size 8 \
-  --max-anchors 3072 \
+  --max-anchors 32 \
+  --draft-attn-impl sdpa \
   --num-layers 5 \
   --target-layer-ids 2 18 34 \
   --on-missing raise >/tmp/train.log 2>&1 || TRAIN_RC=$?
@@ -430,6 +445,9 @@ model.safetensors
 # 关 dynamo + --enforce-eager：见 install-torch 步骤的 ⚠ 说明
 export TORCHDYNAMO_DISABLE=1
 rm -rf /root/.cache/vllm/torch_compile_cache 2>/dev/null || true
+
+# CANN env：见 Step 3a 注释 —— `libatb.so` 不在 ascend-toolkit 默认 LD path 里
+source /usr/local/Ascend/nnal/atb/set_env.sh
 
 # num_speculative_tokens=5：vllm-ascend 限制 (num_speculative_tokens + 1) ≤ 15
 nohup vllm serve "<verifier_path>" \

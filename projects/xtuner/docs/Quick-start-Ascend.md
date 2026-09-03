@@ -422,8 +422,8 @@ print(save_path)
 拷出来的 config 跟模板原版完全一致，按下面 4 处修改规则调整。
 
 **占位符说明**：
-- `<cfg>` = 上一节「准备配置文件」步骤 `#test-setup` 的输出，是 cfg 文件绝对路径（store=`xtuner_llm_cfg_path`）。**本地手动跑**：自己跑 `xtuner copy-cfg qwen1_5_1_8b_chat_qlora_custom_sft_e1 /tmp/xtuner_npu_llm_cfg.py` 后用 `ls /tmp/xtuner_npu_llm_cfg.py/` 找 `_copy.py` 后缀的那个文件路径替换，典型值 `/tmp/xtuner_npu_llm_cfg.py/qwen1_5_1_8b_chat_qlora_custom_sft_e1_copy.py`。
-- `<weights_dir>` = 「准备模型权重」步骤 `#test-setup` 的输出，是 modelscope 落盘的 Qwen 权重绝对路径（store=`xtuner_weights_path`）。**本地手动跑**：用前一步 `xtuner-pull-weights` 块里 `find ./qwen -name config.json -print -quit` 的 `dirname` 结果替换，典型值 `./qwen/qwen/Qwen1.5-1.8B-Chat`。
+- `<cfg>` = 上一节「准备配置文件」拷 cfg 那一步落到的文件绝对路径，典型值 `/tmp/xtuner_npu_llm_cfg.py/qwen1_5_1_8b_chat_qlora_custom_sft_e1_copy.py`。**本地手动跑**：自己跑 `xtuner copy-cfg qwen1_5_1_8b_chat_qlora_custom_sft_e1 /tmp/xtuner_npu_llm_cfg.py`，然后 `ls /tmp/xtuner_npu_llm_cfg.py/` 找 `_copy.py` 后缀的那个文件路径替换。
+- `<weights_dir>` = 「准备模型权重」下权重那一步落到的 Qwen 权重绝对路径，典型值 `./qwen/qwen/Qwen1.5-1.8B-Chat`。**本地手动跑**：用前一步 `xtuner-pull-weights` 块里 `find ./qwen -name config.json -print -quit` 的 `dirname` 结果替换。
 
 1. `pretrained_model_name_or_path`：替成本地真实权重路径（pull-weights 阶段落盘路径）
 2. `data_files[0]`：替成转换后的 OpenAI 格式 jsonl 绝对路径

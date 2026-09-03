@@ -644,8 +644,11 @@ then
     exit 1
 fi
 SHAREGPT_PATH="$SPECFORGE_ROOT/cache/dataset/sharegpt_train.jsonl"
-ls -la "$SHAREGPT_PATH"
-echo "smoke: prepare-data OK ($SHAREGPT_PATH)"
+ls -la "$SHAREGPT_PATH" >&2
+echo "smoke: prepare-data OK ($SHAREGPT_PATH)" >&2
+# store="sharegpt_path" 只抓最后一行 stdout 给下游 placeholder 替换，
+# 把诊断信息 redirect 到 stderr，避免污染 sharegpt_path 捕获值。
+echo "$SHAREGPT_PATH"
 ```
 
 ```shell #test-result id="smoke-prepare-data" load="sharegpt_path>>SHAREGPT_PATH"

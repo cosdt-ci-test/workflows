@@ -57,6 +57,9 @@ npu-smi info
 ```shell #test id="check-py"
 python --version
 ```
+
+输出结果如下：
+
 ```shell #test-result id="check-py" fuzzy='xxx'
 Python 3.12.xxx
 ```
@@ -101,6 +104,8 @@ python -c "import importlib.metadata; print(f'triton_ascend={importlib.metadata.
 python -c "import importlib.metadata; print(f'triton={importlib.metadata.version(\"triton\")}')"
 ```
 
+输出结果如下：
+
 ```shell #test-result id="verify-vllm-stack" fuzzy='xxx'
 torch=2.10.0+cpu
 torch_npu=2.10.0.post4
@@ -123,6 +128,8 @@ uv pip install 'modelscope==1.37.0'
 ```shell #test id="install-deps"
 python -c "import modelscope; print(f'modelscope={modelscope.__version__}')"
 ```
+
+输出结果如下：
 
 ```shell #test-result id="install-deps"
 modelscope=1.37.0
@@ -147,6 +154,8 @@ uv pip install -e .
 speculators --version
 python -c "from importlib.metadata import version; print('speculators', version('speculators'))"
 ```
+
+输出结果如下：
 
 ```shell #test-result id="speculators-install-source" fuzzy='xxx'
 speculators version: xxx
@@ -195,6 +204,8 @@ echo "/root/dflash-qwen3-8b-converted"
 ls -1 <dflash_path>/config.json <dflash_path>/model.safetensors
 echo <dflash_path>
 ```
+
+输出结果如下：
 
 ```shell #test-result id="pipeline-step1-convert"
 /root/dflash-qwen3-8b-converted/config.json
@@ -254,6 +265,8 @@ print('token_freq keys:', list(freq.keys()) if isinstance(freq, dict) else type(
 print('len:', len(freq))
 "
 ```
+
+输出结果如下：
 
 ```shell #test-result id="pipeline-step2-extract" fuzzy='xxx'
 /root/dflash-train-data
@@ -423,8 +436,18 @@ if [ "$TRAIN_RC" -ne 0 ]; then
 fi
 # trainer 把 checkpoint 写到 "$CHECKPOINT_DIR/<step>/" 子目录；Step 4 用
 # <checkpoint_path> 当 draft_model 路径，需要直接读 config.json /
-# model.safetensors，把最新子目录的内容拷到根
-LATEST_CKPT=$(ls -1d "$CHECKPOINT_DIR"/*/ 2>/dev/null | sort -V | tail -1)
+# model.safetensors，把最新子目录的内容拷到根，然后清掉 trainer 的
+# 元数据（optimizer/scheduler state、run.yaml、training_state.json、
+# val_metrics.json、checkpoint_best/epoch0_end symlinks、checkpoint
+# 子目录），只留 config.json + model.safetensors 给下游 pipeline-step3-train
+# test 做精确 ls 对账。
+#
+# LATEST_CKPT 只看数字子目录（[0-9]*），不吸 symlink-to-dir：
+# `ls -1d "$CHECKPOINT_DIR"/*/` 会把 checkpoint_best -> 0 / epoch0_end
+# -> 0 这类 symlink-to-dir 也列出来，sort -V 还会把 epoch0_end 排
+# 在 0 后面，结果拿到一个 symlink path 让 cp 间接跟链；改用 [0-9]*
+# glob 直接锁 trainer 自己创建的 step 子目录
+LATEST_CKPT=$(ls -1d "$CHECKPOINT_DIR"/[0-9]*/ 2>/dev/null | sort -V | tail -1)
 if [ -n "$LATEST_CKPT" ] && [ "$LATEST_CKPT" != "$CHECKPOINT_DIR/" ]; then
   cp -af "$LATEST_CKPT"/. "$CHECKPOINT_DIR"/
 fi
@@ -433,6 +456,17 @@ if ! test -f "$CHECKPOINT_DIR/config.json" || ! test -f "$CHECKPOINT_DIR/model.s
   cat /tmp/train.log >&2
   exit 1
 fi
+# 清 trainer 元数据：symlinks / 子目录 / optimizer & scheduler state /
+# run.yaml / training_state.json / val_metrics.json / config.py
+rm -f "$CHECKPOINT_DIR"/checkpoint_best "$CHECKPOINT_DIR"/epoch0_end
+rm -rf "$CHECKPOINT_DIR"/[0-9]*/
+rm -f "$CHECKPOINT_DIR"/optimizer_state_dict.pt \
+      "$CHECKPOINT_DIR"/scheduler_state_dict.pt \
+      "$CHECKPOINT_DIR"/run.yaml \
+      "$CHECKPOINT_DIR"/training_state.json \
+      "$CHECKPOINT_DIR"/val_metrics.json \
+      "$CHECKPOINT_DIR"/train_command.txt \
+      "$CHECKPOINT_DIR"/config.py
 
 echo "$CHECKPOINT_DIR"
 ```
@@ -443,6 +477,8 @@ echo "$CHECKPOINT_DIR"
 echo <checkpoint_path>
 ls -1 <checkpoint_path>
 ```
+
+输出结果如下：
 
 ```shell #test-result id="pipeline-step3-train"
 /root/dflash-trained
@@ -489,6 +525,8 @@ curl -sS http://127.0.0.1:8000/v1/chat/completions \
 kill "$VLLM_PID" 2>/dev/null || true
 ```
 
+输出结果如下：
+
 ```shell #test-result id="pipeline-step4-serve" fuzzy='xxx'
 {"id":"chatcmpl-xxx","object":"chat.completion","created":xxx,"model":"Qwen/Qwen3-8B","choices":[{"index":0,"message":{"role":"assistant","content":"xxx"},"finish_reason":"length"}]}
 ```
@@ -519,6 +557,7 @@ print("proposal speculative_tokens:", proposal.speculative_tokens)
 PY
 ```
 
+输出结果如下：
 ```shell #test-result id="config-import"
 verifier: /root/.cache/modelscope/hub/models/Qwen/Qwen3-8B
 verifier architectures: ['Qwen3ForCausalLM']

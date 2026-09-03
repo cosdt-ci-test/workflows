@@ -338,6 +338,7 @@ test -f ./colors_openai/train.jsonl || { echo "MISSING: ./colors_openai/train.js
 src_n=$(wc -l < ./colors/train.jsonl)
 dst_n=$(wc -l < ./colors_openai/train.jsonl)
 test "$src_n" = "$dst_n" || { echo "row count mismatch: src=$src_n dst=$dst_n"; exit 1; }
+echo "converted ${dst_n} rows -> ./colors_openai/train.jsonl"
 # 抽第一条做字面比对，验格式正确
 head -1 ./colors_openai/train.jsonl | python -c "
 import sys, json

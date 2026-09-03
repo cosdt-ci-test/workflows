@@ -1,0 +1,85 @@
+# DGL quick start guard - project thin trigger.
+#
+# Calls the common engine .github/workflows/quick-start-template.yml;
+# this file only declares what varies per project: schedule,
+# concurrency, runner, container image + options, upstream repo,
+# monitored doc, and the test entry command. The guard loop, cache
+# I/O, state relay and publishing all live in the engine.
+#
+# Cache keys (monitor-state-dgl-*) and artifact names are derived
+# from project=dgl, not from the workflow name.
+#
+# Container options:
+#   * No explicit device mounts: the self-hosted NPU runner
+#     (`linux-aarch64-a2-2`, two 910B4) auto-passes `/dev/davinci*`
+#     into the container via the cluster device-plugin.
+#   * No bind-mounts needed: the doc clones the fork and builds
+#     DGL-Ascend from source each run (build artifacts are not
+#     persisted across runs — source builds are inherently cold), and
+#     the LightGCN gowalla dataset (~tens of MB) is re-fetched from the
+#     official dgl-data bucket inside the smoke block.
+
+name: dgl-quick-start
+
+concurrency:
+  group: ${{ github.event_name == 'schedule' && 'dgl-quick-start-schedule' || format('manual-{0}', github.run_id) }}
+  cancel-in-progress: false
+
+on:
+  # Schedule temporarily disabled while the fork-based adaptation is
+  # being stabilised. Re-enable after the first green workflow_dispatch
+  # run (same convention as lightx2v / xdit / upstream-doc-monitor).
+  # schedule:
+  #   # Every 6 hours: 00:00 / 06:00 / 12:00 / 18:00 UTC.
+  #   - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dgl-quick-start:
+    uses: ./.github/workflows/quick-start-template.yml
+    with:
+      # Namespaces cache keys (monitor-state-dgl-*), artifacts
+      # (dgl-quick-start-<run_id>) and the test working dir
+      # (workflows/projects/dgl).
+      project: dgl
+      # Self-hosted NPU runner for the test job only. The doc's smoke
+      # is single-card (LightGCN, --device npu) and the test class pins
+      # card 0 via ASCEND_RT_VISIBLE_DEVICES=0.
+      test_runner: '["linux-aarch64-a2-2"]'
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+      # Doc body does: torch 2.9.0 + torch_npu 2.9.0.post2 install (the
+      # image ships only CANN 9.1.0, so the whole torch stack is
+      # installed and verified by the doc itself — deliberately reusing
+      # the CI's torch line rather than the fork's documented torch
+      # 2.8.0 / py3.10) + `git clone` the fork (default branch) +
+      # `git submodule update --init --recursive` + `bash
+      # script/build_dgl_ascend.sh` (CMake -DUSE_ASCEND=ON
+      # -DUSE_CUDA=OFF, SOC=910B4) + `pip install -e .` + the install
+      # verify block (imports dgl, asserts `npu available: True`) +
+      # a LightGCN smoke (`wget` the official dgl-data gowalla zip +
+      # `unzip` + `python main.py --dataset gowalla --batch 2048
+      # --recdim 64 --epochs 1 --device npu`) asserted via the
+      # `Average BPR Loss` log line.
+      # 240 min covers cold install + full DGL C++/Cython source build
+      # (dominant cost) + gowalla download + single-card LightGCN.
+      timeout_minutes: 240
+      # Upstream is the Huawei×BUPT DGL-NPU fork: dmlc/dgl proper has
+      # no Ascend support (src/array has only cpu/cuda backends). The
+      # fork publishes NO releases and NO tags, so the engine's ref
+      # fallback chain (/releases/latest -> /releases -> /tags ->
+      # /commits/HEAD) bottoms out at /commits/HEAD and anchors the
+      # default-branch HEAD sha as the change key — exactly the
+      # "tagless upstream" case the engine supports.
+      upstream_repo: BUPT-GAMMA/dgl-ascend
+      # GitHub Contents API URL (NOT raw.githubusercontent.com) — same
+      # authenticated doc-hash contract as xtuner / xdit / aibrix.
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/dgl/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/dgl/docs/Quick-start-Ascend.md
+      # cwd is workflows/projects/dgl; env contract (MONITORED_DOC_URL /
+      # UPSTREAM_REF / NPU_READY) is injected by the engine. All project
+      # env prep and installs live in the test subclass's
+      # prepare_environment hook.
+      test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1

@@ -235,14 +235,23 @@ head -1 data/train/data.list
 
 ## 7. 训练 5 epochs（stage 4）
 
-创建自定义配置文件，将 `max_epoch` 从 240 缩短到 5：
+创建自定义配置文件，将 `max_epoch` 从 240 缩短到 5。
+
+> **注意**：当前 torch_npu 2.2.0 + CANN 8.0.0 组合下，DataLoader 多进程 worker 在 fork 后会段错误
+> （上游 PR #2563 验证栈可正常，属栈版本行为漂移），因此这里使用 `--num_workers 0` 在主进程
+> 加载数据（mock 数据量极小，无性能影响），并对 wenet 硬编码的 `persistent_workers` /
+> `prefetch_factor` 打最小补丁使其与 `num_workers=0` 兼容；训练后立即校验产物以快速失败：
 
 ```shell #test-setup id="train"
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 cd wenet/examples/aishell/s0
 cp conf/train_conformer.yaml conf/train_conformer_5ep.yaml
 sed -i 's/max_epoch: .*/max_epoch: 5/' conf/train_conformer_5ep.yaml
-bash run_npu.sh --stage 4 --stop_stage 4 --train_config conf/train_conformer_5ep.yaml
+TRAIN_UTILS=$(git rev-parse --show-toplevel)/wenet/utils/train_utils.py
+sed -i 's/persistent_workers=True/persistent_workers=args.num_workers > 0/' $TRAIN_UTILS
+sed -i 's/prefetch_factor=args.prefetch/prefetch_factor=args.prefetch if args.num_workers > 0 else None/' $TRAIN_UTILS
+bash run_npu.sh --stage 4 --stop_stage 4 --num_workers 0 --train_config conf/train_conformer_5ep.yaml
+test -f exp/conformer/train.yaml || { echo "train failed, check stderr above"; exit 1; }
 ```
 
 训练完成后检查输出：

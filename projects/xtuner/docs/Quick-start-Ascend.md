@@ -738,7 +738,10 @@ train.main()
 ```shell #test id="xtuner-train-smoke"
 ls -t /tmp/xtuner_sft_llm_out_single/*.pth 2>/dev/null | head -1
 echo "---SAMPLE_OUTPUT---"
-grep -m 1 -A 20 "Sample output:" /tmp/xtuner_sft_llm_out_single/train.log 2>/dev/null | sed -E 's/^[0-9]{2}\/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} - mmengine - (INFO|WARNING|ERROR|DEBUG) - //' | head -25
+# 抓首个 "Sample output:" 块：awk 打印到第二个 Sample output: 行前 exit。
+# -A 20 那种 grep 方案不行，因为 -m 1 只挡 grep 不挡 -A 20，20 行里可能含 2-3 个 Sample output: 块。
+# sed strip mmengine INFO/WARNING/ERROR/DEBUG prefix，torch_npu 原生 [W903 ...] 警告无 prefix 不动。
+awk 'BEGIN{c=0} /Sample output:/{c++; if(c>1) exit} {print}' /tmp/xtuner_sft_llm_out_single/train.log 2>/dev/null | sed -E 's/^[0-9]{2}\/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} - mmengine - (INFO|WARNING|ERROR|DEBUG) - //' | head -25
 ```
 
 输出结果如下：
@@ -757,10 +760,6 @@ Sample output:
 Tellmeaboutthecolor#FF5733<|im_end|>
 <|im_start|>assistant
 The color #FF5733 is a shade of yellow-green, specifically a vibrant and energetic hue. It is a combination of yellow and green, with yellow being the dominant color and green serving as a secondary or accent color.
-...
-Sample output:
-<|im_start|>user
-Tellmeaboutthecolor#000000<|im_end|>
 ...
 ```
 

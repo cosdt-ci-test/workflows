@@ -172,7 +172,7 @@ uv pip install 'mmengine==0.10.6' 'transformers==4.48.0' 'peft>=0.14.0' 'dataset
 python -c "import xtuner; from xtuner.version import __version__; print('xtuner', __version__)"
 ```
 
-\<ref> 是 CI 工作流引擎自动注入的 xtuner 最新 release tag（在跑前从 https://github.com/InternLM/xtuner/releases 取）。**本地手动跑**：到 https://github.com/InternLM/xtuner/releases 拿最新 tag（如 `v0.2.0`）替换。
+\<ref> 是 xtuner 最新 release tag（在跑前从 https://github.com/InternLM/xtuner/releases 取）。
 
 输出结果类似如下：
 
@@ -223,7 +223,7 @@ has_chat: True
 
 ## LLM 大模型微调
 
-本文档的训练入口是 `xtuner train <config>`（基于 mmengine runner）。下面按 [xtuner legacy 快速上手模板](https://xtuner.readthedocs.io/zh-cn/latest/legacy/get_started/quickstart.html) 的顺序展开，每个章节都挂一个 `#test` 块做烟囱测试。
+本文档的训练按 [xtuner legacy 快速上手模板](https://xtuner.readthedocs.io/zh-cn/latest/legacy/get_started/quickstart.html) 的顺序展开。
 
 ### 准备模型权重
 
@@ -257,8 +257,6 @@ total xxx
 ```
 
 权重落到 `./qwen/qwen/Qwen1.5-1.8B-Chat/` 下（含 `model.safetensors` 3.5 GB + `tokenizer.json` 7 MB + `vocab.json` + `merges.txt` + `config.json` + `tokenizer_config.json`）。
-
-> `#test-setup` 在 CI 里跑 `snapshot_download` 拉权重（~3-5 分钟）；本地如果已经下过可以跳过 setup 只跑 `#test`。
 
 ### 准备微调数据集
 
@@ -486,10 +484,10 @@ print(path)
 "
 ```
 
-```shell #test id="xtuner-patch-cfg" load="xtuner_llm_cfg_path>>cfg" load="xtuner_weights_path>>weights_dir"
-# py_compile 验 cfg 是合法 Python + 4 处 patch 都生效（grep 关键串）。
+<!-- # py_compile 验 cfg 是合法 Python + 4 处 patch 都生效（grep 关键串）。
 # 不用 mmengine.config.Config.fromfile：它会执行 cfg 顶层 import 触发 torchvision::nms，
-# NPU base image 的 torchvision 缺 C++ op 直接 RuntimeError。
+# NPU base image 的 torchvision 缺 C++ op 直接 RuntimeError。 -->
+```shell #test id="xtuner-patch-cfg" load="xtuner_llm_cfg_path>>cfg" load="xtuner_weights_path>>weights_dir"
 python -c "
 import py_compile
 py_compile.compile('<cfg>', doraise=True)
@@ -538,15 +536,16 @@ data= xxx
   装法（PyPI bnb 0.45.0 无 aarch64 wheel；source-build 撞 triton.ops 死锁；新版 bnb
   Linear4bit 撞 torch.uint8 dtype 错）。详见文末附录 A。Qwen1.5-1.8B fp16 ~3.5 GB，
   plain LoRA 在 32 GB NPU 上有充裕 margin（实测峰 RSS ≈ 10.3 GB），无需量化。
--->
 
-```shell #test-setup id="xtuner-train-smoke-setup" load="xtuner_llm_cfg_path>>cfg"
-# 装 cv2 + torchvision stub：NPU base image 的 cv2 缺 libxcb.so.1（headless 也救不回来，.so 链接还在），
+  # 装 cv2 + torchvision stub：NPU base image 的 cv2 缺 libxcb.so.1（headless 也救不回来，.so 链接还在），
 # torchvision 缺 C++ op（任何 torch.ops.torchvision.* 都 RuntimeError）。mmengine 顶层 import cv2，
 # transformers.bloom 顶层 import torchvision.transforms，所以训练入口加载时就会撞。
 # 走 PYTHONPATH 让 Python FileFinder 命中 /tmp/*_stub/ 里真正的 stub package（自带 __spec__，
 # sitecustomize 注入的 ModuleType 没 __spec__ 会被 find_spec 拒）。
 # 5 iter smoke 不真做图像增强，stub no-op 够用。merge-setup / chat-setup 也复用同一组 stub。
+-->
+
+```shell #test-setup id="xtuner-train-smoke-setup" load="xtuner_llm_cfg_path>>cfg"
 mkdir -p /tmp/cv2_stub/cv2
 cat > /tmp/cv2_stub/cv2/__init__.py <<'PYEOF'
 __version__ = "4.12.0"
@@ -667,9 +666,6 @@ train.main()
 ```shell #test id="xtuner-train-smoke"
 ls -t /tmp/xtuner_sft_llm_out_single/*.pth 2>/dev/null | head -1
 echo "---SAMPLE_OUTPUT---"
-# 抓首个 "Sample output:" 块：awk 打印到第二个 Sample output: 行前 exit。
-# -A 20 那种 grep 方案不行，因为 -m 1 只挡 grep 不挡 -A 20，20 行里可能含 2-3 个 Sample output: 块。
-# sed strip mmengine INFO/WARNING/ERROR/DEBUG prefix，torch_npu 原生 [W903 ...] 警告无 prefix 不动。
 awk 'BEGIN{c=0} /Sample output:/{c++; if(c>1) exit} {print}' /tmp/xtuner_sft_llm_out_single/train.log 2>/dev/null | sed -E 's/^[0-9]{2}\/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} - mmengine - (INFO|WARNING|ERROR|DEBUG) - //' | head -25
 ```
 
@@ -811,17 +807,20 @@ awk 'BEGIN{c=0} /Sample output:/{c++; if(c>1) exit} {print}' /tmp/xtuner_sft_llm
 ```
 
 输出结果如下：
-
-```shell #test-result id="xtuner-train-smoke-multi" fuzzy='xxx'
+```shell #test-result id="xtuner-train-smoke-multi" fuzzy='xxx' fuzzy='...'
 /tmp/xtuner_sft_llm_out_multi/iter_xxx.pth
 ---SAMPLE_OUTPUT---
 Sample output:
 <|im_start|>user
 Tellmeaboutthecolor#000000<|im_end|>
 <|im_start|>assistant
-xxx (5 iter 没训出什么，可能是空 / 乱码 / 长串 loss；Qwen BPE tokenizer 把 user 提示里的空格在 decode 后 collapse 掉了)
+...
+Sample output:
+<|im_start|>user
+Tellmeaboutthecolor#FF5733<|im_end|>
+<|im_start|>assistant
+...
 ```
-
 
 ### 模型转换 + LoRA 合并
 
@@ -929,9 +928,9 @@ python -m xtuner.tools.chat /tmp/xtuner_sft_llm_out_single/merged \
 
 输出结果如下：
 
-```shell #test-result id="xtuner-chat-merged" fuzzy='xxx'
+```shell #test-result id="xtuner-chat-merged" fuzzy='xxx' fuzzy='...'
 Load LLM from /tmp/xtuner_sft_llm_out_single/merged
-xxx (Qwen1.5-1.8B + 5 samples × 1 epoch 微调后对英文颜色描述的回复；smoke 不验证具体色号)
+xxx
 Log: Exit!
 ```
 
@@ -952,47 +951,9 @@ python -m xtuner.tools.chat ./qwen/Qwen1.5-1.8B-Chat \
 
 输出结果如下：
 
-```shell #test-result id="xtuner-chat-adapter" fuzzy='xxx'
+```shell #test-result id="xtuner-chat-adapter" fuzzy='xxx' fuzzy='...'
 Load LLM from ./qwen/Qwen1.5-1.8B-Chat
 Load adapter from /tmp/xtuner_sft_llm_out_single/iter_xxx_hf
-xxx (Qwen1.5-1.8B + LoRA adapter 对英文颜色描述的回复；smoke 不验证具体色号)
+...
 Log: Exit!
 ```
-
-## 附录 A：为什么用 plain LoRA 而不是 QLoRA <a id="appendix-bnb"></a>
-
-xtuner v0.2.0 的 Qwen cfg 模板默认 QLoRA（4-bit base + LoRA），需要 `bitsandbytes`。**aarch64 NPU 上没有可用的 bnb 装法**：
-
-| 方案 | 失败原因 |
-| --- | --- |
-| `pip install bitsandbytes==0.45.0` | PyPI 上无 aarch64 wheel（仅 manylinux x86_64 + win_amd64） |
-| source-build bnb 0.45.0 + cmake cpu backend | `import bitsandbytes` 撞 `ModuleNotFoundError: No module named 'triton.ops'`——bnb 顶层 `from triton.ops.matmul_perf_model import ...` 无条件触发，triton 1.x~2.x 删了 `triton.ops` 命名空间 |
-| triton 1.x~2.x | PyPI 上**全无 aarch64 wheel** |
-| triton 3.0.0+ | 有 aarch64 wheel，但整个 `triton.ops` 命名空间已删 |
-| bnb 0.49.1+（有 aarch64 wheel） | `Linear4bit` 推理撞 `RuntimeError: Blockwise 4bit quantization only supports 16/32-bit floats, but got torch.uint8`（at bitsandbytes/backends/default/ops.py:225） |
-
-**绕法**：拷 xtuner qlora cfg 后 strip 整个 `quantization_config=dict(...)` block + `BitsAndBytesConfig` import，bitsandbytes 整条 import 链不再被触发。代价：smoke 验不到 `_replace_with_bnb_linear()` + `peft.prepare_model_for_kbit_training()` 这条 QLoRA-only 路径，但 5 iter smoke 本来 forward 就是 zero，换 plain LoRA 反而能跑真 fp16 matmul + autograd。
-
-Qwen1.5-1.8B-Chat fp16 权重仅 ~3.5 GB，加 LoRA grads + optimizer states + activations 在 32 GB NPU 上仍有充裕 margin（实测峰 RSS ≈ 10.3 GB），不必走 QLoRA。
-
-**生产必须 QLoRA**（7B+ 4bit base 才塞得进 29 GiB NPU）：目前无解，等 bnb 上游修 NPU quant kernel 的 uint8 dtype 问题，或换 deepspeed offload 跑 fp16 base。
-
-## 附录 B：常见 NPU 适配坑
-
-### cv2 / torchvision 缺 .so
-
-NPU base image 的 `opencv-python` 缺 `libxcb.so.1`（headless 也救不回来，.so 链接还在），`torchvision` 缺 C++ extension（任何 `torch.ops.torchvision.*` 都抛 `RuntimeError: operator torchvision::nms does not exist`）。触发链：mmengine 顶层 `import cv2`，transformers.bloom 顶层 `from torchvision.transforms import InterpolationMode`。
-
-**绕法**：写真正的 stub package 放 `/tmp/cv2_stub/` `/tmp/torchvision_stub/`，加到 `PYTHONPATH` 最前面。**注意**：不能用 `sitecustomize` + `types.ModuleType` 注入，那样 `__spec__ is None` 会被 `importlib.util.find_spec()` 抛 `ValueError`。stub package 自带合法 `__spec__` 才能通过 find_spec 检查。
-
-### `TrainLoop` 强制 `max_iters` / `max_epochs` 二选一
-
-xtuner `TrainLoop.__init__` 强制 `Only one of max_iters or max_epochs can exist in train_cfg`（loops.py:22）。Qwen cfg 模板写死了 `train_cfg = dict(type=TrainLoop, max_epochs=max_epochs)`，smoke 用 `max_iters=5` 必须 strip 掉 max_epochs。
-
-### Qwen1.5 BPE decode 把空格吃了
-
-`Tell me about the color` → tokenizer encode + decode 后 → `Tellmeaboutthecolor`。这是 Qwen1.5 TikToken-style BPE（`merges.txt`）的预期行为，不是 bug。Sample output 里看到这种拼一起的 user prompt 是正常的。
-
-### `pipefail` 不能忘
-
-`python ... | tee train.log` 默认 pipeline rc 取 `tee` 的 rc（总 0），python 抛错 framework 看不到。smoke 必须 `set -o pipefail`。

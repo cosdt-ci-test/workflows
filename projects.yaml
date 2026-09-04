@@ -328,6 +328,15 @@ projects:
     dir: projects/timm
     workflows:
       quick_start: .github/workflows/timm-quick-start.yml
+  - name: open_clip
+    category: 推理加速
+    support_level: 新兴适配
+    upstream_repo: mlfoundations/open_clip
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/open_clip
+    workflows:
+      quick_start: .github/workflows/open-clip-quick-start.yml
   - name: xllm
     category: 推理加速
     support_level: 基础支持

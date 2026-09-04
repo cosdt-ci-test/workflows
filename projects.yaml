@@ -337,6 +337,15 @@ projects:
     dir: projects/open_clip
     workflows:
       quick_start: .github/workflows/open-clip-quick-start.yml
+  - name: internlm
+    category: 推理加速
+    support_level: 新兴适配
+    upstream_repo: InternLM/InternLM
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/internlm
+    workflows:
+      quick_start: .github/workflows/internlm-quick-start.yml
   - name: xllm
     category: 推理加速
     support_level: 基础支持

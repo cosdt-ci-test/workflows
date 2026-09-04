@@ -558,3 +558,30 @@ projects:
     dir: projects/openrlhf
     workflows:
       quick_start: .github/workflows/openrlhf-quick-start.yml
+  # MiniOneRec quickstart exercises generative-recommendation SFT on
+  # Ascend NPU: ModelScope base-model download (Qwen2.5-0.5B, base not
+  # Instruct — upstream README warns Instruct + newer transformers can
+  # break constrained decoding) + HF-mirror pull of the official
+  # preprocessed Amazon Industrial_and_Scientific subset (~27 MB, .npy
+  # embeddings excluded — RQ/SID-construction stage only) +
+  # transfer_to_npu patch (top-level bitsandbytes import stripped: it is
+  # never used and aarch64 wheel availability is uncertain, same class
+  # of problem as xtuner's 0.45.0 pin) + 1-epoch HF-Trainer SFT smoke
+  # (sample=600 per sub-dataset, cutoff 256, batch 8 / micro 2).
+  # torch stack pinned in doc + probe: torch 2.9.0 + torch_npu
+  # 2.9.0.post2 (CANN 9.1.0 pairing, same line as dgl / xdit). Manual
+  # verification on this image shape passed 2026-09-03 (910B3, bf16 OK,
+  # 9.1 samples/s, no DataLoader fork segfault at the default
+  # num_workers=0). RL stage (GRPO) is pointer-only: minionerec_trainer's
+  # vLLM path is CUDA-only and the transformers-native generation
+  # fallback is too slow for a smoke; evaluate.py constrained beam
+  # search is pointer-only for the same reason (follow-up candidates).
+  - name: minionerec
+    category: 训练加速
+    support_level: 新兴适配
+    upstream_repo: AkaliKong/MiniOneRec
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/minionerec
+    workflows:
+      quick_start: .github/workflows/minionerec-quick-start.yml

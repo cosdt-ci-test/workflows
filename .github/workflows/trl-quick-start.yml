@@ -65,10 +65,12 @@ jobs:
       # Doc under guard: projects/trl/docs/Quick-start-Ascend.md in
       # this repo (raw URL for hashing/fetching, blob URL for the
       # human-clickable link recorded in result.json).
+      # Doc body does: PyPI 二进制安装 trl + 最小 5 步 SFT LoRA smoke
+      # （模型经 ModelScope snapshot_download 自动下载到默认缓存，
+      # 挂载的 /root/.cache/modelscope 供跨轮复用）。
       doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/trl/docs/Quick-start-Ascend.md
       doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/trl/docs/Quick-start-Ascend.md
       # cwd is workflows/projects/trl; env contract (MONITORED_DOC_URL /
-      # UPSTREAM_REF / NPU_READY) is injected by the engine. All project
-      # env prep and installs live in the test subclass's
-      # prepare_environment hook.
+      # NPU_READY) is injected by the engine. All project env prep and
+      # installs live in the test subclass's prepare_environment hook.
       test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1

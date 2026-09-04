@@ -40,8 +40,8 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | datasets | `>=4.7.0` |
 | peft | 最新 release |
 | modelscope | 1.37.0 |
-| trl | 最新 release 的源码/二进制 |
-| 模型 | [Qwen/Qwen2.5-0.5B-Instruct](https://www.modelscope.cn/models/Qwen/Qwen2.5-0.5B-Instruct) |
+| trl | 最新 release（PyPI） |
+| 模型 | [Qwen/Qwen2.5-0.5B-Instruct](https://www.modelscope.cn/models/Qwen/Qwen2.5-0.5B-Instruct)，约 1 GB，首次运行自动下载 |
 | 数据集 | 文档内联的 4 条极小对话样本（不依赖外部数据集下载） |
 
 ### 前置安装
@@ -91,23 +91,19 @@ python -c "import torch, torch_npu; print(f'torch={torch.__version__}'); print(f
 
 输出结果如下：
 
-```shell #test-result id="check-npu-runtime"
-torch=2.9.0+cpu
-torch_npu=2.9.0.post2
+```shell #test-result id="check-npu-runtime" fuzzy='xxx'
+torch=xxx
+torch_npu=xxx
 is_available: True
 count: 1
 ```
 
 > 如果 `import torch_npu` 失败，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查 torch / torch_npu / CANN 三方兼容矩阵。
 
-安装 `transformers` / `peft` / `modelscope`（`trl` 自身会在下一节安装，并自动带入 `accelerate` / `datasets` 依赖）：
+安装 `transformers` / `peft` / `modelscope`（`trl` 会在下一节安装，并按依赖声明自动带入 `transformers` / `peft` / `accelerate` / `datasets`），装完打印版本验证：
 
-```shell #test-setup
-pip install 'transformers>=4.56.2,<5.0' 'peft' 'modelscope==1.37.0'
-```
-
-打印安装版本：
 ```shell #test id="install-deps"
+uv pip install 'transformers>=4.56.2,<5.0' 'peft' 'modelscope==1.37.0'
 python -c "import transformers, peft, modelscope; print(f'transformers={transformers.__version__} peft={peft.__version__} modelscope={modelscope.__version__}')"
 ```
 
@@ -119,10 +115,10 @@ transformers=xxx peft=xxx modelscope=1.37.0
 
 ## 安装 TRL
 
-### 使用 uv 进行安装
+用 uv 安装 PyPI 最新 release，装完打印版本验证：
 
 ```shell #test id="trl-install-binary"
-uv pip install --index-url https://mirrors.aliyun.com/pypi/simple trl
+uv pip install trl
 python -c "import trl; print('trl', trl.__version__)"
 ```
 
@@ -132,57 +128,17 @@ python -c "import trl; print('trl', trl.__version__)"
 trl xxx
 ```
 - xxx 表示最新的版本号
-<!--
-```shell #test-setup
-uv pip uninstall trl -y
-```
--->
-
-### 从源码安装
-<!--
-```shell #test-setup store="upstream_ref"
-echo "${UPSTREAM_REF}"
-```
--->
-
-克隆上游仓库并 checkout 到工作流注入的最新 release tag，安装并且验证。
-
-> 注意：TRL 上游 `examples/` 已改为**目录式**布局（如 `examples/sft_qlora/`、`examples/grpo_wordle/`），每个示例是一个自包含目录，脚本内用 `# /// script` 头声明依赖、在模块 docstring 里写运行命令。昇腾社区旧文档中的 `examples/scripts/sft.py` / `examples/scripts/dpo.py` 这类路径**已过时**，请勿引用。
-
-```shell #test id="trl-install-source" load="upstream_ref>>ref"
-git clone https://github.com/huggingface/trl.git /tmp/trl-src
-cd /tmp/trl-src && git checkout <ref>
-uv pip install -e .
-python -c "import trl; print('trl', trl.__version__)"
-```
-\<ref> 为安装的最新的 release 分支
-
-输出结果类似如下：
-
-```shell #test-result id="trl-install-source" fuzzy='xxx'
-trl xxx
-```
-- xxx 表示最新的版本号
-
-## 下载基础模型
-
-默认使用 **ModelScope** 进行模型下载（runner 无法访问 HuggingFace）。
-
-```shell #test-setup store="model_path"
-python -c "from modelscope import snapshot_download; print(snapshot_download('Qwen/Qwen2.5-0.5B-Instruct'))" | tail -n 1
-```
 
 ## 使用样例：最小 SFT LoRA 后训练
 
-用 4 条内联对话样本（极小数据集，不依赖外部数据集下载）对 Qwen2.5-0.5B-Instruct 做 5 步 LoRA SFT。`SFTTrainer` 通过 `peft_config` 注入 LoRA 适配器，底座权重冻结、只训练新注入的低秩矩阵；训练完成后把适配器保存到 `output/trl-sft-lora`。
+用 4 条内联对话样本（极小数据集，不依赖外部数据集下载）对 Qwen2.5-0.5B-Instruct 做 5 步 LoRA SFT。模型由脚本内的 `snapshot_download` 首次运行时自动下载到默认缓存（约 1 GB）；`SFTTrainer` 通过 `peft_config` 注入 LoRA 适配器，底座权重冻结、只训练新注入的低秩矩阵；训练完成后把适配器保存到 `output/trl-sft-lora`。
 
-```shell #test id="sft-lora" load="model_path>>model_path"
-ASCEND_RT_VISIBLE_DEVICES=0 python << 'PY'
-import os
-
+```shell #test id="sft-lora"
+python << 'PY'
 import torch
 import torch_npu
 from datasets import Dataset
+from modelscope import snapshot_download
 from peft import LoraConfig, TaskType
 from trl import SFTConfig, SFTTrainer
 
@@ -201,8 +157,10 @@ data = [
 ]
 train_dataset = Dataset.from_list(data)
 
+model = snapshot_download('Qwen/Qwen2.5-0.5B-Instruct')
+
 trainer = SFTTrainer(
-    model="<model_path>",
+    model=model,
     train_dataset=train_dataset,
     peft_config=LoraConfig(r=8, lora_alpha=32, task_type=TaskType.CAUSAL_LM),
     args=SFTConfig(
@@ -224,8 +182,6 @@ trainer.save_model("output/trl-sft-lora")
 print("TRL_SFT_DONE")
 PY
 ```
-
-> `<model_path>` 为上面「下载基础模型」章节对应命令的输出，由 `#test-setup store="model_path"` 捕获并注入，无需手动替换。
 
 输出结果类似如下（训练日志走 stderr，stdout 只保留首尾标记）：
 
@@ -249,8 +205,4 @@ output/trl-sft-lora/adapter_config.json
 output/trl-sft-lora/adapter_model.safetensors
 ```
 
-小贴士：
-
-- 如果要换用其他后训练方法（DPO / GRPO / KTO 等），只需把 `SFTTrainer` / `SFTConfig` 换成对应的 `DPOTrainer` / `GRPOTrainer` 等，入口形态保持一致。
-- 如果要切换其他模型，只需修改 `model=<model_id/model_path>`；本文默认经 **ModelScope** 获取模型。
-- 想跑完整训练而非 5 步冒烟，去掉 `max_steps` 并调大 `save_steps` / 数据集规模即可。
+更多用法见 [TRL examples](https://github.com/huggingface/trl/tree/main/examples)。

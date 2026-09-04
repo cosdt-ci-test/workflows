@@ -17,12 +17,6 @@ Environment variables (injected by GitHub workflow
                                   from the local checkout instead, because
                                   ``raw.githubusercontent.com`` is not
                                   reachable from the NPU runner's cluster.
-    ``UPSTREAM_REF``              Required; bash reads ``$UPSTREAM_REF`` to get
-                                  the latest release tag. The value is
-                                  captured into ``captures`` via the
-                                  ``#test-setup store="upstream_ref"`` block's
-                                  stdout, then substituted into the doc
-                                  command body where ``<ref>`` appears.
     ``NPU_READY=true``            Required, otherwise the class is skipped.
                                   End-to-end tests only run on the NPU runner:
                                   local dev machines / normal ubuntu runners
@@ -175,7 +169,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         defensive ``safetensors`` install, and the modelscope cache
         purge. All other packages — ``transformers`` / ``peft`` /
         ``modelscope`` (via ``install-deps``) and ``trl`` (via
-        ``trl-install-binary`` / ``trl-install-source``) — install
+        ``trl-install-binary``) — install
         themselves in document order via the ``#test`` machinery.
         ``accelerate`` / ``datasets`` come in transitively as trl's
         declared dependencies.
@@ -212,9 +206,14 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         os.environ['PIP_CONSTRAINT'] = cls._CONSTRAINTS_FILE
         os.environ['UV_CONSTRAINT'] = cls._CONSTRAINTS_FILE
 
-        # 2) uv: the doc's ``trl-install-binary`` / ``trl-install-source``
-        # blocks call ``uv pip install`` which handles PEP 517 build deps
-        # more reliably than pip. Inherit ``PIP_INDEX_URL`` +
+        # 2) Card pin: the doc runs single-card SFT; pin card 0 so the
+        # runner's other NPUs stay idle and the doc's ``count: 1``
+        # assertion holds regardless of host layout.
+        os.environ.setdefault('ASCEND_RT_VISIBLE_DEVICES', '0')
+
+        # 3) uv: the doc's ``trl-install-binary`` block calls
+        # ``uv pip install`` which handles PEP 517 build deps more
+        # reliably than pip. Inherit ``PIP_INDEX_URL`` +
         # ``PIP_TRUSTED_HOST`` from the yml job-level env (cluster cache
         # path + trusted-host).
         subprocess.run(
@@ -222,7 +221,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             check=True,
         )
 
-        # 3) torch stack probe + install: when version matches the image's
+        # 4) torch stack probe + install: when version matches the image's
         # pre-installed wheels, reuse them to avoid the cluster cache
         # triggering ``+cpu`` resolution.
         _PROBE_SCRIPT = (
@@ -259,12 +258,12 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 check=True,
             )
 
-        # 4) safetensors: native loader used by the cache validation
+        # 5) safetensors: native loader used by the cache validation
         # step below. Pulled in transitively by torch on most images;
         # install defensively in case the CANN base ships without it.
         ensure_safetensors()
 
-        # 5) Cache validation: persistent host-side bind mount can hold
+        # 6) Cache validation: persistent host-side bind mount can hold
         # truncated safetensors from interrupted runs. Walk every shard
         # under each model dir and purge it on failure; modelscope
         # will re-download cleanly on next access. Implementation
@@ -272,13 +271,12 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         # docstring for the full rationale.
         purge_modelscope_corrupt(resolve_modelscope_cache())
 
-        # 6) transformers / peft / modelscope are installed by the doc's
+        # 7) transformers / peft / modelscope are installed by the doc's
         # ``### 前置安装`` block (``install-deps`` carries the install +
         # verify pair itself). ``trl`` is also NOT installed here: it's
         # the subject of the test and gets installed by the doc's
-        # ``## 安装 TRL`` blocks (``trl-install-binary`` /
-        # ``trl-install-source``), which exercise both binary and source
-        # install paths. ``accelerate`` / ``datasets`` arrive
+        # ``## 安装 TRL`` block (``trl-install-binary``).
+        # ``accelerate`` / ``datasets`` arrive
         # transitively as trl's declared dependencies — the doc's SFT
         # block imports both, so they must be present, but installing
         # them here on top would just be redundant noise.
@@ -294,7 +292,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
         ``transformers`` / ``peft`` / ``modelscope`` / ``trl`` are NOT
         installed here — the doc's ``#test`` blocks (``install-deps`` /
-        ``trl-install-binary`` / ``trl-install-source``) install them
+        ``trl-install-binary``) install them
         themselves in document order.
 
         ``@unittest.skipIf`` only skips the test *method* — ``setUpClass``

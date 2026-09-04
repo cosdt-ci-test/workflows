@@ -29,10 +29,10 @@ Scope note: the doc body covers the smoke path for **stock torchvision**
 running under ``torch_npu`` PrivateUse1 dispatch. ``torch`` /
 ``torch_npu`` are installed by the doc body via ``uv pip install`` from
 Aliyun PyPI mirror / Huawei Cloud ascend pypi
-(versions per [Ascend PyTorch Compatibility 矩阵](https://gitcode.com/Ascend/pytorch/blob/main/COMPATIBILITY.en.md): torch==2.9.0 / torch_npu==2.9.0.post6 / CANN==9.1.0).
+(versions per [Ascend PyTorch Compatibility 矩阵](https://gitcode.com/Ascend/pytorch/blob/main/COMPATIBILITY.en.md): torch==2.12.0 / torch_npu==2.12.0 / CANN==9.1.0).
 ``torchvision`` is installed two ways: (1) **binary path** — `uv pip install
 torchvision` from Aliyun PyPI mirror (unconstrained, pip resolves latest
-compatible with torch==2.9.0); (2) **source build** — `git clone
+compatible with torch==2.12.0); (2) **source build** — `git clone
 github.com/pytorch/vision` at the latest release tag + `uv pip install -e .`,
 mirroring ms-swift's source build pattern. Both paths install the **same**
 stock torchvision; the source build is for users who need exact-version
@@ -230,17 +230,6 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             ['python', '-m', 'pip', 'install', 'uv'],
             check=True,
         )
-
-        # ``torch`` / ``torch_npu`` / ``torchvision`` / ``pillow`` are NOT
-        # pre-installed here: the doc body's ``#test-setup`` /
-        # ``## 安装 torchvision`` blocks are the single source of truth
-        # for which packages get installed, at which source. A pre-install
-        # here would mask install-block failures (the v2 transforms +
-        # NPU dispatch on stock torchvision wheels is the smoke test's
-        # whole point). numpy comes in transitively as a torchvision
-        # requirement; safetensors is NOT needed (no modelscope
-        # snapshot_download in the doc body — transforms work on
-        # synthetic PIL images).
 
     # ----------------------------------------------------------
     # test entry

@@ -35,7 +35,7 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | triton | 最新release |
 | modelscope | 最新release |
 | torchtitan | 最新 release |
-| 训练配置 | 单卡 Step 12：`torchtitan/models/llama3/train_configs/debug_model.toml`（debugmodel：dim=256 / 6 层 / 16 head / vocab 2048，~6 M 参数）；多卡 Step 13：`torchtitan/models/llama3/train_configs/llama3_8b.toml`（Llama 3 8B：dim=4096 / 32 层 / 32 head / 8 kv head，FSDP shard=2 + cpu_offload + 全量 bf16 装得下） |
+| 训练配置 | 单卡 Step 12：`torchtitan/models/llama3/config_registry.py::llama3_debugmodel`（debugmodel：dim=256 / 6 层 / 16 head / vocab 2048，~6 M 参数）；多卡 Step 13：`torchtitan/models/llama3/config_registry.py::llama3_8b`（Llama 3 8B：dim=4096 / 32 层 / 32 head / 8 kv head，FSDP shard=2 + cpu_offload + 全量 bf16 装得下） |
 
 
 ### 检查前置是否满足
@@ -211,7 +211,7 @@ tokenizer_config.json
 
 ### 单卡训练
 
-用 `torchrun --nproc_per_node=1` 在 1 张 NPU 上跑 `debug_model` 真跑 2 步，验证配置解析、初始化、加载 tokenizer、build dataloader、forward + backward 整条链路能跑通。`debug_model` 是 torchtitan 自带的最小 smoke 配置（dim=256 / 6 层 / 16 head / vocab 2048，~6 M 参数量），用 `debug_model.toml` 即可，单卡 30 GB 完全够装。走真实 HCCL backend（`--comm.mode default`）让 c10d 把 `npu` 路由到 `hccl`，1-rank 下所有集合通信都是 self-barrier，不会真的有跨卡流量；不要用 `--comm.mode fake_backend` —— 它只注册 `fake` PG，v0.2.2 在 step 1 之后调 `set_pg_timeouts` → `torch.distributed.barrier(device_ids=[npu:0])` 时会因 `default_device_backend_map["npu"]="hccl"` 但当前 PG 是 `fake` 抛 `RuntimeError: No backend type associated with device type npu`。8B 模型单卡实测装不下（params + grads 在 bf16 下就要 32 GB > 30 GB 可用），需要双卡 FSDP shard=2 才跑得动，详见下一节「多卡训练」：
+用 `torchrun --nproc_per_node=1` 在 1 张 NPU 上跑 `debugmodel` 真跑 2 步，验证配置解析、初始化、加载 tokenizer、build dataloader、forward + backward 整条链路能跑通。`llama3_debugmodel` 是 torchtitan 自带的最小 smoke 配置（dim=256 / 6 层 / 16 head / vocab 2048，~6 M 参数量），单卡 30 GB 完全够装。走真实 HCCL backend（`--comm.mode default`）让 c10d 把 `npu` 路由到 `hccl`，1-rank 下所有集合通信都是 self-barrier，不会真的有跨卡流量；不要用 `--comm.mode fake_backend` —— 它只注册 `fake` PG，v0.2.2 在 step 1 之后调 `set_pg_timeouts` → `torch.distributed.barrier(device_ids=[npu:0])` 时会因 `default_device_backend_map["npu"]="hccl"` 但当前 PG 是 `fake` 抛 `RuntimeError: No backend type associated with device type npu`。8B 模型单卡实测装不下（params + grads 在 bf16 下就要 32 GB > 30 GB 可用），需要双卡 FSDP shard=2 才跑得动，详见下一节「多卡训练」：
 
 ```shell #test id="torchtitan-train-debug" load="upstream_ref>>ref"
 cd torchtitan && git checkout <ref>
@@ -219,8 +219,9 @@ ASCEND_RT_VISIBLE_DEVICES=0 \
 torchrun --nproc_per_node=1 \
     --rdzv_backend c10d \
     --rdzv_endpoint="localhost:0" \
-    --module torchtitan.train \
-    --job.config-file ./torchtitan/models/llama3/train_configs/debug_model.toml \
+    -m torchtitan.train \
+    --module llama3 \
+    --config llama3_debugmodel \
     --comm.mode default \
     --training.steps 2 \
     --training.local-batch-size 1 \
@@ -254,8 +255,9 @@ torchrun --nproc_per_node=2 \
     --rdzv_endpoint="localhost:0" \
     --local-ranks-filter 0 \
     --tee 3 \
-    --module torchtitan.train \
-    --job.config-file ./torchtitan/models/llama3/train_configs/llama3_8b.toml \
+    -m torchtitan.train \
+    --module llama3 \
+    --config llama3_8b \
     --model.hf-assets-path <ms_tokenizer_path> \
     --comm.mode default \
     --training.dataset c4_test \

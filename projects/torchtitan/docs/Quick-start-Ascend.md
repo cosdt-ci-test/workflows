@@ -119,10 +119,11 @@ modelscope xxx
 ```
 ### 安装 triton-ascend
 
-NPU 上 `torch.compile`/inductor 走到 `torch_npu._inductor` 时需要 Ascend 的 Triton fork **triton-ascend**（为 `triton` 模块提供 Ascend 后端）；社区版 `triton` 只有 CUDA 后端，装了会在训练第一步报 `RuntimeError: 0 active drivers ([]). There should only be one.`。triton-ascend 的版本号对齐它 fork 的 triton 基线：torch 2.12 配套 triton 3.5，因此用 Ascend nightly 源 3.5.0 线的末位构建。注意华为云源的 triton-ascend（3.2.1 起的稳定版与全部 nightly）都声明 `triton==3.5.0` 依赖、文件设计为覆盖社区版目录：稳定 3.2.x 的 fork 基线（3.2）与所钉社区版（3.5.0）错配，混装后 `import triton` 报 `cannot import name 'Language'`；nightly 3.5.0 线基线匹配且 wheel 为完整 fork 可独立成立，但 `--no-deps` 仍然必要——不让社区版进环境，`triton/` 目录只归属 triton-ascend 一个包：
+NPU 上 `torch.compile`/inductor 走到 `torch_npu._inductor` 时需要 Ascend 的 Triton fork **triton-ascend**（为 `triton` 模块提供 Ascend 后端）；社区版 `triton` 只有 CUDA 后端，装了会在训练第一步报 `RuntimeError: 0 active drivers ([]). There should only be one.`。triton-ascend 的版本号对齐它 fork 的 triton 基线：torch 2.12 配套 triton 3.5，因此用 Ascend nightly 源 3.5.0 线的末位构建。注意华为云源的 triton-ascend（3.2.1 起的稳定版与全部 nightly）都声明 `triton==3.5.0` 依赖、文件设计为覆盖社区版目录：稳定 3.2.x 的 fork 基线（3.2）与所钉社区版（3.5.0）错配，混装后 `import triton` 报 `cannot import name 'Language'`；nightly 3.5.0 线基线匹配且 wheel 为完整 fork 可独立成立，但 `--no-deps` 仍然必要——不让社区版进环境，`triton/` 目录只归属 triton-ascend 一个包。`--no-deps` 跳过的依赖里，被 Ascend 后端运行期 import 的只有 **pybind11**（后端 utils/driver 在首次编译 kernel 时用它把 `npu_utils.cpp` 现场编成扩展，需要容器里有 g++/clang++ 和已 source 的 CANN 环境），单独补装；其余（numpy/pytest/pandas 等）是上游打包夹带的测试依赖，运行期不 import：
 
 ```shell #test-setup
 uv pip install --no-deps --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi/nightly triton-ascend==3.5.0+dev20260701
+uv pip install pybind11
 ```
 
 打印安装版本：

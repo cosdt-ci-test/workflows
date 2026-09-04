@@ -406,23 +406,28 @@ print(save_path)
 
 ### 修改配置文件
 
-拷出来的 config 跟模板原版完全一致，按下面 4 处修改规则调整。
+拷出来的 config 跟模板原版完全一致，需要改 4 个地方：**前两个是模板留的占位值，换成你自己的路径就行（打开文件直接改）**；后两个是 NPU 上跑通必须做的删除。
 
 **占位符说明**：
 - `<cfg>` = 上一节「准备配置文件」拷 cfg 那一步落到的文件绝对路径，典型值 `/tmp/xtuner_npu_llm_cfg.py/qwen1_5_1_8b_chat_qlora_custom_sft_e1_copy.py`。**本地手动跑**：自己跑 `xtuner copy-cfg qwen1_5_1_8b_chat_qlora_custom_sft_e1 /tmp/xtuner_npu_llm_cfg.py`，然后 `ls /tmp/xtuner_npu_llm_cfg.py/` 找 `_copy.py` 后缀的那个文件路径替换。
 - `<weights_dir>` = 「准备模型权重」下权重那一步落到的 Qwen 权重绝对路径，典型值 `./qwen/models/qwen--Qwen1.5-1.8B-Chat/snapshots/master`（modelscope cache 布局，随版本变化）。**本地手动跑**：用前一步 `xtuner-pull-weights` 块里 `find ./qwen -name config.json -print -quit` 的 `dirname` 结果替换。
 
-1. `pretrained_model_name_or_path`：替成本地真实权重路径（pull-weights 阶段落盘路径）
-2. `data_files[0]`：替成转换后的 OpenAI 格式 jsonl 绝对路径
-3. **strip `quantization_config` + `BitsAndBytesConfig` 导入**：QLoRA 路径需要 bnb，aarch64 NPU 上装不上，所以退化为 plain LoRA 走 fp16 base
-4. **strip `train_cfg` 里的 `max_epochs`**：`xtuner train_cfg` 强制 `max_iters` 和 `max_epochs` 二选一，本文档用 `max_iters=5` 限制迭代数
+**换两处路径**（直接编辑 cfg 里对应的行）：
+
+| cfg 里的行 | 模板默认值 | 改成 |
+| --- | --- | --- |
+| `pretrained_model_name_or_path` | `"Qwen/Qwen1.5-1.8B-Chat"`（HF repo id，会联网拉权重） | 「准备模型权重」下载的本地权重目录 |
+| `data_files` | `["/path/to/json/file.json"]`（占位符，文件不存在） | 转换后的 `./colors_openai/train.jsonl` 绝对路径 |
+
+**两处必要删除**（NPU 限制）：
+
+3. 删掉 `quantization_config` 及 `BitsAndBytesConfig` 导入：QLoRA 的 4-bit 量化配置依赖 bitsandbytes，aarch64 NPU 上装不上，退化为 plain LoRA 走 fp16 base（1.8B 模型 32 GB 显存够用）
+4. 删掉 `train_cfg` 里的 `max_epochs`：`train_cfg` 强制 `max_iters` 和 `max_epochs` 二选一，本文档用 `max_iters=5` 限制迭代数
 
 ```shell #test-setup load="xtuner_llm_cfg_path>>cfg" load="xtuner_weights_path>>weights_dir" store="xtuner_llm_cfg_path"
-# 对 cfg 模板做 4 处 patch（用 Python str/re 比 sed 稳：cfg 全用双引号，sed 引号易踩坑）：
-#   1) pretrained_model_name_or_path → 本地权重绝对路径
-#   2) data_files[0]               → OpenAI 格式 jsonl 绝对路径
-#   3) strip quantization_config   + BitsAndBytesConfig import（plain LoRA 路径）
-#   4) strip train_cfg 里 max_epochs（TrainLoop 强制 max_iters / max_epochs 二选一）
+# 自动完成上面的 4 处修改（Python str/re 比 sed 稳：cfg 全用双引号，sed 引号易踩坑）：
+#   换路径：pretrained_model_name_or_path → <weights_dir>；data_files → OpenAI jsonl 绝对路径
+#   删配置：quantization_config + BitsAndBytesConfig 导入；train_cfg 里的 max_epochs
 python -c "
 import re, os
 path = '<cfg>'
@@ -430,22 +435,22 @@ weights_dir = '<weights_dir>'
 with open(path) as f:
     text = f.read()
 
-# patch 1: pretrained_model_name_or_path → 本地权重路径
+# 换权重路径：模板的 HF repo id → 本地权重目录
 text, n = re.subn(
     r'pretrained_model_name_or_path = \"Qwen/Qwen1\.5-1\.8B-Chat\"',
     f\"pretrained_model_name_or_path = {weights_dir!r}\",
     text,
 )
-assert n == 1, f'patch 1 applied {n} times (expected 1)'
+assert n == 1, f'weights path replaced {n} times (expected 1)'
 
-# patch 2: data_files[0] → OpenAI jsonl 绝对路径
+# 换数据路径：占位符 → 转换后的 OpenAI jsonl 绝对路径
 data_abs = os.path.abspath('./colors_openai/train.jsonl')
 old = 'data_files = [\"/path/to/json/file.json\"]'
 new = f'data_files = [{data_abs!r}]'
-assert old in text, f'patch 2 source not found: {old!r}'
+assert old in text, f'data placeholder not found: {old!r}'
 text = text.replace(old, new)
 
-# patch 3: strip quantization_config block + BitsAndBytesConfig import
+# 删量化配置：quantization_config 块 + BitsAndBytesConfig 导入（QLoRA → plain LoRA）
 text = re.sub(
     r',\s*\n\s*quantization_config=dict\(\n(?:\s+[^\n]*,\n)+?\s*\),\n',
     '\n',
@@ -459,13 +464,13 @@ text = re.sub(
     count=1,
 )
 
-# patch 4: train_cfg 去掉 max_epochs（TrainLoop 强制二选一；用 max_iters=5 限迭代数）
+# 删 train_cfg 里的 max_epochs（TrainLoop 强制二选一；用 max_iters=5 限迭代数）
 text, n = re.subn(
     r'train_cfg = dict\(type=TrainLoop, max_epochs=max_epochs\)',
     'train_cfg = dict(type=TrainLoop)',
     text,
 )
-assert n == 1, f'patch 4 applied {n} times (expected 1)'
+assert n == 1, f'max_epochs removed {n} times (expected 1)'
 
 with open(path, 'w') as f:
     f.write(text)
@@ -473,10 +478,10 @@ print(path)
 "
 ```
 
-<!-- # py_compile 验 cfg 是合法 Python + 4 处 patch 都生效（grep 关键串）。
+<!-- # py_compile 验 cfg 是合法 Python + 4 处修改都生效（grep 关键串）。
 # 不用 mmengine.config.Config.fromfile：它会执行 cfg 顶层 import 触发 torchvision::nms，
 # NPU base image 的 torchvision 缺 C++ op 直接 RuntimeError。 -->
-验证 patch 结果——cfg 能通过编译 + 4 处修改都已生效：
+验证修改结果——cfg 能通过编译，两处路径已替换、两处删除已生效：
 
 ```shell #test id="xtuner-patch-cfg" load="xtuner_llm_cfg_path>>cfg" load="xtuner_weights_path>>weights_dir"
 python -c "
@@ -493,7 +498,7 @@ checks = [
     ('data', f\"data_files = ['{data_abs}']\"),
 ]
 for name, expected in checks:
-    assert expected in text, f'missing patch ({name}): {expected!r}'
+    assert expected in text, f'missing edit ({name}): {expected!r}'
 assert 'quantization_config' not in text
 assert 'BitsAndBytesConfig' not in text
 assert 'train_cfg = dict(type=TrainLoop, max_epochs=max_epochs)' not in text

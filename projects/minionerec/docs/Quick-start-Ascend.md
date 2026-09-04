@@ -100,12 +100,12 @@ grep -c "transfer_to_npu" sft.py evaluate.py
 grep -c "bitsandbytes" sft.py evaluate.py || true
 ```
 
-输出结果如下（多文件 `grep -c` 逐文件输出 `文件名:次数`；`transfer_to_npu` 每个文件出现 2 次：import + from 行；`bitsandbytes` 出现 0 次）：
+输出结果如下（多文件 `grep -c` 逐文件输出 `文件名:匹配行数`；`transfer_to_npu` 只出现在 `from torch_npu.contrib import transfer_to_npu` 一行——`import torch_npu` 不含该子串，每个文件匹配 1 行；`bitsandbytes` 出现 0 次）：
 
 ```shell #test-result id="patch"
 patched
-sft.py:2
-evaluate.py:2
+sft.py:1
+evaluate.py:1
 sft.py:0
 evaluate.py:0
 ```
@@ -292,5 +292,5 @@ HR...
 | ModelScope 下载慢/失败 | 网络 | 重试（支持断点续传）；数据侧确认 `HF_ENDPOINT=https://hf-mirror.com` 已导出 |
 | `model_type` grep 为空 | `final_checkpoint/config.json` 缺失 | 训练未完成，检查上一块退出码与日志 |
 | 评估报 `FileNotFoundError: [Errno 2] No such file or directory: ''` | 未传 `--result_json_data`，结果文件路径为空 | 补上 `--result_json_data ./eval_result.json` |
-| CC 大于 0 | 约束解码未生效 | 确认第 5 节补丁已注入 `evaluate.py`（`grep -c transfer_to_npu evaluate.py` 应为 2）；基座模型须为 Qwen2.5-**base**（Instruct 版约束解码失效） |
+| CC 大于 0 | 约束解码未生效 | 确认第 5 节补丁已注入 `evaluate.py`（`grep -c transfer_to_npu evaluate.py` 应为 1）；基座模型须为 Qwen2.5-**base**（Instruct 版约束解码失效） |
 | HR/NDCG 与文中示例差异大 | 冒烟训练仅 1 epoch/600 样本，`num_beams` 也降为 20 | 数值仅供参考；CI 只断言 CC=0，HR/NDCG 用占位符匹配 |

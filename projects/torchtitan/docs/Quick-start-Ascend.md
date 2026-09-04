@@ -32,7 +32,7 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | CANN | 9.1.0 |
 | torch | 2.12.0 |
 | torch_npu | 2.12.0 |
-| triton | 最新release |
+| triton-ascend | 最新release（Ascend 源） |
 | modelscope | 最新release |
 | torchtitan | 最新 release |
 | 训练配置 | 单卡 Step 12：`torchtitan/models/llama3/config_registry.py::llama3_debugmodel`（debugmodel：dim=256 / 6 层 / 16 head / vocab 2048，~6 M 参数）；多卡 Step 13：`torchtitan/models/llama3/config_registry.py::llama3_8b`（Llama 3 8B：dim=4096 / 32 层 / 32 head / 8 kv head，FSDP shard=2 + cpu_offload + 全量 bf16 装得下） |
@@ -117,21 +117,22 @@ python -c "import modelscope; print('modelscope', modelscope.__version__)"
 ```shell #test-result id="modelscope-install" fuzzy='xxx'
 modelscope xxx
 ```
+### 安装 triton-ascend
 
-### 安装triton
+NPU 上 `torch.compile`/inductor 走到 `torch_npu._inductor` 时需要 Ascend 的 Triton fork **triton-ascend**（提供 `triton` 模块的 Ascend 后端）；原版 `triton` 只有 CUDA 后端，装了会在训练第一步报 `RuntimeError: 0 active drivers ([]). There should only be one.`。原版 PyPI 的 triton-ascend 没有 cp312 wheel，从 Ascend 源装（含 cp312 aarch64）：
 
 ```shell #test-setup
-uv pip install --extra-index-url https://mirrors.aliyun.com/pypi/simple/ triton
+uv pip install --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi triton-ascend
 ```
 
 打印安装版本：
 ```shell #test id="triton-install"
-python -c "from importlib.metadata import version; print('triton', version('triton'))"
+python -c "from importlib.metadata import version; print('triton-ascend', version('triton-ascend'))"
 ```
 
 输出结果如下：
 ```shell #test-result id="triton-install" fuzzy='xxx'
-triton xxx
+triton-ascend xxx
 ```
 
 ## 安装 torchtitan

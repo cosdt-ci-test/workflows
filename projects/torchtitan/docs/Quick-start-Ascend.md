@@ -211,23 +211,9 @@ tokenizer_config.json
 
 ### 兼容性补丁：v0.3.0 传给 `create_block_mask` 的 `separate_full_blocks` 参数
 
-torchtitan v0.3.0 是按 torch 2.14 nightly 开发的（release notes 的 Compatibility 表写明 validated with PyTorch 2.14.0），其 `torchtitan/models/common/decoder.py::_create_flex_attention_mask` 会向 `create_block_mask()` 传一个 `separate_full_blocks` 关键字参数：
+torchtitan v0.3.0 是按 torch 2.14 nightly 开发的（release notes 的 Compatibility 表写明 validated with PyTorch 2.14.0），其 `torchtitan/models/common/decoder.py::_create_flex_attention_mask` 会向 `create_block_mask()` 传一个 `separate_full_blocks` 关键字参数（值取 `not is_in_batch_invariant_mode()`）。该参数是 pytorch main（2.13/2.14-dev）新加的，稳定版 `create_block_mask` 签名（含 2.12.0）里没有；而 NPU 侧最新的 torch_npu 2.12.0 只配套 torch 2.12.0，升不上去——第 1 个 train step 构建 flex attention mask 时（forward 之前）就会抛 `TypeError: create_block_mask() got an unexpected keyword argument 'separate_full_blocks'`。
 
-```python
-separate_full_blocks=not is_in_batch_invariant_mode(),
-```
-
-该参数是 pytorch main（2.13/2.14-dev）新加的，稳定版 `create_block_mask` 签名（含 2.12.0）里没有；而 NPU 侧最新的 torch_npu 2.12.0 只配套 torch 2.12.0，升不上去。于是第 1 个 train step 构建 flex attention mask 时（forward 之前）即抛：
-
-```
-TypeError: create_block_mask() got an unexpected keyword argument 'separate_full_blocks'
-```
-
-删掉该参数在 torch 2.12 上行为不变：torch 2.12 的 `create_block_mask` 内部本来就固定 `separate_full_blocks=True`，而 torchtitan 传入的 `not is_in_batch_invariant_mode()` 在默认（非 batch-invariant）模式下也为 `True`。因此下面「单卡训练」「多卡训练」两个命令都在 `git checkout <ref>` 之后先执行一行 `sed` 删掉这个参数再启动 torchrun：
-
-```shell
-sed -i '/separate_full_blocks=not is_in_batch_invariant_mode()/d' torchtitan/models/common/decoder.py
-```
+删掉该参数在 torch 2.12 上行为不变：torch 2.12 内部本来就固定 `separate_full_blocks=True`，torchtitan 传的这个值在默认（非 batch-invariant）模式下也是 `True`。因此下面两个训练命令都在 `git checkout <ref>` 之后先用一行 `sed` 把 `decoder.py` 里这个参数删掉再启动 torchrun。
 
 > 待 torch_npu 发布配套 torch ≥ 2.13（`separate_full_blocks` 进入稳定版签名）的版本后，本节与两处 `sed` 行可一并移除。
 

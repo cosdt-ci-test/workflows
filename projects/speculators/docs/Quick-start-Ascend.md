@@ -275,7 +275,7 @@ len: xxx
 
 单卡 64 GB NPU 装不下「vllm 16 GB 权重 + KV + train draft 模型 + optimizer 激活」并发跑，所以拆成两步：先生成 hidden_states 缓存，再离线训。
 
-起 vllm 一次性 generate 10 条 hidden_states 写到 `/tmp/hs-train/`（train 的 FileBackend 直接读这个目录；生成完杀 vllm 释放全部 NPU 给后续 train 留 64 GB 完整空间）。v0.8.0 起 `launch_vllm.py` 会按宿主机 CPU 数自动推导 `--api-server-count`（render 大批量吞吐优化，大机器上起多个 API server 前端进程），这里 10 条 smoke 数据显式钉 1 个前端：
+起 vllm 一次性 generate 10 条 hidden_states 写到 `/tmp/hs-train/`（train 的 FileBackend 直接读这个目录；生成完杀 vllm 释放全部 NPU 给后续 train 留 64 GB 完整空间）。v0.8.0 的 `launch_vllm.py` 有两处行为变化需要留意：按宿主机 CPU 数自动推导 `--api-server-count`（render 大批量吞吐优化，大机器上起多个 API server 前端进程），以及不再自动追加 `--no-enable-chunked-prefill`——镜像 vllm 0.23.0 默认开 chunked prefill 而 `ExampleHiddenStatesConnector` 不支持，必须显式关掉。这里 10 条 smoke 数据顺便钉 1 个前端：
 
 ```shell #test-setup store="hs_dir" load="data_path>>data_path" load="verifier_path>>verifier_path"
 set -euo pipefail
@@ -302,6 +302,7 @@ setsid nohup python scripts/launch_vllm.py "<verifier_path>" \
   --max-model-len 4096 \
   --enforce-eager \
   --api-server-count 1 \
+  --no-enable-chunked-prefill \
   > /tmp/vllm-gen.log 2>&1 < /dev/null &
 VLLM_GEN_PID=$!
 VLLM_GEN_PGID=$(ps -o pgid= -p "$VLLM_GEN_PID" | tr -d ' ')

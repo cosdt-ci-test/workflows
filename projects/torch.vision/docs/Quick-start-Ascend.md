@@ -32,8 +32,8 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | --- | --- |
 | Python | 3.12 |
 | CANN | 9.1.0 |
-| torch | 2.9.0+cpu |
-| torch_npu | 2.9.0.post6 |
+| torch | 2.12.0+cpu |
+| torch_npu | 2.12.0 |
 | torchvision | 最新 release（**必须源码构建** `FORCE_CUDA=0`——torchvision ≥0.23 停止发布 CPU-only wheel，PyPI 上的 linux wheel 都链 `libcudart.so`，跟 torch_npu 不兼容；CPU-only 构建产出的 `_C.so` 只链 `libc10_cpu` / `libtorch_cpu`，跟 torch_npu 完全兼容） |
 | pillow | `>=10.0`（`torchvision.transforms.functional.to_pil_image` 等的运行时依赖） |
 
@@ -79,9 +79,11 @@ Python 3.12.xxx
 安装 `torch` / `torch_npu`：
 
 ```shell #test-setup
-uv pip install -f https://mirrors.aliyun.com/pytorch-wheels/cpu torch==2.9.0
-uv pip install --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi torch_npu==2.9.0.post6
+uv pip install -f https://mirrors.aliyun.com/pytorch-wheels/cpu torch==2.12.0
+uv pip install --extra-index-url https://mirrors.aliyun.com/pypi/simple torch_npu==2.12.0
 ```
+
+> 之前 torch=2.9.0+cpu + torchvision=v0.29.0 这套在源码构建时炸过——torch 2.9.0 wheel 的 Stable ABI 头是早期不完整快照，缺 `torch/csrc/stable/c/shim.h` 等核心头，v0.29.0 的 `box_iou_rotated.cpp` 编不过。**升到 torch 2.12.0 后 wheel 完整 ship Stable ABI 头**，是仓库里 torchtitan Quick-start-Ascend.md 已实测的稳定组合（同款 CANN 9.1.0 镜像 / 同源 wheel / NPU 上跑通过 Llama 3 debug_model + 8B 训练）。torch_npu 2.12.0 在 aliyun pypi/simple 上有，跟 torch 2.12.0 是华为官方兼容矩阵对齐的同一 minor。
 
 检查 torch / torch_npu 是否装好且 NPU 设备可用：
 
@@ -92,8 +94,8 @@ python -c "import torch, torch_npu; print('torch=', torch.__version__); print('t
 输出结果如下：
 
 ```shell #test-result id="check-torch" fuzzy='xxx'
-torch= 2.9.0+cpu
-torch_npu= 2.9.0.post6
+torch= 2.12.0+cpu
+torch_npu= 2.12.0
 is_available: True
 count: 1
 ```
@@ -121,6 +123,8 @@ Pillow xxx
 ## 安装 torchvision
 
 torchvision ≥0.23 不再发布 CPU-only wheel——PyPI 上的 linux aarch64 / x86_64 wheel 全部链接 `libcudart.so`，跟 `torch_npu`（替换 torch CUDA backend）不兼容。所以必须**从源码构建**，强制 `FORCE_CUDA=0` 让构建脚本跳过 CUDA 依赖，产出的 `_C.so` 只链 `libc10_cpu` / `libtorch_cpu`，跟 torch_npu 完全兼容。
+
+torchvision ≥v0.29 进一步迁移到 PyTorch Stable C ABI，C 扩展从 `#include <torch/csrc/stable/c/shim.h>` 等头编译——**这要求 torch wheel 必须完整 ship Stable ABI 头**。torch 2.12.0+cpu wheel 满足这个条件（aliyun 镜像实测含 `c/shim.h` / `headeronly/util/shim_utils.h` / `headeronly/version.h` 共 61 个相关头），所以前面把 torch 升到 2.12.0 + torchvision 走 latest release 这条链能编过；如果未来 torchvision 再升到 v0.30/v0.31（仍走 Stable ABI），同一套 torch wheel 继续可用——这正是 Stable ABI 设计的 forward-compat 收益。
 
 构建工具依赖（g++ / make / cmake / git）已在基础镜像里，无需额外安装。
 

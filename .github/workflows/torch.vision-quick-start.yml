@@ -16,13 +16,27 @@
 #
 # Upstream: github.com/pytorch/vision. The doc installs torchvision
 # two ways: (1) `uv pip install torchvision -i ...` pulls the latest
-# PyPI release matching torch==2.9.0 — canonical stock wheel path;
+# PyPI release matching torch==2.12.0 — canonical stock wheel path;
 # (2) the source build section `git clone`s pytorch/vision at the
 # latest release tag (`<ref>`) and runs `uv pip install -e .`,
 # mirroring ms-swift's source build pattern. pytorch/vision
 # publishes GitHub Releases (e.g. v0.24.0) so the engine's default
 # release_source=releases works — no special source=tags override
 # needed.
+#
+# torch / torch_npu both pinned to 2.12.0: this is the verified
+# upgrade from the prior torch=2.9.0+cpu + torch_npu=2.9.0.post6
+# combo. Required because torchvision v0.29.0 (Sep 2026) migrated
+# to PyTorch Stable C ABI, which needs torch wheel to ship
+# `torch/csrc/stable/c/shim.h` and `torch/headeronly/util/shim_utils.h`
+# — torch 2.9.0 wheel ships an incomplete Stable ABI header snapshot
+# (verified via `unzip -l` on aliyun's wheel). torch 2.12.0+cpu wheel
+# ships 61 Stable ABI headers including those two; the matching
+# torch_npu 2.12.0 wheel is on aliyun pypi/simple. The torchtitan
+# Quick-start-Ascend.md project in this same repo uses the exact same
+# torch 2.12.0 + torch_npu 2.12.0 + aliyun pypi/simple combo and has
+# been green on the same NPU runner with CANN 9.1.0 — cross-project
+# parity reduces the surface area this guard has to re-verify.
 #
 # No container devices / volumes: torch_npu auto-registers with the
 # CANN base image, and torchvision transforms run on synthetic PIL
@@ -87,7 +101,7 @@ jobs:
       # dispatch on a synthetic PIL image).
       container_options: ''
       # Doc body does: uv pip install torch / torch_npu from Aliyun
-      # pytorch-wheels + Huawei Cloud ascend dual-source (torch_npu is
+      # pytorch-wheels + aliyun pypi/simple dual-source (torch_npu is
       # the slowest piece, ~30 min on cold cache), then stock torchvision
       # cpu wheel from Aliyun PyPI mirror, then 9 transforms.v2 smoke
       # tests that exercise torch_npu PrivateUse1 dispatch. No source

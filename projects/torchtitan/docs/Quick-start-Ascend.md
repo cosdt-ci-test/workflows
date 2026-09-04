@@ -228,7 +228,7 @@ torchrun --nproc_per_node=1 \
     --training.seq-len 256 \
     --metrics.log-freq 1 \
     --metrics.disable-color-printing \
-    --job.dump-folder /tmp/torchtitan-quickstart
+    --dump-folder /tmp/torchtitan-quickstart
 ```
 
 输出结果类似如下：
@@ -258,9 +258,9 @@ torchrun --nproc_per_node=2 \
     -m torchtitan.train \
     --module llama3 \
     --config llama3_8b \
-    --model.hf-assets-path <ms_tokenizer_path> \
+    --hf-assets-path <ms_tokenizer_path> \
     --comm.mode default \
-    --training.dataset c4_test \
+    --dataloader.dataset c4_test \
     --training.dtype bfloat16 \
     --training.enable-cpu-offload \
     --training.steps 2 \
@@ -268,7 +268,7 @@ torchrun --nproc_per_node=2 \
     --training.seq-len 256 \
     --metrics.log-freq 1 \
     --metrics.disable-color-printing \
-    --job.dump-folder /tmp/torchtitan-quickstart-2card
+    --dump-folder /tmp/torchtitan-quickstart-2card
 ```
 
 输出结果类似如下：

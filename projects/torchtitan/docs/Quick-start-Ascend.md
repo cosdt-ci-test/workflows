@@ -210,13 +210,23 @@ tokenizer_config.json
 
 文件名是 Llama 3 tokenizer 必备文件，确认 snapshot_download 命中正确。
 
-### 兼容性补丁：v0.3.0 传给 `create_block_mask` 的 `separate_full_blocks` 参数
+### 兼容性补丁
+
+**补丁一：v0.3.0 传给 `create_block_mask` 的 `separate_full_blocks` 参数（torchtitan）**
 
 torchtitan v0.3.0 是按 torch 2.14 nightly 开发的（release notes 的 Compatibility 表写明 validated with PyTorch 2.14.0），其 `torchtitan/models/common/decoder.py::_create_flex_attention_mask` 会向 `create_block_mask()` 传一个 `separate_full_blocks` 关键字参数（值取 `not is_in_batch_invariant_mode()`）。该参数是 pytorch main（2.13/2.14-dev）新加的，稳定版 `create_block_mask` 签名（含 2.12.0）里没有；而 NPU 侧最新的 torch_npu 2.12.0 只配套 torch 2.12.0，升不上去——第 1 个 train step 构建 flex attention mask 时（forward 之前）就会抛 `TypeError: create_block_mask() got an unexpected keyword argument 'separate_full_blocks'`。
 
 删掉该参数在 torch 2.12 上行为不变：torch 2.12 内部本来就固定 `separate_full_blocks=True`，torchtitan 传的这个值在默认（非 batch-invariant）模式下也是 `True`。因此下面两个训练命令都在 `git checkout <ref>` 之后先用一行 `sed` 把 `decoder.py` 里这个参数删掉再启动 torchrun。
 
-> 待 torch_npu 发布配套 torch ≥ 2.13（`separate_full_blocks` 进入稳定版签名）的版本后，本节与两处 `sed` 行可一并移除。
+**补丁二：torch_npu 2.12.0 inductor codegen 的 `DeferredLine` 崩溃（torch_npu）**
+
+torch_npu 2.12.0 的 NPU inductor 补丁 `torch_npu/_inductor/codegen/triton.py::find_axis_in_load_store` 遍历 codegen 缓冲区里的行时按老 API 把行当字符串调 `line.find(...)`，而 torch 2.12 inductor 产出的行是 `DeferredLine` 对象——`create_block_mask` 里的 cumsum 归约 store 走到该路径时抛 `InductorError: AttributeError: 'DeferredLine' object has no attribute 'find'`。上游 master 已改为统一解包（`line.line if isinstance(line, DeferredLine) else line`）后再用，但该修复未回合进 2.12.0 wheel，这里用 `sed` 对四个缓冲区循环应用同样的修法：
+
+```shell #test-setup
+sed -i -E "s/for line in self\.(loads|compute|post_loop_store|stores)\._lines:/for line in [l.line if isinstance(l, DeferredLine) else l for l in self.\1._lines]:/" "$(python -c 'import torch_npu, os; print(os.path.dirname(torch_npu.__file__))')/_inductor/codegen/triton.py"
+```
+
+> 补丁一待 torch_npu 发布配套 torch ≥ 2.13（`separate_full_blocks` 进入稳定版签名）的版本后可移除；补丁二待 torch_npu 发布带该修复的 2.12 补丁版或 2.13 后可移除（届时 `sed` 无匹配，本身也是无害的空操作）。
 
 ### 单卡训练
 

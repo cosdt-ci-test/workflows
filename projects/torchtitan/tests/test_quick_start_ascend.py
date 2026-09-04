@@ -95,7 +95,11 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     # inherits parent env by default) see it. torchtitan's transitive
     # deps (datasets) occasionally pull CUDA-marked wheels if
     # the resolver sees the cluster cache's CUDA index first.
+    # Also blocks community `triton` (CUDA-only backend): on NPU it must
+    # be replaced by triton-ascend, and installing both clobbers the
+    # same triton/ tree into a broken mix.
     _CUDA_CONSTRAINTS = (
+        'triton<0',
         'cuda-toolkit<0',
         'cuda-python<0',
         'cuda-bindings<0',

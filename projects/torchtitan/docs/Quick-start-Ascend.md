@@ -32,7 +32,7 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | CANN | 9.1.0 |
 | torch | 2.12.0 |
 | torch_npu | 2.12.0 |
-| triton-ascend | 最新release（Ascend 源） |
+| triton-ascend | 3.5.0+dev20260701（Ascend nightly 源） |
 | modelscope | 最新release |
 | torchtitan | 最新 release |
 | 训练配置 | 单卡 Step 12：`torchtitan/models/llama3/config_registry.py::llama3_debugmodel`（debugmodel：dim=256 / 6 层 / 16 head / vocab 2048，~6 M 参数）；多卡 Step 13：`torchtitan/models/llama3/config_registry.py::llama3_8b`（Llama 3 8B：dim=4096 / 32 层 / 32 head / 8 kv head，FSDP shard=2 + cpu_offload + 全量 bf16 装得下） |
@@ -119,10 +119,10 @@ modelscope xxx
 ```
 ### 安装 triton-ascend
 
-NPU 上 `torch.compile`/inductor 走到 `torch_npu._inductor` 时需要 Ascend 的 Triton fork **triton-ascend**（提供 `triton` 模块的 Ascend 后端）；原版 `triton` 只有 CUDA 后端，装了会在训练第一步报 `RuntimeError: 0 active drivers ([]). There should only be one.`。原版 PyPI 的 triton-ascend 没有 cp312 wheel，从 Ascend 源装（含 cp312 aarch64）：
+NPU 上 `torch.compile`/inductor 走到 `torch_npu._inductor` 时需要 Ascend 的 Triton fork **triton-ascend**（为 `triton` 模块提供 Ascend 后端）；社区版 `triton` 只有 CUDA 后端，装了会在训练第一步报 `RuntimeError: 0 active drivers ([]). There should only be one.`。triton-ascend 的版本号对齐它 fork 的 triton 基线：torch 2.12 配套 triton 3.5，因此用 Ascend nightly 源 3.5.0 线的末位构建。注意华为云源的 triton-ascend（3.2.1 起的稳定版与全部 nightly）都声明 `triton==3.5.0` 依赖、文件设计为覆盖社区版目录：稳定 3.2.x 的 fork 基线（3.2）与所钉社区版（3.5.0）错配，混装后 `import triton` 报 `cannot import name 'Language'`；nightly 3.5.0 线基线匹配且 wheel 为完整 fork 可独立成立，但 `--no-deps` 仍然必要——不让社区版进环境，`triton/` 目录只归属 triton-ascend 一个包：
 
 ```shell #test-setup
-uv pip install --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi triton-ascend
+uv pip install --no-deps --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi/nightly triton-ascend==3.5.0+dev20260701
 ```
 
 打印安装版本：
@@ -210,13 +210,23 @@ tokenizer_config.json
 
 文件名是 Llama 3 tokenizer 必备文件，确认 snapshot_download 命中正确。
 
-### 兼容性补丁：v0.3.0 传给 `create_block_mask` 的 `separate_full_blocks` 参数
+### 兼容性补丁
+
+**补丁一：v0.3.0 传给 `create_block_mask` 的 `separate_full_blocks` 参数（torchtitan）**
 
 torchtitan v0.3.0 是按 torch 2.14 nightly 开发的（release notes 的 Compatibility 表写明 validated with PyTorch 2.14.0），其 `torchtitan/models/common/decoder.py::_create_flex_attention_mask` 会向 `create_block_mask()` 传一个 `separate_full_blocks` 关键字参数（值取 `not is_in_batch_invariant_mode()`）。该参数是 pytorch main（2.13/2.14-dev）新加的，稳定版 `create_block_mask` 签名（含 2.12.0）里没有；而 NPU 侧最新的 torch_npu 2.12.0 只配套 torch 2.12.0，升不上去——第 1 个 train step 构建 flex attention mask 时（forward 之前）就会抛 `TypeError: create_block_mask() got an unexpected keyword argument 'separate_full_blocks'`。
 
 删掉该参数在 torch 2.12 上行为不变：torch 2.12 内部本来就固定 `separate_full_blocks=True`，torchtitan 传的这个值在默认（非 batch-invariant）模式下也是 `True`。因此下面两个训练命令都在 `git checkout <ref>` 之后先用一行 `sed` 把 `decoder.py` 里这个参数删掉再启动 torchrun。
 
-> 待 torch_npu 发布配套 torch ≥ 2.13（`separate_full_blocks` 进入稳定版签名）的版本后，本节与两处 `sed` 行可一并移除。
+**补丁二：torch_npu 2.12.0 inductor codegen 的 `DeferredLine` 崩溃（torch_npu）**
+
+torch_npu 2.12.0 的 NPU inductor 补丁 `torch_npu/_inductor/codegen/triton.py::find_axis_in_load_store` 遍历 codegen 缓冲区里的行时按老 API 把行当字符串调 `line.find(...)`，而 torch 2.12 inductor 产出的行是 `DeferredLine` 对象——`create_block_mask` 里的 cumsum 归约 store 走到该路径时抛 `InductorError: AttributeError: 'DeferredLine' object has no attribute 'find'`。上游 master 已改为统一解包（`line.line if isinstance(line, DeferredLine) else line`）后再用，但该修复未回合进 2.12.0 wheel，这里用 `sed` 对四个缓冲区循环应用同样的修法：
+
+```shell #test-setup
+sed -i -E "s/for line in self\.(loads|compute|post_loop_store|stores)\._lines:/for line in [l.line if isinstance(l, DeferredLine) else l for l in self.\1._lines]:/" "$(python -c 'import torch_npu, os; print(os.path.dirname(torch_npu.__file__))')/_inductor/codegen/triton.py"
+```
+
+> 补丁一待 torch_npu 发布配套 torch ≥ 2.13（`separate_full_blocks` 进入稳定版签名）的版本后可移除；补丁二待 torch_npu 发布带该修复的 2.12 补丁版或 2.13 后可移除（届时 `sed` 无匹配，本身也是无害的空操作）。
 
 ### 单卡训练
 

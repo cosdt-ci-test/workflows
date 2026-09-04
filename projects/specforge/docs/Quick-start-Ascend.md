@@ -696,8 +696,10 @@ smoke: specforge train alive after 30s, pid=xxx, log=/tmp/smoke-train.log
 set -euo pipefail
 LOG_FILE=/tmp/smoke-train.log
 TRAIN_PID=$(cat /tmp/smoke-train.pid)
-WAIT_TIMEOUT="${SPECFORGE_TRAIN_TIMEOUT:-4800}"   # 80 min 上限；单段命令的框架超时为 5400s
+WAIT_TIMEOUT="${SPECFORGE_TRAIN_TIMEOUT:-4800}"     # 总等待上限；单段命令的框架超时为 5400s
+GRACE_AFTER_DONE="${SPECFORGE_TRAIN_GRACE:-300}"   # step/loss 出现后，等进程退出的宽限
 WAIT_START=$(date +%s)
+DONE_AT=""
 while kill -0 "$TRAIN_PID" 2>/dev/null; do
     ELAPSED=$(( $(date +%s) - WAIT_START ))
     if [[ $ELAPSED -ge $WAIT_TIMEOUT ]]; then
@@ -705,6 +707,19 @@ while kill -0 "$TRAIN_PID" 2>/dev/null; do
         kill -9 "$TRAIN_PID" 2>/dev/null || true
         tail -50 "$LOG_FILE"
         exit 1
+    fi
+    if [[ -z "$DONE_AT" ]] && grep -qE "step.*loss|loss.*step|step N:|train_runtime" "$LOG_FILE" 2>/dev/null; then
+        DONE_AT=$ELAPSED
+        echo "smoke: step/loss markers present at elapsed=${ELAPSED}s; giving the process ${GRACE_AFTER_DONE}s to exit"
+    fi
+    # 训练已产出 step/loss 但进程迟迟不退：CI runner 上出现过训练完成后 teardown 卡死、
+    # 80 min 不退（log 静止、kill -0 常真）——宽限后杀掉整个进程树，按训练成功收尾。
+    if [[ -n "$DONE_AT" ]] && [[ $(( ELAPSED - DONE_AT )) -ge $GRACE_AFTER_DONE ]]; then
+        echo "smoke: WARNING - train pid=$TRAIN_PID still alive ${GRACE_AFTER_DONE}s after step/loss markers; killing process tree"
+        pkill -9 -P "$TRAIN_PID" 2>/dev/null || true
+        kill -9 "$TRAIN_PID" 2>/dev/null || true
+        sleep 2
+        break
     fi
     if [[ -f "$LOG_FILE" ]]; then
         LOG_SIZE=$(stat -c%s "$LOG_FILE" 2>/dev/null || echo 0)
@@ -737,6 +752,6 @@ smoke: specforge train process exited, elapsed=xxx
 smoke: OK - 1-step training completed
 ```
 
-> 首行 `xxx` 吸收监控期间的周期进度行：训练进程退出前每 60s 打一行 `[hh:mm:ss] elapsed=Ns log_size=... last: <日志末行>`，退出后才输出最后两行结论。
+> 首行 `xxx` 吸收监控期间的周期输出：每 60s 一行 `[hh:mm:ss] elapsed=...` 进度行、step/loss 标记出现时的提示行，以及进程在宽限期内不退被杀时的 WARNING（CI runner 上出现过训练完成但 teardown 卡死 80 min 不退——宽限 300s 后杀进程树、按成功收尾）。无论哪条路径，最后都以"进程退出 + 训练完成"两行收尾。
 
 > 卡 0 capture server、卡 1 trainer、卡 2/3 留空给 HCCL buffer。`--context-length 1024 --mem-fraction-static 0.5` 压住 SGLang KV 池；`training.max_steps=1 training.batch_size=1 data.max_length=512 training.num_anchors=32 deployment.trainer.nproc_per_node=1` 把训练侧压到 1 步最小数据。

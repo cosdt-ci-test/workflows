@@ -128,6 +128,22 @@ class TestOpenClipProjectContract(unittest.TestCase):
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, text)
 
+    def test_environment_setup_defers_torchvision_import_to_doc(self) -> None:
+        test_path = (
+            _REPO_ROOT
+            / "projects"
+            / "open_clip"
+            / "tests"
+            / "test_quick_start_ascend.py"
+        )
+        text = test_path.read_text(encoding="utf-8")
+        self.assertNotIn(
+            "import torch, torch_npu, torchvision",
+            text,
+            "torchvision imports Pillow; defer its import until the document "
+            "has installed the complete open_clip dependency set",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

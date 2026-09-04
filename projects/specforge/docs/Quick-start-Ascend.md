@@ -153,7 +153,8 @@ fi
 cd SpecForge
 uv pip install --no-deps .
 # specforge/_train() lazy-import accelerate.utils.set_seed（仅 import 不触发，
-# 真正训练才暴露 ModuleNotFoundError——run 33578505226 复现）。
+# 真正训练才暴露 ModuleNotFoundError——run 33578505226 复现）；CLI 的 click 依赖
+# 镜像已自带（--no-deps 不会安装它）。
 uv pip install --no-deps accelerate
 python -c "from importlib.metadata import version; print('specforge, version', version('specforge'))"
 ```
@@ -181,16 +182,17 @@ specforge --help
 ```
 
 ```shell #test-result id="specforge-help"
-usage: specforge [-h] {train,export,benchmark} ...
+Usage: specforge [OPTIONS] COMMAND [ARGS]...
 
-positional arguments:
-  {train,export,benchmark}
-    train               train a draft model from a typed config
-    export              materialize a runtime checkpoint as a model directory
-    benchmark           benchmark a running SGLang server
+  SpecForge: speculative decoding training framework.
 
-options:
-  -h, --help            show this help message and exit
+Options:
+  -h, --help  Show this message and exit.
+
+Commands:
+  benchmark  benchmark a running SGLang server
+  export     materialize a runtime checkpoint as a model directory
+  train      train a draft model from a typed config
 ```
 
 ```shell #test id="specforge-train-help"
@@ -198,26 +200,24 @@ specforge train --help
 ```
 
 ```shell #test-result id="specforge-train-help"
-usage: specforge train [-h] -c CONFIG
-                       [--role {auto,all,producer,consumer,both}]
-                       [--node-rank NODE_RANK] [--plan]
-                       [overrides ...]
+Usage: specforge train [OPTIONS] [OVERRIDES]...
 
-positional arguments:
-  overrides             dotted overrides, e.g. training.learning_rate=1e-4
+  Train a draft model from a typed run config.
 
-options:
-  -h, --help            show this help message and exit
-  -c CONFIG, --config CONFIG
-                        YAML or JSON run config
-  --role {auto,all,producer,consumer,both}
-                        launch selection (default: offline local all or
-                        online/disaggregated producer+consumer)
-  --node-rank NODE_RANK
-                        node-local rank for an explicit multi-node trainer
-                        launch
-  --plan                print the resolved process plan without starting
-                        workers
+  OVERRIDES are dotted ``section.field=value`` assignments applied on top of
+  the config file, e.g. ``training.learning_rate=1e-4``.
+
+Options:
+  -c, --config PATH               YAML or JSON run config.  [required]
+  --role [auto|all|producer|consumer|both]
+                                  Launch selection: offline local 'all' or
+                                  online/disaggregated producer+consumer when
+                                  'auto'.  [default: auto]
+  --node-rank INTEGER             Node-local rank for an explicit multi-node
+                                  trainer launch.
+  --plan                          Print the resolved process plan without
+                                  starting workers.
+  -h, --help                      Show this message and exit.
 ```
 
 ## 端到端 smoke：1 步训练
@@ -252,9 +252,7 @@ PY
 
 镜像里 sglang 是 0.5.18（以上方预检输出为准），`apply_sglang_spec_capture_patch.sh` 默认 target 是 `v0.5.18`。脚本会从 specforge 源码仓拉 `patches/sglang/v0.5.18/spec-capture.patch` + `spec-capture-ascend-mount.patch`。后者 hunk 行号跟上游 a8c0993 之后版本对不上，ascend companion 用字符串替换做（不依赖行号）。
 
-> `apply_sglang_spec_capture_patch.sh` 内部 `git apply -v -p2`，对 git-editable 装的 sglang（`pip install -e` / 镜像预装，working tree 根在 `python/`）会**全 12 个文件静默 Skipped patch**——patch header 是 `a/python/sglang/...`，`-p2` 剥成 `sglang/...` 找不到路径，但脚本的"已应用"判定（`cmp -s APPLIED_COPY PATCH && check_reverse`）依然通过、run rc=0 一行没写。
->
-> 治本：直接 `git -C <sglang_repo_root> apply -p1 patches/sglang/v0.5.18/spec-capture.patch`（`-p1` 只剥 `a/` → `python/sglang/...`）。server_args fallback 只补 3 个 field，**不**恢复 logits_processor/scheduler/model_runner hook，SGLang server 起来后 forward 早期仍会因缺 patch ValueError。
+> 历史坑：`apply_sglang_spec_capture_patch.sh` 内部 `git apply -p2`，对 git-editable 装的 sglang（`pip install -e` / 镜像预装，working tree 根在 `python/`）曾**全 12 个文件静默 Skipped patch**——patch header 是 `a/python/sglang/...`，`-p2` 剥成 `sglang/...` 找不到路径，但脚本的"已应用"判定依然通过、rc=0。上游 2026-09-03 PR #807 已修（`GIT_CEILING_DIRECTORIES` 让 git 把安装目录当普通目录解析）。下方命令块里的"sink 缺失则强制 `git apply -p1` 重 apply"是对旧 ref 的兜底，新 upstream 上正常路径直接成功、兜底不触发。
 
 > SpecForge 上游 2026-08-29 退掉 v0.5.14 patch（commit `b453386827`）。以后 image 把 sglang 倒回 0.5.14，这条 step 会立即红——届时把 sglang 重新钉到 0.5.18、或 checkout `b453386827` 之前的 SpecForge commit。
 
@@ -277,16 +275,12 @@ if [[ -f scripts/apply_sglang_spec_capture_patch.sh ]]; then
 else
     echo "smoke: WARNING - apply_sglang_spec_capture_patch.sh missing; assuming already patched"
 fi
-# 治本：apply_sglang_spec_capture_patch.sh 的 -p2 在 sglang git toplevel（镜像装在
-# python 子目录但仓库根在上一级）上静默 skip——patch header a/python/sglang/... 经
-# -p2 剥成 sglang/... 找不到路径，git apply --check 全文件 silently skipped；脚本
-# `cmp -s APPLIED_COPY PATCH && check_reverse PATCH` 也 rc=0（--reverse 同样找不到
-# 文件 rc=0），误判"已应用"，APPLIED_COPY 落盘但 12 个 patch 文件全没落盘。
-# 后果：smoke-start-sglang 启动后 --enable-spec-capture 字段被 server_args.py 解析
-# 但 spec_capture_sink.py 等 11 个文件缺失，/generate 返回 meta_info 无 spec_capture，
-# specforge producer 标 10 terminally failed prompts。
-# 治本：强制清掉 APPLIED_COPY、用正确 -p1 + --reject 重 apply（git toplevel 是
-# SGLANG_DIR 的父目录），--reject 容忍已被 Python fallback / 旧 apply 部分修改的文件。
+# 兜底：上游 2026-09-03 PR #807 之前，脚本的 -p2 在 sglang git toplevel（镜像把
+# sglang 装在 python/ 子目录、仓库根在上一级）上静默 skip——a/python/sglang/... 剥成
+# sglang/... 找不到路径，却误判"已应用"（APPLIED_COPY 落盘、12 个文件全没落盘）。
+# 修复后正常不会走到这里；万一 sink 仍缺失（旧 ref / 残留状态），清掉 APPLIED_COPY
+# 用 -p1 + --reject 重 apply（toplevel 是 SGLANG_DIR 的父目录），--reject 容忍已被
+# 部分修改的文件。
 SGLANG_DIR=$(python -c "import importlib.util, os; print(os.path.dirname(os.path.dirname(importlib.util.find_spec('sglang').origin)))")
 APPLIED_COPY="$SGLANG_DIR/sglang/.spec_capture_patch.applied"
 SINK_FILE="$SGLANG_DIR/sglang/srt/spec_capture_sink.py"

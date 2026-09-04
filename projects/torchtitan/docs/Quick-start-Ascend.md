@@ -209,12 +209,21 @@ tokenizer_config.json
 
 文件名是 Llama 3 tokenizer 必备文件，确认 snapshot_download 命中正确。
 
+### 兼容性补丁：v0.3.0 传给 `create_block_mask` 的 `separate_full_blocks` 参数
+
+torchtitan v0.3.0 是按 torch 2.14 nightly 开发的（release notes 的 Compatibility 表写明 validated with PyTorch 2.14.0），其 `torchtitan/models/common/decoder.py::_create_flex_attention_mask` 会向 `create_block_mask()` 传一个 `separate_full_blocks` 关键字参数（值取 `not is_in_batch_invariant_mode()`）。该参数是 pytorch main（2.13/2.14-dev）新加的，稳定版 `create_block_mask` 签名（含 2.12.0）里没有；而 NPU 侧最新的 torch_npu 2.12.0 只配套 torch 2.12.0，升不上去——第 1 个 train step 构建 flex attention mask 时（forward 之前）就会抛 `TypeError: create_block_mask() got an unexpected keyword argument 'separate_full_blocks'`。
+
+删掉该参数在 torch 2.12 上行为不变：torch 2.12 内部本来就固定 `separate_full_blocks=True`，torchtitan 传的这个值在默认（非 batch-invariant）模式下也是 `True`。因此下面两个训练命令都在 `git checkout <ref>` 之后先用一行 `sed` 把 `decoder.py` 里这个参数删掉再启动 torchrun。
+
+> 待 torch_npu 发布配套 torch ≥ 2.13（`separate_full_blocks` 进入稳定版签名）的版本后，本节与两处 `sed` 行可一并移除。
+
 ### 单卡训练
 
 用 `torchrun --nproc_per_node=1` 在 1 张 NPU 上跑 `debugmodel` 真跑 2 步，验证配置解析、初始化、加载 tokenizer、build dataloader、forward + backward 整条链路能跑通。`llama3_debugmodel` 是 torchtitan 自带的最小 smoke 配置（dim=256 / 6 层 / 16 head / vocab 2048，~6 M 参数量），单卡 30 GB 完全够装。走真实 HCCL backend（`--comm.mode default`）让 c10d 把 `npu` 路由到 `hccl`，1-rank 下所有集合通信都是 self-barrier，不会真的有跨卡流量；不要用 `--comm.mode fake_backend` —— 它只注册 `fake` PG，v0.2.2 在 step 1 之后调 `set_pg_timeouts` → `torch.distributed.barrier(device_ids=[npu:0])` 时会因 `default_device_backend_map["npu"]="hccl"` 但当前 PG 是 `fake` 抛 `RuntimeError: No backend type associated with device type npu`。8B 模型单卡实测装不下（params + grads 在 bf16 下就要 32 GB > 30 GB 可用），需要双卡 FSDP shard=2 才跑得动，详见下一节「多卡训练」：
 
 ```shell #test id="torchtitan-train-debug" load="upstream_ref>>ref"
 cd torchtitan && git checkout <ref>
+sed -i '/separate_full_blocks=not is_in_batch_invariant_mode()/d' torchtitan/models/common/decoder.py
 ASCEND_RT_VISIBLE_DEVICES=0 \
 torchrun --nproc_per_node=1 \
     --rdzv_backend c10d \
@@ -248,6 +257,7 @@ torchrun --nproc_per_node=1 \
 
 ```shell #test id="torchtitan-train-2card" load="upstream_ref>>ref" load="ms_tokenizer_path>>ms_tokenizer_path"
 cd torchtitan && git checkout <ref>
+sed -i '/separate_full_blocks=not is_in_batch_invariant_mode()/d' torchtitan/models/common/decoder.py
 ASCEND_RT_VISIBLE_DEVICES=0,1 \
 PYTORCH_ALLOC_CONF="expandable_segments:True" \
 torchrun --nproc_per_node=2 \

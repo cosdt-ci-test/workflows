@@ -712,7 +712,7 @@ smoke: specforge train alive after 30s, pid=xxx, log=/tmp/smoke-train.log
 
 #### 监控直到退出
 
-轮询等待训练完成：日志出现 step/loss 指标即训练成功，正常情况下进程随后自行退出。个别环境下进程会在训练完成后卡在收尾的分布式销毁上不退出——此时等 300s 宽限后杀掉进程树，仍按训练成功收尾，并把各进程的 `/proc` 状态和 py-spy 线程栈写到日志（供定位卡点）。若始终没有 step/loss 指标，则等到 80 min 上限判失败：
+轮询等待训练完成：日志出现 step/loss 指标即训练成功，正常情况下进程随后自行退出。注意容器环境下进程退出后可能停留在僵尸状态（容器 PID 1 不回收孤儿，`kill -0` 仍返回成功），本段已按"僵尸即退出"处理。若进程确认活着但 300s 内不退出，杀掉进程树并按训练成功收尾，同时把各进程的 `/proc` 状态和 py-spy 线程栈写到日志（供定位）。若始终没有 step/loss 指标，则等到 80 min 上限判失败：
 
 ```shell #test id="smoke-train-monitor"
 set -euo pipefail
@@ -722,7 +722,18 @@ WAIT_TIMEOUT="${SPECFORGE_TRAIN_TIMEOUT:-4800}"     # 总等待上限；单段�
 GRACE_AFTER_DONE="${SPECFORGE_TRAIN_GRACE:-300}"   # step/loss 出现后，等进程退出的宽限
 WAIT_START=$(date +%s)
 DONE_AT=""
-while kill -0 "$TRAIN_PID" 2>/dev/null; do
+# 存活判定不能只看 kill -0：它对僵尸进程也返回成功。GH Actions 容器的 PID 1 不回收
+# 孤儿——specforge train 正常退出后停在 zombie 状态、kill -0 恒真，看起来像"卡死"
+#（CI 3/3 复现；coder 的 PID 1 会收尸所以从不复现）。State 为 Z 即视为已退出。
+trainer_alive() {
+    kill -0 "$TRAIN_PID" 2>/dev/null || return 1
+    if grep -q 'State:[[:space:]]*Z' "/proc/$TRAIN_PID/status" 2>/dev/null; then
+        echo "smoke: train pid=$TRAIN_PID already exited (zombie state; container init does not reap orphans)"
+        return 1
+    fi
+    return 0
+}
+while trainer_alive; do
     ELAPSED=$(( $(date +%s) - WAIT_START ))
     if [[ $ELAPSED -ge $WAIT_TIMEOUT ]]; then
         echo "smoke: FAILED - specforge train exceeded ${WAIT_TIMEOUT}s, killing pid=$TRAIN_PID"
@@ -734,8 +745,7 @@ while kill -0 "$TRAIN_PID" 2>/dev/null; do
         DONE_AT=$ELAPSED
         echo "smoke: step/loss markers present at elapsed=${ELAPSED}s; giving the process ${GRACE_AFTER_DONE}s to exit"
     fi
-    # 训练已产出 step/loss 但进程迟迟不退：CI runner 上出现过训练完成后 teardown 卡死、
-    # 80 min 不退（log 静止、kill -0 常真，疑似卡在 destroy_process_group 的 HCCL 销毁）。
+    # 训练已产出 step/loss 但进程活着迟迟不退（非僵尸）——尚未在实测中出现过，留作兜底。
     # 杀进程树前先取证（父+子进程各一份），全部写 stderr 并带 [ERROR] 前缀——框架对含
     # [ERROR] 的 stderr 即使 rc=0 也整段 print 到 job log（≤256KB 不截断），GitHub 上可直接
     # 复制。三层证据：/proc 状态+内核栈（D=不可中断等驱动、wchan=等待点）→ py-spy
@@ -744,7 +754,7 @@ while kill -0 "$TRAIN_PID" 2>/dev/null; do
         echo "smoke: WARNING - train pid=$TRAIN_PID still alive ${GRACE_AFTER_DONE}s after step/loss markers; dumping stacks then killing process tree"
         for P in "$TRAIN_PID" $(pgrep -P "$TRAIN_PID" 2>/dev/null || true); do
             echo "[ERROR] teardown-hang diagnostic for pid $P:" >&2
-            awk '/^(State|Threads)/{print "  "$0}' /proc/$P/status 2>/dev/null >&2 || true
+            awk '/^(State|Threads)/{print "  "$0}' /proc/$P/status >&2 2>/dev/null || true
             echo "  wchan: $(cat /proc/$P/wchan 2>/dev/null)" >&2
             echo "  kernel stack:" >&2
             cat /proc/$P/stack 2>/dev/null | sed 's/^/    /' >&2 || echo "    (unreadable)" >&2

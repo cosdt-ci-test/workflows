@@ -10,6 +10,14 @@
 - **Examples 清单看护**：[`examples_manifest.yaml`](examples_manifest.yaml) 由 `scripts/bootstrap_manifest.py` 扫描上游 `examples/` 生成（TRL 新布局为目录式 example，`scan.unit: mixed`）。当前 supported 为 2 条单卡（`linux-aarch64-a2-1`、`npu_devices: '0'`、profile `peft_lora`）小规模 example：`examples/dpo_reduce_hallucinations`（DPO LoRA）与 `examples/tpo_ultrafeedback`（TPO LoRA），均用 `overlay_args` 压到 CI 规模（8 条 fixture、`max_steps 2`、输出到 `${CI_OUTPUT_DIR}`），其余全部列入 unsupported 并注明原因。`scripts/setup_example.sh` / `run_example.sh` 遵循「项目运行脚本契约」，只修改 CI 工作区内的目标仓副本，绝不向上游写操作。
 - **触发方式**：两条流水线初期**仅开 `workflow_dispatch` 手动触发**（与 llama.cpp / whisper.cpp 的接入节奏一致）；跑绿稳定后再开启 schedule 轮询（quick-start 参考 peft 的 `cron: '0 */3 * * *'`，examples 为 `cron: '30 */6 * * *'`，已在 YAML 中留好注释）。开启 schedule 后，monitor 对比上游信号（examples 树 commit / latest release tag / main HEAD，或文档 hash），有变化才占用 NPU；上次失败时下个周期自动重试。
 
+## 能力覆盖矩阵
+
+- **已验证**：二进制与源码安装（quick-start）、单卡最小 SFT LoRA（quick-start）、DPO LoRA 多模态 VLM（examples）、TPO LoRA（examples）。
+- **未验证**：GRPO、PPO 与 reward modeling、全参微调、多卡分布式、蒸馏与 KTO/ORPO/CPO。上游 examples 当前没有非 vLLM 的最小 GRPO 入口，补覆盖需自行编写并先推上游。
+- **共享缓存**：examples 挂共享根 `/data/ci-cache/modelscope`，DPO / TPO 两个 matrix job 复用同一份权重，避免重复下载；quick-start 挂 `trl` 子目录，与 examples 的模型缓存互不借用。
+- **残留不自动清理**：examples 不调用缓存清理（挂共享根与自动 purge 互斥，属本仓约定），残留损坏分片由人工定向清理。
+- **单卡串行**：runner `linux-aarch64-a2-1` 单卡，两个 supported example 串行排队，冷启动下载只发生一次，之后命中缓存。
+
 ## 看护周期计划
 
 ### 日常检查（每个轮询周期）

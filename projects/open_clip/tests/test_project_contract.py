@@ -58,7 +58,7 @@ class TestOpenClipProjectContract(unittest.TestCase):
         self.assertNotIn("--device=/dev/davinci", text)
         self.assertIn("workflow_dispatch:", text)
 
-    def test_doc_has_one_pretrained_npu_inference_example(self) -> None:
+    def test_doc_has_pretrained_inference_and_upstream_training_smoke(self) -> None:
         doc_path = (
             _REPO_ROOT
             / "projects"
@@ -72,7 +72,13 @@ class TestOpenClipProjectContract(unittest.TestCase):
         test_ids = {command.id for command in commands if hasattr(command, "id")}
         self.assertEqual(
             test_ids,
-            {"check-python", "check-torch", "install-open-clip", "npu-inference"},
+            {
+                "check-python",
+                "check-torch",
+                "install-open-clip",
+                "npu-inference",
+                "npu-training",
+            },
         )
         self.assertEqual(set(results), test_ids)
 
@@ -81,12 +87,23 @@ class TestOpenClipProjectContract(unittest.TestCase):
             "### 本文档示例使用的版本",
             "## 安装 open_clip",
             "## Quick Start：单卡预训练图文推理",
+            "## 单卡最小训练验证",
             "mlfoundations/open_clip",
+            "requirements-training.txt",
             'pretrained="laion2b_s34b_b79k"',
             'device="npu:0"',
             '.to("npu:0")',
             'top_label == "a diagram"',
             "NPU inference PASSED",
+            "tests/test_training_simple.py",
+            "--dataset-type synthetic",
+            "--train-num-samples 4",
+            "--device npu:0",
+            "--precision fp32",
+            "--logs none",
+            "Running with a single process. Device npu:0.",
+            "Train Epoch: 0",
+            "NPU training PASSED",
             'load="upstream_ref>>ref"',
         )
         for fragment in required:
@@ -95,9 +112,11 @@ class TestOpenClipProjectContract(unittest.TestCase):
 
         quick_start = text.split("## Quick Start：单卡预训练图文推理", 1)[1]
         self.assertEqual(quick_start.count('#test id="npu-inference"'), 1)
+        self.assertEqual(quick_start.count('#test id="npu-training"'), 1)
+        training = quick_start.split("## 单卡最小训练验证", 1)[1]
+        self.assertIn("set -euo pipefail", training)
         self.assertNotIn("torchrun", quick_start)
         self.assertNotIn("--dist-backend", quick_start)
-        self.assertNotIn("synthetic", quick_start.lower())
 
     def test_e2e_test_prepares_the_npu_and_hf_environment(self) -> None:
         test_path = (
@@ -127,6 +146,22 @@ class TestOpenClipProjectContract(unittest.TestCase):
         for fragment in required:
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, text)
+
+    def test_environment_setup_defers_torchvision_import_to_doc(self) -> None:
+        test_path = (
+            _REPO_ROOT
+            / "projects"
+            / "open_clip"
+            / "tests"
+            / "test_quick_start_ascend.py"
+        )
+        text = test_path.read_text(encoding="utf-8")
+        self.assertNotIn(
+            "import torch, torch_npu, torchvision",
+            text,
+            "torchvision imports Pillow; defer its import until the document "
+            "has installed the complete open_clip dependency set",
+        )
 
 
 if __name__ == "__main__":

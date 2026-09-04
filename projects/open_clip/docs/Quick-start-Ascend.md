@@ -1,8 +1,9 @@
 # Quick Start (Ascend NPU)
 
 在单卡昇腾 NPU 上运行 [open_clip](https://github.com/mlfoundations/open_clip)
-官方 README 的预训练图文相似度示例：加载 `ViT-B-32`，分别编码一张图片和
-三条文本，并确认图片最匹配 `a diagram`。
+官方 README 的预训练图文相似度示例，并用上游测试已有的 synthetic 数据方式
+完成一次最小训练：先确认 `ViT-B-32` 图片最匹配 `a diagram`，再验证 RN50
+能够在 `npu:0` 上执行前向、反向和优化器更新。
 
 ## 前置条件
 
@@ -81,7 +82,7 @@ printf '%s\n' "$UPSTREAM_REF"
 ```shell #test id="install-open-clip" load="upstream_ref>>ref"
 git clone --depth 1 --branch <ref> https://github.com/mlfoundations/open_clip.git open-clip-src
 cd open-clip-src
-uv pip install -r requirements.txt
+uv pip install -r requirements-training.txt
 uv pip install -e . --no-deps
 python -c "import open_clip; print('open_clip', open_clip.__version__)"
 ```
@@ -142,5 +143,39 @@ top label: a diagram
 NPU inference PASSED
 ```
 
-该示例只覆盖单卡预训练推理，不覆盖训练、HCCL、FSDP、音频模型、CoCa、
-INT8 或 `torch.compile`。
+## 单卡最小训练验证
+
+本步骤来自上游 `tests/test_training_simple.py` 的 RN50 synthetic training 用例。
+它不下载训练数据，只把上游测试规模缩小为 4 个样本，并增加
+`--device npu:0` 和 `--precision fp32`；因此会真实执行损失计算、反向传播和
+优化器更新，同时保持 Quick Start 足够轻量。
+
+```shell #test id="npu-training"
+set -euo pipefail
+cd open-clip-src
+python -m open_clip_train.main \
+    --dataset-type synthetic \
+    --train-num-samples 4 \
+    --batch-size 2 \
+    --epochs 1 \
+    --workers 0 \
+    --model RN50 \
+    --device npu:0 \
+    --precision fp32 \
+    --warmup 1 \
+    --lr 1e-3 \
+    --wd 0.1 \
+    --save-frequency 0 \
+    --zeroshot-frequency 0 \
+    --logs none 2>&1
+echo "NPU training PASSED"
+```
+
+```shell #test-result id="npu-training" fuzzy="xxx"
+xxxRunning with a single process. Device npu:0.xxx
+xxxTrain Epoch: 0xxx
+NPU training PASSED
+```
+
+该示例覆盖真实权重单卡推理和 synthetic 数据单卡训练，不覆盖 HCCL 多卡训练、
+FSDP、音频模型、CoCa、INT8 或 `torch.compile`。

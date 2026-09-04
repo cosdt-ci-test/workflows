@@ -106,17 +106,10 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             ],
             check=True,
         )
-        subprocess.run(
-            [
-                "python",
-                "-c",
-                "import torch, torch_npu, torchvision; "
-                "assert torch.npu.is_available(); "
-                "assert torch.npu.device_count() == 1; "
-                "print(torch.__version__, torch_npu.__version__, torchvision.__version__)",
-            ],
-            check=True,
-        )
+        # Do not import torchvision here: ``--no-deps`` intentionally avoids
+        # re-resolving torch, so Pillow is not installed until the document's
+        # open_clip requirements block runs. The document's ``check-torch``
+        # and ``install-open-clip`` steps own the runtime checks in order.
 
     @classmethod
     def setUpClass(cls) -> None:

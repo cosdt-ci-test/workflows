@@ -12,7 +12,6 @@ Atlas 900 A2 / A3 训练系列产品或者 Ascend 950 系列产品，并按需�
 
 - 可用的 Python 环境
 - 可用的 CANN（参考[快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html)）
-- 与上面 CANN 匹配的 `torch` + `torch_npu`，且 `torch` 能正常 `import` 并 `torch.npu.is_available() == True`（参考 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch)，按 torch ↔ torch_npu ↔ CANN 三方兼容矩阵选择版本）
 
 ### 本文档示例使用的版本
 
@@ -31,8 +30,8 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | --- | --- |
 | Python | 3.12 |
 | CANN | 9.1.0 |
-| torch | 2.10.0 |
-| torch_npu | 2.10.0.post4 |
+| torch | 2.12.0 |
+| torch_npu | 2.12.0 |
 | triton | 最新release |
 | modelscope | 最新release |
 | torchtitan | 最新 release |
@@ -77,6 +76,13 @@ python --version
 输出结果如下：
 ```shell #test-result id="check-py" fuzzy='xxx'
 Python 3.12.xxx
+```
+
+装 `torch` + `torch_npu` ：
+
+```shell #test-setup
+uv pip install -f https://mirrors.aliyun.com/pytorch-wheels/cpu torch==2.12.0
+uv pip install --extra-index-url https://mirrors.aliyun.com/pypi/simple torch_npu==2.12.0
 ```
 
 检查 torch / torch_npu 是否装好且 NPU 设备可用：

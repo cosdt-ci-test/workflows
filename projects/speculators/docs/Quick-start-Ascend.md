@@ -355,7 +355,7 @@ sleep 5
 echo "$HS_DIR"
 ```
 
-用 `torchrun -m speculators.train` 单卡训 1 epoch × 10 sample（smoke 验证管线通，不指望 loss 真下降；`scripts/train.py` 在 v0.8.0 已是 deprecated shim，v0.9.0 移除，统一走 CLI 入口）：
+用 `torchrun -m speculators.train` 单卡训 1 epoch × 10 sample（smoke 验证管线通，不指望 loss 真下降）：
 
 ```shell #test-setup store="checkpoint_path" load="hs_dir>>hs_dir" load="data_path>>data_path" load="verifier_path>>verifier_path"
 set -euo pipefail

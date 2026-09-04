@@ -1,23 +1,19 @@
-# Quick Start (Ascend NPU)
+# 快速开始
 
 在单卡昇腾 NPU 上跑通 [xtuner](https://github.com/InternLM/xtuner) 的最小链路。
 
-本文档以 **Qwen1.5-1.8B-Chat** + Colorist 指令微调数据为例，端到端走通「权重下载 → 配置修改 → 单/多卡训练 → LoRA 合并 → chat 推理」全链路。模型仅 1.8B 参数，fp16 权重 ≈ 3.5 GB，**32 GB NPU 上不需要 monkey-patch 也不需要 4-bit 量化**就能跑 plain LoRA + 采样输出。
+本文档以 **Qwen1.5-1.8B-Chat** + Colorist 指令微调数据为例，端到端走通「权重下载 → 配置修改 → 单/多卡训练 → LoRA 合并 → chat 推理」全链路。
 
 ## 你会做什么
 
 按顺序走完 6 步，每步都附带一段可执行的验证命令，验证通过再进下一步：
 
 1. **装环境**——CANN + torch + torch_npu + xtuner
-2. **下权重**——Qwen1.5-1.8B-Chat（≈ 3.5 GB）
+2. **下权重**——Qwen1.5-1.8B-Chat
 3. **下数据**——Colorist 颜色描述数据集，几 MB
 4. **改 cfg**——拷 xtuner 模板 cfg，改 4 处（路径 / 数据 / 量化 / epoch）
 5. **跑训练**——5 轮迭代的最小训练（约 30 秒），验证整条训练链路和训练中的采样输出
 6. **merge + chat**——LoRA adapter 合并回 base，跟合并后 / adapter 模型对话
-
-**你不需要懂**：bitsandbytes 4-bit 量化、模型量化 kernel、CUDA。Qwen1.5-1.8B 跑 plain LoRA fp16 在 32 GB NPU 上完全够用。
-
-**你需要懂**：xtuner 的 cfg 是 Python 文件（不是 YAML）；`xtuner train <cfg>` 走 mmengine runner，每个 hook（checkpoint / eval / logger）按 cfg 注册；adapter 是 PEFT 格式，要 `pth → hf → merge` 才能跟纯 base 模型对话。
 
 ## 前置条件
 
@@ -31,13 +27,12 @@ Atlas 900 A2 / A3 训练系列产品或者 Ascend 950 系列产品，并按需�
 
 - 可用的 Python 环境
 - 可用的 CANN（参考[快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html)）
-- 与上面 CANN 匹配的 `torch` + `torch_npu`，且 `torch` 能正常 `import` 并 `torch.npu.is_available() == True`（参考 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch)，按 torch ↔ torch_npu ↔ CANN 三方兼容矩阵选择版本）
 
 ### 本文档示例使用的版本
 
 **配套机器**：
 
-- **机器类型**：Atlas 900 A2 PODc（Ascend 910B4，64 GB × 1）。本文档示例模型 1.8B + fp16 base + plain LoRA，**32 GB 910B4 也跑得通**，实测峰值显存 ≈ 10.3 GB。
+- **机器类型**：Atlas 900 A2 PODc（Ascend 910B4）。本文档示例模型 1.8B + fp16 base + plain LoRA。
 - **操作系统**：Ubuntu 22.04
 
 **配套镜像**：
@@ -84,30 +79,27 @@ npu-smi info
 > 如果 `npu-smi` 不存在，请回到 [Ascend 官方快速安装指南](https://ascend.github.io/docs/sources/ascend/quick_install.html) 补装驱动。
 
 检查 Python 版本：
-
 ```shell #test id="check-py"
 python --version
 ```
+
 输出结果如下：
 ```shell #test-result id="check-py" fuzzy='xxx'
 Python 3.12.xxx
 ```
 
-对齐上游 pin 装 `torch` / `torch_npu`：
-
+装 `torch` / `torch_npu`：
 ```shell #test-setup
 uv pip install -f https://mirrors.aliyun.com/pytorch-wheels/cpu torch==2.11.0
 uv pip install --extra-index-url https://mirrors.aliyun.com/pypi/simple torch_npu==2.11.0
 ```
 
 检查 torch / torch_npu 是否装好且 NPU 设备可用：
-
 ```shell #test id="check-torch"
 python -c "import torch, torch_npu; print('torch=', torch.__version__); print('torch_npu=', torch_npu.__version__); print('is_available:', torch.npu.is_available()); print('count:', torch.npu.device_count())"
 ```
 
 输出结果如下：
-
 ```shell #test-result id="check-torch" fuzzy='xxx'
 torch= 2.11.0+cpu
 torch_npu= 2.11.0
@@ -117,7 +109,7 @@ count: xxx
 
 > 如果 `import torch_npu` 失败，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查 torch / torch_npu / CANN 三方兼容矩阵。
 
-装 `modelscope`（本文档下载 Qwen1.5-1.8B-Chat 权重 + Colorist 数据集要用，ModelScope 国内网络更稳）：
+装 `modelscope`：
 
 ```shell #test-setup
 uv pip install modelscope
@@ -164,7 +156,6 @@ echo "${UPSTREAM_REF}"
 克隆上游仓库并 checkout 到最新 release tag，装 xtuner 本体 + 运行依赖，最后打印版本号验证：
 
 ```shell #test id="xtuner-install-source" load="upstream_ref>>ref"
-# 已 clone 过就跳过（本地重复跑本文档时避免 "destination path already exists"）
 [ -d xtuner ] || git clone --depth 1 --branch <ref> https://github.com/InternLM/xtuner.git
 cd xtuner
 uv pip install --no-deps -e .
@@ -219,15 +210,13 @@ has_chat: True
 
 ### 准备模型权重
 
-本文档示例使用 **Qwen1.5-1.8B-Chat**——1.8B 参数 + TikToken BPE 分词（`tokenizer.json` 7 MB，无 sentencepiece），fp16 权重 ≈ 3.5 GB，**32 GB NPU 上直接 plain LoRA 跑得通**，不需要 4-bit 量化也不需要 monkey-patch。
+本文档示例使用 **Qwen1.5-1.8B-Chat**——1.8B 参数 + TikToken BPE 分词（`tokenizer.json` 7 MB，无 sentencepiece），fp16 权重 ≈ 3.5 GB。
 
-下载 Qwen1.5-1.8B-Chat 权重（≈ 3.5 GB，落到 `./qwen` 下的 modelscope cache 目录，含 `model.safetensors` + tokenizer + config）：
+下载 Qwen1.5-1.8B-Chat 权重：
 
 ```shell #test-setup store="xtuner_weights_path"
-# modelscope 把权重落到自己的 cache 目录结构里（新版布局是
-# `./qwen/models/qwen--Qwen1.5-1.8B-Chat/snapshots/master/`，随 modelscope 版本变化）。
-# 用 snapshot_download 的返回值（绝对路径）供「修改配置文件」「模型转换 + LoRA 合并」「与模型对话」
-# 步骤引用，避免 cwd 切换后相对路径指错地方，也不依赖具体 cache 布局。
+# modelscope 把权重落到自己的 cache 目录结构里。
+# 用 snapshot_download 的返回值（绝对路径）供「修改配置文件」「模型转换 + LoRA 合并」「与模型对话」步骤引用。
 python -c "
 import os
 from modelscope import snapshot_download
@@ -236,8 +225,7 @@ print(os.path.abspath(path))
 "
 ```
 
-权重落盘校验——modelscope 的 cache 目录结构随版本变化（新版是
-`./qwen/models/qwen--Qwen1.5-1.8B-Chat/snapshots/master/`），所以用 `find` 定位
+权重落盘校验——modelscope 的 cache 目录结构随版本变化，所以用 `find` 定位
 `config.json` 而不是写死路径：
 
 ```shell #test id="xtuner-pull-weights"
@@ -253,7 +241,7 @@ weights_ok
 total xxx
 ```
 
-权重落到 `./qwen` 下的 modelscope cache 目录（新版布局 `./qwen/models/qwen--Qwen1.5-1.8B-Chat/snapshots/master/`，含 `model.safetensors` 3.5 GB + `tokenizer.json` 7 MB + `vocab.json` + `merges.txt` + `config.json` + `tokenizer_config.json`；目录结构随 modelscope 版本变化，所以后续步骤统一用 `find` 定位或 `snapshot_download` 的返回值）。
+权重落到 `./qwen` 下的 modelscope cache 目录。
 
 ### 准备微调数据集
 
@@ -280,23 +268,23 @@ print('dataset at', target)
 ls -la colors/ | head -1
 ```
 
+验证数据集完整落盘——必需文件逐个检查，再列出目录实际内容：
+
 ```shell #test id="xtuner-pull-dataset"
+# 三个必需文件逐个断言存在，缺了任何一个直接退出报错
 for f in colors.json README.md train.jsonl; do
     test -f "colors/$f" || { echo "MISSING: colors/$f"; exit 1; }
 done
-echo "colors/"
-echo "├── colors.json"
-echo "├── README.md"
-echo "└── train.jsonl"
+# 列出目录的实际内容
+ls colors/
 ```
 
-输出结果（同时是数据集会落在 `./colors/` 下的目录结构）：
+输出结果是 `./colors/` 的实际目录内容：
 
 ```shell #test-result id="xtuner-pull-dataset" disable_fuzzy
-colors/
-├── colors.json
-├── README.md
-└── train.jsonl
+README.md
+colors.json
+train.jsonl
 ```
 
 > 数据集只有几 MB，下载几秒完成；重复执行时脚本会先清掉旧的 `./colors/` 再重建。
@@ -338,6 +326,8 @@ with open(src) as fin, open(dst, 'w') as fout:
 print(f'converted {n} rows -> {dst}')
 "
 ```
+
+验证转换结果——输出文件存在、行数与原始数据集逐行守恒、抽第一条验消息格式正确：
 
 ```shell #test id="xtuner-convert-colors"
 test -f ./colors_openai/train.jsonl || { echo "MISSING: ./colors_openai/train.jsonl"; exit 1; }
@@ -381,6 +371,8 @@ print('head_first:', names[0] if names else '')
 print('qwen_1_8b_chat_count:', sum(1 for n in names if 'qwen1_5_1_8b_chat_qlora_custom_sft_e1' in n))
 "
 ```
+
+输出结果如下（`xxx` 是 cfg 总数 / 首个 cfg 名 / 匹配到的目标 cfg 个数）：
 
 ```shell #test-result id="xtuner-list-cfg" fuzzy='xxx'
 lines: xxx
@@ -484,6 +476,8 @@ print(path)
 <!-- # py_compile 验 cfg 是合法 Python + 4 处 patch 都生效（grep 关键串）。
 # 不用 mmengine.config.Config.fromfile：它会执行 cfg 顶层 import 触发 torchvision::nms，
 # NPU base image 的 torchvision 缺 C++ op 直接 RuntimeError。 -->
+验证 patch 结果——cfg 能通过编译 + 4 处修改都已生效：
+
 ```shell #test id="xtuner-patch-cfg" load="xtuner_llm_cfg_path>>cfg" load="xtuner_weights_path>>weights_dir"
 python -c "
 import py_compile
@@ -518,7 +512,7 @@ weights= xxx
 data= xxx
 ```
 
-> 上一段命令把 4 处 patch 实际应用到 cfg；验证命令跑 `py_compile.compile(<cfg>)` + `grep` 确认 cfg 是合法 Python 且 4 处 patch 都生效。**不**用 `mmengine.config.Config.fromfile`，否则它会执行 cfg 顶层 import 触发 torchvision 链。这里不验 cfg 训出来的实际效果，那要等下面「启动微调」章节真跑。
+> 这里不验 cfg 训出来的实际效果，那要等下面「启动微调」章节真跑。
 
 ### 启动微调
 
@@ -625,7 +619,6 @@ export TORCH_NPU_USE_HCCL=1
 # stub 必须放 PYTHONPATH 最前（前面 stub 优先于 site-packages 的坏 torchvision）。
 export PYTHONPATH=/tmp/torchvision_stub:/tmp/cv2_stub${PYTHONPATH:+:$PYTHONPATH}
 mkdir -p /tmp/xtuner_sft_llm_out_single
-# pipefail：否则 `python ... | tee` 整条管道永远返回 0，训练报错会被吞掉
 set -o pipefail
 
 # 5 处 --cfg-options override：
@@ -753,8 +746,7 @@ Tellmeaboutthecolor#FF5733<|im_end|>
 ```shell #test-setup load="xtuner_llm_cfg_path>>cfg" load="xtuner_weights_path>>weights_dir"
 # merge 入口也会触发 transformers.bloom → torchvision.transforms，复用「启动微调」准备命令建好的 stub。
 # pth_to_hf 的第一个参数是 cfg 文件（「准备配置文件」一步拷出的 <cfg>），不是 /tmp/xtuner_npu_llm_cfg.py 目录；
-# merge 的 LLM 参数用「准备模型权重」一步下载的 <weights_dir>——modelscope cache 目录结构随版本变化
-# （新版是 ./qwen/models/qwen--Qwen1.5-1.8B-Chat/snapshots/master/），不能写死字面路径。
+# merge 的 LLM 参数用「准备模型权重」一步下载的 <weights_dir>。
 export PYTHONPATH=/tmp/torchvision_stub:/tmp/cv2_stub${PYTHONPATH:+:$PYTHONPATH}
 
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
@@ -798,14 +790,7 @@ ls -t /tmp/xtuner_sft_llm_out_single/merged/*.bin 2>/dev/null | head -3
 先跟合并后的模型对话（用上一步合并出的 1.8B merged/ 目录）：
 
 ```shell #test id="xtuner-chat-merged"
-# chat.py 顶层 import 链会撞坏 torchvision（timm 拉进来的 torchvision 在 NPU 上缺 C++ op），
-# 用「启动微调」准备命令建好的 stub 放 PYTHONPATH 最前绕开。export 必须写在本条命令里——
-# 每段命令都是独立的 shell，上一段 export 的变量不会带过来。
 export PYTHONPATH=/tmp/torchvision_stub:/tmp/cv2_stub${PYTHONPATH:+:$PYTHONPATH}
-# chat.py 的 get_input() 用 iter(input, '') 收输入：空行（double enter）提交 prompt，
-# 再输 EXIT + 空行退出；只喂 "prompt\nEXIT" 会在等空行时 EOF 崩溃。
-# 生成内容每次不同，用 grep 只抓确定性标记行（模型加载行 + 干净退出行）。
-# --no-streamer 关掉 TextStreamer 增量输出，等全部生成完再一次性打印。
 echo -e "Tell me about the color #66ccff\n\nEXIT\n" | \
 python -m xtuner.tools.chat /tmp/xtuner_sft_llm_out_single/merged \
     --prompt-template qwen_chat \

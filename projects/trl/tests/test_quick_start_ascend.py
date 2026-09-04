@@ -54,9 +54,13 @@ def _e2e_enabled() -> bool:
 class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     """``Quick-start-Ascend.md`` end-to-end test: fetch doc -> validate
     contract -> run ``#test-setup`` / ``#test`` in order -> compare against
-    ``#test-result``."""
+    ``#test-result``.
 
-    DEFAULT_COMMAND_TIMEOUT = 1200  # 20 min: long enough for model download + 5-step SFT LoRA
+    Scope: 单卡 NPU 上的 SFT + DPO 双方法 LoRA smoke —— 环境与 NPU
+    检查、PyPI 二进制安装 trl、最小 5 步 SFT LoRA、3 步 DPO LoRA、
+    两份适配器产物验证。模型经 ModelScope 自动下载到默认缓存。"""
+
+    DEFAULT_COMMAND_TIMEOUT = 1200  # 20 min: long enough for model download + SFT/DPO LoRA smoke
     USER_AGENT = 'cosdt-ci-test/quick-start'  # monitored source is the fork under cosdt-ci-test org
     ERROR_MARKERS = (
         *MarkdownDocTestBase.ERROR_MARKERS,  # generic [ERROR] + Traceback

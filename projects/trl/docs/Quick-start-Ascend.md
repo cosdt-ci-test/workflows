@@ -1,6 +1,6 @@
 # Quick Start (Ascend NPU)
 
-在单卡昇腾 NPU 上，用极小数据集对 Qwen2.5-0.5B-Instruct 跑通一个最小的 SFT LoRA 后训练示例，并验证输出目录产物。
+TRL 用同一套 `Trainer` / `Config` API 覆盖 SFT / DPO / GRPO / PPO 等后训练方法。本示例在单卡昇腾 NPU 上，用同一个 Qwen2.5-0.5B-Instruct 模型先跑通最小 SFT LoRA，再换成 `DPOTrainer` 跑通偏好优化 DPO LoRA，并验证两种方法的产物。
 
 ## 前置条件
 
@@ -42,7 +42,7 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | modelscope | 1.37.0 |
 | trl | 最新 release（PyPI） |
 | 模型 | [Qwen/Qwen2.5-0.5B-Instruct](https://www.modelscope.cn/models/Qwen/Qwen2.5-0.5B-Instruct)，约 1 GB，首次运行自动下载 |
-| 数据集 | 文档内联的 4 条极小对话样本（不依赖外部数据集下载） |
+| 数据集 | 文档内联的极小对话样本：4 条 SFT 对话 + 3 条偏好样本（不依赖外部数据集下载） |
 
 ### 前置安装
 
@@ -190,9 +190,76 @@ PY
 TRL_SFT_DONE
 ```
 
+## 切换方法：偏好优化 DPO LoRA
+
+同一个模型与 LoRA 配置，把 `SFTTrainer` / `SFTConfig` 换成 `DPOTrainer` / `DPOConfig` 就是偏好优化：数据集改为 `prompt` / `chosen` / `rejected` 三段对话，训练让模型更倾向 `chosen` 而非 `rejected` 的回答。这里用 3 条内联偏好样本跑 3 步 DPO LoRA，产物保存到 `output/trl-dpo-lora`。
+
+```shell #test id="dpo-lora"
+python << 'PY'
+import torch
+import torch_npu
+from datasets import Dataset
+from modelscope import snapshot_download
+from peft import LoraConfig, TaskType
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from trl import DPOConfig, DPOTrainer
+
+print("TRL_DPO_BEGIN")
+
+# 偏好数据集：prompt / chosen / rejected 三段对话，DPOTrainer 自动套用 chat template
+data = [
+    {"prompt": [{"role": "user", "content": "What is the capital of France?"}],
+     "chosen": [{"role": "assistant", "content": "The capital of France is Paris."}],
+     "rejected": [{"role": "assistant", "content": "The capital of France is London."}]},
+    {"prompt": [{"role": "user", "content": "How many days are there in a week?"}],
+     "chosen": [{"role": "assistant", "content": "There are seven days in a week."}],
+     "rejected": [{"role": "assistant", "content": "There are ten days in a week."}]},
+    {"prompt": [{"role": "user", "content": "What is 2+2?"}],
+     "chosen": [{"role": "assistant", "content": "2+2 equals 4."}],
+     "rejected": [{"role": "assistant", "content": "2+2 equals 22."}]},
+]
+train_dataset = Dataset.from_list(data)
+
+model_path = snapshot_download('Qwen/Qwen2.5-0.5B-Instruct')
+model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.bfloat16)
+tokenizer = AutoTokenizer.from_pretrained(model_path)
+
+trainer = DPOTrainer(
+    model=model,
+    ref_model=None,
+    tokenizer=tokenizer,
+    train_dataset=train_dataset,
+    peft_config=LoraConfig(r=8, lora_alpha=32, task_type=TaskType.CAUSAL_LM),
+    max_length=512,
+    max_prompt_length=256,
+    args=DPOConfig(
+        output_dir="output/trl-dpo-lora",
+        max_steps=3,
+        per_device_train_batch_size=1,
+        gradient_accumulation_steps=1,
+        learning_rate=1e-4,
+        logging_steps=1,
+        save_strategy="no",
+        report_to="none",
+    ),
+)
+print("model device:", next(trainer.model.parameters()).device)
+trainer.train()
+trainer.save_model("output/trl-dpo-lora")
+print("TRL_DPO_DONE")
+PY
+```
+
+输出结果类似如下（训练日志走 stderr，stdout 只保留首尾标记）：
+
+```shell #test-result id="dpo-lora"
+...
+TRL_DPO_DONE
+```
+
 ## 结果验证
 
-检查输出目录中的 LoRA 适配器产物：`adapter_config.json`（LoRA 配置）与 `adapter_model.safetensors`（适配器权重）。
+检查两个输出目录中的 LoRA 适配器产物：`adapter_config.json`（LoRA 配置）与 `adapter_model.safetensors`（适配器权重）。
 
 ```shell #test id="verify-output"
 ls output/trl-sft-lora/adapter_config.json output/trl-sft-lora/adapter_model.safetensors
@@ -205,4 +272,17 @@ output/trl-sft-lora/adapter_config.json
 output/trl-sft-lora/adapter_model.safetensors
 ```
 
-更多用法见 [TRL examples](https://github.com/huggingface/trl/tree/main/examples)。
+检查 DPO 输出目录的适配器产物：
+
+```shell #test id="verify-dpo"
+ls output/trl-dpo-lora/adapter_config.json output/trl-dpo-lora/adapter_model.safetensors
+```
+
+输出结果如下：
+
+```shell #test-result id="verify-dpo"
+output/trl-dpo-lora/adapter_config.json
+output/trl-dpo-lora/adapter_model.safetensors
+```
+
+更多方法（GRPO / PPO / Reward / KTO 等）入口形态一致，切换对应的 `Trainer` / `Config` 即可；GRPO 依赖 vLLM 生成，不在本示例运行。更多用法见 [TRL examples](https://github.com/huggingface/trl/tree/main/examples)。

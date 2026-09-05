@@ -229,7 +229,11 @@ torch_npu 2.12.0 在 `torch_npu/_inductor/codegen/common.py::get_system`（FxGra
 
 **补丁四：torch_npu 2.12.0 launcher 引用旧的 `CompiledKernel.launch_*_hook` 类属性（torch_npu × triton-ascend）**
 
-torch_npu 2.12.0 的 `torch_npu/_inductor/npu_triton_heuristics.py::make_launcher`（三处）引用 `binary.__class__.launch_enter_hook / launch_exit_hook` 类属性；triton 3.5 基线把这些 hook 挪到了 `triton.knobs.runtime`，`CompiledKernel` 上已没有这两个属性——kernel launcher 构建时抛 `AttributeError: type object 'CompiledKernel' has no attribute 'launch_enter_hook'`，表现为 `No valid triton configs`。上游 master 同样改为优先 `knobs.runtime`，`sed` 把三处引用统一指到新位置（fork 的 `launch_metadata` 内部自带 hook 判空，无条件调用也安全）：
+torch_npu 2.12.0 的 `torch_npu/_inductor/npu_triton_heuristics.py::make_launcher`（三处）引用 `binary.__class__.launch_enter_hook / launch_exit_hook` 类属性；triton 3.5 基线把这些 hook 挪到了 `triton.knobs.runtime`，`CompiledKernel` 上已没有这两个属性——kernel launcher 构建时抛 `AttributeError: type object 'CompiledKernel' has no attribute 'launch_enter_hook'`，表现为 `No valid triton configs`。上游 master 同样改为优先 `knobs.runtime`，`sed` 把三处引用统一指到新位置（fork 的 `launch_metadata` 内部自带 hook 判空，无条件调用也安全）。
+
+**补丁五：去掉 `create_block_mask` 的 `torch.compile`（torchtitan）**
+
+torchtitan 在 `torchtitan/models/common/attention.py` 模块级硬编码 `_compiled_create_block_mask = torch.compile(create_block_mask)`。flex mask 的 mask_mod 图里有 cumsum/scatter，inductor 会把它融合成**双归约轴 kernel**——而 torch_npu 的 NPU codegen 不支持双归约（其源码自述 "Currently npu don't support multi-reduction ranges trees"，该路径上生成残缺代码，报 `NameError('r2 is not defined')` / `No valid triton configs`，上游 master 已整区重写但未回合）。`create_block_mask` 只是构建 BlockMask 的一次性张量计算，改回 eager 语义不变，只是不做编译优化。补丁二/三/四的 `sed` 作用于已安装的 torch_npu，补丁五的 `sed` 在训练命令里作用于 torchtitan 源码：
 
 ```shell #test-setup
 TN_DIR="$(python -c 'import torch_npu, os; print(os.path.dirname(torch_npu.__file__))')"
@@ -239,7 +243,7 @@ sed -i "s/from triton\.compiler\.compiler import triton_key$/from triton.runtime
 sed -i "s/binary\.__class__\.launch_enter_hook/__import__(\"triton\").knobs.runtime.launch_enter_hook/g; s/binary\.__class__\.launch_exit_hook/__import__(\"triton\").knobs.runtime.launch_exit_hook/g" "$TN_DIR/_inductor/npu_triton_heuristics.py"
 ```
 
-> 补丁一待 torch_npu 发布配套 torch ≥ 2.13（`separate_full_blocks` 进入稳定版签名）的版本后可移除；补丁二、三、四待 torch_npu 发布带对应修复的 2.12 补丁版或 2.13 后可移除（届时 `sed` 无匹配，本身也是无害的空操作）。
+> 补丁一待 torch_npu 发布配套 torch ≥ 2.13（`separate_full_blocks` 进入稳定版签名）的版本后可移除；补丁二、三、四待 torch_npu 发布带对应修复的 2.12 补丁版或 2.13 后可移除（届时 `sed` 无匹配，本身也是无害的空操作）。补丁五随补丁二一起退役（双归约 codegen 修复后 mask 编译即可恢复）。
 
 ### 单卡训练
 
@@ -248,6 +252,7 @@ sed -i "s/binary\.__class__\.launch_enter_hook/__import__(\"triton\").knobs.runt
 ```shell #test id="torchtitan-train-debug" load="upstream_ref>>ref"
 cd torchtitan && git checkout <ref>
 sed -i '/separate_full_blocks=not is_in_batch_invariant_mode()/d' torchtitan/models/common/decoder.py
+sed -i 's/_compiled_create_block_mask = torch.compile(create_block_mask)$/_compiled_create_block_mask = create_block_mask/' torchtitan/models/common/attention.py
 ASCEND_RT_VISIBLE_DEVICES=0 \
 torchrun --nproc_per_node=1 \
     --rdzv_backend c10d \
@@ -282,6 +287,7 @@ torchrun --nproc_per_node=1 \
 ```shell #test id="torchtitan-train-2card" load="upstream_ref>>ref" load="ms_tokenizer_path>>ms_tokenizer_path"
 cd torchtitan && git checkout <ref>
 sed -i '/separate_full_blocks=not is_in_batch_invariant_mode()/d' torchtitan/models/common/decoder.py
+sed -i 's/_compiled_create_block_mask = torch.compile(create_block_mask)$/_compiled_create_block_mask = create_block_mask/' torchtitan/models/common/attention.py
 ASCEND_RT_VISIBLE_DEVICES=0,1 \
 PYTORCH_ALLOC_CONF="expandable_segments:True" \
 torchrun --nproc_per_node=2 \

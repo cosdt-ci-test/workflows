@@ -60,18 +60,18 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     """
 
     # torchtitan's smallest meaningful command — `python -m torchtitan.train
-    # --job.config_file ./.../debug_model.toml --training.steps 1
+    # --module llama3 --config llama3_debugmodel --training.steps 1
     # --comm.mode fake_backend` — needs to: clone torchtitan (~5 MB
     # sparse), `uv pip install -r requirements.txt` (torchdata / datasets /
     # tensorboard / wandb / fsspec / tyro / tokenizers / safetensors /
     # einops / pillow on v0.2.x; cluster cache resolves most in well under
     # a minute on a warm runner), `uv pip install -e . --no-deps`, then run
-    # a 1-step fake-backend training that builds the Llama 3 debug model
-    # (~256 dim / 6 layers) on NPU. 22 minutes gives cold-cache room for
-    # the install chain (a torchdata/datasets pair on a cold cluster cache
-    # takes a few minutes) without letting a hung training run block the
-    # queue.
-    DEFAULT_COMMAND_TIMEOUT = 1300
+    # a 2-step fake-backend training that builds the Llama 3 debug model
+    # (~256 dim / 6 layers) on NPU. 60 minutes: the first train step on a
+    # cold cache compiles the flex-attention triton kernel through the
+    # bisheng compiler on NPU (tens of seconds per config), dwarfing the
+    # install chain; watch runs showed 1300s is not enough for that.
+    DEFAULT_COMMAND_TIMEOUT = 3600
 
     # Monitored source is the cosdt-ci-test/workflows fork (this repo): the
     # doc lives at projects/torchtitan/docs/Quick-start-Ascend.md and the

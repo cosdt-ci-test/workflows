@@ -213,7 +213,7 @@ tokenizer_config.json
 
 ### 兼容性补丁
 
-torchtitan v0.3.0 + torch 2.12 + torch_npu 2.12.0 + triton-ascend 3.5.0 是一个双方生态都未验证过的组合，共两个根因、六处 `sed`，每处都有明确根因和退役条件。
+torchtitan v0.3.0 + torch 2.12 + torch_npu 2.12.0 + triton-ascend 3.5.0 是一个双方生态都未验证过的组合，共三个根因、若干处 `sed`，每处都有明确根因和退役条件。
 
 **根因一：torchtitan v0.3.0 按 torch 2.14 nightly 开发（release notes 的 Compatibility 表写明 validated with PyTorch 2.14.0），而 NPU 全家桶最高只配套到 torch 2.12。** v0.3.0 的语言模型路径强制 flex/varlen attention（`sdpa` 被上游显式禁用），flex 必经 inductor，撞上三处断层：
 
@@ -229,6 +229,8 @@ torchtitan v0.3.0 + torch 2.12 + torch_npu 2.12.0 + triton-ascend 3.5.0 是一�
 
 安装侧另有两点配合（见「安装 triton-ascend」一节）：`--no-deps` 防止 wheel 声明的社区版 `triton==3.5.0` 依赖混入覆盖 fork 文件；单独补装被跳过依赖里唯一被运行期 import 的 `pybind11`。
 
+**根因三：NPU 算子覆盖缺口。** llama3 注册表默认用 `ComplexRoPE`（complex64 缓存做旋转位置编码），forward 里 `rope_cache[positions]` 的索引落到 CANN 的 `aclnnIndex` 算子，而该算子不支持 `DT_COMPLEX64`（报 `AclNN_Parameter_Error ... not implemented for DT_COMPLEX64`）。换成数学等价的实数实现 `CosSinRoPE`（cos/sin 缓存 + rotate-half，全程实数张量）即可；它唯一的限制是不支持 llama scaling，需一并把 `scaling="llama"` 改为 `"none"`——llama scaling 只影响 >8k 长上下文的频率插值，对本文档 256/8192 seq 的 smoke 训练数值无影响。`sed` 作用于 `torchtitan/models/llama3/__init__.py`（import、6 处 `ComplexRoPE.Config`、6 处 scaling 一并替换）。
+
 torch_npu 侧 `sed`（作用于已安装包，训练前执行一次）：
 
 ```shell #test-setup
@@ -241,7 +243,7 @@ sed -i "s/binary\.__class__\.launch_enter_hook/__import__(\"triton\").knobs.runt
 
 torchtitan 侧 `sed`（根因一的三处，在下面两个训练命令里作用于 checkout 出的源码）。
 
-> 退役条件：根因一的 1、2 与根因二全部随 torch_npu 发布配套 torch ≥ 2.13 的版本自然消失（届时 `sed` 无匹配，本身也是无害的空操作）；根因一的 3 是性能取舍，可长期保留。
+> 退役条件：根因一的 1、2 与根因二全部随 torch_npu 发布配套 torch ≥ 2.13 的版本自然消失（届时 `sed` 无匹配，本身也是无害的空操作）；根因一的 3 是性能取舍，可长期保留；根因三随 CANN 的 `aclnnIndex` 支持 complex64（或 torch_npu 补转换实现）后可移除。
 
 ### 单卡训练
 
@@ -252,6 +254,7 @@ cd torchtitan && git checkout <ref>
 sed -i '/separate_full_blocks=not is_in_batch_invariant_mode()/d' torchtitan/models/common/decoder.py
 sed -i 's/_compiled_create_block_mask = torch.compile(create_block_mask)$/_compiled_create_block_mask = create_block_mask/' torchtitan/models/common/attention.py
 sed -i 's/"max_autotune": True,/"max_autotune": False,/; s/"coordinate_descent_tuning": True,/"coordinate_descent_tuning": False,/' torchtitan/models/common/attention.py
+sed -i 's/^    ComplexRoPE,$/    ComplexRoPE,\n    CosSinRoPE,/; s/ComplexRoPE\.Config(/CosSinRoPE.Config(/; s/scaling="llama",/scaling="none",/' torchtitan/models/llama3/__init__.py
 ASCEND_RT_VISIBLE_DEVICES=0 \
 torchrun --nproc_per_node=1 \
     --rdzv_backend c10d \
@@ -288,6 +291,7 @@ cd torchtitan && git checkout <ref>
 sed -i '/separate_full_blocks=not is_in_batch_invariant_mode()/d' torchtitan/models/common/decoder.py
 sed -i 's/_compiled_create_block_mask = torch.compile(create_block_mask)$/_compiled_create_block_mask = create_block_mask/' torchtitan/models/common/attention.py
 sed -i 's/"max_autotune": True,/"max_autotune": False,/; s/"coordinate_descent_tuning": True,/"coordinate_descent_tuning": False,/' torchtitan/models/common/attention.py
+sed -i 's/^    ComplexRoPE,$/    ComplexRoPE,\n    CosSinRoPE,/; s/ComplexRoPE\.Config(/CosSinRoPE.Config(/; s/scaling="llama",/scaling="none",/' torchtitan/models/llama3/__init__.py
 ASCEND_RT_VISIBLE_DEVICES=0,1 \
 PYTORCH_ALLOC_CONF="expandable_segments:True" \
 torchrun --nproc_per_node=2 \

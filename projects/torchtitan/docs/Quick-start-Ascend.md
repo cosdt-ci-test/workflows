@@ -228,6 +228,7 @@ torchtitan v0.3.0 + torch 2.12 + torch_npu 2.12.0 + triton-ascend 3.5.0 是一�
 3. `npu_triton_heuristics.py::make_launcher` 引用 `CompiledKernel.launch_enter/exit_hook` 类属性，triton 3.5 基线已把 hooks 挪到 `triton.knobs.runtime`——三处引用统一指向新位置（fork 的 `launch_metadata` 内部自带 hook 判空，无条件调用安全）。
 4. torch 2.12.0 核心的 `flex_attention.py::_validate_device` 设备白名单 `{"cuda", "cpu", "xpu", "hpu"}` 不含 `npu`，torch_npu 2.12.0 没有 patch 它——往白名单里加 `"npu"`。
 5. torch_npu 2.12.0 的 `_inductor/lowering.py` 在启动时把 torch 注册的全部 inductor lowering 过一遍自己的白名单（`lowering_op_list.py::GENERATE_LIST`，约 70 个基础算子 + `invoke_subgraph`/`cond`），**不在白名单的一律替换成 eager fallback**——flex_attention / flex_attention_backward 的 Triton 模板 lowering（表现为 `LoweringException: 'Subgraph' object has no attribute 'dtype'`）和 mask_mod 子图里 `offsets[document_id[q_idx]]` 需要的 `aten.index`（表现为 `SubgraphLoweringException: Buffers cannot be created while lowering a pointwise subgraph`）都是这样被抹掉的。把这三项加进白名单（stock torch 对 `aten.index` 本有正经 lowering，仅布尔索引时才回落 ATen）。
+6. torch_npu 2.12.0 的 `NPUTritonScheduling.define_kernel` 签名要求第 4 个参数 `traced_graph_hash`（按 torch 2.12-dev 写的），而 torch 2.12.0 正式版的模板 codegen 路径只传 3 个参数——flex 模板 kernel 构建时报 `missing 1 required positional argument: 'traced_graph_hash'`。给该参数加默认值 `None`（其函数体内本就有 `if traced_graph_hash:` 空值 guard，torch_npu 自己的 4 参调用不受影响）。
 
 安装侧另有两点配合（见「安装 triton-ascend」一节）：`--no-deps` 防止 wheel 声明的社区版 `triton==3.5.0` 依赖混入覆盖 fork 文件；单独补装被跳过依赖里唯一被运行期 import 的 `pybind11`。
 
@@ -243,6 +244,7 @@ sed -i "s/from triton\.compiler\.compiler import triton_key$/from triton.runtime
 sed -i "s/binary\.__class__\.launch_enter_hook/__import__(\"triton\").knobs.runtime.launch_enter_hook/g; s/binary\.__class__\.launch_exit_hook/__import__(\"triton\").knobs.runtime.launch_exit_hook/g" "$TN_DIR/_inductor/npu_triton_heuristics.py"
 sed -i 's/supported_devices = {"cuda", "cpu", "xpu", "hpu"}/supported_devices = {"cuda", "cpu", "xpu", "hpu", "npu"}/' "$(python -c 'import torch, os; print(os.path.dirname(torch.__file__))')/nn/attention/flex_attention.py"
 sed -i 's/^    torch.ops.higher_order.invoke_subgraph,$/    torch.ops.higher_order.invoke_subgraph,\n    torch.ops.higher_order.flex_attention,\n    torch.ops.higher_order.flex_attention_backward,\n    aten.index,/' "$TN_DIR/_inductor/lowering_op_list.py"
+sed -i 's/def define_kernel(self, src_code, node_schedule, kernel, traced_graph_hash: str):/def define_kernel(self, src_code, node_schedule, kernel, traced_graph_hash: str | None = None):/' "$TN_DIR/_inductor/codegen/scheduling.py"
 ```
 
 torchtitan 侧 `sed`（根因一的三处，在下面两个训练命令里作用于 checkout 出的源码）。

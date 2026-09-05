@@ -226,6 +226,7 @@ torchtitan v0.3.0 + torch 2.12 + torch_npu 2.12.0 + triton-ascend 3.5.0 是一�
 1. `codegen/triton.py::find_axis_in_load_store` 把 codegen 行当字符串调 `line.find(...)`，而 torch 2.12 inductor 的行是 `DeferredLine` 对象——四个缓冲区循环统一先解包再使用（master 的 `_iter_codegen_lines()` 修法）。
 2. `codegen/common.py::get_system` 与 `patch_triton_hash` 从 `triton.compiler.compiler` import `triton_key`，triton-ascend fork 已把它挪到 `triton.runtime.cache`——改 import 路径，`make_backend` 留在原位置（master 修法）。
 3. `npu_triton_heuristics.py::make_launcher` 引用 `CompiledKernel.launch_enter/exit_hook` 类属性，triton 3.5 基线已把 hooks 挪到 `triton.knobs.runtime`——三处引用统一指向新位置（fork 的 `launch_metadata` 内部自带 hook 判空，无条件调用安全）。
+4. torch 2.12.0 核心的 `flex_attention.py::_validate_device` 设备白名单 `{"cuda", "cpu", "xpu", "hpu"}` 不含 `npu`，torch_npu 2.12.0 没有 patch 它——往白名单里加 `"npu"`。
 
 安装侧另有两点配合（见「安装 triton-ascend」一节）：`--no-deps` 防止 wheel 声明的社区版 `triton==3.5.0` 依赖混入覆盖 fork 文件；单独补装被跳过依赖里唯一被运行期 import 的 `pybind11`。
 
@@ -239,6 +240,7 @@ sed -i -E "s/for line in self\.(loads|compute|post_loop_store|stores)\._lines:/f
 sed -i -E "s/^([[:space:]]*)from triton\.compiler\.compiler import triton_key, make_backend$/\1from triton.runtime.cache import triton_key\n\1from triton.compiler.compiler import make_backend/" "$TN_DIR/_inductor/codegen/triton.py"
 sed -i "s/from triton\.compiler\.compiler import triton_key$/from triton.runtime.cache import triton_key/" "$TN_DIR/_inductor/codegen/common.py"
 sed -i "s/binary\.__class__\.launch_enter_hook/__import__(\"triton\").knobs.runtime.launch_enter_hook/g; s/binary\.__class__\.launch_exit_hook/__import__(\"triton\").knobs.runtime.launch_exit_hook/g" "$TN_DIR/_inductor/npu_triton_heuristics.py"
+sed -i 's/supported_devices = {"cuda", "cpu", "xpu", "hpu"}/supported_devices = {"cuda", "cpu", "xpu", "hpu", "npu"}/' "$(python -c 'import torch, os; print(os.path.dirname(torch.__file__))')/nn/attention/flex_attention.py"
 ```
 
 torchtitan 侧 `sed`（根因一的三处，在下面两个训练命令里作用于 checkout 出的源码）。

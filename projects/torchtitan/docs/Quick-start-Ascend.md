@@ -227,14 +227,19 @@ torch_npu 2.12.0 的 NPU inductor 补丁 `torch_npu/_inductor/codegen/triton.py:
 
 torch_npu 2.12.0 在 `torch_npu/_inductor/codegen/common.py::get_system`（FxGraphCache 的 cache key）和 `codegen/triton.py::patch_triton_hash`（kernel cache key）里从 `triton.compiler.compiler` import `triton_key`；triton-ascend fork 把该函数移到了 `triton.runtime.cache`，旧位置没有这个名字——模块在而名字缺失抛的是 `ImportError`，torch_npu 的 `except ModuleNotFoundError` 接不住，编译第一步就崩。上游 master 已经改为优先从 `triton.runtime.cache` import（回落旧路径），`sed` 应用同样的改法（`patch_triton_hash` 处把两个名字拆成两行 import，`make_backend` 留在原位置不动）。
 
+**补丁四：torch_npu 2.12.0 launcher 引用旧的 `CompiledKernel.launch_*_hook` 类属性（torch_npu × triton-ascend）**
+
+torch_npu 2.12.0 的 `torch_npu/_inductor/npu_triton_heuristics.py::make_launcher`（三处）引用 `binary.__class__.launch_enter_hook / launch_exit_hook` 类属性；triton 3.5 基线把这些 hook 挪到了 `triton.knobs.runtime`，`CompiledKernel` 上已没有这两个属性——kernel launcher 构建时抛 `AttributeError: type object 'CompiledKernel' has no attribute 'launch_enter_hook'`，表现为 `No valid triton configs`。上游 master 同样改为优先 `knobs.runtime`，`sed` 把三处引用统一指到新位置（fork 的 `launch_metadata` 内部自带 hook 判空，无条件调用也安全）：
+
 ```shell #test-setup
 TN_DIR="$(python -c 'import torch_npu, os; print(os.path.dirname(torch_npu.__file__))')"
 sed -i -E "s/for line in self\.(loads|compute|post_loop_store|stores)\._lines:/for line in [l.line if isinstance(l, DeferredLine) else l for l in self.\1._lines]:/" "$TN_DIR/_inductor/codegen/triton.py"
 sed -i -E "s/^([[:space:]]*)from triton\.compiler\.compiler import triton_key, make_backend$/\1from triton.runtime.cache import triton_key\n\1from triton.compiler.compiler import make_backend/" "$TN_DIR/_inductor/codegen/triton.py"
 sed -i "s/from triton\.compiler\.compiler import triton_key$/from triton.runtime.cache import triton_key/" "$TN_DIR/_inductor/codegen/common.py"
+sed -i "s/binary\.__class__\.launch_enter_hook/__import__(\"triton\").knobs.runtime.launch_enter_hook/g; s/binary\.__class__\.launch_exit_hook/__import__(\"triton\").knobs.runtime.launch_exit_hook/g" "$TN_DIR/_inductor/npu_triton_heuristics.py"
 ```
 
-> 补丁一待 torch_npu 发布配套 torch ≥ 2.13（`separate_full_blocks` 进入稳定版签名）的版本后可移除；补丁二、三待 torch_npu 发布带对应修复的 2.12 补丁版或 2.13 后可移除（届时 `sed` 无匹配，本身也是无害的空操作）。
+> 补丁一待 torch_npu 发布配套 torch ≥ 2.13（`separate_full_blocks` 进入稳定版签名）的版本后可移除；补丁二、三、四待 torch_npu 发布带对应修复的 2.12 补丁版或 2.13 后可移除（届时 `sed` 无匹配，本身也是无害的空操作）。
 
 ### 单卡训练
 

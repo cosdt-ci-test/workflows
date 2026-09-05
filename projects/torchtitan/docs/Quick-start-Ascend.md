@@ -221,13 +221,20 @@ torchtitan v0.3.0 是按 torch 2.14 nightly 开发的（release notes 的 Compat
 
 **补丁二：torch_npu 2.12.0 inductor codegen 的 `DeferredLine` 崩溃（torch_npu）**
 
-torch_npu 2.12.0 的 NPU inductor 补丁 `torch_npu/_inductor/codegen/triton.py::find_axis_in_load_store` 遍历 codegen 缓冲区里的行时按老 API 把行当字符串调 `line.find(...)`，而 torch 2.12 inductor 产出的行是 `DeferredLine` 对象——`create_block_mask` 里的 cumsum 归约 store 走到该路径时抛 `InductorError: AttributeError: 'DeferredLine' object has no attribute 'find'`。上游 master 已改为统一解包（`line.line if isinstance(line, DeferredLine) else line`）后再用，但该修复未回合进 2.12.0 wheel，这里用 `sed` 对四个缓冲区循环应用同样的修法：
+torch_npu 2.12.0 的 NPU inductor 补丁 `torch_npu/_inductor/codegen/triton.py::find_axis_in_load_store` 遍历 codegen 缓冲区里的行时按老 API 把行当字符串调 `line.find(...)`，而 torch 2.12 inductor 产出的行是 `DeferredLine` 对象——`create_block_mask` 里的 cumsum 归约 store 走到该路径时抛 `InductorError: AttributeError: 'DeferredLine' object has no attribute 'find'`。上游 master 已改为统一解包（`line.line if isinstance(line, DeferredLine) else line`）后再用，但该修复未回合进 2.12.0 wheel，这里用 `sed` 对四个缓冲区循环应用同样的修法。
+
+**补丁三：torch_npu 2.12.0 从旧路径 import `triton_key`（torch_npu × triton-ascend）**
+
+torch_npu 2.12.0 在 `torch_npu/_inductor/codegen/common.py::get_system`（FxGraphCache 的 cache key）和 `codegen/triton.py::patch_triton_hash`（kernel cache key）里从 `triton.compiler.compiler` import `triton_key`；triton-ascend fork 把该函数移到了 `triton.runtime.cache`，旧位置没有这个名字——模块在而名字缺失抛的是 `ImportError`，torch_npu 的 `except ModuleNotFoundError` 接不住，编译第一步就崩。上游 master 已经改为优先从 `triton.runtime.cache` import（回落旧路径），`sed` 应用同样的改法（`patch_triton_hash` 处把两个名字拆成两行 import，`make_backend` 留在原位置不动）。
 
 ```shell #test-setup
-sed -i -E "s/for line in self\.(loads|compute|post_loop_store|stores)\._lines:/for line in [l.line if isinstance(l, DeferredLine) else l for l in self.\1._lines]:/" "$(python -c 'import torch_npu, os; print(os.path.dirname(torch_npu.__file__))')/_inductor/codegen/triton.py"
+TN_DIR="$(python -c 'import torch_npu, os; print(os.path.dirname(torch_npu.__file__))')"
+sed -i -E "s/for line in self\.(loads|compute|post_loop_store|stores)\._lines:/for line in [l.line if isinstance(l, DeferredLine) else l for l in self.\1._lines]:/" "$TN_DIR/_inductor/codegen/triton.py"
+sed -i -E "s/^([[:space:]]*)from triton\.compiler\.compiler import triton_key, make_backend$/\1from triton.runtime.cache import triton_key\n\1from triton.compiler.compiler import make_backend/" "$TN_DIR/_inductor/codegen/triton.py"
+sed -i "s/from triton\.compiler\.compiler import triton_key$/from triton.runtime.cache import triton_key/" "$TN_DIR/_inductor/codegen/common.py"
 ```
 
-> 补丁一待 torch_npu 发布配套 torch ≥ 2.13（`separate_full_blocks` 进入稳定版签名）的版本后可移除；补丁二待 torch_npu 发布带该修复的 2.12 补丁版或 2.13 后可移除（届时 `sed` 无匹配，本身也是无害的空操作）。
+> 补丁一待 torch_npu 发布配套 torch ≥ 2.13（`separate_full_blocks` 进入稳定版签名）的版本后可移除；补丁二、三待 torch_npu 发布带对应修复的 2.12 补丁版或 2.13 后可移除（届时 `sed` 无匹配，本身也是无害的空操作）。
 
 ### 单卡训练
 

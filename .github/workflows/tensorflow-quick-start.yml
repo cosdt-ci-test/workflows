@@ -1,4 +1,4 @@
-# TensorFlow 1.15 + TF Adapter 9.1.0 Ascend quick-start guard. The
+# TensorFlow 2.6.5 + TF Adapter 9.1.0 Ascend quick-start guard. The
 # shared engine owns monitoring, retry state, result publication, and
 # cache relay; this caller only declares the fixed compatibility stack.
 name: tensorflow-quick-start
@@ -25,15 +25,15 @@ jobs:
       # one configured NPU without caller-side --device/driver mounts.
       test_runner: '["linux-aarch64-a2-1"]'
       # Same CANN 9.1.0 / 910B / Ubuntu 22.04 baseline as ms-swift.
-      # The devel variant supplies the compiler needed by official h5py 2.8.0.
+      # The devel variant supplies the compiler needed by official h5py 3.1.0.
       image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12-devel
       container_options: ''
       timeout_minutes: 120
       upstream_repo: tensorflow/tensorflow
-      # TF Adapter 9.1.0 supports the legacy TensorFlow 1.15 line, not
-      # TensorFlow's latest 2.x release. Keep result metadata honest by
+      # TF Adapter 9.1.0 supports the legacy TensorFlow 2.6.5 line, not
+      # TensorFlow's latest release. Keep result metadata honest by
       # resolving and recording this exact upstream tag.
-      fixed_ref: v1.15.0
+      fixed_ref: v2.6.5
       doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/tensorflow/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
       doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/tensorflow/docs/Quick-start-Ascend.md
       test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1

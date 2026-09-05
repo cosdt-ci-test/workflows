@@ -1,16 +1,15 @@
-# Quick Start（TensorFlow 1.15 + Ascend NPU）
+# Quick Start（TensorFlow 2.6.5 + Ascend NPU）
 
-本文在单张昇腾 NPU 上安装 TensorFlow 1.15 和 TF Adapter 9.1.0，并运行
-官方 `NpuOptimizer` 加法样例。TensorFlow 1.15 已停止演进，因此这里看护的
-是一个**固定兼容基线**，不是 TensorFlow 最新 2.x release。
+本文在单张昇腾 NPU 上安装 TensorFlow 2.6.5 和 TF Adapter 9.1.0，并运行
+TF Adapter 2.x 的基本加法样例。TensorFlow 2.6.5 已停止演进，本文使用固定
+兼容版本组合，不适用于 TensorFlow 最新 release。
 
-安装和迁移逻辑来自 TF Adapter 9.1.0 的三份官方文档：
+安装和迁移逻辑来自 TF Adapter 9.1.0 的官方文档：
 
-- [安装 TensorFlow 1.15](https://gitcode.com/cann/tensorflow/blob/9.1.0/docs/zh/tfadapter_1/installation/tensorflow-1-15_install.md)
-- [安装 TF Adapter](https://gitcode.com/cann/tensorflow/blob/9.1.0/docs/zh/tfadapter_1/installation/tfadapter_install.md)
-- [TF Adapter 1.x 快速入门](https://gitcode.com/cann/tensorflow/blob/9.1.0/docs/zh/tfadapter_1/quick_start.md)
-
-也可以从昇腾社区文档中心查看对应的[在线最新文档](https://www.hiascend.com/document/detail/zh/TensorFlowCommunity/latest/migration/tfmigr1/docs/zh/tfadapter_1/quick_start.md)。
+- [安装 TensorFlow 2.6.5](https://gitcode.com/cann/tensorflow/blob/9.1.0/docs/zh/tfadapter_2/installation/tensorflow-2-6-5_install.md)
+- [安装 TF Adapter](https://gitcode.com/cann/tensorflow/blob/9.1.0/docs/zh/tfadapter_2/installation/tfadapter_install.md)
+- [TensorFlow 2.6.5 手工迁移](https://gitcode.com/cann/tensorflow/blob/9.1.0/docs/zh/tfadapter_2/migration/script_migration/manual_porting.md)
+- [npu.open API](https://gitcode.com/cann/tensorflow/blob/9.1.0/docs/zh/tfadapter_2/apiref/npu-open.md)
 
 ## 前置条件
 
@@ -20,16 +19,13 @@
 - 至少一张可用的昇腾 NPU；
 - 驱动和容器运行环境已经配置完成，`npu-smi info` 能正常显示设备。
 
-本文样例只创建一个 TensorFlow Session，不使用 HCCL 或多卡并行，所以
-`linux-aarch64-a2-1` 的一张 NPU 足够。CI Runner 会自动提供设备和驱动，
-无需在工作流中重复填写 `--device` 或驱动目录挂载。
+本文样例只打开一个 NPU 自定义设备，不使用 HCCL 或多卡并行，所以一张 NPU
+即可。运行前请确认当前环境能正常访问该设备。
 
 ### 基础软件
 
 在运行本文前，需要先安装可用的 CANN 9.1.0。安装方式参考
 [快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html)。
-CI 使用与 ms-swift 相同来源的 AscendHub CANN 镜像，Python 包默认经过
-集群 PyPI 缓存，并把华为云昇腾 PyPI 作为额外源。
 
 ### 本文档验证的固定配套
 
@@ -40,90 +36,167 @@ Ubuntu 22.04。
 
 `swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12-devel`
 
-镜像自带的 Python 3.12 用来运行文档测试框架；另外将 Python 3.7.10 安装到
-`/usr/local/python3.7.10`，只用于 TensorFlow 1.15。两个解释器并存，不覆盖
-系统的 `python` / `python3`。`devel` 变体提供编译 Python、HDF5 和 h5py
-所需的工具，CANN 版本和设备环境仍与 ms-swift 的 9.1.0 基线一致。
+保留镜像自带的 Python 3.12，另外将 Python 3.9.25 安装到
+`/usr/local/python3.9.25`，只用于 TensorFlow 2.6.5。`devel` 变体提供
+编译 Python、HDF5 和 h5py 所需的工具。
 
 | 组件 | 版本 |
 | --- | --- |
-| Python | 3.7.10 |
-| TensorFlow | 1.15.0 (`v1.15.0`) |
+| Python | 3.9.25 |
+| TensorFlow | 2.6.5 (`v2.6.5`) |
 | CANN | 9.1.0 |
 | TF Adapter branch | 9.1.0 |
 | TF Adapter wheel release | `tfa_v0.0.49_9.1.0` |
-| npu_bridge | 1.15.0 |
+| npu_device | 2.6.5 |
 | HDF5 | 1.10.5 |
-| h5py | 2.8.0 |
+| h5py | 3.1.0 |
+| numpy | 1.19.5 |
+| protobuf | 3.19.6 |
 | NPU | Ascend 910B × 1 |
 
-## 准备 Python 3.7 环境
+## 安装前准备
 
-官方文档要求 TensorFlow 1.15 使用 Python 3.7.x；这里固定为仍处于官方范围
-内的 Python 3.7.10。使用 `make altinstall` 安装到独立前缀，不创建 conda
-或 venv，也不会修改 CANN 镜像已有的 Python 3.12。
+官方文档支持 Python 3.7.x、3.8.x 和 3.9.x；这里使用与公开 aarch64 wheel
+匹配的 Python 3.9.25。通过 `make altinstall` 安装到独立前缀，不修改
+CANN 镜像已有的 Python 3.12。
+
+### 安装编译依赖
+
+如果已经配置了可用的 Ubuntu 软件源，可以删除下面的 `sed` 命令；在国内
+环境中可将默认 `ports.ubuntu.com` 切换到阿里云 `ubuntu-ports` 镜像。
 
 ```shell #test-setup
 set -euo pipefail
-PYTHON_PREFIX=/usr/local/python3.7.10
-PYTHON_ARCHIVE=/tmp/Python-3.7.10.tgz
-HDF5_PREFIX=/usr/local/hdf5
-HDF5_ARCHIVE=/tmp/hdf5-1.10.5.tar.gz
-
+sed -i 's|http://ports.ubuntu.com/ubuntu-ports/|https://mirrors.aliyun.com/ubuntu-ports/|g' /etc/apt/sources.list
+echo "Updating package indexes..."
 apt-get update
+echo "Package indexes updated."
+```
+
+```shell #test-setup
+set -euo pipefail
+echo "Installing build dependencies..."
 apt-get install -y --no-install-recommends \
   build-essential ca-certificates curl \
   libbz2-dev libffi-dev libgdbm-dev liblzma-dev libncurses5-dev \
   libreadline-dev libsqlite3-dev libssl-dev tk-dev uuid-dev zlib1g-dev
+echo "Build dependencies installed."
+```
 
-if [ ! -x "$PYTHON_PREFIX/bin/python3.7" ]; then
+### 安装 Python 3.9.25
+
+```shell #test-setup
+set -euo pipefail
+echo "Preparing Python 3.9.25..."
+PYTHON_PREFIX=/usr/local/python3.9.25
+PYTHON_ARCHIVE=/tmp/Python-3.9.25.tgz
+
+if [ ! -x "$PYTHON_PREFIX/bin/python3.9" ]; then
   curl -fL --retry 5 --retry-all-errors --connect-timeout 30 --max-time 600 \
-    https://repo.huaweicloud.com/python/3.7.10/Python-3.7.10.tgz \
+    https://repo.huaweicloud.com/python/3.9.25/Python-3.9.25.tgz \
     -o "$PYTHON_ARCHIVE"
-  echo "c9649ad84dc3a434c8637df6963100b2e5608697f9ba56d82e3809e4148e0975  $PYTHON_ARCHIVE" \
+  echo "a7438eabd3a48139f42d4e058096af8d880b0bb6e8fb8c78838892e4ce5583f2  $PYTHON_ARCHIVE" \
     | sha256sum -c -
   tar -xzf "$PYTHON_ARCHIVE" -C /tmp
-  cd /tmp/Python-3.7.10
-  ./configure --prefix=/usr/local/python3.7.10 --with-ensurepip=install
+  cd /tmp/Python-3.9.25
+  ./configure --prefix=/usr/local/python3.9.25 --with-ensurepip=install
   make -j"$(nproc)"
   make altinstall
 fi
+ln -sfn "$PYTHON_PREFIX/bin/python3.9" "$PYTHON_PREFIX/bin/python3"
+ln -sfn "$PYTHON_PREFIX/bin/pip3.9" "$PYTHON_PREFIX/bin/pip3"
+export PATH="$PYTHON_PREFIX/bin:$PATH"
+echo "Python 3.9.25 is ready."
+```
 
-if [ ! -x "$HDF5_PREFIX/bin/h5cc" ]; then
+### 编译安装 HDF5 1.10.5
+
+对于 Linux aarch64，需要先编译安装 HDF5 1.10.5。
+
+#### 下载 HDF5 源码包
+
+```shell #test-setup
+set -euo pipefail
+echo "Downloading HDF5 1.10.5 if needed..."
+HDF5_ARCHIVE=/tmp/hdf5-1.10.5.tar.gz
+if [ ! -s "$HDF5_ARCHIVE" ]; then
   curl -fL --retry 5 --retry-all-errors --connect-timeout 30 --max-time 600 \
     https://support.hdfgroup.org/ftp/HDF5/releases/hdf5-1.10/hdf5-1.10.5/src/hdf5-1.10.5.tar.gz \
     -o "$HDF5_ARCHIVE"
   echo "6d4ce8bf902a97b050f6f491f4268634e252a63dadd6656a1a9be5b7b7726fa8  $HDF5_ARCHIVE" \
     | sha256sum -c -
-  tar -xzf "$HDF5_ARCHIVE" -C /tmp
+fi
+echo "HDF5 1.10.5 source is ready."
+```
+
+#### 解压 HDF5 源码包
+
+```shell #test-setup
+set -euo pipefail
+tar -zxvf /tmp/hdf5-1.10.5.tar.gz -C /tmp
+```
+
+#### 配置、编译和安装 HDF5
+
+```shell #test-setup
+set -euo pipefail
+echo "Building HDF5 1.10.5 if needed..."
+HDF5_PREFIX=/usr/local/hdf5
+if [ ! -x "$HDF5_PREFIX/bin/h5cc" ]; then
   cd /tmp/hdf5-1.10.5
   ./configure --prefix=/usr/local/hdf5
   make -j16 && make install
 fi
-
-# 与 TF Adapter 9.1.0 仓库的 aarch64 TensorFlow 1.15 安装文档一致。
-export CPATH=/usr/local/hdf5/include/:/usr/local/hdf5/lib/
-export LD_LIBRARY_PATH=/usr/local/hdf5/lib/:${LD_LIBRARY_PATH:-}
-
-# uv 由镜像已有的 Python 3.12 启动；后续通过 --python 明确写入 Python 3.7。
-python -m pip install -q uv
+echo "HDF5 1.10.5 is ready."
 ```
 
-这里使用 `uv pip install` 而不是调用 `python3.7 -m pip install`，原因是 uv
-本身由镜像已有的 Python 3.12 启动，却可以通过 `--python` 把包准确安装到
-指定的 Python 3.7。这样不需要升级已经停止支持 Python 3.7 的新版 pip，
-也能直接复用工作流提供的 `UV_INDEX_URL` / `UV_EXTRA_INDEX_URL`。设置
-`UV_PYTHON_DOWNLOADS=never` 后，uv 只使用刚编译的解释器，不再尝试从外网
-下载另一份 Python，也不会创建虚拟环境。
+#### 配置 HDF5 环境变量
 
-检查 Python 与 HDF5 版本：
+```shell #test-setup
+export CPATH=/usr/local/hdf5/include/:/usr/local/hdf5/lib/
+export LD_LIBRARY_PATH=/usr/local/hdf5/lib/:${LD_LIBRARY_PATH:-}
+```
+
+### 安装 h5py
+
+#### 安装 h5py 依赖包
+
+```shell #test-setup
+set -euo pipefail
+echo "Installing h5py dependencies..."
+export PATH=/usr/local/python3.9.25/bin:$PATH
+export CPATH=/usr/local/hdf5/include/:/usr/local/hdf5/lib/
+export LD_LIBRARY_PATH=/usr/local/hdf5/lib/:${LD_LIBRARY_PATH:-}
+pip3 install "setuptools==59.8.0"
+pip3 install "Cython<3"
+pip3 install wheel
+pip3 install "numpy==1.19.5"
+echo "h5py dependencies installed."
+```
+
+#### 安装 h5py 3.1.0
+
+```shell #test-setup
+set -euo pipefail
+echo "Installing h5py 3.1.0..."
+export PATH=/usr/local/python3.9.25/bin:$PATH
+export CPATH=/usr/local/hdf5/include/:/usr/local/hdf5/lib/
+export LD_LIBRARY_PATH=/usr/local/hdf5/lib/:${LD_LIBRARY_PATH:-}
+HDF5_DIR=/usr/local/hdf5 pip3 install "h5py==3.1.0"
+echo "h5py 3.1.0 is installed."
+```
+
+检查 Python、HDF5、numpy 和 h5py 版本：
 
 ```shell #test id="check-python"
-TF_PYTHON=/usr/local/python3.7.10/bin/python3.7
-"$TF_PYTHON" - <<'PY'
+export PATH=/usr/local/python3.9.25/bin:$PATH
+python3 - <<'PY'
 import re
 import subprocess
 import sys
+
+import h5py
+import numpy
 
 print("Python", sys.version.split()[0])
 h5_config = subprocess.check_output(
@@ -133,119 +206,142 @@ h5_config = subprocess.check_output(
 match = re.search(r"HDF5 Version:\s+(\S+)", h5_config)
 assert match is not None, h5_config
 print("HDF5", match.group(1))
-PY
-```
-
-```shell #test-result id="check-python"
-Python 3.7.10
-HDF5 1.10.5
-```
-
-## 安装 TensorFlow 1.15
-
-官方说明指出 PyPI 没有 Linux aarch64 的 TensorFlow 1.15 wheel。这里使用
-Ascend 官方镜像项目公开的 aarch64 wheel，并校验 SHA-256；HDF5 1.10.5
-由上一步安装，h5py 2.8.0 按官方要求从源码编译。
-
-```shell #test-setup
-set -euo pipefail
-TF_CACHE=/root/.cache/tensorflow
-TF_PYTHON=/usr/local/python3.7.10/bin/python3.7
-HDF5_PREFIX=/usr/local/hdf5
-TF_WHEEL="$TF_CACHE/wheels/tensorflow-1.15.0-cp37-cp37m-manylinux2014_aarch64.whl"
-mkdir -p "$TF_CACHE/wheels"
-
-if [ ! -s "$TF_WHEEL" ]; then
-  curl -fL --retry 5 --retry-all-errors --connect-timeout 30 --max-time 900 \
-    https://ascend-repo.obs.cn-east-2.myhuaweicloud.com/MindX/OpenSource/python/packages/tensorflow-1.15.0-cp37-cp37m-manylinux2014_aarch64.whl \
-    -o "$TF_WHEEL.tmp"
-  mv "$TF_WHEEL.tmp" "$TF_WHEEL"
-fi
-echo "c2d6df0930f6558ec9bb741c219cb84f90f906cc9e2c28c6561960a1404dec39  $TF_WHEEL" \
-  | sha256sum -c - >/dev/null
-
-UV_PYTHON_DOWNLOADS=never uv pip install --python "$TF_PYTHON" \
-  'setuptools==59.8.0' 'wheel==0.37.1' 'numpy==1.19.5' \
-  'Cython==0.29.36' 'pkgconfig==1.5.5' 'protobuf==3.20.3'
-CPATH="$HDF5_PREFIX/include/:$HDF5_PREFIX/lib/" \
-LD_LIBRARY_PATH="$HDF5_PREFIX/lib/:${LD_LIBRARY_PATH:-}" \
-HDF5_DIR="$HDF5_PREFIX" UV_PYTHON_DOWNLOADS=never \
-  uv pip install --python "$TF_PYTHON" --no-build-isolation 'h5py==2.8.0'
-UV_PYTHON_DOWNLOADS=never \
-  uv pip install --python "$TF_PYTHON" "$TF_WHEEL"
-```
-
-验证 TensorFlow 和 h5py 的实际安装版本：
-
-```shell #test id="install-tensorflow"
-TF_PYTHON=/usr/local/python3.7.10/bin/python3.7
-LD_LIBRARY_PATH=/usr/local/hdf5/lib/:${LD_LIBRARY_PATH:-} \
-  TF_CPP_MIN_LOG_LEVEL=2 "$TF_PYTHON" - <<'PY'
-import h5py
-import tensorflow as tf
-
-print("tensorflow", tf.__version__)
+print("numpy", numpy.__version__)
 print("h5py", h5py.__version__)
 PY
 ```
 
-```shell #test-result id="install-tensorflow"
-tensorflow 1.15.0
-h5py 2.8.0
+```shell #test-result id="check-python"
+Python 3.9.25
+HDF5 1.10.5
+numpy 1.19.5
+h5py 3.1.0
 ```
 
-## 安装 TF Adapter
+## 安装 TensorFlow 2.6.5
 
-从与 CANN 9.1.0 对应的官方发布 `tfa_v0.0.49_9.1.0` 获取
-`npu_bridge-1.15.0-py3-none-manylinux2014_aarch64.whl`，并按照官方文档用
-`-t "$TFPLUGIN_INSTALL_PATH"` 安装到独立目录。
+PyPI 没有 Linux aarch64 的 TensorFlow 2.6.5 wheel。这里使用 Ascend 官方
+镜像项目公开的 Python 3.9 aarch64 wheel，并校验 SHA-256。
 
 ```shell #test-setup
 set -euo pipefail
+echo "Installing TensorFlow 2.6.5..."
 TF_CACHE=/root/.cache/tensorflow
-TF_PYTHON=/usr/local/python3.7.10/bin/python3.7
-TFPLUGIN_INSTALL_PATH="$TF_CACHE/tfplugin-9.1.0"
-ADAPTER_WHEEL="$TF_CACHE/wheels/npu_bridge-1.15.0-py3-none-manylinux2014_aarch64.whl"
-mkdir -p "$TF_CACHE/wheels" "$TFPLUGIN_INSTALL_PATH"
+TF_WHEEL="$TF_CACHE/wheels/tensorflow-2.6.5-cp39-cp39-linux_aarch64.whl"
+mkdir -p "$TF_CACHE/wheels"
+
+if [ ! -s "$TF_WHEEL" ]; then
+  curl -fL --retry 5 --retry-all-errors --connect-timeout 30 --max-time 900 \
+    https://ascend-repo.obs.cn-east-2.myhuaweicloud.com/MindX/OpenSource/packages/tensorflow-2.6.5-cp39-cp39-linux_aarch64.whl \
+    -o "$TF_WHEEL.tmp"
+  mv "$TF_WHEEL.tmp" "$TF_WHEEL"
+fi
+echo "be1c8f52d6a72cc0db5826605f61c196777f5939441b7e87442688a5d1866bd0  $TF_WHEEL" \
+  | sha256sum -c - >/dev/null
+
+export PATH=/usr/local/python3.9.25/bin:$PATH
+pip3 install "protobuf==3.19.6"
+pip3 install "$TF_WHEEL"
+echo "TensorFlow 2.6.5 is installed."
+```
+
+验证 TensorFlow 版本和 Eager 模式：
+
+```shell #test id="install-tensorflow"
+export PATH=/usr/local/python3.9.25/bin:$PATH
+LD_LIBRARY_PATH=/usr/local/hdf5/lib/:${LD_LIBRARY_PATH:-} \
+  TF_CPP_MIN_LOG_LEVEL=2 python3 - <<'PY'
+import tensorflow as tf
+
+print("tensorflow", tf.__version__)
+print("eager", tf.executing_eagerly())
+PY
+```
+
+```shell #test-result id="install-tensorflow"
+tensorflow 2.6.5
+eager True
+```
+
+## 安装框架插件包 TF Adapter
+
+TF Adapter 2.x 通过 `npu_device` 将 NPU 注册为 TensorFlow 自定义设备。
+
+### 安装插件包
+
+#### 1. 获取 TF Adapter 安装包
+
+从 TF Adapter GitCode 仓选择与 CANN 9.1.0 配套的发布
+`tfa_v0.0.49_9.1.0`，获取
+`npu_device-2.6.5-py3-none-manylinux2014_aarch64.whl`。
+
+```shell #test-setup
+set -euo pipefail
+echo "Downloading TF Adapter 9.1.0 if needed..."
+PACKAGE_DIR=/home/package
+ADAPTER_WHEEL="$PACKAGE_DIR/npu_device-2.6.5-py3-none-manylinux2014_aarch64.whl"
+mkdir -p "$PACKAGE_DIR"
 
 if [ ! -s "$ADAPTER_WHEEL" ]; then
   curl -fL --retry 5 --retry-all-errors --connect-timeout 30 --max-time 600 \
-    https://gitcode.com/cann/tensorflow/releases/download/tfa_v0.0.49_9.1.0/npu_bridge-1.15.0-py3-none-manylinux2014_aarch64.whl \
+    https://gitcode.com/cann/tensorflow/releases/download/tfa_v0.0.49_9.1.0/npu_device-2.6.5-py3-none-manylinux2014_aarch64.whl \
     -o "$ADAPTER_WHEEL.tmp"
   mv "$ADAPTER_WHEEL.tmp" "$ADAPTER_WHEEL"
 fi
-echo "faac580f9a732e86b6ad2a49150eb450757ee18c173ec099044d855d364d4d98  $ADAPTER_WHEEL" \
+echo "68a14762b24ebfafe554c2a29406be2932b82a1950938d1de97a2cc0909d73fc  $ADAPTER_WHEEL" \
   | sha256sum -c - >/dev/null
-
-UV_PYTHON_DOWNLOADS=never \
-  uv pip install --python "$TF_PYTHON" --no-deps --reinstall \
-  --target "$TFPLUGIN_INSTALL_PATH" "$ADAPTER_WHEEL"
+echo "TF Adapter wheel is ready."
 ```
+
+#### 2. 安装 TF Adapter
+
+```shell #test-setup
+set -euo pipefail
+echo "Installing npu_device 2.6.5..."
+export PATH=/usr/local/python3.9.25/bin:$PATH
+TFPLUGIN_INSTALL_PATH=$HOME/Ascend/tfplugin
+ADAPTER_WHEEL=/home/package/npu_device-2.6.5-py3-none-manylinux2014_aarch64.whl
+mkdir -p "$TFPLUGIN_INSTALL_PATH"
+pip3 install "$ADAPTER_WHEEL" --force-reinstall -t "$TFPLUGIN_INSTALL_PATH"
+echo "npu_device 2.6.5 is installed."
+```
+
+- `--force-reinstall`：强制重新安装插件包。
+- `-t`：指定 TF Adapter 的安装路径。
+
+#### 3. 设置 TF Adapter 环境变量
+
+```shell #test-setup
+TFPLUGIN_INSTALL_PATH=$HOME/Ascend/tfplugin
+export PYTHONPATH=${TFPLUGIN_INSTALL_PATH}:$PYTHONPATH
+```
+
+`TFPLUGIN_INSTALL_PATH` 为 TF Adapter 软件包的安装路径。
 
 验证插件安装版本：
 
 ```shell #test id="install-tf-adapter"
-TF_CACHE=/root/.cache/tensorflow
-TF_PYTHON=/usr/local/python3.7.10/bin/python3.7
-TFPLUGIN_INSTALL_PATH="$TF_CACHE/tfplugin-9.1.0"
+export PATH=/usr/local/python3.9.25/bin:$PATH
+TFPLUGIN_INSTALL_PATH=$HOME/Ascend/tfplugin
 PYTHONPATH="$TFPLUGIN_INSTALL_PATH${PYTHONPATH:+:$PYTHONPATH}" \
   LD_LIBRARY_PATH=/usr/local/hdf5/lib/:${LD_LIBRARY_PATH:-} \
-  TF_CPP_MIN_LOG_LEVEL=2 "$TF_PYTHON" - <<'PY'
-import pkg_resources
-import npu_bridge
+  TF_CPP_MIN_LOG_LEVEL=2 python3 - <<'PY'
+from importlib.metadata import version
 
-print("npu_bridge", pkg_resources.get_distribution("npu-bridge").version)
+import npu_device
+
+print("npu_device", version("npu-device"))
 PY
 ```
 
 ```shell #test-result id="install-tf-adapter"
-npu_bridge 1.15.0
+npu_device 2.6.5
 ```
 
 ## 配置运行环境
 
-下面的变量与官方 Quick Start 一致。若 CANN 安装在非默认目录，请替换
-`set_env.sh` 路径；每个终端会话都需要重新执行这些 `export`。
+若 CANN 安装在非默认目录，请替换 `set_env.sh` 路径；每个终端会话都需要
+重新设置这些环境变量。
 
 ```shell #test-setup
 if [ -f /usr/local/Ascend/cann/set_env.sh ]; then
@@ -253,66 +349,56 @@ if [ -f /usr/local/Ascend/cann/set_env.sh ]; then
 else
   source /usr/local/Ascend/ascend-toolkit/set_env.sh
 fi
-export TFPLUGIN_INSTALL_PATH=/root/.cache/tensorflow/tfplugin-9.1.0
-export PYTHONPATH="${TFPLUGIN_INSTALL_PATH}:${PYTHONPATH:-}"
+export PATH=/usr/local/python3.9.25/bin:$PATH
+export TFPLUGIN_INSTALL_PATH=$HOME/Ascend/tfplugin
+export PYTHONPATH=${TFPLUGIN_INSTALL_PATH}:$PYTHONPATH
 export CPATH=/usr/local/hdf5/include/:/usr/local/hdf5/lib/
 export LD_LIBRARY_PATH=/usr/local/hdf5/lib/:${LD_LIBRARY_PATH:-}
 export JOB_ID=tensorflow-quick-start
 export ASCEND_DEVICE_ID=0
 ```
 
-## 运行 NpuOptimizer 样例
+## 运行 npu_device 样例
 
-以下逻辑保持官方迁移步骤：导入 `npu_bridge`、向 Session 注册
-`NpuOptimizer`，并关闭会与 NPU 图优化冲突的 remapping 和内存优化。为让
-CI 输出稳定，输入由官方示例中的随机张量改成占位符和固定数据。
+下面的调用方式来自 TF Adapter 2.x 的 `examples/basic_tests.py` 和手工迁移
+文档：通过 `npu.open().as_default()` 设置默认 NPU 设备，并用
+`@tf.function` 编译 TensorFlow 运算。
 
-```shell #test id="run-npu-optimizer"
+```shell #test id="run-npu-device"
 set -euo pipefail
-TF_CACHE=/root/.cache/tensorflow
-TF_PYTHON=/usr/local/python3.7.10/bin/python3.7
-TFPLUGIN_INSTALL_PATH="$TF_CACHE/tfplugin-9.1.0"
+export PATH=/usr/local/python3.9.25/bin:$PATH
+TFPLUGIN_INSTALL_PATH=$HOME/Ascend/tfplugin
 PYTHONPATH="$TFPLUGIN_INSTALL_PATH${PYTHONPATH:+:$PYTHONPATH}" \
 LD_LIBRARY_PATH=/usr/local/hdf5/lib/:${LD_LIBRARY_PATH:-} \
 JOB_ID=tensorflow-quick-start \
 ASCEND_DEVICE_ID=0 \
 TF_CPP_MIN_LOG_LEVEL=2 \
-"$TF_PYTHON" - <<'PY'
+python3 - <<'PY'
 import tensorflow as tf
-from npu_bridge.npu_init import *
-from tensorflow.core.protobuf.rewriter_config_pb2 import RewriterConfig
+import npu_device as npu
 
-a = tf.placeholder(tf.float32, shape=[2, 3], name="a")
-b = tf.placeholder(tf.float32, shape=[2, 3], name="b")
-c = tf.add(a, b, name="sum")
+npu_context = npu.open().as_default()
 
-config = tf.ConfigProto(allow_soft_placement=True)
-custom_op = config.graph_options.rewrite_options.custom_optimizers.add()
-custom_op.name = "NpuOptimizer"
-config.graph_options.rewrite_options.remapping = RewriterConfig.OFF
-config.graph_options.rewrite_options.memory_optimization = RewriterConfig.OFF
+@tf.function
+def add(left, right):
+    return tf.add(left, right)
 
-with tf.Session(config=config) as session:
-    result = session.run(
-        c,
-        feed_dict={
-            a: [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
-            b: [[10.0, 20.0, 30.0], [40.0, 50.0, 60.0]],
-        },
-    )
-
+left = tf.constant([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+right = tf.constant([[10.0, 20.0, 30.0], [40.0, 50.0, 60.0]])
+result = add(left, right)
 expected = [[11.0, 22.0, 33.0], [44.0, 55.0, 66.0]]
-assert result.tolist() == expected, result
-print("optimizer", custom_op.name)
-print("result", result.tolist())
-print("TensorFlow Ascend Quick Start PASSED")
+
+assert result.numpy().tolist() == expected, result
+print("device", npu_context.name())
+print("result", result.numpy().tolist())
+print("TensorFlow 2.6.5 Ascend Quick Start PASSED")
 PY
 ```
 
-```shell #test-result id="run-npu-optimizer" fuzzy="..."
+```shell #test-result id="run-npu-device" fuzzy="..."
 ...
-optimizer NpuOptimizer
+device ...NPU:0
 result [[11.0, 22.0, 33.0], [44.0, 55.0, 66.0]]
-TensorFlow Ascend Quick Start PASSED
+TensorFlow 2.6.5 Ascend Quick Start PASSED
 ...
 ```

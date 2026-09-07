@@ -191,7 +191,7 @@ torchtitan xxx
 python -c "from modelscope import snapshot_download; print(snapshot_download('LLM-Research/Llama-3.2-1B', allow_patterns=['*.json', '*.model', 'tokenizer*']))" | tail -n 1
 ```
 
-> 输出的路径用于后续「单卡训练」和「多卡训练」章节。
+> 该下载演示 modelscope `snapshot_download` 的标准用法（多卡训练改为 debugmodel 后，训练自身使用 torchtitan 自带的 tests/assets/tokenizer，不依赖此路径）。
 
 验证 tokenizer 关键文件都落盘：
 
@@ -219,13 +219,21 @@ torchtitan v0.3.0 + torch 2.12 + torch_npu 2.12.0 + triton-ascend 3.5.0 是一�
 
 **限制二：NPU 算子缺口——`aclnnIndex` 不支持 complex64。** llama3 注册表默认 `ComplexRoPE`（complex64 缓存），forward 里 `rope_cache[positions]` 索引落到 `aclnnIndex` 直接报 `AclNN_Parameter_Error: not implemented for DT_COMPLEX64`。换成数学等价的实数实现 `CosSinRoPE`（cos/sin 缓存 + rotate-half）；它不支持 llama scaling，需一并把 `scaling="llama"` 改为 `"none"`——llama scaling 只影响 >8k 长上下文的频率插值，对本文档 256 seq 的 smoke 数值无影响。
 
+**限制三：v0.3.0 的 `ChunkedLossWrapper` 在 NPU 上 backward 崩。** 该 wrapper 在 forward 内部逐 chunk 调 `chunk_loss.backward()`（backward-inside-forward）+ FSDP unshard/reshard 交错，在 NPU 上触发 `RuntimeError: The tensor has a non-zero number of elements, but its data is not allocated yet`（meta 张量泄漏）。换成标准的 `CrossEntropyLoss`（上游同 registry 提供 `llama3_debugmodel_ce_loss` 同款配置，数学等价、只是无峰值内存优化）。
+
+**限制四：多卡下默认的 `spmd_types` 后端在 torch 2.12 上不可用。** v0.3.0 默认 SPMD 后端 `spmd_types` 用惰性注解标记参数分布，需要 torch ≥2.13 的 FSDP `dp_mesh_dims` 把注解翻译成 DTensor；torch 2.12 的 FSDP 只认真 DTensor，多卡（dp_shard>1）时报 `ValueError: When dp_mesh_dims is provided, all parameters must be DTensors... Got plain tensor`。切到 `full_dtensor` 后端（`--parallelism.spmd-backend full_dtensor`，参数经 `distribute_tensor` 成为真 DTensor）即可，无需改代码；单卡不受影响（size-1 mesh 时 torchtitan 自己跳过该路径）。
+
+**限制五：`set_pg_timeouts` 用了 torch 2.13+ 的 API。** `distributed/utils.py` 调 `torch.distributed.set_timeout(timeout, group)`——该模块级 API torch 2.13 才有，step 1 之后（`train()` 里调整 PG 超时）必炸 `AttributeError`。torch 2.12 等价物是实例方法 `ProcessGroup.set_timeout(timeout)`。
+
+**限制六：8B 规模模型在本栈上不可用（多卡改用 debugmodel）。** 8B 走 `--training.enable-cpu-offload` 路径时权重在 CPU 上经 DTensor dispatch 逐参数 `init_weights`，实测单个 `trunc_normal_` 超过 1.5 小时不完成（CPU 持续 133% 在 `normal_fill`，DTensor in-place op 反复重派发，接近活锁）——即使加大 OMP 线程也不缓解。多卡章节因此用 `debugmodel` 双卡（FSDP shard=2 + HCCL 双卡 + DTensor 参数分布 + bf16 全部覆盖），8B 规模验证留待上游修复后恢复。
+
 安装侧另有两点配合（见「安装 triton-ascend」一节）：`--no-deps` 防止 wheel 声明的社区版 `triton==3.5.0` 依赖混入覆盖 fork 文件；单独补装被跳过依赖里唯一被运行期 import 的 `pybind11`。
 
-> 退役条件：限制二随 CANN 的 `aclnnIndex` 支持 complex64（或 torch_npu 补转换实现）后可移除；限制一的 SDPA 切换随 bisheng/triton-ascend 支持编译 inductor flex 模板 kernel 后整体回退（届时 flex 路径还需带上上面六处 torch_npu 断层的 sed，修法已在上游 master 验证过——详见迭代记录，等待回合 2.12 补丁版或 2.13）。
+> 退役条件：限制二随 CANN 的 `aclnnIndex` 支持 complex64（或 torch_npu 补转换实现）后可移除；限制一的 SDPA 切换随 bisheng/triton-ascend 支持编译 inductor flex 模板 kernel 后整体回退（届时 flex 路径还需带上六处 torch_npu 断层的 sed，修法已在上游 master 验证过——等待回合 2.12 补丁版或 2.13）；限制三、四、五随 torch_npu 发布配套 torch ≥ 2.13 的版本自然消失。
 
 ### 单卡训练
 
-用 `torchrun --nproc_per_node=1` 在 1 张 NPU 上跑 `debugmodel` 真跑 2 步，验证配置解析、初始化、加载 tokenizer、build dataloader、forward + backward 整条链路能跑通。`llama3_debugmodel` 是 torchtitan 自带的最小 smoke 配置（dim=256 / 6 层 / 16 head / vocab 2048，~6 M 参数量），单卡 30 GB 完全够装。走真实 HCCL backend（`--comm.mode default`）让 c10d 把 `npu` 路由到 `hccl`，1-rank 下所有集合通信都是 self-barrier，不会真的有跨卡流量；不要用 `--comm.mode fake_backend` —— 它只注册 `fake` PG，v0.2.2 在 step 1 之后调 `set_pg_timeouts` → `torch.distributed.barrier(device_ids=[npu:0])` 时会因 `default_device_backend_map["npu"]="hccl"` 但当前 PG 是 `fake` 抛 `RuntimeError: No backend type associated with device type npu`。8B 模型单卡实测装不下（params + grads 在 bf16 下就要 32 GB > 30 GB 可用），需要双卡 FSDP shard=2 才跑得动，详见下一节「多卡训练」：
+用 `torchrun --nproc_per_node=1` 在 1 张 NPU 上跑 `debugmodel` 真跑 2 步，验证配置解析、初始化、加载 tokenizer、build dataloader、forward + backward 整条链路能跑通。`llama3_debugmodel` 是 torchtitan 自带的最小 smoke 配置（dim=256 / 6 层 / 16 head / vocab 2048，~6 M 参数量），单卡 30 GB 完全够装。走真实 HCCL backend（`--comm.mode default`）让 c10d 把 `npu` 路由到 `hccl`，1-rank 下所有集合通信都是 self-barrier，不会真的有跨卡流量；不要用 `--comm.mode fake_backend` —— 它只注册 `fake` PG，v0.2.2 在 step 1 之后调 `set_pg_timeouts` → `torch.distributed.barrier(device_ids=[npu:0])` 时会因 `default_device_backend_map["npu"]="hccl"` 但当前 PG 是 `fake` 抛 `RuntimeError: No backend type associated with device type npu`。多卡 FSDP shard 训练见下一节「多卡训练」（8B 规模在本栈暂不可用，见「兼容性补丁」限制六）：
 
 ```shell #test id="torchtitan-train-debug" load="upstream_ref>>ref"
 cd torchtitan && git checkout <ref>
@@ -233,6 +241,8 @@ sed -i 's/^    ComplexRoPE,$/    ComplexRoPE,\n    CosSinRoPE,/; s/ComplexRoPE\.
 sed -i 's/attn_backend: str = "flex",/attn_backend: str = "sdpa",/' torchtitan/models/llama3/__init__.py
 sed -i 's/    VarlenAttention,$/    VarlenAttention,\n    ScaledDotProductAttention,/' torchtitan/models/common/config_utils.py
 sed -i 's/    elif backend == "sdpa":/    elif backend == "sdpa":\n        return ScaledDotProductAttention.Config()\n    elif backend == "sdpa_banned":/' torchtitan/models/common/config_utils.py
+sed -i '/^        loss=ChunkedLossWrapper.Config($/,/^        ),$/c\        loss=CrossEntropyLoss.Config(\n            global_vocab_size=decoder_vocab_size(model_spec),\n        ),' torchtitan/models/llama3/config_registry.py
+sed -i 's|        torch.distributed.set_timeout(timeout, group)|        (group if group is not None else torch.distributed.distributed_c10d._get_default_group()).set_timeout(timeout)|' torchtitan/distributed/utils.py
 ASCEND_RT_VISIBLE_DEVICES=0 \
 torchrun --nproc_per_node=1 \
     --rdzv_backend c10d \
@@ -262,16 +272,17 @@ torchrun --nproc_per_node=1 \
 
 ### 多卡训练
 
-用 torchrun 起 2 个 rank 跑 8B 模型真分布式训练，`--training.steps 2` 真跑 2 步。`data_parallel_shard_degree = -1` 在双卡下解析成 2，FSDP 把 params / grads / Adam state 都按 shard 分摊，再加 `--training.enable-cpu-offload` 让 FSDP 把 Adam state 卸到 CPU，每张卡 NPU 实测占用 ~16 GB（params 8 GB + grads 8 GB + 激活张量 <1 GB），单卡 30 GB 装得下。再叠 `--training.dtype bfloat16` 把 params / grads / Adam state 全量 bf16，省掉 fp32 Adam state 那 32 GB 副本：
+用 torchrun 起 2 个 rank 跑 `debugmodel` 真分布式训练，`--training.steps 2` 真跑 2 步。`data_parallel_shard_degree = -1` 在双卡下解析成 2，FSDP 把 params / grads / Adam state 按 shard 分摊到两张卡，验证 HCCL 双卡集合通信 + FSDP shard>1 + DTensor 参数分布整条链路。`--parallelism.spmd-backend full_dtensor` 是多卡必须项（默认的 `spmd_types` 后端要 torch ≥2.13 的 FSDP 注解翻译，见「兼容性补丁」限制四）；叠 `--training.dtype bfloat16` 验证混合精度：
 
-```shell #test id="torchtitan-train-2card" load="upstream_ref>>ref" load="ms_tokenizer_path>>ms_tokenizer_path"
+```shell #test id="torchtitan-train-2card" load="upstream_ref>>ref"
 cd torchtitan && git checkout <ref>
 sed -i 's/^    ComplexRoPE,$/    ComplexRoPE,\n    CosSinRoPE,/; s/ComplexRoPE\.Config(/CosSinRoPE.Config(/; s/scaling="llama",/scaling="none",/' torchtitan/models/llama3/__init__.py
 sed -i 's/attn_backend: str = "flex",/attn_backend: str = "sdpa",/' torchtitan/models/llama3/__init__.py
 sed -i 's/    VarlenAttention,$/    VarlenAttention,\n    ScaledDotProductAttention,/' torchtitan/models/common/config_utils.py
 sed -i 's/    elif backend == "sdpa":/    elif backend == "sdpa":\n        return ScaledDotProductAttention.Config()\n    elif backend == "sdpa_banned":/' torchtitan/models/common/config_utils.py
+sed -i '/^        loss=ChunkedLossWrapper.Config($/,/^        ),$/c\        loss=CrossEntropyLoss.Config(\n            global_vocab_size=decoder_vocab_size(model_spec),\n        ),' torchtitan/models/llama3/config_registry.py
+sed -i 's|        torch.distributed.set_timeout(timeout, group)|        (group if group is not None else torch.distributed.distributed_c10d._get_default_group()).set_timeout(timeout)|' torchtitan/distributed/utils.py
 ASCEND_RT_VISIBLE_DEVICES=0,1 \
-PYTORCH_ALLOC_CONF="expandable_segments:True" \
 torchrun --nproc_per_node=2 \
     --rdzv_backend c10d \
     --rdzv_endpoint="localhost:0" \
@@ -279,12 +290,10 @@ torchrun --nproc_per_node=2 \
     --tee 3 \
     -m torchtitan.train \
     --module llama3 \
-    --config llama3_8b \
-    --hf-assets-path <ms_tokenizer_path> \
+    --config llama3_debugmodel \
     --comm.mode default \
-    --dataloader.dataset c4_test \
+    --parallelism.spmd-backend full_dtensor \
     --training.dtype bfloat16 \
-    --training.enable-cpu-offload \
     --training.steps 2 \
     --training.local-batch-size 1 \
     --training.seq-len 256 \

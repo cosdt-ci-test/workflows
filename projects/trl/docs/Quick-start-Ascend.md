@@ -227,6 +227,14 @@ train_dataset = load_dataset(
     split='train',
 )
 
+# prompt 列是纯字符串，chosen / rejected 是 messages 列表；把 prompt 转成
+# 单条 user 消息即可让 DPOTrainer 按 conversational 格式处理
+def to_conversational(example):
+    example['prompt'] = [{'role': 'user', 'content': example['prompt']}]
+    return example
+
+train_dataset = train_dataset.map(to_conversational)
+
 model_path = snapshot_download('Qwen/Qwen2.5-0.5B-Instruct')
 model = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.bfloat16)
 tokenizer = AutoTokenizer.from_pretrained(model_path)

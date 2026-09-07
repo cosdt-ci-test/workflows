@@ -236,7 +236,7 @@ torchtitan v0.3.0 + torch 2.12 + torch_npu 2.12.0 + triton-ascend 3.5.0 是一�
 用 `torchrun --nproc_per_node=1` 在 1 张 NPU 上跑 `debugmodel` 真跑 2 步，验证配置解析、初始化、加载 tokenizer、build dataloader、forward + backward 整条链路能跑通。`llama3_debugmodel` 是 torchtitan 自带的最小 smoke 配置（dim=256 / 6 层 / 16 head / vocab 2048，~6 M 参数量），单卡 30 GB 完全够装。走真实 HCCL backend（`--comm.mode default`）让 c10d 把 `npu` 路由到 `hccl`，1-rank 下所有集合通信都是 self-barrier，不会真的有跨卡流量；不要用 `--comm.mode fake_backend` —— 它只注册 `fake` PG，v0.2.2 在 step 1 之后调 `set_pg_timeouts` → `torch.distributed.barrier(device_ids=[npu:0])` 时会因 `default_device_backend_map["npu"]="hccl"` 但当前 PG 是 `fake` 抛 `RuntimeError: No backend type associated with device type npu`。多卡 FSDP shard 训练见下一节「多卡训练」（8B 规模在本栈暂不可用，见「兼容性补丁」限制六）：
 
 ```shell #test id="torchtitan-train-debug" load="upstream_ref>>ref"
-cd torchtitan && git checkout <ref>
+cd torchtitan && git checkout -f <ref>
 sed -i 's/^    ComplexRoPE,$/    ComplexRoPE,\n    CosSinRoPE,/; s/ComplexRoPE\.Config(/CosSinRoPE.Config(/; s/scaling="llama",/scaling="none",/' torchtitan/models/llama3/__init__.py
 sed -i 's/attn_backend: str = "flex",/attn_backend: str = "sdpa",/' torchtitan/models/llama3/__init__.py
 sed -i 's/    VarlenAttention,$/    VarlenAttention,\n    ScaledDotProductAttention,/' torchtitan/models/common/config_utils.py
@@ -275,7 +275,7 @@ torchrun --nproc_per_node=1 \
 用 torchrun 起 2 个 rank 跑 `debugmodel` 真分布式训练，`--training.steps 2` 真跑 2 步。`data_parallel_shard_degree = -1` 在双卡下解析成 2，FSDP 把 params / grads / Adam state 按 shard 分摊到两张卡，验证 HCCL 双卡集合通信 + FSDP shard>1 + DTensor 参数分布整条链路。`--parallelism.spmd-backend full_dtensor` 是多卡必须项（默认的 `spmd_types` 后端要 torch ≥2.13 的 FSDP 注解翻译，见「兼容性补丁」限制四）；叠 `--training.dtype bfloat16` 验证混合精度：
 
 ```shell #test id="torchtitan-train-2card" load="upstream_ref>>ref"
-cd torchtitan && git checkout <ref>
+cd torchtitan && git checkout -f <ref>
 sed -i 's/^    ComplexRoPE,$/    ComplexRoPE,\n    CosSinRoPE,/; s/ComplexRoPE\.Config(/CosSinRoPE.Config(/; s/scaling="llama",/scaling="none",/' torchtitan/models/llama3/__init__.py
 sed -i 's/attn_backend: str = "flex",/attn_backend: str = "sdpa",/' torchtitan/models/llama3/__init__.py
 sed -i 's/    VarlenAttention,$/    VarlenAttention,\n    ScaledDotProductAttention,/' torchtitan/models/common/config_utils.py

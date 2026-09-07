@@ -173,7 +173,7 @@ trainer = SFTTrainer(
         logging_steps=1,
         save_strategy="no",
         report_to="none",
-        model_init_kwargs={"torch_dtype": torch.bfloat16},
+        model_init_kwargs={"dtype": torch.bfloat16},
     ),
 )
 print("model device:", next(trainer.model.parameters()).device)
@@ -221,13 +221,13 @@ data = [
 train_dataset = Dataset.from_list(data)
 
 model_path = snapshot_download('Qwen/Qwen2.5-0.5B-Instruct')
-model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.bfloat16)
+model = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.bfloat16)
 tokenizer = AutoTokenizer.from_pretrained(model_path)
 
 trainer = DPOTrainer(
     model=model,
     ref_model=None,
-    tokenizer=tokenizer,
+    processing_class=tokenizer,
     train_dataset=train_dataset,
     peft_config=LoraConfig(r=8, lora_alpha=32, task_type=TaskType.CAUSAL_LM),
     max_length=512,

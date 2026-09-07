@@ -263,7 +263,7 @@ torchrun --nproc_per_node=1 \
 
 ```shell #test-result id="torchtitan-train-debug" fuzzy='xxx' fuzzy='...'
 [titan] xxx - root - INFO - torchtitan version: xxx
-[titan] xxx - root - INFO - Starting job: Llama 3 debug training
+[titan] xxx - root - INFO - Building llama3 debugmodel
 ...
 [titan] xxx - root - INFO - Sleeping 2 seconds for other ranks to complete
 [titan] xxx - root - INFO - Training completed
@@ -306,7 +306,8 @@ torchrun --nproc_per_node=2 \
 
 ```shell #test-result id="torchtitan-train-2card" fuzzy='xxx' fuzzy='...'
 [default0]:[titan] xxx - root - INFO - torchtitan version: xxx
-[default0]:[titan] xxx - root - INFO - Starting job: Llama 3 8B training
+[default0]:[titan] xxx - root - INFO - Building device mesh with parallelism: xxx
+[default0]:[titan] xxx - root - INFO - Building llama3 debugmodel
 ...
 [default0]:[titan] xxx - root - INFO - Sleeping 2 seconds for other ranks to complete
 [default0]:[titan] xxx - root - INFO - Training completed

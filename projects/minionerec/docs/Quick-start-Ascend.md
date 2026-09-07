@@ -72,7 +72,7 @@ torch 栈与 CANN 9.1.0 配套（torch 2.9.0 + torch_npu 2.9.0.post2）：
 ```shell #test-setup id="install"
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 pip install torch==2.9.0 torch-npu==2.9.0.post2
-pip install transformers==4.57.1 accelerate==1.10.1 datasets==4.2.0 \
+pip install modelscope transformers==4.57.1 accelerate==1.10.1 datasets==4.2.0 \
     tokenizers==0.22.1 fire==0.7.1 pandas==2.2.2 tqdm
 ```
 

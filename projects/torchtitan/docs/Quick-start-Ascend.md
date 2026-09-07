@@ -213,37 +213,15 @@ tokenizer_config.json
 
 ### 兼容性补丁
 
-**补丁一：v0.3.0 传给 `create_block_mask` 的 `separate_full_blocks` 参数（torchtitan）**
+torchtitan v0.3.0 + torch 2.12 + torch_npu 2.12.0 + triton-ascend 3.5.0 是一个双方生态都未验证过的组合，剥到最底层是两个硬限制 + 一个算子缺口，本文档最终只保留两处 `sed`：
 
-torchtitan v0.3.0 是按 torch 2.14 nightly 开发的（release notes 的 Compatibility 表写明 validated with PyTorch 2.14.0），其 `torchtitan/models/common/decoder.py::_create_flex_attention_mask` 会向 `create_block_mask()` 传一个 `separate_full_blocks` 关键字参数（值取 `not is_in_batch_invariant_mode()`）。该参数是 pytorch main（2.13/2.14-dev）新加的，稳定版 `create_block_mask` 签名（含 2.12.0）里没有；而 NPU 侧最新的 torch_npu 2.12.0 只配套 torch 2.12.0，升不上去——第 1 个 train step 构建 flex attention mask 时（forward 之前）就会抛 `TypeError: create_block_mask() got an unexpected keyword argument 'separate_full_blocks'`。
+**限制一：flex attention 在这套 NPU 栈上编不出来（硬墙，无法绕过，只能换 backend）。** v0.3.0 的语言模型路径强制 flex/varlen（`sdpa` 被 `config_utils.py::get_attention_config` 显式禁用），flex 必经 inductor 编译 Triton kernel。逐层剥开（顺序即迭代顺序）：`separate_full_blocks` 参数 torch ≥2.13 才有 → mask 图的双归约 kernel torch_npu codegen 不支持 → torch_npu×triton-ascend 六处 API 断层（`DeferredLine`、`triton_key` 路径、launch hooks、设备白名单无 `npu`、lowering 全量白名单误杀 flex 模板与 `aten.index`、`define_kernel` 签名漂移）——这些全部可用 sed 修复，且修法均与 torch_npu master 一致。但最后一层是 **CANN 9.1.0 的 bishengir-compile 编译器本身**编不了 inductor 生成的 flex 模板 kernel：`'hivm.hir.store' op only support store ub to gm currently!` / `'scf.for' op Failed to collect vector loop tiling info`（BiShengIR 流水线报错，在编译器二进制里，无法 patch）。因此本文档把 llama3 的 attention backend 切到 **SDPA**（`config_utils.py` 解除 sdpa 禁用 + `llama3/__init__.py` 默认 backend 改 `sdpa`）——trainer 本就支持 maskless SDPA 路径（靠 `is_causal`），torch_npu 的 SDPA 走 aclnn flash attention，是 NPU 生态的标准 attention 路径（vllm-ascend 同款）。代价：SMOKE 不再验证 flex kernel 本身，文档 masking 语义为纯 causal（对 2 步训练验证无影响）。
 
-删掉该参数在 torch 2.12 上行为不变：torch 2.12 内部本来就固定 `separate_full_blocks=True`，torchtitan 传的这个值在默认（非 batch-invariant）模式下也是 `True`。因此下面两个训练命令都在 `git checkout <ref>` 之后先用一行 `sed` 把 `decoder.py` 里这个参数删掉再启动 torchrun。
+**限制二：NPU 算子缺口——`aclnnIndex` 不支持 complex64。** llama3 注册表默认 `ComplexRoPE`（complex64 缓存），forward 里 `rope_cache[positions]` 索引落到 `aclnnIndex` 直接报 `AclNN_Parameter_Error: not implemented for DT_COMPLEX64`。换成数学等价的实数实现 `CosSinRoPE`（cos/sin 缓存 + rotate-half）；它不支持 llama scaling，需一并把 `scaling="llama"` 改为 `"none"`——llama scaling 只影响 >8k 长上下文的频率插值，对本文档 256 seq 的 smoke 数值无影响。
 
-**补丁二：torch_npu 2.12.0 inductor codegen 的 `DeferredLine` 崩溃（torch_npu）**
+安装侧另有两点配合（见「安装 triton-ascend」一节）：`--no-deps` 防止 wheel 声明的社区版 `triton==3.5.0` 依赖混入覆盖 fork 文件；单独补装被跳过依赖里唯一被运行期 import 的 `pybind11`。
 
-torch_npu 2.12.0 的 NPU inductor 补丁 `torch_npu/_inductor/codegen/triton.py::find_axis_in_load_store` 遍历 codegen 缓冲区里的行时按老 API 把行当字符串调 `line.find(...)`，而 torch 2.12 inductor 产出的行是 `DeferredLine` 对象——`create_block_mask` 里的 cumsum 归约 store 走到该路径时抛 `InductorError: AttributeError: 'DeferredLine' object has no attribute 'find'`。上游 master 已改为统一解包（`line.line if isinstance(line, DeferredLine) else line`）后再用，但该修复未回合进 2.12.0 wheel，这里用 `sed` 对四个缓冲区循环应用同样的修法。
-
-**补丁三：torch_npu 2.12.0 从旧路径 import `triton_key`（torch_npu × triton-ascend）**
-
-torch_npu 2.12.0 在 `torch_npu/_inductor/codegen/common.py::get_system`（FxGraphCache 的 cache key）和 `codegen/triton.py::patch_triton_hash`（kernel cache key）里从 `triton.compiler.compiler` import `triton_key`；triton-ascend fork 把该函数移到了 `triton.runtime.cache`，旧位置没有这个名字——模块在而名字缺失抛的是 `ImportError`，torch_npu 的 `except ModuleNotFoundError` 接不住，编译第一步就崩。上游 master 已经改为优先从 `triton.runtime.cache` import（回落旧路径），`sed` 应用同样的改法（`patch_triton_hash` 处把两个名字拆成两行 import，`make_backend` 留在原位置不动）。
-
-**补丁四：torch_npu 2.12.0 launcher 引用旧的 `CompiledKernel.launch_*_hook` 类属性（torch_npu × triton-ascend）**
-
-torch_npu 2.12.0 的 `torch_npu/_inductor/npu_triton_heuristics.py::make_launcher`（三处）引用 `binary.__class__.launch_enter_hook / launch_exit_hook` 类属性；triton 3.5 基线把这些 hook 挪到了 `triton.knobs.runtime`，`CompiledKernel` 上已没有这两个属性——kernel launcher 构建时抛 `AttributeError: type object 'CompiledKernel' has no attribute 'launch_enter_hook'`，表现为 `No valid triton configs`。上游 master 同样改为优先 `knobs.runtime`，`sed` 把三处引用统一指到新位置（fork 的 `launch_metadata` 内部自带 hook 判空，无条件调用也安全）。
-
-**补丁五：去掉 `create_block_mask` 的 `torch.compile`（torchtitan）**
-
-torchtitan 在 `torchtitan/models/common/attention.py` 模块级硬编码 `_compiled_create_block_mask = torch.compile(create_block_mask)`。flex mask 的 mask_mod 图里有 cumsum/scatter，inductor 会把它融合成**双归约轴 kernel**——而 torch_npu 的 NPU codegen 不支持双归约（其源码自述 "Currently npu don't support multi-reduction ranges trees"，该路径上生成残缺代码，报 `NameError('r2 is not defined')` / `No valid triton configs`，上游 master 已整区重写但未回合）。`create_block_mask` 只是构建 BlockMask 的一次性张量计算，改回 eager 语义不变，只是不做编译优化。补丁二/三/四的 `sed` 作用于已安装的 torch_npu，补丁五的 `sed` 在训练命令里作用于 torchtitan 源码：
-
-```shell #test-setup
-TN_DIR="$(python -c 'import torch_npu, os; print(os.path.dirname(torch_npu.__file__))')"
-sed -i -E "s/for line in self\.(loads|compute|post_loop_store|stores)\._lines:/for line in [l.line if isinstance(l, DeferredLine) else l for l in self.\1._lines]:/" "$TN_DIR/_inductor/codegen/triton.py"
-sed -i -E "s/^([[:space:]]*)from triton\.compiler\.compiler import triton_key, make_backend$/\1from triton.runtime.cache import triton_key\n\1from triton.compiler.compiler import make_backend/" "$TN_DIR/_inductor/codegen/triton.py"
-sed -i "s/from triton\.compiler\.compiler import triton_key$/from triton.runtime.cache import triton_key/" "$TN_DIR/_inductor/codegen/common.py"
-sed -i "s/binary\.__class__\.launch_enter_hook/__import__(\"triton\").knobs.runtime.launch_enter_hook/g; s/binary\.__class__\.launch_exit_hook/__import__(\"triton\").knobs.runtime.launch_exit_hook/g" "$TN_DIR/_inductor/npu_triton_heuristics.py"
-```
-
-> 补丁一待 torch_npu 发布配套 torch ≥ 2.13（`separate_full_blocks` 进入稳定版签名）的版本后可移除；补丁二、三、四待 torch_npu 发布带对应修复的 2.12 补丁版或 2.13 后可移除（届时 `sed` 无匹配，本身也是无害的空操作）。补丁五随补丁二一起退役（双归约 codegen 修复后 mask 编译即可恢复）。
+> 退役条件：限制二随 CANN 的 `aclnnIndex` 支持 complex64（或 torch_npu 补转换实现）后可移除；限制一的 SDPA 切换随 bisheng/triton-ascend 支持编译 inductor flex 模板 kernel 后整体回退（届时 flex 路径还需带上上面六处 torch_npu 断层的 sed，修法已在上游 master 验证过——详见迭代记录，等待回合 2.12 补丁版或 2.13）。
 
 ### 单卡训练
 
@@ -251,8 +229,10 @@ sed -i "s/binary\.__class__\.launch_enter_hook/__import__(\"triton\").knobs.runt
 
 ```shell #test id="torchtitan-train-debug" load="upstream_ref>>ref"
 cd torchtitan && git checkout <ref>
-sed -i '/separate_full_blocks=not is_in_batch_invariant_mode()/d' torchtitan/models/common/decoder.py
-sed -i 's/_compiled_create_block_mask = torch.compile(create_block_mask)$/_compiled_create_block_mask = create_block_mask/' torchtitan/models/common/attention.py
+sed -i 's/^    ComplexRoPE,$/    ComplexRoPE,\n    CosSinRoPE,/; s/ComplexRoPE\.Config(/CosSinRoPE.Config(/; s/scaling="llama",/scaling="none",/' torchtitan/models/llama3/__init__.py
+sed -i 's/attn_backend: str = "flex",/attn_backend: str = "sdpa",/' torchtitan/models/llama3/__init__.py
+sed -i 's/    VarlenAttention,$/    VarlenAttention,\n    ScaledDotProductAttention,/' torchtitan/models/common/config_utils.py
+sed -i 's/    elif backend == "sdpa":/    elif backend == "sdpa":\n        return ScaledDotProductAttention.Config()\n    elif backend == "sdpa_banned":/' torchtitan/models/common/config_utils.py
 ASCEND_RT_VISIBLE_DEVICES=0 \
 torchrun --nproc_per_node=1 \
     --rdzv_backend c10d \
@@ -286,8 +266,10 @@ torchrun --nproc_per_node=1 \
 
 ```shell #test id="torchtitan-train-2card" load="upstream_ref>>ref" load="ms_tokenizer_path>>ms_tokenizer_path"
 cd torchtitan && git checkout <ref>
-sed -i '/separate_full_blocks=not is_in_batch_invariant_mode()/d' torchtitan/models/common/decoder.py
-sed -i 's/_compiled_create_block_mask = torch.compile(create_block_mask)$/_compiled_create_block_mask = create_block_mask/' torchtitan/models/common/attention.py
+sed -i 's/^    ComplexRoPE,$/    ComplexRoPE,\n    CosSinRoPE,/; s/ComplexRoPE\.Config(/CosSinRoPE.Config(/; s/scaling="llama",/scaling="none",/' torchtitan/models/llama3/__init__.py
+sed -i 's/attn_backend: str = "flex",/attn_backend: str = "sdpa",/' torchtitan/models/llama3/__init__.py
+sed -i 's/    VarlenAttention,$/    VarlenAttention,\n    ScaledDotProductAttention,/' torchtitan/models/common/config_utils.py
+sed -i 's/    elif backend == "sdpa":/    elif backend == "sdpa":\n        return ScaledDotProductAttention.Config()\n    elif backend == "sdpa_banned":/' torchtitan/models/common/config_utils.py
 ASCEND_RT_VISIBLE_DEVICES=0,1 \
 PYTORCH_ALLOC_CONF="expandable_segments:True" \
 torchrun --nproc_per_node=2 \

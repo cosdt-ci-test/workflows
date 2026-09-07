@@ -25,6 +25,9 @@ jobs:
         --volume=/data/ci-cache/modelscope/torchtitan:/root/.cache/modelscope
       timeout_minutes: 180
       upstream_repo: pytorch/torchtitan
-      doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/torchtitan/docs/Quick-start-Ascend.md
-      doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/torchtitan/docs/Quick-start-Ascend.md
+      # TODO(hdc-iteration): doc_url/doc_path temporarily point at the hdc
+      # branch so manual dispatches test the in-flight doc on hdc instead of
+      # main. REVERT both back to /main/ before merging hdc into main.
+      doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/hdc/projects/torchtitan/docs/Quick-start-Ascend.md
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/hdc/projects/torchtitan/docs/Quick-start-Ascend.md
       test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1

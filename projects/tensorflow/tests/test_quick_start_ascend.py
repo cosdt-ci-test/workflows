@@ -1,4 +1,4 @@
-"""Execute the TensorFlow 1.15 + TF Adapter 9.1.0 Quick Start on NPU."""
+"""Execute the TensorFlow 2.6.5 + TF Adapter 9.1.0 Quick Start on NPU."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     ERROR_MARKERS = (
         *MarkdownDocTestBase.ERROR_MARKERS,
         "GEInitialize failed",
-        "NpuOptimizer init failed",
+        "NPU device open failed",
         "device open failed",
         "ERR99999",
         "EZ9999",
@@ -44,7 +44,8 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         "/usr/local/Ascend/cann/set_env.sh",
         "/usr/local/Ascend/ascend-toolkit/set_env.sh",
     )
-    _TFPLUGIN_INSTALL_PATH = "/root/.cache/tensorflow/tfplugin-9.1.0"
+    _PYTHON39_BIN = "/usr/local/python3.9.25/bin"
+    _TFPLUGIN_INSTALL_PATH = "/root/Ascend/tfplugin"
     _HDF5_LIBRARY_PATH = "/usr/local/hdf5/lib"
 
     @classmethod
@@ -77,6 +78,10 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 os.environ[key] = value
 
         existing_pythonpath = os.environ.get("PYTHONPATH", "")
+        existing_path = os.environ.get("PATH", "")
+        os.environ["PATH"] = os.pathsep.join(
+            item for item in (cls._PYTHON39_BIN, existing_path) if item
+        )
         os.environ["TFPLUGIN_INSTALL_PATH"] = cls._TFPLUGIN_INSTALL_PATH
         os.environ["PYTHONPATH"] = os.pathsep.join(
             item
@@ -92,6 +97,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         os.environ["JOB_ID"] = "tensorflow-quick-start"
         os.environ["ASCEND_DEVICE_ID"] = "0"
         os.environ["ASCEND_RT_VISIBLE_DEVICES"] = "0"
+        os.environ["PIP_EXTRA_INDEX_URL"] = ""
         print(f"setup: sourced CANN environment from {cann_set_env}")
 
     @classmethod

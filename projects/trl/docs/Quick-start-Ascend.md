@@ -159,7 +159,7 @@ for name in os.listdir(os.path.join(ds_path, 'data')):
 train_dataset = load_dataset(
     'parquet', data_files=os.path.join(data_dir, 'train_sft-*.parquet'),
     split='train',
-)
+).select_columns(['messages'])
 
 model = snapshot_download('Qwen/Qwen2.5-0.5B-Instruct')
 

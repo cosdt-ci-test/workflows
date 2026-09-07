@@ -57,9 +57,10 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     ``#test-result``.
 
     Scope: 单卡 NPU 上的 SFT + DPO 双方法 LoRA smoke —— 环境与 NPU
-    检查、PyPI 二进制安装 trl、官方数据集 Capybara / ultrafeedback_binarized
-    经 hf-mirror 下载、5 步 SFT LoRA、3 步 DPO LoRA、两份适配器产物验证。
-    模型经 ModelScope 自动下载到默认缓存。"""
+    检查、PyPI 二进制安装 trl、ModelScope 数据集
+    HuggingFaceH4/ultrafeedback_binarized 下载、5 步 SFT LoRA、
+    3 步 DPO LoRA、两份适配器产物验证。模型与数据集均经 ModelScope
+    自动下载到默认缓存。"""
 
     DEFAULT_COMMAND_TIMEOUT = 1200  # 20 min: long enough for model download + SFT/DPO LoRA smoke
     USER_AGENT = 'cosdt-ci-test/quick-start'  # monitored source is the fork under cosdt-ci-test org
@@ -216,14 +217,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         # assertion holds regardless of host layout.
         os.environ.setdefault('ASCEND_RT_VISIBLE_DEVICES', '0')
 
-        # 3) HF mirror: the doc's dataset blocks load trl-lib datasets
-        # from HuggingFace Hub; the runner cannot reach huggingface.co
-        # directly, so route through hf-mirror and disable the Xet
-        # data plane (same pattern as lm-evaluation-harness).
-        os.environ.setdefault('HF_ENDPOINT', 'https://hf-mirror.com')
-        os.environ.setdefault('HF_HUB_DISABLE_XET', '1')
-
-        # 4) uv: the doc's ``trl-install-binary`` block calls
+        # 3) uv: the doc's ``trl-install-binary`` block calls
         # ``uv pip install`` which handles PEP 517 build deps more
         # reliably than pip. Inherit ``PIP_INDEX_URL`` +
         # ``PIP_TRUSTED_HOST`` from the yml job-level env (cluster cache
@@ -233,7 +227,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             check=True,
         )
 
-        # 5) torch stack probe + install: when version matches the image's
+        # 4) torch stack probe + install: when version matches the image's
         # pre-installed wheels, reuse them to avoid the cluster cache
         # triggering ``+cpu`` resolution.
         _PROBE_SCRIPT = (
@@ -270,12 +264,12 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 check=True,
             )
 
-        # 6) safetensors: native loader used by the cache validation
+        # 5) safetensors: native loader used by the cache validation
         # step below. Pulled in transitively by torch on most images;
         # install defensively in case the CANN base ships without it.
         ensure_safetensors()
 
-        # 7) Cache validation: persistent host-side bind mount can hold
+        # 6) Cache validation: persistent host-side bind mount can hold
         # truncated safetensors from interrupted runs. Walk every shard
         # under each model dir and purge it on failure; modelscope
         # will re-download cleanly on next access. Implementation
@@ -283,7 +277,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         # docstring for the full rationale.
         purge_modelscope_corrupt(resolve_modelscope_cache())
 
-        # 8) transformers / peft / modelscope are installed by the doc's
+        # 7) transformers / peft / modelscope are installed by the doc's
         # ``### 前置安装`` block (``install-deps`` carries the install +
         # verify pair itself). ``trl`` is also NOT installed here: it's
         # the subject of the test and gets installed by the doc's

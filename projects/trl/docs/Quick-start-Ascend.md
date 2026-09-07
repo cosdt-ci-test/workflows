@@ -42,7 +42,7 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | modelscope | 1.37.0 |
 | trl | 最新 release（PyPI） |
 | 模型 | [Qwen/Qwen2.5-0.5B-Instruct](https://www.modelscope.cn/models/Qwen/Qwen2.5-0.5B-Instruct)，约 1 GB，首次运行自动下载 |
-| 数据集 | `trl-lib/Capybara`（SFT）+ `trl-lib/ultrafeedback_binarized`（DPO），经 hf-mirror 自动下载 |
+| 数据集 | `HuggingFaceH4/ultrafeedback_binarized`（ModelScope 镜像，SFT 用 `messages` 列、DPO 用 `prompt` / `chosen` / `rejected` 列） |
 
 ### 前置安装
 
@@ -100,7 +100,7 @@ count: 1
 
 > 如果 `import torch_npu` 失败，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查 torch / torch_npu / CANN 三方兼容矩阵。
 
-安装 `transformers` / `peft` / `modelscope`（`trl` 会在下一节安装，并按依赖声明自动带入 `transformers` / `peft` / `accelerate` / `datasets`），装完打印版本验证。示例数据集来自 HuggingFace Hub，直连不可达时经 hf-mirror 镜像下载（下同）：
+安装 `transformers` / `peft` / `modelscope`（`trl` 会在下一节安装，并按依赖声明自动带入 `transformers` / `peft` / `accelerate` / `datasets`），装完打印版本验证。示例数据集来自 ModelScope（网络环境无法直连 HuggingFace 时经 ModelScope 获取，下同）：
 
 ```shell #test id="install-deps"
 uv pip install 'transformers>=4.56.2,<5.0' 'peft' 'modelscope==1.37.0'
@@ -131,10 +131,12 @@ trl xxx
 
 ## 使用样例：最小 SFT LoRA 后训练
 
-用官方数据集 `trl-lib/Capybara` 对 Qwen2.5-0.5B-Instruct 做 5 步 LoRA SFT。模型由脚本内的 `snapshot_download` 首次运行时自动下载到默认缓存（约 1 GB），数据集经 hf-mirror 自动下载；`SFTTrainer` 通过 `peft_config` 注入 LoRA 适配器，底座权重冻结、只训练新注入的低秩矩阵；训练完成后把适配器保存到 `output/trl-sft-lora`。
+用 ModelScope 数据集 `HuggingFaceH4/ultrafeedback_binarized` 的 SFT 子集对 Qwen2.5-0.5B-Instruct 做 5 步 LoRA SFT。模型由脚本内的 `snapshot_download` 首次运行时自动下载到默认缓存（约 1 GB），数据集经 ModelScope 自动下载；`SFTTrainer` 通过 `peft_config` 注入 LoRA 适配器，底座权重冻结、只训练新注入的低秩矩阵；训练完成后把适配器保存到 `output/trl-sft-lora`。
 
 ```shell #test id="sft-lora"
-HF_ENDPOINT=https://hf-mirror.com python << 'PY'
+python << 'PY'
+import os
+import shutil
 import torch
 import torch_npu
 from datasets import load_dataset
@@ -144,7 +146,20 @@ from trl import SFTConfig, SFTTrainer
 
 print("TRL_SFT_BEGIN")
 
-train_dataset = load_dataset("trl-lib/Capybara", split="train")
+ds_path = snapshot_download(
+    'HuggingFaceH4/ultrafeedback_binarized', repo_type='dataset',
+)
+data_dir = './ultrafeedback_sft'
+if os.path.isdir(data_dir):
+    shutil.rmtree(data_dir)
+os.makedirs(data_dir, exist_ok=True)
+for name in os.listdir(os.path.join(ds_path, 'data')):
+    if name.startswith('train_sft-'):
+        shutil.copy2(os.path.join(ds_path, 'data', name), data_dir)
+train_dataset = load_dataset(
+    'parquet', data_files=os.path.join(data_dir, 'train_sft-*.parquet'),
+    split='train',
+)
 
 model = snapshot_download('Qwen/Qwen2.5-0.5B-Instruct')
 
@@ -181,10 +196,12 @@ TRL_SFT_DONE
 
 ## 切换方法：偏好优化 DPO LoRA
 
-同一个模型与 LoRA 配置，把 `SFTTrainer` / `SFTConfig` 换成 `DPOTrainer` / `DPOConfig` 就是偏好优化：官方数据集 `trl-lib/ultrafeedback_binarized` 的 `prompt` / `chosen` / `rejected` 三段对话让模型更倾向 `chosen` 而非 `rejected` 的回答。这里跑 3 步 DPO LoRA，产物保存到 `output/trl-dpo-lora`。
+同一个模型与 LoRA 配置，把 `SFTTrainer` / `SFTConfig` 换成 `DPOTrainer` / `DPOConfig` 就是偏好优化：ModelScope 数据集 `HuggingFaceH4/ultrafeedback_binarized` 的 `prompt` / `chosen` / `rejected` 三段对话让模型更倾向 `chosen` 而非 `rejected` 的回答。这里跑 3 步 DPO LoRA，产物保存到 `output/trl-dpo-lora`。
 
 ```shell #test id="dpo-lora"
-HF_ENDPOINT=https://hf-mirror.com python << 'PY'
+python << 'PY'
+import os
+import shutil
 import torch
 import torch_npu
 from datasets import load_dataset
@@ -195,7 +212,20 @@ from trl import DPOConfig, DPOTrainer
 
 print("TRL_DPO_BEGIN")
 
-train_dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
+ds_path = snapshot_download(
+    'HuggingFaceH4/ultrafeedback_binarized', repo_type='dataset',
+)
+data_dir = './ultrafeedback_prefs'
+if os.path.isdir(data_dir):
+    shutil.rmtree(data_dir)
+os.makedirs(data_dir, exist_ok=True)
+for name in os.listdir(os.path.join(ds_path, 'data')):
+    if name.startswith('train_prefs-'):
+        shutil.copy2(os.path.join(ds_path, 'data', name), data_dir)
+train_dataset = load_dataset(
+    'parquet', data_files=os.path.join(data_dir, 'train_prefs-*.parquet'),
+    split='train',
+)
 
 model_path = snapshot_download('Qwen/Qwen2.5-0.5B-Instruct')
 model = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.bfloat16)

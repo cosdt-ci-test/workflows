@@ -42,7 +42,7 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | modelscope | 1.37.0 |
 | trl | 最新 release（PyPI） |
 | 模型 | [Qwen/Qwen2.5-0.5B-Instruct](https://www.modelscope.cn/models/Qwen/Qwen2.5-0.5B-Instruct)，约 1 GB，首次运行自动下载 |
-| 数据集 | 文档内联的极小对话样本：4 条 SFT 对话 + 3 条偏好样本（不依赖外部数据集下载） |
+| 数据集 | `trl-lib/Capybara`（SFT）+ `trl-lib/ultrafeedback_binarized`（DPO），经 hf-mirror 自动下载 |
 
 ### 前置安装
 
@@ -100,7 +100,7 @@ count: 1
 
 > 如果 `import torch_npu` 失败，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查 torch / torch_npu / CANN 三方兼容矩阵。
 
-安装 `transformers` / `peft` / `modelscope`（`trl` 会在下一节安装，并按依赖声明自动带入 `transformers` / `peft` / `accelerate` / `datasets`），装完打印版本验证：
+安装 `transformers` / `peft` / `modelscope`（`trl` 会在下一节安装，并按依赖声明自动带入 `transformers` / `peft` / `accelerate` / `datasets`），装完打印版本验证。示例数据集来自 HuggingFace Hub，直连不可达时经 hf-mirror 镜像下载（下同）：
 
 ```shell #test id="install-deps"
 uv pip install 'transformers>=4.56.2,<5.0' 'peft' 'modelscope==1.37.0'
@@ -131,31 +131,20 @@ trl xxx
 
 ## 使用样例：最小 SFT LoRA 后训练
 
-用 4 条内联对话样本（极小数据集，不依赖外部数据集下载）对 Qwen2.5-0.5B-Instruct 做 5 步 LoRA SFT。模型由脚本内的 `snapshot_download` 首次运行时自动下载到默认缓存（约 1 GB）；`SFTTrainer` 通过 `peft_config` 注入 LoRA 适配器，底座权重冻结、只训练新注入的低秩矩阵；训练完成后把适配器保存到 `output/trl-sft-lora`。
+用官方数据集 `trl-lib/Capybara` 对 Qwen2.5-0.5B-Instruct 做 5 步 LoRA SFT。模型由脚本内的 `snapshot_download` 首次运行时自动下载到默认缓存（约 1 GB），数据集经 hf-mirror 自动下载；`SFTTrainer` 通过 `peft_config` 注入 LoRA 适配器，底座权重冻结、只训练新注入的低秩矩阵；训练完成后把适配器保存到 `output/trl-sft-lora`。
 
 ```shell #test id="sft-lora"
-python << 'PY'
+HF_ENDPOINT=https://hf-mirror.com python << 'PY'
 import torch
 import torch_npu
-from datasets import Dataset
+from datasets import load_dataset
 from modelscope import snapshot_download
 from peft import LoraConfig, TaskType
 from trl import SFTConfig, SFTTrainer
 
 print("TRL_SFT_BEGIN")
 
-# 极小数据集：会话格式（{"messages": [...]}），SFTTrainer 自动套用 chat template
-data = [
-    {"messages": [{"role": "user", "content": "What color is the sky?"},
-                  {"role": "assistant", "content": "The sky is blue."}]},
-    {"messages": [{"role": "user", "content": "What is 2+2?"},
-                  {"role": "assistant", "content": "2+2 equals 4."}]},
-    {"messages": [{"role": "user", "content": "Name a planet."},
-                  {"role": "assistant", "content": "Mars is a planet."}]},
-    {"messages": [{"role": "user", "content": "What do bees make?"},
-                  {"role": "assistant", "content": "Bees make honey."}]},
-]
-train_dataset = Dataset.from_list(data)
+train_dataset = load_dataset("trl-lib/Capybara", split="train")
 
 model = snapshot_download('Qwen/Qwen2.5-0.5B-Instruct')
 
@@ -192,13 +181,13 @@ TRL_SFT_DONE
 
 ## 切换方法：偏好优化 DPO LoRA
 
-同一个模型与 LoRA 配置，把 `SFTTrainer` / `SFTConfig` 换成 `DPOTrainer` / `DPOConfig` 就是偏好优化：数据集改为 `prompt` / `chosen` / `rejected` 三段对话，训练让模型更倾向 `chosen` 而非 `rejected` 的回答。这里用 3 条内联偏好样本跑 3 步 DPO LoRA，产物保存到 `output/trl-dpo-lora`。
+同一个模型与 LoRA 配置，把 `SFTTrainer` / `SFTConfig` 换成 `DPOTrainer` / `DPOConfig` 就是偏好优化：官方数据集 `trl-lib/ultrafeedback_binarized` 的 `prompt` / `chosen` / `rejected` 三段对话让模型更倾向 `chosen` 而非 `rejected` 的回答。这里跑 3 步 DPO LoRA，产物保存到 `output/trl-dpo-lora`。
 
 ```shell #test id="dpo-lora"
-python << 'PY'
+HF_ENDPOINT=https://hf-mirror.com python << 'PY'
 import torch
 import torch_npu
-from datasets import Dataset
+from datasets import load_dataset
 from modelscope import snapshot_download
 from peft import LoraConfig, TaskType
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -206,19 +195,7 @@ from trl import DPOConfig, DPOTrainer
 
 print("TRL_DPO_BEGIN")
 
-# 偏好数据集：prompt / chosen / rejected 三段对话，DPOTrainer 自动套用 chat template
-data = [
-    {"prompt": [{"role": "user", "content": "What is the capital of France?"}],
-     "chosen": [{"role": "assistant", "content": "The capital of France is Paris."}],
-     "rejected": [{"role": "assistant", "content": "The capital of France is London."}]},
-    {"prompt": [{"role": "user", "content": "How many days are there in a week?"}],
-     "chosen": [{"role": "assistant", "content": "There are seven days in a week."}],
-     "rejected": [{"role": "assistant", "content": "There are ten days in a week."}]},
-    {"prompt": [{"role": "user", "content": "What is 2+2?"}],
-     "chosen": [{"role": "assistant", "content": "2+2 equals 4."}],
-     "rejected": [{"role": "assistant", "content": "2+2 equals 22."}]},
-]
-train_dataset = Dataset.from_list(data)
+train_dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
 
 model_path = snapshot_download('Qwen/Qwen2.5-0.5B-Instruct')
 model = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.bfloat16)

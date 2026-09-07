@@ -1,4 +1,4 @@
-# Quick Start (Ascend NPU)
+# TRL (Ascend NPU)
 
 TRL 用同一套 `Trainer` / `Config` API 覆盖 SFT / DPO / GRPO / PPO 等后训练方法。本示例在单卡昇腾 NPU 上，用同一个 Qwen2.5-0.5B-Instruct 模型先跑通最小 SFT LoRA，再换成 `DPOTrainer` 跑通偏好优化 DPO LoRA，并验证两种方法的产物。
 
@@ -41,8 +41,8 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | peft | 最新 release |
 | modelscope | 1.37.0 |
 | trl | 最新 release（PyPI） |
-| 模型 | [Qwen/Qwen2.5-0.5B-Instruct](https://www.modelscope.cn/models/Qwen/Qwen2.5-0.5B-Instruct)，约 1 GB，首次运行自动下载 |
-| 数据集 | `HuggingFaceH4/ultrafeedback_binarized`（ModelScope 镜像，SFT 用 `messages` 列、DPO 用 `prompt` / `chosen` / `rejected` 列） |
+| 模型 | [Qwen/Qwen2.5-0.5B-Instruct](https://www.modelscope.cn/models/Qwen/Qwen2.5-0.5B-Instruct)，约 1 GB |
+| 数据集 | `HuggingFaceH4/ultrafeedback_binarized` |
 
 ### 前置安装
 
@@ -89,7 +89,8 @@ Python 3.12.xxx
 检查 NPU 设备运行时可用：
 
 ```shell #test id="check-npu-runtime"
-python -c "import torch, torch_npu; print(f'torch={torch.__version__}'); print(f'torch_npu={torch_npu.__version__}'); print('is_available:', torch.npu.is_available()); print('count:', torch.npu.device_count())"
+python -c "import torch, torch_npu; print(f'torch={torch.__version__}'); print(f'torch_npu={torch_npu.__version__}'); print('is_available:', torch.npu.is_available()); 
+print('count:', torch.npu.device_count())"
 ```
 
 输出结果如下：
@@ -106,7 +107,7 @@ count: 1
 如果 `import torch_npu` 失败，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查 torch / torch_npu / CANN 三方兼容矩阵
 ```
 
-安装 `transformers` / `peft` / `modelscope`（`trl` 会在下一节安装，并按依赖声明自动带入 `transformers` / `peft` / `accelerate` / `datasets`），装完打印版本验证。示例数据集来自 ModelScope（网络环境无法直连 HuggingFace 时经 ModelScope 获取，下同）：
+安装 `transformers` / `peft` / `modelscope`，装完打印版本验证。示例数据集来自 ModelScope：
 
 ```shell #test id="install-deps"
 uv pip install 'transformers>=4.56.2,<5.0' 'peft' 'modelscope==1.37.0'

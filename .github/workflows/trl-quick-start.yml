@@ -13,12 +13,10 @@
 #   * result.json is written by the engine and validated against
 #     schemas/result.schema.json before upload.
 #
-# NOTE: only workflow_dispatch is enabled for now (per spec: same
-# onboarding rhythm as llama.cpp / whisper.cpp). Once the pipeline
-# runs green and stable, re-enable the schedule block below
-# (copy the peft-quick-start.yml cron: '0 */3 * * *') to start the
-# periodic monitor loop. Until then, the engine's schedule-only steps
-# (monitor / record-monitor-outcome / cache save) simply never run.
+# schedule is enabled; workflow_dispatch stays for manual reruns.
+# The engine's schedule-only steps (monitor / record-monitor-outcome /
+# cache save) run on schedule triggers; dispatch forces a manual test
+# without mutating monitor state.
 
 name: trl-quick-start
 
@@ -26,8 +24,6 @@ concurrency:
   # format() is load-bearing: a '||' between 'manual-' and
   # github.run_id would short-circuit on the truthy literal and
   # every dispatch would share one 'manual-' group.
-  # The schedule branch is kept (even though schedule is not enabled
-  # yet) so re-enabling the cron later needs no concurrency change.
   group: ${{ github.event_name == 'schedule' && 'trl-quick-start-schedule' || format('manual-{0}', github.run_id) }}
   # cancel-in-progress: false because (1) a schedule run cancelled
   # mid-way loses its outcome writeback - the outcome is what makes
@@ -37,9 +33,8 @@ concurrency:
   cancel-in-progress: false
 
 on:
-  # schedule: deliberately NOT enabled yet - see the header note.
-  # Enable with e.g. `- cron: '0 */3 * * *'` once the pipeline is
-  # proven stable on manual runs.
+  schedule:
+    - cron: '0 */3 * * *'
   workflow_dispatch:
 
 permissions:
@@ -52,6 +47,8 @@ jobs:
       # Namespaces cache keys (monitor-state-trl-*), artifacts
       # (trl-quick-start-<run_id>) and the test working dir
       # (workflows/projects/trl).
+      # result.json is uploaded by the engine's publish-and-persist job
+      # (ubuntu-latest, if: always()); the NPU test job never uploads.
       project: trl
       # Self-hosted NPU runner for the test job only; the engine pins
       # the cache I/O jobs (restore-cache / publish-and-persist) to

@@ -228,27 +228,47 @@ print('Available attention backends:', [x for x in dir(cache_dit) if 'attn' in x
 为了验证 Ascend NPU 加速是否真正生效，执行以下实际推理命令。此步骤将生成一张测试图片并验证 NPU 后端是否被激活。
 
 ```shell #test id="npu-function-verification"
-export HF_ENDPOINT=https://hf-mirror.com
-export MODELSCOPE_CACHE=/root/.cache/modelscope
-export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
-python3 -c "from modelscope import snapshot_download; snapshot_download('AI-ModelScope/FLUX.1-dev', local_dir='/root/.cache/modelscope/cache-dit-flux')"
-NPU_COUNT=$(python3 -c "import os, torch; v=os.environ.get('ASCEND_RT_VISIBLE_DEVICES'); print(len([x for x in v.split(',') if x != '']) if v else torch.npu.device_count())")
-mkdir -p output
-if [ "${NPU_COUNT}" -ge 2 ]; then
-  torchrun --nproc_per_node=2 -m cache_dit.generate flux --model-path /root/.cache/modelscope/cache-dit-flux --parallel tp --attn _native_npu \
-    --prompt "A cat holding a sign that says hello world" \
-    --num_inference_steps 10 \
-    --height 512 \
-    --width 512 \
-    --save-path output/test.png
-else
-  python3 -m cache_dit.generate flux --model-path /root/.cache/modelscope/cache-dit-flux --attn _native_npu --cpu-offload \
-    --prompt "A cat holding a sign that says hello world" \
-    --num_inference_steps 10 \
-    --height 512 \
-    --width 512 \
-    --save-path output/test.png
-fi
+python3 -c "
+import os, sys, torch
+os.environ['HF_ENDPOINT'] = os.environ.get('HF_ENDPOINT', 'https://hf-mirror.com')
+os.environ['MODELSCOPE_CACHE'] = os.environ.get('MODELSCOPE_CACHE', '/root/.cache/modelscope')
+os.environ.setdefault('PYTORCH_NPU_ALLOC_CONF', 'expandable_segments:True')
+
+from modelscope import snapshot_download
+snapshot_download('AI-ModelScope/FLUX.1-dev', local_dir='/root/.cache/modelscope/cache-dit-flux')
+
+import cache_dit
+from diffusers import DiffusionPipeline
+from cache_dit import ParallelismConfig
+
+npu_count = torch.npu.device_count()
+print(f'NPU device count: {npu_count}')
+
+pipe = DiffusionPipeline.from_pretrained(
+    '/root/.cache/modelscope/cache-dit-flux',
+    torch_dtype=torch.bfloat16,
+).to('npu')
+
+if npu_count >= 2:
+    pipe = cache_dit.enable_cache(
+        pipe,
+        attention_backend='_native_npu',
+        parallelism_config=ParallelismConfig(tp_size=npu_count),
+    )
+else:
+    pipe.enable_model_cpu_offload()
+    pipe = cache_dit.enable_cache(pipe, attention_backend='_native_npu')
+
+output = pipe(
+    prompt='A cat holding a sign that says hello world',
+    num_inference_steps=10,
+    height=512,
+    width=512,
+)
+os.makedirs('output', exist_ok=True)
+output.images[0].save('output/test.png')
+print('Image saved to output/test.png')
+"
 ```
 
 ```shell #test-result id="npu-function-verification" fuzzy='@@@'

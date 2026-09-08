@@ -32,6 +32,20 @@ python -c "from deepspeed.accelerator import get_accelerator; print('accelerator
 accelerator: npu
 ```
 
+## 安装 torchvision
+
+CIFAR10 数据集的加载和预处理依赖 torchvision（本文脚本用它自动下载 CIFAR10 并转成训练张量，无需手动准备数据）。安装时必须固定版本：torchvision 与 torch 是严格配套发布的，不固定版本的话，pip 会安装最新的 torchvision 并连带把 torch 升级到配套版本，破坏已有的 torch_npu 环境（torch 与 torch_npu 也必须版本配套）。
+
+```shell #test id="install-torchvision"
+pip install "torchvision==0.24.*"
+python -c "import torchvision; print('torchvision', torchvision.__version__)"
+```
+
+```shell #test-result id="install-torchvision" fuzzy='...' fuzzy='xxx'
+...
+torchvision xxx
+```
+
 ## 编写训练脚本
 
 下面这段 CIFAR10 训练脚本分 4 个模块，展示了 DeepSpeed 的完整工作流程。先把脚本写入 train_cifar10.py（deepspeed 启动器需要脚本文件路径），CIFAR10 数据集会在首次运行时自动下载。

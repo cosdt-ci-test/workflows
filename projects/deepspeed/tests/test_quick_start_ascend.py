@@ -158,22 +158,14 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         )
         print('setup: installed MPI (libopenmpi-dev + mpi4py)')
 
-        # torchvision is installed in setUpClass after _ensure_torch_npu
-        # (pinned to torchvision==0.24.0 to match torch 2.9.0).
+        # torchvision (and its runtime deps pillow/numpy) is installed by
+        # the doc's install-torchvision block, pinned to match torch 2.9.0.
 
     @classmethod
     def setUpClass(cls) -> None:
         if _e2e_enabled():
             cls.prepare_environment()
             _ensure_torch_npu()
-            # torchvision must match torch 2.9.0 (torch 2.9.0 <-> torchvision 0.24.0).
-            # Don't unpin: pip can pull torchvision 0.29.0 (requires torch 2.14.0)
-            # and break the mirror's torch/torch_npu stack.
-            subprocess.run(
-                [sys.executable, '-m', 'pip', 'install', '--no-deps', 'torchvision==0.24.0'],
-                check=True,
-            )
-            print('setup: installed torchvision==0.24.0')
 
     @unittest.skipIf(
         not _e2e_enabled(),

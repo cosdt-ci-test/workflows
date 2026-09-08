@@ -84,6 +84,11 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         Class-level setup: run once per test class, triggered by
         ``setUpClass``. Each labeled fence is a new subprocess, so a
         ``source set_env.sh`` block in the document does not persist.
+
+        Also pins NPU card 0 (avoid multi-card CI conflicts), chdirs
+        to the project root (``projects/deepspeed/``) so doc relative
+        paths resolve correctly, and installs CI dependencies (MPI,
+        torchvision) that the user would otherwise have to handle.
         """
         path_dirs = '/usr/local/sbin:/usr/local/bin'
         current_path = os.environ.get('PATH', '')
@@ -105,6 +110,32 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             print(
                 f'setup: skipping CANN env source ({cls._CANN_SET_ENV} not present)'
             )
+
+        # ASCEND_RT_VISIBLE_DEVICES=0: pin card 0 for single-card smoke.
+        os.environ['ASCEND_RT_VISIBLE_DEVICES'] = '0'
+        print('setup: pinned ASCEND_RT_VISIBLE_DEVICES=0')
+
+        # Chdir to project root so doc relative paths resolve from
+        # projects/deepspeed/ (the parent of tests/).
+        project_root = Path(__file__).resolve().parent.parent
+        os.chdir(project_root)
+        print(f'setup: cwd -> {project_root}')
+
+        # Install MPI (libopenmpi-dev + mpi4py) for deepspeed command.
+        subprocess.run(['apt-get', 'update'], check=True)
+        subprocess.run(['apt-get', 'install', '-y', 'libopenmpi-dev'], check=True)
+        subprocess.run(
+            [sys.executable, '-m', 'pip', 'install', 'mpi4py'],
+            check=True,
+        )
+        print('setup: installed MPI (libopenmpi-dev + mpi4py)')
+
+        # Install torchvision (CIFAR10 example needs it).
+        subprocess.run(
+            [sys.executable, '-m', 'pip', 'install', 'torchvision'],
+            check=True,
+        )
+        print('setup: installed torchvision')
 
     @classmethod
     def setUpClass(cls) -> None:

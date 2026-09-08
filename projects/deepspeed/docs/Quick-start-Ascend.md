@@ -6,7 +6,7 @@
 
 - **硬件**：Atlas 800T / 900 A2 训练服务器，搭载 Ascend 910B NPU。本文先单卡训练，再双卡分布式（需要 2 张卡）。
 - **软件**：已装好 CANN，以及与 CANN 匹配的 `torch` + `torch_npu`（`torch.npu.is_available() == True`）。参考[快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html)与 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch)。
-- **示例版本**：Python 3.10 · CANN 8.x · torch 2.9.x · torch_npu 2.9.x · torchvision 0.24.x · deepspeed 0.19.x。
+- **示例版本**：Python 3.12 · CANN 9.1.0 · torch 2.9.x · torch_npu 2.9.x · torchvision 0.24.x · deepspeed 0.19.x。
 
 ## 安装 DeepSpeed
 
@@ -34,7 +34,7 @@ accelerator: npu
 
 ## 安装 torchvision
 
-CIFAR10 数据集的加载和预处理依赖 torchvision（本文脚本用它自动下载 CIFAR10 并转成训练张量，无需手动准备数据）。安装时必须固定版本：torchvision 与 torch 是严格配套发布的，不固定版本的话，pip 会安装最新的 torchvision 并连带把 torch 升级到配套版本，破坏已有的 torch_npu 环境（torch 与 torch_npu 也必须版本配套）。
+CIFAR10 数据集的加载依赖 torchvision。torchvision 与 torch 版本严格配套，固定版本以避免 pip 连带升级 torch。
 
 ```shell #test id="install-torchvision"
 pip install "torchvision==0.24.*"
@@ -48,12 +48,13 @@ torchvision xxx
 
 ## 编写训练脚本
 
-下面这段 CIFAR10 训练脚本分 4 个模块，展示了 DeepSpeed 的完整工作流程。先把脚本写入 train_cifar10.py（deepspeed 启动器需要脚本文件路径），CIFAR10 数据集会在首次运行时自动下载（脚本内置国内镜像加速）。
+下面这段 CIFAR10 训练脚本分 4 个模块，展示了 DeepSpeed 的完整工作流程。先把脚本写入 train_cifar10.py（deepspeed 启动器需要脚本文件路径），CIFAR10 数据集会在首次运行时自动下载。
 
 ```shell #test-setup id="write-script"
 cat > train_cifar10.py <<'PY'
 import os
 import urllib.request
+import zipfile
 from pathlib import Path
 
 import torch
@@ -65,16 +66,16 @@ import deepspeed
 MICRO_BATCH = 8
 
 # ===== 模块 1：准备数据 =====
-# CIFAR10 数据集首次运行时自动下载，无需手动准备。官网（多伦多大学）在国内
-# 访问较慢，这里优先从国内镜像下载压缩包，torchvision 校验通过后直接使用；
-# 镜像不可用时 torchvision 会回落到官网下载。
-archive = Path('./data/cifar-10-python.tar.gz')
-if not archive.exists():
-    archive.parent.mkdir(parents=True, exist_ok=True)
-    print('downloading CIFAR10 from CN mirror ...')
+# CIFAR10 数据集首次运行时自动下载：从 ModelScope 镜像获取并解压。
+data_dir = Path('./data')
+if not (data_dir / 'cifar-10-batches-py').exists():
+    data_dir.mkdir(parents=True, exist_ok=True)
+    archive = data_dir / 'cifar-10-batches-py.zip'
     urllib.request.urlretrieve(
-        'https://mirror.azure.cn/pytorch-data/cifar/cifar-10-python.tar.gz',
+        'https://modelscope.cn/api/v1/datasets/studyhard1/cifar10-dataset/repo?Revision=master&FilePath=cifar-10-batches-py.zip',
         archive)
+    with zipfile.ZipFile(archive) as zf:
+        zf.extractall(data_dir)
 transform = transforms.Compose([
     transforms.ToTensor(),
     transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),

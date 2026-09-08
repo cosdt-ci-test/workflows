@@ -1,30 +1,5 @@
 #!/usr/bin/env python3
 """upstream-doc-monitor: 上游文档变化监控检测引擎。
-
-按 `.github/upstream-doc-monitor.yaml` 的监控清单（条目只需顶层 url：
-github.com blob 链接自动识别为 repo_file，其他 http(s) 网页为 web_page），
-对每份被监控文档做一次纯哈希校验（repo_file → GitHub Contents API 的
-git blob SHA；web_page → HTTP 条件请求 + 响应体 SHA-256 兜底），与基线
-（actions/cache 持久化）比对，
-将 changed 与上游侧异常同步为仓库内工单 Issue（每文档一张、@owner、去重
-追加、异常恢复评论），并产出内部报告 report.json（驱动 Step Summary 与
-日志审计；交付面 = 工单，本报告不上传 artifact）。
-
-错误分级（按故障域裁决）：
-  上游侧（doc_not_found / repo_error / fetch_error）→ 不中断其余监控项，
-      job 绿，异常走工单通知（doc_not_found 属有效观测）；
-  本仓库侧（配置/基线致命 exit 1；rate_limited 中断剩余检测 exit 2；
-      全部监控项均未能完成观测 exit 2）→ 中断执行，job 红。
-
-用法：
-    python scripts/upstream_doc_monitor.py \
-        --config .github/upstream-doc-monitor.yaml \
-        --state /tmp/upstream-doc-monitor-state.json \
-        --output-dir /tmp/report \
-        [--repo owner/repo]      # 缺省取 GITHUB_REPOSITORY（Actions 自动注入）
-
-环境变量：GH_TOKEN（或 GITHUB_TOKEN）用于 GitHub API 认证。
-依赖：标准库 + PyYAML（GitHub runner 镜像预装）。
 """
 
 from __future__ import annotations

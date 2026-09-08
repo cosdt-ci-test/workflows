@@ -95,16 +95,16 @@ count: 1
 
 ## 验证 xllm 安装
 
-xllm 已预装于官方 release 镜像，无需编译，验证版本：
+xllm 已预装于官方 release 镜像，无需编译，验证可导入（镜像内 xllm 包未暴露 `__version__`，此处打印模块路径确认安装位置）：
 
 ```shell #test id="check-xllm"
-python -c "import xllm; print('xllm version:', xllm.__version__)"
+python -c "import xllm; print('xllm import ok:', xllm.__file__)"
 ```
 
 输出结果如下：
 
 ```shell #test-result id="check-xllm" fuzzy='xxx'
-xllm version: xxx
+xllm import ok: xxx
 ```
 
 ## 在线服务用例

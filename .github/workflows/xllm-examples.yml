@@ -290,7 +290,7 @@ jobs:
           python -c "import torch, torch_npu; print('torch:', torch.__version__, 'torch_npu:', torch_npu.__version__, 'npu_count:', torch.npu.device_count())"
 
       - name: Verify xllm import
-        run: python -c "import xllm; print('xllm version:', xllm.__version__)"
+        run: python -c "import xllm; print('xllm import ok:', xllm.__file__)"
 
       # Run every supported example sequentially; isolate each with `timeout`
       # and keep going on failure. Writes one result JSON per example.

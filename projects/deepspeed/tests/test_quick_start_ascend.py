@@ -109,10 +109,12 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         ``setUpClass``. Each labeled fence is a new subprocess, so a
         ``source set_env.sh`` block in the document does not persist.
 
-        Also pins NPU card 0 (avoid multi-card CI conflicts), chdirs
+        Also pins NPU cards 0-1 (2-card runner; the doc's 2-card
+        distributed run needs the launcher to see both devices), chdirs
         to the project root (``projects/deepspeed/``) so doc relative
-        paths resolve correctly, and installs CI dependencies (MPI,
-        torchvision) that the user would otherwise have to handle.
+        paths resolve correctly, and installs CI dependencies (MPI;
+        torchvision is pinned in ``setUpClass`` after the torch stack
+        is confirmed) that the user would otherwise have to handle.
         """
         path_dirs = '/usr/local/sbin:/usr/local/bin'
         current_path = os.environ.get('PATH', '')
@@ -135,9 +137,11 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 f'setup: skipping CANN env source ({cls._CANN_SET_ENV} not present)'
             )
 
-        # ASCEND_RT_VISIBLE_DEVICES=0: pin card 0 for single-card smoke.
-        os.environ['ASCEND_RT_VISIBLE_DEVICES'] = '0'
-        print('setup: pinned ASCEND_RT_VISIBLE_DEVICES=0')
+        # ASCEND_RT_VISIBLE_DEVICES=0,1: expose both cards for the
+        # single-card + 2-card distributed smoke (--num_gpus 2 needs
+        # the launcher to see 2 devices).
+        os.environ['ASCEND_RT_VISIBLE_DEVICES'] = '0,1'
+        print('setup: pinned ASCEND_RT_VISIBLE_DEVICES=0,1')
 
         # Chdir to project root so doc relative paths resolve from
         # projects/deepspeed/ (the parent of tests/).

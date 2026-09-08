@@ -107,6 +107,6 @@ python -c "import torch, torch_npu; print('torch:', torch.__version__, 'torch_np
 npu-smi info
 
 # Verify xllm from the official release image (pre-installed, no source build)
-python -c "import xllm; print('xllm version:', xllm.__version__)"
+python -c "import xllm; print('xllm import ok:', xllm.__file__)"
 
 "setup_${PROFILE}"

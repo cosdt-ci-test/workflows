@@ -138,10 +138,11 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             )
 
         # 2) Verify xllm (official release image ships it pre-installed;
-        # no source build needed)
+        # no source build needed). The wheel does not expose __version__,
+        # so assert import success via the module path instead.
         print('setup: verifying xllm import')
         subprocess.run(
-            ['python', '-c', 'import xllm; print("xllm:", xllm.__version__)'],
+            ['python', '-c', 'import xllm; print("xllm import ok:", xllm.__file__)'],
             check=True,
         )
 

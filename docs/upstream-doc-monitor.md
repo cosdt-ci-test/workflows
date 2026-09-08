@@ -26,6 +26,10 @@
 `.github/upstream-doc-monitor.yaml`，**完全自包含**（不依赖 projects.yaml 解析，与项目注册表各自独立演进）。
 
 ```yaml
+owners:                              # 项目负责人名单（条目 owner 从这里选）
+  - zhangsan
+  - lisi
+maintainer: wangwu                   # 本 workflow 管理人（可不在 owners 中）
 projects:
   - project: transformers            # 展示标签（工单标题与报告分组用）
     owner: zhangsan                  # 处理人 GitHub 用户名（建议必填）
@@ -39,7 +43,9 @@ projects:
 规则：
 
 - 每个条目一个 `url`，**源类型自动识别**：`https://github.com/<owner>/<repo>/blob/<branch>/<path>` 链接 → 仓库文档（branch 填该仓库默认分支名）；其他 http(s) 地址 → 外部网页。GitHub 链接必须指到单个文件（blob 链接），仓库首页等链接会校验失败
-- `owner`：该条目的工单在**建票正文顶部（一次）与事件评论**中 **@owner**（对任何 GitHub 用户生效）。**缺省则全程不 @人**——强烈建议每条目填写（不再自动设置 assignee）。每次事件处理人只收 1 封邮件
+- `owner`：该条目的工单在**建票正文顶部（一次）与事件评论**中 @owner；**取值必须命中 `owners ∪ {maintainer}` 校验集合**（项目负责人名单 + 管理人），否则记 config_error（检测照常，项目工单内 @ maintainer 提示修复）
+- `owners`：项目负责人名单（必填）
+- `maintainer`：管理人（必填，owner 配置问题的通知对象）
 - 校验失败（URL 非法、github.com 链接未指到单文件、条目键 `<project>::<文档路径或 URL>` 重复）→ job 直接失败并在日志指出错误条目
 
 ### 接入新监控项
@@ -52,6 +58,14 @@ projects:
 
 改条目的 `owner` 字段即可。已 open 的工单不受影响（处理人看后续评论的 @ 提及）；新事件的新评论 @ 新 owner。
 
+### 字段填错如何定位
+
+| 错误 | 表现 | 处理 |
+| --- | --- | --- |
+| 语法错误（url 非法 / owner 格式错 / 缺 `owners` / `maintainer`） | job 直接失败，日志含条目索引与字段名（如 `projects[3] (deepspeed): 'url' is required`） | 按提示改配置 |
+| url 值拼错（仓库 / 分支 / 路径任一段） | 该条目记检测异常，message 含完整 url 与核对指引；工单「检测异常」段落可见 | 核对 url，上游确实变更则更新配置 |
+| owner 不在 `owners ∪ {maintainer}` | 该条目检测照常，项目工单追加「## 配置错误」段落并 @ maintainer（每型仅首轮评论，修复后自动恢复） | 修正 owner 或加入 `owners` 名单 |
+
 ## 3. 工单生命周期（处理人须知）
 
 **每个监控文档一张工单**（标题固定 `[upstream-doc-monitor] <project> / <path-or-url>`），记录该文档的变化、异常、恢复时间线。**新建工单时，本轮的全部事件段落直接并入工单正文**（正文顶部 @ 处理人一次），不再对首事件单独发评论——建票即该轮唯一通知；工单 open 后的新事件才以评论追加（每条评论 @ 处理人）：
@@ -61,6 +75,7 @@ projects:
 | 文档变化 | `## 文档变化`（前后哈希、文档与提交历史链接、建议动作） | 每次变化都记录 |
 | 检测异常 | `## 检测异常 (类型)`（doc_not_found / repo_error / fetch_error） | 同型异常持续**不重复评论**；错误类型变化才追加 |
 | 异常恢复 | `## 异常恢复`（此前异常在本轮观测中恢复） | 恢复时记录一次，**不自动关闭** |
+| 配置错误 | `## 配置错误`（owner 不在 `owners ∪ {maintainer}`，@ maintainer） | 未修复持续不重复评论；修复后走异常恢复 |
 
 **处理闭环**：收到 @ → 点开正文/评论里的文档与提交历史链接核对上游变更 → 更新本项目看护文档（如受影响）→ **关闭工单**。关闭后再有事件会新建新工单（事件同样并入正文）——open 工单即未处理事项。
 

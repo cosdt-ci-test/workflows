@@ -191,8 +191,10 @@ def _parse_source_url(where: str, project: str, url: str) -> dict:
     return {"key": key, "type": "web_page", "url": url}
 
 
-def load_config(path: str) -> list[dict]:
-    """解析监控配置并校验；返回归一化条目列表。致命问题抛 FatalError。"""
+def load_config(path: str) -> tuple[list[dict], str]:
+    """解析监控配置并校验；返回 (归一化条目列表, maintainer)。
+    致命问题抛 FatalError；条目 owner 失配名单 → 条目标 config_error
+    （不中断解析，由主循环作为事件接入）。"""
     cfg_path = Path(path)
     if not cfg_path.is_file():
         raise FatalError(f"config not found: {path}")
@@ -204,6 +206,29 @@ def load_config(path: str) -> list[dict]:
     projects = raw.get("projects")
     if not isinstance(projects, list) or not projects:
         raise FatalError("config must contain a non-empty 'projects' list")
+
+    # 文件级 owners 名单（与 projects 平级）：条目 owner 的合法取值域；
+    # 缺失/为空/非（非空）字符串列表 → 配置致命
+    owners = raw.get("owners")
+    if (not isinstance(owners, list) or not owners
+            or not all(isinstance(o, str) and o.strip() for o in owners)):
+        raise FatalError(
+            "config must contain a non-empty 'owners' list "
+            "(project owners, entries' owner must be one of them "
+            "or the maintainer)")
+    owners = [o.strip() for o in owners]
+
+    # maintainer：名单兜底人（config_error 事件的 @ 对象），必填单个用户名
+    maintainer = raw.get("maintainer")
+    if (not isinstance(maintainer, str)
+            or not GH_USERNAME_RE.match(str(maintainer).strip())):
+        raise FatalError(
+            "config must contain a valid 'maintainer' username "
+            f"(got {maintainer!r})")
+    maintainer = maintainer.strip()
+
+    # 有效校验集合：名单 ∪ 维护人（集合并天然去重）
+    valid_owners = set(owners) | {maintainer}
 
     entries, seen_keys = [], set()
     for idx, item in enumerate(projects, start=1):
@@ -235,13 +260,19 @@ def load_config(path: str) -> list[dict]:
         source = _parse_source_url(where, project, url)
         key = source["key"]
         entry = {"key": key, "project": project, "owner": owner, **source}
+        if owner and owner not in valid_owners:
+            # owner 不在名单：条目照常解析（不中断），标 config_error；
+            # owner 缺省不校验。主循环仍照常检测，事件层再暴露该问题
+            entry["config_error"] = True
+            print(f"config: WARN projects[{idx}] ({project}): owner '{owner}' "
+                  "not in owners∪{maintainer} → config_error")
         entries.append(entry)
 
         if key in seen_keys:
             raise FatalError(f"{where} ({project}): duplicate entry key '{key}' "
                              "(same project label + same source)")
         seen_keys.add(key)
-    return entries
+    return entries, maintainer
 
 
 def load_state(path: str) -> dict:
@@ -266,6 +297,10 @@ def load_state(path: str) -> dict:
 def fetch_repo_file_sha(entry: dict, token: str) -> str:
     """repo_file 采集器：Contents API 取 git blob SHA。成功返回 sha；
     文档 404 → DocNotFound；仓库级异常 → RepoError；限流 → RateLimitError。"""
+    # 异常文案统一归因：携带定位（repo/path、HTTP 状态）+ url 核对提示，
+    # 把「url 哪一段可能错了」直接写进工单，免去人工二次排查。
+    hint = "核对 url：仓库/分支/路径任一段有误，或上游已删除/移动该文件"
+    target = f"{entry['repo']}/{entry['path']}"
     ref = f"?ref={urllib.parse.quote(entry['branch'])}" if entry.get("branch") else ""
     url = (f"{API_BASE}/repos/{entry['repo']}/contents/"
            f"{urllib.parse.quote(entry['path'])}{ref}")
@@ -274,12 +309,13 @@ def fetch_repo_file_sha(entry: dict, token: str) -> str:
     except RateLimitError:
         raise
     except TransientError as exc:
-        raise RepoError(str(exc)) from exc
+        raise RepoError(f"repo unreachable ({exc}): {target} — {hint}") from exc
     if status == 200:
         payload = json.loads(body) if body else {}
         sha = payload.get("sha")
         if not sha:
-            raise RepoError("contents response missing .sha")
+            raise RepoError(f"HTTP {status} from contents API, response missing "
+                            f".sha: {target} — {hint}")
         return sha
     if status == 404:
         # 区分文档缺失与仓库级异常：仓库本体可达 → 文档缺失（有效观测）
@@ -289,11 +325,11 @@ def fetch_repo_file_sha(entry: dict, token: str) -> str:
         except RateLimitError:
             raise
         except TransientError as exc:
-            raise RepoError(str(exc)) from exc
+            raise RepoError(f"repo probe failed ({exc}): {target} — {hint}") from exc
         if rstatus == 200:
-            raise DocNotFound(f"404: {entry['repo']}/{entry['path']}")
-        raise RepoError(f"repo unreachable (HTTP {rstatus}): {entry['repo']}")
-    raise RepoError(f"unexpected HTTP {status} from contents API")
+            raise DocNotFound(f"404: {target} — {hint}")
+        raise RepoError(f"repo unreachable (HTTP {rstatus}): {target} — {hint}")
+    raise RepoError(f"unexpected HTTP {status} from contents API: {target} — {hint}")
 
 
 def fetch_web_page(entry: dict, prior: dict) -> dict:
@@ -302,6 +338,8 @@ def fetch_web_page(entry: dict, prior: dict) -> dict:
     返回 {"outcome": "unchanged", "sha": ...}（304 快速判空）或
          {"outcome": "ok", "sha": ..., "etag": ..., "last_modified": ...}。
     404 → DocNotFound；网络/5xx/反爬 → FetchError。"""
+    # 异常文案统一归因：与 repo_file 采集器同款约定，附 url 核对提示
+    hint = "核对 url 字段拼写；若站点已迁移请更新配置"
     headers = {"Accept": "text/html,application/xhtml+xml,*/*;q=0.8"}
     if prior.get("etag"):
         headers["If-None-Match"] = prior["etag"]
@@ -310,12 +348,13 @@ def fetch_web_page(entry: dict, prior: dict) -> dict:
     try:
         status, resp_headers, body = http_with_retry(entry["url"], headers=headers)
     except RateLimitError as exc:
-        raise FetchError(f"target site rate limited us: {exc}") from exc
+        raise FetchError(f"target site rate limited us: {exc} — {hint}") from exc
     except TransientError as exc:
-        raise FetchError(str(exc)) from exc
+        raise FetchError(f"{exc} — {hint}") from exc
     if status == 304:
         if not prior.get("sha"):
-            raise FetchError("304 but baseline has no sha to reuse")
+            raise FetchError(
+                f"304 but baseline has no sha to reuse: {entry['url']} — {hint}")
         return {"outcome": "unchanged", "sha": prior["sha"]}
     if status == 200:
         digest = hashlib.sha256(body).hexdigest()
@@ -323,8 +362,8 @@ def fetch_web_page(entry: dict, prior: dict) -> dict:
                 "etag": resp_headers.get("ETag") or None,
                 "last_modified": resp_headers.get("Last-Modified") or None}
     if status == 404:
-        raise DocNotFound(f"404: {entry['url']}")
-    raise FetchError(f"unexpected HTTP {status} from {entry['url']}")
+        raise DocNotFound(f"404: {entry['url']} — {hint}")
+    raise FetchError(f"unexpected HTTP {status} from {entry['url']} — {hint}")
 
 
 # ---------------------------------------------------------------------------
@@ -430,7 +469,8 @@ def _ticket_intro(entry: dict, mention: str) -> str:
 
 
 def _event_comment(event: str, res: dict, entry: dict, error: dict | None,
-                   run_id: str, observed_at: str, mention: str) -> str | None:
+                   run_id: str, observed_at: str, mention: str,
+                   maintainer: str | None = None) -> str | None:
     footer = (f"<sub>由 upstream-doc-monitor 自动生成"
               f"（run {run_id}，{observed_at}）</sub>")
     lead = f"{mention}\n\n" if mention else ""
@@ -454,6 +494,19 @@ def _event_comment(event: str, res: dict, entry: dict, error: dict | None,
             lines.append(f"- 文档：{error['doc_url']}")
         lines += ["", "建议动作：核查文档路径/URL 是否变更，必要时更新 "
                   "`.github/upstream-doc-monitor.yaml`；处置完成后关闭本工单。",
+                  "", footer]
+        return "\n".join(lines)
+    if event == "config_error":
+        # 配置错误的 @ 对象是 maintainer（owners 名单的裁决人）而非条目
+        # owner（后者本就不在名单内）；maintainer 未传入时退回原 lead 逻辑
+        if maintainer:
+            lead = f"@{maintainer}\n\n"
+        lines = [lead + "## 配置错误", "",
+                 f"- 观测时间：{observed_at}",
+                 f"- 详情：owner `{entry['owner']}` 不在 owners ∪ {{maintainer}} "
+                 "校验集合"]
+        lines += ["", "建议动作：修正条目 owner，或将其加入 owners 名单"
+                  "（`.github/upstream-doc-monitor.yaml`）；处置完成后关闭本工单。",
                   "", footer]
         return "\n".join(lines)
     if event == "recovery":
@@ -484,7 +537,7 @@ def run(argv: list[str]) -> int:
         return 1
 
     try:
-        entries = load_config(args.config)
+        entries, maintainer = load_config(args.config)
     except FatalError as exc:
         print(f"FATAL(config): {exc}", file=sys.stderr)
         return 1
@@ -586,18 +639,36 @@ def run(argv: list[str]) -> int:
             if status == "changed":
                 change["previous_sha"] = res.get("previous_sha")
 
-            # 事件序列：先异常恢复、后文档变化（spec 固定顺序）
+            # 事件序列：先异常恢复、后文档变化、最后配置错误（spec 固定顺序）
+            config_error_active = bool(entry.get("config_error"))
+            # 上轮 error 为 config_error 且本轮仍持续 → 异常未恢复：
+            # 不触发 recovery（仅标记消失后的首轮恢复），也不同型重复
+            # 评论（沿用既有 last_error_type 频控，etype=config_error）
+            prior_config_error = (prior.get("last_event") == "error"
+                                  and prior.get("last_error_type")
+                                  == "config_error")
             events = []
-            if prior.get("last_event") == "error":
+            if prior.get("last_event") == "error" and not (
+                    prior_config_error and config_error_active):
                 events.append("recovery")
             if status == "changed":
                 events.append("change")
+            if config_error_active:
+                # config_error 不阻断检测：观测成功且本轮无检测错误时，
+                # 作为末位事件追加（同型持续轮已由上方频控排除）
+                if not prior_config_error:
+                    events.append("config_error")
             change["events"] = list(events)
 
             new_entry = dict(prior)
             new_entry.update({"sha": res["sha"], "date": observed_at,
                               "last_event": "ok"})
             new_entry.pop("last_error_type", None)
+            if config_error_active:
+                # 观测成功但配置错误仍在：基线按 error 记账（sha 照常前进），
+                # 供下轮同型频控与修复后的既有 recovery 判定使用
+                new_entry.update({"last_event": "error",
+                                  "last_error_type": "config_error"})
             web = res.get("web")
             if web:
                 # 仅在服务器给出新验证器时覆盖（304 时保留旧值）
@@ -609,7 +680,7 @@ def run(argv: list[str]) -> int:
             if events and syncer:
                 issue_url, action = _sync_events(
                     syncer, entry, prior, events, res, run_id, observed_at,
-                    tickets)
+                    tickets, maintainer=maintainer)
                 change["ticket_action"] = action
                 if issue_url:
                     change["ticket_url"] = _html_url(args.repo, issue_url)
@@ -619,6 +690,32 @@ def run(argv: list[str]) -> int:
 
             baseline[key] = new_entry
             changes.append(change)
+
+            if config_error_active:
+                # 配置错误条目照常进报告 errors[]（字段对齐检测错误条目；
+                # 检测失败轮由检测错误主导，config_error 不重复入列）
+                cfg_err = {"project": entry["project"],
+                           "owner": entry["owner"],
+                           "source": entry["type"],
+                           "error_type": "config_error",
+                           "message": f"owner '{entry['owner']}' not in "
+                                      "owners∪{maintainer} — "
+                                      "修正条目 owner 或加入 owners 名单"}
+                if entry["type"] == "repo_file":
+                    cfg_err["repo"] = entry["repo"]
+                else:
+                    cfg_err["url"] = entry["url"]
+                if "config_error" in events:
+                    if syncer:
+                        # 本轮 config_error 段随工单动作一并发出
+                        cfg_err["ticket_action"] = change.get("ticket_action")
+                        if change.get("ticket_url"):
+                            cfg_err["ticket_url"] = change["ticket_url"]
+                    else:
+                        cfg_err["ticket_action"] = "skipped(no-repo)"
+                # 同型持续（频控轮）：不带 ticket_action，对齐检测错误
+                # same_error 时的报告行为
+                errors.append(cfg_err)
             continue
 
         if status == "error":
@@ -708,7 +805,8 @@ def _html_url(target_repo: str, issue_api_url: str) -> str:
 
 def _sync_events(syncer: IssueSync, entry: dict, prior: dict, events: list[str],
                  res: dict, run_id: str, observed_at: str, tickets: dict,
-                 error: dict | None = None) -> tuple[str | None, str]:
+                 error: dict | None = None,
+                 maintainer: str | None = None) -> tuple[str | None, str]:
     """为一个监控条目同步工单；返回 (issue_url, action)。
 
     action ∈ created（本轮新建）/ commented（在 open 工单追加）/ none（失败）。
@@ -733,7 +831,7 @@ def _sync_events(syncer: IssueSync, entry: dict, prior: dict, events: list[str],
         sections = []
         for event in events:
             section = _event_comment(event, res, entry, error, run_id,
-                                     observed_at, "")
+                                     observed_at, "", maintainer=maintainer)
             if section:
                 sections.append(section)
         body = _ticket_intro(entry, mention)
@@ -748,7 +846,7 @@ def _sync_events(syncer: IssueSync, entry: dict, prior: dict, events: list[str],
     else:
         for event in events:
             body = _event_comment(event, res, entry, error, run_id,
-                                  observed_at, mention)
+                                  observed_at, mention, maintainer=maintainer)
             if body and syncer.comment(issue_url, body):
                 print(f"ticket: commented '{event}' → {issue_url}")
     action = "created" if created else "commented"

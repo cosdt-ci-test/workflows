@@ -3,6 +3,13 @@
 # 手动指定全部监控项，不依赖 projects.yaml 解析（监控清单与项目注册表
 # 各自独立演进，repo 一致性由本文件的评审保障）。
 #
+# 文件级字段（与 projects 平级）：
+#   owners      团队全部项目负责人名单（必填非空列表），条目 owner 的
+#               可选池，体现项目分工
+#   maintainer  本 workflow 管理人（必填单个用户名，独立于 owners——管理
+#               者未必参与项目监控），owner 配置错误的工单会 @ 此人
+#   （新增负责人 = owners 加名 + 条目 owner 引用，一个 PR 完成）
+#
 # 每个条目 = 一个监控项，字段：
 #   project  展示标签（工单标题与报告分组用；同一标签可出现在多个条目）
 #   owner    处理人 GitHub 用户名（可选但强烈建议填写：该条目产生的工单
@@ -19,6 +26,10 @@
 # TODO(owner): 当前 4 个测试条目的 owner 均为 lltiaor；后续补齐全量
 # 清单时按团队分工逐条填写。测试条目（ci-test / page-test）验证完
 # 成后删除。
+
+owners:
+  - lltiaor                # 项目负责人名单（条目 owner 从这里选；新负责人在此加名）
+maintainer: lltiaor        # 本 workflow 管理人：owner 配置问题的通知对象（可不在 owners 中）
 
 projects:
   - project: deepspeed

@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """upstream-doc-monitor: 上游文档变化监控检测引擎。
 
-按 `.github/upstream-doc-monitor.yaml` 的监控清单，对每份被监控文档做一次
-纯哈希校验（repo_file → GitHub Contents API 的 git blob SHA；web_page →
-HTTP 条件请求 + 响应体 SHA-256 兜底），与基线（actions/cache 持久化）比对，
+按 `.github/upstream-doc-monitor.yaml` 的监控清单（条目只需顶层 url：
+github.com blob 链接自动识别为 repo_file，其他 http(s) 网页为 web_page），
+对每份被监控文档做一次纯哈希校验（repo_file → GitHub Contents API 的
+git blob SHA；web_page → HTTP 条件请求 + 响应体 SHA-256 兜底），与基线
+（actions/cache 持久化）比对，
 将 changed 与上游侧异常同步为仓库内工单 Issue（每文档一张、@owner、去重
 追加、异常恢复评论），并产出内部报告 report.json（驱动 Step Summary 与
 日志审计；交付面 = 工单，本报告不上传 artifact）。
@@ -55,9 +57,9 @@ STATE_SCHEMA_VERSION = 1
 REPORT_SCHEMA_VERSION = 1
 
 GH_USERNAME_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$")
-REPO_RE = re.compile(r"^[^\s/]+/[^\s/]+$")
 
-SOURCE_TYPES = ("repo_file", "web_page")
+GITHUB_BLOB_URL_RE = re.compile(
+    r"^https?://github\.com/([A-Za-z0-9_.\-]+)/([A-Za-z0-9_.\-]+)/blob/([^/]+)/(.+)$")
 
 
 class FatalError(Exception):
@@ -166,6 +168,29 @@ def gh_get_json(url: str, token: str):
 # 配置加载与校验
 # ---------------------------------------------------------------------------
 
+def _parse_source_url(where: str, project: str, url: str) -> dict:
+    """URL → 内部源结构：github.com blob 链接 → repo_file；其他 http(s) → web_page。"""
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise FatalError(
+            f"{where} ({project}): url must be a valid http(s) URL, got {url!r}")
+    match = GITHUB_BLOB_URL_RE.match(url)
+    if match:
+        repo = f"{match.group(1)}/{match.group(2)}"
+        branch = match.group(3)
+        spath = match.group(4).strip()
+        key = f"{project}::{spath}"
+        return {"key": key, "type": "repo_file", "repo": repo,
+                "path": spath, "branch": branch}
+    if parsed.netloc.lower() == "github.com":
+        raise FatalError(
+            f"{where} ({project}): GitHub URLs must point to a single file, "
+            "e.g. https://github.com/<owner>/<repo>/blob/<branch>/<path> "
+            f"(got {url!r})")
+    key = f"{project}::{url}"
+    return {"key": key, "type": "web_page", "url": url}
+
+
 def load_config(path: str) -> list[dict]:
     """解析监控配置并校验；返回归一化条目列表。致命问题抛 FatalError。"""
     cfg_path = Path(path)
@@ -196,47 +221,21 @@ def load_config(path: str) -> list[dict]:
             if owner and not GH_USERNAME_RE.match(owner):
                 raise FatalError(f"{where} ({project}): invalid owner '{owner}'")
 
-        source = item.get("source")
-        if not isinstance(source, dict):
-            raise FatalError(f"{where} ({project}): 'source' object is required")
-        stype = source.get("type")
-        if stype not in SOURCE_TYPES:
-            raise FatalError(
-                f"{where} ({project}): source.type must be one of {SOURCE_TYPES}, "
-                f"got {stype!r}")
+        url = item.get("url")
+        if not isinstance(url, str) or not url.strip():
+            if "source" in item:
+                raise FatalError(
+                    f"{where} ({project}): nested 'source' config is deprecated; "
+                    "use a top-level 'url' field instead, e.g. "
+                    "url: https://github.com/<owner>/<repo>/blob/<branch>/<path> "
+                    "or url: https://example.com/doc")
+            raise FatalError(f"{where} ({project}): 'url' is required")
+        url = url.strip()
 
-        if stype == "repo_file":
-            repo = source.get("repo")
-            if not isinstance(repo, str) or not REPO_RE.match(repo.strip()):
-                raise FatalError(
-                    f"{where} ({project}): source.repo is required (owner/repo)")
-            spath = source.get("path")
-            if not isinstance(spath, str) or not spath.strip():
-                raise FatalError(f"{where} ({project}): source.path is required")
-            spath = spath.strip()
-            if spath.lower().startswith(("http://", "https://")):
-                raise FatalError(
-                    f"{where} ({project}): source.path must be a repo-relative "
-                    "path, not a URL (use type: web_page for URLs)")
-            branch = source.get("branch")
-            if branch is not None:
-                branch = str(branch).strip() or None
-            key = f"{project}::{spath}"
-            entries.append({"key": key, "project": project, "owner": owner,
-                            "type": "repo_file", "repo": repo.strip(),
-                            "path": spath, "branch": branch})
-        else:  # web_page
-            url = source.get("url")
-            if not isinstance(url, str):
-                raise FatalError(f"{where} ({project}): source.url is required")
-            url = url.strip()
-            parsed = urllib.parse.urlparse(url)
-            if parsed.scheme not in ("http", "https") or not parsed.netloc:
-                raise FatalError(
-                    f"{where} ({project}): source.url must be a valid http(s) URL")
-            key = f"{project}::{url}"
-            entries.append({"key": key, "project": project, "owner": owner,
-                            "type": "web_page", "url": url})
+        source = _parse_source_url(where, project, url)
+        key = source["key"]
+        entry = {"key": key, "project": project, "owner": owner, **source}
+        entries.append(entry)
 
         if key in seen_keys:
             raise FatalError(f"{where} ({project}): duplicate entry key '{key}' "

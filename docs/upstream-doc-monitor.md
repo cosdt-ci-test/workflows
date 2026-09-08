@@ -2,9 +2,9 @@
 
 监控所有在维护项目的**上游侧文档**变化：上游仓库内的文档（README/quickstart 等）与外部官方网页（如 ascend.github.io 文档页）。检测到内容变化或检测异常时，**在仓库内生成/更新工单 Issue 并 @ 处理人**——工单即待办，处理人核对上游变更、更新本项目看护文档后关闭工单。
 
-- 独立 workflow：[.github/workflows/upstream-doc-monitor.yml](workflows/upstream-doc-monitor.yml)（与 quick-start 引擎完全解耦，不触发任何测试）
+- 独立 workflow：[.github/workflows/upstream-doc-monitor.yml](../.github/workflows/upstream-doc-monitor.yml)（与 quick-start 引擎完全解耦，不触发任何测试）
 - 检测引擎：[scripts/upstream_doc_monitor.py](../scripts/upstream_doc_monitor.py)
-- 监控清单：[.github/upstream-doc-monitor.yaml](upstream-doc-monitor.yaml)（唯一需要人工维护的文件）
+- 监控清单：[.github/upstream-doc-monitor.yaml](../.github/upstream-doc-monitor.yaml)（唯一需要人工维护的文件）
 
 ## 1. 运行方式
 
@@ -29,24 +29,18 @@
 projects:
   - project: transformers            # 展示标签（工单标题与报告分组用）
     owner: zhangsan                  # 处理人 GitHub 用户名（建议必填）
-    source:
-      type: repo_file                # 采集源一：GitHub 仓库文档
-      repo: huggingface/transformers # owner/repo 形式
-      branch: main                   # 可选，默认上游默认分支
-      path: README.md                # 仓库内文档路径（相对仓库根）
+    url: https://github.com/huggingface/transformers/blob/main/README.md
 
-  - project: lm-eval-ascend-doc      # 采集源二：外部官方网页（标签可自拟）
+  - project: lm-eval-ascend-doc      # 外部官方网页（标签可自拟）
     owner: lisi
-    source:
-      type: web_page
-      url: https://ascend.github.io/docs/sources/lm_evaluation/quick_start.html
+    url: https://ascend.github.io/docs/sources/lm_evaluation/quick_start.html
 ```
 
 规则：
 
-- 每个条目**有且仅有一个采集源**，`type` 二选一：`repo_file`（`repo` + `path` 必填，`branch` 可选）或 `web_page`（`url` 必填，合法 http(s)）
+- 每个条目一个 `url`，**源类型自动识别**：`https://github.com/<owner>/<repo>/blob/<branch>/<path>` 链接 → 仓库文档（branch 填该仓库默认分支名）；其他 http(s) 地址 → 外部网页。GitHub 链接必须指到单个文件（blob 链接），仓库首页等链接会校验失败
 - `owner`：该条目的工单在**建票正文顶部（一次）与事件评论**中 **@owner**（对任何 GitHub 用户生效）。**缺省则全程不 @人**——强烈建议每条目填写（不再自动设置 assignee）。每次事件处理人只收 1 封邮件
-- 校验失败（格式错误、未知 type、条目键 `<project>::<source>` 重复）→ job 直接失败并在日志指出错误条目
+- 校验失败（URL 非法、github.com 链接未指到单文件、条目键 `<project>::<文档路径或 URL>` 重复）→ job 直接失败并在日志指出错误条目
 
 ### 接入新监控项
 

@@ -48,11 +48,14 @@ torchvision xxx
 
 ## 编写训练脚本
 
-下面这段 CIFAR10 训练脚本分 4 个模块，展示了 DeepSpeed 的完整工作流程。先把脚本写入 train_cifar10.py（deepspeed 启动器需要脚本文件路径），CIFAR10 数据集会在首次运行时自动下载。
+下面这段 CIFAR10 训练脚本分 4 个模块，展示了 DeepSpeed 的完整工作流程。先把脚本写入 train_cifar10.py（deepspeed 启动器需要脚本文件路径），CIFAR10 数据集会在首次运行时自动下载（脚本内置国内镜像加速）。
 
 ```shell #test-setup id="write-script"
 cat > train_cifar10.py <<'PY'
 import os
+import urllib.request
+from pathlib import Path
+
 import torch
 import torch.nn as nn
 import torchvision
@@ -62,7 +65,16 @@ import deepspeed
 MICRO_BATCH = 8
 
 # ===== 模块 1：准备数据 =====
-# CIFAR10 数据集首次运行时自动下载到当前目录，无需手动准备。
+# CIFAR10 数据集首次运行时自动下载，无需手动准备。官网（多伦多大学）在国内
+# 访问较慢，这里优先从国内镜像下载压缩包，torchvision 校验通过后直接使用；
+# 镜像不可用时 torchvision 会回落到官网下载。
+archive = Path('./data/cifar-10-python.tar.gz')
+if not archive.exists():
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    print('downloading CIFAR10 from CN mirror ...')
+    urllib.request.urlretrieve(
+        'https://mirror.azure.cn/pytorch-data/cifar/cifar-10-python.tar.gz',
+        archive)
 transform = transforms.Compose([
     transforms.ToTensor(),
     transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),

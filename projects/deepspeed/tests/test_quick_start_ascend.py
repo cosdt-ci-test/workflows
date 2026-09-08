@@ -158,6 +158,9 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         )
         print('setup: installed MPI (libopenmpi-dev + mpi4py)')
 
+        # CIFAR10 download is handled inside the doc's train_cifar10.py
+        # (CN mirror fast path + torchvision official fallback).
+
         # torchvision (and its runtime deps pillow/numpy) is installed by
         # the doc's install-torchvision block, pinned to match torch 2.9.0.
 

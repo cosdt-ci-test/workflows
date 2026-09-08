@@ -41,23 +41,47 @@ def _e2e_enabled() -> bool:
 
 
 def _ensure_torch_npu():
-    """Install torch + torch_npu if not already available."""
-    try:
-        import torch
-        import torch_npu
-        print(f'setup: found torch {torch.__version__}, torch_npu {torch_npu.__version__}')
+    """Ensure torch + torch_npu are importable and match 2.9.0.
+
+    Probe first: the CANN 9.1.0 image ships ``torch==2.9.0+cpu`` +
+    ``torch_npu==2.9.0.post2``; when present, reuse them. Only when the
+    probe fails (missing or version mismatch) reinstall from the
+    cluster cache + Huawei Ascend dual source so torch and torch_npu
+    come from the same compatible build.
+    """
+    _PROBE_SCRIPT = (
+        'import torch, torch_npu\n'
+        "raise SystemExit(0 if "
+        "torch.__version__.startswith('2.9.0') "
+        "and torch_npu.__version__.startswith('2.9.0') "
+        "else 1)"
+    )
+    probe = subprocess.run(
+        [sys.executable, '-c', _PROBE_SCRIPT],
+        capture_output=True,
+        check=False,
+    )
+    if probe.returncode == 0:
+        versions = subprocess.run(
+            [sys.executable, '-c',
+             'import torch, torch_npu; print(torch.__version__, torch_npu.__version__)'],
+            capture_output=True, text=True, check=True,
+        )
+        print(f'setup: reusing image torch stack ({versions.stdout.strip()})')
         return
-    except ImportError:
-        print('setup: installing torch==2.9.0 torch_npu==2.9.0.post2')
-        subprocess.run(
-            [sys.executable, '-m', 'pip', 'install',
-             '--extra-index-url', 'https://repo.huaweicloud.com/ascend/repos/pypi',
-             '--trusted-host', 'repo.huaweicloud.com',
-             'torch==2.9.0', 'torch_npu==2.9.0.post2'],
-            check=True)
-        import torch
-        import torch_npu
-        print(f'setup: installed torch {torch.__version__}, torch_npu {torch_npu.__version__}')
+    print('setup: installing torch==2.9.0 torch_npu==2.9.0.post2')
+    subprocess.run(
+        [
+            sys.executable, '-m', 'pip', 'install',
+            '--index-url', 'http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple',
+            '--extra-index-url', 'https://repo.huaweicloud.com/ascend/repos/pypi',
+            'torch==2.9.0', 'torch_npu==2.9.0.post2',
+        ],
+        check=True,
+    )
+    # Verify ABI after install.
+    subprocess.run([sys.executable, '-c', _PROBE_SCRIPT], check=True)
+    print('setup: installed torch==2.9.0 torch_npu==2.9.0.post2')
 
 
 class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
@@ -130,18 +154,22 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         )
         print('setup: installed MPI (libopenmpi-dev + mpi4py)')
 
-        # Install torchvision (CIFAR10 example needs it).
-        subprocess.run(
-            [sys.executable, '-m', 'pip', 'install', 'torchvision'],
-            check=True,
-        )
-        print('setup: installed torchvision')
+        # torchvision is installed in setUpClass after _ensure_torch_npu
+        # (pinned to torchvision==0.24.0 to match torch 2.9.0).
 
     @classmethod
     def setUpClass(cls) -> None:
         if _e2e_enabled():
             cls.prepare_environment()
             _ensure_torch_npu()
+            # torchvision must match torch 2.9.0 (torch 2.9.0 <-> torchvision 0.24.0).
+            # Don't unpin: pip can pull torchvision 0.29.0 (requires torch 2.14.0)
+            # and break the mirror's torch/torch_npu stack.
+            subprocess.run(
+                [sys.executable, '-m', 'pip', 'install', '--no-deps', 'torchvision==0.24.0'],
+                check=True,
+            )
+            print('setup: installed torchvision==0.24.0')
 
     @unittest.skipIf(
         not _e2e_enabled(),

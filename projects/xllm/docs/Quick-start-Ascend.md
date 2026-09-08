@@ -26,7 +26,7 @@ swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/xllm-ai/xllm-ai:xllm-0
 
 | 组件 | 版本 |
 | --- | --- |
-| Python | 3.12 |
+| Python | 3.11 |
 | CANN | 9.1.0 |
 | torch | 2.9.0 |
 | torch_npu | 2.9.0.post2 |
@@ -73,7 +73,7 @@ python --version
 
 输出结果如下：
 ```shell #test-result id="check-py" fuzzy='xxx'
-Python 3.12.xxx
+Python 3.11.xxx
 ```
 
 检查 torch / torch_npu 是否装好且 NPU 设备可用：
@@ -85,7 +85,7 @@ python -c "import torch, torch_npu; print('torch=', torch.__version__); print('t
 输出结果如下：
 
 ```shell #test-result id="check-torch"
-torch= 2.9.0
+torch= 2.9.0+cpu
 torch_npu= 2.9.0.post2
 is_available: True
 count: 1

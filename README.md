@@ -13,6 +13,7 @@ scripts/                             # 全项目共用：初始化清单、CI �
 templates/                           # 新项目可复制的 workflow 骨架
 docs/guarding-examples.md            # 看护 Examples 设计文档
 docs/artifacts.md                    # artifact 命名与读取约定
+docs/upstream-doc-monitor.md         # 上游文档变化监控使用文档
 .github/workflows/<project>-examples.yml
 .github/workflows/<project>-quick-start.yml
 projects/<project>/                  # 该项目的清单、fixture、专用脚本

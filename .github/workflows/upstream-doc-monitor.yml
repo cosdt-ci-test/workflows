@@ -119,8 +119,8 @@ jobs:
         if: always()
         run: |
           if [ ! -s /tmp/upstream-doc-monitor-report/result.json ]; then
-            echo "result.json is missing or empty; skipping schema validation"
-            exit 0
+            echo "result.json is missing or empty; schema validation failed"
+            exit 1
           fi
           python3 -m pip install -q check-jsonschema
           check-jsonschema \
@@ -133,7 +133,7 @@ jobs:
         with:
           name: upstream-doc-monitor-result-${{ github.run_id }}
           path: /tmp/upstream-doc-monitor-report/result.json
-          if-no-files-found: warn
+          if-no-files-found: error
 
       - name: Persist monitor state (baseline)
         if: always()

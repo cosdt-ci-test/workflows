@@ -33,6 +33,7 @@ REPORT_SCHEMA_VERSION = 1
 
 # result.json 侧的 open 工单扫描参数；标题前缀与 _sync_events 建票标题一致
 TICKET_TITLE_PREFIX = "[upstream-doc-monitor] "
+TICKET_LABEL = "upstream-doc-monitor"
 TICKET_SCAN_PAGE_SIZE = 100
 TICKET_SCAN_MAX_PAGES = 5
 
@@ -85,14 +86,14 @@ def _http_once(url: str, *, method: str = "GET", token: str | None = None,
     req = urllib.request.Request(url, method=method, headers=req_headers, data=data)
     try:
         with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
-            return resp.status, dict(resp.headers), resp.read()
+            return resp.status, {k.lower(): v for k, v in resp.headers.items()}, resp.read()
     except urllib.error.HTTPError as exc:
         body = b""
         try:
             body = exc.read()
         except Exception:  # noqa: BLE001 - 读失败不影响分类
             pass
-        return exc.code, dict(exc.headers or {}), body
+        return exc.code, {k.lower(): v for k, v in (exc.headers or {}).items()}, body
 
 
 def http_with_retry(url: str, *, method: str = "GET", token: str | None = None,
@@ -115,7 +116,7 @@ def http_with_retry(url: str, *, method: str = "GET", token: str | None = None,
         if 500 <= status < 600:
             last_kind, last_detail = "http", status
             continue
-        if status == 403 and resp_headers.get("X-RateLimit-Remaining") == "0":
+        if status == 403 and resp_headers.get("x-ratelimit-remaining") == "0":
             last_kind, last_detail = "ratelimit", "X-RateLimit-Remaining=0"
             continue
         return status, resp_headers, body
@@ -154,12 +155,18 @@ def _parse_source_url(where: str, project: str, url: str) -> dict:
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         raise FatalError(
             f"{where} ({project}): url must be a valid http(s) URL, got {url!r}")
-    match = GITHUB_BLOB_URL_RE.match(url)
+    # 去掉 fragment / query 再匹配 blob 链接：README.md#L1-L5、?plain=1
+    # 是浏览器复制的常见形态，不能把 #L1-L5 当文件名拼进 Contents API。
+    clean_url = urllib.parse.urlunsplit(
+        (parsed.scheme, parsed.netloc, parsed.path, "", ""))
+    match = GITHUB_BLOB_URL_RE.match(clean_url)
     if match:
         repo = f"{match.group(1)}/{match.group(2)}"
         branch = match.group(3)
         spath = match.group(4).strip()
-        key = f"{project}::{spath}"
+        # key 纳入 repo + branch：同一 project 标签可监控不同仓库/分支的
+        # 同名文档，仅用 path 会撞车（FatalError 整轮失败）。
+        key = f"{project}::{repo}/{branch}/{spath}"
         return {"key": key, "type": "repo_file", "repo": repo,
                 "path": spath, "branch": branch}
     if parsed.netloc.lower() == "github.com":
@@ -167,8 +174,11 @@ def _parse_source_url(where: str, project: str, url: str) -> dict:
             f"{where} ({project}): GitHub URLs must point to a single file, "
             "e.g. https://github.com/<owner>/<repo>/blob/<branch>/<path> "
             f"(got {url!r})")
-    key = f"{project}::{url}"
-    return {"key": key, "type": "web_page", "url": url}
+    # 网页类保留 query（部分文档页 query 有语义），只剥 fragment
+    web_url = urllib.parse.urlunsplit(
+        (parsed.scheme, parsed.netloc, parsed.path, parsed.query, ""))
+    key = f"{project}::{web_url}"
+    return {"key": key, "type": "web_page", "url": web_url}
 
 
 def load_config(path: str) -> tuple[list[dict], str]:
@@ -339,8 +349,8 @@ def fetch_web_page(entry: dict, prior: dict) -> dict:
     if status == 200:
         digest = hashlib.sha256(body).hexdigest()
         return {"outcome": "ok", "sha": digest,
-                "etag": resp_headers.get("ETag") or None,
-                "last_modified": resp_headers.get("Last-Modified") or None}
+                "etag": resp_headers.get("etag") or None,
+                "last_modified": resp_headers.get("last-modified") or None}
     if status == 404:
         raise DocNotFound(f"404: {entry['url']} — {hint}")
     raise FetchError(f"unexpected HTTP {status} from {entry['url']} — {hint}")
@@ -377,7 +387,8 @@ class IssueSync:
         try:
             status, _h, resp_body = http_with_retry(
                 url, method="POST", token=self.token, headers=gh_headers(),
-                data=json.dumps({"title": title, "body": body}).encode("utf-8"))
+                data=json.dumps({"title": title, "body": body,
+                                 "labels": [TICKET_LABEL]}).encode("utf-8"))
         except RateLimitError as exc:
             print(f"issue-sync: WARN create rate limited: {exc}", file=sys.stderr)
             return None
@@ -410,7 +421,11 @@ class IssueSync:
 # ---------------------------------------------------------------------------
 
 def _title_target(entry: dict) -> str:
-    return entry["path"] if entry["type"] == "repo_file" else entry["url"]
+    # repo_file 的标题带 repo/branch/path，与 entry key 对齐，避免
+    # 不同仓库同路径的工单标题冲突。
+    if entry["type"] == "repo_file":
+        return f"{entry['repo']}/{entry['branch']}/{entry['path']}"
+    return entry["url"]
 
 
 def _doc_target(entry: dict) -> str:
@@ -420,8 +435,9 @@ def _doc_target(entry: dict) -> str:
 
 def _doc_links(entry: dict) -> tuple[str, str | None]:
     if entry["type"] == "repo_file":
-        doc_url = f"https://github.com/{entry['repo']}/blob/HEAD/{entry['path']}"
-        history = f"https://github.com/{entry['repo']}/commits/HEAD/{entry['path']}"
+        branch = entry["branch"]
+        doc_url = f"https://github.com/{entry['repo']}/blob/{branch}/{entry['path']}"
+        history = f"https://github.com/{entry['repo']}/commits/{branch}/{entry['path']}"
         return doc_url, history
     return entry["url"], None
 
@@ -565,7 +581,7 @@ def fetch_open_ticket_map(repo: str | None, token: str, entries: list[dict],
     关联优先级：baseline 里记录的 issue_url（API url）精确命中 → 工单标题
     `[upstream-doc-monitor] <project> / <target>` 反解。两条路径都不命中的
     游离工单（条目已从配置删除）直接丢弃，仅打日志供运维排查。
-    无目标仓库或任何请求失败 → 返回空 dict（result.json 全部记为无工单）。
+    请求失败时退回到 baseline 的 issue_url 保底显示 pending，不误降级为 unchanged。
     """
     if not repo:
         return {}
@@ -582,13 +598,14 @@ def fetch_open_ticket_map(repo: str | None, token: str, entries: list[dict],
     try:
         for page in range(1, TICKET_SCAN_MAX_PAGES + 1):
             url = (f"{API_BASE}/repos/{repo}/issues?state=open"
+                   f"&labels={urllib.parse.quote(TICKET_LABEL)}"
                    f"&per_page={TICKET_SCAN_PAGE_SIZE}&page={page}")
             status, payload = gh_get_json(url, token)
             if status != 200 or not isinstance(payload, list):
                 print(f"result: WARN open ticket scan returned HTTP {status} "
-                      f"for {repo} (page {page}) → ticket map empty",
+                      f"for {repo} (page {page}) → fallback to baseline issue_url",
                       file=sys.stderr)
-                return {}
+                break
             for item in payload:
                 if not isinstance(item, dict):
                     continue
@@ -617,14 +634,29 @@ def fetch_open_ticket_map(repo: str | None, token: str, entries: list[dict],
                     matched[key] = html_url
             if len(payload) < TICKET_SCAN_PAGE_SIZE:
                 break
+        else:
+            # for 循环正常结束（未被 break）说明打到第 5 页且每页都满：
+            # 超过 500 条 open 工单，提示可能截断
+            print(f"result: WARN open ticket scan hit page limit "
+                  f"({TICKET_SCAN_MAX_PAGES} pages); "
+                  "ticket map may be incomplete",
+                  file=sys.stderr)
     except RateLimitError as exc:
         print(f"result: WARN open ticket scan rate limited ({exc}) "
-              "→ ticket map empty", file=sys.stderr)
-        return {}
+              "→ fallback to baseline issue_url", file=sys.stderr)
     except TransientError as exc:
         print(f"result: WARN open ticket scan failed ({exc}) "
-              "→ ticket map empty", file=sys.stderr)
-        return {}
+              "→ fallback to baseline issue_url", file=sys.stderr)
+
+    # 扫描失败或截断时，baseline 记录的 issue_url 保底写入 pending
+    for entry in entries:
+        key = entry["key"]
+        if key not in matched:
+            issue_url = baseline.get(key, {}).get("issue_url")
+            if issue_url:
+                html_url = _html_url(repo, issue_url)
+                if html_url:
+                    matched[key] = html_url
     return matched
 
 
@@ -791,13 +823,23 @@ def run(argv: list[str]) -> int:
                     new_entry["last_modified"] = web["last_modified"]
 
             if events and syncer:
-                issue_url, action = _sync_events(
+                issue_url, action, synced = _sync_events(
                     syncer, entry, prior, events, res, run_id, observed_at,
                     tickets, maintainer=maintainer)
                 change["ticket_action"] = action
-                if issue_url:
-                    change["ticket_url"] = _html_url(args.repo, issue_url)
-                    new_entry["issue_url"] = issue_url
+                if synced:
+                    if issue_url:
+                        change["ticket_url"] = _html_url(args.repo, issue_url)
+                        new_entry["issue_url"] = issue_url
+                else:
+                    # 同步失败（create/comment 未送达）：保留旧基线，
+                    # 下一轮重新检测并重新同步，不吞变化。
+                    print(f"result: WARN event sync failed for {key}, "
+                          "baseline kept for retry", file=sys.stderr)
+                    results[key]["sync_failed"] = True
+                    baseline[key] = prior
+                    changes.append(change)
+                    continue
             elif events:
                 change["ticket_action"] = "skipped(no-repo)"
 
@@ -839,7 +881,7 @@ def run(argv: list[str]) -> int:
             if entry["type"] == "repo_file":
                 err.update({"repo": entry["repo"], "doc_path": entry["path"],
                             "doc_url": f"https://github.com/{entry['repo']}"
-                                       f"/blob/HEAD/{entry['path']}"})
+                                       f"/blob/{entry['branch']}/{entry['path']}"})
 
             new_entry = dict(prior)  # 保留旧哈希（文档回来时可比对）
 
@@ -852,13 +894,22 @@ def run(argv: list[str]) -> int:
             same_error = (prior.get("last_event") == "error"
                           and prior.get("last_error_type") == etype)
             if not same_error and syncer:
-                issue_url, action = _sync_events(
+                issue_url, action, synced = _sync_events(
                     syncer, entry, prior, ["error"], res, run_id, observed_at,
                     tickets, error=err)
                 err["ticket_action"] = action
-                if issue_url:
-                    err["ticket_url"] = _html_url(args.repo, issue_url)
-                    new_entry["issue_url"] = issue_url
+                if synced:
+                    if issue_url:
+                        err["ticket_url"] = _html_url(args.repo, issue_url)
+                        new_entry["issue_url"] = issue_url
+                else:
+                    # 同步失败：保留旧基线（last_event/last_error_type 不更新），
+                    # 下一轮重新检测并重新同步，避免异常事件被静默吞掉。
+                    print(f"result: WARN error event sync failed for {key}, "
+                          "baseline kept for retry", file=sys.stderr)
+                    baseline[key] = prior
+                    errors.append(err)
+                    continue
 
             new_entry.update({"date": observed_at, "last_event": "error",
                               "last_error_type": etype})
@@ -906,14 +957,25 @@ def run(argv: list[str]) -> int:
         key = entry["key"]
         if entry["type"] == "repo_file":
             repo = entry["repo"]
+            # version 基线缓存：本轮有检测结果时按需刷新（changed /
+            # first_seen / 缓存缺失），unchanged / error 轮直接复用旧值，
+            # 避免每轮都打 releases/tags API。
             if repo not in version_cache:
-                version_cache[repo] = fetch_upstream_version(repo, token)
+                prior_version = baseline.get(key, {}).get("version")
+                result_status = results.get(key, {}).get("status")
+                if (prior_version is not None
+                        and result_status in ("unchanged", "error", None)):
+                    version_cache[repo] = prior_version
+                else:
+                    version_cache[repo] = fetch_upstream_version(repo, token)
+                    baseline.setdefault(key, {})["version"] = version_cache[repo]
             version, doc = version_cache[repo], entry["path"]
         else:
             version, doc = None, entry["url"]   # 网页类无版本号，不打 API
         ticket = open_tickets.get(key)
         # 状态优先级：本轮检测失败 > 存在未关闭工单 > 其余一律 unchanged
-        if results.get(key, {}).get("status") == "error":
+        if (results.get(key, {}).get("status") == "error"
+                or results.get(key, {}).get("sync_failed")):
             item_status = "error"
         elif ticket:
             item_status = "pending"
@@ -952,10 +1014,12 @@ def _html_url(target_repo: str, issue_api_url: str) -> str:
 def _sync_events(syncer: IssueSync, entry: dict, prior: dict, events: list[str],
                  res: dict, run_id: str, observed_at: str, tickets: dict,
                  error: dict | None = None,
-                 maintainer: str | None = None) -> tuple[str | None, str]:
-    """为一个监控条目同步工单；返回 (issue_url, action)。
+                 maintainer: str | None = None) -> tuple[str | None, str, bool]:
+    """为一个监控条目同步工单；返回 (issue_url, action, synced)。
 
-    action ∈ created（本轮新建）/ commented（在 open 工单追加）/ none（失败）。
+    action ∈ created（本轮新建）/ commented（在 open 工单追加）/ none（无工单或失败）。
+    synced=False 表示本次事件实际未送达（create/comment 失败）：调用方必须
+    保留旧基线，让下一轮重新检测并重新同步，避免静默吞掉变化。
     """
     title = f"[upstream-doc-monitor] {entry['project']} / {_title_target(entry)}"
     mention = f"@{entry['owner']}" if entry["owner"] else ""
@@ -971,7 +1035,7 @@ def _sync_events(syncer: IssueSync, entry: dict, prior: dict, events: list[str],
         # 仅"异常恢复"单事件且无 open 工单 → 不为恢复单独建票（噪音）；
         # 状态由调用方置 ok 即可。
         if events == ["recovery"]:
-            return None, "none"
+            return None, "none", True
         # 首事件（本轮全部事件）并入正文：建票成为唯一 GitHub 事件，
         # 处理人只收 1 封邮件；后续轮次的事件才走评论追加。
         sections = []
@@ -986,18 +1050,25 @@ def _sync_events(syncer: IssueSync, entry: dict, prior: dict, events: list[str],
         issue_url = syncer.create(title, body)
         if not issue_url:
             print(f"ticket: WARN create failed for {entry['key']}", file=sys.stderr)
-            return None, "none"
+            return None, "none", False
         created = True
         print(f"ticket: created {title}")
     else:
+        ok = True
         for event in events:
             body = _event_comment(event, res, entry, error, run_id,
                                   observed_at, mention, maintainer=maintainer)
             if body and syncer.comment(issue_url, body):
                 print(f"ticket: commented '{event}' → {issue_url}")
+            elif body:
+                print(f"ticket: WARN comment failed '{event}' → {issue_url}",
+                      file=sys.stderr)
+                ok = False
+        if not ok:
+            return issue_url, "none", False
     action = "created" if created else "commented"
     tickets[action] = tickets.get(action, 0) + 1
-    return issue_url, action
+    return issue_url, action, True
 
 
 def main() -> int:

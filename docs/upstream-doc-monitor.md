@@ -13,7 +13,7 @@
 | schedule | cron `0 */6 * * *`（UTC 0/6/12/18 点 = 香港 8/14/20/2 点），**仅对默认分支（main）上的 workflow 定义生效** |
 | workflow_dispatch | 手动即时触发，Actions 页 → upstream-doc-monitor → Run workflow |
 
-单轮全量检测约 1 分钟（43 个监控项 × 每项 1 次轻量 API 调用 + 网页条件请求）。
+单轮全量检测约 1 分钟（每项 1 次轻量 API 调用 + 网页条件请求）。
 
 ### 运行结果在哪看
 

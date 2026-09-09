@@ -107,9 +107,13 @@ class Net(nn.Module):
 # ===== 模块 3：配置 DeepSpeed 并初始化引擎 =====
 # 全局 batch = 每卡 batch × 卡数；WORLD_SIZE 由 deepspeed 启动器注入，直接 python 运行时为 1。
 world_size = int(os.environ.get('WORLD_SIZE', 1))
-# deepspeed.initialize() 是 DeepSpeed 的入口，ZeRO 显存优化和 BF16 混合精度在此注入，返回封装后的模型引擎。
+# deepspeed.initialize() 是 DeepSpeed 的入口，优化器、ZeRO 显存优化和 BF16 混合精度在此注入，返回封装后的模型引擎。
 ds_config = {
     'train_batch_size': MICRO_BATCH * world_size,
+    'optimizer': {
+        'type': 'Adam',
+        'params': {'lr': 0.001},
+    },
     'zero_optimization': {'stage': 1},
     'bf16': {'enabled': True},
 }

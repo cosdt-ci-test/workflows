@@ -80,16 +80,32 @@ monitor 另外盯 `onnxruntime/core/providers/cann`。EP 源码不是 example �
 
 ## Quick Start
 
-文档在 `docs/Quick-start-Ascend.md`。装的是 `onnxruntime-cann==1.24.4`，并装 `decorator`、`scipy>=1.11,<1.15`、`attrs`、`psutil`。索引用 `https://repo.huaweicloud.com/repository/pypi/simple`。昇腾专用索引没有 `onnxruntime-cann`。这个 wheel 按 NumPy 1.x 编，文档钉 `numpy<2`。不装那四个包时，会话能建，`sess.run()` 会在 `aclgrphBuildInitialize` / `aclopCompileAndExecute` 上红——根因是 `import tbe` 缺依赖，不是 wheel 与 CANN 9.1.0 不兼容。
+文档在 `docs/Quick-start-Ascend.md`。用户路径是：检出 `microsoft/onnxruntime` 当前 GitHub 正式 Release，用 `./build.sh --use_cann --build_wheel` 编出 `onnxruntime-cann`，再当场造最小 Add 模型、关掉 CPU 回退做推理。monitor 盯的就是这份上游仓的 `/releases/latest`，所以文档跟最新正式 tag 走，不再钉 PyPI 上的 `onnxruntime-cann==1.24.4`。
+
+第三方包索引用 `https://repo.huaweicloud.com/repository/pypi/simple`。这个 wheel 按 NumPy 1.x 编，文档钉 `numpy<2`。CANN 算子编译依赖是 `decorator`、`scipy>=1.11,<1.15`、`attrs`、`psutil`、`sympy`。缺其中任何一个时，会话能建，`sess.run()` 会在 `aclgrphBuildInitialize` / `aclopCompileAndExecute` 上红——根因是 `import tbe` 失败。
+
+Ubuntu 22.04 默认是 gcc 11.4 和 cmake 3.22。文档会装 gcc-12、ninja，并用华为通用 PyPI 装 `cmake>=3.28,<4`、`packaging`、`wheel`、`setuptools`。不要覆盖 `/etc/apt/sources.list`。不要装 cmake 4。
 
 创建会话时只请求 `CANNExecutionProvider`，并关掉 fallback。`get_providers()` 仍可能同时列出 CPU。那是注册表，不是「请求了 CPU」。
+
+工作目录是 `/root/onnxruntime-qs`。跨 run 缓存在 `/root/.cache/cosdt-ci-test/onnxruntime/`：`wheels/<tag>/` 放编好的 wheel，`src/<tag>/` 放浅克隆，`cmake-mirror/` 与 example 线共用。薄触发器按同路径挂 volume。这些路径只出现在隐藏 `#test-setup`，不进用户看得见的正文。
+
+## 看护范围
+
+被看护的可见 `#test` 块：安装编译工具、克隆上游、编译 wheel、安装 wheel 与 TBE 依赖、打印 `get_available_providers()`、生成 `add_model.onnx`、关掉 CPU 回退后的 Add 推理。推理块的预期含 `CANNExecutionProvider` 和 `result [4.0, 6.0]`。
+
+无标签、不执行：开头的 `source set_env.sh` / `PATH`，以及 `npu-smi info`。CI 面由 `prepare_environment` 覆盖式合并同一份 `set_env.sh`。
+
+隐藏 `#test-setup`：捕获 `UPSTREAM_REF`；从宿主机缓存预置 wheel / 源码 / cmake-mirror 软链；编译成功后把 wheel 和浅克隆写回缓存。可见 clone / compile 仍是官方 GitHub 与 `./build.sh`；缓存命中时工作目录里已经有 `.git` 或 `dist/*.whl`，`if [ ! -d .../.git ]` / `compgen -G dist/*.whl` 自然跳过。
+
+QS 绿只证明当前正式 Release 的 Python CANN EP 能跑通这篇文档里的 Add。不等于 example 线 `cann-gtest` 绿。`CannExecutionProviderTest.FunctionTest` 在 CANN 9.1.0 上仍是 `aclrtAllocatorGetByStream failed. Parameter stream is invalid`，保持诚实红。
 
 ## 已知的诚实红 / 噪音
 
 coder 上（A2-910B，CANN 9.1.0，无 docker，不是 CI 镜像）目前测到：
 
-- `onnxruntime-cann==1.24.4` + CPython 3.12 + `numpy<2` + `decorator` / `scipy>=1.11,<1.15` / `attrs` / `psutil`：`get_available_providers()` 含 `CANNExecutionProvider`，关掉 fallback 的最小 Add 推理得到 `[4.0, 6.0]`。不钉 `numpy<2` 时 import 会炸。只装 wheel、不装那四个包时，`import tbe` 失败，`sess.run()` 报 `ge::aclgrphBuildInitialize` 或 `aclopCompileAndExecute("Add")`。
-- `--use_cann` 在 CANN 9.1.0 + gcc-12 + cmake 3.31 上能编过，并链出 `libonnxruntime_providers_cann.so` 和 `onnxruntime_provider_test`。
+- 当前正式 Release 源码 + `--use_cann --build_wheel` + CPython 3.12 + `numpy<2` + `decorator` / `scipy>=1.11,<1.15` / `attrs` / `psutil` / `sympy`：wheel 元数据名是 `onnxruntime-cann`，`get_available_providers()` 含 `CANNExecutionProvider`，关掉 fallback 的最小 Add 推理得到 `[4.0, 6.0]`。不钉 `numpy<2` 时 import 会炸。只装 wheel、不装 TBE 依赖时，`import tbe` 失败，`sess.run()` 报 `ge::aclgrphBuildInitialize` 或 `aclopCompileAndExecute("Add")`。缺 `sympy` 时同样是 `import tbe` 失败。
+- `--use_cann` 在 CANN 9.1.0 + gcc-12 + cmake 3.31 上能编过，并链出 `libonnxruntime_providers_cann.so`。`--build_wheel` 打出 `onnxruntime_cann-*-linux_aarch64.whl`。PyPI 上 FFrog 的 `onnxruntime-cann==1.24.4` 不再是 Quick Start 的安装路径。
 - `cann-gtest`：`CannExecutionProviderTest.FunctionTest` 能匹配到并在 NPU=0 上跑。官方 `run_example.sh` 路径上的失败是 `aclrtAllocatorGetByStream failed. Parameter stream is invalid`。环境已就绪（CANN 已 source、`--use_cann` 编过、filter 命中）。这是诚实红，不是「编错二进制」或假绿。空 `--gtest_filter` 被守卫判红（`0 tests from 0 test suites`）。不 source CANN 时加载 `libonnxruntime_providers_cann.so` 失败（缺 `libmsprofiler.so`），不会假绿。
 - `cmake-consumer`：绿。日志有 `ONNX Runtime version: 1.30.0` 和 `Result: PASS`。默认 SessionOptions，没有 NPU 锚点。
 - 默认是 gcc 11.4 和 cmake 3.22。`setup_example.sh` 会装 gcc-12，并用华为通用 PyPI 装 `cmake>=3.28,<4`。不要覆盖 `/etc/apt/sources.list`。不要从 pypi.org 拉 cmake。不要装 cmake 4。ORT 的 FetchContent 还依赖 cmake 3 的兼容行为。

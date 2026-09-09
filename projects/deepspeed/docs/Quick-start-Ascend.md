@@ -79,6 +79,7 @@ if not (data_dir / 'cifar-10-batches-py').exists():
 transform = transforms.Compose([
     transforms.ToTensor(),
     transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+    transforms.ConvertImageDtype(torch.bfloat16),
 ])
 trainset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
 # 每个 rank 独立从 DataLoader 取 micro batch。

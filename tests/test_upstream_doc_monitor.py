@@ -99,7 +99,7 @@ class TestUrlAndKey(unittest.TestCase):
 
     def test_title_and_doc_links_use_branch(self):
         a = udm._parse_source_url("t", "ci", "https://github.com/orgA/repoX/blob/main/doc.md")
-        self.assertEqual(udm._title_target(a), "orgA/repoX/main/doc.md")
+        self.assertEqual(udm._title_target(a), "orgA/repoX doc.md (main)")
         doc_url, history = udm._doc_links(a)
         self.assertEqual(doc_url, "https://github.com/orgA/repoX/blob/main/doc.md")
         self.assertEqual(history, "https://github.com/orgA/repoX/commits/main/doc.md")

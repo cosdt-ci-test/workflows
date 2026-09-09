@@ -15,7 +15,7 @@
 
 单轮全量检测约 1 分钟（每项 1 次轻量 API 调用 + 网页条件请求）。
 
-**运行结果在哪看**：Issues（交付面，标题前缀 `[upstream-doc-monitor]` 的工单）→ 处理人；Step Summary（Actions 对应 run → Summary 页）→ 运维；job 日志→ 逐项检测明细；result artifact（前端消费面）→ 机器读取，见 §5。
+**运行结果在哪看**：Issues（交付面，标题形如 `\[项目\] 事件类型 — 文档` 的工单）→ 处理人；Step Summary（Actions 对应 run → Summary 页）→ 运维；job 日志→ 逐项检测明细；result artifact（前端消费面）→ 机器读取，见 §5。
 
 ## 2. 监控清单配置
 
@@ -46,7 +46,7 @@ projects:
 
 ## 3. 工单生命周期（处理人须知）
 
-**每个监控文档一张工单**（标题固定 `[upstream-doc-monitor] <project> / <path-or-url>`），记录该文档的变化、异常、恢复时间线。新建工单时本轮全部事件段落直接并入正文（正文顶部 @ 处理人一次），工单 open 后的新事件以评论追加（每条评论 @ 处理人）：
+**每个监控文档一张工单**（标题固定 `\[<project>\] <事件类型> — <文档>`（事件类型取建票时首事件，后续不更新）），记录该文档的变化、异常、恢复时间线。新建工单时本轮全部事件段落直接并入正文（正文顶部 @ 处理人一次），工单 open 后的新事件以评论追加（每条评论 @ 处理人）：
 
 | 事件 | 段落 | 频控 |
 | --- | --- | --- |
@@ -103,3 +103,4 @@ gh run download {run_id} --repo cosdt-ci-test/workflows --name upstream-doc-moni
 **与内部报告 report.json 的关系**：同一轮另产出 `report.json`（`schema_version: 1`，含 changes / errors 双数组与 owner、前后哈希、工单动作、错误消息等细节），驱动 Step Summary 渲染与日志审计，**不上传 artifact**。两者并存：`result.json` 是对外前端契约（极简、稳定），`report.json` 是内部审计视图（可随实现调整）。
 
 更多用法见 [检测引擎](../scripts/upstream_doc_monitor.py) 与 [result schema](../schemas/upstream_doc_monitor_result.schema.json)。
+

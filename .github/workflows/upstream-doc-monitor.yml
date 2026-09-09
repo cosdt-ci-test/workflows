@@ -107,10 +107,7 @@ jobs:
               lines.append("")
           if not changed_rows and not r["errors"]:
               lines += ["本轮无变化、无异常。", ""]
-          lines += [f"<sub>report.json 保留于本 run 的临时目录（详见 job 日志）；"
-                    f"前端消费的 result.json 已上传为 artifact "
-                    f"upstream-doc-monitor-result-{r['run_id']}；"
-                    f"通知交付面为仓库 Issues（前缀 `[upstream-doc-monitor]`）。</sub>"]
+          lines += [f"<sub>通知交付面为仓库 Issues（前缀 `[upstream-doc-monitor]`）。</sub>"]
           with open(summary, "a", encoding="utf-8") as fh:
               fh.write("\n".join(lines) + "\n")
           PYEOF

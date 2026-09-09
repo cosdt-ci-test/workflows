@@ -32,10 +32,21 @@ STATE_SCHEMA_VERSION = 1
 REPORT_SCHEMA_VERSION = 1
 
 # result.json 侧的 open 工单扫描参数；标题前缀与 _sync_events 建票标题一致
-TICKET_TITLE_PREFIX = "[upstream-doc-monitor] "
+TICKET_TITLE_PREFIX = "["
 TICKET_LABEL = "upstream-doc-monitor"
 TICKET_SCAN_PAGE_SIZE = 100
 TICKET_SCAN_MAX_PAGES = 5
+
+# 事件类型 → 工单标题中文标签
+_EVENT_LABELS = {
+    "change": "文档变化",
+    "error": "检测异常",
+    "config_error": "配置错误",
+    "recovery": "异常恢复",
+}
+
+# 工单标题正则：{project}] {label} — {target}
+_TITLE_RE = re.compile(r"^\[([^\]]+)\] .+ — (.+)$")
 
 GH_USERNAME_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$")
 
@@ -421,10 +432,10 @@ class IssueSync:
 # ---------------------------------------------------------------------------
 
 def _title_target(entry: dict) -> str:
-    # repo_file 的标题带 repo/branch/path，与 entry key 对齐，避免
-    # 不同仓库同路径的工单标题冲突。
+    # repo_file 的标题带 repo/path/branch，与 entry key 对齐，避免
+    # 不同仓库同路径的工单标题冲突；列表里可读性更强。
     if entry["type"] == "repo_file":
-        return f"{entry['repo']}/{entry['branch']}/{entry['path']}"
+        return f"{entry['repo']} {entry['path']} ({entry['branch']})"
     return entry["url"]
 
 
@@ -613,17 +624,14 @@ def fetch_open_ticket_map(repo: str | None, token: str, entries: list[dict],
                 if "pull_request" in item:
                     continue
                 title = item.get("title") or ""
-                if not title.startswith(TICKET_TITLE_PREFIX):
+                m = _TITLE_RE.match(title)
+                if not m:
                     continue
+                project, target = m.group(1), m.group(2)
                 api_url = item.get("url")
                 key = by_issue_url.get(api_url) if api_url else None
                 if key is None:
-                    # 标题反解：target 自身可能含 " / "，project 不含斜杠，
-                    # 故只按第一个 " / " 切分
-                    rest = title[len(TICKET_TITLE_PREFIX):]
-                    project, sep, target = rest.partition(" / ")
-                    if sep:
-                        key = by_title.get((project, target))
+                    key = by_title.get((project, target))
                 if key is None:
                     print(f"result: orphan open ticket #{item.get('number')} "
                           f"({title}) — no matching monitor entry")
@@ -1011,7 +1019,13 @@ def _sync_events(syncer: IssueSync, entry: dict, prior: dict, events: list[str],
     synced=False 表示本次事件实际未送达（create/comment 失败）：调用方必须
     保留旧基线，让下一轮重新检测并重新同步，避免静默吞掉变化。
     """
-    title = f"[upstream-doc-monitor] {entry['project']} / {_title_target(entry)}"
+    # 首事件类型作为标题标签：error 事件用具体错误类型，其他取第一个非 recovery 事件
+    if events == ["error"] and error and error.get("error_type"):
+        primary_label = _EVENT_LABELS.get(error["error_type"], "检测异常")
+    else:
+        primary = next((e for e in events if e != "recovery"), events[0] if events else "error")
+        primary_label = _EVENT_LABELS.get(primary, primary)
+    title = f"[{entry['project']}] {primary_label} — {_title_target(entry)}"
     mention = f"@{entry['owner']}" if entry["owner"] else ""
     issue_url = prior.get("issue_url")
 

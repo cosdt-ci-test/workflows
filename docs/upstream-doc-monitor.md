@@ -20,6 +20,7 @@
 1. **Issues**（交付面）：标题前缀 `[upstream-doc-monitor]` 的工单，处理人被 @ 提及
 2. **Step Summary**：Actions → 对应 run → Summary 页，有人读的变化表与异常表
 3. **job 日志**：逐监控项的检测明细（`[i/N] 键: 状态`）
+4. **status artifact**（前端消费面）：artifact 名 `upstream-doc-monitor-status-<run_id>`，内容为 `status.json`（顶层裸数组、每项 5 字段），供前端/后端服务机器读取，详见 [§5 前端对接](#5-前端对接status-artifact)
 
 ## 2. 监控清单配置
 
@@ -87,13 +88,79 @@ projects:
 - **基线**：各监控项的哈希、工单链接与频控状态存于 actions/cache（键前缀 `upstream-doc-monitor-state-`），跨轮持久
 - **错误分级**：上游侧问题（文档 404 / 仓库异常 / 网页不可达）不中断其余监控项、job 保持绿色、走工单通知；本仓库侧问题（配置错误 / 基线损坏 / API 限流 / 整轮无法观测）中断执行、job 标红
 
-## 5. 已知限制（v1）
+## 5. 前端对接（status artifact）
+
+三个交付面并存：工单 Issue 面向处理人（通知）、Step Summary 面向运维（人读）、**status artifact 面向前端（机器消费）**。本节是前端/后端服务的对接契约。
+
+### 产出物与时机
+
+- artifact 名：`upstream-doc-monitor-status-<run_id>`（`<run_id>` = `github.run_id`）
+- 内容：单个 `status.json`，符合 [schemas/upstream_doc_monitor_status.schema.json](../schemas/upstream_doc_monitor_status.schema.json)
+- **每轮必产出**：`Upload status artifact` step 带 `if: always()`——检测失败、限流中断的轮次同样上传（此时条目多为 `error`），`if-no-files-found: warn`
+- 上传前用 `check-jsonschema` 校验，不合规即 job 红
+- 命名例外：本 workflow 是**全局 workflow**（不对应 projects.yaml 里的单一 project），故以 workflow 名 `upstream-doc-monitor-` 作前缀，见 [docs/artifacts.md](artifacts.md)
+
+### 后端拉取（持 GitHub token）
+
+```bash
+# 1. 列最新一次成功的 run，取 workflow_runs[0].id
+#    也可按 workflow 名过滤：&workflow=upstream-doc-monitor.yml
+gh api "repos/cosdt-ci-test/workflows/actions/runs?branch=main&status=success&per_page=1"
+
+# 2. 取该 run 的 artifacts，找 name 为 upstream-doc-monitor-status-{run_id} 的项
+#    同一响应里的 created_at 即数据新鲜度
+gh api repos/cosdt-ci-test/workflows/actions/runs/{run_id}/artifacts
+
+# 3. 下载并解包，得到单个 status.json
+gh api repos/cosdt-ci-test/workflows/actions/runs/{run_id}/artifacts/{artifact_id}/zip > status.zip
+#    或用 gh CLI 一步下载解包：
+gh run download {run_id} --repo cosdt-ci-test/workflows --name upstream-doc-monitor-status-{run_id}
+```
+
+### 数据形态
+
+顶层是**裸数组**（不是对象、无 summary 包裹），一份**全量快照**：每轮包含监控清单的**全部**条目，本轮无变化的也在内。每项恰好 5 个字段：
+
+| 字段 | 含义 |
+| --- | --- |
+| `project` | 项目名（监控清单的 project 标签） |
+| `doc` | 文档标识：仓库文档（repo_file）为仓库内路径（如 `README.md`），外部网页（web_page）为完整 URL。用于消歧——同一 project 标签可配多个文档条目 |
+| `version` | 上游版本号，三级降级解析：`/releases/latest` → `/releases?per_page=20` 取最新非 draft → `/tags?per_page=1`；均无则 `null`。web_page 条目无关联仓库，恒为 `null`；版本查询失败降级为 `null`，不影响监控 |
+| `status` | 综合状态，三值枚举，判定优先级 **error > pending > unchanged**（见下表） |
+| `ticket` | 该监控项当前未关闭工单的 html url，无则 `null`。`status=pending` 时必非 `null`；`unchanged` 时必为 `null`；`error` 时可有可无 |
+
+`status` 三值：
+
+| 值 | 判定条件 | 中文显示 | 处置 |
+| --- | --- | --- | --- |
+| `error` | 本轮检测失败：文档 404 / 仓库不可达 / 网页抓取失败 / 限流未检测 | 检测异常 | 排查上游或配置 |
+| `pending` | 本轮无异常，但该监控项存在未关闭工单（含往轮变化遗留与配置错误工单） | 已变化待确认 | 核对变化 → 更新看护文档 → 关闭工单 |
+| `unchanged` | 本轮无异常且无未关闭工单（含新增条目首轮登记基线） | 未变化 | 无需处理 |
+
+### 消费语义
+
+- **整表替换**：拉最新一份 artifact 覆盖本地视图即可——无需增量合并、无需维护 diff 状态；漏拉几轮可自愈（下一份仍是完整快照）
+- **`pending` 是持续状态**：工单未被人工关闭则跨轮保持 `pending`（即使本轮无新变化）；工单关闭后下一轮自动回到 `unchanged`
+- **待确认数**由前端统计 `status == "pending"` 的项数得出，产物不提供 summary 计数
+- **新鲜度与 run 标识从 artifact 元数据取**：产物内没有 `generated_at` / `run_id` / `schema_version` 等运行元信息，读 Artifacts API 返回的 `created_at` 与 artifact 名称中的 `run_id`
+
+### 契约演进
+
+新增字段向后兼容，前端应忽略未知字段；破坏性变更会同步更新 schema 文件与本节。
+
+> 游离工单（监控条目已从配置删除、但工单仍未关闭）**不出现在产物中**，仅在 job 日志提示，由运维排查清理。
+
+### 与内部报告 report.json 的关系
+
+同一轮另产出内部详细报告 `report.json`（`schema_version: 1`，含 changes / errors 双数组与 owner、前后哈希、工单动作、错误消息等细节），驱动 Step Summary 渲染与日志审计，**不上传 artifact**。两者并存：`status.json` 是对外前端契约（极简、稳定），`report.json` 是内部审计视图（可随实现调整）。
+
+## 6. 已知限制（v1）
 
 - **SPA 页面**：哈希基于服务器响应体，JS 客户端渲染的内容不可见。官方文档站（SSG 静态输出，如 ascend.github.io）不受影响
 - **哈希抖动**：页面若嵌时间戳/随机 token，内容没变哈希也会变（误报变化）。官方静态文档站实践上稳定；个别页面出现抖动时反馈维护者按条目归一化
 - **反爬/需登录页面**：取不到内容会归为检测异常（工单可见，job 绿）
 
-## 6. 常见操作
+## 7. 常见操作
 
 ```bash
 # 本地全链路 dry-run（不建工单：缺省 --repo 时工单同步跳过）

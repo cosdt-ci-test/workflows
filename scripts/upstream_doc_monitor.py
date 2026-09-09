@@ -31,6 +31,11 @@ BACKOFF_SECONDS = (2, 4, 8)
 STATE_SCHEMA_VERSION = 1
 REPORT_SCHEMA_VERSION = 1
 
+# status.json 侧的 open 工单扫描参数；标题前缀与 _sync_events 建票标题一致
+TICKET_TITLE_PREFIX = "[upstream-doc-monitor] "
+TICKET_SCAN_PAGE_SIZE = 100
+TICKET_SCAN_MAX_PAGES = 5
+
 GH_USERNAME_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$")
 
 GITHUB_BLOB_URL_RE = re.compile(
@@ -491,6 +496,139 @@ def _event_comment(event: str, res: dict, entry: dict, error: dict | None,
 
 
 # ---------------------------------------------------------------------------
+# 前端产物 status.json：上游版本号 + open 工单关联
+# ---------------------------------------------------------------------------
+
+def fetch_upstream_version(repo: str, token: str) -> str | None:
+    """三级降级解析上游最新版本号（沿用 quick-start 引擎的 fallback 链约定）。
+
+    1) /releases/latest      —— 多数上游走这条
+    2) /releases?per_page=20 —— 覆盖只发 prerelease 的上游（latest 会 404），
+                                取第一条非 draft（prerelease 允许）
+    3) /tags?per_page=1      —— 覆盖从不发 GitHub Release 的上游
+
+    版本号不是监控核心信号：任何限流/瞬时失败/非预期状态/解析失败都只打
+    WARN 并返回 None，绝不上抛，避免影响检测流程与退出码。
+    """
+    base = f"{API_BASE}/repos/{repo}"
+    try:
+        # 一级：latest release（404 = 无正式发布，静默降级）
+        status, payload = gh_get_json(f"{base}/releases/latest", token)
+        if status == 200 and isinstance(payload, dict):
+            tag = payload.get("tag_name")
+            if tag:
+                return str(tag)
+        elif status != 404:
+            print(f"version: WARN {repo}: /releases/latest returned HTTP "
+                  f"{status} → falling back", file=sys.stderr)
+
+        # 二级：最近 20 条 release（draft 不算发布；prerelease 可接受）
+        status, payload = gh_get_json(f"{base}/releases?per_page=20", token)
+        if status == 200 and isinstance(payload, list) and payload:
+            published = [r for r in payload
+                         if isinstance(r, dict) and not r.get("draft")]
+            pick = published[0] if published else payload[0]
+            tag = pick.get("tag_name") if isinstance(pick, dict) else None
+            if tag:
+                return str(tag)
+        elif status != 200:
+            print(f"version: WARN {repo}: /releases returned HTTP {status} "
+                  "→ falling back", file=sys.stderr)
+
+        # 三级：最新 tag（200 但空列表 = 无 tag，继续到 None）
+        status, payload = gh_get_json(f"{base}/tags?per_page=1", token)
+        if status == 200 and isinstance(payload, list) and payload:
+            first = payload[0]
+            tag = first.get("name") if isinstance(first, dict) else None
+            if tag:
+                return str(tag)
+        elif status != 200:
+            print(f"version: WARN {repo}: /tags returned HTTP {status} "
+                  "→ falling back", file=sys.stderr)
+    except RateLimitError as exc:
+        print(f"version: WARN {repo}: rate limited ({exc}) → version unknown",
+              file=sys.stderr)
+        return None
+    except TransientError as exc:
+        print(f"version: WARN {repo}: transient failure ({exc}) "
+              "→ version unknown", file=sys.stderr)
+        return None
+    print(f"version: WARN {repo}: no version resolved from releases/tags "
+          "(or unusable response) → null", file=sys.stderr)
+    return None
+
+
+def fetch_open_ticket_map(repo: str | None, token: str, entries: list[dict],
+                          baseline: dict) -> dict[str, str]:
+    """扫描本仓库 open 工单并关联到监控项，返回 key → html_url。
+
+    关联优先级：baseline 里记录的 issue_url（API url）精确命中 → 工单标题
+    `[upstream-doc-monitor] <project> / <target>` 反解。两条路径都不命中的
+    游离工单（条目已从配置删除）直接丢弃，仅打日志供运维排查。
+    无目标仓库或任何请求失败 → 返回空 dict（status.json 全部记为无工单）。
+    """
+    if not repo:
+        return {}
+    # 关联索引：issue API url → key、(project, target) → key
+    by_issue_url, by_title = {}, {}
+    for entry in entries:
+        key = entry["key"]
+        issue_url = baseline.get(key, {}).get("issue_url")
+        if issue_url:
+            by_issue_url[issue_url] = key
+        by_title[(entry["project"], _title_target(entry))] = key
+
+    matched: dict[str, str] = {}
+    try:
+        for page in range(1, TICKET_SCAN_MAX_PAGES + 1):
+            url = (f"{API_BASE}/repos/{repo}/issues?state=open"
+                   f"&per_page={TICKET_SCAN_PAGE_SIZE}&page={page}")
+            status, payload = gh_get_json(url, token)
+            if status != 200 or not isinstance(payload, list):
+                print(f"status: WARN open ticket scan returned HTTP {status} "
+                      f"for {repo} (page {page}) → ticket map empty",
+                      file=sys.stderr)
+                return {}
+            for item in payload:
+                if not isinstance(item, dict):
+                    continue
+                # issues API 默认混入 pull request，工单口径只要纯 issue
+                if "pull_request" in item:
+                    continue
+                title = item.get("title") or ""
+                if not title.startswith(TICKET_TITLE_PREFIX):
+                    continue
+                api_url = item.get("url")
+                key = by_issue_url.get(api_url) if api_url else None
+                if key is None:
+                    # 标题反解：target 自身可能含 " / "，project 不含斜杠，
+                    # 故只按第一个 " / " 切分
+                    rest = title[len(TICKET_TITLE_PREFIX):]
+                    project, sep, target = rest.partition(" / ")
+                    if sep:
+                        key = by_title.get((project, target))
+                if key is None:
+                    print(f"status: orphan open ticket #{item.get('number')} "
+                          f"({title}) — no matching monitor entry")
+                    continue
+                html_url = item.get("html_url") or (
+                    _html_url(repo, api_url) if api_url else None)
+                if html_url:
+                    matched[key] = html_url
+            if len(payload) < TICKET_SCAN_PAGE_SIZE:
+                break
+    except RateLimitError as exc:
+        print(f"status: WARN open ticket scan rate limited ({exc}) "
+              "→ ticket map empty", file=sys.stderr)
+        return {}
+    except TransientError as exc:
+        print(f"status: WARN open ticket scan failed ({exc}) "
+              "→ ticket map empty", file=sys.stderr)
+        return {}
+    return matched
+
+
+# ---------------------------------------------------------------------------
 # 主流程
 # ---------------------------------------------------------------------------
 
@@ -756,6 +894,39 @@ def run(argv: list[str]) -> int:
                            encoding="utf-8")
     print(f"report: written {report_path}")
     print(f"summary: {json.dumps(report['summary'], ensure_ascii=False)}")
+
+    # ---- 前端产物 status.json（裸数组，每项恰 5 字段）----
+    # 与 report.json 同目录的第二份产物：report.json 保持内部详报口径不变，
+    # status.json 只给前端渲染用的极简视图。工单映射在工单同步之后取，
+    # 本轮新建的工单即计入 pending；所有采集失败均已在上游函数内降级。
+    open_tickets = fetch_open_ticket_map(args.repo, token, entries, baseline)
+    version_cache: dict[str, str | None] = {}   # 同 repo 多条目只查一次
+    status_items = []
+    for entry in entries:
+        key = entry["key"]
+        if entry["type"] == "repo_file":
+            repo = entry["repo"]
+            if repo not in version_cache:
+                version_cache[repo] = fetch_upstream_version(repo, token)
+            version, doc = version_cache[repo], entry["path"]
+        else:
+            version, doc = None, entry["url"]   # 网页类无版本号，不打 API
+        ticket = open_tickets.get(key)
+        # 状态优先级：本轮检测失败 > 存在未关闭工单 > 其余一律 unchanged
+        if results.get(key, {}).get("status") == "error":
+            item_status = "error"
+        elif ticket:
+            item_status = "pending"
+        else:
+            item_status = "unchanged"
+        status_items.append({"project": entry["project"], "doc": doc,
+                             "version": version, "status": item_status,
+                             "ticket": ticket})
+    status_path = out_dir / "status.json"
+    status_path.write_text(
+        json.dumps(status_items, ensure_ascii=False, indent=2),
+        encoding="utf-8")
+    print(f"status: written {status_path}")
 
     state_path = Path(args.state)
     state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2),

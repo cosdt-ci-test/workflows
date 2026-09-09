@@ -957,18 +957,8 @@ def run(argv: list[str]) -> int:
         key = entry["key"]
         if entry["type"] == "repo_file":
             repo = entry["repo"]
-            # version 基线缓存：本轮有检测结果时按需刷新（changed /
-            # first_seen / 缓存缺失），unchanged / error 轮直接复用旧值，
-            # 避免每轮都打 releases/tags API。
             if repo not in version_cache:
-                prior_version = baseline.get(key, {}).get("version")
-                result_status = results.get(key, {}).get("status")
-                if (prior_version is not None
-                        and result_status in ("unchanged", "error", None)):
-                    version_cache[repo] = prior_version
-                else:
-                    version_cache[repo] = fetch_upstream_version(repo, token)
-                    baseline.setdefault(key, {})["version"] = version_cache[repo]
+                version_cache[repo] = fetch_upstream_version(repo, token)
             version, doc = version_cache[repo], entry["path"]
         else:
             version, doc = None, entry["url"]   # 网页类无版本号，不打 API

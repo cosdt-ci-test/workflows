@@ -107,11 +107,30 @@ jobs:
               lines.append("")
           if not changed_rows and not r["errors"]:
               lines += ["本轮无变化、无异常。", ""]
-          lines += [f"<sub>report.json 保留于本 run 的临时目录（详见 job 日志）；"
-                    f"交付面为仓库 Issues（前缀 `[upstream-doc-monitor]`）。</sub>"]
+          lines += [f"<sub>通知交付面为仓库 Issues（前缀 `[upstream-doc-monitor]`）。</sub>"]
           with open(summary, "a", encoding="utf-8") as fh:
               fh.write("\n".join(lines) + "\n")
           PYEOF
+
+      - name: Validate result.json against schema
+        if: always()
+        run: |
+          if [ ! -s /tmp/upstream-doc-monitor-report/result.json ]; then
+            echo "result.json is missing or empty; schema validation failed"
+            exit 1
+          fi
+          python3 -m pip install -q check-jsonschema
+          check-jsonschema \
+            --schemafile schemas/upstream_doc_monitor_result.schema.json \
+            /tmp/upstream-doc-monitor-report/result.json
+
+      - name: Upload result artifact
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: upstream-doc-monitor-result-${{ github.run_id }}
+          path: /tmp/upstream-doc-monitor-report/result.json
+          if-no-files-found: error
 
       - name: Persist monitor state (baseline)
         if: always()

@@ -1,8 +1,8 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://github.com/cosdt-ci-test/workflows/schemas/upstream_doc_monitor_status.schema.json",
-  "title": "Upstream doc monitor status",
-  "description": "Machine-readable status.json consumed by the frontend, uploaded as an artifact by the upstream-doc-monitor job. A bare array; each item reports one monitored doc entry.",
+  "$id": "https://github.com/cosdt-ci-test/workflows/schemas/upstream_doc_monitor_result.schema.json",
+  "title": "Upstream doc monitor result",
+  "description": "Machine-readable result.json consumed by the frontend, uploaded as an artifact by the upstream-doc-monitor job. A bare array; each item reports one monitored doc entry.",
   "type": "array",
   "items": {
     "type": "object",

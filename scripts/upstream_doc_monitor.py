@@ -31,7 +31,7 @@ BACKOFF_SECONDS = (2, 4, 8)
 STATE_SCHEMA_VERSION = 1
 REPORT_SCHEMA_VERSION = 1
 
-# status.json 侧的 open 工单扫描参数；标题前缀与 _sync_events 建票标题一致
+# result.json 侧的 open 工单扫描参数；标题前缀与 _sync_events 建票标题一致
 TICKET_TITLE_PREFIX = "[upstream-doc-monitor] "
 TICKET_SCAN_PAGE_SIZE = 100
 TICKET_SCAN_MAX_PAGES = 5
@@ -496,7 +496,7 @@ def _event_comment(event: str, res: dict, entry: dict, error: dict | None,
 
 
 # ---------------------------------------------------------------------------
-# 前端产物 status.json：上游版本号 + open 工单关联
+# 前端产物 result.json：上游版本号 + open 工单关联
 # ---------------------------------------------------------------------------
 
 def fetch_upstream_version(repo: str, token: str) -> str | None:
@@ -565,7 +565,7 @@ def fetch_open_ticket_map(repo: str | None, token: str, entries: list[dict],
     关联优先级：baseline 里记录的 issue_url（API url）精确命中 → 工单标题
     `[upstream-doc-monitor] <project> / <target>` 反解。两条路径都不命中的
     游离工单（条目已从配置删除）直接丢弃，仅打日志供运维排查。
-    无目标仓库或任何请求失败 → 返回空 dict（status.json 全部记为无工单）。
+    无目标仓库或任何请求失败 → 返回空 dict（result.json 全部记为无工单）。
     """
     if not repo:
         return {}
@@ -585,7 +585,7 @@ def fetch_open_ticket_map(repo: str | None, token: str, entries: list[dict],
                    f"&per_page={TICKET_SCAN_PAGE_SIZE}&page={page}")
             status, payload = gh_get_json(url, token)
             if status != 200 or not isinstance(payload, list):
-                print(f"status: WARN open ticket scan returned HTTP {status} "
+                print(f"result: WARN open ticket scan returned HTTP {status} "
                       f"for {repo} (page {page}) → ticket map empty",
                       file=sys.stderr)
                 return {}
@@ -608,7 +608,7 @@ def fetch_open_ticket_map(repo: str | None, token: str, entries: list[dict],
                     if sep:
                         key = by_title.get((project, target))
                 if key is None:
-                    print(f"status: orphan open ticket #{item.get('number')} "
+                    print(f"result: orphan open ticket #{item.get('number')} "
                           f"({title}) — no matching monitor entry")
                     continue
                 html_url = item.get("html_url") or (
@@ -618,11 +618,11 @@ def fetch_open_ticket_map(repo: str | None, token: str, entries: list[dict],
             if len(payload) < TICKET_SCAN_PAGE_SIZE:
                 break
     except RateLimitError as exc:
-        print(f"status: WARN open ticket scan rate limited ({exc}) "
+        print(f"result: WARN open ticket scan rate limited ({exc}) "
               "→ ticket map empty", file=sys.stderr)
         return {}
     except TransientError as exc:
-        print(f"status: WARN open ticket scan failed ({exc}) "
+        print(f"result: WARN open ticket scan failed ({exc}) "
               "→ ticket map empty", file=sys.stderr)
         return {}
     return matched
@@ -895,13 +895,13 @@ def run(argv: list[str]) -> int:
     print(f"report: written {report_path}")
     print(f"summary: {json.dumps(report['summary'], ensure_ascii=False)}")
 
-    # ---- 前端产物 status.json（裸数组，每项恰 5 字段）----
+    # ---- 前端产物 result.json（裸数组，每项恰 5 字段）----
     # 与 report.json 同目录的第二份产物：report.json 保持内部详报口径不变，
-    # status.json 只给前端渲染用的极简视图。工单映射在工单同步之后取，
+    # result.json 只给前端渲染用的极简视图。工单映射在工单同步之后取，
     # 本轮新建的工单即计入 pending；所有采集失败均已在上游函数内降级。
     open_tickets = fetch_open_ticket_map(args.repo, token, entries, baseline)
     version_cache: dict[str, str | None] = {}   # 同 repo 多条目只查一次
-    status_items = []
+    result_items = []
     for entry in entries:
         key = entry["key"]
         if entry["type"] == "repo_file":
@@ -919,14 +919,14 @@ def run(argv: list[str]) -> int:
             item_status = "pending"
         else:
             item_status = "unchanged"
-        status_items.append({"project": entry["project"], "doc": doc,
+        result_items.append({"project": entry["project"], "doc": doc,
                              "version": version, "status": item_status,
                              "ticket": ticket})
-    status_path = out_dir / "status.json"
-    status_path.write_text(
-        json.dumps(status_items, ensure_ascii=False, indent=2),
+    result_path = out_dir / "result.json"
+    result_path.write_text(
+        json.dumps(result_items, ensure_ascii=False, indent=2),
         encoding="utf-8")
-    print(f"status: written {status_path}")
+    print(f"result: written {result_path}")
 
     state_path = Path(args.state)
     state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2),

@@ -20,7 +20,7 @@
 1. **Issues**（交付面）：标题前缀 `[upstream-doc-monitor]` 的工单，处理人被 @ 提及
 2. **Step Summary**：Actions → 对应 run → Summary 页，有人读的变化表与异常表
 3. **job 日志**：逐监控项的检测明细（`[i/N] 键: 状态`）
-4. **status artifact**（前端消费面）：artifact 名 `upstream-doc-monitor-status-<run_id>`，内容为 `status.json`（顶层裸数组、每项 5 字段），供前端/后端服务机器读取，详见 [§5 前端对接](#5-前端对接status-artifact)
+4. **result artifact**（前端消费面）：artifact 名 `upstream-doc-monitor-result-<run_id>`，内容为 `result.json`（顶层裸数组、每项 5 字段），供前端/后端服务机器读取，详见 [§5 前端对接](#5-前端对接result-artifact)
 
 ## 2. 监控清单配置
 
@@ -88,15 +88,15 @@ projects:
 - **基线**：各监控项的哈希、工单链接与频控状态存于 actions/cache（键前缀 `upstream-doc-monitor-state-`），跨轮持久
 - **错误分级**：上游侧问题（文档 404 / 仓库异常 / 网页不可达）不中断其余监控项、job 保持绿色、走工单通知；本仓库侧问题（配置错误 / 基线损坏 / API 限流 / 整轮无法观测）中断执行、job 标红
 
-## 5. 前端对接（status artifact）
+## 5. 前端对接（result artifact）
 
-三个交付面并存：工单 Issue 面向处理人（通知）、Step Summary 面向运维（人读）、**status artifact 面向前端（机器消费）**。本节是前端/后端服务的对接契约。
+三个交付面并存：工单 Issue 面向处理人（通知）、Step Summary 面向运维（人读）、**result artifact 面向前端（机器消费）**。本节是前端/后端服务的对接契约。
 
 ### 产出物与时机
 
-- artifact 名：`upstream-doc-monitor-status-<run_id>`（`<run_id>` = `github.run_id`）
-- 内容：单个 `status.json`，符合 [schemas/upstream_doc_monitor_status.schema.json](../schemas/upstream_doc_monitor_status.schema.json)
-- **每轮必产出**：`Upload status artifact` step 带 `if: always()`——检测失败、限流中断的轮次同样上传（此时条目多为 `error`），`if-no-files-found: warn`
+- artifact 名：`upstream-doc-monitor-result-<run_id>`（`<run_id>` = `github.run_id`）
+- 内容：单个 `result.json`，符合 [schemas/upstream_doc_monitor_result.schema.json](../schemas/upstream_doc_monitor_result.schema.json)
+- **每轮必产出**：`Upload result artifact` step 带 `if: always()`——检测失败、限流中断的轮次同样上传（此时条目多为 `error`），`if-no-files-found: warn`
 - 上传前用 `check-jsonschema` 校验，不合规即 job 红
 - 命名例外：本 workflow 是**全局 workflow**（不对应 projects.yaml 里的单一 project），故以 workflow 名 `upstream-doc-monitor-` 作前缀，见 [docs/artifacts.md](artifacts.md)
 
@@ -107,14 +107,14 @@ projects:
 #    也可按 workflow 名过滤：&workflow=upstream-doc-monitor.yml
 gh api "repos/cosdt-ci-test/workflows/actions/runs?branch=main&status=success&per_page=1"
 
-# 2. 取该 run 的 artifacts，找 name 为 upstream-doc-monitor-status-{run_id} 的项
+# 2. 取该 run 的 artifacts，找 name 为 upstream-doc-monitor-result-{run_id} 的项
 #    同一响应里的 created_at 即数据新鲜度
 gh api repos/cosdt-ci-test/workflows/actions/runs/{run_id}/artifacts
 
-# 3. 下载并解包，得到单个 status.json
-gh api repos/cosdt-ci-test/workflows/actions/runs/{run_id}/artifacts/{artifact_id}/zip > status.zip
+# 3. 下载并解包，得到单个 result.json
+gh api repos/cosdt-ci-test/workflows/actions/runs/{run_id}/artifacts/{artifact_id}/zip > result.zip
 #    或用 gh CLI 一步下载解包：
-gh run download {run_id} --repo cosdt-ci-test/workflows --name upstream-doc-monitor-status-{run_id}
+gh run download {run_id} --repo cosdt-ci-test/workflows --name upstream-doc-monitor-result-{run_id}
 ```
 
 ### 数据形态
@@ -152,7 +152,7 @@ gh run download {run_id} --repo cosdt-ci-test/workflows --name upstream-doc-moni
 
 ### 与内部报告 report.json 的关系
 
-同一轮另产出内部详细报告 `report.json`（`schema_version: 1`，含 changes / errors 双数组与 owner、前后哈希、工单动作、错误消息等细节），驱动 Step Summary 渲染与日志审计，**不上传 artifact**。两者并存：`status.json` 是对外前端契约（极简、稳定），`report.json` 是内部审计视图（可随实现调整）。
+同一轮另产出内部详细报告 `report.json`（`schema_version: 1`，含 changes / errors 双数组与 owner、前后哈希、工单动作、错误消息等细节），驱动 Step Summary 渲染与日志审计，**不上传 artifact**。两者并存：`result.json` 是对外前端契约（极简、稳定），`report.json` 是内部审计视图（可随实现调整）。
 
 ## 6. 已知限制（v1）
 

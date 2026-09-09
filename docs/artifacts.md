@@ -11,11 +11,11 @@
 | example 结果 | `<project>-examples-<run_id>-<job_index>` | 每个 `publish-result` matrix job（对应一个 `run-example`），`if: always()` |
 | manifest 检查 | `<project>-manifest-check` | `manifest-check` job，`if: always()` |
 | quick-start 结果 | `<project>-quick-start-<run_id>`，一轮测多棵树时用 `<project>-quick-start-<run_id>-<job_index>` | 托管 runner 上的 `publish-result`（或仍在同一 job 里写结果的旧流水线）。NPU 上的测试 job 不上传。无变化时整个 run 在 monitor 后结束，不产生此 artifact |
-| 上游文档监控状态 | `upstream-doc-monitor-status-<run_id>` | upstream-doc-monitor workflow 的 `Upload status artifact` step，`if: always()` |
+| 上游文档监控状态 | `upstream-doc-monitor-result-<run_id>` | upstream-doc-monitor workflow 的 `Upload result artifact` step，`if: always()` |
 
 `run_id` 是 GitHub Actions 的 `github.run_id`。`job_index` 是 matrix 的 `strategy.job-index`（从 0 起）。失败也必须上传，不能只在绿的时候留文件。
 
-命名例外：`upstream-doc-monitor-status-<run_id>` 属**全局 workflow**（监控清单覆盖多个上游项目，不对应 [projects.yaml](../projects.yaml) 里的单一 project），故以 workflow 名 `upstream-doc-monitor-` 作前缀，是「`<project>-` 开头」规则的例外。
+命名例外：`upstream-doc-monitor-result-<run_id>` 属**全局 workflow**（监控清单覆盖多个上游项目，不对应 [projects.yaml](../projects.yaml) 里的单一 project），故以 workflow 名 `upstream-doc-monitor-` 作前缀，是「`<project>-` 开头」规则的例外。
 
 ## 内容与 schema
 
@@ -39,9 +39,9 @@ llama.cpp 的 quick-start 结果由跑在 GitHub 托管 runner 上的 `publish-r
 
 example 流水线里，每个 `publish-result` job 在上传前用 `check-jsonschema --schemafile schemas/result.schema.json` 校验自己生成的 `result.json`；quick-start 流水线同样在上传前校验。缺文件或不合规即红。
 
-### `upstream-doc-monitor-status-<run_id>`
+### `upstream-doc-monitor-result-<run_id>`
 
-单个文件 `status.json`，符合 [schemas/upstream_doc_monitor_status.schema.json](../schemas/upstream_doc_monitor_status.schema.json)。由 upstream-doc-monitor workflow 每轮产出，`if: always()`——检测失败的轮次同样上传（此时条目多为 `error`），`if-no-files-found: warn`。上传前用 `check-jsonschema --schemafile schemas/upstream_doc_monitor_status.schema.json` 校验，不合规即 job 红。
+单个文件 `result.json`，符合 [schemas/upstream_doc_monitor_result.schema.json](../schemas/upstream_doc_monitor_result.schema.json)。由 upstream-doc-monitor workflow 每轮产出，`if: always()`——检测失败的轮次同样上传（此时条目多为 `error`），`if-no-files-found: warn`。上传前用 `check-jsonschema --schemafile schemas/upstream_doc_monitor_result.schema.json` 校验，不合规即 job 红。
 
 **顶层是裸数组**（不是对象、无 summary 包裹），一份**全量快照**：每轮包含监控清单的全部条目，本轮无变化的也在内。消费方拉最新一份做整表替换即可，无需增量合并。
 
@@ -84,7 +84,7 @@ gh run download {run_id} --repo cosdt-ci-test/workflows --name <project>-example
 
 下载后打开 `result.json`，用 `job_status` 判断该 example 是否跑通，用 `path` / `target_ref` 判断测的是哪条、哪个提交。
 
-#### `upstream-doc-monitor-status-<run_id>`（上游文档监控状态）
+#### `upstream-doc-monitor-result-<run_id>`（上游文档监控状态）
 
 后端服务持 GitHub token，三步拉到最新一份全量快照：
 
@@ -93,14 +93,14 @@ gh run download {run_id} --repo cosdt-ci-test/workflows --name <project>-example
 #    （也可按 workflow 名过滤：&workflow=upstream-doc-monitor.yml）
 gh api "repos/cosdt-ci-test/workflows/actions/runs?branch=main&status=success&per_page=1"
 
-# 2. 取该 run 的 artifacts，找 name 为 upstream-doc-monitor-status-{run_id} 的项
+# 2. 取该 run 的 artifacts，找 name 为 upstream-doc-monitor-result-{run_id} 的项
 #    同一响应里的 created_at 即数据新鲜度
 gh api repos/cosdt-ci-test/workflows/actions/runs/{run_id}/artifacts
 
-# 3. 下载并解包，得到单个 status.json
-gh api repos/cosdt-ci-test/workflows/actions/runs/{run_id}/artifacts/{artifact_id}/zip > status.zip
+# 3. 下载并解包，得到单个 result.json
+gh api repos/cosdt-ci-test/workflows/actions/runs/{run_id}/artifacts/{artifact_id}/zip > result.zip
 #    或用 gh CLI 一步下载解包：
-gh run download {run_id} --repo cosdt-ci-test/workflows --name upstream-doc-monitor-status-{run_id}
+gh run download {run_id} --repo cosdt-ci-test/workflows --name upstream-doc-monitor-result-{run_id}
 ```
 
-产物内不含生成时间与 run 标识：**新鲜度读第 2 步 artifact 的 `created_at`，run 标识读 artifact 名称里的 `{run_id}`**。拿到 `status.json` 后整表替换本地视图，待确认数 = 统计 `status == "pending"` 的项数。
+产物内不含生成时间与 run 标识：**新鲜度读第 2 步 artifact 的 `created_at`，run 标识读 artifact 名称里的 `{run_id}`**。拿到 `result.json` 后整表替换本地视图，待确认数 = 统计 `status == "pending"` 的项数。

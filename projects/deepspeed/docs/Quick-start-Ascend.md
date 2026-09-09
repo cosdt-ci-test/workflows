@@ -157,6 +157,7 @@ deepspeed --num_gpus 1 train_cifar10.py
 ```shell #test-result id="run-train" fuzzy='...'
 ...
 Finished Training
+...
 ```
 
 ## 多卡分布式训练
@@ -176,6 +177,7 @@ deepspeed --num_gpus 2 train_cifar10.py
 ```shell #test-result id="run-train-2card" fuzzy='...'
 ...
 Finished Training
+...
 ```
 
 ## 更多用法

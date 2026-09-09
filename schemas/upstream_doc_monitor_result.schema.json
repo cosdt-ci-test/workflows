@@ -20,7 +20,7 @@
       },
       "doc": {
         "type": "string",
-        "description": "Doc identifier: a repo-relative path for repo_file entries, a full URL for web_page entries."
+        "description": "Full URL of the monitored document, matching the configured url field: a GitHub blob URL for repo_file entries, the web page URL for web_page entries."
       },
       "version": {
         "type": ["string", "null"],

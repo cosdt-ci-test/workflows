@@ -959,7 +959,7 @@ def run(argv: list[str]) -> int:
             repo = entry["repo"]
             if repo not in version_cache:
                 version_cache[repo] = fetch_upstream_version(repo, token)
-            version, doc = version_cache[repo], entry["path"]
+            version, doc = version_cache[repo], _doc_links(entry)[0]
         else:
             version, doc = None, entry["url"]   # 网页类无版本号，不打 API
         ticket = open_tickets.get(key)

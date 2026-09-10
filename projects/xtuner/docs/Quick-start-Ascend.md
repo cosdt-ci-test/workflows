@@ -118,8 +118,9 @@ uv pip install modelscope
 ```shell #test id="xtuner-install-binary"
 uv pip install --index-url https://mirrors.aliyun.com/pypi/simple --no-deps xtuner
 # scikit-image 会拉 GUI 版 opencv-python（与 headless 并存，其 .so 直接链
-# libxcb.so.1 / libGL.so.1，服务器镜像不带），apt 补上系统库让两者都能用
-apt-get update -qq && apt-get install -y -qq libgl1 libglib2.0-0
+# libxcb.so.1 / libGL.so.1，服务器镜像不带），apt 补上系统库让两者都能用；
+# apt/dpkg 的进度打到 stdout 会污染本块输出比对，重定向掉（stderr 保留）
+apt-get update -qq >/dev/null && apt-get install -y -qq libgl1 libglib2.0-0 >/dev/null
 # torchvision（timm 的依赖）必须显式 pin 到与 torch 配对的 +cpu 版本：
 # PyPI 上的 linux wheel 是 CUDA 构建（链 libcudart），配 +cpu torch 时 C++ 算子
 # 注册不上、import 就崩；不 pin 版本的话 uv 会从 cpu 源挑最新的 +cpu wheel，
@@ -165,7 +166,7 @@ echo "${UPSTREAM_REF}"
 [ -d xtuner ] || git clone --depth 1 --branch <ref> https://github.com/InternLM/xtuner.git
 cd xtuner
 uv pip install --no-deps -e .
-apt-get update -qq && apt-get install -y -qq libgl1 libglib2.0-0
+apt-get update -qq >/dev/null && apt-get install -y -qq libgl1 libglib2.0-0 >/dev/null
 uv pip install -f https://mirrors.aliyun.com/pytorch-wheels/cpu 'mmengine==0.10.6' 'transformers==4.48.0' 'peft>=0.14.0' \
     'datasets>=3.2.0,<4.0.0' einops loguru openpyxl 'scikit-image' scipy \
     SentencePiece tiktoken transformers_stream_generator cyclopts \

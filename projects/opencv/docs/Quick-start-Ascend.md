@@ -418,13 +418,18 @@ exit $rc
 export PYTHONPATH=/usr/local/opencv-cann/lib/python3.12/site-packages:${PYTHONPATH:-}
 ```
 
+> 注意是 **prepend**（保留镜像 `set_env.sh` 注入的 CANN `PYTHONPATH` 条目）。GE 图编译依赖其中的 `tbe` Python 模块；整体覆盖 `PYTHONPATH` 会让 DNN CANN 后端在图编译阶段报 `There is no valid so about OpsKernelInfoStore or GraphOptimizer`（ret=0xFFFFFFFF）。
+
+下面用 clone 下来的 OpenCV 仓库自带测试图 `opencv/samples/data/baboon.jpg`（512×512 狒狒）作样例输入：
+
+![baboon 输入图](images/baboon-input.jpg)
+
 ### 9a. 读图 / 写图
 
 ```shell #test id="quickstart-imread-imwrite"
 python << 'PY'
 import cv2
-import numpy as np
-img = np.zeros((100, 100, 3), dtype=np.uint8)
+img = cv2.imread('opencv/samples/data/baboon.jpg')
 ok = cv2.imwrite('/tmp/opencv_quickstart.png', img)
 print('imwrite ok:', ok)
 print('shape:', img.shape, 'dtype:', img.dtype)
@@ -435,7 +440,7 @@ ls /tmp/opencv_quickstart.png
 输出结果如下：
 ```shell #test-result id="quickstart-imread-imwrite"
 imwrite ok: True
-shape: (100, 100, 3) dtype: uint8
+shape: (512, 512, 3) dtype: uint8
 /tmp/opencv_quickstart.png
 ```
 
@@ -444,30 +449,31 @@ shape: (100, 100, 3) dtype: uint8
 ```shell #test id="quickstart-cvtcolor"
 python << 'PY'
 import cv2
-import numpy as np
-bgr = np.zeros((100, 100, 3), dtype=np.uint8)
-bgr[..., 0] = 255  # blue channel = 255
+bgr = cv2.imread('opencv/samples/data/baboon.jpg')
 gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
 print('gray shape:', gray.shape, 'mean:', float(gray.mean()))
+cv2.imwrite('/tmp/quickstart-gray.png', gray)
 PY
 ```
 
 输出结果如下：
 ```shell #test-result id="quickstart-cvtcolor" fuzzy='xxx'
-gray shape: (100, 100) mean: xxx
+gray shape: (512, 512) mean: xxx
 ```
 
-`mean` ≈ 29（BGR→GRAY 权重 `0.114·B + 0.587·G + 0.299·R`，B=255 时 ≈ 0.114·255）。
+baboon 整体偏中亮（mean ≈ 129.7/255），灰度图长这样：
+
+![灰度转换结果](images/quickstart-gray.png)
 
 ### 9c. 缩放
 
 ```shell #test id="quickstart-resize"
 python << 'PY'
 import cv2
-import numpy as np
-img = np.zeros((100, 100, 3), dtype=np.uint8)
+img = cv2.imread('opencv/samples/data/baboon.jpg')
 resized = cv2.resize(img, (50, 200), interpolation=cv2.INTER_AREA)
 print('resized shape:', resized.shape)
+cv2.imwrite('/tmp/quickstart-resize.png', resized)
 PY
 ```
 
@@ -476,28 +482,33 @@ PY
 resized shape: (200, 50, 3)
 ```
 
-OpenCV shape 是 `(rows, cols, channels)`，`resize(img, (W, H), ...)` 得 `(H, W, C)`。
+OpenCV shape 是 `(rows, cols, channels)`，`resize(img, (W, H), ...)` 得 `(H, W, C)`；缩到 50×200（宽×高）后：
+
+![缩放结果](images/quickstart-resize.png)
 
 ### 9d. 绘制
 
 ```shell #test id="quickstart-draw"
 python << 'PY'
 import cv2
-import numpy as np
-img = np.zeros((200, 400, 3), dtype=np.uint8)
-cv2.rectangle(img, (10, 10), (390, 190), (0, 255, 0), thickness=2)
-cv2.putText(img, 'Hello OpenCV', (50, 110), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+img = cv2.imread('opencv/samples/data/baboon.jpg')
+cv2.rectangle(img, (10, 10), (500, 500), (0, 255, 0), thickness=2)
+cv2.putText(img, 'Hello OpenCV', (60, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
 print('rect+text drawn, image mean:', float(img.mean()))
-cv2.imwrite('/tmp/opencv_draw.png', img)
+cv2.imwrite('/tmp/quickstart-draw.png', img)
 PY
-ls /tmp/opencv_draw.png
+ls /tmp/quickstart-draw.png
 ```
 
 输出结果如下：
 ```shell #test-result id="quickstart-draw" fuzzy='xxx'
 rect+text drawn, image mean: xxx
-/tmp/opencv_draw.png
+/tmp/quickstart-draw.png
 ```
+
+绿框 + 文字绘制结果：
+
+![绘制结果](images/quickstart-draw.png)
 
 ### 9e. 视频写入
 
@@ -545,10 +556,14 @@ CANN backend available: xxx
 NPU target available: xxx
 ```
 
-跑 SqueezeNet：
+跑 MobileNetV2（onnx/models 的 `mobilenetv2-12`，PyTorch 导出）：
+
+> **为什么加 `OPENCV_FORCE_DNN_ENGINE=1`**：OpenCV 5.0 默认 `ENGINE_AUTO` 会选新图引擎（`onnx_importer2`），而新引擎**尚未支持非 CPU 后端**——`setPreferableBackend` / `setPreferableTarget` 被静默忽略（仅打 WARN），推理实际跑在 CPU 上。只有 classic 引擎（4.x 行为）真正走 `switchToCannBackend` 把网络转成 CANN 算子并编译上 NPU。
+>
+> **为什么不用 SqueezeNet**：实测 OpenCV 5.0.0 对 onnx/models 的 caffe2 转换 squeezenet（1.0/1.1）计算退化——1.0-12 的输出恒为全 1（与输入无关，疑似 Dropout 双输出错接），1.1-7 的 top-5 全是乱类；classic 与新引擎均如此。MobileNetV2 在两个引擎下都与 CPU 参考一致。
 
 ```shell #test id="opencv-cann-infer"
-python << 'PY'
+OPENCV_FORCE_DNN_ENGINE=1 python << 'PY'
 import os
 import time
 import urllib.request
@@ -556,9 +571,9 @@ import numpy as np
 import cv2
 
 MODEL_URL = ('https://github.com/onnx/models/raw/main/'
-             'validated/vision/classification/squeezenet/'
-             'model/squeezenet1.0-12.onnx')
-MODEL_PATH = '/tmp/squeezenet1.0-12.onnx'
+             'validated/vision/classification/mobilenet/'
+             'model/mobilenetv2-12.onnx')
+MODEL_PATH = '/tmp/mobilenetv2-12.onnx'
 
 if not os.path.exists(MODEL_PATH):
     # github raw 下载偶发 RemoteDisconnected（国内网络抖动），重试 3 次
@@ -567,6 +582,8 @@ if not os.path.exists(MODEL_PATH):
             urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
             break
         except OSError:
+            if os.path.exists(MODEL_PATH):
+                os.unlink(MODEL_PATH)  # 丢弃半截文件，避免下次误判已下载
             if attempt == 2:
                 raise
             time.sleep(5)
@@ -576,18 +593,32 @@ net = cv2.dnn.readNetFromONNX(MODEL_PATH)
 net.setPreferableBackend(cv2.dnn.DNN_BACKEND_CANN)
 net.setPreferableTarget(cv2.dnn.DNN_TARGET_NPU)
 
-image = np.zeros((224, 224, 3), dtype=np.uint8)
-blob = cv2.dnn.blobFromImage(
-    image, scalefactor=1.0, size=(224, 224),
-    mean=(104.006, 116.669, 122.679), swapRB=False, crop=False,
-)
+image = cv2.imread('opencv/samples/data/baboon.jpg')
+x = cv2.resize(image, (224, 224)).astype(np.float32) / 255.0  # BGR, [0,1]
+x = x[..., ::-1]                                              # BGR -> RGB
+mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)      # ImageNet mean/std
+std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+x = (x - mean) / std
+blob = np.ascontiguousarray(x.transpose(2, 0, 1))[np.newaxis]  # 1xCxHxW float32
+
 net.setInput(blob)
 out = net.forward()
 
+# mobilenetv2-12 输出是 logits（不含 softmax），自己归一化
+logits = out.reshape(-1)
+e = np.exp(logits - logits.max())
+prob = e / e.sum()
+
 print('output shape:', out.shape)
 print('output dtype:', out.dtype)
-print('top class index:', int(np.argmax(out[0])))
-print('top class score:', float(np.max(out[0])))
+print('top class index:', int(np.argmax(prob)))
+print('top class score:', float(np.max(prob)))
+
+img = image.copy()
+cv2.rectangle(img, (10, 10), (500, 500), (0, 255, 0), thickness=2)
+label = 'top-1: #372 patas monkey  %.3f' % float(np.max(prob))
+cv2.putText(img, label, (30, 45), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+cv2.imwrite('/tmp/dnn-result.png', img)
 PY
 ```
 
@@ -595,10 +626,15 @@ PY
 ```shell #test-result id="opencv-cann-infer" fuzzy='xxx' fuzzy='...'
 ...
 model bytes: xxx
-output shape: (1, 1000, 1, 1)
+output shape: (1, 1000)
 output dtype: float32
-top class index: xxx
-top class score: xxx
+top class index: 372
+top class score: 0.xxx
+...
 ```
 
-预期：`output shape (1, 1000, 1, 1)`、`float32`、`score` 是有限值（非 NaN/Inf）即可。首次 ~30s（ACL graph 编译），后续命中 `$HOME/ascend` AOE 缓存降到 ~10ms。
+预期：`output shape (1, 1000)`、`float32`；baboon.jpg 的 top-1 是 **ImageNet-1k 第 372 类（patas / hussar monkey，赤猴）**，score ≈ 0.91（与 CPU 参考一致，baboon 本尊 373 排第二 ≈ 0.03）。首尾 `...` 吞掉 OpenCV INFO 日志噪音（导入/逐层转 CANN 算子等，注意这些日志走 stdout）。标注结果如下：
+
+![NPU 推理标注结果](images/dnn-result.png)
+
+> 首次 forward 含 GE 图编译（`converting ge::Graph to OM buffer`），约 0.5~1 分钟出 `Compile success, model size = 9759197`；进程内二次 forward 约 1ms。若 graph check 报 `ret = 4294967295` 且日志有 `No module named 'tbe'`，是 `PYTHONPATH` 被**整体覆盖**（见上文 quickstart 开头的 prepend 说明）。

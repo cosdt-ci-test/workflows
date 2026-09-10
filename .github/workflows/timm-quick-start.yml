@@ -25,9 +25,9 @@
 # device-plugin, so container_options stays empty (same convention as
 # tensordict). The doc exercises install + the 快速开始 flow's
 # four #test smoke commands (import-torch-npu / timm-train /
-# timm-validate / timm-inference) all with pretrained=False, so
-# no weights are downloaded and no read-only Ascend driver bind-mount
-# is needed. check-torch expects `count: 1`.
+# timm-validate / timm-inference) 自动下载 pretrained 权重（modelscope）,
+# so no read-only Ascend driver bind-mount is needed.
+# check-torch expects `count: 1`.
 
 name: timm-quick-start
 
@@ -47,6 +47,7 @@ concurrency:
 
 on:
   # schedule: deliberately NOT enabled yet - see the header note.
+  # 跑通前 schedule 暂关.
   # Enable with e.g. `- cron: '45 */3 * * *'` once the pipeline is
   # proven stable on manual runs.
   workflow_dispatch:
@@ -70,12 +71,12 @@ jobs:
       container_options: >-
       # Doc body does: uv pip install timm + four #test smoke commands
       # (import-torch-npu / timm-train / timm-validate / timm-inference).
-      # All four construct the model with pretrained=False on 'npu:0'
+      # All four auto-download pretrained weights (modelscope) on 'npu:0'
       # directly; they run after timm install. timm's transitive deps
       # (torch / torchvision / pyyaml / huggingface_hub / safetensors)
-      # are small enough that 90 min covers cold cache + first-time wheel
+      # are small enough that 120 min covers cold cache + first-time wheel
       # pulls + four ~1s smoke commands comfortably.
-      timeout_minutes: 90
+      timeout_minutes: 120
       upstream_repo: huggingface/pytorch-image-models
       # Raw URL the engine's monitor hashes and the test fetches;
       # doc-hash state lives under the monitor-state-timm- cache prefix.

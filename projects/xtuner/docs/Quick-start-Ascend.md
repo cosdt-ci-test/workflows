@@ -36,6 +36,7 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | CANN | 9.1.0 |
 | torch | 2.11.0+cpu |
 | torch_npu | 2.11.0 |
+| torchvision | 0.26.0+cpu |
 | xtuner | 最新 release tag |
 
 #### 前置安装
@@ -116,10 +117,17 @@ uv pip install modelscope
 
 ```shell #test id="xtuner-install-binary"
 uv pip install --index-url https://mirrors.aliyun.com/pypi/simple --no-deps xtuner
-uv pip install 'mmengine==0.10.6' 'transformers==4.48.0' 'peft>=0.14.0' \
+# scikit-image 会拉 GUI 版 opencv-python（与 headless 并存，其 .so 直接链
+# libxcb.so.1 / libGL.so.1，服务器镜像不带），apt 补上系统库让两者都能用
+apt-get update -qq && apt-get install -y -qq libgl1 libglib2.0-0
+# torchvision（timm 的依赖）必须显式 pin 到与 torch 配对的 +cpu 版本：
+# PyPI 上的 linux wheel 是 CUDA 构建（链 libcudart），配 +cpu torch 时 C++ 算子
+# 注册不上、import 就崩；不 pin 版本的话 uv 会从 cpu 源挑最新的 +cpu wheel，
+# 连带把 torch 升级到不配套的版本（torch_npu 对不上、NPU 后端加载失败）
+uv pip install -f https://mirrors.aliyun.com/pytorch-wheels/cpu 'mmengine==0.10.6' 'transformers==4.48.0' 'peft>=0.14.0' \
     'datasets>=3.2.0,<4.0.0' einops loguru openpyxl 'scikit-image' scipy \
     SentencePiece tiktoken transformers_stream_generator cyclopts \
-    'opencv-python-headless<=4.12.0.88' timm pyarrow pydantic tensorboard \
+    'opencv-python-headless<=4.12.0.88' 'torchvision==0.26.0+cpu' timm pyarrow pydantic tensorboard \
     xxhash imageio 'py-libnuma' GitPython
 python -c "import xtuner; from xtuner.version import __version__; print('xtuner', __version__)"
 ```
@@ -157,10 +165,11 @@ echo "${UPSTREAM_REF}"
 [ -d xtuner ] || git clone --depth 1 --branch <ref> https://github.com/InternLM/xtuner.git
 cd xtuner
 uv pip install --no-deps -e .
-uv pip install 'mmengine==0.10.6' 'transformers==4.48.0' 'peft>=0.14.0' \
+apt-get update -qq && apt-get install -y -qq libgl1 libglib2.0-0
+uv pip install -f https://mirrors.aliyun.com/pytorch-wheels/cpu 'mmengine==0.10.6' 'transformers==4.48.0' 'peft>=0.14.0' \
     'datasets>=3.2.0,<4.0.0' einops loguru openpyxl 'scikit-image' scipy \
     SentencePiece tiktoken transformers_stream_generator cyclopts \
-    'opencv-python-headless<=4.12.0.88' timm pyarrow pydantic tensorboard \
+    'opencv-python-headless<=4.12.0.88' 'torchvision==0.26.0+cpu' timm pyarrow pydantic tensorboard \
     xxhash imageio 'py-libnuma' GitPython
 python -c "import xtuner; from xtuner.version import __version__; print('xtuner', __version__)"
 ```
@@ -471,8 +480,8 @@ print(path)
 ```
 
 <!-- # py_compile 验 cfg 是合法 Python + 4 处修改都生效（grep 关键串）。
-## 不用 mmengine.config.Config.fromfile：它会执行 cfg 顶层 import 触发 torchvision::nms，
-## CANN 镜像的 torchvision 缺 C++ op 直接 RuntimeError。 -->
+## 不用 mmengine.config.Config.fromfile：装了 torchvision 0.26.0+cpu 后它其实能跑，
+## 但 py_compile 更轻量、输出确定，不引入 cfg 顶层 import 的执行副作用。 -->
 验证修改结果：
 
 ```shell #test id="xtuner-patch-cfg" load="xtuner_llm_cfg_path>>cfg" load="xtuner_weights_path>>weights_dir"
@@ -519,91 +528,6 @@ data= xxx
 这里不验 `<cfg>` 训出来的实际效果，那要等下面「启动微调」章节真跑。
 ```
 
-#### 准备 cv2 / torchvision stub
-
-`cv2`（opencv-python）缺 `libxcb.so.1`（X11 客户端库，服务器镜像不带），进程一启动就崩；`torchvision` 在 CPU-only torch 里 C++ 算子没注册，调用直接报错。本节干脆不装真包，给它们写一对 stub 放到 `/tmp`，把缺的函数全改成 `return None`、啥都不做。下面「启动微调·单卡」「启动微调·多卡」「模型转换 + LoRA 合并」「与模型对话」节都会把 stub 路径塞到 `PYTHONPATH` 最前面，让 Python 优先找到空壳、绕开坏掉的真包。
-
-```shell #test-setup id="xtuner-train-stubs"
-mkdir -p /tmp/cv2_stub/cv2
-cat > /tmp/cv2_stub/cv2/__init__.py <<'PYEOF'
-__version__ = "4.12.0"
-
-def imread(*args, **kwargs):
-    return None
-
-def imwrite(*args, **kwargs):
-    return True
-
-def cvtColor(*args, **kwargs):
-    return None
-
-def resize(*args, **kwargs):
-    return None
-
-def setNumThreads(*args, **kwargs):
-    return None
-PYEOF
-
-mkdir -p /tmp/torchvision_stub/torchvision/ops /tmp/torchvision_stub/torchvision/transforms
-cat > /tmp/torchvision_stub/torchvision/__init__.py <<'PYEOF'
-__version__ = "0.24.0"
-PYEOF
-cat > /tmp/torchvision_stub/torchvision/ops/__init__.py <<'PYEOF'
-def nms(*args, **kwargs):
-    return None
-PYEOF
-cat > /tmp/torchvision_stub/torchvision/transforms/__init__.py <<'PYEOF'
-from enum import Enum
-
-class InterpolationMode(Enum):
-    NEAREST = "nearest"
-    NEAREST_EXACT = "nearest-exact"
-    BOX = "box"
-    BILINEAR = "bilinear"
-    HAMMING = "hamming"
-    BICUBIC = "bicubic"
-    LANCZOS = "lanczos"
-
-def Compose(*args, **kwargs):
-    return None
-
-def ToTensor(*args, **kwargs):
-    return None
-
-def Resize(*args, **kwargs):
-    return None
-
-def CenterCrop(*args, **kwargs):
-    return None
-
-def Normalize(*args, **kwargs):
-    return None
-PYEOF
-cat > /tmp/torchvision_stub/torchvision/transforms/v2.py <<'PYEOF'
-from torchvision.transforms import functional
-PYEOF
-cat > /tmp/torchvision_stub/torchvision/transforms/functional.py <<'PYEOF'
-from torchvision.transforms import InterpolationMode
-
-def normalize(*args, **kwargs):
-    return None
-
-def pil_to_tensor(*args, **kwargs):
-    return None
-
-def to_tensor(*args, **kwargs):
-    return None
-
-def to_pil_image(*args, **kwargs):
-    return None
-
-def resize(*args, **kwargs):
-    return None
-PYEOF
-
-export PYTHONPATH=/tmp/torchvision_stub:/tmp/cv2_stub${PYTHONPATH:+:$PYTHONPATH}
-```
-
 #### 启动微调
 
 训练日志（loss、学习率）每次跑都不一样，没法写死预期值。本文档只跑 5 轮迭代验证整条训练链路，不指望训出有意义结果。`EvaluateChatHook` 每轮打印 `Sample output:` 采样段，下面的验证命令检查 `.pth` 落盘 + 采样段格式。
@@ -619,7 +543,6 @@ cp <cfg> /tmp/xtuner_npu_smoke_single_cfg.py
 
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 export TORCH_NPU_USE_HCCL=1
-export PYTHONPATH=/tmp/torchvision_stub:/tmp/cv2_stub${PYTHONPATH:+:$PYTHONPATH}
 mkdir -p /tmp/xtuner_sft_llm_out_single
 set -o pipefail
 
@@ -691,7 +614,6 @@ cp <cfg> /tmp/xtuner_npu_smoke_multi_cfg.py
 
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 export TORCH_NPU_USE_HCCL=1
-export PYTHONPATH=/tmp/torchvision_stub:/tmp/cv2_stub${PYTHONPATH:+:$PYTHONPATH}
 mkdir -p /tmp/xtuner_sft_llm_out_multi
 set -o pipefail
 
@@ -750,8 +672,6 @@ Tellmeaboutthecolor#FF5733<|im_end|>
 训练产物是 LoRA adapter 的 `.pth`（只含 adapter 参数），要跟纯 base 模型对话需要两步：`pth_to_hf` 把 `.pth` 转成 HuggingFace 格式（PEFT adapter），`merge` 把 adapter 合并回 base：
 
 ```shell #test-setup load="xtuner_llm_cfg_path>>cfg" load="xtuner_weights_path>>weights_dir"
-export PYTHONPATH=/tmp/torchvision_stub:/tmp/cv2_stub${PYTHONPATH:+:$PYTHONPATH}
-
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 src_pth=$(ls -t /tmp/xtuner_sft_llm_out_single/*.pth 2>/dev/null | head -1)
 [ -n "$src_pth" ] || { echo "no .pth: 先跑上面的单卡训练"; exit 1; }
@@ -798,7 +718,6 @@ ls -t /tmp/xtuner_sft_llm_out_single/merged/*.bin 2>/dev/null | head -3
 先跟合并后的模型对话（用上一步合并出的 1.8B merged/ 目录）：
 
 ```shell #test id="xtuner-chat-merged"
-export PYTHONPATH=/tmp/torchvision_stub:/tmp/cv2_stub${PYTHONPATH:+:$PYTHONPATH}
 echo -e "Tell me about the color #66ccff\n\nEXIT\n" | \
 python -m xtuner.tools.chat /tmp/xtuner_sft_llm_out_single/merged \
     --prompt-template qwen_chat \
@@ -817,7 +736,6 @@ Load LLM from /tmp/xtuner_sft_llm_out_single/merged
 不合并、只跟 LLM + LoRA adapter 直接对话（adapter 版）：
 
 ```shell #test id="xtuner-chat-adapter" load="xtuner_weights_path>>weights_dir"
-export PYTHONPATH=/tmp/torchvision_stub:/tmp/cv2_stub${PYTHONPATH:+:$PYTHONPATH}
 hf_dir=$(ls -td /tmp/xtuner_sft_llm_out_single/iter_*_hf 2>/dev/null | head -1)
 [ -n "$hf_dir" ] || { echo "no iter_*_hf: 先跑上面的模型转换"; exit 1; }
 echo -e "Tell me about the color #66ccff\n\nEXIT\n" | \

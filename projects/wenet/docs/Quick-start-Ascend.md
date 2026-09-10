@@ -226,22 +226,16 @@ xxx
 
 ## 10. 模型训练（stage 4）
 
-`run_npu.sh` 脚本中实现了 NPU 卡号的自动获取和相关环境变量设置，可直接启动昇腾 NPU 上的模型训练。为控制时长，将 `max_epoch` 从 240 缩短到 5。
+`run_npu.sh` 脚本中实现了 NPU 卡号的自动获取和相关环境变量设置，可直接启动昇腾 NPU 上的模型训练。为控制时长，将 `max_epoch` 从 240 缩短到 5（其余参数全部保持脚本默认值）：
 
-> **注意**：当前 torch_npu 2.2.0 + CANN 8.0.0 组合下，DataLoader 多进程 worker 在 fork 后会段错误
-> （上游 PR #2563 验证栈可正常，属栈版本行为漂移），因此这里使用 `--num_workers 0` 在主进程
-> 加载数据，并对 wenet 硬编码的 `persistent_workers` / `prefetch_factor` 打最小补丁使其与
-> `num_workers=0` 兼容；训练后立即校验产物以快速失败：
+> **注意**：训练产物校验放在命令尾部，快速失败：
 
 ```shell #test-setup id="train"
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 cd wenet/examples/aishell/s0
 cp conf/train_conformer.yaml conf/train_conformer_5ep.yaml
 sed -i 's/max_epoch: .*/max_epoch: 5/' conf/train_conformer_5ep.yaml
-TRAIN_UTILS=$(git rev-parse --show-toplevel)/wenet/utils/train_utils.py
-sed -i 's/persistent_workers=True/persistent_workers=args.num_workers > 0/' $TRAIN_UTILS
-sed -i 's/prefetch_factor=args.prefetch/prefetch_factor=args.prefetch if args.num_workers > 0 else None/' $TRAIN_UTILS
-bash run_npu.sh --stage 4 --stop_stage 4 --num_workers 0 --train_config conf/train_conformer_5ep.yaml
+bash run_npu.sh --stage 4 --stop_stage 4 --train_config conf/train_conformer_5ep.yaml
 test -f exp/conformer/train.yaml || { echo "train failed, check stderr above"; exit 1; }
 ```
 
@@ -371,4 +365,5 @@ exp/conformer/final_quant.zip
 | `no such directory $data` | 数据目录未创建 | `mkdir -p` 创建绝对路径数据目录（stage -1 的前置要求） |
 | 数据下载慢 / 失败 | openslr 出口带宽波动 | 重跑 stage -1，脚本按 `.complete` 断点续传 |
 | 训练报错 OOM | batch_size 过大 | 减小 batch_size 或使用真实数据 |
+| 训练段错误（worker fork 后） | torch_npu 2.2.0 + CANN 8.0.0 下 DataLoader 多进程 worker 的 fork-safety 问题（上游 PR #2563 验证栈可正常，属栈版本行为漂移） | 回退 `--num_workers 0`，并把 `wenet/utils/train_utils.py` 中硬编码的 `persistent_workers=True` / `prefetch_factor=args.prefetch` 改为与 `num_workers > 0` 条件兼容 |
 | `sox` 命令失败 | 未安装 sox | `apt-get install sox libsox-dev` |

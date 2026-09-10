@@ -65,7 +65,10 @@ jobs:
         --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
       # Doc body does: apt-get install build deps (aliyun mirror) +
       # git clone opencv + opencv_contrib + source patches (MatShape
-      # + all_ops.h narrowing) + cmake -DWITH_CANN=ON configure
+      # + all_ops.h narrowing + op_cann.cpp host-buffer-clamped
+      # memcpy: driver >= 25.5.x reports padded dataset sizes that
+      # overflow the shape-sized host Mat = heap corruption)
+      # + cmake -DWITH_CANN=ON configure
       # (BUILD_LIST scoped to 8 modules) + make -j2 (Debug -O0;
       # ~50-70 min with the narrow-header patch) + make install
       # + opencv_version / opencv_test_cannops smokes + Python binding

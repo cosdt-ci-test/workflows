@@ -90,9 +90,9 @@ git clone --depth 1 --branch <ref> https://github.com/opencv/opencv.git
 git clone --depth 1 --branch <ref> https://github.com/opencv/opencv_contrib.git
 ```
 
-## 打 4 个源码补丁
+## 打 5 个源码补丁
 
-OpenCV mainline 与 CANN 9.1.0 / aarch64 有 4 处不兼容（4 个 patch 脚本假设 runner resolve 到 `5.0.0` tag；其它 tag 上 `assert old in s` 会抛错，需要重写 patch 适配）。按顺序跑这 4 段脚本（幂等，已打过会断言跳过）。
+OpenCV mainline 与 CANN 9.1.0 / aarch64 有 4 处不兼容 + 1 处宿主驱动兼容性缺陷（5 个 patch 脚本假设 runner resolve 到 `5.0.0` tag；其它 tag 上 `assert old in s` 会抛错，需要重写 patch 适配）。按顺序跑这 5 段脚本（幂等，已打过会断言跳过）。
 
 ### 4a. `cv::MatShape` 改了类型
 
@@ -307,6 +307,60 @@ PY
 ```
 
 预期：打印 `(h) patched`。
+
+### 4e. CANN 整图执行的宿主缓冲收窄（驱动 ≥ 25.5.x 堆损坏修复）
+
+`CannNet::forward`（`op_cann.cpp`）做输入/输出 H2D/D2H 拷贝时，**把 ACL 报告的 dataset buffer 字节数（`aclmdlGetOutputSizeByIndex`，可能含对齐 padding）当作宿主 `Mat` 的容量上限**。宿主 buffer 是按 shape 推断分配的（如 1×1000×float32 = 4000 字节）；宿主机驱动 ≥ 25.5.x（配 CANN 9.1.0 镜像）时报告的输出 size 大于 shape 字节数，`aclrtMemcpy` 直接把宿主堆写穿 → `corrupted double-linked list` + SIGABRT（实测 910B1/910B4 × 驱动 25.5.2 必崩，驱动 25.3.rc1.2 正常——崩溃跟卡无关、跟驱动版本走）。两个方向都按宿主实际字节数收窄拷贝，并打一行日志暴露 `acl_size` 与 `host_size`。
+
+```shell #test-setup
+python3 - <<'PY'
+import pathlib
+
+# (i) 输入 H2D：拷贝字节数收窄到宿主 Mat 实际大小（防越界读）
+p = pathlib.Path('opencv/modules/dnn/src/op_cann.cpp')
+s = p.read_text()
+old_in = '''        auto db = aclmdlGetDatasetBuffer(inputs, i);
+        auto p_device = aclGetDataBufferAddr(db);
+        auto db_size = aclGetDataBufferSizeV2(db);
+
+        ACL_CHECK_RET(aclrtMemcpy(p_device, db_size, p_host, db_size, ACL_MEMCPY_HOST_TO_DEVICE));'''
+new_in = '''        auto db = aclmdlGetDatasetBuffer(inputs, i);
+        auto p_device = aclGetDataBufferAddr(db);
+        auto db_size = aclGetDataBufferSizeV2(db);
+        // (i) driver >= 25.5.x may report dataset buffer size with alignment padding,
+        // larger than the host Mat's actual bytes; clamp copies to the host size on
+        // both directions to avoid overrunning the host heap.
+        size_t host_size = (size_t)input_wrappers[i]->host->total() * input_wrappers[i]->host->elemSize();
+        size_t copy_size = db_size < host_size ? db_size : host_size;
+        ACL_CHECK_RET(aclrtMemcpy(p_device, db_size, p_host, copy_size, ACL_MEMCPY_HOST_TO_DEVICE));'''
+assert old_in in s, 'op_cann.cpp: input memcpy block not found'
+s = s.replace(old_in, new_in, 1)
+
+# (j) 输出 D2H：拷贝字节数收窄到宿主 Mat 实际大小（防越界写 = 堆损坏根因），并打日志
+old_out = '''        auto db = aclmdlGetDatasetBuffer(outputs, i);
+        auto p_device = aclGetDataBufferAddr(db);
+        auto db_size = aclGetDataBufferSizeV2(db);
+
+        ACL_CHECK_RET(aclrtMemcpy(p_host, db_size, p_device, db_size, ACL_MEMCPY_DEVICE_TO_HOST));'''
+new_out = '''        auto db = aclmdlGetDatasetBuffer(outputs, i);
+        auto p_device = aclGetDataBufferAddr(db);
+        auto db_size = aclGetDataBufferSizeV2(db);
+        // (j) clamp the copy to the host capacity: with host driver >= 25.5.x the
+        // reported output size can exceed the shape-implied bytes (padding), and
+        // copying db_size bytes into the smaller host Mat corrupts the heap.
+        size_t host_size = (size_t)output_wrappers[i]->host->total() * output_wrappers[i]->host->elemSize();
+        size_t copy_size = db_size < host_size ? db_size : host_size;
+        CV_LOG_INFO(NULL, "DNN/CANN: output[" << i << "] acl_size=" << db_size << " host_size=" << host_size);
+        ACL_CHECK_RET(aclrtMemcpy(p_host, host_size, p_device, copy_size, ACL_MEMCPY_DEVICE_TO_HOST));'''
+assert old_out in s, 'op_cann.cpp: output memcpy block not found'
+assert new_out not in s, 'op_cann.cpp: already patched'
+s = s.replace(old_out, new_out, 1)
+p.write_text(s)
+print('(i)(j) op_cann.cpp: host-buffer clamped H2D/D2H memcpy + size log')
+PY
+```
+
+预期：打印 `(i)(j) ... patched` 一行；`grep 'host_size=' opencv/modules/dnn/src/op_cann.cpp` 命中 1 处。
 
 ## 桥接 CANN 9.1.0 的库目录
 
@@ -645,4 +699,4 @@ top class score: 0.xxx
 
 ![NPU 推理标注结果](images/dnn-result.png)
 
-> 首次 forward 含 GE 图编译（`converting ge::Graph to OM buffer`），约 0.5~1 分钟出 `Compile success, model size = 9759197`；进程内二次 forward 约 1ms。若 graph check 报 `ret = 4294967295` 且日志有 `No module named 'tbe'`，是 `PYTHONPATH` 被**整体覆盖**（见上文 quickstart 开头的 prepend 说明）。
+> 首次 forward 含 GE 图编译（`converting ge::Graph to OM buffer`），约 0.5~1 分钟出 `Compile success, model size = 9759197`；进程内二次 forward 约 1ms。若 graph check 报 `ret = 4294967295` 且日志有 `No module named 'tbe'`，是 `PYTHONPATH` 被**整体覆盖**（见上文 quickstart 开头的 prepend 说明）。forward 时补丁 4e 会打一行 `DNN/CANN: output[0] acl_size=... host_size=...`——驱动 25.3 两者相等；驱动 ≥ 25.5.x 时 `acl_size` 会大于 `host_size`（对齐 padding），这正是未打 4e 时堆损坏的根源。

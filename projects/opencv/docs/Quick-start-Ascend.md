@@ -556,7 +556,9 @@ CANN backend available: xxx
 NPU target available: xxx
 ```
 
-跑 MobileNetV2（onnx/models 的 `mobilenetv2-12`，PyTorch 导出）：
+跑 MobileNetV2（onnx/models 的 `mobilenetv2-12`，PyTorch 导出，13,964,571 bytes）：
+
+> **模型来源**：CI 与本仓库 checkout 优先用 `fixtures/mobilenetv2-12.onnx`（同字节入仓，避免 GitHub raw 在国内网络的 `RemoteDisconnected` 抖动）；自己机器上跟着跑时没有 fixtures 目录，自动回落到从 onnx/models 下载（重试 5 次）。
 
 > **为什么加 `OPENCV_FORCE_DNN_ENGINE=1`**：OpenCV 5.0 默认 `ENGINE_AUTO` 会选新图引擎（`onnx_importer2`），而新引擎**尚未支持非 CPU 后端**——`setPreferableBackend` / `setPreferableTarget` 被静默忽略（仅打 WARN），推理实际跑在 CPU 上。只有 classic 引擎（4.x 行为）真正走 `switchToCannBackend` 把网络转成 CANN 算子并编译上 NPU。
 >
@@ -565,6 +567,7 @@ NPU target available: xxx
 ```shell #test id="opencv-cann-infer"
 OPENCV_FORCE_DNN_ENGINE=1 python << 'PY'
 import os
+import shutil
 import time
 import urllib.request
 import numpy as np
@@ -576,17 +579,22 @@ MODEL_URL = ('https://github.com/onnx/models/raw/main/'
 MODEL_PATH = '/tmp/mobilenetv2-12.onnx'
 
 if not os.path.exists(MODEL_PATH):
-    # github raw 下载偶发 RemoteDisconnected（国内网络抖动），重试 3 次
-    for attempt in range(3):
-        try:
-            urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
-            break
-        except OSError:
-            if os.path.exists(MODEL_PATH):
-                os.unlink(MODEL_PATH)  # 丢弃半截文件，避免下次误判已下载
-            if attempt == 2:
-                raise
-            time.sleep(5)
+    if os.path.exists('fixtures/mobilenetv2-12.onnx'):
+        # 本仓库 checkout（CI）：直接用入仓副本，零网络依赖
+        shutil.copy('fixtures/mobilenetv2-12.onnx', MODEL_PATH)
+    else:
+        # 读者自跑：从 onnx/models 下载；github raw 偶发 RemoteDisconnected
+        # （国内网络抖动），重试 5 次，半截文件要丢掉避免下次误判已下载
+        for attempt in range(5):
+            try:
+                urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
+                break
+            except OSError:
+                if os.path.exists(MODEL_PATH):
+                    os.unlink(MODEL_PATH)
+                if attempt == 4:
+                    raise
+                time.sleep(10)
 print('model bytes:', os.path.getsize(MODEL_PATH))
 
 net = cv2.dnn.readNetFromONNX(MODEL_PATH)

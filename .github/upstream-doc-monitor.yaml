@@ -1,13 +1,8 @@
 # Upstream doc monitor — 完全自包含的监控清单
 
-maintainer: lltiaor        # 本 workflow 管理人：owner 配置问题的通知对象（可不在 owners 中）
-
-owners:
-  - lltiaor                # 项目负责人名单（条目 owner 从这里选；新负责人在此加名）
-
+maintainer: lltiaor        # 本 workflow 管理人
 
 projects:
-  # 两个测试条目：1个仓库文档，1个网页文档，
   - project: ci-test
     owner: lltiaor
     url: https://github.com/lltiaor/doc-test/blob/main/doc.md

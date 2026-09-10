@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   monitor:
-    name: detect doc changes & sync tickets
+    name: detect doc changes & sync issues
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -33,7 +33,7 @@ jobs:
           restore-keys: |
             upstream-doc-monitor-state-
 
-      - name: Run doc monitor (detect + sync tickets)
+      - name: Run doc monitor (detect + sync issues)
         id: monitor
         env:
           GH_TOKEN: ${{ github.token }}
@@ -71,8 +71,8 @@ jobs:
               f"web_page {s['by_source']['web_page']}）",
               f"- 变化 **{s['changed']}** ｜ 新增 **{s['first_seen']}** ｜ "
               f"无变化 {s['unchanged']} ｜ 异常 **{s['errors']}**",
-              f"- 工单动作：新建 {s['tickets'].get('created', 0)} ｜ "
-              f"评论追加 {s['tickets'].get('commented', 0)}",
+              f"- Issue 动作：新建 {s['tickets'].get('created', 0)} ｜ "
+              f"追加评论 {s['tickets'].get('commented', 0)}",
               "",
           ]
           # report 的 changes 数组包含全部监控项（靠 status 区分），
@@ -81,7 +81,7 @@ jobs:
                           if c.get("status") in ("changed", "first_seen")]
           if changed_rows:
               lines += ["### 变化明细", "",
-                        "| 项目 | 处理人 | 源 | 文档 | 状态 | 工单 |",
+                        "| 项目 | 处理人 | 源 | 文档 | 状态 | Issue |",
                         "| --- | --- | --- | --- | --- | --- |"]
               for c in changed_rows:
                   ticket = (f"[{c.get('ticket_action','')}]({c['ticket_url']})"
@@ -94,7 +94,7 @@ jobs:
               lines.append("")
           if r["errors"]:
               lines += ["### 异常明细", "",
-                        "| 项目 | 处理人 | 源 | 类型 | 详情 | 工单 |",
+                        "| 项目 | 处理人 | 源 | 类型 | 详情 | Issue |",
                         "| --- | --- | --- | --- | --- | --- |"]
               for e in r["errors"]:
                   ticket = (f"[{e.get('ticket_action','')}]({e['ticket_url']})"

@@ -41,7 +41,6 @@ TICKET_SCAN_MAX_PAGES = 5
 _EVENT_LABELS = {
     "change": "文档变化",
     "error": "检测异常",
-    "config_error": "配置错误",
     "recovery": "异常恢复",
 }
 
@@ -194,8 +193,7 @@ def _parse_source_url(where: str, project: str, url: str) -> dict:
 
 def load_config(path: str) -> tuple[list[dict], str]:
     """解析监控配置并校验；返回 (归一化条目列表, maintainer)。
-    致命问题抛 FatalError；条目 owner 失配名单 → 条目标 config_error
-    （不中断解析，由主循环作为事件接入）。"""
+    致命问题抛 FatalError。"""
     cfg_path = Path(path)
     if not cfg_path.is_file():
         raise FatalError(f"config not found: {path}")
@@ -208,18 +206,7 @@ def load_config(path: str) -> tuple[list[dict], str]:
     if not isinstance(projects, list) or not projects:
         raise FatalError("config must contain a non-empty 'projects' list")
 
-    # 文件级 owners 名单（与 projects 平级）：条目 owner 的合法取值域；
-    # 缺失/为空/非（非空）字符串列表 → 配置致命
-    owners = raw.get("owners")
-    if (not isinstance(owners, list) or not owners
-            or not all(isinstance(o, str) and o.strip() for o in owners)):
-        raise FatalError(
-            "config must contain a non-empty 'owners' list "
-            "(project owners, entries' owner must be one of them "
-            "or the maintainer)")
-    owners = [o.strip() for o in owners]
-
-    # maintainer：名单兜底人（config_error 事件的 @ 对象），必填单个用户名
+    # maintainer：本 workflow 管理人，条目未填 owner 时的兜底 @ 对象，必填单个用户名
     maintainer = raw.get("maintainer")
     if (not isinstance(maintainer, str)
             or not GH_USERNAME_RE.match(str(maintainer).strip())):
@@ -227,9 +214,6 @@ def load_config(path: str) -> tuple[list[dict], str]:
             "config must contain a valid 'maintainer' username "
             f"(got {maintainer!r})")
     maintainer = maintainer.strip()
-
-    # 有效校验集合：名单 ∪ 维护人（集合并天然去重）
-    valid_owners = set(owners) | {maintainer}
 
     entries, seen_keys = [], set()
     for idx, item in enumerate(projects, start=1):
@@ -261,12 +245,6 @@ def load_config(path: str) -> tuple[list[dict], str]:
         source = _parse_source_url(where, project, url)
         key = source["key"]
         entry = {"key": key, "project": project, "owner": owner, **source}
-        if owner and owner not in valid_owners:
-            # owner 不在名单：条目照常解析（不中断），标 config_error；
-            # owner 缺省不校验。主循环仍照常检测，事件层再暴露该问题
-            entry["config_error"] = True
-            print(f"config: WARN projects[{idx}] ({project}): owner '{owner}' "
-                  "not in owners∪{maintainer} → config_error")
         entries.append(entry)
 
         if key in seen_keys:
@@ -453,7 +431,8 @@ def _doc_links(entry: dict) -> tuple[str, str | None]:
     return entry["url"], None
 
 
-def _ticket_intro(entry: dict, mention: str) -> str:
+def _ticket_intro(entry: dict, mention: str,
+                  assignee: str | None = None) -> str:
     lines = []
     if mention:
         # @owner 仅出现在正文顶部一次：建票是该轮唯一 GitHub 事件，
@@ -464,10 +443,10 @@ def _ticket_intro(entry: dict, mention: str) -> str:
         "",
         f"- 项目：`{entry['project']}`",
         f"- 文档：{_doc_target(entry)}",
-        f"- 处理人：{entry['owner'] if entry['owner'] else '（未指定）'}",
+        f"- 处理人：{assignee if assignee else '（未指定）'}",
         "",
-        "> 本工单由 `upstream-doc-monitor` 自动维护：该文档的内容变化与检测"
-        "异常都会以评论追加到这里。处理完成后请关闭本工单；下次事件会新建新工单。",
+        "> 本 Issue 由 `upstream-doc-monitor` 自动维护：该文档的内容变化与检测"
+        "异常都会以评论追加到这里。处理完成后请关闭本 Issue；下次事件会新建 Issue。",
         "",
         "---",
         "",
@@ -476,8 +455,8 @@ def _ticket_intro(entry: dict, mention: str) -> str:
 
 
 def _event_comment(event: str, res: dict, entry: dict, error: dict | None,
-                   run_id: str, observed_at: str, mention: str,
-                   maintainer: str | None = None) -> str | None:
+                   run_id: str, observed_at: str,
+                   mention: str) -> str | None:
     footer = (f"<sub>由 upstream-doc-monitor 自动生成"
               f"（run {run_id}，{observed_at}）</sub>")
     lead = f"{mention}\n\n" if mention else ""
@@ -490,8 +469,8 @@ def _event_comment(event: str, res: dict, entry: dict, error: dict | None,
                  f"- 文档：{doc_url}"]
         if history_url:
             lines.append(f"- 提交历史：{history_url}")
-        lines += ["", "建议动作：核对上游变更 → 更新本项目看护文档（如受影响）"
-                  "→ 关闭本工单。", "", footer]
+        lines += ["", "建议动作：核对上游变更 → 更新本仓库对应文档（如受影响）"
+                  "→ 关闭本 Issue。", "", footer]
         return "\n".join(lines)
     if event == "error" and error:
         lines = [lead + f"## 检测异常 ({error['error_type']})", "",
@@ -500,20 +479,7 @@ def _event_comment(event: str, res: dict, entry: dict, error: dict | None,
         if error.get("doc_url"):
             lines.append(f"- 文档：{error['doc_url']}")
         lines += ["", "建议动作：核查文档路径/URL 是否变更，必要时更新 "
-                  "`.github/upstream-doc-monitor.yaml`；处置完成后关闭本工单。",
-                  "", footer]
-        return "\n".join(lines)
-    if event == "config_error":
-        # 配置错误的 @ 对象是 maintainer（owners 名单的裁决人）而非条目
-        # owner（后者本就不在名单内）；maintainer 未传入时退回原 lead 逻辑
-        if maintainer:
-            lead = f"@{maintainer}\n\n"
-        lines = [lead + "## 配置错误", "",
-                 f"- 观测时间：{observed_at}",
-                 f"- 详情：owner `{entry['owner']}` 不在 owners ∪ {{maintainer}} "
-                 "校验集合"]
-        lines += ["", "建议动作：修正条目 owner，或将其加入 owners 名单"
-                  "（`.github/upstream-doc-monitor.yaml`）；处置完成后关闭本工单。",
+                  "`.github/upstream-doc-monitor.yaml`；处置完成后关闭本 Issue。",
                   "", footer]
         return "\n".join(lines)
     if event == "recovery":
@@ -676,13 +642,30 @@ def run(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--config", required=True,
                         help="监控配置文件 .github/upstream-doc-monitor.yaml")
-    parser.add_argument("--state", required=True,
+    parser.add_argument("--state",
                         help="基线状态文件（actions/cache 持久化）")
-    parser.add_argument("--output-dir", required=True,
+    parser.add_argument("--output-dir",
                         help="内部报告 report.json 输出目录")
     parser.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY"),
-                        help="工单目标仓库 owner/repo（缺省取 GITHUB_REPOSITORY）")
+                        help="Issue 目标仓库 owner/repo（缺省取 GITHUB_REPOSITORY）")
+    parser.add_argument("--validate-only", action="store_true",
+                        help="只校验配置文件合法性后退出"
+                             "（供 PR 触发的配置校验 workflow 使用）")
     args = parser.parse_args(argv)
+
+    # 配置合法性校验：与运行期共用 load_config，规则单一来源
+    if args.validate_only:
+        try:
+            entries, _ = load_config(args.config)
+        except FatalError as exc:
+            print(f"FATAL(config): {exc}", file=sys.stderr)
+            return 1
+        print(f"config: OK ({len(entries)} entries)")
+        return 0
+
+    if not args.state or not args.output_dir:
+        parser.error("--state and --output-dir are required unless "
+                     "--validate-only is set")
 
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
     if not token:
@@ -792,36 +775,18 @@ def run(argv: list[str]) -> int:
             if status == "changed":
                 change["previous_sha"] = res.get("previous_sha")
 
-            # 事件序列：先异常恢复、后文档变化、最后配置错误（spec 固定顺序）
-            config_error_active = bool(entry.get("config_error"))
-            # 上轮 error 为 config_error 且本轮仍持续 → 异常未恢复：
-            # 不触发 recovery（仅标记消失后的首轮恢复），也不同型重复
-            # 评论（沿用既有 last_error_type 频控，etype=config_error）
-            prior_config_error = (prior.get("last_event") == "error"
-                                  and prior.get("last_error_type")
-                                  == "config_error")
+            # 事件序列：先异常恢复、后文档变化（spec 固定顺序）
             events = []
-            if prior.get("last_event") == "error" and not (
-                    prior_config_error and config_error_active):
+            if prior.get("last_event") == "error":
                 events.append("recovery")
             if status == "changed":
                 events.append("change")
-            if config_error_active:
-                # config_error 不阻断检测：观测成功且本轮无检测错误时，
-                # 作为末位事件追加（同型持续轮已由上方频控排除）
-                if not prior_config_error:
-                    events.append("config_error")
             change["events"] = list(events)
 
             new_entry = dict(prior)
             new_entry.update({"sha": res["sha"], "date": observed_at,
                               "last_event": "ok"})
             new_entry.pop("last_error_type", None)
-            if config_error_active:
-                # 观测成功但配置错误仍在：基线按 error 记账（sha 照常前进），
-                # 供下轮同型频控与修复后的既有 recovery 判定使用
-                new_entry.update({"last_event": "error",
-                                  "last_error_type": "config_error"})
             web = res.get("web")
             if web:
                 # 仅在服务器给出新验证器时覆盖（304 时保留旧值）
@@ -853,32 +818,6 @@ def run(argv: list[str]) -> int:
 
             baseline[key] = new_entry
             changes.append(change)
-
-            if config_error_active:
-                # 配置错误条目照常进报告 errors[]（字段对齐检测错误条目；
-                # 检测失败轮由检测错误主导，config_error 不重复入列）
-                cfg_err = {"project": entry["project"],
-                           "owner": entry["owner"],
-                           "source": entry["type"],
-                           "error_type": "config_error",
-                           "message": f"owner '{entry['owner']}' not in "
-                                      "owners∪{maintainer} — "
-                                      "修正条目 owner 或加入 owners 名单"}
-                if entry["type"] == "repo_file":
-                    cfg_err["repo"] = entry["repo"]
-                else:
-                    cfg_err["url"] = entry["url"]
-                if "config_error" in events:
-                    if syncer:
-                        # 本轮 config_error 段随工单动作一并发出
-                        cfg_err["ticket_action"] = change.get("ticket_action")
-                        if change.get("ticket_url"):
-                            cfg_err["ticket_url"] = change["ticket_url"]
-                    else:
-                        cfg_err["ticket_action"] = "skipped(no-repo)"
-                # 同型持续（频控轮）：不带 ticket_action，对齐检测错误
-                # same_error 时的报告行为
-                errors.append(cfg_err)
             continue
 
         if status == "error":
@@ -904,7 +843,7 @@ def run(argv: list[str]) -> int:
             if not same_error and syncer:
                 issue_url, action, synced = _sync_events(
                     syncer, entry, prior, ["error"], res, run_id, observed_at,
-                    tickets, error=err)
+                    tickets, error=err, maintainer=maintainer)
                 err["ticket_action"] = action
                 if synced:
                     if issue_url:
@@ -1026,7 +965,9 @@ def _sync_events(syncer: IssueSync, entry: dict, prior: dict, events: list[str],
         primary = next((e for e in events if e != "recovery"), events[0] if events else "error")
         primary_label = _EVENT_LABELS.get(primary, primary)
     title = f"[{entry['project']}] {primary_label} — {_title_target(entry)}"
-    mention = f"@{entry['owner']}" if entry["owner"] else ""
+    # 条目未填 owner 时兜底 @ maintainer（本 workflow 管理人）
+    assignee = entry["owner"] or maintainer
+    mention = f"@{assignee}" if assignee else ""
     issue_url = prior.get("issue_url")
 
     if issue_url:
@@ -1045,10 +986,10 @@ def _sync_events(syncer: IssueSync, entry: dict, prior: dict, events: list[str],
         sections = []
         for event in events:
             section = _event_comment(event, res, entry, error, run_id,
-                                     observed_at, "", maintainer=maintainer)
+                                     observed_at, "")
             if section:
                 sections.append(section)
-        body = _ticket_intro(entry, mention)
+        body = _ticket_intro(entry, mention, assignee)
         if sections:
             body = body.rstrip("\n") + "\n\n" + "\n\n".join(sections) + "\n"
         issue_url = syncer.create(title, body)
@@ -1061,7 +1002,7 @@ def _sync_events(syncer: IssueSync, entry: dict, prior: dict, events: list[str],
         ok = True
         for event in events:
             body = _event_comment(event, res, entry, error, run_id,
-                                  observed_at, mention, maintainer=maintainer)
+                                  observed_at, mention)
             if body and syncer.comment(issue_url, body):
                 print(f"ticket: commented '{event}' → {issue_url}")
             elif body:

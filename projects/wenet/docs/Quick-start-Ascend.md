@@ -1,6 +1,6 @@
 # 快速开始：在昇腾 NPU 上用 WeNet 训练语音识别模型
 
-> **阅读本文前**，请先按 [快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html) 准备好 CANN 与驱动。本文聚焦**第一次跑通**：在单卡 NPU 上完成 WeNet 的数据准备、训练和推理全流程。
+> **阅读本文前**，请先按 [快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html) 准备好 CANN 与驱动。本文聚焦**第一次跑通**：基于 [aishell-1](https://www.openslr.org/33) 真实数据集，按 WeNet 官方 [NPU 实验脚本](https://github.com/wenet-e2e/wenet/blob/main/examples/aishell/s0/run_npu.sh)（[官方教程](https://wenet.org.cn/wenet/tutorial_aishell.html#)）完成数据下载、数据准备、训练、推理与导出全流程。
 
 [WeNet](https://github.com/wenet-e2e/wenet) 是一个生产级端到端语音识别工具包，支持流式和非流式识别。昇腾侧通过 `torch-npu` 将计算调度到 NPU。
 
@@ -14,12 +14,23 @@ Atlas **800T** / **900 A2** 训练系列（Ascend **910B**）。本文示例为*
 
 ### 软件
 
-| 类别 | 要求 |
-| --- | --- |
-| CANN | toolkit + 驱动固件已安装并可 `source set_env.sh` |
-| Python | 3.10+ |
-| 编译工具 | git |
-| 音频工具 | sox |
+与官方安装指南（`examples/aishell/s0`）的版本要求保持一致：
+
+| 类别 | 最低版本 | 推荐版本 |
+| --- | --- | --- |
+| CANN | 8.0.RC2.alpha003 | latest |
+| Python | 3.10 | 3.10 |
+| torch | 2.1.0 | 2.2.0 |
+| torch-npu | 2.1.0 | 2.2.0 |
+| torchaudio | 2.1.0 | 2.2.0 |
+| deepspeed | 0.13.2 | latest |
+
+> **注意**：CANN 最低版本为 8.0.rc1，安装 CANN 时请同时安装 Kernel 算子包。本文配套镜像为
+> `swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:8.0.0-910b-ubuntu22.04-py3.10`（CANN 8.0.0 + Python 3.10，满足最低要求），
+> torch / torch-npu / torchaudio 使用推荐版本 **2.2.0**。deepspeed 最低要求 0.13.2，但 0.16+ 在
+> torch 2.2.0 下会触发 `torch.library.custom_op` `AttributeError`，本文显式钉在 **0.14.4**。
+
+编译工具 git、音频工具 sox 需要提前就绪。
 
 ---
 
@@ -71,16 +82,14 @@ cd wenet
 git checkout <UPSTREAM_REF>
 ```
 
-安装 WeNet 及其 NPU 依赖：
+安装 WeNet 及其 NPU 依赖（与官方安装指南一致：`[torch-npu]` extra 已将 torch / torch-npu / torchaudio 钉在推荐版本 2.2.0，并附带 `numpy<2`；`requirements.txt` 只约束 `deepspeed>=0.14.0`，为避免 pip 解析到与 torch 2.2.0 不兼容的 0.16+，安装后显式回钉 0.14.4）：
 
 ```shell #test-setup id="install"
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 cd wenet
-pip install -e .
-pip install torch==2.2.0 torch-npu==2.2.0
-pip install torchaudio==2.2.0 --index-url https://download.pytorch.org/whl/cpu
-pip install "deepspeed==0.14.4" tensorboardX
-pip install "numpy<2"
+pip install -e .[torch-npu]
+pip install -r requirements.txt
+pip install "deepspeed==0.14.4"
 ```
 
 安装 sox：
@@ -110,137 +119,119 @@ npu count: 1
 
 ---
 
-## 5. 准备训练数据
+## 5. 下载数据（stage -1）
 
-本节在本地生成最小化的测试数据，用于快速验证 WeNet 数据准备流程。
+stage -1 阶段将 aishell-1 数据下载到本地路径 `$data`（主包 `data_aishell.tgz` 约 15.6 GB；`$data` 必须为**绝对路径**，且下载脚本要求目录已存在，需提前 `mkdir -p` 创建。如果已下载数据，把 `--data` 换成实际数据集存放的绝对路径即可）：
 
-创建目录结构：
-
-```shell #test-setup id="create-dirs"
-mkdir -p /tmp/wenet-mock/data_aishell/wav/train/S0001
-mkdir -p /tmp/wenet-mock/data_aishell/transcript
-mkdir -p /tmp/wenet-mock/data/{train,dev,test}
+```shell #test-setup id="download-data"
+mkdir -p /root/asr-data/OpenSLR/33
+cd wenet/examples/aishell/s0
+bash run_npu.sh --stage -1 --stop_stage -1 --data /root/asr-data/OpenSLR/33
 ```
 
-用 sox 生成 3 条合成音频（16kHz, 1秒）：
+验证 `data_aishell` 与 `resource_aishell` 两个数据包均下载解压完成（脚本以 `.complete` 标记断点，重跑 stage -1 会跳过已完成部分）：
 
-```shell #test id="gen-audio"
-sox -n -r 16000 -c 1 /tmp/wenet-mock/data_aishell/wav/train/S0001/BAC009S0002W001.wav trim 0.0 1.0
-sox -n -r 16000 -c 1 /tmp/wenet-mock/data_aishell/wav/train/S0001/BAC009S0002W002.wav trim 0.0 1.0
-sox -n -r 16000 -c 1 /tmp/wenet-mock/data_aishell/wav/train/S0001/BAC009S0002W003.wav trim 0.0 1.0
-ls -la /tmp/wenet-mock/data_aishell/wav/train/S0001/
+```shell #test id="verify-download"
+ls /root/asr-data/OpenSLR/33/data_aishell/.complete /root/asr-data/OpenSLR/33/resource_aishell/.complete
 ```
 
 输出结果如下：
 
-```shell #test-result id="gen-audio"
-total 200
-drwxr-xr-x 2 root root  4096 ...
-drwxr-xr-x 3 root root  4096 ...
--rw-r--r-- 1 root root 64080 ...
--rw-r--r-- 1 root root 64080 ...
--rw-r--r-- 1 root root 64080 ...
-```
-
-创建 wav.scp 和 text 文件：
-
-```shell #test id="create-scp"
-cat > /tmp/wenet-mock/data/train/wav.scp << 'EOF'
-BAC009S0002W001 /tmp/wenet-mock/data_aishell/wav/train/S0001/BAC009S0002W001.wav
-BAC009S0002W002 /tmp/wenet-mock/data_aishell/wav/train/S0001/BAC009S0002W002.wav
-BAC009S0002W003 /tmp/wenet-mock/data_aishell/wav/train/S0001/BAC009S0002W003.wav
-EOF
-
-cat > /tmp/wenet-mock/data/train/text << 'EOF'
-BAC009S0002W001 今天天气真好
-BAC009S0002W002 我喜欢编程
-BAC009S0002W003 语音识别很有意思
-EOF
-
-cp /tmp/wenet-mock/data/train/wav.scp /tmp/wenet-mock/data/dev/
-cp /tmp/wenet-mock/data/train/text /tmp/wenet-mock/data/dev/
-cp /tmp/wenet-mock/data/train/wav.scp /tmp/wenet-mock/data/test/
-cp /tmp/wenet-mock/data/train/text /tmp/wenet-mock/data/test/
-
-cat /tmp/wenet-mock/data/train/wav.scp
-cat /tmp/wenet-mock/data/train/text
-```
-
-输出结果如下：
-
-```shell #test-result id="create-scp"
-BAC009S0002W001 /tmp/wenet-mock/data_aishell/wav/train/S0001/BAC009S0002W001.wav
-BAC009S0002W002 /tmp/wenet-mock/data_aishell/wav/train/S0001/BAC009S0002W002.wav
-BAC009S0002W003 /tmp/wenet-mock/data_aishell/wav/train/S0001/BAC009S0002W003.wav
-BAC009S0002W001 今天天气真好
-BAC009S0002W002 我喜欢编程
-BAC009S0002W003 语音识别很有意思
+```shell #test-result id="verify-download"
+/root/asr-data/OpenSLR/33/data_aishell/.complete
+/root/asr-data/OpenSLR/33/resource_aishell/.complete
 ```
 
 ---
 
-## 6. 准备 WeNet 数据格式（stage 1-3）
+## 6. 准备训练数据（stage 0）
 
-进入 aishell/s0 目录，将 mock 数据链接到 WeNet 期望的位置：
+stage 0 阶段为训练数据准备阶段，将使用 `local/aishell_data_prep.sh` 脚本将训练数据重新组织为 `wav.scp` 和 `text` 两部分。`wav.scp` 每行记录两个制表符分隔的列：`wav_id` 和 `wav_path`；`text` 每行记录 `wav_id` 和 `text_label`：
 
-```shell #test id="link-data"
+```shell #test-setup id="prep-data"
 cd wenet/examples/aishell/s0
-mkdir -p data
-ln -sf /tmp/wenet-mock/data/train data/train
-ln -sf /tmp/wenet-mock/data/dev data/dev
-ln -sf /tmp/wenet-mock/data/test data/test
-ls -la data/
+bash run_npu.sh --stage 0 --stop_stage 0 --data /root/asr-data/OpenSLR/33
+```
+
+验证训练 / 验证 / 测试集划分（aishell-1 官方固定划分为 120098 / 14326 / 7176 条）：
+
+```shell #test id="verify-prep"
+cd wenet/examples/aishell/s0
+wc -l data/train/wav.scp data/train/text data/dev/wav.scp data/test/wav.scp | awk '{print $1, $2}'
 ```
 
 输出结果如下：
 
-```shell #test-result id="link-data"
-total 8
-drwxr-xr-x 2 root root 4096 ...
-drwxr-xr-x 5 root root 4096 ...
-lrwxrwxrwx 1 root root   24 ... dev -> /tmp/wenet-mock/data/dev
-lrwxrwxrwx 1 root root   25 ... test -> /tmp/wenet-mock/data/test
-lrwxrwxrwx 1 root root   26 ... train -> /tmp/wenet-mock/data/train
+```shell #test-result id="verify-prep"
+120098 data/train/wav.scp
+120098 data/train/text
+14326 data/dev/wav.scp
+7176 data/test/wav.scp
+261698 total
 ```
 
-运行 stage 1-3 (准备训练数据)：
+---
 
-```shell #test-setup id="prepare-data"
-source /usr/local/Ascend/ascend-toolkit/set_env.sh
+## 7. 提取最佳 cmvn 特征（stage 1）
+
+stage 1 阶段从训练数据中提取 cmvn 特征，本阶段为可选阶段，设置 `cmvn=false` 可跳过本阶段。`tools/compute_cmvn_stats.py` 用于提取全局 cmvn（倒谱均值和方差归一化）统计数据，用来归一化声学特征：
+
+```shell #test-setup id="cmvn"
 cd wenet/examples/aishell/s0
-bash run_npu.sh --stage 1 --stop_stage 3
+bash run_npu.sh --stage 1 --stop_stage 1
 ```
 
-验证生成的文件：
+---
+
+## 8. 生成 token 字典（stage 2）
+
+stage 2 阶段生成训练所需 token 字典，用于 CTC 解码阶段查询，将输出转换为文字：
+
+```shell #test-setup id="dict"
+cd wenet/examples/aishell/s0
+bash run_npu.sh --stage 2 --stop_stage 2 --data /root/asr-data/OpenSLR/33
+```
+
+---
+
+## 9. 准备 WeNet 数据格式（stage 3）
+
+stage 3 阶段生成 WeNet 所需格式的文件 `data.list`，每一行都是 json 格式，包含关键词 `key`（文件名称）、语音文件地址 `wav` 和对应文本内容 `txt` 三个关键数据：
+
+```shell #test-setup id="data-list"
+cd wenet/examples/aishell/s0
+bash run_npu.sh --stage 3 --stop_stage 3 --data /root/asr-data/OpenSLR/33
+```
+
+验证生成的文件（字典前三行为固定特殊符号，其后按字频排序；`data.list` 首行为真实语音的 json 记录）：
 
 ```shell #test id="verify-data"
 cd wenet/examples/aishell/s0
-ls -la data/dict/lang_char.txt
 head -5 data/dict/lang_char.txt
-ls -la data/train/data.list
 head -1 data/train/data.list
 ```
 
 输出结果如下：
 
-```shell #test-result id="verify-data"
-...
+```shell #test-result id="verify-data" fuzzy='xxx'
 <blank> 0
 <unk> 1
 <sos/eos> 2
-...
+xxx
+xxx
+xxx
 ```
 
 ---
 
-## 7. 训练 5 epochs（stage 4）
+## 10. 模型训练（stage 4）
 
-创建自定义配置文件，将 `max_epoch` 从 240 缩短到 5。
+`run_npu.sh` 脚本中实现了 NPU 卡号的自动获取和相关环境变量设置，可直接启动昇腾 NPU 上的模型训练。为控制时长，将 `max_epoch` 从 240 缩短到 5。
 
 > **注意**：当前 torch_npu 2.2.0 + CANN 8.0.0 组合下，DataLoader 多进程 worker 在 fork 后会段错误
 > （上游 PR #2563 验证栈可正常，属栈版本行为漂移），因此这里使用 `--num_workers 0` 在主进程
-> 加载数据（mock 数据量极小，无性能影响），并对 wenet 硬编码的 `persistent_workers` /
-> `prefetch_factor` 打最小补丁使其与 `num_workers=0` 兼容；训练后立即校验产物以快速失败：
+> 加载数据，并对 wenet 硬编码的 `persistent_workers` / `prefetch_factor` 打最小补丁使其与
+> `num_workers=0` 兼容；训练后立即校验产物以快速失败：
 
 ```shell #test-setup id="train"
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
@@ -275,36 +266,62 @@ exp/conformer/epoch_4.pt
 
 ---
 
-## 8. 测试推理（stage 5）
+## 11. 测试推理（stage 5）
 
-使用训练好的模型对测试数据进行推理验证：
+stage 5 为模型测试推理阶段，将测试集中语音文件识别为文本。此外，stage 5 还提供平均模型的功能：当 `${average_checkpoint}` 为 `true`（脚本默认值）时，将交叉验证集上最佳的 `${average_num}` 个模型平均，生成增强模型 `avg_5.pt`，供解码与导出使用：
 
 ```shell #test-setup id="infer"
-source /usr/local/Ascend/ascend-toolkit/set_env.sh
 cd wenet/examples/aishell/s0
 bash run_npu.sh --stage 5 --stop_stage 5 --average_num 5
 ```
 
-验证推理结果：
+验证推理结果（测试集 7176 条全部识别完成，并抽样打印前两条识别文本）：
 
 ```shell #test id="verify-infer"
 cd wenet/examples/aishell/s0
-ls -la exp/conformer/ctc_greedy_search/text
-head -3 exp/conformer/ctc_greedy_search/text
+test -f exp/conformer/avg_5.pt && echo "avg_5.pt ok"
+wc -l exp/conformer/ctc_greedy_search/text | awk '{print $1}'
+head -2 exp/conformer/ctc_greedy_search/text
 ```
 
-输出结果如下：
+输出结果如下（xxx 为识别文本，随模型收敛情况变化）：
 
-```shell #test-result id="verify-infer"
-...
-BAC009S0002W001 ...
-BAC009S0002W002 ...
-BAC009S0002W003 ...
+```shell #test-result id="verify-infer" fuzzy='xxx'
+avg_5.pt ok
+7176
+xxx
+xxx
 ```
 
 ---
 
-## 9. 验证完整流程
+## 12. 导出训练好的模型（stage 6）
+
+stage 6 为模型导出阶段，`wenet/bin/export_jit.py` 使用 `Libtorch` 导出以上训练好的模型（基于 stage 5 生成的 `avg_5.pt`），导出的模型可用于其他编程语言（如 C++）的推理：
+
+```shell #test-setup id="export"
+cd wenet/examples/aishell/s0
+bash run_npu.sh --stage 6 --stop_stage 6 --average_num 5
+```
+
+验证导出产物：
+
+```shell #test id="verify-export"
+cd wenet/examples/aishell/s0
+test -f exp/conformer/final.zip && echo "final.zip ok"
+test -f exp/conformer/final_quant.zip && echo "final_quant.zip ok"
+```
+
+输出结果如下：
+
+```shell #test-result id="verify-export"
+final.zip ok
+final_quant.zip ok
+```
+
+---
+
+## 13. 验证完整流程
 
 确认所有关键文件均已生成：
 
@@ -315,7 +332,9 @@ ls data/dict/lang_char.txt data/train/data.list data/dev/data.list data/test/dat
 echo "=== 训练输出 ==="
 ls exp/conformer/train.yaml exp/conformer/final.pt | sort
 echo "=== 推理输出 ==="
-ls exp/conformer/ctc_greedy_search/text exp/conformer/ctc_prefix_beam_search/text | sort
+ls exp/conformer/avg_5.pt exp/conformer/ctc_greedy_search/text exp/conformer/ctc_prefix_beam_search/text | sort
+echo "=== 导出输出 ==="
+ls exp/conformer/final.zip exp/conformer/final_quant.zip | sort
 echo "=== 流程完成 ==="
 ```
 
@@ -331,8 +350,12 @@ data/train/data.list
 exp/conformer/final.pt
 exp/conformer/train.yaml
 === 推理输出 ===
+exp/conformer/avg_5.pt
 exp/conformer/ctc_greedy_search/text
 exp/conformer/ctc_prefix_beam_search/text
+=== 导出输出 ===
+exp/conformer/final.zip
+exp/conformer/final_quant.zip
 === 流程完成 ===
 ```
 
@@ -345,5 +368,7 @@ exp/conformer/ctc_prefix_beam_search/text
 | `npu-smi` 找不到 | 未 `source set_env.sh`，或 `npu-smi` 不在 `PATH` | 重做第 1-2 节 |
 | `import torch_npu` 失败 | torch/torch_npu 版本不匹配 | 检查 [兼容矩阵](https://gitcode.com/Ascend/pytorch) |
 | `npu available: False` | NPU 设备未挂载或驱动问题 | 检查 `/dev/davinci0` 是否存在 |
-| 训练报错 OOM | 数据量太小，batch_size 过大 | 减小 batch_size 或使用真实数据 |
+| `no such directory $data` | 数据目录未创建 | `mkdir -p` 创建绝对路径数据目录（stage -1 的前置要求） |
+| 数据下载慢 / 失败 | openslr 出口带宽波动 | 重跑 stage -1，脚本按 `.complete` 断点续传 |
+| 训练报错 OOM | batch_size 过大 | 减小 batch_size 或使用真实数据 |
 | `sox` 命令失败 | 未安装 sox | `apt-get install sox libsox-dev` |

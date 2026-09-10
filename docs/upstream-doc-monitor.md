@@ -55,12 +55,35 @@ python scripts/upstream_doc_monitor.py --validate-only --config .github/upstream
 
 配置类问题（缺字段、url 非法、条目重复、用户名格式非法）在 PR 阶段就被拦下，校验日志含条目索引 `projects[i]` 与字段名，改到绿为止。url 写对了但指不到内容（上游改名、仓库删除、页面 404）属于运行期问题：该条目记为检测异常，在 Issue 里可见，不影响其余监控项。
 
-## 原理
-
-**仓库文档**取 GitHub Contents API 返回的 git blob SHA 做前后对比。**外部网页**用 HTTP 条件请求（304 即无变化，不下载正文），再用响应体 SHA-256 兜底。各监控项的哈希、Issue 链接与频控状态存在 actions/cache 里跨轮持久。
-
-上游侧问题（文档 404、仓库不可达、抓取失败）不中断其余监控项，走 Issue 通知。本仓库侧问题（基线损坏、API 限流、整轮无法观测）中断执行，job 标红。
-
 ## 结果投递到看板
 
-每轮检测把 `result.json` 上传为 Actions artifact，名如 `upstream-doc-monitor-result-<run_id>`。看板用 Artifacts API 列出该 workflow run 的 artifacts，取 `<run_id>` 最大的一份，下载 zip 读其中的 `result.json`。顶层数组，每项 5 个字段：`project`、`doc`、`version`、`status`、`ticket`。`status` 三值：`error` 检测异常、`pending` 已变化待确认（存在未关闭 Issue）、`unchanged` 未变化（无异常且无未关闭 Issue，含首轮基线登记）。消费时整表替换——拉最新一份覆盖本地视图即可，无需增量合并。
+每轮检测把 `result.json` 上传为 Actions artifact，名如 `upstream-doc-monitor-result-<run_id>`。看板用 Artifacts API 列出本 workflow 最新 run 的 artifacts，下载该 zip 读其中的 `result.json`，整表替换本地视图即可，无需增量合并。
+
+**完整示例**
+
+```json
+[
+  {
+    "project": "transformers",
+    "doc": "https://github.com/huggingface/transformers/blob/main/README.md",
+    "version": "v4.56.0",
+    "status": "pending",
+    "ticket": "https://github.com/your-org/workflows/issues/12"
+  },
+  {
+    "project": "lm-eval-ascend-doc",
+    "doc": "https://ascend.github.io/docs/sources/lm_evaluation/quick_start.html",
+    "version": null,
+    "status": "unchanged",
+    "ticket": null
+  }
+]
+```
+
+**字段**
+
+- `project`：监控条目的展示标签，与配置里的 `project` 一致，同一项目可出现多条。
+- `doc`：被监控文档的完整地址。仓库内文档为 blob 链接，外部文档为网页地址。
+- `version`：上游仓库的最新版本号。网页类条目与没有版本标记的仓库为 `null`。
+- `status`：当前状态，三值。`error` 检测异常（文档 404、仓库不可达、抓取失败）；`pending` 已变化待确认（存在未关闭 Issue）；`unchanged` 未变化（无异常且无未关闭 Issue，含新增条目首轮基线登记）。
+- `ticket`：未关闭 Issue 的页面地址，没有则为 `null`。

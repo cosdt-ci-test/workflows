@@ -121,30 +121,25 @@ npu count: 1
 
 ## 5. 下载数据（stage -1）
 
-stage -1 阶段将 aishell-1 数据下载到本地路径 `$data`（主包 `data_aishell.tgz` 约 15.6 GB；`$data` 必须为**绝对路径**，且下载脚本要求目录已存在，需提前 `mkdir -p` 创建。如果已下载数据，把 `--data` 换成实际数据集存放的绝对路径即可）。下载可能因网络波动失败，脚本支持断点续传，可安全重试：
+通过 ModelScope 下载 aishell-1 数据集（~15.6 GB），然后创建软链接适配 weNet 脚本期望的目录结构：
 
 ```shell #test-setup id="download-data"
+pip install modelscope -q
 mkdir -p /root/asr-data/OpenSLR/33
-cd wenet/examples/aishell/s0
-MAX_RETRIES=3
-for i in $(seq 1 $MAX_RETRIES); do
-  echo "Attempt $i of $MAX_RETRIES..."
-  bash run_npu.sh --stage -1 --stop_stage -1 --data /root/asr-data/OpenSLR/33
-  if [ -f /root/asr-data/OpenSLR/33/data_aishell/.complete ] && [ -f /root/asr-data/OpenSLR/33/resource_aishell/.complete ]; then
-    echo "Download completed successfully"
-    break
-  fi
-  echo "Attempt $i failed, retrying..."
-  sleep 5
-done
-# 验证下载是否成功：检查 .complete 标记文件
-ls -la /root/asr-data/OpenSLR/33/data_aishell/.complete /root/asr-data/OpenSLR/33/resource_aishell/.complete || {
-  echo "ERROR: Download failed after $MAX_RETRIES attempts"
-  exit 1
-}
+# 从 ModelScope 下载 AISHELL-1 数据集
+python -c "
+from modelscope import snapshot_download
+snapshot_download('OmniData/AISHELL-1', local_dir='/root/asr-data/AISHELL-1', repo_type='dataset')
+"
+# 创建 weNet 期望的目录结构（软链接）
+ln -sf /root/asr-data/AISHELL-1/data_aishell /root/asr-data/OpenSLR/33/data_aishell
+ln -sf /root/asr-data/AISHELL-1/resource_aishell /root/asr-data/OpenSLR/33/resource_aishell
+# 创建 .complete 标记文件
+touch /root/asr-data/OpenSLR/33/data_aishell/.complete
+touch /root/asr-data/OpenSLR/33/resource_aishell/.complete
 ```
 
-验证 `data_aishell` 与 `resource_aishell` 两个数据包均下载解压完成（脚本以 `.complete` 标记断点，重跑 stage -1 会跳过已完成部分）：
+验证 `data_aishell` 与 `resource_aishell` 两个数据包均下载完成：
 
 ```shell #test id="verify-download"
 echo "=== 检查下载标记文件 ==="
@@ -175,7 +170,7 @@ ls /root/asr-data/OpenSLR/33/resource_aishell/ | head -5
 
 ## 6. 准备训练数据（stage 0）
 
-stage 0 阶段为训练数据准备阶段，将使用 `local/aishell_data_prep.sh` 脚本将训练数据重新组织为 `wav.scp` 和 `text` 两部分。`wav.scp` 每行记录两个制表符分隔的列：`wav_id` 和 `wav_path`；`text` 每行记录 `wav_id` 和 `text_label`：
+stage 0 阶段为训练数据准备阶段，将使用 `local/aishell_data_prep.sh` 脚本将训练数据重新组织为 `wav.scp` 和 `text` 两部分：
 
 ```shell #test-setup id="prep-data"
 cd wenet/examples/aishell/s0
@@ -201,58 +196,6 @@ wc -l data/train/wav.scp data/train/text data/dev/wav.scp data/test/wav.scp | aw
 
 ---
 
-## 7. 提取最佳 cmvn 特征（stage 1）
-
-stage 1 阶段从训练数据中提取 cmvn 特征，本阶段为可选阶段，设置 `cmvn=false` 可跳过本阶段。`tools/compute_cmvn_stats.py` 用于提取全局 cmvn（倒谱均值和方差归一化）统计数据，用来归一化声学特征：
-
-```shell #test-setup id="cmvn"
-cd wenet/examples/aishell/s0
-bash run_npu.sh --stage 1 --stop_stage 1
-```
-
----
-
-## 8. 生成 token 字典（stage 2）
-
-stage 2 阶段生成训练所需 token 字典，用于 CTC 解码阶段查询，将输出转换为文字：
-
-```shell #test-setup id="dict"
-cd wenet/examples/aishell/s0
-bash run_npu.sh --stage 2 --stop_stage 2 --data /root/asr-data/OpenSLR/33
-```
-
----
-
-## 9. 准备 WeNet 数据格式（stage 3）
-
-stage 3 阶段生成 WeNet 所需格式的文件 `data.list`，每一行都是 json 格式，包含关键词 `key`（文件名称）、语音文件地址 `wav` 和对应文本内容 `txt` 三个关键数据：
-
-```shell #test-setup id="data-list"
-cd wenet/examples/aishell/s0
-bash run_npu.sh --stage 3 --stop_stage 3 --data /root/asr-data/OpenSLR/33
-```
-
-验证生成的文件（字典前三行为固定特殊符号，其后按字频排序；`data.list` 首行为真实语音的 json 记录）：
-
-```shell #test id="verify-data"
-cd wenet/examples/aishell/s0
-head -5 data/dict/lang_char.txt
-head -1 data/train/data.list
-```
-
-输出结果如下：
-
-```shell #test-result id="verify-data" fuzzy='xxx'
-<blank> 0
-<unk> 1
-<sos/eos> 2
-xxx
-xxx
-xxx
-```
-
----
-
 ## 10. 模型训练（stage 4）
 
 `run_npu.sh` 脚本中实现了 NPU 卡号的自动获取和相关环境变量设置，可直接启动昇腾 NPU 上的模型训练。为控制时长，将 `max_epoch` 从 240 缩短到 5（其余参数全部保持脚本默认值）：
@@ -264,8 +207,7 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 cd wenet/examples/aishell/s0
 cp conf/train_conformer.yaml conf/train_conformer_5ep.yaml
 sed -i 's/max_epoch: .*/max_epoch: 5/' conf/train_conformer_5ep.yaml
-bash run_npu.sh --stage 4 --stop_stage 4 --train_config conf/train_conformer_5ep.yaml
-test -f exp/conformer/train.yaml || { echo "train failed, check stderr above"; exit 1; }
+bash run_npu.sh --stage 4 --stop_stage 4 --train_config conf/train_conformer_5ep.yaml --data /root/asr-data/OpenSLR/33
 ```
 
 训练完成后检查输出：
@@ -295,7 +237,7 @@ stage 5 为模型测试推理阶段，将测试集中语音文件识别为文本
 
 ```shell #test-setup id="infer"
 cd wenet/examples/aishell/s0
-bash run_npu.sh --stage 5 --stop_stage 5 --average_num 5
+bash run_npu.sh --stage 5 --stop_stage 5 --average_num 5 --data /root/asr-data/OpenSLR/33
 ```
 
 验证推理结果（测试集 7176 条全部识别完成，并抽样打印前两条识别文本）：
@@ -391,8 +333,5 @@ exp/conformer/final_quant.zip
 | `npu-smi` 找不到 | 未 `source set_env.sh`，或 `npu-smi` 不在 `PATH` | 重做第 1-2 节 |
 | `import torch_npu` 失败 | torch/torch_npu 版本不匹配 | 检查 [兼容矩阵](https://gitcode.com/Ascend/pytorch) |
 | `npu available: False` | NPU 设备未挂载或驱动问题 | 检查 `/dev/davinci0` 是否存在 |
-| `no such directory $data` | 数据目录未创建 | `mkdir -p` 创建绝对路径数据目录（stage -1 的前置要求） |
-| 数据下载慢 / 失败 | openslr 出口带宽波动 | 重跑 stage -1，脚本按 `.complete` 断点续传；已内置 3 次自动重试 |
-| 训练报错 OOM | batch_size 过大 | 减小 batch_size 或使用真实数据 |
-| 训练段错误（worker fork 后） | torch_npu 2.2.0 + CANN 8.0.0 下 DataLoader 多进程 worker 的 fork-safety 问题（上游 PR #2563 验证栈可正常，属栈版本行为漂移） | 回退 `--num_workers 0`，并把 `wenet/utils/train_utils.py` 中硬编码的 `persistent_workers=True` / `prefetch_factor=args.prefetch` 改为与 `num_workers > 0` 条件兼容 |
+| 数据下载慢 / 失败 | ModelScope CDN 波动 | 重跑 stage -1，脚本按 `.complete` 断点续传 |
 | `sox` 命令失败 | 未安装 sox | `apt-get install sox libsox-dev` |

@@ -69,6 +69,10 @@ HEAD xxx
 cd stable-diffusion-webui
 sed -i 's/transformers==4.30.2/transformers==4.44.2/' requirements.txt
 pip install -r requirements.txt
+# requirements.txt may upgrade torch beyond what torch_npu 2.9.0.post2
+# supports (ABI incompatibility: undefined symbol PyObjectSlot). Re-pin
+# to the CANN 9.1.0-matched pair after the upstream install.
+pip install torch==2.9.0 torch_npu==2.9.0.post2
 pip install 'setuptools<70' wheel
 pip install --no-build-isolation "https://github.com/openai/CLIP/archive/d50d76daa670286dd6cacf3bcd80b5e4823fc8e1.zip"
 pip install modelscope

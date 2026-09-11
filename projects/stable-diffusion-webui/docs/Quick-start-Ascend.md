@@ -65,7 +65,7 @@ HEAD xxx
 ## 安装依赖
 
 先把 transformers 升到 4.44.2 以匹配 Python 3.12，再装上游 requirements.txt；CLIP 无预编译包需从 GitHub 源码安装，modelscope 用于下载模型：
-```shell #test id="install-webui"
+```shell #test-setup
 cd stable-diffusion-webui
 sed -i 's/transformers==4.30.2/transformers==4.44.2/' requirements.txt
 pip install -r requirements.txt
@@ -75,6 +75,10 @@ pip install modelscope
 # Re-pin torch/torch_npu after all pip installs: modelscope pulls in
 # torch>=2.10 which breaks torch_npu 2.9.0.post2 ABI compatibility.
 pip install torch==2.9.0 torch_npu==2.9.0.post2
+python -c "import modelscope, gradio, fastapi, transformers, tokenizers; print('deps ok', transformers.__version__)"
+
+验证依赖可用：
+```shell #test id="install-webui"
 python -c "import modelscope, gradio, fastapi, transformers, tokenizers; print('deps ok', transformers.__version__)"
 ```
 ```shell #test-result id="install-webui" fuzzy='xxx'

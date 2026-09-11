@@ -1,12 +1,16 @@
 # Upstream doc monitor — 完全自包含的监控清单
 
-maintainer: lltiaor        # 本 workflow 管理人
+maintainer: lltiaor        # 本配置文件管理人
 
 projects:
-  - project: ci-test
+  - project: deepspeed
     owner: lltiaor
-    url: https://github.com/lltiaor/doc-test/blob/main/doc.md
+    url: https://github.com/deepspeedai/DeepSpeed/blob/master/docs/_tutorials/getting-started.md
 
-  - project: page-test
+  - project: timm
     owner: lltiaor
-    url: https://lltiaor.github.io/doc-test/
+    url: https://github.com/huggingface/hub-docs/blob/main/docs/hub/timm.md
+    
+  - project: TRL
+    owner: lltiaor
+    url: https://github.com/huggingface/trl/blob/main/docs/source/quickstart.md

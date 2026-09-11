@@ -110,125 +110,79 @@ npu count: 1
 
 ---
 
-## 5. 准备训练数据
+## 5. 下载数据（stage -1）
 
-本节在本地生成最小化的测试数据，用于快速验证 WeNet 数据准备流程。
+通过 ModelScope 下载 aishell-1 数据集（~15.6 GB），然后创建软链接适配 weNet 脚本期望的目录结构：
 
-创建目录结构：
-
-```shell #test-setup id="create-dirs"
-mkdir -p /tmp/wenet-mock/data_aishell/wav/train/S0001
-mkdir -p /tmp/wenet-mock/data_aishell/transcript
-mkdir -p /tmp/wenet-mock/data/{train,dev,test}
+```shell #test-setup id="download-data"
+pip install modelscope -q
+mkdir -p /root/asr-data/OpenSLR/33
+# 从 ModelScope 下载 AISHELL-1 数据集
+python -c "
+from modelscope import snapshot_download
+snapshot_download('OmniData/AISHELL-1', local_dir='/root/asr-data/AISHELL-1', repo_type='dataset')
+"
+# 创建 weNet 期望的目录结构（软链接）
+ln -sf /root/asr-data/AISHELL-1/data_aishell /root/asr-data/OpenSLR/33/data_aishell
+ln -sf /root/asr-data/AISHELL-1/resource_aishell /root/asr-data/OpenSLR/33/resource_aishell
+# 创建 .complete 标记文件
+touch /root/asr-data/OpenSLR/33/data_aishell/.complete
+touch /root/asr-data/OpenSLR/33/resource_aishell/.complete
 ```
 
-用 sox 生成 3 条合成音频（16kHz, 1秒）：
+验证 `data_aishell` 与 `resource_aishell` 两个数据包均下载完成：
 
-```shell #test id="gen-audio"
-sox -n -r 16000 -c 1 /tmp/wenet-mock/data_aishell/wav/train/S0001/BAC009S0002W001.wav trim 0.0 1.0
-sox -n -r 16000 -c 1 /tmp/wenet-mock/data_aishell/wav/train/S0001/BAC009S0002W002.wav trim 0.0 1.0
-sox -n -r 16000 -c 1 /tmp/wenet-mock/data_aishell/wav/train/S0001/BAC009S0002W003.wav trim 0.0 1.0
-ls -la /tmp/wenet-mock/data_aishell/wav/train/S0001/
-```
-
-输出结果如下：
-
-```shell #test-result id="gen-audio"
-total 200
-drwxr-xr-x 2 root root  4096 ...
-drwxr-xr-x 3 root root  4096 ...
--rw-r--r-- 1 root root 64080 ...
--rw-r--r-- 1 root root 64080 ...
--rw-r--r-- 1 root root 64080 ...
-```
-
-创建 wav.scp 和 text 文件：
-
-```shell #test id="create-scp"
-cat > /tmp/wenet-mock/data/train/wav.scp << 'EOF'
-BAC009S0002W001 /tmp/wenet-mock/data_aishell/wav/train/S0001/BAC009S0002W001.wav
-BAC009S0002W002 /tmp/wenet-mock/data_aishell/wav/train/S0001/BAC009S0002W002.wav
-BAC009S0002W003 /tmp/wenet-mock/data_aishell/wav/train/S0001/BAC009S0002W003.wav
-EOF
-
-cat > /tmp/wenet-mock/data/train/text << 'EOF'
-BAC009S0002W001 今天天气真好
-BAC009S0002W002 我喜欢编程
-BAC009S0002W003 语音识别很有意思
-EOF
-
-cp /tmp/wenet-mock/data/train/wav.scp /tmp/wenet-mock/data/dev/
-cp /tmp/wenet-mock/data/train/text /tmp/wenet-mock/data/dev/
-cp /tmp/wenet-mock/data/train/wav.scp /tmp/wenet-mock/data/test/
-cp /tmp/wenet-mock/data/train/text /tmp/wenet-mock/data/test/
-
-cat /tmp/wenet-mock/data/train/wav.scp
-cat /tmp/wenet-mock/data/train/text
+```shell #test id="verify-download"
+echo "=== 检查下载标记文件 ==="
+ls -la /root/asr-data/OpenSLR/33/data_aishell/.complete /root/asr-data/OpenSLR/33/resource_aishell/.complete
+echo "=== 检查数据目录内容 ==="
+ls /root/asr-data/OpenSLR/33/data_aishell/ | head -5
+ls /root/asr-data/OpenSLR/33/resource_aishell/ | head -5
 ```
 
 输出结果如下：
 
-```shell #test-result id="create-scp"
-BAC009S0002W001 /tmp/wenet-mock/data_aishell/wav/train/S0001/BAC009S0002W001.wav
-BAC009S0002W002 /tmp/wenet-mock/data_aishell/wav/train/S0001/BAC009S0002W002.wav
-BAC009S0002W003 /tmp/wenet-mock/data_aishell/wav/train/S0001/BAC009S0002W003.wav
-BAC009S0002W001 今天天气真好
-BAC009S0002W002 我喜欢编程
-BAC009S0002W003 语音识别很有意思
+```shell #test-result id="verify-download"
+=== 检查下载标记文件 ===
+... /root/asr-data/OpenSLR/33/data_aishell/.complete
+... /root/asr-data/OpenSLR/33/resource_aishell/.complete
+=== 检查数据目录内容 ===
+...
+...
+...
+...
+...
+...
+...
+...
 ```
 
 ---
 
-## 6. 准备 WeNet 数据格式（stage 1-3）
+## 6. 准备训练数据（stage 0）
 
-进入 aishell/s0 目录，将 mock 数据链接到 WeNet 期望的位置：
+stage 0 阶段为训练数据准备阶段，将使用 `local/aishell_data_prep.sh` 脚本将训练数据重新组织为 `wav.scp` 和 `text` 两部分：
 
-```shell #test id="link-data"
+```shell #test-setup id="prep-data"
 cd wenet/examples/aishell/s0
-mkdir -p data
-ln -sf /tmp/wenet-mock/data/train data/train
-ln -sf /tmp/wenet-mock/data/dev data/dev
-ln -sf /tmp/wenet-mock/data/test data/test
-ls -la data/
+bash run_npu.sh --stage 0 --stop_stage 0 --data /root/asr-data/OpenSLR/33
+```
+
+验证训练 / 验证 / 测试集划分（aishell-1 官方固定划分为 120098 / 14326 / 7176 条）：
+
+```shell #test id="verify-prep"
+cd wenet/examples/aishell/s0
+wc -l data/train/wav.scp data/train/text data/dev/wav.scp data/test/wav.scp | awk '{print $1, $2}'
 ```
 
 输出结果如下：
 
-```shell #test-result id="link-data"
-total 8
-drwxr-xr-x 2 root root 4096 ...
-drwxr-xr-x 5 root root 4096 ...
-lrwxrwxrwx 1 root root   24 ... dev -> /tmp/wenet-mock/data/dev
-lrwxrwxrwx 1 root root   25 ... test -> /tmp/wenet-mock/data/test
-lrwxrwxrwx 1 root root   26 ... train -> /tmp/wenet-mock/data/train
-```
-
-运行 stage 1-3 (准备训练数据)：
-
-```shell #test-setup id="prepare-data"
-source /usr/local/Ascend/ascend-toolkit/set_env.sh
-cd wenet/examples/aishell/s0
-bash run_npu.sh --stage 1 --stop_stage 3
-```
-
-验证生成的文件：
-
-```shell #test id="verify-data"
-cd wenet/examples/aishell/s0
-ls -la data/dict/lang_char.txt
-head -5 data/dict/lang_char.txt
-ls -la data/train/data.list
-head -1 data/train/data.list
-```
-
-输出结果如下：
-
-```shell #test-result id="verify-data"
-...
-<blank> 0
-<unk> 1
-<sos/eos> 2
-...
+```shell #test-result id="verify-prep"
+120098 data/train/wav.scp
+120098 data/train/text
+14326 data/dev/wav.scp
+7176 data/test/wav.scp
+261698 total
 ```
 
 ---
@@ -242,7 +196,7 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 cd wenet/examples/aishell/s0
 cp conf/train_conformer.yaml conf/train_conformer_5ep.yaml
 sed -i 's/max_epoch: .*/max_epoch: 5/' conf/train_conformer_5ep.yaml
-bash run_npu.sh --stage 4 --stop_stage 4 --train_config conf/train_conformer_5ep.yaml
+bash run_npu.sh --stage 4 --stop_stage 4 --train_config conf/train_conformer_5ep.yaml --data /root/asr-data/OpenSLR/33
 ```
 
 训练完成后检查输出：
@@ -273,7 +227,7 @@ exp/conformer/epoch_4.pt
 ```shell #test-setup id="infer"
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 cd wenet/examples/aishell/s0
-bash run_npu.sh --stage 5 --stop_stage 5 --average_num 5
+bash run_npu.sh --stage 5 --stop_stage 5 --average_num 5 --data /root/asr-data/OpenSLR/33
 ```
 
 验证推理结果：
@@ -336,5 +290,5 @@ exp/conformer/ctc_prefix_beam_search/text
 | `npu-smi` 找不到 | 未 `source set_env.sh`，或 `npu-smi` 不在 `PATH` | 重做第 1-2 节 |
 | `import torch_npu` 失败 | torch/torch_npu 版本不匹配 | 检查 [兼容矩阵](https://gitcode.com/Ascend/pytorch) |
 | `npu available: False` | NPU 设备未挂载或驱动问题 | 检查 `/dev/davinci0` 是否存在 |
-| 训练报错 OOM | 数据量太小，batch_size 过大 | 减小 batch_size 或使用真实数据 |
+| 数据下载慢 / 失败 | ModelScope CDN 波动 | 重跑 stage -1，脚本按 `.complete` 断点续传 |
 | `sox` 命令失败 | 未安装 sox | `apt-get install sox libsox-dev` |

@@ -121,25 +121,54 @@ npu count: 1
 
 ## 5. 下载数据（stage -1）
 
-stage -1 阶段将 aishell-1 数据下载到本地路径 `$data`（主包 `data_aishell.tgz` 约 15.6 GB；`$data` 必须为**绝对路径**，且下载脚本要求目录已存在，需提前 `mkdir -p` 创建。如果已下载数据，把 `--data` 换成实际数据集存放的绝对路径即可）：
+stage -1 阶段将 aishell-1 数据下载到本地路径 `$data`（主包 `data_aishell.tgz` 约 15.6 GB；`$data` 必须为**绝对路径**，且下载脚本要求目录已存在，需提前 `mkdir -p` 创建。如果已下载数据，把 `--data` 换成实际数据集存放的绝对路径即可）。下载可能因网络波动失败，脚本支持断点续传，可安全重试：
 
 ```shell #test-setup id="download-data"
 mkdir -p /root/asr-data/OpenSLR/33
 cd wenet/examples/aishell/s0
-bash run_npu.sh --stage -1 --stop_stage -1 --data /root/asr-data/OpenSLR/33
+MAX_RETRIES=3
+for i in $(seq 1 $MAX_RETRIES); do
+  echo "Attempt $i of $MAX_RETRIES..."
+  bash run_npu.sh --stage -1 --stop_stage -1 --data /root/asr-data/OpenSLR/33
+  if [ -f /root/asr-data/OpenSLR/33/data_aishell/.complete ] && [ -f /root/asr-data/OpenSLR/33/resource_aishell/.complete ]; then
+    echo "Download completed successfully"
+    break
+  fi
+  echo "Attempt $i failed, retrying..."
+  sleep 5
+done
+# 验证下载是否成功：检查 .complete 标记文件
+ls -la /root/asr-data/OpenSLR/33/data_aishell/.complete /root/asr-data/OpenSLR/33/resource_aishell/.complete || {
+  echo "ERROR: Download failed after $MAX_RETRIES attempts"
+  exit 1
+}
 ```
 
 验证 `data_aishell` 与 `resource_aishell` 两个数据包均下载解压完成（脚本以 `.complete` 标记断点，重跑 stage -1 会跳过已完成部分）：
 
 ```shell #test id="verify-download"
-ls /root/asr-data/OpenSLR/33/data_aishell/.complete /root/asr-data/OpenSLR/33/resource_aishell/.complete
+echo "=== 检查下载标记文件 ==="
+ls -la /root/asr-data/OpenSLR/33/data_aishell/.complete /root/asr-data/OpenSLR/33/resource_aishell/.complete
+echo "=== 检查数据目录内容 ==="
+ls /root/asr-data/OpenSLR/33/data_aishell/ | head -5
+ls /root/asr-data/OpenSLR/33/resource_aishell/ | head -5
 ```
 
 输出结果如下：
 
 ```shell #test-result id="verify-download"
-/root/asr-data/OpenSLR/33/data_aishell/.complete
-/root/asr-data/OpenSLR/33/resource_aishell/.complete
+=== 检查下载标记文件 ===
+... /root/asr-data/OpenSLR/33/data_aishell/.complete
+... /root/asr-data/OpenSLR/33/resource_aishell/.complete
+=== 检查数据目录内容 ===
+...
+...
+...
+...
+...
+...
+...
+...
 ```
 
 ---
@@ -363,7 +392,7 @@ exp/conformer/final_quant.zip
 | `import torch_npu` 失败 | torch/torch_npu 版本不匹配 | 检查 [兼容矩阵](https://gitcode.com/Ascend/pytorch) |
 | `npu available: False` | NPU 设备未挂载或驱动问题 | 检查 `/dev/davinci0` 是否存在 |
 | `no such directory $data` | 数据目录未创建 | `mkdir -p` 创建绝对路径数据目录（stage -1 的前置要求） |
-| 数据下载慢 / 失败 | openslr 出口带宽波动 | 重跑 stage -1，脚本按 `.complete` 断点续传 |
+| 数据下载慢 / 失败 | openslr 出口带宽波动 | 重跑 stage -1，脚本按 `.complete` 断点续传；已内置 3 次自动重试 |
 | 训练报错 OOM | batch_size 过大 | 减小 batch_size 或使用真实数据 |
 | 训练段错误（worker fork 后） | torch_npu 2.2.0 + CANN 8.0.0 下 DataLoader 多进程 worker 的 fork-safety 问题（上游 PR #2563 验证栈可正常，属栈版本行为漂移） | 回退 `--num_workers 0`，并把 `wenet/utils/train_utils.py` 中硬编码的 `persistent_workers=True` / `prefetch_factor=args.prefetch` 改为与 `num_workers > 0` 条件兼容 |
 | `sox` 命令失败 | 未安装 sox | `apt-get install sox libsox-dev` |

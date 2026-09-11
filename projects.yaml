@@ -122,6 +122,27 @@ projects:
     dir: projects/diffusers
     workflows:
       quick_start: .github/workflows/diffusers-quick-start.yml
+  # DGL quick-start guard scope: single-card LightGCN smoke on NPU,
+  # backed by the Huawei×BUPT fork BUPT-GAMMA/dgl-ascend (dmlc/dgl
+  # proper has no Ascend backend). The fork publishes no releases/tags,
+  # so the engine's ref chain bottoms out at /commits/HEAD (default
+  # branch HEAD sha) instead of a release. The doc installs the pinned
+  # torch stack (torch 2.9.0 + torch_npu 2.9.0.post2 — reusing the CI's
+  # torch line, not the fork's documented torch 2.8.0/py3.10) and builds
+  # DGL-Ascend from source (git clone + submodule + build_dgl_ascend.sh
+  # with -DUSE_ASCEND=ON -DUSE_CUDA=OFF, SOC=910B4 + pip install -e .).
+  # Smoke runs LightGCN one epoch on gowalla (official dgl-data zip)
+  # via `python main.py --device npu`. timeout_minutes=240 covers the
+  # full source build. Multi-model (GraphSAGE/HERec) is pointer-only.
+  - name: dgl
+    category: 训练加速
+    support_level: 新兴适配
+    upstream_repo: BUPT-GAMMA/dgl-ascend
+    phase: A
+    runner: linux-aarch64-a2-2
+    dir: projects/dgl
+    workflows:
+      quick_start: .github/workflows/dgl-quick-start.yml
   - name: bitsandbytes
     category: 推理加速
     support_level: 基础支持
@@ -307,6 +328,24 @@ projects:
     dir: projects/timm
     workflows:
       quick_start: .github/workflows/timm-quick-start.yml
+  - name: open_clip
+    category: 推理加速
+    support_level: 新兴适配
+    upstream_repo: mlfoundations/open_clip
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/open_clip
+    workflows:
+      quick_start: .github/workflows/open-clip-quick-start.yml
+  - name: internlm
+    category: 推理加速
+    support_level: 新兴适配
+    upstream_repo: InternLM/InternLM
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/internlm
+    workflows:
+      quick_start: .github/workflows/internlm-quick-start.yml
   - name: xllm
     category: 推理加速
     support_level: 基础支持
@@ -469,6 +508,21 @@ projects:
     dir: projects/wenet
     workflows:
       quick_start: .github/workflows/wenet-quick-start.yml
+  # comfyui quickstart exercises the native NPU device path
+  # (model_management auto-detects torch_npu -> torch.device("npu")) via
+  # the upstream API example script_examples/basic_api_example.py:
+  # headless server on port 8188 + default SD 1.5 text2img workflow
+  # (v1-5-pruned-emaonly.safetensors fetched via ModelScope, ~4.3 GB),
+  # verified by polling /queue and checking the output PNG.
+  - name: comfyui
+    category: 推理加速
+    support_level: 新兴适配
+    upstream_repo: comfyanonymous/ComfyUI
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/comfyui
+    workflows:
+      quick_start: .github/workflows/comfyui-quick-start.yml
   # modelscope quickstart exercises the ModelScope Hub download +
   # transformers AutoModel loading + torch_npu text generation on a
   # single 910B4 card. Note the doc's NPU smoke goes through
@@ -483,3 +537,60 @@ projects:
     dir: projects/modelscope
     workflows:
       quick_start: .github/workflows/modelscope-quick-start.yml
+  # axolotl quickstart installs the latest GitHub release from PyPI
+  # (--no-build-isolation --no-deps, no CUDA extras) on CANN 9.1.0 +
+  # torch 2.11 / torch_npu 2.11, then runs a 3-step LoRA SFT of
+  # Qwen2.5-0.5B-Instruct on one 910B4 card. Upstream check_npu_config
+  # rejects flash-attn / sdpa / 8-bit optimizers / 4-8bit load, so the
+  # doc uses eager attention, adamw_torch, and lora_*_kernel: false.
+  - name: axolotl
+    category: 训练加速
+    support_level: 新兴适配
+    upstream_repo: axolotl-ai-cloud/axolotl
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/axolotl
+    workflows:
+      quick_start: .github/workflows/axolotl-quick-start.yml
+  # openrlhf quickstart installs torch 2.11 / torch_npu 2.11 on CANN
+  # 9.1.0, maps torch.cuda to NPU via sitecustomize + transfer_to_npu,
+  # then runs a 4-step LoRA SFT of Qwen2.5-0.5B-Instruct through
+  # deepspeed --module openrlhf.cli.train_sft on one 910B4 card.
+  # Upstream has no Ascend code; setup.py tags wheels as x86_64 so the
+  # doc puts the clone on PYTHONPATH instead of pip installing.
+  - name: openrlhf
+    category: 训练加速
+    support_level: 新兴适配
+    upstream_repo: OpenRLHF/OpenRLHF
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/openrlhf
+    workflows:
+      quick_start: .github/workflows/openrlhf-quick-start.yml
+  # MiniOneRec quickstart exercises generative-recommendation SFT on
+  # Ascend NPU: ModelScope base-model download (Qwen2.5-0.5B, base not
+  # Instruct — upstream README warns Instruct + newer transformers can
+  # break constrained decoding) + HF-mirror pull of the official
+  # preprocessed Amazon Industrial_and_Scientific subset (~27 MB, .npy
+  # embeddings excluded — RQ/SID-construction stage only) +
+  # transfer_to_npu patch (top-level bitsandbytes import stripped: it is
+  # never used and aarch64 wheel availability is uncertain, same class
+  # of problem as xtuner's 0.45.0 pin) + 1-epoch HF-Trainer SFT smoke
+  # (sample=600 per sub-dataset, cutoff 256, batch 8 / micro 2).
+  # torch stack pinned in doc + probe: torch 2.9.0 + torch_npu
+  # 2.9.0.post2 (CANN 9.1.0 pairing, same line as dgl / xdit). Manual
+  # verification on this image shape passed 2026-09-03 (910B3, bf16 OK,
+  # 9.1 samples/s, no DataLoader fork segfault at the default
+  # num_workers=0). RL stage (GRPO) is pointer-only: minionerec_trainer's
+  # vLLM path is CUDA-only and the transformers-native generation
+  # fallback is too slow for a smoke; evaluate.py constrained beam
+  # search is pointer-only for the same reason (follow-up candidates).
+  - name: minionerec
+    category: 训练加速
+    support_level: 新兴适配
+    upstream_repo: AkaliKong/MiniOneRec
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/minionerec
+    workflows:
+      quick_start: .github/workflows/minionerec-quick-start.yml

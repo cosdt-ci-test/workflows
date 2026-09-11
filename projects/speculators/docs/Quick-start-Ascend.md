@@ -1,6 +1,6 @@
-# Quick Start (Ascend NPU)
+# 快速开始
 
-在单卡昇腾 NPU 上跑 [Speculators](https://github.com/vllm-project/speculators) 端到端：转换 DFlash draft → 抽训练数据 → torchrun 训 draft → `vllm serve` 挂载 draft 做推理 smoke。配套 vllm-ascend 0.23.0 + vLLM 0.23.0。
+在单卡昇腾 NPU 上跑 [Speculators](https://github.com/vllm-project/speculators) 端到端：转换 DFlash draft → 抽训练数据 → torchrun 训 draft → `vllm serve` 挂载 draft 做推理 smoke。
 
 ## 前置条件
 
@@ -22,7 +22,7 @@ Atlas 900 A2 / A3 或 Ascend 950 系列 NPU，至少 1 卡。
 
 swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/vllm-ascend/vllm-ascend:v0.23.0
 
-镜像预装 vllm 0.23.0 + vllm-ascend 0.23.0 + triton-ascend 3.2.2 + torch 2.10.0+cpu + torch_npu 2.10.0.post4 + CANN 9.1.0 + Python 3.12，**直接用**——`vllm_ascend_C.so` 是按 torch 2.10 的 `at::Tag` namespace 编的，跟镜像预装 torch 自洽；不要 `pip install` 升 torch / torch_npu，torch_npu 2.11 / 2.12 公网没有任何镜像能下到（Aliyun / Tsinghua / Huawei 全 404）。
+镜像预装 vllm 0.23.0 + vllm-ascend 0.23.0 + triton-ascend 3.2.2 + torch 2.10.0+cpu + torch_npu 2.10.0.post4 + torchvision 0.25.0+cpu + torchaudio 2.10.0+cpu + transformers 5.5.4 + modelscope 1.39.1 + CANN 9.1.0 + Python 3.12。
 
 **软件版本**：
 
@@ -30,14 +30,16 @@ swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/vllm-ascend/vllm-ascen
 | --- | --- |
 | Python | 3.12 |
 | CANN | 9.1.0 |
-| torch | 2.10.0+cpu（镜像预装，不要动） |
-| torch_npu | 2.10.0.post4（镜像预装，不要动） |
+| torch | 2.10.0+cpu（镜像预装） |
+| torch_npu | 2.10.0.post4（镜像预装） |
+| torchvision | 0.25.0+cpu（镜像预装） |
+| torchaudio | 2.10.0+cpu（镜像预装） |
 | vllm | 0.23.0（镜像预装） |
 | vllm-ascend | 0.23.0（镜像预装） |
 | triton-ascend | 3.2.2（镜像预装） |
 | triton | 3.5.0（镜像预装） |
-| transformers | 由 `speculators` 透传拉入（>=4.56.1,<5.15.0） |
-| modelscope | 1.37.0 |
+| transformers | 5.5.4（镜像预装；speculators 透传范围 >=4.56.1,<5.15.0） |
+| modelscope | 1.39.1（镜像预装；下面步骤会钉到 1.37.0） |
 | speculators | 最新 release |
 | draft 模型 | z-lab/Qwen3-8B-DFlash-b16 |
 | verifier | Qwen/Qwen3-8B |
@@ -64,39 +66,21 @@ python --version
 Python 3.12.xxx
 ```
 
-确认镜像预装的 torch / torch_npu stack 不被改过：
-
-```shell #test-setup id="check-torch-stack"
-# torch 2.10.0+cpu + torch_npu 2.10.0.post4 是镜像预装；这两个的
-# `at::Tag` namespace 跟 vllm_ascend_C.so 对得上。如果之前有人 pip
-# install 过 torch / torch_npu（试图升级到 2.12），这里会被撞出
-# torch_npu dlopen 失败（libtorch_cpu.so 的 _def 用了新 namespace）。
-# 镜像预装 wheel 是 PEP 660 不可变缓存 wheel，--upgrade 在大跨度不替换，
-# 所以 --force-reinstall 还得带上版本号才能拉回镜像原版。
-pip install --force-reinstall --no-deps \
-  -f https://mirrors.aliyun.com/pytorch-wheels/cpu \
-  'torch==2.10.0+cpu'
-# torchvision 0.25+cpu 是 torch 2.10 的 ABI 匹配版本（vllm 加载
-# transformers qwen2_vl image_processor 会强 import torchvision；
-# text-only Qwen3 也会走这条 import 路径触发 ModuleNotFoundError）。
-# 不要装 torchvision 0.26/0.27+cpu——那是 torch 2.11/2.12 ABI，会让
-# `import vllm_ascend` 抛 `RuntimeError: operator torchvision::nms
-# does not exist`
-pip install --no-deps \
-  -f https://mirrors.aliyun.com/pytorch-wheels/cpu \
-  'torchvision==0.25.0+cpu'
-```
-
-> ⚠ **Step 3a（launch_vllm）和 Step 4（vllm serve）启动前必须设 `TORCHDYNAMO_DISABLE=1` + `--enforce-eager`。**
->
-> flex_attention 在 dynamo capture 阶段会撞 torch_npu 不支持的 HOP / UB，trace 时直接抛 `Unsupported: Import failure`；关掉 dynamo + cudagraph，让 vllm 走纯 eager 路径就稳。`TORCHDYNAMO_DISABLE=1` 必须 export 在 shell 里、不能塞进 vllm 进程命令行（vllm 自己 fork 之后才会去读 env）。
-
-加载 CANN env 并验证镜像预装的 vllm-ascend 栈（应输出下表的版本号）：
+检查 CANN env 并验证镜像预装的 vllm-ascend 栈（含 torch / torch_npu / torchvision / torchaudio / transformers / vllm / vllm-ascend / triton*）：
 
 ```shell #test id="verify-vllm-stack"
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 
-python -c "import torch, torch_npu; print(f'torch={torch.__version__}'); print(f'torch_npu={torch_npu.__version__}'); print('is_available:', torch.npu.is_available()); print('npu_count:', torch.npu.device_count())"
+python -c "
+import torch, torch_npu, torchvision, torchaudio, transformers
+print(f'torch={torch.__version__}')
+print(f'torch_npu={torch_npu.__version__}')
+print(f'torchvision={torchvision.__version__}')
+print(f'torchaudio={torchaudio.__version__}')
+print(f'transformers={transformers.__version__}')
+print('is_available:', torch.npu.is_available())
+print('npu_count:', torch.npu.device_count())
+"
 
 python -c "import importlib.metadata; print(f'vllm={importlib.metadata.version(\"vllm\")}')"
 python -c "import importlib.metadata; print(f'vllm_ascend={importlib.metadata.version(\"vllm-ascend\")}')"
@@ -109,6 +93,9 @@ python -c "import importlib.metadata; print(f'triton={importlib.metadata.version
 ```shell #test-result id="verify-vllm-stack" fuzzy='xxx'
 torch=2.10.0+cpu
 torch_npu=2.10.0.post4
+torchvision=0.25.0+cpu
+torchaudio=2.10.0+cpu
+transformers=xxx
 is_available: True
 npu_count: xxx
 vllm=0.23.0+empty
@@ -117,15 +104,10 @@ triton_ascend=3.2.2
 triton=3.5.0
 ```
 
-装 modelscope（用来从 ModelScope 拉权重；镜像不含）：
-
-```shell #test-setup
-uv pip install 'modelscope==1.37.0'
-```
-
-确认 modelscope 版本：
+装 modelscope：
 
 ```shell #test id="install-deps"
+uv pip install 'modelscope==1.37.0'
 python -c "import modelscope; print(f'modelscope={modelscope.__version__}')"
 ```
 
@@ -166,6 +148,8 @@ speculators xxx
 
 ### 前置：下载 draft 与 verifier
 
+`#test-setup` 块 stdout 的末行会被捕获为 `store=` 指定的变量，供后续命令里 `<draft_path>` / `<verifier_path>` 占位符替换——所以下载命令用 `| tail -n 1` 只留路径行，后续各 setup 块末尾的 `echo` 同理。
+
 从 ModelScope 拉 draft 模型 z-lab/Qwen3-8B-DFlash-b16：
 
 ```shell #test-setup store="draft_path"
@@ -178,7 +162,23 @@ python -c "from modelscope import snapshot_download; print(snapshot_download('z-
 python -c "from modelscope import snapshot_download; print(snapshot_download('Qwen/Qwen3-8B'))" | tail -n 1
 ```
 
-### Step 1：convert（DFlash 算法）
+确认两个模型快照已就位（`config.json` + 权重文件）：
+
+```shell #test id="model-download-check" load="draft_path>>draft_path" load="verifier_path>>verifier_path"
+ls -1 <draft_path>/config.json <draft_path>/model.safetensors
+ls -1 <verifier_path>/config.json <verifier_path>/model.safetensors.index.json
+```
+
+输出结果如下：
+
+```shell #test-result id="model-download-check" load="draft_path>>draft_path" load="verifier_path>>verifier_path"
+<draft_path>/config.json
+<draft_path>/model.safetensors
+<verifier_path>/config.json
+<verifier_path>/model.safetensors.index.json
+```
+
+### convert（DFlash 算法）
 
 `speculators convert` 把本地 draft + verifier 读进来按 DFlash 算法重映射权重、写到 `/root/dflash-qwen3-8b-converted/`。CLI 的 `--algorithm` 不支持 `dflash`，走 Python API：
 
@@ -195,6 +195,7 @@ convert_model(
 PY
 test -f /root/dflash-qwen3-8b-converted/config.json
 test -f /root/dflash-qwen3-8b-converted/model.safetensors
+# 末行路径供 store 捕获（后续块 <dflash_path> 的替换源）；上面两行 test -f 保证它真实存在
 echo "/root/dflash-qwen3-8b-converted"
 ```
 
@@ -213,9 +214,9 @@ echo <dflash_path>
 /root/dflash-qwen3-8b-converted
 ```
 
-### Step 2：训练数据预处理
+### 训练数据预处理
 
-用上游 `scripts/prepare_data.py` 把 JSONL chat 数据 tokenize 写到 `/root/dflash-train-data/`（HF arrow 数据集）：
+把 10 条 chat 用 verifier tokenizer 跑 chat template 得到 `input_ids`/`loss_mask`，写到 `/tmp/prompts.jsonl`（speculator-format），再交给上游 `prepare-data`。
 
 ```shell #test-setup store="data_path" load="verifier_path>>verifier_path"
 set -euo pipefail
@@ -223,28 +224,41 @@ DATA_DIR=/root/dflash-train-data
 rm -rf "$DATA_DIR"
 mkdir -p "$DATA_DIR"
 
-# 顶层 key 必须是 "conversations"（不是 "messages"）；每条 user + assistant 都要填
-cat > /tmp/prompts.jsonl << 'JSONL'
-{"conversations":[{"role":"user","content":"Briefly describe AI topic #0."},{"role":"assistant","content":"AI is a field of computer science."}]}
-{"conversations":[{"role":"user","content":"Briefly describe AI topic #1."},{"role":"assistant","content":"AI is a field of computer science."}]}
-{"conversations":[{"role":"user","content":"Briefly describe AI topic #2."},{"role":"assistant","content":"AI is a field of computer science."}]}
-{"conversations":[{"role":"user","content":"Briefly describe AI topic #3."},{"role":"assistant","content":"AI is a field of computer science."}]}
-{"conversations":[{"role":"user","content":"Briefly describe AI topic #4."},{"role":"assistant","content":"AI is a field of computer science."}]}
-{"conversations":[{"role":"user","content":"Briefly describe AI topic #5."},{"role":"assistant","content":"AI is a field of computer science."}]}
-{"conversations":[{"role":"user","content":"Briefly describe AI topic #6."},{"role":"assistant","content":"AI is a field of computer science."}]}
-{"conversations":[{"role":"user","content":"Briefly describe AI topic #7."},{"role":"assistant","content":"AI is a field of computer science."}]}
-{"conversations":[{"role":"user","content":"Briefly describe AI topic #8."},{"role":"assistant","content":"AI is a field of computer science."}]}
-{"conversations":[{"role":"user","content":"Briefly describe AI topic #9."},{"role":"assistant","content":"AI is a field of computer science."}]}
-JSONL
+python << 'PY'
+import json
+from transformers import AutoTokenizer
 
-cd /root/speculators
+tokenizer = AutoTokenizer.from_pretrained("<verifier_path>")
 
-python scripts/prepare_data.py \
+def _ids(encoded):
+    # transformers 4.x: list[int] ; 5.x: BatchEncoding with .input_ids
+    return encoded["input_ids"] if hasattr(encoded, "keys") else encoded
+
+# 用 verifier 的 chat template 算 assistant 段分界：
+# prefix_ids（add_generation_prompt=True）渲染到 <|im_start|>assistant\n 为止；
+# full_ids 在它后面追加 <think>\n\n</think>\n\n + assistant 内容 + <|im_end|>\n
+# （Qwen3 thinking 模式 serving 输出形态），所以 [len(prefix_ids):] 就是要算 loss 的 token。
+with open("/tmp/prompts.jsonl", "w") as f:
+    for i in range(10):
+        conv = [
+            {"role": "user", "content": f"Briefly describe AI topic #{i}."},
+            {"role": "assistant", "content": "AI is a field of computer science."},
+        ]
+        prefix_ids = _ids(tokenizer.apply_chat_template(
+            conv[:-1], tokenize=True, add_generation_prompt=True
+        ))
+        full_ids = _ids(tokenizer.apply_chat_template(conv, tokenize=True))
+        loss_mask = [0] * len(prefix_ids) + [1] * (len(full_ids) - len(prefix_ids))
+        f.write(json.dumps({"input_ids": full_ids, "loss_mask": loss_mask}) + "\n")
+PY
+
+speculators prepare-data \
   --model "<verifier_path>" \
   --data /tmp/prompts.jsonl \
   --output "$DATA_DIR" \
   --max-samples 10 \
   --seq-length 8192 \
+  --num-preprocessing-workers 4 \
   --overwrite
 
 echo "$DATA_DIR"
@@ -276,11 +290,9 @@ token_freq keys: xxx
 len: xxx
 ```
 
-### Step 3：训练（单卡 torchrun）
+### 训练
 
-单卡 64 GB NPU 装不下「vllm 16 GB 权重 + KV + train draft 模型 + optimizer 激活」并发跑，所以拆成两步：先生成 hidden_states 缓存，再离线训。
-
-起 vllm 一次性 generate 10 条 hidden_states 写到 `/tmp/hs-train/`（train.py 的 FileBackend 直接读这个目录；生成完杀 vllm 释放全部 NPU 给后续 train 留 64 GB 完整空间）：
+先生成 hidden_states 缓存，再离线训。起 vllm 一次性 generate 10 条 hidden_states 写到 `/tmp/hs-train/`（train 的 FileBackend 直接读这个目录；生成完杀 vllm 释放全部 NPU 给后续 train 留 64 GB 完整空间）。v0.8.0 的 `launch_vllm.py` 有两处行为变化需要留意：按宿主机 CPU 数自动推导 `--api-server-count`（render 大批量吞吐优化，大机器上起多个 API server 前端进程），以及不再自动追加 `--no-enable-chunked-prefill`——镜像 vllm 0.23.0 默认开 chunked prefill 而 `ExampleHiddenStatesConnector` 不支持，必须显式关掉。这里 10 条 smoke 数据顺便钉 1 个前端：
 
 ```shell #test-setup store="hs_dir" load="data_path>>data_path" load="verifier_path>>verifier_path"
 set -euo pipefail
@@ -291,22 +303,9 @@ HS_DIR=/tmp/hs-train
 rm -rf "$HS_DIR"
 mkdir -p "$HS_DIR"
 
-# 关 dynamo + --enforce-eager：见 install-torch 步骤的 ⚠ 说明 —— 避开
-# dynamo capture 把 enable_custom_op() 的 fallback 吃掉触雷
 export TORCHDYNAMO_DISABLE=1
 rm -rf /root/.cache/vllm/torch_compile_cache 2>/dev/null || true
 
-# CANN env：vllm 进程 fork 出 EngineCore 后会动态 load torch_npu 的 atb
-# extension (`/usr/local/.../libop_plugin_atb.so`)，缺 LD_LIBRARY_PATH 里的
-# `libatb.so` 直接 `OSError: libatb.so: cannot open shared object file`。
-# ascend-toolkit/set_env.sh 不含 nnal 的 atb 路径，必须单独 source。
-#
-# atb/set_env.sh 是 zsh 写的，里面有两处在 bash + `set -u` 下报错：
-#   line 12 `until [[ -z "$1" ]]`（$1 没传时 unbound）
-#   line 43 `if [[ -n "$ZSH_VERSION" ]]`（ZSH_VERSION 没设时 unbound）
-# CI test framework 会自动 prepend `set -euo pipefail`，所以 source 前
-# 必须 `set +u` 关掉 nounset，source 完再 `set -u` 恢复 —— 单 pre-export
-# ZSH_VERSION 顶不住 $1 那个坑
 set +u
 export ZSH_VERSION="${ZSH_VERSION:-}"
 source /usr/local/Ascend/nnal/atb/set_env.sh
@@ -319,6 +318,8 @@ setsid nohup python scripts/launch_vllm.py "<verifier_path>" \
   --gpu-memory-utilization 0.9 \
   --max-model-len 4096 \
   --enforce-eager \
+  --api-server-count 1 \
+  --no-enable-chunked-prefill \
   > /tmp/vllm-gen.log 2>&1 < /dev/null &
 VLLM_GEN_PID=$!
 VLLM_GEN_PGID=$(ps -o pgid= -p "$VLLM_GEN_PID" | tr -d ' ')
@@ -347,7 +348,7 @@ if [ "$VLLM_READY" != "1" ]; then
   exit 1
 fi
 
-python scripts/data_generation_offline.py \
+speculators generate-offline-data \
   --model "<verifier_path>" \
   --preprocessed-data "<data_path>" \
   --output "$HS_DIR" \
@@ -360,7 +361,7 @@ tail -30 /tmp/hs-gen.log >&2
 
 HS_COUNT=$(ls -1 "$HS_DIR"/hs_*.safetensors 2>/dev/null | wc -l)
 if [ "$HS_RC" -ne 0 ] || [ "$HS_COUNT" -ne 10 ]; then
-  echo "=== data_generation_offline.py failed (rc=$HS_RC, hs_count=$HS_COUNT/10); full log ===" >&2
+  echo "=== generate-offline-data failed (rc=$HS_RC, hs_count=$HS_COUNT/10); full log ===" >&2
   cat /tmp/hs-gen.log >&2
   cleanup_vllm_gen
   exit 1
@@ -372,7 +373,21 @@ sleep 5
 echo "$HS_DIR"
 ```
 
-用上游 `scripts/train.py` 单卡 torchrun 训 1 epoch × 10 sample（smoke 验证管线通，不指望 loss 真下降）：
+确认 hidden states 已落盘（10 个 `hs_*.safetensors`）：
+
+```shell #test id="pipeline-step2b-hs" load="hs_dir>>hs_dir"
+echo <hs_dir>
+python -c "from pathlib import Path; print(len(list(Path('<hs_dir>').glob('hs_*.safetensors'))))"
+```
+
+输出结果如下：
+
+```shell #test-result id="pipeline-step2b-hs" load="hs_dir>>hs_dir"
+<hs_dir>
+10
+```
+
+用 `torchrun -m speculators.train` 单卡训 1 epoch × 10 sample（smoke 验证管线通，不指望 loss 真下降）：
 
 ```shell #test-setup store="checkpoint_path" load="hs_dir>>hs_dir" load="data_path>>data_path" load="verifier_path>>verifier_path"
 set -euo pipefail
@@ -382,36 +397,14 @@ mkdir -p "$CHECKPOINT_DIR"
 
 cd /root/speculators
 
-# 关 dynamo + ASCEND_LAUNCH_BLOCKING=1：见 install-torch 步骤的 ⚠ 说明。
-# ASCEND_LAUNCH_BLOCKING=1 让 NPU kernel 错误同步上抛（不设的话 CANN 错误是
-# silent kill，下次失败看不到 traceback）
 export TORCHDYNAMO_DISABLE=1
 export ASCEND_LAUNCH_BLOCKING=1
 
-# CANN env：torch_npu 的 atb extension 需要 `libatb.so`；Step 3a 已 source，
-# 同一个 shell 状态如果跨 step 中断了就要再 source 一次（bash 子 shell 不继承）。
-# set +u / set -u：见 Step 3a 注释（atb 是 zsh 写的，bash + set -u 会撞）
 set +u
 source /usr/local/Ascend/nnal/atb/set_env.sh
 set -u
 
-# --hidden-states-dtype float32：spec 把 LN.weight 写死 fp32，autocast 不会
-# cast LN；而 dflash.forward 复用的 V 来自 hidden_states 缓存（默认 bf16），
-# Q/K fp32 + V bf16 会撞 flex_attention 的 dtype check。把 V 也 cast fp32
-# 让 Q/K/V 对齐。A2 64 GB 装得下 1.9 GB fp32 缓存。备注：CUDA 跑同一份
-# train.py 也会有这个 dtype 不匹配，spec 是先有 CUDA 路径后迁到 NPU。
-# --on-missing raise 强制走 FileBackend 读 <hs_dir> 缓存；不带 --vllm-endpoint
-# 让 dataloader 不去问不存在的 server
-#
-# --max-anchors 32 --draft-attn-impl sdpa：spec 默认是 `--max-anchors 3072
-# --draft-attn-impl simple_flex_attention`（CUDA 路径）；torch 2.10 的
-# `flex_attention._validate_device` 只放行 CUDA / CPU / HPU，NPU device
-# 直接 ValueError，不是 OOM 是 hard reject。64 GB NPU 也必须切 sdpa，不
-# 是只 32 GB 才需要。sdpa 不走 DFlash 的 anchor-block 稀疏 mask，用各
-# draft layer 的 sliding-window（window=2048）；smoke 只验管线通，
-# 真训练需要补一个 NPU 能跑的 flex_attention 后端。sdpa + 32 anchor
-# 实测 val/loss=6.688，3.5 GB 落盘，~3 min/epoch on 910B4。
-torchrun --standalone --nproc_per_node=1 scripts/train.py \
+torchrun --standalone --nproc_per_node=1 -m speculators.train \
   --verifier-name-or-path "<verifier_path>" \
   --data-path "<data_path>" \
   --hidden-states-path "<hs_dir>" \
@@ -430,29 +423,17 @@ torchrun --standalone --nproc_per_node=1 scripts/train.py \
 TRAIN_RC=${TRAIN_RC:-0}
 
 if [ "$TRAIN_RC" -ne 0 ]; then
-  echo "=== train.py failed (rc=$TRAIN_RC); full train.log follows ===" >&2
+  echo "=== train failed (rc=$TRAIN_RC); full train.log follows ===" >&2
   cat /tmp/train.log >&2
   exit 1
 fi
-# trainer 把 checkpoint 写到 "$CHECKPOINT_DIR/<step>/" 子目录；Step 4 用
-# <checkpoint_path> 当 draft_model 路径，需要直接读 config.json /
-# model.safetensors，把最新子目录的内容拷到根，然后清掉 trainer 的
-# 元数据（optimizer/scheduler state、run.yaml、training_state.json、
-# val_metrics.json、checkpoint_best/epoch0_end symlinks、checkpoint
-# 子目录），只留 config.json + model.safetensors 给下游 pipeline-step3-train
-# test 做精确 ls 对账。
-#
-# LATEST_CKPT 只看数字子目录（[0-9]*），不吸 symlink-to-dir：
-# `ls -1d "$CHECKPOINT_DIR"/*/` 会把 checkpoint_best -> 0 / epoch0_end
-# -> 0 这类 symlink-to-dir 也列出来，sort -V 还会把 epoch0_end 排
-# 在 0 后面，结果拿到一个 symlink path 让 cp 间接跟链；改用 [0-9]*
-# glob 直接锁 trainer 自己创建的 step 子目录
+
 LATEST_CKPT=$(ls -1d "$CHECKPOINT_DIR"/[0-9]*/ 2>/dev/null | sort -V | tail -1)
 if [ -n "$LATEST_CKPT" ] && [ "$LATEST_CKPT" != "$CHECKPOINT_DIR/" ]; then
   cp -af "$LATEST_CKPT"/. "$CHECKPOINT_DIR"/
 fi
 if ! test -f "$CHECKPOINT_DIR/config.json" || ! test -f "$CHECKPOINT_DIR/model.safetensors"; then
-  echo "=== train.py rc=0 但 checkpoint 缺失 (looked under $CHECKPOINT_DIR/) ===" >&2
+  echo "=== train rc=0 但 checkpoint 缺失 (looked under $CHECKPOINT_DIR/) ===" >&2
   cat /tmp/train.log >&2
   exit 1
 fi
@@ -471,32 +452,32 @@ rm -f "$CHECKPOINT_DIR"/optimizer_state_dict.pt \
 echo "$CHECKPOINT_DIR"
 ```
 
-确认训练产物（checkpoint 目录 + `config.json` + `model.safetensors`）：
+确认训练产物与训练真跑完（checkpoint 文件 + 从 train.log 提取 val loss）：
 
 ```shell #test id="pipeline-step3-train" load="checkpoint_path>>checkpoint_path"
 echo <checkpoint_path>
 ls -1 <checkpoint_path>
+grep -oE 'val/loss_epoch=[0-9.]+' /tmp/train.log | head -1
 ```
 
 输出结果如下：
 
-```shell #test-result id="pipeline-step3-train"
+```shell #test-result id="pipeline-step3-train" fuzzy='xxx'
 /root/dflash-trained
 config.json
 model.safetensors
+val/loss_epoch=xxx
 ```
 
-### Step 4：`vllm serve` 挂 draft 做推理
+### `vllm serve` 挂 draft 做推理
 
 起 vllm-ascend serve 把训好的 draft 挂上做 chat completion smoke（8 token completion）：
 
 ```shell #test id="pipeline-step4-serve" load="checkpoint_path>>draft_model" load="verifier_path>>verifier_path"
-# 关 dynamo + --enforce-eager：见 install-torch 步骤的 ⚠ 说明
+
 export TORCHDYNAMO_DISABLE=1
 rm -rf /root/.cache/vllm/torch_compile_cache 2>/dev/null || true
 
-# CANN env：见 Step 3a 注释 —— `libatb.so` 不在 ascend-toolkit 默认 LD path 里
-# set +u / set -u：见 Step 3a 注释（atb 是 zsh 写的）
 set +u
 source /usr/local/Ascend/nnal/atb/set_env.sh
 set -u
@@ -518,17 +499,29 @@ for i in {1..180}; do
   sleep 2
 done
 
+echo "input: Hello"
 curl -sS http://127.0.0.1:8000/v1/chat/completions \
   -H 'Content-Type: application/json' \
-  -d '{"model":"Qwen/Qwen3-8B","messages":[{"role":"user","content":"Hello"}],"max_tokens":8}'
+  -d '{"model":"Qwen/Qwen3-8B","messages":[{"role":"user","content":"Hello"}],"max_tokens":8}' \
+  | python -c "
+import sys, json
+r = json.load(sys.stdin)
+print('content:', r['choices'][0]['message']['content'])
+print('completion_tokens:', r['usage']['completion_tokens'])
+print('finish_reason:', r['choices'][0]['finish_reason'])
+"
 
 kill "$VLLM_PID" 2>/dev/null || true
 ```
 
 输出结果如下：
 
-```shell #test-result id="pipeline-step4-serve" fuzzy='xxx'
-{"id":"chatcmpl-xxx","object":"chat.completion","created":xxx,"model":"Qwen/Qwen3-8B","choices":[{"index":0,"message":{"role":"assistant","content":"xxx","refusal":null,"annotations":null,"audio":null,"function_call":null,"reasoning":null},"logprobs":null,"finish_reason":"length","stop_reason":null,"token_ids":null,"routed_experts":null}],"service_tier":null,"system_fingerprint":"vllm-xxx","usage":{"prompt_tokens":xxx,"total_tokens":xxx,"completion_tokens":xxx,"prompt_tokens_details":null,"completion_tokens_details":null},"prompt_logprobs":null,"prompt_token_ids":null,"prompt_text":null,"kv_transfer_params":null}
+```shell #test-result id="pipeline-step4-serve" fuzzy='xxx' fuzzy='...'
+input: Hello
+content: xxx
+...
+completion_tokens: xxx
+finish_reason: length
 ```
 
 ### 编程式入口：SpeculatorsConfig / TokenProposalConfig

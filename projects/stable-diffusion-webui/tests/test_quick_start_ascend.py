@@ -117,6 +117,8 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         os.environ["PIP_CONSTRAINT"] = cls._CONSTRAINTS_FILE
         os.environ["UV_CONSTRAINT"] = cls._CONSTRAINTS_FILE
 
+        os.environ.setdefault("ASCEND_RT_VISIBLE_DEVICES", "0")
+
         subprocess.run(["apt-get", "update", "-qq"], check=True)
         subprocess.run(
             [

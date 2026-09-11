@@ -4,21 +4,22 @@
 
 ## 前置条件
 
-Atlas 900 A2 单卡，已装好 CANN、torch + torch_npu（`torch.npu.is_available() == True`）。设置 CANN 环境变量：
+Atlas 900 A2 单卡，已装好 CANN 以及配套的 torch、torch_npu，`torch.npu.is_available()` 为 True。设置 CANN 环境变量：
 ```shell
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 ```
 
-容器需已安装 opencv 运行库（`libgl1`、`libglib2.0-0`）。
+容器需已安装 opencv 运行库 `libgl1` 与 `libglib2.0-0`。
 
-| 组件 | 版本 |
-| --- | --- |
-| Python | 3.12 |
-| CANN | 9.1.0 |
-| torch | 2.9.0+cpu |
-| torch_npu | 2.9.0.post2 |
-| stable-diffusion-webui | v1.10.1 |
-| 模型 | `AI-ModelScope/sd-turbo`（约 3.4 GB，经 ModelScope 自动下载） |
+| 组件 | 版本 | 来源 |
+| --- | --- | --- |
+| Python | 3.12 | 昇腾 CANN 镜像 |
+| CANN | 9.1.0 | 昇腾 CANN 镜像 |
+| torch | 2.9.0+cpu | 昇腾 PyPI 源 |
+| torch_npu | 2.9.0.post2 | 昇腾 PyPI 源 |
+| transformers | 4.44.2 | PyPI |
+| stable-diffusion-webui | v1.10.1 | GitHub |
+| 模型 | `AI-ModelScope/sd-turbo` | ModelScope，约 3.4 GB，自动下载 |
 
 ## 环境检查
 
@@ -32,13 +33,14 @@ Python 3.12.xxx
 
 检查 torch / torch_npu 是否装好且 NPU 设备可用：
 ```shell #test id="check-torch"
-python -c "import torch, torch_npu; print('torch=', torch.__version__); print('torch_npu=', torch_npu.__version__); print('is_available:', torch.npu.is_available()); print('count:', torch.npu.device_count())"
+python -c "import torch, torch_npu; print('torch=', torch.__version__); print('torch_npu=', torch_npu.__version__); print('is_available:', torch.npu.is_available()); print('count:', torch.npu.device_count()); print('device:', torch_npu.npu.get_device_name(0))"
 ```
 ```shell #test-result id="check-torch" fuzzy='xxx'
 torch= xxx
 torch_npu= xxx
 is_available: True
 count: 1
+device: xxx
 ```
 
 ## 获取代码
@@ -62,20 +64,21 @@ HEAD xxx
 
 ## 安装依赖
 
-安装上游 requirements.txt，CLIP 不在 PyPI 上需从 GitHub 源码安装，modelscope 用于下载模型：
+先把 transformers 升到 4.44.2 以匹配 Python 3.12，再装上游 requirements.txt；CLIP 无预编译包需从 GitHub 源码安装，modelscope 用于下载模型：
 ```shell #test id="install-webui"
 cd stable-diffusion-webui
+sed -i 's/transformers==4.30.2/transformers==4.44.2/' requirements.txt
 pip install -r requirements.txt
-pip install 'setuptools<70'
+pip install 'setuptools<70' wheel
 pip install --no-build-isolation "https://github.com/openai/CLIP/archive/d50d76daa670286dd6cacf3bcd80b5e4823fc8e1.zip"
 pip install modelscope
-python -c "import modelscope, gradio, fastapi; print('deps ok')"
+python -c "import modelscope, gradio, fastapi, transformers, tokenizers; print('deps ok', transformers.__version__)"
 ```
-```shell #test-result id="install-webui"
-deps ok
+```shell #test-result id="install-webui" fuzzy='xxx'
+deps ok xxx
 ```
 
-## 下载模型
+## 无头文生图（单卡 NPU）
 
 sd-turbo 约 3.4 GB，首次运行时自动下载到默认缓存：
 <!--
@@ -84,9 +87,7 @@ python -c "from modelscope import snapshot_download; print(snapshot_download('AI
 ```
 -->
 
-## 无头文生图（单卡 NPU）
-
-注入 autocast 补丁（上游缺少 NPU 分支），指向 community stablediffusion 仓库 fork（上游原仓库已删除），以 API 模式启动；`<ckpt>` 为模型下载目录：
+注入 autocast 补丁并指向 stablediffusion 的社区 fork，以 API 模式启动；`<ckpt>` 为模型下载目录：
 ```shell #test-setup load="model_dir>>ckpt"
 cd stable-diffusion-webui
 export STABLE_DIFFUSION_REPO=https://github.com/w-e-w/stablediffusion.git
@@ -116,7 +117,7 @@ python -c "import json, base64; r=json.load(open('/tmp/sd-turbo-resp.json')); pr
 txt2img images: 1
 ```
 
-校验生成的 PNG 完整有效：
+校验 PNG 文件头与大小下限，防止空图坏图：
 ```shell #test id="verify-png"
 python -c "import os; p='/tmp/sd-turbo-out.png'; s=os.path.getsize(p); assert s>10000; assert open(p,'rb').read(8)==b'\\x89PNG\\r\\n\\x1a\\n'; print(s,'bytes')"
 ```

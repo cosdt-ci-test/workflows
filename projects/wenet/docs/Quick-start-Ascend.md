@@ -131,10 +131,10 @@ python -c "
 from modelscope import snapshot_download
 snapshot_download('OmniData/AISHELL-1', repo_type='dataset')
 "
-# 创建 weNet 期望的目录结构（软链接）
-ln -sf /root/.cache/modelscope/datasets/OmniData/AISHELL-1 /root/asr-data/AISHELL-1
-ln -sf /root/asr-data/AISHELL-1/data_aishell /root/asr-data/OpenSLR/33/data_aishell
-ln -sf /root/asr-data/AISHELL-1/resource_aishell /root/asr-data/OpenSLR/33/resource_aishell
+# 解压数据集
+cd /root/.cache/modelscope/datasets/OmniData/AISHELL-1
+tar -xzf data_aishell.tgz -C /root/asr-data/OpenSLR/33/
+tar -xzf resource_aishell.tgz -C /root/asr-data/OpenSLR/33/
 # 创建 .complete 标记文件
 touch /root/asr-data/OpenSLR/33/data_aishell/.complete
 touch /root/asr-data/OpenSLR/33/resource_aishell/.complete

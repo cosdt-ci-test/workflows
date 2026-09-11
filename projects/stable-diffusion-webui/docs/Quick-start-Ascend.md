@@ -72,10 +72,11 @@ pip install -r requirements.txt
 pip install 'setuptools<70' wheel
 pip install --no-build-isolation "https://github.com/openai/CLIP/archive/d50d76daa670286dd6cacf3bcd80b5e4823fc8e1.zip"
 pip install modelscope
-# Re-pin torch/torch_npu after all pip installs: modelscope pulls in
-# torch>=2.10 which breaks torch_npu 2.9.0.post2 ABI compatibility.
-pip install torch==2.9.0 torch_npu==2.9.0.post2
-python -c "import modelscope, gradio, fastapi, transformers, tokenizers; print('deps ok', transformers.__version__)"
+# Re-pin torch/torch_npu + torchvision after all pip installs:
+# modelscope and open-clip-torch pull in torch>=2.10 / torchvision==0.25.0
+# which break torch_npu 2.9.0.post2 ABI compatibility.
+pip install torch==2.9.0 torchvision==0.24.0 torch_npu==2.9.0.post2
+```
 
 验证依赖可用：
 ```shell #test id="install-webui"

@@ -135,12 +135,11 @@ print(snapshot_download('OmniData/AISHELL-1', repo_type='dataset'))
 
 echo "Dataset downloaded to: $DATASET_DIR"
 
-# 解压
-cd "$DATASET_DIR"
+# 解压数据集到 weNet 期望的目录结构
+cd /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33
 tar -xzf data_aishell.tgz -C /root/asr-data/OpenSLR/33/
 tar -xzf resource_aishell.tgz -C /root/asr-data/OpenSLR/33/
-
-# 创建标记文件
+# 创建 .complete 标记文件
 touch /root/asr-data/OpenSLR/33/data_aishell/.complete
 touch /root/asr-data/OpenSLR/33/resource_aishell/.complete
 ```

@@ -2,6 +2,7 @@
 
 import math
 import os
+import tempfile
 
 import ray
 from ray.train import ScalingConfig
@@ -37,7 +38,18 @@ def test_single_worker_npu_optimizer_step() -> None:
         assert not torch.equal(before, model.weight.detach())
         value = float(loss.detach().cpu().item())
         assert math.isfinite(value)
-        train.report({"loss": value, "device": device.type})
+        with tempfile.TemporaryDirectory() as checkpoint_dir:
+            torch.save(
+                {
+                    name: tensor.detach().cpu()
+                    for name, tensor in model.state_dict().items()
+                },
+                os.path.join(checkpoint_dir, "model.pt"),
+            )
+            train.report(
+                {"loss": value, "device": device.type},
+                checkpoint=train.Checkpoint.from_directory(checkpoint_dir),
+            )
 
     ray.init(include_dashboard=False, log_to_driver=False)
     try:

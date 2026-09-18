@@ -1,6 +1,7 @@
 """Two local Ray Train workers must complete an HCCL collective on NPUs."""
 
 import os
+import tempfile
 
 import ray
 from ray.train import ScalingConfig
@@ -39,7 +40,18 @@ def test_two_worker_hccl_all_reduce() -> None:
         dist.all_reduce(value)
         total = float(value.cpu().item())
         assert total == 3.0, (rank, total)
-        train.report({"collective_sum": total, "world_size": 2})
+        with tempfile.TemporaryDirectory() as checkpoint_dir:
+            checkpoint = None
+            if rank == 0:
+                torch.save(
+                    {"collective_sum": total, "world_size": 2},
+                    os.path.join(checkpoint_dir, "result.pt"),
+                )
+                checkpoint = train.Checkpoint.from_directory(checkpoint_dir)
+            train.report(
+                {"collective_sum": total, "world_size": 2},
+                checkpoint=checkpoint,
+            )
 
     ray.init(include_dashboard=False, log_to_driver=False)
     try:

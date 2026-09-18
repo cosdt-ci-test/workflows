@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import sys
 import unittest
 from pathlib import Path
@@ -219,6 +220,40 @@ class TestRayProjectContract(unittest.TestCase):
         self.assertIn("upstream_repo: ray-project/ray", text)
         self.assertIn("max_parallel: 2", text)
         self.assertNotIn("run-example:", text)
+
+    def test_train_examples_attach_checkpoint_to_reported_metrics(self) -> None:
+        for name in ("test_npu_train_single.py", "test_npu_train_hccl.py"):
+            with self.subTest(name=name):
+                path = _REPO_ROOT / "projects" / "ray" / "example" / name
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+                reports = [
+                    node
+                    for node in ast.walk(tree)
+                    if isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and isinstance(node.func.value, ast.Name)
+                    and node.func.value.id == "train"
+                    and node.func.attr == "report"
+                ]
+                self.assertEqual(len(reports), 1)
+                self.assertIn("checkpoint", {kw.arg for kw in reports[0].keywords})
+
+    def test_hccl_checkpoint_is_created_only_by_rank_zero(self) -> None:
+        path = _REPO_ROOT / "projects" / "ray" / "example" / "test_npu_train_hccl.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        rank_zero_branches = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.If) and ast.unparse(node.test) == "rank == 0"
+        ]
+        self.assertEqual(len(rank_zero_branches), 1)
+        self.assertTrue(
+            any(
+                isinstance(node, ast.Call)
+                and ast.unparse(node.func) == "train.Checkpoint.from_directory"
+                for node in ast.walk(rank_zero_branches[0])
+            )
+        )
 
 
 if __name__ == "__main__":

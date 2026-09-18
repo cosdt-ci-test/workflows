@@ -6,8 +6,17 @@ Ray is registered as a basic-support inference-acceleration project in phase A.
 
 ## Examples
 
-The examples workflow runs two files that already exist in the upstream Ray
-repository:
+The examples workflow uses the shared `examples-template.yml` engine. A manual
+run with an empty `target_ref` selects the latest Ray release; an explicit tag,
+branch, or SHA can still be supplied. The schedule remains disabled until the
+expanded matrix is validated on NPU runners.
+
+One manifest holds both sources. `source: upstream` paths resolve in the Ray
+checkout; `source: project` paths resolve in this directory's `example/` tree.
+The matrix job name comes from each test file's basename. The shared checker
+verifies both path origins before a self-hosted NPU runner is allocated.
+
+The two upstream Ray tests remain unchanged:
 
 - `python/ray/tests/accelerators/test_npu.py` exercises Ray Core's native
   `NPUAcceleratorManager` contract;
@@ -15,10 +24,15 @@ repository:
   `NPUTorchDeviceManager`; the CI overlay selects `test_npu_device_manager`
   so unrelated CUDA and TPU tests in the same upstream file are not run.
 
-The project-local `scripts/check_manifest.py` interprets the manifest's
-`scan.paths` because these two upstream tests live in unrelated directories.
-The shared manifest checker remains unchanged, and the guard does not add or
-replace a Ray example.
+The project-owned cases cover real-device discovery; Task/Actor assignment and
+isolation; resource queuing, release, and recovery; fractional scheduling;
+single-worker training; same-node two-worker HCCL; Ray Data batch processing;
+Ray Serve inference; and Ray Tune trials. A passing test must prove the stated
+behavior, not just import Ray or return exit code zero. Cross-machine tests
+are intentionally excluded: the available two-card runner is one host, not a
+multi-node Ray cluster. The `scan.paths` list is limited to the two upstream
+paths and does not claim to discover every new upstream NPU test.
+
 `setup_example.sh` installs a released target directly from its matching PyPI
 version. Development targets such as Ray master use the official Linux aarch64
 wheel built from the exact target commit.

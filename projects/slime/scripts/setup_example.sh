@@ -287,10 +287,25 @@ SLIME_FORK_ROOT="$DEPS_ROOT/slime-ascend"
 export SLIME_FORK_ROOT
 mkdir -p "$DEPS_ROOT"
 
-source /usr/local/Ascend/ascend-toolkit/set_env.sh
-# nnal/atb ships with the CANN toolkit image; tolerate images without it.
-# shellcheck disable=SC1091
-source /usr/local/Ascend/nnal/atb/set_env.sh 2>/dev/null || true
+# Vendor CANN/ATB env scripts assume a login shell and reference optional
+# variables (e.g. $ZSH_VERSION) without ${VAR:-} guards. Under this
+# project's `set -u` they die with "unbound variable"; relax strict mode
+# only while sourcing vendor code, then restore it (same pattern as
+# projects/roll after its CI hit the identical silent failure).
+source_vendor_env() {
+  local vendor_file="$1"
+  if [[ ! -f "$vendor_file" ]]; then
+    echo "vendor env script not found, skipping: $vendor_file"
+    return 0
+  fi
+  set +eu
+  # shellcheck disable=SC1090
+  source "$vendor_file"
+  set -eu
+}
+
+source_vendor_env /usr/local/Ascend/ascend-toolkit/set_env.sh
+source_vendor_env /usr/local/Ascend/nnal/atb/set_env.sh
 
 select_pip_index
 python -m pip install -U pip setuptools wheel

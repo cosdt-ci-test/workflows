@@ -29,9 +29,19 @@ fi
 
 mkdir -p "$CI_OUTPUT_DIR"
 
-source /usr/local/Ascend/ascend-toolkit/set_env.sh
-# shellcheck disable=SC1091
-source /usr/local/Ascend/nnal/atb/set_env.sh 2>/dev/null || true
+# Vendor env scripts assume a login shell and die under `set -u`; relax
+# strict mode only while sourcing them (same trap as setup_example.sh).
+source_vendor_env() {
+  local vendor_file="$1"
+  [[ -f "$vendor_file" ]] || return 0
+  set +eu
+  # shellcheck disable=SC1090
+  source "$vendor_file"
+  set -eu
+}
+
+source_vendor_env /usr/local/Ascend/ascend-toolkit/set_env.sh
+source_vendor_env /usr/local/Ascend/nnal/atb/set_env.sh
 
 if command -v python3 >/dev/null 2>&1; then
   PYTHON=python3

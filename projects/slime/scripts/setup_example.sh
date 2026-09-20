@@ -147,12 +147,12 @@ PY
     "$DEPS_ROOT"/sgl-kernel-npu/torch_memory_saver-*-cp312-cp312-linux_aarch64.whl \
     "$DEPS_ROOT"/sgl-kernel-npu/sgl_kernel_npu-*-cp312-cp312-linux_aarch64.whl \
     "$DEPS_ROOT"/sgl-kernel-npu/deep_ep-*-cp312-cp312-linux_aarch64.whl
-  # deep_ep's C++ extension ships beside the wheel inside the bundle
-  # (the fork's quick_install.sh links it into site-packages the same way).
+  # deep_ep's C++ extension ships inside the deep_ep wheel under
+  # deep_ep/ but is imported as a top-level module; the fork's
+  # Dockerfile links it into the site-packages root (relative symlink).
   local site_dir
   site_dir=$(python -c 'import site; print(site.getsitepackages()[0])')
-  ln -sf "$DEPS_ROOT/sgl-kernel-npu/lib/deep_ep_cpp.cpython-312-aarch64-linux-gnu.so" \
-    "$site_dir/deep_ep_cpp.cpython-312-aarch64-linux-gnu.so"
+  ln -sf deep_ep/deep_ep_cpp*.so "$site_dir/"
   python -c 'import deep_ep; print("deep_ep ok:", deep_ep.__path__)'
 }
 

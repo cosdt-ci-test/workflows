@@ -17,9 +17,9 @@ PROFILE="$1"
 
 # Validate the profile before installing anything (contract: unknown
 # profile must exit non-zero before any install).
-SUPPORTED_PROFILES="diffusers-sdxl diffusers-sd15 diffusers-amused diffusers-cogvideo diffusers-lcm diffusers-lcm-sdxl diffusers-controlnet diffusers-controlnet-sdxl"
+SUPPORTED_PROFILES="diffusers-sdxl diffusers-sd15 diffusers-dreambooth diffusers-instruct-pix2pix diffusers-kandinsky diffusers-research diffusers-research-plain diffusers-t2i-adapter diffusers-text-to-image diffusers-textual-inversion diffusers-unconditional diffusers-vqgan diffusers-sdxl-online diffusers-amused diffusers-cogvideo diffusers-lcm diffusers-lcm-sdxl diffusers-controlnet diffusers-controlnet-sdxl diffusers-llada2"
 case "$PROFILE" in
-  diffusers-sdxl|diffusers-sd15|diffusers-amused|diffusers-cogvideo|diffusers-lcm|diffusers-lcm-sdxl|diffusers-controlnet|diffusers-controlnet-sdxl) ;;
+  diffusers-sdxl|diffusers-sd15|diffusers-dreambooth|diffusers-instruct-pix2pix|diffusers-kandinsky|diffusers-research|diffusers-research-plain|diffusers-t2i-adapter|diffusers-text-to-image|diffusers-textual-inversion|diffusers-unconditional|diffusers-vqgan|diffusers-sdxl-online|diffusers-amused|diffusers-cogvideo|diffusers-lcm|diffusers-lcm-sdxl|diffusers-controlnet|diffusers-controlnet-sdxl|diffusers-llada2) ;;
   *)
     echo "unknown profile: ${PROFILE} (supported: ${SUPPORTED_PROFILES})" >&2
     exit 1
@@ -112,10 +112,13 @@ install_example_stack() {
   # examples/advanced_diffusion_training/requirements.txt.
   # datasets<4.0.0: diffusers examples (e.g. controlnet's load_dataset path)
   # break on datasets 4.x; the whole project stays below 4.
+  # wandb: every training script does `if is_wandb_available(): import wandb`
+  # and several default --report_to to wandb; installed once here, kept
+  # offline by the global WANDB_MODE=disabled.
   python -m pip install \
     "transformers>=5.0,<6.0" "accelerate>=1.0,<2.0" "peft>=0.6" \
     "datasets<4.0.0" ftfy tensorboard Jinja2 sentencepiece "torchvision==0.24.0" \
-    prodigyopt "modelscope==1.37.0"
+    prodigyopt "modelscope==1.37.0" wandb
   python -c "import diffusers, transformers, accelerate, peft; print('diffusers', diffusers.__version__, '/ transformers', transformers.__version__, '/ accelerate', accelerate.__version__, '/ peft', peft.__version__)"
 }
 
@@ -140,7 +143,14 @@ from modelscope import snapshot_download
 WORKSPACE = Path(os.environ["GITHUB_WORKSPACE"])
 ENV_FILE = os.environ["GITHUB_ENV"]
 MODEL_CACHE = Path(os.environ.get("MODELSCOPE_CACHE", os.path.expanduser("~/.cache/modelscope")))
+MODEL_CACHE.mkdir(parents=True, exist_ok=True)
 WANT = {item.strip() for item in os.environ.get("DIFFUSERS_DOWNLOAD", "").split(",") if item.strip()}
+
+# ModelScope's snapshot_download gives up on a single file once its own
+# retries are exhausted (e.g. "1 file(s) failed to download out of 16"),
+# which fails the whole setup. Re-run it a few times: each pass resumes /
+# re-fetches only what is still missing.
+DOWNLOAD_ATTEMPTS = 3
 
 exports: dict[str, str] = {}
 failures: list[str] = []
@@ -151,13 +161,54 @@ def export(name: str, path: str) -> None:
     print(f"{name}={path}", flush=True)
 
 
+def corrupt_safetensors(root: Path) -> list[Path]:
+    # A truncated / half-written safetensors file fails to open ("incomplete
+    # metadata, file not fully covered"). snapshot_download trusts files that
+    # already exist, so a corrupt one is never re-fetched on its own: detect it,
+    # delete it, and let the retry loop re-download.
+    from safetensors import safe_open
+
+    bad: list[Path] = []
+    for path in sorted(root.rglob("*.safetensors")):
+        try:
+            with safe_open(path, framework="pt") as handle:
+                handle.keys()
+        except Exception as exc:  # noqa: BLE001
+            print(f"corrupt {path}: {exc}", flush=True)
+            bad.append(path)
+    return bad
+
+
 def snapshot(name: str, ms_id: str, **kwargs) -> None:
-    try:
-        local = Path(snapshot_download(ms_id, cache_dir=str(MODEL_CACHE), **kwargs))
-        export(name, str(local))
-    except Exception as exc:  # noqa: BLE001 - report and continue
-        failures.append(f"{ms_id}: {type(exc).__name__}: {exc}")
-        print(f"FAIL {ms_id}: {exc}", flush=True)
+    last: Exception | None = None
+    for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+        try:
+            local = Path(snapshot_download(ms_id, cache_dir=str(MODEL_CACHE), **kwargs))
+            bad = corrupt_safetensors(local)
+            if bad:
+                for path in bad:
+                    path.unlink()
+                raise RuntimeError(f"{len(bad)} corrupt safetensors file(s) removed; re-downloading")
+            export(name, str(local))
+            return
+        except Exception as exc:  # noqa: BLE001 - retry, then report
+            last = exc
+            print(f"retry {attempt}/{DOWNLOAD_ATTEMPTS} {ms_id}: {type(exc).__name__}: {exc}", flush=True)
+    failures.append(f"{ms_id}: {type(last).__name__}: {last}")
+    print(f"FAIL {ms_id}: {last}", flush=True)
+
+
+def hf_snapshot(repo_id: str, **kwargs) -> str:
+    from huggingface_hub import snapshot_download as hf_snapshot_download
+
+    last: Exception | None = None
+    for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+        try:
+            return hf_snapshot_download(repo_id, **kwargs)
+        except Exception as exc:  # noqa: BLE001 - retry, then report
+            last = exc
+            print(f"retry {attempt}/{DOWNLOAD_ATTEMPTS} {repo_id}: {type(exc).__name__}: {exc}", flush=True)
+    raise last
 
 
 # SDXL base components only. The repo also carries sd_xl_base_1.0.safetensors
@@ -174,7 +225,9 @@ if "sdxl" in WANT:
             "text_encoder/*", "text_encoder_2/*",
             "tokenizer/*", "tokenizer_2/*", "scheduler/*",
         ],
-        ignore_file_pattern=["*.fp16.*"],
+        # .bin is the duplicate of .safetensors; skip both fp16 and .bin to
+        # halve the download (and the .bin download is what fails).
+        ignore_file_pattern=["*.fp16.*", "*.bin"],
     )
 
 # SDXL fp16-safe VAE. Only entries that pass
@@ -194,7 +247,23 @@ if "sd15" in WANT:
             "unet/*", "vae/*",
             "text_encoder/*", "tokenizer/*", "scheduler/*",
         ],
-        ignore_file_pattern=["*.fp16.*"],
+        # Same as SDXL: the repo carries both .bin and .safetensors; only the
+        # latter is needed.
+        ignore_file_pattern=["*.fp16.*", "*.bin"],
+    )
+
+# SD 1.4 (the dreambooth examples' README base model). Same component-only
+# filter as SD1.5.
+if "sd14" in WANT:
+    snapshot(
+        "SD14_MODEL_PATH",
+        "AI-ModelScope/stable-diffusion-v1-4",
+        allow_file_pattern=[
+            "*.json", "*.txt", "*.model",
+            "unet/*", "vae/*",
+            "text_encoder/*", "tokenizer/*", "scheduler/*",
+        ],
+        ignore_file_pattern=["*.fp16.*", "*.bin"],
     )
 
 # CogVideoX-2b (transformer + T5 text_encoder + VAE). The ModelScope repo
@@ -219,11 +288,9 @@ if "cogvideo" in WANT:
     # will fail and the dataset must be delivered via cache-seed/diffusers/
     # instead (same treatment as peft's Xet-backed fixtures).
     try:
-        from huggingface_hub import snapshot_download as hf_snapshot_download
-
         dataset_dir = WORKSPACE / "datasets" / "disney"
         dataset_dir.mkdir(parents=True, exist_ok=True)
-        hf_snapshot_download(
+        hf_snapshot(
             "Wild-Heart/Disney-VideoGeneration-Dataset",
             repo_type="dataset",
             local_dir=str(dataset_dir),
@@ -238,11 +305,9 @@ if "cogvideo" in WANT:
 # hf-mirror into the workspace and point --dataset_name at the local directory.
 if "3d-icon" in WANT:
     try:
-        from huggingface_hub import snapshot_download as hf_snapshot_download
-
         dataset_dir = WORKSPACE / "datasets" / "3d_icon"
         dataset_dir.mkdir(parents=True, exist_ok=True)
-        hf_snapshot_download(
+        hf_snapshot(
             "linoyts/3d_icon",
             repo_type="dataset",
             local_dir=str(dataset_dir),
@@ -285,22 +350,103 @@ PY
 # and add the delta here; never `pip install -r` it verbatim (it pins to git
 # main / loose versions and pulls CUDA-only deps).
 
-# diffusers-sdxl: SDXL advanced dreambooth/LoRA training examples.
+# diffusers-sdxl: SDXL advanced dreambooth/LoRA training example. Uses the
+# tiny HF model at run time, so no ModelScope pre-download.
 setup_diffusers_sdxl() {
   install_example_stack
-  download_assets sdxl,3d-icon
 }
 
-# diffusers-sd15: SD1.5 advanced dreambooth/LoRA training examples.
+# diffusers-sd15: SD1.5 advanced dreambooth/LoRA training example.
 setup_diffusers_sd15() {
   install_example_stack
   download_assets sd15,3d-icon
+}
+
+# diffusers-dreambooth: SD1.5 dreambooth / dreambooth-LoRA training examples.
+# The model is pulled online (hf-mirror) by the example; the dataset is the
+# fixture image (fixtures/DOG.jpg), so no download here.
+setup_diffusers_dreambooth() {
+  install_example_stack
+}
+
+# diffusers-instruct-pix2pix: SD1.5 InstructPix2Pix. The dataset
+# (fusing/instructpix2pix-1000-samples) is fetched by the example at run time.
+setup_diffusers_instruct_pix2pix() {
+  install_example_stack
+  download_assets sd15
+}
+
+# diffusers-kandinsky: Kandinsky 2.2 decoder training. Base only; the model
+# (kandinsky-community/kandinsky-2-2-decoder, no ModelScope mirror) and the
+# dataset are fetched by the example at run time.
+setup_diffusers_kandinsky() {
+  install_example_stack
+}
+
+# diffusers-research: research_projects SD1.5 training examples. Base + SD1.5
+# predownload; datasets (naruto / fixtures/DOG.jpg) at run time.
+setup_diffusers_research() {
+  install_example_stack
+  download_assets sd15
+}
+
+# diffusers-research-plain: research_projects examples that fetch their own
+# model + dataset at run time (cifar10 / inpainting / instruct-pix2pix /
+# wuerstchen-prior / sd-vae-ft-mse). Base only.
+setup_diffusers_research_plain() {
+  install_example_stack
+}
+
+# diffusers-t2i-adapter: T2I-Adapter SDXL. The tiny SDXL / tiny adapter models
+# and the fill10 dataset are fetched via hf-mirror at run time. Base only.
+setup_diffusers_t2i_adapter() {
+  install_example_stack
+}
+
+# diffusers-text-to-image: text_to_image SD1.5 / SDXL (full + LoRA) examples.
+# Tiny SD models and the dummy_image_text_data dataset are fetched via
+# hf-mirror at run time. Base only.
+setup_diffusers_text_to_image() {
+  install_example_stack
+}
+
+# diffusers-textual-inversion: textual_inversion SD1.5 / SDXL examples. Tiny
+# models are fetched via hf-mirror at run time; the dataset is the fixture
+# image (fixtures/DOG.jpg). Base only.
+setup_diffusers_textual_inversion() {
+  install_example_stack
+}
+
+# diffusers-unconditional: unconditional_image_generation (DDPM 64px). The
+# ddpm_dummy config and dummy_image_class_data dataset are fetched via
+# hf-mirror at run time. Base only.
+setup_diffusers_unconditional() {
+  install_example_stack
+}
+
+# diffusers-vqgan: VQGAN training (VQModel + Paella discriminator + timm
+# perceptual loss). timm is the example's own requirement; the dataset is the
+# tiny dummy_image_text_data and timm vgg19 weights are fetched at run time.
+setup_diffusers_vqgan() {
+  install_example_stack
+  python -m pip install timm
+}
+
+# diffusers-sdxl-online: SDXL examples that pull the model + datasets online
+# (hf-mirror) at run time, using the fp16 variant (~6.6GB) to keep the
+# download small. Base only.
+setup_diffusers_sdxl_online() {
+  install_example_stack
 }
 
 # diffusers-amused: Amused-256 finetuning. ModelScope has neither
 # amused/amused-256 nor the m1guelpf/nouns dataset, so nothing is
 # pre-downloaded: the example fetches both via hf-mirror at run time
 # (the engine sets HF_ENDPOINT + HF_HUB_DISABLE_XET).
+# amused's --report_to defaults to wandb (wandb is in the base stack; the
+# global WANDB_MODE=disabled keeps it offline). Do NOT use
+# --report_to tensorboard: amused passes list-valued args to init_trackers,
+# which tensorboard's add_hparams rejects.
 setup_diffusers_amused() {
   install_example_stack
 }
@@ -319,7 +465,7 @@ setup_diffusers_controlnet() {
 setup_diffusers_controlnet_sdxl() {
   install_example_stack
   echo "HF_DATASETS_TRUST_REMOTE_CODE=1" >> "$GITHUB_ENV"
-  download_assets sdxl
+  # SDXL is pulled online (hf-mirror, --variant fp16) by the example.
 }
 
 # diffusers-lcm: LCM consistency-distillation webdataset examples with an
@@ -335,7 +481,7 @@ setup_diffusers_lcm() {
 setup_diffusers_lcm_sdxl() {
   install_example_stack
   python -m pip install webdataset braceexpand
-  download_assets sdxl,sdxl-vae
+  # SDXL teacher + fp16-safe VAE are pulled online (hf-mirror) by the example.
 }
 
 # diffusers-cogvideo: CogVideoX-2b LoRA finetuning. decord + imageio /
@@ -349,6 +495,13 @@ setup_diffusers_cogvideo() {
   # imageio-ffmpeg are the example's own requirements (video export).
   python -m pip install decord2 imageio imageio-ffmpeg
   download_assets cogvideo
+}
+
+# diffusers-llada2: LLaDA2 block-refinement training smoke. Base stack is
+# enough (datasets is already pinned there); Qwen2.5-0.5B is fetched at run
+# time and --use_dummy_data avoids any dataset download.
+setup_diffusers_llada2() {
+  install_example_stack
 }
 
 if [[ -z "${TARGET_ROOT:-}" || -z "${GITHUB_WORKSPACE:-}" || -z "${GITHUB_ENV:-}" ]]; then
@@ -365,6 +518,15 @@ select_pip_index
 python -m pip install -U pip setuptools wheel
 ensure_torch_stack
 prepare_fixtures
+
+# All examples: keep wandb offline. Some entrypoints default --report_to to
+# wandb; WANDB_MODE=disabled prevents any network reporting and is harmless
+# for the ones that use tensorboard. Persisted to the run step via GITHUB_ENV.
+echo "WANDB_MODE=disabled" >> "$GITHUB_ENV"
+
+# All examples: let HCCL pick a free socket port range (required on some
+# Ascend setups to avoid "address already in use" on multi-process init).
+echo "HCCL_NPU_SOCKET_PORT_RANGE=auto" >> "$GITHUB_ENV"
 
 # Profile names map to setup_<profile with '-' -> '_'> functions.
 "setup_${PROFILE//-/_}"

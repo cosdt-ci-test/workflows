@@ -50,19 +50,53 @@ except urllib.error.HTTPError:
 }
 
 ensure_torch_stack() {
-  # Same torch line as peft quick-start (CANN 9.1.0 pairing): reuse
-  # the image stack when it already matches, otherwise install.
+  # torch 2.12.0 + torch_npu 2.12.0 + CANN 9.1.0 (upgraded 2026-09-20
+  # from 2.9.0 to unblock the sparse-COO tuners shira: torch_npu 2.9
+  # crashes at torch.sparse_coo_tensor construction plus dense+=sparse
+  # off. Reuse the image stack when it already matches, otherwise
+  # install.
+  #
+  # torch==2.12.0 is NOT installed via `pip_ascend`: aliyun (and the
+  # cluster pip cache, both PyPI mirrors) only host the CUDA torch
+  # wheel, whose METADATA declares `Requires-Dist: cuda-toolkit`, which
+  # conflicts with constraints-npu.txt `cuda-toolkit<0`. The CPU
+  # variant is `torch==2.12.0+cpu` (PEP 440 local label) published ONLY
+  # at https://download.pytorch.org/whl/cpu/ - so fetch it by direct
+  # URL. We compute the cp tag at runtime because the manifest mixes
+  # py3.10 (30 entries) and py3.12 (15 entries) images.
   if python -c "
 import torch, torch_npu
 raise SystemExit(
-    0 if torch.__version__.startswith('2.9.0')
-    and torch_npu.__version__.startswith('2.9.0') else 1)
+    0 if torch.__version__.startswith('2.12.0')
+    and torch_npu.__version__.startswith('2.12.0') else 1)
 "; then
     echo "reusing image torch stack ($(python -c 'import torch; print(torch.__version__)'))"
     return
   fi
-  echo "installing torch==2.9.0 torch_npu==2.9.0.post2"
-  pip_ascend torch==2.9.0 torch_npu==2.9.0.post2
+  echo "installing torch==2.12.0+cpu (direct URL) + torch_npu==2.12.0"
+  CP_ABI=$(python -c "import sys; print(f'cp{sys.version_info.major}{sys.version_info.minor}')")
+  python -m pip install --no-deps \
+    "https://download.pytorch.org/whl/cpu/torch-2.12.0%2Bcpu-${CP_ABI}-${CP_ABI}-manylinux_2_28_aarch64.whl"
+  # torch's pure-Python deps (filelock / typing-extensions / sympy /
+  # networkx / jinja2 / fsspec) from aliyun so `import torch` succeeds
+  # (the +cpu wheel does not pull them; none declare cuda-toolkit).
+  python -m pip install -i "$ALIYUN_PIP_INDEX" \
+    'filelock' 'typing-extensions>=4.10.0' 'setuptools<82' \
+    'sympy>=1.13.3' 'networkx>=2.5.1' 'jinja2' 'fsspec>=0.8.5'
+  pip_ascend torch_npu==2.12.0
+}
+
+install_cpu_torchvision() {
+  # torchvision matching torch 2.12 is 0.27.0; like torch it ships as a
+  # +cpu direct-download wheel only (PyPI linux wheels link libcudart.so
+  # and are cuda-toolkit-gated). Only the adamss image example needs it.
+  # pillow is torchvision's image-codec dep (numpy already comes from
+  # scikit-learn/evaluate); install it separately so its deps resolve.
+  local cp_abi
+  cp_abi=$(python -c "import sys; print(f'cp{sys.version_info.major}{sys.version_info.minor}')")
+  python -m pip install --no-deps \
+    "https://download.pytorch.org/whl/cpu/torchvision-0.27.0%2Bcpu-${cp_abi}-${cp_abi}-manylinux_2_28_aarch64.whl"
+  python -m pip install pillow
 }
 
 # Copy CI fixture data into the target root so that example scripts can
@@ -134,8 +168,8 @@ setup_peft() {
   echo "installing peft from $TARGET_ROOT"
   python -m pip install -e "$TARGET_ROOT"
   python -m pip install "transformers==4.57.1" "datasets>=4.7.0,<6" \
-    "huggingface_hub<1.0" "trl==1.12.0" evaluate scikit-learn \
-    torchvision==0.24.0
+    "huggingface_hub<1.0" "trl==1.12.0" evaluate scikit-learn
+  install_cpu_torchvision
   python -c "import peft, trl, transformers, datasets, accelerate; print('peft', peft.__version__, '/ trl', trl.__version__, '/ transformers', transformers.__version__)"
 
   # Resolve seeded asset paths for overlay_args. The shared cache root
@@ -183,15 +217,22 @@ PY
 setup_peft_dreambooth() {
   # SD dreambooth 例（lora/oft/deft/hra/stable_diffusion ×5）：SFT 栈之外
   # 还要 diffusers + tensorboard。run 35303810367 实测缺 diffusers 直接
-  # import 崩（train_dreambooth.py:14）；--report_to tensorboard 是
-  # accelerate log_with，需要 tensorboard 包。
-  # diffusers 不 pin：requirements 对 transformers>=4.x / hub>=0.30 的约束
-  # 均被 setup_peft 的 pinned 线满足，pip 不会动已装版本；具体版本线以
-  # 首轮 CI 绿后为准再固定。
+  # import 崩（train_dreambooth.py:14）→ 初版修复"diffusers tensorboard"
+  # 不 pin，以为 pip 不会动已装版本——run 35316518546（2026-09-18）5 条
+  # dreambooth 全挂打脸：最新 diffusers 0.40 要求 huggingface-hub>=1.23，
+  # pip 把 hub 从 0.36.2 升到 1.31+（对已装的 transformers 只给 warning
+  # 不回退），transformers 4.57.1 的 dependency_versions_check 硬校验
+  # hub<1.0 → `import transformers` 直接 ImportError。
+  # 修复（coder npu-5 2026-09-18 实测 5 条 exit 0）：hub<1.0 +
+  # diffusers==0.39.0 双 pin（0.39 与 hub<1.0 兼容，0.40 起不兼容）。
+  # hra 例外：v0.21.0 脚本 :319 在 cwd/data/dreambooth 不存在时无条件
+  # git clone github.com/google/dreambooth（runner 网络不通 + 纯死代码，
+  # 该路径只用于 clone 自身）；预先 mkdir 空目录即可绕过，无需 patch。
   setup_peft
-  echo "installing dreambooth stack (diffusers + tensorboard)"
-  python -m pip install diffusers tensorboard
+  echo "installing dreambooth stack (diffusers==0.39.0 + tensorboard, hub<1.0)"
+  python -m pip install "huggingface_hub<1.0" "diffusers==0.39.0" tensorboard
   python -c "import diffusers, tensorboard; print('diffusers', diffusers.__version__)"
+  mkdir -p "$TARGET_ROOT/data/dreambooth"
 
   # SD v1.5 由 cache-seed 投递（与 accelerate 共享同一缓存卷，2026-09-17
   # 已 plant；peft 的 ms_seeds.yaml 同步声明，冷缓存时 peft 自己 dispatch
@@ -218,6 +259,19 @@ with open(os.environ["GITHUB_ENV"], "a") as fh:
     fh.write(f"{var}={snap}\n")
 print(f"{var}={snap}", flush=True)
 PY
+}
+
+setup_peft_ds() {
+  # deepspeed 多卡 sft 例（run_peft_deepspeed.sh /
+  # run_peft_qlora_deepspeed_stage3.sh）：setup_peft 之上装 deepspeed。
+  # 0.19.7 的 npu accelerator 自动识别 Ascend + HCCL，coder npu-5
+  # 2026-09-18 实跑 ZeRO-3 2 卡 exit 0（loss 4.64）。DS_BUILD_OPS=0
+  # 跳过 CPU op 内核编译：ZeRO-3 bf16 训练路径不需要编译 op，且
+  # 编译耗时 + 裸镜像缺编译链，CI 不划算。
+  setup_peft
+  echo "installing deepspeed for ZeRO-3 sft entries"
+  DS_BUILD_OPS=0 python -m pip install deepspeed==0.19.7
+  python -c "import deepspeed; from deepspeed.accelerator import get_accelerator; print('deepspeed', deepspeed.__version__, 'accelerator', get_accelerator()._name)"
 }
 
 supported_profiles() {

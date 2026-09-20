@@ -13,8 +13,9 @@ expanded matrix is validated on NPU runners.
 
 One manifest holds both sources. `source: upstream` paths resolve in the Ray
 checkout; `source: project` paths resolve in this directory's `example/` tree.
-The matrix job name comes from each test file's basename. The shared checker
-verifies both path origins before a self-hosted NPU runner is allocated.
+The matrix job name is the full relative test path without its extension.
+The shared checker verifies both path origins before a self-hosted NPU runner
+is allocated.
 
 The two upstream Ray tests remain unchanged:
 

@@ -104,7 +104,7 @@ flowchart TD
 
 #### 2.4.1 引擎化边界：动态矩阵如何跨 `workflow_call`
 
-Ray 的 opt-in 混合来源扩展：supported 条目不写 `source` 时，仍按原行为在目标/examples checkout 查找；`source: project` 时，`path` 在本仓该项目 manifest 所在目录下查找，运行时将来源传给项目 `run_example.sh`。矩阵 job 显示名仍取测试文件名；`source` 作为可选字段写入 `result.json`，旧项目未写该字段时，矩阵和结果结构保持原样。`npu_devices` 仅在条目显式声明时写入运行环境，其他项目不受影响。Ray 的自有测试因此与上游测试共用一份 manifest 和 release-only 看护回路。
+Ray 的 opt-in 混合来源扩展：supported 条目不写 `source` 时，仍按原行为在目标/examples checkout 查找；`source: project` 时，`path` 在本仓该项目 manifest 所在目录下查找，运行时将来源传给项目 `run_example.sh`。矩阵 job 显示名统一使用完整相对路径去掉扩展名，避免不同目录的同名脚本冲突；`source` 作为可选字段写入 `result.json`，旧项目未写该字段时，矩阵和结果结构保持原样。`npu_devices` 仅在条目显式声明时写入运行环境，其他项目不受影响。Ray 的自有测试因此与上游测试共用一份 manifest，以及以最新 release 为被测版本的看护回路。
 
 这是本设计与 quick start 引擎最关键的差异。quick start 引擎的 test job 是**单 job**：runner、镜像、超时都是 `workflow_call` inputs。examples 的调度单元是「每条 supported 条目一个 job」，runner / 卡数 / 镜像 / 超时**逐条不同**，无法用 inputs 表达（GitHub Actions 不允许 matrix 来自 workflow inputs）。
 
@@ -112,15 +112,16 @@ Ray 的 opt-in 混合来源扩展：supported 条目不写 `source` 时，仍按
 
 推论：薄触发器完全不感知矩阵；「加一条 supported 只改清单」的既有收益原样保留。
 
-#### 2.4.2 只监控 release；无 release 是一等公民状态
+#### 2.4.2 监控 release + workflow-files 两信号；无 release 是一等公民状态
 
-只保留 release 一个触发信号，无 fallback 链：
+保留 release 触发信号为主，另加 workflow-files 信号覆盖本仓看护本身的变化，无 fallback 链：
 
 1. **被测对象由 release 决定**：example 的行为 = example 脚本 × 它依赖的软件版本。脚本与依赖同时定版的公开时点就是发版——release tag 是「这次该测什么版本」的完整答案。main 上的中间态（无论改 src 还是改 examples）不是稳定被测对象，需要验证时用 `workflow_dispatch` 指定 ref 手动跑（仓库恒为 `upstream_repo`，界面上不提供仓库选择）。
-2. **NPU 占用最小化**：release 频率天然有限（peft 约每 1~2 月一版），schedule 轮询几乎永远只花免费 ubuntu-latest 上的几秒钟；三信号时代的 main HEAD 高频触发问题从机制上消失，schedule 可以常开。
-3. **无 release 的语义是「如实显示」，不是「想办法触发」**：`/releases/latest` 404 或解析不到 tag 时，monitor 在日志与 step summary 写明 no release，`need_to_run=false`，本次 run 在 monitor 后结束——不产生 result.json、不占 NPU。quick start 引擎的 fallback 链（prerelease → tags → HEAD）**不移植**：那条链存在是因为 quick start 必须解析出一个可测 ref；examples 看护面对「上游从未发版」时没有东西可测，如实报告即可，把版本信号退化成 commit 监控只会把删掉的高频触发从后门加回来。
+2. **workflow-files 信号**：本项目相关文件（`projects/<project>/**` + `.github/workflows/<project>-examples.yml`）在 main HEAD 上的 blob/tree SHA 合成 hash 变了 → 在最新 release tag 上重跑一次。共用 `.monitor` 的 `last_workflow_files_hash` 字段；fire 时 `reason=workflow-files`，ref 与 release 信号 fire 时同源（最新 release tag）。priority: release > workflow-files——release fire 时 reason 与 ref 仍取 release 信号，workflow-files 仅在 release 未 fire 时生效。两信号共用同一 `need_to_run` 输出。
+3. **NPU 占用最小化**：release 频率天然有限（peft 约每 1~2 月一版），schedule 轮询几乎永远只花免费 ubuntu-latest 上的几秒钟；三信号时代的 main HEAD 高频触发问题从机制上消失，schedule 可以常开。workflow-files 信号单次 tree API 调用，与 release 同价；本仓文件改动是低频事件，fire 不频繁。
+4. **无 release 的语义是「如实显示」，不是「想办法触发」**：`/releases/latest` 404 或解析不到 tag 时，release 信号 `release_ref` 输出空、`need_to_run` 不被 set；本次 run 在 monitor 后结束——不产生 result.json、不占 NPU。quick start 引擎的 fallback 链（prerelease → tags → HEAD）**不移植**：那条链存在是因为 quick start 必须解析出一个可测 ref；examples 看护面对「上游从未发版」时没有东西可测，如实报告即可，把版本信号退化成 commit 监控只会把删掉的高频触发从后门加回来。
 
-信号值比较键是 release tag；API 请求失败（空值）视为「信号未知」，不触发、不前滚状态，与 no-release 同样走 need_to_run=false 路径（区别只在日志措辞）。
+信号值比较键是 release tag；API 请求失败（空值）视为「信号未知」，不触发、不前滚状态，与 no-release 同样走 need_to_run=false 路径（区别只在日志措辞）。workflow-files 的 tree API 同理：空响应视为信号未知，不前滚 `last_workflow_files_hash`。
 
 #### 2.4.3 状态拓扑：restore 与 save 分离，run 内单次保存
 
@@ -187,7 +188,7 @@ peft 侧新增（引擎零改动）：
 - 不跨 runner 切分单条 example（`max-parallel` 上限语义不变）。
 - 不改写上游 example 本体；看护失败如实标红，修复走上游 PR。
 - **不做上游 example 新增发现**（磁盘有、清单无的 new_paths）：本引擎只对已声明的 supported 条目负责，新增未分类**不阻塞执行**；「上游多了什么该纳入看护」是独立关注点，后续单独设计监控 workflow（定期扫描目标树与清单求差集、报告新增——形态待定）。
-- **扫描模型简化为 files-only**（发现 workflow 采用；legacy 的 `unit: directories / mixed` 连同 marker / max_depth 废弃）：对账单位统一为**入口文件**——`scan` 只有三个键：`root`、`include_extensions`（只扫这几类，`.h`/`.md` 天然不进）、`exclude`（排除"不是 example 的配套物"——项为目录路径（递归剪枝）或 glob（`**` 跨目录）：llama.cpp 用于非 example 目录（`examples/llama.android`），peft 用于 helper 模块（`**/utils`、`**/__init__.py`）、上游自测（`**/test_*`）、运行配置（`**/*config*.yaml`）、入口背后的实现（`examples/sft/train.py`））。多文件 example 的内部 helper 源文件是一次性 triage 进 unsupported 的噪声单元，成本有界；上游新增 example = 出现新的入口文件，信号不丢。随之 `path` 语义统一为**入口源文件**；`exec` 仅剩一种用途——path 是源码而启动的是构建产物（llama.cpp：`path: examples/simple/simple.cpp` + `exec: build/bin/llama-simple`）；python/shell 例不需要 exec，启动命令由项目脚本按扩展名分发（`.sh` → bash，其余 → python，解释器即 setup 装依赖的那个）。实施为独立 PR（涉及扫描脚本与 llama.cpp / whisper.cpp / trl 三个存量清单迁移），不混入本 PR。
+- **扫描模型简化为 files-only**（发现 workflow 采用；legacy 的 `unit: directories / mixed` 连同 marker / max_depth 废弃）：对账单位统一为**入口文件**——`scan` 只有两个键：`root`、`include_extensions`（只扫这几类，`.h`/`.md` 天然不进）。多文件 example 的内部 helper 源文件、`__init__.py`、上游自测等"不是 example 的配套物"一律登记在 `unsupported` 段（扫描引擎不消费的"声明性 exclude"字段已退役——曾经 8 份清单依赖它过滤扩展名之外的文件，但引擎本身从未实现 exclude，对账单位与 `load_scan` 实测一致）。随之 `path` 语义统一为**入口源文件**；`exec` 仅剩一种用途——path 是源码而启动的是构建产物（llama.cpp：`path: examples/simple/simple.cpp` + `exec: build/bin/llama-simple`）；python/shell 例不需要 exec，启动命令由项目脚本按扩展名分发（`.sh` → bash，其余 → python，解释器即 setup 装依赖的那个）。实施为独立 PR（涉及扫描脚本与 llama.cpp / whisper.cpp / trl 三个存量清单迁移），不混入本 PR。
 
 ## 3. 核心数据结构
 
@@ -353,6 +354,7 @@ GET /repos/<upstream_repo>/releases/latest    → release 信号（tag_name）
 
 | 日期 | 变更内容 | 原因 |
 |------|----------|------|
+| 2026-09-20 | 新增 workflow-files 信号：`monitor-release` step 改名为 `monitor`，内部分两信号区块（release + 本项目文件 SHA），共用 `.monitor` state。监控本项目相关文件（`projects/<project>/**` + `.github/workflows/<project>-examples.yml`）在 main HEAD 上的 blob/tree SHA 合成 hash，变化即 fire `reason=workflow-files`，ref 取最新 release tag。priority release > workflow-files。两信号共用同一 `need_to_run` 输出。`.monitor` 文件新增 `last_workflow_files_hash` 字段；decide step 简化为 4 行透传。 | 用户要求：本仓 example 监控相关文件改动也能触发看护，无需等 6 小时 schedule。复用 monitor-release 的 release API 调用作 ref，workflow-files step 不重复调 release；fire-and-forget，不防 retry 风暴（与现有 release 信号同形，靠 release-outcome=failure 推动 release-retry）。 |
 | 2026-09-16 | 引擎新增可选输入 `examples_repo`（分离模式）：example 脚本与被测软件分属两仓时（如 deepspeed：监控 `deepspeedai/DeepSpeed`，脚本在 `deepspeedai/DeepSpeedExamples`），examples 单独 checkout 到 `examples/`（跟默认分支）并以 `EXAMPLES_ROOT` 暴露；`target` 与 `TARGET_ROOT` 语义不变（被测仓 `@ target_ref`），setup 安装契约对所有项目同形。存量步骤零修改，不传输入时行为与此前逐字一致。 | PR 评审：原方案给存量 checkout 加条件并新引 `UPSTREAM_ROOT`；改为「只加步骤、不动存量」后回归面更小、契约更统一。代价是分离模式下 manifest-check 多一次主仓 checkout（免费 runner，可接受）。examples 仓跟默认分支而非 main：DeepSpeedExamples 默认分支为 master，且 release tag 跨仓不存在。 |
 | 2026-09-10 | 初版设计：examples 看护引擎化（引擎 + 薄触发器），监控信号由三（examples / release / commit）收敛为二（examples / release），scan.root 单一事实源，以 peft 为首个接入示例。 | 14 份复制式 examples workflow 维护成本高；commit 信号 NPU 占用过高致 schedule 停用；quick start 已验证引擎化形态。 |
 | 2026-09-10 | monitor state cache key 改为严格格式 `examples-monitor-state-<project>_<run_id>`：项目名禁 `_`、`_` 作终止分隔符、项目名移到尾部；配套三道运行时校验（project 输入校验、matched-key 断言、`.project` 属主标签）。 | 评审确认：`-` 分隔时项目名互为前缀（peft / peft-npu 类）可致 restore-keys 跨项目串扰，且 GitHub 缓存无 namespace 隔离机制；分隔符与名字字符集互斥可获得构造性保证，尾部命名同时支持按引擎前缀整体审计（gh cache list）。 |
@@ -372,8 +374,9 @@ GET /repos/<upstream_repo>/releases/latest    → release 信号（tag_name）
 | 2026-09-11 | validate-results 的 "Write result JSON" 内联 bash+python 抽出为 `scripts/write_example_result.py`（Job API 查询改 urllib 分页，去掉 gh/jq 依赖；conclusion 归一化与 JSON 写出可单测），新增 5 个单测；引擎步骤收敛为一行调用。 | 与 check_supported_entries.py 同一模式：引擎私有逻辑放 scripts/ 可单测，workflow 里不藏代码。 |
 | 2026-09-11 | record-outcome job 更名 save-monitor-state（职责即“持久化 monitor state，run 内唯一保存点”），并注明与 validate-results 并行是有意设计：发布问题不得门控状态回写或触发 NPU 重跑，且尽早落盘缩小取消丢失窗口。 | 命名评审：record-outcome 像记日志，名不副实；执行顺序评审确认二者无依赖、不应串行。 |
 | 2026-09-14 | 删除容器 `options: --shm-size=64g`（含 TODO）：首轮 NPU run（dispatch, peft examples/sft 全绿）实测 /dev/shm=16G 非 64G——选项未被应用，16G 来自 runner 自身；该负载 shm Used=0，无需配置。 | 实测证据见 run 34818091939 的 df 输出；`df -h /dev/shm` 诊断行保留在 Run example 步骤。 |
-| 2026-09-14 | 评审确定扫描模型简化为 files-only（§2.7）：scan 收敛为 root + include_extensions + exclude，废弃 unit: directories/mixed 及 marker/max_depth；对账单位统一为入口文件；exec 语义收窄为「path 是源码、启动的是构建产物」（py/sh 不需要——项目脚本按扩展名分发 bash/python）。实施为独立 PR，不混入本 PR。 | llama.cpp examples/ 下非 example 目录极少且可 exclude（android/swift 目录被扩展名白名单天然滤掉）；目录单元引入的 unit/marker/max_depth/mixed 复杂度不值。 |
+| 2026-09-14 | 评审确定扫描模型简化为 files-only（§2.7）：scan 收敛为 root + include_extensions，废弃 unit: directories/mixed 及 marker/max_depth；对账单位统一为入口文件；exec 语义收窄为「path 是源码、启动的是构建产物」（py/sh 不需要——项目脚本按扩展名分发 bash/python）。实施为独立 PR，不混入本 PR。 | llama.cpp examples/ 下非 example 目录极少且扩展名白名单天然滤掉；目录单元引入的 unit/marker/max_depth/mixed 复杂度不值。 |
 | 2026-09-14 | 修复 publish-result 首跑判红：write_example_result 的 job 名匹配从精确相等改为后缀匹配——可复用 workflow 的 Jobs API 给 job 名加 `<调用方 workflow 名> / ` 前缀（run 34818091939 实测 `peft-examples / run-example (…)`），独立 workflow 时代的精确匹配移植过来即失效；新增 job_matches 单测（精确/带前缀/嵌套前缀/不匹配）。 | 首跑 dispatch（run-example 全绿）暴露：脚本报 could not find completed job → result.json 未写 → upload 级联红。 |
 | 2026-09-14 | peft 清单应用 exclude：34 项非 example 配套物（utils 模块 / __init__ / test_* / 配置 yaml / sft/train.py 实现）从 unsupported 移入 scan.exclude（9 条目录+glob 规则），unsupported 收敛为 84 条真实 example；exclude 语义定为「目录路径（递归剪枝）或 glob」。 | unsupported 是"example 注册表"，配套物登记其中污染对账信号；exclude 是声明"这一类根本不是 example"。扫描工具支持随发现 workflow PR 落地（引擎不扫描，本变更对引擎零影响）。 |
+| 2026-09-20 | 退役 scan.exclude 字段：9 份清单（accelerate / deepspeed / opencv / roll / slime / specforge / torchtitan / torchtune / trl）原先用 scan.exclude 声明非 example 配套物，实测扫描引擎（load_scan / discover）从未实现 exclude，对账逻辑始终基于 supported ∪ unsupported 集合求差；与 audit_examples_manifest.py 头注释「there is no separate exclude mechanism」一致。把各清单 scan.exclude 项迁移到 unsupported 段（带说明性注释），scan 收敛为 root + include_extensions 两个键；examples-guard-engine §2.7 与 §4 同步更新；roll / slime 两个项目的 tests/*_examples.py 一并更新断言（unsupported 含原 exclude 项 + scan schema 仅剩 2 键）。 | 引擎从未消费 exclude，scan.exclude 是死字段；统一收口到 unsupported 让 audit 噪声清零（xtuner 4 + accelerate 6 + torchtune 5 + opencv ~30 + deepspeed 7 + roll 2 + slime 2 + specforge 0 + torchtitan ~10 + trl 0 daily "+ new_paths"），且 supported 与 unsupported 在结构上对称。 |
 | 2026-09-14 | 移除 `target_repo` 输入（引擎与薄触发器）：上游仓库唯一来源是薄触发器里的 `upstream_repo`，dispatch 界面只留 `target_ref`（默认 main）；下游 checkout 与 result.json 的 target_repo 均直接取 `inputs.upstream_repo`。 | 评审决策：仓库不该在界面上选择——每项目的上游是固定配置；测 fork 的场景如出现，临时改薄触发器即可。 |
 | 2026-09-14 | peft examples 全量逐例验证（coder npu-3，torch2.9+torch_npu2.9.0.post2+CANN9.1，transfer_to_npu shim）：28 条实测、其余静态分析；supported 1→9，unsupported 84 条附理由注释；setup 依赖线 pin + evaluate/torchvision；run_example 增加 cuda→npu sitecustomize shim（与 dataset shim 合并单文件）。 | 用户要求逐例分析验证：NPU 可行进 supported、受阻给理由。实测确认 8 条 NPU 硬阻塞。 |

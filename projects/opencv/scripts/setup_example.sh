@@ -10,7 +10,7 @@
 #      still needs the toolkit).
 #   2. Run a source build of opencv + opencv_contrib with WITH_CANN=ON
 #      if /usr/local/opencv-cann/bin/opencv_version is missing. The
-#      build is heavy (~50-70 min at -j2) and is fully idempotent; a
+#      build is heavy (~23 min at -j2) and is fully idempotent; a
 #      pre-built install is left in place across example runs because
 #      the engine's run-example job reuses the same self-hosted
 #      runner (linux-aarch64-a2-1) and the install path
@@ -33,7 +33,7 @@
 #      build surfaces here as a shape / dtype mismatch instead of
 #      waiting for the NPU leg to mis-pick CPU silently.
 
-set -uo pipefail
+set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
     echo "usage: $0 <profile>" >&2
@@ -58,8 +58,18 @@ set +u
 source /home/coder/.hdc/env.sh 2>/dev/null || true
 set -u
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
-# nnal/atb: kept for CANN-backend legs (see header note 1)
-[[ -f /usr/local/Ascend/nnal/atb/set_env.sh ]] && source /usr/local/Ascend/nnal/atb/set_env.sh
+# nnal/atb: kept for CANN-backend legs (see header note 1). Wrap in
+# set +u because atb's set_env.sh references $ZSH_VERSION which is
+# unset under bash + set -u -> unbound variable exit (empirically
+# reproduced on a2-1 runner with CANN 9.1.0; matches torchtune's
+# run_example.sh workaround). Toggle set -u in place because env vars
+# set inside a subshell don't propagate to the parent.
+unset ZSH_VERSION
+if [[ -f /usr/local/Ascend/nnal/atb/set_env.sh ]]; then
+    set +u
+    source /usr/local/Ascend/nnal/atb/set_env.sh
+    set -u
+fi
 export PATH=/usr/local/sbin:$PATH
 
 # 2) Build opencv-cann if not already installed.
@@ -69,7 +79,7 @@ UPSTREAM_REF="${UPSTREAM_REF:-5.0.0}"  # set by the engine's monitor job
 if [[ -x "$OPENCV_INSTALL/bin/opencv_version" ]]; then
     echo "setup: reusing pre-built opencv-cann ($($OPENCV_INSTALL/bin/opencv_version))"
 else
-    echo "setup: building opencv-cann from source (UPSTREAM_REF=$UPSTREAM_REF, ~50-70 min at -j2)"
+    echo "setup: building opencv-cann from source (UPSTREAM_REF=$UPSTREAM_REF, ~23 min at -j2)"
     bash "$(dirname "$0")/build_opencv_cann.sh" "$UPSTREAM_REF"
 fi
 

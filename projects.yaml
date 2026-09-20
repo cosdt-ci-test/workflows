@@ -250,6 +250,12 @@ projects:
     runner: linux-aarch64-a2-1
     dir: projects/slime
     workflows:
+      # Examples guard on the shared engine (examples-template.yml).
+      # The guarded upstream is THUDM/slime (release-only trigger signal +
+      # manifest-check tree); the tested code is the gitcode NPU fork
+      # Ascend/slime-ascend main HEAD, cloned and installed by
+      # projects/slime/scripts/setup_example.sh. See projects/slime/README.md.
+      examples: .github/workflows/slime-examples.yml
       quick_start: .github/workflows/slime-quick-start.yml
   # specforge quick start runs an end-to-end 1-step training smoke on
   # 4-card NPU: installs torch 2.11.0 / torch_npu 2.11.0 / sglang 0.5.14
@@ -667,3 +673,20 @@ projects:
     dir: projects/roll
     workflows:
       quick_start: .github/workflows/roll-quick-start.yml
+  # TGI quickstart guards a full source build (Rust launcher/router +
+  # Python server) and a real /generate inference on a 2-card 910B
+  # runner: single-card baseline + dual-card HCCL tensor parallelism
+  # (--num-shard 2). NPU support lives in the VenusTZZ fork
+  # (feat/ascend-npu, cut as releases); official upstream releases do
+  # not contain it yet, so upstream_repo points at the fork and the
+  # guard follows the fork's latest release + doc hash.
+  - name: tgi
+    category: 推理加速
+    support_level: 新兴适配
+    upstream_repo: VenusTZZ/text-generation-inference
+    phase: A
+    runner: linux-aarch64-a2-2
+    dir: projects/tgi
+    workflows:
+      quick_start: .github/workflows/tgi-quick-start.yml
+      examples: .github/workflows/roll-examples.yml

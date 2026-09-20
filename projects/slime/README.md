@@ -52,9 +52,13 @@ slime 上游 `THUDM/slime` 发布 release（当前 v0.3.2）但没有任何昇�
 | `examples/fully_async/run-qwen2.5-0.5B-fully_async.sh` | a2-4 | fork NPU nightly `tests/tests_npu/nightly_CI/test_qwen2.5_0.5B_fully_async_short_npu.py`（昇腾已验证） | actor 1 + rollout 3、TP/PP/CP/EP 全 1、`--num-rollout 2`、response 1024（nightly 为 8192）、数据换仓内 16 行 fixture |
 
 执行不直接跑上游 `.sh`（硬编码 `/root` 绝对路径、无 `"$@"` 透传），由
-`scripts/ci_train_driver.py` 复刻同一 `train_async.py` 调用并注入 CI 参数；
-模型 `--hf-checkpoint` 走 ModelScope 本地路径，`--ref-load` 用 fork 自带
-`tools/convert_hf_to_torch_dist.py` 现转的 `_torch_dist` 目录（torchrun 4 procs）。
+manifest `overlay_args` 承载完整训练配方（逐块注释对应 fork 测试的参数组），
+`run_example.sh` 只做两件事：把 `MODEL_TYPE`/`TRAIN_SCRIPT` 这两个引擎
+透传不了的调用元数据按条目映射好，然后内联调用 fork 自己的
+`slime.utils.external_utils.command_utils.execute_train()`（ray start/submit、
+NPU 资源注入都由 fork 框架代码完成）。模型 `--hf-checkpoint` 走 ModelScope
+本地路径，`--ref-load` 用 fork 自带 `tools/convert_hf_to_torch_dist.py`
+现转的 `_torch_dist` 目录（torchrun 4 procs）。
 
 ### 阶段二（阶段一远程绿后）
 
@@ -113,5 +117,4 @@ python -m pytest projects/slime/tests tests/test_check_supported_entries.py -q
 python -m pytest projects/roll/tests/test_roll_examples.py -q  # regression: shared-engine contract
 bash -n projects/slime/scripts/setup_example.sh
 bash -n projects/slime/scripts/run_example.sh
-python -m py_compile projects/slime/scripts/ci_train_driver.py
 ```

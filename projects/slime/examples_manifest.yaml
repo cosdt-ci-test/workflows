@@ -34,11 +34,114 @@ supported:
   # TP/PP/CP/EP 全 1、GRPO、--num-rollout 2；仅两处压缩偏离（response 8192→1024、
   # 数据换仓内 16 行 fixture）。模型走 ModelScope 本地路径（Qwen2.5-0.5B-Instruct），
   # ref-load 用 tools/convert_hf_to_torch_dist.py 现转的 _torch_dist 目录。
+  # overlay_args 即完整训练配方（run_example.sh 追加到 execute_train 调用）；
+  # 引擎调用元数据（megatron model type / train script）在 run_example.sh 的
+  # per-entry 映射里，manifest 装不下（引擎不透传自定义字段）。
   - path: examples/fully_async/run-qwen2.5-0.5B-fully_async.sh
     profile: slime_fully_async
     runner: linux-aarch64-a2-4
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     timeout_minutes: 300
+    # --- checkpoint 组（路径由 setup_example.sh 导出到 GITHUB_ENV） ---
+    overlay_args:
+      - --hf-checkpoint
+      - ${SLIME_MODEL_PATH}
+      - --ref-load
+      - ${SLIME_TORCH_DIST_PATH}
+      # --- rollout 组（fully_async 配方） ---
+      - --rollout-function-path
+      - slime.rollout.fully_async_rollout.generate_rollout_fully_async
+      - --prompt-data
+      - ${SLIME_FIXTURE_JSONL}
+      - --input-key
+      - prompt
+      - --label-key
+      - label
+      - --apply-chat-template
+      - --rollout-shuffle
+      - --rm-type
+      - deepscaler
+      - --num-rollout
+      - '2'
+      - --rollout-batch-size
+      - '4'
+      - --n-samples-per-prompt
+      - '4'
+      - --rollout-max-response-len
+      - '1024'
+      - --rollout-temperature
+      - '0.8'
+      - --global-batch-size
+      - '16'
+      - --balance-data
+      # --- optimizer 组（与 fork nightly 同字面值） ---
+      - --optimizer
+      - adam
+      - --lr
+      - '1e-6'
+      - --lr-decay-style
+      - constant
+      - --weight-decay
+      - '0.1'
+      - --adam-beta1
+      - '0.9'
+      - --adam-beta2
+      - '0.98'
+      # --- GRPO 组 ---
+      - --advantage-estimator
+      - grpo
+      - --use-kl-loss
+      - --kl-loss-coef
+      - '0.00'
+      - --kl-loss-type
+      - low_var_kl
+      - --entropy-coef
+      - '0.00'
+      - --eps-clip
+      - '0.2'
+      - --eps-clip-high
+      - '0.28'
+      # --- perf 组（TP/PP/CP/EP 全 1 + 动态 batch） ---
+      - --tensor-model-parallel-size
+      - '1'
+      - --sequence-parallel
+      - --pipeline-model-parallel-size
+      - '1'
+      - --context-parallel-size
+      - '1'
+      - --expert-model-parallel-size
+      - '1'
+      - --expert-tensor-parallel-size
+      - '1'
+      - --use-dynamic-batch-size
+      - --max-tokens-per-gpu
+      - '4096'
+      # --- sglang rollout 组（NPU） ---
+      - --rollout-num-gpus-per-engine
+      - '1'
+      - --sglang-mem-fraction-static
+      - '0.65'
+      - --sglang-cuda-graph-max-bs
+      - '16'
+      - --sglang-enable-metrics
+      - --sglang-device
+      - npu
+      # --- misc 组 + CI 冒烟开关 ---
+      - --attention-dropout
+      - '0.0'
+      - --hidden-dropout
+      - '0.0'
+      - --accumulate-allreduce-grads-in-fp32
+      - --attention-softmax-in-fp32
+      - --attention-backend
+      - flash
+      - --actor-num-nodes
+      - '1'
+      - --actor-num-gpus-per-node
+      - '1'
+      - --rollout-num-gpus
+      - '3'
+      - --ci-test
 unsupported:
   # ===== coding_agent_rl：硬阻塞（集群级外部服务 + 无公开模型/数据） =====
   # 8 节点 64 rollout 卡硬编码（examples/coding_agent_rl/run_qwen36_35b_a3b_swe_8nodes.sh：

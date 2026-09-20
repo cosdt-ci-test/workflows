@@ -2,10 +2,12 @@
 # Run one supported slime example.
 #
 # $1 is the manifest entry path. The upstream launchers hardcode paths,
-# models and GPU layouts without "$@" passthrough, so execution goes
-# through projects/slime/scripts/ci_train_driver.py, which re-assembles
-# the same train.py / train_async.py invocation with CI-sized parameters
-# (recipe: the fork's NPU CI tests). Never git add/commit/push here.
+# models and GPU layouts without "$@" passthrough, so the CI train
+# recipe lives in the manifest overlay_args (mirroring the fork's NPU
+# CI tests) and this script only maps the per-entry engine-call metadata
+# that the engine cannot pass through (megatron model type / train
+# script), then invokes the fork's own execute_train() helper. Never
+# git add/commit/push here.
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
@@ -96,6 +98,8 @@ require_visible_devices() {
 # and the NPU allocator keeps expandable_segments (no vLLM CaMemAllocator
 # in this stack, unlike projects/roll).
 require_visible_devices 4 '0,1,2,3'
+# Total visible devices drive the Ray resource count (fork NUM_GPUS).
+NUM_GPUS=$(IFS=,; set -- $ASCEND_RT_VISIBLE_DEVICES; echo "$#")
 export RAY_EXPERIMENTAL_NOSET_ASCEND_RT_VISIBLE_DEVICES=1
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 export HCCL_HOST_SOCKET_PORT_RANGE="${HCCL_HOST_SOCKET_PORT_RANGE:-60000-60050}"
@@ -112,11 +116,51 @@ export PYTHONUNBUFFERED=1
 # matrix legs that share a runner.
 export RAY_DASHBOARD_PORT=$((8265 + GITHUB_RUN_ID % 100))
 
+# execute_train() takes the full train-arg list as one shell-quoted
+# string (fork API contract); rebuild it from the expanded overlay.
+case "$entry_key" in
+  examples/fully_async/run-qwen2.5-0.5B-fully_async.sh)
+    # Recipe source: tests/tests_npu/nightly_CI/
+    # test_qwen2.5_0.5B_fully_async_short_npu.py (fork-verified on NPU).
+    MODEL_TYPE=qwen2.5-0.5B
+    TRAIN_SCRIPT=train_async.py
+    ;;
+  *)
+    echo "no engine-call metadata mapping for $entry_key" >&2
+    exit 1
+    ;;
+esac
+
+: "${SLIME_MODEL_PATH:?SLIME_MODEL_PATH was not exported by setup}"
+: "${SLIME_TORCH_DIST_PATH:?SLIME_TORCH_DIST_PATH was not exported by setup}"
+: "${SLIME_FIXTURE_JSONL:?SLIME_FIXTURE_JSONL was not exported by setup}"
+
 cd "$SLIME_FORK_ROOT"
 
-$PYTHON "$GITHUB_WORKSPACE/workflows/projects/slime/scripts/ci_train_driver.py" \
-  --example "$entry_key" \
-  --fork-root "$SLIME_FORK_ROOT" \
-  --ci-output-dir "$CI_OUTPUT_DIR" \
-  "${EXTRA_ARGS[@]}"
+"$PYTHON" - "$SLIME_FORK_ROOT" "$NUM_GPUS" "$MODEL_TYPE" "$TRAIN_SCRIPT" "${EXTRA_ARGS[@]}" <<'PY'
+import importlib.util
+import sys
+from pathlib import Path
 
+fork_root, num_gpus, model_type, train_script, *train_args = sys.argv
+
+# The fork execute_train() owns ray start/submit, NPU resource
+# injection and the runtime env; load it straight from the fork tree.
+if str(fork_root) not in sys.path:
+    sys.path.insert(0, str(fork_root))
+spec = importlib.util.spec_from_file_location(
+    "_fork_command_utils",
+    str(Path(fork_root) / "slime" / "utils" / "external_utils" / "command_utils.py"),
+)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+print(f"execute_train: model_type={model_type} train_script={train_script} num_gpus={num_gpus}")
+print("train args:", " ".join(train_args))
+module.execute_train(
+    train_args=" ".join(train_args),
+    num_gpus_per_node=int(num_gpus),
+    megatron_model_type=model_type,
+    train_script=train_script,
+)
+PY

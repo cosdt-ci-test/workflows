@@ -150,6 +150,67 @@ def test_run_example_exports_npu_contract() -> None:
         assert needle in run_script, f"run_example.sh missing: {needle}"
 
 
+
+
+# Entries whose full CI train recipe is carried by manifest overlay_args.
+# Recipe source per entry: the fork's NPU CI test named in the comment.
+RECIPE_OVERLAY_REQUIRED = {
+    "examples/fully_async/run-qwen2.5-0.5B-fully_async.sh": [
+        "--hf-checkpoint",
+        "${SLIME_MODEL_PATH}",
+        "--ref-load",
+        "${SLIME_TORCH_DIST_PATH}",
+        "--rollout-function-path",
+        "slime.rollout.fully_async_rollout.generate_rollout_fully_async",
+        "--prompt-data",
+        "${SLIME_FIXTURE_JSONL}",
+        "--num-rollout",
+        "2",
+        "--rollout-max-response-len",
+        "1024",
+        "--sglang-device",
+        "npu",
+        "--ci-test",
+    ],
+}
+
+# Engine-call metadata that the engine cannot pass through; each
+# supported entry must have a per-entry mapping in run_example.sh.
+ENTRY_MODEL_TYPES = {
+    "examples/fully_async/run-qwen2.5-0.5B-fully_async.sh": "qwen2.5-0.5B",
+}
+ENTRY_TRAIN_SCRIPTS = {
+    "examples/fully_async/run-qwen2.5-0.5B-fully_async.sh": "train_async.py",
+}
+
+
+def test_manifest_overlay_carries_full_recipe() -> None:
+    manifest = load_manifest()
+    for entry in manifest["supported"]:
+        required = RECIPE_OVERLAY_REQUIRED[entry["path"]]
+        overlay = entry.get("overlay_args") or []
+        missing = [token for token in required if token not in overlay]
+        assert not missing, (
+            f"{entry['path']}: overlay_args missing recipe tokens: {missing}")
+
+
+def test_run_example_maps_engine_call_metadata() -> None:
+    run_script = (PROJECT_ROOT / "scripts" / "run_example.sh").read_text(
+        encoding="utf-8")
+    assert "ci_train_driver" not in run_script, (
+        "driver script was removed; run_example.sh must call execute_train "
+        "inline via the fork's command_utils")
+    for path, model_type in ENTRY_MODEL_TYPES.items():
+        assert f"MODEL_TYPE={model_type}" in run_script, (
+            f"run_example.sh missing MODEL_TYPE mapping for {path}")
+    for path, train_script in ENTRY_TRAIN_SCRIPTS.items():
+        assert f"TRAIN_SCRIPT={train_script}" in run_script, (
+            f"run_example.sh missing TRAIN_SCRIPT mapping for {path}")
+    # The execute_train invocation must stay generic (one heredoc, no
+    # per-entry branches after the metadata case).
+    assert run_script.count("module.execute_train(") == 1
+    assert "fork_root" in run_script and "command_utils.py" in run_script
+
 def test_workflow_registers_engine_call() -> None:
     workflow = (
         PROJECT_ROOT.parents[1] / ".github" / "workflows" / "slime-examples.yml"
@@ -175,3 +236,7 @@ def test_device_requirements_cover_all_supported_entries() -> None:
     for entry in manifest["supported"]:
         assert entry["path"] in ENTRY_DEVICE_REQUIREMENTS, (
             f"missing device requirement for {entry['path']}")
+        assert entry["path"] in ENTRY_MODEL_TYPES, (
+            f"missing model type mapping for {entry['path']}")
+        assert entry["path"] in ENTRY_TRAIN_SCRIPTS, (
+            f"missing train script mapping for {entry['path']}")

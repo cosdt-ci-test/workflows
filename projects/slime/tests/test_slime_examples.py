@@ -25,6 +25,15 @@ ENTRY_DEVICE_REQUIREMENTS = {
     "examples/fully_async/run-qwen2.5-0.5B-fully_async.sh": 4,
 }
 
+# Engine-call metadata that the engine cannot pass through; each
+# supported entry must have a per-entry mapping in run_example.sh.
+ENTRY_MODEL_TYPES = {
+    "examples/fully_async/run-qwen2.5-0.5B-fully_async.sh": "qwen2.5-0.5B",
+}
+ENTRY_TRAIN_SCRIPTS = {
+    "examples/fully_async/run-qwen2.5-0.5B-fully_async.sh": "train_async.py",
+}
+
 # Pin table copied from the fork's Dockerfile ARGs and quick_install.sh;
 # tests assert our setup pins match the fork recipe.
 FORK_PINS = {
@@ -156,31 +165,15 @@ def test_run_example_exports_npu_contract() -> None:
 # Recipe source per entry: the fork's NPU CI test named in the comment.
 RECIPE_OVERLAY_REQUIRED = {
     "examples/fully_async/run-qwen2.5-0.5B-fully_async.sh": [
-        "--hf-checkpoint",
-        "${SLIME_MODEL_PATH}",
-        "--ref-load",
-        "${SLIME_TORCH_DIST_PATH}",
-        "--rollout-function-path",
-        "slime.rollout.fully_async_rollout.generate_rollout_fully_async",
-        "--prompt-data",
-        "${SLIME_FIXTURE_JSONL}",
-        "--num-rollout",
-        "2",
-        "--rollout-max-response-len",
-        "1024",
-        "--sglang-device",
-        "npu",
+        "--hf-checkpoint ${SLIME_MODEL_PATH}",
+        "--ref-load ${SLIME_TORCH_DIST_PATH}",
+        "--prompt-data ${SLIME_FIXTURE_JSONL}",
+        "--rollout-function-path slime.rollout.fully_async_rollout.generate_rollout_fully_async",
+        "--num-rollout 2",
+        "--rollout-max-response-len 1024",
+        "--sglang-device npu",
         "--ci-test",
     ],
-}
-
-# Engine-call metadata that the engine cannot pass through; each
-# supported entry must have a per-entry mapping in run_example.sh.
-ENTRY_MODEL_TYPES = {
-    "examples/fully_async/run-qwen2.5-0.5B-fully_async.sh": "qwen2.5-0.5B",
-}
-ENTRY_TRAIN_SCRIPTS = {
-    "examples/fully_async/run-qwen2.5-0.5B-fully_async.sh": "train_async.py",
 }
 
 

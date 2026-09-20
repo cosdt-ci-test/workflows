@@ -15,9 +15,9 @@ version: 1
 # Execution never uses the upstream .sh launchers directly: they
 # hardcode absolute paths (/root/slime, /path/to/...), large models,
 # 8-16 GPU layouts and multi-thousand-rollout schedules without "$@"
-# passthrough. projects/slime/scripts/ci_train_driver.py re-assembles
-# the same train.py/train_async.py invocation with CI-sized parameters
-# instead; no example source is modified.
+# passthrough. overlay_args carries the minimal CI recipe; run_example.sh maps metadata and
+# invokes the fork execute_train directly (no driver script).
+# No example source is modified.
 scan:
   root: examples
   include_extensions: ['.sh', '.py']
@@ -30,118 +30,47 @@ scan:
 supported:
   # Fully-async rollout 全链路（Qwen2.5-0.5B + dapo-math-17k）。CI 复刻 fork 昇腾
   # nightly 测试 tests/tests_npu/nightly_CI/test_qwen2.5_0.5B_fully_async_short_npu.py
-  # 的已验证配方：train_async.py、actor 1 卡 + rollout 3 卡（每 engine 1 卡）、
-  # TP/PP/CP/EP 全 1、GRPO、--num-rollout 2；仅两处压缩偏离（response 8192→1024、
-  # 数据换仓内 16 行 fixture）。模型走 ModelScope 本地路径（Qwen2.5-0.5B-Instruct），
-  # ref-load 用 tools/convert_hf_to_torch_dist.py 现转的 _torch_dist 目录。
-  # overlay_args 即完整训练配方（run_example.sh 追加到 execute_train 调用）；
-  # 引擎调用元数据（megatron model type / train script）在 run_example.sh 的
-  # per-entry 映射里，manifest 装不下（引擎不透传自定义字段）。
+  # 的已验证配方：train_async.py、actor 1 卡 + rollout 3 卡、GRPO；CI 压缩为
+  # 2 个 rollout。模型走 ModelScope 本地路径，ref-load 现转 _torch_dist。
+  # overlay_args 只列必需绑定 + 规模压缩 + NPU/CI 开关，其余走默认。
   - path: examples/fully_async/run-qwen2.5-0.5B-fully_async.sh
     profile: slime_fully_async
     runner: linux-aarch64-a2-4
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     timeout_minutes: 300
-    # --- checkpoint 组（路径由 setup_example.sh 导出到 GITHUB_ENV） ---
+    # CI 配方 —— 只保留必需绑定、规模压缩与 NPU/CI 开关，其余走默认：
     overlay_args:
-      - --hf-checkpoint
-      - ${SLIME_MODEL_PATH}
-      - --ref-load
-      - ${SLIME_TORCH_DIST_PATH}
-      # --- rollout 组（fully_async 配方） ---
-      - --rollout-function-path
-      - slime.rollout.fully_async_rollout.generate_rollout_fully_async
-      - --prompt-data
-      - ${SLIME_FIXTURE_JSONL}
-      - --input-key
-      - prompt
-      - --label-key
-      - label
+      # -- 必需路径绑定（setup 导出到 GITHUB_ENV，无默认值） --
+      - "--hf-checkpoint ${SLIME_MODEL_PATH}"
+      - "--ref-load ${SLIME_TORCH_DIST_PATH}"
+      - "--prompt-data ${SLIME_FIXTURE_JSONL}"
+      # -- rollout 语义绑定（fully_async 入口 / fixture schema / 本地奖励） --
+      - "--rollout-function-path slime.rollout.fully_async_rollout.generate_rollout_fully_async"
+      - "--input-key prompt"
+      - "--label-key label"
       - --apply-chat-template
-      - --rollout-shuffle
-      - --rm-type
-      - deepscaler
-      - --num-rollout
-      - '2'
-      - --rollout-batch-size
-      - '4'
-      - --n-samples-per-prompt
-      - '4'
-      - --rollout-max-response-len
-      - '1024'
-      - --rollout-temperature
-      - '0.8'
-      - --global-batch-size
-      - '16'
-      - --balance-data
-      # --- optimizer 组（与 fork nightly 同字面值） ---
-      - --optimizer
-      - adam
-      - --lr
-      - '1e-6'
-      - --lr-decay-style
-      - constant
-      - --weight-decay
-      - '0.1'
-      - --adam-beta1
-      - '0.9'
-      - --adam-beta2
-      - '0.98'
-      # --- GRPO 组 ---
-      - --advantage-estimator
-      - grpo
-      - --use-kl-loss
-      - --kl-loss-coef
-      - '0.00'
-      - --kl-loss-type
-      - low_var_kl
-      - --entropy-coef
-      - '0.00'
-      - --eps-clip
-      - '0.2'
-      - --eps-clip-high
-      - '0.28'
-      # --- perf 组（TP/PP/CP/EP 全 1 + 动态 batch） ---
-      - --tensor-model-parallel-size
-      - '1'
-      - --sequence-parallel
-      - --pipeline-model-parallel-size
-      - '1'
-      - --context-parallel-size
-      - '1'
-      - --expert-model-parallel-size
-      - '1'
-      - --expert-tensor-parallel-size
-      - '1'
+      - "--rm-type deepscaler"
+      # -- 规模压缩旋钮（nightly: rollout 3 / batch 8 / gbs 32 / samples 4→4 保持） --
+      - "--num-rollout 2"
+      - "--rollout-batch-size 4"
+      - "--global-batch-size 16"
+      - "--rollout-max-response-len 1024"
+      - "--n-samples-per-prompt 4"  # 默认 1
+      # -- 设备拓扑（上游默认 actor 8 卡，CI 为 1+3 分离） --
+      - "--actor-num-gpus-per-node 1"
+      - "--rollout-num-gpus 3"
+      # -- NPU/CI 特有开关 --
+      - "--sglang-device npu"
+      - "--sglang-mem-fraction-static 0.65"
+      - "--sglang-cuda-graph-max-bs 16"
+      - "--max-tokens-per-gpu 4096"
       - --use-dynamic-batch-size
-      - --max-tokens-per-gpu
-      - '4096'
-      # --- sglang rollout 组（NPU） ---
-      - --rollout-num-gpus-per-engine
-      - '1'
-      - --sglang-mem-fraction-static
-      - '0.65'
-      - --sglang-cuda-graph-max-bs
-      - '16'
-      - --sglang-enable-metrics
-      - --sglang-device
-      - npu
-      # --- misc 组 + CI 冒烟开关 ---
-      - --attention-dropout
-      - '0.0'
-      - --hidden-dropout
-      - '0.0'
+      - --sequence-parallel
       - --accumulate-allreduce-grads-in-fp32
       - --attention-softmax-in-fp32
-      - --attention-backend
-      - flash
-      - --actor-num-nodes
-      - '1'
-      - --actor-num-gpus-per-node
-      - '1'
-      - --rollout-num-gpus
-      - '3'
+      - "--attention-backend flash"
       - --ci-test
+
 unsupported:
   # ===== coding_agent_rl：硬阻塞（集群级外部服务 + 无公开模型/数据） =====
   # 8 节点 64 rollout 卡硬编码（examples/coding_agent_rl/run_qwen36_35b_a3b_swe_8nodes.sh：

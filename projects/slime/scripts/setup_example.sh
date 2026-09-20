@@ -132,7 +132,17 @@ install_sglang_source() {
 install_sgl_kernel_npu() {
   local bundle="$DEPS_ROOT/sgl-kernel-npu.zip"
   curl -L --fail --retry 3 --retry-delay 5 --connect-timeout 30 -o "$bundle" "$SGL_KERNEL_NPU_URL"
-  unzip -q -o "$bundle" -d "$DEPS_ROOT/sgl-kernel-npu"
+  # The CANN image does not ship unzip; use the stdlib zipfile module
+  # (also gives us explicit overwrite semantics).
+  python - "$bundle" "$DEPS_ROOT/sgl-kernel-npu" <<'PY'
+import sys
+import zipfile
+
+bundle, dest = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(bundle) as zf:
+    zf.extractall(dest)
+print("extracted", len(zf.infolist()), "entries ->", dest)
+PY
   python -m pip install \
     "$DEPS_ROOT"/sgl-kernel-npu/torch_memory_saver-*-cp312-cp312-linux_aarch64.whl \
     "$DEPS_ROOT"/sgl-kernel-npu/sgl_kernel_npu-*-cp312-cp312-linux_aarch64.whl \

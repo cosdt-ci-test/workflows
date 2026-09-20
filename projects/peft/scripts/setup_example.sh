@@ -170,6 +170,14 @@ setup_peft() {
   python -m pip install "transformers==4.57.1" "datasets>=4.7.0,<6" \
     "huggingface_hub<1.0" "trl==1.12.0" evaluate scikit-learn
   install_cpu_torchvision
+  # t5-base seq2seq FSDP 例（peft_lora_seq2seq_accelerate_fsdp.py）零 CLI，
+  # 数据路径硬编码 cwd 相对 temp/data/FinancialPhraseBank-v1.0/ 下两个
+  # jsonl——从仓内 fixture 放置（run 阶段 cwd=$TARGET_ROOT 直接命中）。
+  mkdir -p "$TARGET_ROOT/temp/data/FinancialPhraseBank-v1.0"
+  cp "$TARGET_ROOT/fixtures/financial_phrasebank/financial_phrase_bank_train.jsonl" \
+     "$TARGET_ROOT/temp/data/FinancialPhraseBank-v1.0/"
+  cp "$TARGET_ROOT/fixtures/financial_phrasebank/financial_phrase_bank_val.jsonl" \
+     "$TARGET_ROOT/temp/data/FinancialPhraseBank-v1.0/"
   python -c "import peft, trl, transformers, datasets, accelerate; print('peft', peft.__version__, '/ trl', trl.__version__, '/ transformers', transformers.__version__)"
 
   # Resolve seeded asset paths for overlay_args. The shared cache root
@@ -232,6 +240,54 @@ setup_peft_dreambooth() {
   echo "installing dreambooth stack (diffusers==0.39.0 + tensorboard, hub<1.0)"
   python -m pip install "huggingface_hub<1.0" "diffusers==0.39.0" tensorboard
   python -c "import diffusers, tensorboard; print('diffusers', diffusers.__version__)"
+  # boft_dreambooth/train_dreambooth.py 缺 hra 已有的两处修复（幂等 sed，
+  # 2026-09-20 npu-1 2.12 实测带 patch 10 步 exit 0）：
+  # (1) :91 log_with=args.report_to → hra 的 "none"→None 映射：否则
+  #     --report_to none 被 accelerate 1.15 filter_trackers 抛
+  #     ValueError("Unsupported logging capability: none")；
+  # (2) :391 init_trackers(...init_kwargs=wandb_init) 无 guard，wandb 分支外
+  #     UnboundLocalError：wandb_init 定义处补 else 分支。
+  python - "$TARGET_ROOT/examples/boft_dreambooth/train_dreambooth.py" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+src = path.read_text()
+patches = [
+    (
+        "        log_with=args.report_to,\n",
+        "        log_with=args.report_to if args.report_to != \"none\" else None,\n",
+    ),
+    (
+        """        wandb_init = {
+            "wandb": {
+                "name": args.wandb_run_name,
+                "mode": "online",
+            }
+        }
+""",
+        """        wandb_init = {
+            "wandb": {
+                "name": args.wandb_run_name,
+                "mode": "online",
+            }
+        }
+    else:
+        wandb_init = None
+""",
+    ),
+]
+for old, new in patches:
+    if new in src:
+        print("boft already patched (skip)", file=sys.stderr)
+        continue
+    if old not in src:
+        print("WARN: boft patch pattern not found (upstream may have fixed it)", file=sys.stderr)
+        continue
+    src = src.replace(old, new, 1)
+    print("boft patched", file=sys.stderr)
+path.write_text(src)
+PY
   mkdir -p "$TARGET_ROOT/data/dreambooth"
 
   # SD v1.5 由 cache-seed 投递（与 accelerate 共享同一缓存卷，2026-09-17

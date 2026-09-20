@@ -868,10 +868,11 @@ supported:
   # 配方（vanilla transformers.Trainer + device_map=auto 单卡全落 npu:0，
   # 无 trl/bnb/fp16 硬编码）。
   # 硬前提：torch/torch_npu 2.12.0——torch_npu 2.9 在
-  # torch.sparse_coo_tensor 构造处 INTERNAL ASSERT 崩（layer.py:222），
-  # 2.12 上构造 + dense+=sparse 前向反向均实测通过（2026-09-20 npu-1
-  # 微基准；setup_example.sh 2026-09-20 整栈升 2.12，全部 supported
-  # 随之在 2.12 复跑）。
+  # torch.sparse_coo_tensor 构造处 INTERNAL ASSERT 崩（layer.py:222）。
+  # 2.12 + **--dtype bfloat16** 下 2026-09-20 npu-1 单卡实跑 exit 0
+  # （loss 3.22，adapter 落盘）；默认 float16 在 2.12 sparse backward
+  # 有 kernel 缺陷（SparseCooTensorWithDimsAndTensorsBackward0 梯度
+  # 形状 57327≠57344），必须 overlay 成 bf16。
   - path: examples/shira_finetuning/shira_finetuning.py
     profile: peft
     runner: linux-aarch64-a2-1
@@ -884,13 +885,61 @@ supported:
       - --cutoff_len 256
       - --val_set_size 1
       - --learning_rate 1e-4
+      - --dtype bfloat16   # 默认 float16 在 torch_npu 2.12 sparse backward 崩（见上）
       - --output_dir ${CI_OUTPUT_DIR}
       - --eval_step 100
       - --save_step 100
     timeout_minutes: 30
 
+  # BOFT dreambooth：SD v1.5 + ci_dummy_image + BOFTConfig。与 hra_dreambooth
+  # 同构（utils/args_loader.py + Accelerator），但 v0.21.0 脚本比 hra 少两处
+  # 修复（setup_peft_dreambooth 用 sed 补，幂等）：
+  # (1) :91 log_with=args.report_to → hra 的 "none"→None 映射——否则
+  #     --report_to none 被 accelerate 1.15 filter_trackers 直接
+  #     ValueError("Unsupported logging capability: none")；
+  # (2) :391 init_trackers(...init_kwargs=wandb_init) 无 guard → wandb 分支
+  #     外 UnboundLocalError——补 else: wandb_init = None。
+  # overlay 关键：--use_boft 是 store_true 必须显式开；--wandb_run_name 必传
+  # （adapter_name=None 会让 get_peft_model 崩 TypeError）；--validation_prompt
+  # 必传（脚本 :88 无条件 args.validation_prompt[0]）。
+  # 2026-09-20 npu-1 单卡 2.12 实跑 10 步 exit 0（loss 0.0017-0.028，
+  # BOFT adapter 训练 + 落盘全通）。
+  - path: examples/boft_dreambooth/train_dreambooth.py
+    profile: peft_dreambooth
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
+    overlay_args:
+      - --pretrained_model_name_or_path ${SD_MODEL_PATH}
+      - --instance_data_dir ${TARGET_ROOT}/fixtures/ci_dummy_image
+      - --instance_prompt 'a photo of sks dog'
+      - --validation_prompt 'a photo of sks dog'   # :88 无条件访问
+      - --wandb_run_name boft-run                  # adapter_name=None 崩
+      - --wandb_project_name boft-proj
+      - --use_boft                                # store_true：不开就是裸 UNet 全参微调
+      - --max_train_steps 10
+      - --train_batch_size 1
+      - --report_to none
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --mixed_precision no
+      - --resolution 256
+      - --center_crop
+      - --checkpointing_steps 1000000
+    timeout_minutes: 30
+
+  # t5-base seq2seq LoRA（Accelerator 裸跑，FSDP 分支需 launcher 才激活）：
+  # 零 CLI 硬编码 t5-base + 本地 FinancialPhraseBank 两个 jsonl
+  # （temp/data/FinancialPhraseBank-v1.0/，setup_peft 从仓内 fixture 放置）。
+  # t5-base 由 cache-seed plant（ms_id: AI-ModelScope/t5-base → hf_id:
+  # t5-base，裸 id 走 hub cache 解析）。
+  # 2026-09-20 npu-1 单卡 2.12 实跑 1 epoch exit 0（train_ppl/eval_ppl/
+  # accuracy 全打印，adapter 落盘）。
+  - path: examples/conditional_generation/peft_lora_seq2seq_accelerate_fsdp.py
+    profile: peft
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
+    timeout_minutes: 30
+
 unsupported:
-  - examples/conditional_generation/peft_lora_seq2seq_accelerate_fsdp.py
   - examples/causal_language_modeling/peft_lora_clm_accelerate_ds_zero3_offload.py
   - examples/conditional_generation/peft_lora_seq2seq_accelerate_ds_zero3_offload.py
   - examples/orthogonal_subspace_learning/osf_continual_learning.py
@@ -905,7 +954,6 @@ unsupported:
   - examples/loftq_finetuning/train_gsm8k_llama.py
   - examples/boft_controlnet/train_controlnet.py
   - examples/boft_controlnet/train_controlnet.sh
-  - examples/boft_dreambooth/train_dreambooth.py
   - examples/boft_dreambooth/train_dreambooth.sh
   - examples/hra_dreambooth/train_dreambooth.sh
   - examples/sft/run_peft_fsdp_gptq.sh

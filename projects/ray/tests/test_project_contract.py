@@ -57,8 +57,12 @@ class TestRayProjectContract(unittest.TestCase):
             "example/test_npu_fractional.py",
             "example/test_npu_train_single.py",
             "example/test_npu_train_hccl.py",
+            "example/test_npu_train_ddp.py",
+            "example/test_npu_train_resume.py",
             "example/test_npu_data_batch.py",
+            "example/test_npu_data_actor.py",
             "example/test_npu_serve_inference.py",
+            "example/test_npu_serve_batching.py",
             "example/test_npu_tune_trials.py",
         }
         self.assertEqual(set(manifest["scan"]["paths"]), upstream_paths)

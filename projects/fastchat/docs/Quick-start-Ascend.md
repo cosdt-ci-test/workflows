@@ -117,22 +117,14 @@ python -m fastchat.serve.openai_api_server \
 echo $! >.fastchat/api.pid
 ```
 
-**等待模型就绪。** `/v1/models` 返回服务名后即可发送请求。
+**检查模型服务。** model worker 加载完成后，通过 `/v1/models` 查看已经注册的模型。
 
-```shell #test id="wait-model"
-set -e
-models=""
-for _ in $(seq 1 180); do
-  models=$(curl -fsS http://127.0.0.1:8000/v1/models 2>/dev/null || true)
-  echo "$models" | grep -q 'Qwen2.5-0.5B-Instruct' && break
-  sleep 5
-done
-echo "$models" | grep -q 'Qwen2.5-0.5B-Instruct' || { tail -50 .fastchat/{controller,worker,api}.log; exit 1; }
-echo "model ready"
+```shell #test id="check-model"
+curl -fsS http://127.0.0.1:8000/v1/models | python -c "import json, sys; data=json.load(sys.stdin); print('model:', data['data'][0]['id'])"
 ```
 
-```shell #test-result id="wait-model"
-model ready
+```shell #test-result id="check-model"
+model: Qwen2.5-0.5B-Instruct
 ```
 
 **发送一次对话请求。** 调用 OpenAI 兼容的 Chat Completions 接口并打印模型回复。

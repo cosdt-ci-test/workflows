@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shlex
@@ -11,9 +12,11 @@ import subprocess
 import sys
 import time
 import unittest
+import urllib.error
+import urllib.request
 from pathlib import Path
 
-from workflows.markdown_doc_test_base import MarkdownDocTestBase
+from workflows.markdown_doc_test_base import MarkdownDocTestBase, TestCommand
 from workflows.model_cache import (
     ensure_safetensors,
     purge_modelscope_corrupt,
@@ -25,6 +28,9 @@ _PROJECT_DIR = Path(__file__).resolve().parent.parent
 _WORK_DIR = Path('/tmp/fastchat-quick-start')
 _SERVICE_DIR = _WORK_DIR / '.fastchat'
 _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
+_MODEL_ID = 'Qwen2.5-0.5B-Instruct'
+_MODELS_URL = 'http://127.0.0.1:8000/v1/models'
+_READINESS_TIMEOUT = 900
 _OWNED_SERVICES = (
     ('api.pid', 'fastchat.serve.openai_api_server'),
     ('worker.pid', 'fastchat.serve.model_worker'),
@@ -157,6 +163,18 @@ def _cleanup_services() -> None:
         _stop_owned_process(_SERVICE_DIR / pid_name, expected_module)
 
 
+def _service_log_tail() -> str:
+    sections: list[str] = []
+    for name in ('controller', 'worker', 'api'):
+        path = _SERVICE_DIR / f'{name}.log'
+        try:
+            lines = path.read_text(encoding='utf-8', errors='replace').splitlines()
+        except OSError:
+            continue
+        sections.append(f'--- {name}.log ---\n' + '\n'.join(lines[-50:]))
+    return '\n'.join(sections) or '(service logs unavailable)'
+
+
 class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     """Run the documented CLI and OpenAI-compatible API flows on one NPU."""
 
@@ -223,6 +241,55 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             raise RuntimeError('UPSTREAM_REF is required for FastChat version alignment')
         _assert_version_alignment(text, upstream_ref)
         return text
+
+    def _wait_for_model_service(self) -> None:
+        deadline = time.monotonic() + _READINESS_TIMEOUT
+        last_error = 'service has not responded yet'
+
+        while time.monotonic() < deadline:
+            stopped: list[str] = []
+            for pid_name, expected_module in _OWNED_SERVICES:
+                pid = _read_pid(_SERVICE_DIR / pid_name)
+                if pid is None or expected_module not in _process_cmdline(pid):
+                    stopped.append(expected_module)
+            if stopped:
+                raise AssertionError(
+                    'FastChat service exited before model registration: '
+                    f'{stopped}\n{_service_log_tail()}'
+                )
+
+            try:
+                with urllib.request.urlopen(_MODELS_URL, timeout=5) as response:
+                    payload = json.load(response)
+                items = payload.get('data', []) if isinstance(payload, dict) else []
+                model_ids = {
+                    item['id']
+                    for item in items
+                    if isinstance(item, dict) and isinstance(item.get('id'), str)
+                }
+                if _MODEL_ID in model_ids:
+                    self.log(f'readiness: {_MODEL_ID} registered')
+                    return
+                last_error = f'registered models: {sorted(model_ids)}'
+            except (
+                json.JSONDecodeError,
+                OSError,
+                TimeoutError,
+                TypeError,
+                urllib.error.URLError,
+            ) as exc:
+                last_error = repr(exc)
+            time.sleep(5)
+
+        raise AssertionError(
+            f'FastChat model was not ready after {_READINESS_TIMEOUT}s; '
+            f'last response: {last_error}\n{_service_log_tail()}'
+        )
+
+    def _run_one(self, cmd, results, env, cwd, timeout, idx):
+        if isinstance(cmd, TestCommand) and cmd.id == 'check-model':
+            self._wait_for_model_service()
+        return super()._run_one(cmd, results, env, cwd, timeout, idx)
 
     @classmethod
     def prepare_environment(cls) -> None:

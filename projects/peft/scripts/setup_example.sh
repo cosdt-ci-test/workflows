@@ -52,8 +52,13 @@ except urllib.error.HTTPError:
 torch_stack_for_profile() {
   # Two coexisting torch stacks (2026-09-21), selected per profile:
   # - default (peft / peft_dreambooth): torch 2.12.0 + torch_npu 2.12.0,
-  #   required by the sparse-COO tuner shira (torch_npu 2.9 crashes at
-  #   torch.sparse_coo_tensor construction plus dense+=sparse).
+  #   the post-2026-09-20 verified line for single-card entries. The
+  #   2.12 upgrade was originally made for the sparse-COO tuner shira
+  #   (torch_npu 2.9 crashes at torch.sparse_coo_tensor construction
+  #   plus dense+=sparse); shira was pulled back to unsupported on
+  #   2026-09-21 (torch_npu 2.12's sparse backward still loses gradient
+  #   values under bf16, run 35575049729 — see examples_manifest.yaml),
+  #   but the 2.12 line stays as default for the remaining entries.
   # - peft_29 / peft_ds (the 4 multi-card sft entries): torch 2.9.0 +
   #   torch_npu 2.9.0.post2, the pre-2026-09-20 verified stack. torch
   #   2.12's c10d broadcast() computes sm90_or_more via

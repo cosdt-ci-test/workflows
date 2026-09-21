@@ -291,6 +291,18 @@ local = snapshot_download("Qwen/Qwen2.5-0.5B-Instruct", cache_dir=MODEL_CACHE)
 with open(os.environ["GITHUB_ENV"], "a") as fh:
     fh.write(f"TT_MODEL_PATH={local}\n")
 print("TT_MODEL_PATH=", local)
+
+# Knowledge-distillation 翻案 (recipes/knowledge_distillation_single_device.py)
+# 也需要 1.5B teacher checkpoint；KD 翻案 + 后续 distributed KD 翻案都用到，
+# 不为它单独 split profile。teacher snapshot 2.88GB / 实测下载 ~3:23。
+teacher = snapshot_download(
+    "Qwen/Qwen2.5-1.5B-Instruct",
+    cache_dir=MODEL_CACHE,
+    allow_patterns=["*.json", "*.txt", "*.safetensors", "tokenizer*"],
+)
+with open(os.environ["GITHUB_ENV"], "a") as fh:
+    fh.write(f"TT_TEACHER_PATH={teacher}\n")
+print("TT_TEACHER_PATH=", teacher)
 PY
 }
 

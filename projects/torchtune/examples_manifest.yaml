@@ -200,31 +200,129 @@ supported:
     # （torch 下载挂 28min 直接超时），提到 60 兜底（同 xtuner 35483448757）。
     timeout_minutes: 60
 
+  # ===== 2026-09-21 coder hdc-stable-npu-3 翻案 =====
+  # 关键修正：之前 manifest 注释说"试 distributed_backend=hccl overlay 仍落
+  # NCCL"，那是 torch_npu 2.11 之前 import 未注册 `default_device_backend_map["npu"]="hccl"`
+  # 的旧事实。torch_npu 2.11.0 在 `torch_npu/_init/registry/distributed.py:34-43`
+  # 已经把 `"npu":"hccl"` 写进 map，所以 `cfg.device=npu` 时 `get_distributed_backend()`
+  # 直接拿 "hccl"，`init_process_group(backend="hccl")` 走通。
+  # 翻案 4 条 smoke + 3 条 recipe 端到端（KD / lora_dpo_dist / full_finetune_dist）
+  # exit 0；详见 coder 实测 trace：
+  #   - KD single_device：student 1.85 + teacher 5.12 GiB HBM, 12s, loss=3.66
+  #   - lora_dpo_distributed：FSDP+DPO world_size=1, 1.35 GiB, loss=0.693
+  #   - full_finetune_distributed：ParallelDims+FSDP+init_process_group hccl,
+  #     0.94 GiB, loss=3.89
+  # 共同前提：run_example.sh 需 export MASTER_ADDR/PORT/RANK/WORLD_SIZE/LOCAL_RANK
+  # (distributed recipes 入口 is_distributed() 守卫；单卡 KD 不需要)。
+
+  # 知识蒸馏 single_device：Qwen2.5-0.5B student + Qwen2.5-1.5B teacher
+  # recipe 自身硬编 StatefulDistributedSampler(num_replicas=1, rank=0)，
+  # 完全不调 init_process_group；只走 upstream yaml + overlay + cached teacher。
+  # 复用 upstream qwen2/1.5_to_0.5B_KD_lora_single_device.yaml，overlay 把
+  # 所有 qwen2 _component_ 换成 qwen2_5（torchtune.models.qwen2_5.qwen2_5_1_5b_instruct
+  # 是 1.5B factory——upstream qwen2_5 只暴露 _base / _instruct 后缀族，
+  # 没有裸 qwen2_5_1_5b，需要 _instruct 后缀）。
+  - path: recipes/knowledge_distillation_single_device.py
+    profile: torchtune
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --config recipes/configs/qwen2/1.5_to_0.5B_KD_lora_single_device.yaml  # upstream KD yaml，overlay 改 qwen2→qwen2_5
+      - tokenizer.path=${TT_MODEL_PATH}/vocab.json  # upstream 默认 /tmp/Qwen2-0.5B-Instruct/vocab.json；改 setup 预下载的 Qwen2.5-0.5B snapshot
+      - tokenizer.merges_file=${TT_MODEL_PATH}/merges.txt
+      - checkpointer.checkpoint_dir=${TT_MODEL_PATH}  # student = Qwen2.5-0.5B
+      - checkpointer.output_dir=${CI_OUTPUT_DIR}
+      - teacher_model._component_=torchtune.models.qwen2_5.qwen2_5_1_5b_instruct  # overlay qwen2→qwen2_5 + 1.5B factory 是 _instruct 后缀
+      - teacher_checkpointer.checkpoint_dir=${TT_TEACHER_PATH}  # teacher = Qwen2.5-1.5B（setup_example.sh 新加的 download）
+      - teacher_checkpointer.output_dir=${CI_OUTPUT_DIR}
+      - model._component_=torchtune.models.qwen2_5.lora_qwen2_5_0_5b  # overlay qwen2→qwen2_5
+      - dataset.source=json  # upstream alpaca_cleaned_dataset 走 HF，CI 不可达
+      - dataset.data_files=${TARGET_ROOT}/fixtures/ci_alpaca_50.json  # 仓内 50 行 alpaca fixture
+      - max_steps_per_epoch=1
+      - gradient_accumulation_steps=1
+      - batch_size=1
+    timeout_minutes: 60
+
+  # LoRA DPO distributed：Qwen2.5-0.5B + 8 行 preference 数据
+  # 复用 upstream qwen2_5/0.5B_lora_single_device.yaml，加 DPOLoss 注入；
+  # FSDP + init_process_group(hccl) + world_size=1 都已 coder 实证。
+  # run_example.sh 必须 export MASTER_ADDR=127.0.0.1 MASTER_PORT=29500
+  # RANK=0 WORLD_SIZE=1 LOCAL_RANK=0（distributed 入口守卫）。
+  - path: recipes/lora_dpo_distributed.py
+    profile: torchtune
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --config recipes/configs/qwen2_5/0.5B_lora_single_device.yaml  # 复用 LoRA SFT yaml（DPO 在 cfg 层级覆盖 loss/dataset）
+      - tokenizer.path=${TT_MODEL_PATH}/vocab.json
+      - tokenizer.merges_file=${TT_MODEL_PATH}/merges.txt
+      - checkpointer.checkpoint_dir=${TT_MODEL_PATH}
+      - checkpointer.output_dir=${CI_OUTPUT_DIR}
+      - loss._component_=torchtune.rlhf.loss.DPOLoss  # upstream LoRA config 无 loss 项；DPO 必填
+      - dataset._component_=torchtune.datasets.preference_dataset  # 走 chosen/rejected 消息列表
+      - dataset.source=json
+      - dataset.data_files=${TARGET_ROOT}/fixtures/ci_preference_conv_8.jsonl  # 仓内 8 行偏好数据
+      - gradient_accumulation_steps=1
+      - max_steps_per_epoch=1
+      - batch_size=1
+      - max_seq_len=512
+      - device=npu  # 强制 npu（yaml 默认 cuda）
+    timeout_minutes: 60
+
+  # 全量 SFT distributed：Qwen2.5-0.5B + alpaca fixture
+  # 复用 upstream qwen2_5/0.5B_full_single_device.yaml，overlay 强制
+  # tp/cp/dp-shard 全 1 让 ParallelDims.build_mesh("npu") 退化成 1-rank mesh；
+  # 关 enable_fp8_training（NPU 不支持 FP8 path）。
+  - path: recipes/full_finetune_distributed.py
+    profile: torchtune
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --config recipes/configs/qwen2_5/0.5B_full_single_device.yaml
+      - tokenizer.path=${TT_MODEL_PATH}/vocab.json
+      - tokenizer.merges_file=${TT_MODEL_PATH}/merges.txt
+      - checkpointer.checkpoint_dir=${TT_MODEL_PATH}
+      - checkpointer.output_dir=${CI_OUTPUT_DIR}
+      - dataset.source=json
+      - dataset.data_files=${TARGET_ROOT}/fixtures/ci_alpaca_50.json
+      - tensor_parallel_dim=1  # 强制 1-rank mesh（不触发 parallelize_module）
+      - context_parallel_dim=1
+      - data_parallel_shard_dim=1
+      - data_parallel_replicate_dim=1
+      - enable_fp8_training=False  # FP8 path 未 wire NPU
+      - gradient_accumulation_steps=1
+      - max_steps_per_epoch=1
+      - batch_size=1
+      - max_seq_len=512
+      - device=npu
+    timeout_minutes: 60
+
 # ===== unsupported（每条附 runtime-verified 标签 + 实测失败堆栈） =====
 unsupported:
   # ===== runtime-verified: NCCL 在 init_process_group 抛 RuntimeError =====
-  # 8 个 distributed recipes 全部在 `_patched_new_process_group_helper`（torch_npu
+  # 5 个 distributed recipes 全部在 `_patched_new_process_group_helper`（torch_npu
   # 包里的 distributed_c10d.py:681）抛 `RuntimeError: Distributed package doesn't
   # have NCCL built in`。torch_npu wheel 不带 NCCL（华为 HCCL 替代），NCCL 后端
   # 字符串直接被拒。需要上游把 backend 改成可配置 + 自动探测 device (cuda/npu)
   # 并落到对应后端，本 CI 矩阵不解决这层。
+  # 2026-09-21 翻案：lora_dpo_distributed / full_finetune_distributed /
+  # knowledge_distillation_single_device 已被 coder 实证走通
+  # （cfg.device=npu → get_distributed_backend() 拿 HCCL，init 成功），
+  # 见 supported 段对应条目；剩下的 5 个 distributed 同 c10d 路径待下个周期
+  # 单独 coder 跑 recipe 验证（不许基于"已翻案同模板"推断翻案）。
   - recipes/lora_finetune_distributed.py          # runtime-verified: NCCL @ lora_finetune_distributed.py:918 `init_process_group("cuda:nccl,cpu:gloo")`
-  - recipes/lora_dpo_distributed.py                # runtime-verified: NCCL @ lora_dpo_distributed.py:848 `init_process_group("cuda:nccl,cpu:gloo")`
-  - recipes/full_finetune_distributed.py           # runtime-verified: NCCL @ full_finetune_distributed.py:144 `init_process_group(self.distributed_backend)`；试 distributed_backend=hccl overlay 仍落 NCCL：torch_npu 路径走 default UNDEFINED → nccl 分支
   - recipes/full_dpo_distributed.py                # runtime-verified: NCCL @ full_dpo_distributed.py:1068 `init_process_group("cuda:nccl,cpu:gloo")`
   - recipes/qat_distributed.py                     # runtime-verified: NCCL @ qat_distributed.py:950 `init_process_group("cuda:nccl,cpu:gloo")`
   - recipes/qat_lora_finetune_distributed.py       # runtime-verified: NCCL @ qat_lora_finetune_distributed.py:965 `init_process_group(backend="gloo" if cfg.device == "cpu" else "nccl")`
   - recipes/knowledge_distillation_distributed.py  # runtime-verified: NCCL @ knowledge_distillation_distributed.py:968 `init_process_group("cuda:nccl,cpu:gloo")`
 
   # ===== runtime-verified: 缺配套依赖，无法启动 =====
-  # knowledge_distillation_single_device.py: `find recipes/configs -iname '*knowledge*'`
-  # 返回空（upstream 没有任何 KD config 文件），即使补写 teacher=1.5B + student=0.5B
-  # config 也需要先造出 teacher checkpoint 才跑得动；本次看护周期不加入 CI 矩阵
-  - recipes/knowledge_distillation_single_device.py
   # ppo_full_finetune_single_device.py: recipes/configs 里唯一 PPO 配置是
   # mistral/7B_full_ppo_low_memory.yaml（不是 Qwen2.5）；recipe 自身要求
   # `_value_checkpointer.load_checkpoint()` + `reward_checkpointer.load_checkpoint()`
-  # 两个独立外部权重，0.5B Instruct 没有现成 RM/VM checkpoint
+  # 两个独立外部权重（带 scalar head 的 REWARD 模型），Qwen2.5-0.5B 上游没现成
+  # RM。合成 REWARD checkpoint 需要新代码（不是 patch torchtune，是 fixture
+  # 准备脚本），超出"零 patch"边界 → 本周期不动。
   - recipes/ppo_full_finetune_single_device.py
 
 

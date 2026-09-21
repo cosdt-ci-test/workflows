@@ -87,39 +87,40 @@ printf '你好\n\n' | FASTCHAT_USE_MODELSCOPE=True \
 
 FastChat 用 controller 管理 model worker，并通过 API server 提供 OpenAI 兼容接口。
 
-**启动服务并发送一次对话请求。** 一个命令完成启动、等待和请求，运行结束或中断时自动停止三个服务；日志保存在当前目录的 `.fastchat` 中。
+**启动 controller。** controller 负责注册和调度 model worker，日志保存在当前目录的 `.fastchat` 中。
 
-```shell #test id="api-chat"
-set -e
+```shell #test-setup id="start-controller"
 mkdir -p .fastchat
-
-cleanup() {
-  trap - EXIT INT TERM
-  kill "${api_pid:-}" "${worker_pid:-}" "${controller_pid:-}" 2>/dev/null || true
-  rm -f .fastchat/*.pid
-}
-trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
-
 python -m fastchat.serve.controller >.fastchat/controller.log 2>&1 &
-controller_pid=$!
-echo "$controller_pid" >.fastchat/controller.pid
+echo $! >.fastchat/controller.pid
+```
+
+**启动 model worker。** worker 在 NPU 上加载模型，并以 `Qwen2.5-0.5B-Instruct` 为服务名注册到 controller。
+
+```shell #test-setup id="start-worker"
 FASTCHAT_USE_MODELSCOPE=True python -m fastchat.serve.model_worker \
   --model-path Qwen/Qwen2.5-0.5B-Instruct \
   --model-names Qwen2.5-0.5B-Instruct \
   --revision master \
   --device npu \
   >.fastchat/worker.log 2>&1 &
-worker_pid=$!
-echo "$worker_pid" >.fastchat/worker.pid
+echo $! >.fastchat/worker.pid
+```
+
+**启动 API server。** 服务在 `http://127.0.0.1:8000/v1` 提供 OpenAI 兼容接口。
+
+```shell #test-setup id="start-api"
 python -m fastchat.serve.openai_api_server \
   --host 127.0.0.1 \
   --port 8000 \
   >.fastchat/api.log 2>&1 &
-api_pid=$!
-echo "$api_pid" >.fastchat/api.pid
+echo $! >.fastchat/api.pid
+```
 
+**等待模型就绪。** `/v1/models` 返回服务名后即可发送请求。
+
+```shell #test id="wait-model"
+set -e
 models=""
 for _ in $(seq 1 180); do
   models=$(curl -fsS http://127.0.0.1:8000/v1/models 2>/dev/null || true)
@@ -127,15 +128,32 @@ for _ in $(seq 1 180); do
   sleep 5
 done
 echo "$models" | grep -q 'Qwen2.5-0.5B-Instruct' || { tail -50 .fastchat/{controller,worker,api}.log; exit 1; }
-response=$(curl -fsS http://127.0.0.1:8000/v1/chat/completions \
+echo "model ready"
+```
+
+```shell #test-result id="wait-model"
+model ready
+```
+
+**发送一次对话请求。** 调用 OpenAI 兼容的 Chat Completions 接口并打印模型回复。
+
+```shell #test id="api-chat"
+curl -fsS http://127.0.0.1:8000/v1/chat/completions \
   -H 'Content-Type: application/json' \
-  -d '{"model":"Qwen2.5-0.5B-Instruct","messages":[{"role":"user","content":"你好"}],"max_tokens":64,"temperature":0}')
-printf '%s' "$response" | python -c "import json, sys; data=json.load(sys.stdin); reply=data['choices'][0]['message']['content'].strip(); assert reply; print('model:', data['model']); print('reply:', reply)"
+  -d '{"model":"Qwen2.5-0.5B-Instruct","messages":[{"role":"user","content":"你好"}],"max_tokens":64,"temperature":0}' \
+  | python -c "import json, sys; data=json.load(sys.stdin); reply=data['choices'][0]['message']['content'].strip(); assert reply; print('model:', data['model']); print('reply:', reply)"
 ```
 
 ```shell #test-result id="api-chat" fuzzy='xxx'
 model: Qwen2.5-0.5B-Instruct
 reply: xxx
+```
+
+**停止服务。** 使用启动时保存的进程号停止 API server、model worker 和 controller。
+
+```shell #test-setup id="stop-api"
+kill $(cat .fastchat/api.pid .fastchat/worker.pid .fastchat/controller.pid) 2>/dev/null || true
+rm -f .fastchat/*.pid
 ```
 
 更多 Web UI、多 worker 和评测用法见 [FastChat 官方文档](https://github.com/lm-sys/FastChat)。

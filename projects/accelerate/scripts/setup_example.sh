@@ -1,16 +1,5 @@
 #!/usr/bin/env bash
-# Prepare the CI environment for one supported accelerate example.
-# $1 is the manifest profile. Unknown profiles fail before any install.
-# accelerate itself is installed from TARGET_ROOT (the release checkout
-# under test), so the guarded tag is exactly the code that runs.
-#
-# The upstream examples/requirements.txt is deliberately NOT installed
-# wholesale: we install the checkout plus the minimal NLP+CV stack instead.
-# PARKED 2026-09-16 (same incident as the manifest PARKED block): the
-# schedulefree pip line and the SmolLM/wikitext asset block below are
-# commented out until the hf-mirror Xet issue is solved; the
-# accelerate-infer profile and its asset prefetch stay defined (unused
-# while the entries are parked).
+
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
@@ -70,65 +59,109 @@ raise SystemExit(
   pip_ascend torch==2.9.0 torch_npu==2.9.0.post2
 }
 
-# Pre-download NLP assets used by every NLP / by_feature supported entry.
-# - bert-base-cased from HF mirror (the model all accelerate NLP
-#   examples hardcode via AutoTokenizer/AutoModelForSequenceClassification.
-#   `bert-base-cased` exists on HF and is reachable via hf-mirror.com from
-#   China runners; pre-downloading here makes the run deterministic
-#   instead of relying on per-example on-demand fetch.
-# - GLUE MRPC from HF via HF_ENDPOINT=https://hf-mirror.com, cached into
-#   $HF_HOME so each NLP example does not re-download.
-prepare_nlp_assets() {
+# Smoke-validate the planted NLP assets by actually loading them (all
+# cache hits, no network): bert-base-cased via the bare hardcoded id,
+# then MRPC through datasets. This is the pre-2026-09-16 behavior,
+# now backed by the ModelScope plant instead of hf-mirror downloads.
+validate_nlp_assets() {
   python - <<'PY'
 import os
-os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 os.environ.setdefault("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 tok = AutoTokenizer.from_pretrained("bert-base-cased")
 print("bert-base-cased tokenizer OK, vocab_size:", tok.vocab_size)
 model = AutoModelForSequenceClassification.from_pretrained("bert-base-cased", num_labels=2)
 print("bert-base-cased model OK, params:", sum(p.numel() for p in model.parameters()) / 1e6, "M")
-PY
-
-  # Trigger MRPC download once into the shared HF cache. The by_feature
-  # scripts load_dataset("nyu-mll/glue", "mrpc") and HF_ENDPOINT=
-  # https://hf-mirror.com (set by the engine) is reachable from runners.
-  python - <<'PY'
-import os
-os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
-os.environ.setdefault("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
 from datasets import load_dataset
 ds = load_dataset("nyu-mll/glue", "mrpc")
 print("mrpc splits:", {k: len(v) for k, v in ds.items()})
 PY
-
-  # PARKED 2026-09-16：SmolLM-360M / wikitext-2 预下块下线。SmolLM 是
-  # Xet-backed 仓库，镜像缓存未命中时 hf-mirror 302 到 cas-bridge，
-  # CI runner 直连超时（run 35062880797 里 cv_example / complete_cv_example
-  # 因此被拖挂——cv profile 复用本函数）。其唯一使用者
-  # by_feature/gradient_accumulation_for_autoregressive_models.py 已随
-  # manifest PARKED 块下线，恢复时两处一起放开：
-  # python - <<'PY'
-  # import os
-  # os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
-  # os.environ.setdefault("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
-  # from transformers import AutoModelForCausalLM, AutoTokenizer
-  # AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM-360M")
-  # AutoModelForCausalLM.from_pretrained("HuggingFaceTB/SmolLM-360M")
-  # from datasets import load_dataset
-  # ds = load_dataset("Salesforce/wikitext", "wikitext-2-v1")
-  # print("smollm OK, wikitext-2 splits:", {k: len(v) for k, v in ds.items()})
-  # PY
 }
 
-# Pre-download the Oxford-IIT Pet Dataset used by cv_example.py +
-# complete_cv_example.py. cv_example.py uses os.listdir(data_dir) +
+# Smoke-validate the SmolLM + wikitext plants (cache hits only).
+validate_ar_assets() {
+  python - <<'PY'
+import os
+os.environ.setdefault("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
+from transformers import AutoModelForCausalLM, AutoTokenizer
+AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM-360M")
+AutoModelForCausalLM.from_pretrained("HuggingFaceTB/SmolLM-360M")
+from datasets import load_dataset
+ds = load_dataset("Salesforce/wikitext", "wikitext-2-v1")
+print("smollm OK, wikitext-2 splits:", {k: len(v) for k, v in ds.items()})
+PY
+}
+
+# Smoke-validate the planted inference models: resolve the snapshot via
+# refs/main and check the weight files exist. A full from_pretrained
+# here would just duplicate what the example does.
+# NOTE: deliberately NOT snapshot_download(local_files_only=True) —
+# huggingface_hub 1.x caches the full HF repo listing (trees/<sha>.json,
+# written by any earlier networked call, e.g. from_pretrained during a
+# previous leg's run step) and then *requires* every listed file to
+# exist, including .gitattributes — which ModelScope snapshots never
+# contain (verified), so the check would detonate on any warm runner
+# (llava, run 35188975420). The plant's contract is "from_pretrained
+# finds its files", not "complete vs the HF listing"; from_pretrained
+# does per-file lookups and never needs .gitattributes.
+validate_infer_assets() {
+  # $1 = infer group name
+  python - "$1" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+CHECKS = {
+    "infer-phi2": ("microsoft/phi-2",
+                   ["model-00001-of-00002.safetensors",
+                    "model-00002-of-00002.safetensors"]),
+    "infer-sd": ("stable-diffusion-v1-5/stable-diffusion-v1-5",
+                 ["model_index.json",
+                  "unet/diffusion_pytorch_model.safetensors",
+                  "vae/diffusion_pytorch_model.safetensors",
+                  "text_encoder/model.safetensors",
+                  "safety_checker/model.safetensors"]),
+    "infer-tts": ("facebook/mms-tts-eng",
+                  ["model.safetensors", "vocab.json"]),
+    "infer-llava": ("llava-hf/LLaVA-NeXT-Video-7B-hf",
+                    [f"model-0000{i}-of-00003.safetensors" for i in (1, 2, 3)]),
+}
+repo, must_have = CHECKS[sys.argv[1]]
+hub_root = Path(os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))) / "hub"
+repo_dir = f"models--{repo.replace('/', '--')}"
+sha = (hub_root / repo_dir / "refs" / "main").read_text().strip()
+snap = hub_root / repo_dir / "snapshots" / sha
+missing = [f for f in must_have if not (snap / f).is_file()]
+if missing:
+    raise SystemExit(f"{repo}: seeded snapshot missing {missing}")
+print(f"{repo} seeded snapshot OK: {snap}")
+
+# tts / llava additionally need their datasets, which are NOT on
+# ModelScope — delivered as repo bundles by the cache-seed workflow
+# (spec + history: cache-seed/README.md). Warn only: the example will
+# fail loudly on the Xet flake if they are absent.
+DATASETS = {
+    "infer-tts": ["datasets--svjack--pokemon-blip-captions-en-zh"],
+    "infer-llava": ["datasets--malterei--LLaVA-Video-small-swift"],
+}
+for repo_dir in DATASETS.get(sys.argv[1], []):
+    refs = hub_root / repo_dir / "refs" / "main"
+    if not refs.is_file():
+        print(f"WARN: {repo_dir} missing from shared cache root — "
+              f"dispatch the cache-seed workflow (see cache-seed/README.md)",
+              flush=True)
+    else:
+        snap = hub_root / repo_dir / "snapshots" / refs.read_text().strip()
+        n = sum(1 for p in snap.rglob("*") if p.is_file())
+        print(f"seeded {repo_dir} ({n} files)", flush=True)
+PY
+}
+
+# Materialize the Oxford-IIT Pet Dataset jpg files used by cv_example.py
+# + complete_cv_example.py. cv_example.py uses os.listdir(data_dir) +
 # ".jpg" filter, so the data_dir must contain the .jpg files directly.
-# Upstream `https://www.robots.ox.ac.uk/~vgg/data/pets/...` is one-shot
-# slow from China runners; use `timm/oxford-iiit-pet` on HF mirror as the
-# primary source and materialize the PIL images into the format the
-# upstream script expects (image_id + ".jpg" → matches the regex
-# `^(.*)_\d+\.jpg$` used to extract the class label).
+# The parquet now comes from the planted shared cache; the
+# materialization loop itself is unchanged.
 prepare_pets_data() {
   local dst="$TARGET_ROOT/fixtures/pets/images"
   if [[ -d "$dst" ]] \
@@ -136,11 +169,10 @@ prepare_pets_data() {
     echo "reusing pets dataset at $dst ($(ls "$dst" | wc -l) files)"
     return
   fi
-  echo "downloading Oxford-IIT Pets via HF mirror to $dst"
+  echo "materializing Oxford-IIT Pets from planted cache to $dst"
   mkdir -p "$dst"
   python - <<PY
 import os
-os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 os.environ.setdefault("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
 from datasets import load_dataset
 DST = "$dst"
@@ -170,23 +202,62 @@ setup_accelerate-nlp() {
   python -m pip install -e "$TARGET_ROOT" "torch==2.9.0" "torch_npu==2.9.0.post2"
   # scikit-learn is needed by the `evaluate` library's glue metric (sklearn's
   # f1_score, matthews_corrcoef); not a direct dep of evaluate or transformers
-  # so it must be listed explicitly.
-  # PARKED 2026-09-16: schedulefree 纯 Python 包本身无害，但其唯一使用者
-  # by_feature/schedule_free.py 已随 manifest PARKED 块下线，先不进列表。
+  # so it must be listed explicitly. schedulefree is a pure-Python wheel
+  # needed only by by_feature/schedule_free.py (tiny, kept in the base list).
   python -m pip install \
-    transformers datasets evaluate safetensors scikit-learn "torch==2.9.0"
+    transformers datasets evaluate safetensors scikit-learn schedulefree \
+    "torch==2.9.0"
   python -c "
 import torch, torch_npu
 assert torch.__version__.startswith('2.9.0'), \
     f'torch drifted to {torch.__version__}'
-import accelerate, transformers, datasets, evaluate, sklearn
+import accelerate, transformers, datasets, evaluate, sklearn, schedulefree
 print('accelerate', accelerate.__version__,
       '/ transformers', transformers.__version__,
       '/ datasets', datasets.__version__,
       '/ torch', torch.__version__,
       '/ sklearn', sklearn.__version__)
 "
-  prepare_nlp_assets
+  validate_nlp_assets
+}
+
+setup_accelerate-nlp-ar() {
+  # Autoregressive grad-accum variant = NLP base + SmolLM/wikitext.
+  setup_accelerate-nlp
+  validate_ar_assets
+}
+
+setup_accelerate-ds() {
+  # DeepSpeed config-support profile = NLP base + upstream deepspeed.
+  # 2026-09-18 coder npu-1 (2x910B4) verification: the plain PyPI
+  # deepspeed wheel (>=0.18.2) ships its own NPU accelerator —
+  # deepspeed.accelerator.get_accelerator() auto-detects torch_npu and
+  # resolves to npu/hccl, no Ascend fork needed. ZeRO-2 bf16 2-card
+  # full flow (train/eval/best-checkpoint/save_pretrained) passes.
+  # torch is re-pinned in the same command: deepspeed's resolver may
+  # otherwise pick a newer wheel that breaks the torch_npu 2.9.0 ABI
+  # (same reason as the -e install pin in setup_accelerate-nlp).
+  setup_accelerate-nlp
+  python -m pip install "deepspeed>=0.18.2" "torch==2.9.0"
+  python -c "
+import torch, torch_npu
+assert torch.__version__.startswith('2.9.0'), \
+    f'torch drifted to {torch.__version__}'
+import deepspeed
+from deepspeed.accelerator import get_accelerator
+acc = get_accelerator()
+assert acc.device_name() == 'npu', \
+    f'deepspeed did not detect NPU: {acc.device_name()}'
+from deepspeed.runtime.sequence_parallel.ulysses_sp import (
+    UlyssesSPAttentionHF,
+)
+print('deepspeed', deepspeed.__version__,
+      '/ accelerator:', acc.device_name(),
+      '/', acc.communication_backend_name(),
+      '/ ulysses_sp import OK')
+"
+  # The DS entry reuses the SmolLM-360M + wikitext plants (no new seeds).
+  validate_ar_assets
 }
 
 setup_accelerate-cv() {
@@ -206,56 +277,49 @@ print('timm', timm.__version__,
   prepare_pets_data
 }
 
-# Pre-download inference assets for the accelerate-infer profile
-# (examples/inference/distributed/*). snapshot_download fetches without
-# instantiating, so the 16G llava weights do not spike host RAM. All via
-# the HF mirror (engine sets HF_ENDPOINT; set default for local runs).
-# HF_HUB_DISABLE_XET is exported above: Xet-backed repos (SD v1.5 etc.)
-# cannot reconstruct chunks through the mirror (401).
-prepare_infer_assets() {
-  python - <<'PY'
-import os
-os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
-os.environ.setdefault("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
-from huggingface_hub import snapshot_download
-for repo, repo_type in [
-    ("microsoft/phi-2", "model"),
-    ("llava-hf/LLaVA-NeXT-Video-7B-hf", "model"),
-    ("malterei/LLaVA-Video-small-swift", "dataset"),
-    ("stable-diffusion-v1-5/stable-diffusion-v1-5", "model"),
-    ("facebook/mms-tts-eng", "model"),
-]:
-    path = snapshot_download(repo, repo_type=repo_type)
-    print(repo, "->", path)
-from datasets import load_dataset
-for name in ("svjack/pokemon-blip-captions-en-zh",):
-    ds = load_dataset(name)
-    print(name, "splits:", {k: len(v) for k, v in ds.items()})
-PY
-}
-
-setup_accelerate-infer() {
-  # Inference profile = NLP profile + generation/vision deps + models.
-  # PARKED 2026-09-16: the manifest entries using this profile are parked
-  # (hf-mirror Xet issue, see manifest PARKED block), so nothing invokes
-  # this profile right now — kept defined for the re-enable.
-  # torchvision: DiffusionPipeline → transformers.AutoImageProcessor pulls
-  # the torchvision op registrations; pin the same ABI-matched build as the
-  # cv profile (image's default torchvision pairs with its original torch,
-  # not our pinned 2.9.0). scipy: speech example's scipy.io.wavfile.
+# Shared pip stack for the four inference/distributed examples. Each
+# example then gets its own model plant group so a job only pulls the
+# weights it actually hardcodes (phi-2 5.5G / SD 5.5G / mms 145M /
+# llava 14G — planting all four per job would move ~27G).
+# - fire: speech_gen + llava CLI entry
+# - av: llava video decode
+# - diffusers: stable_diffusion pipeline
+# - scipy: speech_gen wavfile output
+# - torchvision: DiffusionPipeline / VitsModel import chains pull the
+#   torchvision op registrations (same ABI pin as cv profile).
+setup_infer_base() {
   setup_accelerate-nlp
   python -m pip install \
-    fire webdataset av diffusers scipy "torchvision==0.24.0" "torch==2.9.0"
+    fire av diffusers scipy "torchvision==0.24.0" "torch==2.9.0"
   python -c "
 import torch, torch_npu
 assert torch.__version__.startswith('2.9.0'), \
     f'torch drifted to {torch.__version__}'
-import fire, webdataset, av, diffusers, scipy, torchvision
+import fire, av, diffusers, scipy, torchvision
 print('av', av.__version__,
       '/ diffusers', diffusers.__version__,
       '/ torchvision', torchvision.__version__)
 "
-  prepare_infer_assets
+}
+
+setup_accelerate-infer-phi2() {
+  setup_infer_base
+  validate_infer_assets infer-phi2
+}
+
+setup_accelerate-infer-sd() {
+  setup_infer_base
+  validate_infer_assets infer-sd
+}
+
+setup_accelerate-infer-tts() {
+  setup_infer_base
+  validate_infer_assets infer-tts
+}
+
+setup_accelerate-infer-llava() {
+  setup_infer_base
+  validate_infer_assets infer-llava
 }
 
 supported_profiles() {
@@ -272,10 +336,10 @@ TARGET_ROOT="${TARGET_ROOT:?TARGET_ROOT is required}"
 GITHUB_WORKSPACE="${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is required}"
 GITHUB_ENV="${GITHUB_ENV:?GITHUB_ENV is required}"
 
-# Xet-backed HF repos (e.g. stable-diffusion-v1-5) reconstruct chunks
-# straight from cas-server.xethub.hf.co, which hf-mirror cannot proxy
-# (observed 401 Unauthorized from China runners). Force the legacy HTTP
-# transfer path for the setup step and, via GITHUB_ENV, the run step.
+# Xet-backed HF repos 302 to cas-bridge.xethub.hf.co which hf-mirror
+# cannot proxy. Planted caches make weight downloads unnecessary, but
+# keep the legacy transfer path forced for any residual metadata/file
+# fetch (README misses on dataset resolution etc.).
 echo "HF_HUB_DISABLE_XET=1" >> "$GITHUB_ENV"
 export HF_HUB_DISABLE_XET=1
 

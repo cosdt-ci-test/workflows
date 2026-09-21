@@ -6,23 +6,25 @@
 # parallelism. The guard loop (monitor / manifest-check / run-example
 # matrix / validate-results / save-monitor-state) lives in the engine.
 #
-# === Status (2026-09-16) ===
-# bring-up: schedule is DISABLED (per the peft / trl bring-up policy).
-# The engine's manifest-check will fail until either:
-#   (A) ``upstream_repo`` is repointed at a fork (e.g.
-#       cosdt-ci-test/opencv) that contains
-#       ``examples/quickstart_*.py|sh`` mirroring
-#       projects/opencv/examples/ here, OR
-#   (B) the engine gains a "pre-check sync" step that copies
-#       workflows/projects/opencv/examples/ into the target tree
-#       before the manifest-check.
-# Until then, only manual dispatch on a setup where the target tree
-# already has the example scripts (e.g. via setup_example.sh copying
-# them in) will work. The local-coder verification in this commit
-# (recorded in projects/opencv/examples_manifest.yaml comments) does
-# exactly that copy + run pattern and confirms all 8 examples exit 0.
+# === Status (2026-09-18) ===
+# The self-hosted quickstarts (projects/opencv/examples/
+# quickstart_py_version.py / quickstart_dnn_inference.py /
+# quickstart_cann_unit_tests.sh) and the fork-mirror (A) / engine
+# pre-check-sync (B) plan they required are RETIRED. The current
+# supported entry is a single self-hosted NPU DNN CANN smoke
+# (projects/opencv/scripts/test_npu_dnn.py) that mirrors the Quick-
+# start's mobilenetv2-12 + DNN_BACKEND_CANN + NPU forward path with
+# zero source patches.
 #
-# Once (A) or (B) is in place, re-enable the cron:
+# The earlier 4 supported legs (samples/dnn/{gpt2,gemma3,qwen,vlm}
+# _inference.py, 5.0.0 headless LLM/VLM samples) are withdrawn from
+# supported: each requires a multi-GB user-exported ONNX + opencv-
+# style tokenizer config.json and HF-mirror xet backup is blocked
+# from CN runners, so they can't run until a model-seed workflow
+# (cache-seed-class) is wired up. See projects/opencv/examples_manifest.yaml
+# header for the per-script blocker list. Re-enable them after the
+# first green run of test_npu_dnn.py + after the seed workflow lands.
+# schedule stays DISABLED until then:
 #   schedule:
 #     - cron: '0 */6 * * *'
 
@@ -37,14 +39,14 @@ concurrency:
     cancel-in-progress: false
 
 on:
-    # Bring-up phase: schedule disabled until the fork-or-engine-sync
-    # question is resolved (see file header).
+    # Bring-up phase: schedule disabled until the first manual dispatch
+    # is green (see file header — model seeding + first CI run).
     workflow_dispatch:
         inputs:
             target_ref:
-                description: Branch, tag, or SHA to test
+                description: Branch, tag, or SHA to test (empty = latest upstream release; falls back to main on API failure)
                 required: false
-                default: main
+                default: ''
                 type: string
 
 # Engine jobs query the GitHub Job API (validate-results) — actions:read
@@ -58,16 +60,19 @@ jobs:
         uses: ./.github/workflows/examples-template.yml
         with:
             project: opencv
-            # TODO(bring-up): when the example scripts land in a fork,
-            # point this at the fork (e.g. cosdt-ci-test/opencv). For
-            # now, pointing at opencv/opencv triggers the
-            # "supported example missing from target tree" warning,
-            # which the engine surfaces as a manifest-check failure.
+            # Upstream-native: the manifest's supported entries are real
+            # samples/ paths in opencv/opencv (5.0.0 LLM/VLM inference
+            # samples), so manifest-check validates against the upstream
+            # tree directly.
             upstream_repo: opencv/opencv
             target_ref: ${{ inputs.target_ref }}
-            # 2 (not 4): the opencv DNN inference + CANN unit tests
-            # both want a single NPU; 2 parallel jobs x ~1 NPU each
-            # keeps the runner healthy. The CPU quickstart 9a-9e are
-            # all <2s each and can absorb into the same wall-clock
-            # window as the longer NPU legs.
-            max_parallel: 2
+            # 1 (single supported leg): keep matrix pressure low on
+            # the shared NPU runner. The supported entry is the
+            # self-hosted NPU DNN CANN smoke (projects/opencv/scripts/
+            # test_npu_dnn.py); the setup leg still source-builds
+            # opencv-cann on this runner (~23 min cold @-j2; the
+            # k8s runner pods are ephemeral so this never caches),
+            # so serialization matters. The 5
+            # doc-snippet CPU algorithms run as a setup_example.sh
+            # step-5 sanity check, not matrix legs.
+            max_parallel: 1

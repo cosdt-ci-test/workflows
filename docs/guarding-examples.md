@@ -27,6 +27,8 @@
 
 ## 一、workflow 要求
 
+> 现行公共 `examples-template.yml` 与下文 legacy 三信号范式有意不同：它只在最新 release 变化或上轮失败待重试时运行已声明的 `supported` 条目；新增上游 Example 的发现另由独立流程负责。Ray 的混合来源清单在同一 `supported` 段区分 `source: upstream` 和 `source: project`，项目自有测试不冒充上游 Example。详细契约见 [Examples 看护工作流引擎](examples-guard-engine.md)。
+
 推荐在 [https://github.com/cosdt-ci-test/workflows](https://github.com/cosdt-ci-test/workflows) 下新增目标软件的 github workflow，workflow 的核心要求是：
 
 - 对用昇腾能跑通的 examples，必须在合适的 runner 机器上跑通。
@@ -61,8 +63,9 @@
 - 位置参数：`$1` 是 example 相对目标仓根的路径（即清单 supported 条目的 `path`）。
 - 环境变量（workflow 已设好，脚本直接用）：
   - `PROJECT_ROOT`：`projects/<project>/` 的绝对路径；
-  - `TARGET_ROOT`：目标仓 checkout 的绝对路径；
-  - `FIXTURE_DIR`：`projects/<project>/fixtures/` 的绝对路径；
+- `TARGET_ROOT`：目标仓 checkout 的绝对路径；
+  - `EXAMPLES_ROOT`：example 树 checkout 的绝对路径。非分离模式下与 `TARGET_ROOT` 同值；引擎启用分离模式（可选输入 `examples_repo`，example 脚本与被测软件分属两仓，见 [examples-guard-engine.md](examples-guard-engine.md) §4.3）后指向 examples 仓的独立 checkout，脚本按 `${EXAMPLES_ROOT:-$TARGET_ROOT}` 解析 example 路径；
+- `FIXTURE_DIR`：`projects/<project>/fixtures/` 的绝对路径；
   - `CI_OUTPUT_DIR`：训练/运行输出必须写到这个目录；
   - `ASCEND_RT_VISIBLE_DEVICES`：清单条目的 `npu_devices`；
   - `OVERLAY_ARGS`：清单条目 `overlay_args` 的 JSON 数组（条目没写时为 `[]`）。脚本必须能处理空数组。
@@ -135,4 +138,3 @@ workflows/
 └── projects/
     └── <project>/                    # 项目专属数据
 ```
-

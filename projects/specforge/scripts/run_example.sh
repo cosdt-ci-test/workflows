@@ -126,6 +126,122 @@ PY
 
 ensure_passthrough "$LAUNCH_PATH"
 
+# The `external/` disaggregated recipes expect an already-running Mooncake
+# master + SGLang capture server (their endpoints are hard-coded in the YAML
+# as 127.0.0.1:35551 / 35880 / 30000). specforge only plays producer+consumer,
+# it never spawns those (only `managed_local` does). The examples engine has a
+# single "Run example" step, so we bring the two prerequisites up here first —
+# mirroring Quick-start-Ascend.md's smoke-start-mooncake / smoke-start-sglang —
+# then run `specforge train` against them and tear them down afterwards.
+start_mooncake() {
+  pkill -9 -f '^mooncake_master' 2>/dev/null || true
+  MOONCAKE_RPC_PORT="${SPECFORGE_MOONCAKE_RPC_PORT:-35551}"
+  MOONCAKE_HTTP_PORT="${SPECFORGE_MOONCAKE_HTTP_PORT:-35880}"
+  nohup mooncake_master \
+    --enable_http_metadata_server=true \
+    --rpc_port="$MOONCAKE_RPC_PORT" \
+    --http_metadata_server_port="$MOONCAKE_HTTP_PORT" \
+    --metrics_port=35903 \
+    --enable_metric_reporting=false \
+    >/tmp/examples-mooncake.log 2>&1 &
+  MOONCAKE_PID=$!
+  for _ in $(seq 1 30); do
+    if "$PYTHON" -c "
+import socket, sys
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.settimeout(0.5)
+try:
+    s.connect(('127.0.0.1', $MOONCAKE_RPC_PORT))
+except Exception:
+    sys.exit(1)
+finally:
+    s.close()
+" 2>/dev/null; then
+      echo "mooncake master ready (rpc $MOONCAKE_RPC_PORT, pid=$MOONCAKE_PID)"
+      return 0
+    fi
+    sleep 1
+  done
+  echo "FAILED - mooncake_master did not bind $MOONCAKE_RPC_PORT in 30s" >&2
+  tail -50 /tmp/examples-mooncake.log >&2
+  return 1
+}
+
+# Resolve the capture contract (method + aux layer ids + run_id) for a typed
+# YAML recipe. The spec-capture flags differ per algorithm (dflash/dflash2/domino
+# -> method dflash; dspark -> dspark; eagle3 -> eagle3) and per draft config
+# (dflash_config.target_layer_ids), so they cannot be hard-coded. We derive them
+# from the same typed composition root specforge uses for managed-local launch:
+# load_config -> resolve_run -> resolve_server_capture_contract. Only the model
+# path override is needed (target config must be resolvable locally).
+resolve_capture() {
+  "$PYTHON" - "$LAUNCH_PATH" "$SPECFORGE_MODEL_PATH" <<'PY'
+import json, sys
+from specforge.config import load_config
+from specforge.application import resolve_run
+from specforge.training.capture_contract import resolve_server_capture_contract
+
+recipe, model = sys.argv[1], sys.argv[2]
+cfg = load_config(recipe, [f"model.target_model_path={model}"])
+resolved = resolve_run(cfg)
+contract = resolve_server_capture_contract(cfg, algorithm=resolved.algorithm)
+print(f"CAP_METHOD={contract.method!r}")
+print(f"CAP_AUX={' '.join(str(i) for i in contract.aux_layer_ids)!r}")
+print(f"CAP_RUN_ID={cfg.run_id!r}")
+PY
+}
+
+start_sglang_capture() {
+  local method="$1" aux_layer_ids="$2"
+  pkill -9 -f '^python -m sglang\.launch_server' 2>/dev/null || true
+  CAPTURE_DEVICE="${SPECFORGE_CAPTURE_DEVICE:-0}"
+  SGLANG_PORT="${SPECFORGE_SGLANG_PORT:-30000}"
+  SGLANG_HEALTH_TIMEOUT="${SPECFORGE_SGLANG_HEALTH_TIMEOUT:-600}"
+  MOONCAKE_RPC_PORT="${SPECFORGE_MOONCAKE_RPC_PORT:-35551}"
+  MOONCAKE_HTTP_PORT="${SPECFORGE_MOONCAKE_HTTP_PORT:-35880}"
+  export ASCEND_RT_VISIBLE_DEVICES=$CAPTURE_DEVICE
+  export MOONCAKE_LOCAL_HOSTNAME=127.0.0.1
+  export MOONCAKE_METADATA_SERVER=http://127.0.0.1:$MOONCAKE_HTTP_PORT/metadata
+  export MOONCAKE_MASTER_SERVER_ADDR=127.0.0.1:$MOONCAKE_RPC_PORT
+  export MOONCAKE_PROTOCOL=tcp
+  export MOONCAKE_GLOBAL_SEGMENT_SIZE=$((32<<30))
+  ATB_LIB=/usr/local/Ascend/nnal/atb/9.0.0/atb/cxx_abi_1/lib
+  if [[ -d "$ATB_LIB" ]]; then
+    export LD_LIBRARY_PATH="$ATB_LIB:${LD_LIBRARY_PATH:-}"
+  fi
+  : "${SPECFORGE_MODEL_PATH:?SPECFORGE_MODEL_PATH is required}"
+  nohup python -m sglang.launch_server \
+    --model-path "$SPECFORGE_MODEL_PATH" \
+    --trust-remote-code \
+    --skip-tokenizer-init \
+    --tp-size 1 \
+    --mem-fraction-static 0.65 \
+    --context-length 1024 \
+    --chunked-prefill-size -1 \
+    --attention-backend ascend \
+    --enable-spec-capture --spec-capture-method "$method" \
+    --spec-capture-aux-layer-ids $aux_layer_ids \
+    --host 127.0.0.1 --port "$SGLANG_PORT" \
+    >/tmp/examples-sglang.log 2>&1 &
+  SGLANG_PID=$!
+  HEALTH_DEADLINE=$((SGLANG_HEALTH_TIMEOUT / 5))
+  for _ in $(seq 1 "$HEALTH_DEADLINE"); do
+    if curl -fsS "http://127.0.0.1:$SGLANG_PORT/health" >/dev/null 2>&1; then
+      echo "sglang capture server ready (pid=$SGLANG_PID)"
+      return 0
+    fi
+    sleep 5
+  done
+  echo "FAILED - SGLang capture server not healthy after ${SGLANG_HEALTH_TIMEOUT}s" >&2
+  tail -50 /tmp/examples-sglang.log >&2
+  return 1
+}
+
+cleanup_services() {
+  pkill -9 -f '^python -m sglang\.launch_server' 2>/dev/null || true
+  pkill -9 -f '^mooncake_master' 2>/dev/null || true
+}
+
 # Dispatch on file extension:
 #   *.yaml / *.yml: specforge typed run configs — invoke `specforge train -c`
 #     and forward EXTRA_ARGS as dotted section.field=value overrides.
@@ -134,7 +250,29 @@ ensure_passthrough "$LAUNCH_PATH"
 case "$LAUNCH_PATH" in
   *.yaml|*.yml)
     cd "$TARGET_ROOT"
-    specforge train -c "$LAUNCH_PATH" "${EXTRA_ARGS[@]}"
+    eval "$(resolve_capture)"
+    rm -rf "outputs/${CAP_RUN_ID}"
+    if [[ "$LAUNCH_PATH" == *"/managed-local/"* ]]; then
+      # managed-local recipes: one `specforge train` owns the whole single-node
+      # stack (Mooncake master + capture server + producer + consumer via the
+      # launch_plan managed supervisor). No external services to start, and the
+      # supervisor assigns device ordinals from the recipe's managed_local
+      # block, so no ASCEND_RT_VISIBLE_DEVICES pin here either.
+      PYTHONUNBUFFERED=1 \
+      PYTORCH_NPU_ALLOC_CONF=expandable_segments:True \
+        specforge train -c "$LAUNCH_PATH" "${EXTRA_ARGS[@]}"
+    else
+      # external recipes: bring the Mooncake master + SGLang capture server up
+      # first, then run `specforge train` against them.
+      start_mooncake
+      start_sglang_capture "$CAP_METHOD" "$CAP_AUX"
+      trap cleanup_services EXIT
+      ASCEND_RT_VISIBLE_DEVICES="${SPECFORGE_TRAINER_DEVICE:-1}" \
+      HCCL_CONNECT_TIMEOUT=7200 HCCL_EXEC_TIMEOUT=7200 \
+      PYTHONUNBUFFERED=1 \
+      PYTORCH_NPU_ALLOC_CONF=expandable_segments:True \
+        specforge train -c "$LAUNCH_PATH" "${EXTRA_ARGS[@]}"
+    fi
     ;;
   *.sh)
     cd "$(dirname "$LAUNCH_PATH")"

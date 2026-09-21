@@ -185,6 +185,10 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         # 3) torch stack probe + install: when version matches the image's
         # pre-installed wheels, reuse them to avoid the cluster cache
         # triggering ``+cpu`` resolution.
+        # NOTE: quick-start stays on 2.9.0 (examples guard moved to
+        # 2.12.0 independently, 2026-09-20 — see setup_example.sh
+        # torch_stack_for_profile; the shira entry that motivated the
+        # upgrade is back in unsupported since 2026-09-21).
         _PROBE_SCRIPT = (
             'import torch, torch_npu\n'
             "raise SystemExit(0 if "

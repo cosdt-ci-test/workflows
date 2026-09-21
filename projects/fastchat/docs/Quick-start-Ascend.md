@@ -95,16 +95,7 @@ mkdir -p .fastchat
 
 cleanup() {
   trap - EXIT INT TERM
-  for name in api worker controller; do
-    [ -f ".fastchat/$name.pid" ] || continue
-    pid=$(cat ".fastchat/$name.pid")
-    kill "$pid" 2>/dev/null || true
-    for _ in $(seq 1 50); do
-      kill -0 "$pid" 2>/dev/null || break
-      sleep 0.1
-    done
-    kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
-  done
+  kill "${api_pid:-}" "${worker_pid:-}" "${controller_pid:-}" 2>/dev/null || true
   rm -f .fastchat/*.pid
 }
 trap cleanup EXIT
@@ -112,35 +103,30 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 python -m fastchat.serve.controller >.fastchat/controller.log 2>&1 &
-echo $! >.fastchat/controller.pid
+controller_pid=$!
+echo "$controller_pid" >.fastchat/controller.pid
 FASTCHAT_USE_MODELSCOPE=True python -m fastchat.serve.model_worker \
   --model-path Qwen/Qwen2.5-0.5B-Instruct \
   --model-names Qwen2.5-0.5B-Instruct \
   --revision master \
   --device npu \
   >.fastchat/worker.log 2>&1 &
-echo $! >.fastchat/worker.pid
+worker_pid=$!
+echo "$worker_pid" >.fastchat/worker.pid
 python -m fastchat.serve.openai_api_server \
   --host 127.0.0.1 \
   --port 8000 \
   >.fastchat/api.log 2>&1 &
-echo $! >.fastchat/api.pid
+api_pid=$!
+echo "$api_pid" >.fastchat/api.pid
 
 models=""
 for _ in $(seq 1 180); do
-  for name in controller worker api; do
-    pid=$(cat ".fastchat/$name.pid")
-    if ! kill -0 "$pid" 2>/dev/null; then
-      echo "$name exited before the service was ready"
-      tail -50 ".fastchat/$name.log"
-      exit 1
-    fi
-  done
   models=$(curl -fsS http://127.0.0.1:8000/v1/models 2>/dev/null || true)
   echo "$models" | grep -q 'Qwen2.5-0.5B-Instruct' && break
   sleep 5
 done
-echo "$models" | grep -q 'Qwen2.5-0.5B-Instruct' || { tail -50 .fastchat/worker.log; exit 1; }
+echo "$models" | grep -q 'Qwen2.5-0.5B-Instruct' || { tail -50 .fastchat/{controller,worker,api}.log; exit 1; }
 response=$(curl -fsS http://127.0.0.1:8000/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{"model":"Qwen2.5-0.5B-Instruct","messages":[{"role":"user","content":"你好"}],"max_tokens":64,"temperature":0}')

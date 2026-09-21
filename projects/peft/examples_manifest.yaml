@@ -665,16 +665,6 @@ supported:
       - --checkpointing_steps 1000000
     timeout_minutes: 30
 
-  # ShiRA（稀疏 mask LoRA）：0.5B + ci_alpaca_10 fixture，同 gralora 族
-  # 配方（vanilla transformers.Trainer + device_map=auto 单卡全落 npu:0，
-  # 无 trl/bnb/fp16 硬编码）。
-  # 硬前提：torch/torch_npu 2.12.0——torch_npu 2.9 在
-  # torch.sparse_coo_tensor 构造处 INTERNAL ASSERT 崩（layer.py:222）。
-  # 2.12 + **--dtype bfloat16** 下 2026-09-20 npu-1 单卡实跑 exit 0
-  # （loss 3.22，adapter 落盘）；默认 float16 在 2.12 sparse backward
-  # 有 kernel 缺陷（SparseCooTensorWithDimsAndTensorsBackward0 梯度
-  # 形状 57327≠57344），必须 overlay 成 bf16。
-
   # SFT + QLoRA-DeepSpeed-Z3（Llama-2-70b 换 0.5B，bnb 关掉退化 ZeRO-3+
   # LoRA）：deepspeed_config_z3_qlora.yaml 本就 num_processes: 2 且无
   # gradient_accumulation_steps 键（transformers 不做硬校验），只需 a2-2
@@ -918,32 +908,8 @@ supported:
   # WaveFT（FFT 频域初始化 + LoRA）：同 glora 配方 + 同 fixture；coder npu-3
   # 2026-09-17 实跑 4 步 4.22s exit 0 train_loss 3.23，0 patch
 
-  # ShiRA（稀疏 mask LoRA）：0.5B + ci_alpaca_10 fixture，同 gralora 族
-  # 配方（vanilla transformers.Trainer + device_map=auto 单卡全落 npu:0，
-  # 无 trl/bnb/fp16 硬编码）。
-  # 硬前提：torch/torch_npu 2.12.0——torch_npu 2.9 在
-  # torch.sparse_coo_tensor 构造处 INTERNAL ASSERT 崩（layer.py:222）。
-  # 2.12 + **--dtype bfloat16** 下 2026-09-20 npu-1 单卡实跑 exit 0
-  # （loss 3.22，adapter 落盘）；默认 float16 在 2.12 sparse backward
-  # 有 kernel 缺陷（SparseCooTensorWithDimsAndTensorsBackward0 梯度
-  # 形状 57327≠57344），必须 overlay 成 bf16。
-  - path: examples/shira_finetuning/shira_finetuning.py
-    profile: peft
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
-    overlay_args:
-      - --base_model ${SFT_MODEL_PATH}
-      - --data_path ${TARGET_ROOT}/fixtures/ci_alpaca_10   # 默认 yahma/alpaca-cleaned 52k：换 fixture（instruction/output 字段，脚本 :169-174 拼模板）
-      - --num_epochs 1
-      - --batch_size 1
-      - --cutoff_len 256
-      - --val_set_size 1
-      - --learning_rate 1e-4
-      - --dtype bfloat16   # 默认 float16 在 torch_npu 2.12 sparse backward 崩
-      - --output_dir ${CI_OUTPUT_DIR}
-      - --eval_step 100
-      - --save_step 100
-    timeout_minutes: 30
+  # ShiRA（稀疏 mask LoRA）已撤至 unsupported：torch_npu 2.12 sparse
+  # backward 缺陷 flaky（bf16 也不可靠），见 unsupported 段。
 
   # BOFT dreambooth：SD v1.5 + ci_dummy_image + BOFTConfig。与 hra_dreambooth
   # 同构（utils/args_loader.py + Accelerator），但 v0.21.0 脚本比 hra 少两处
@@ -1210,6 +1176,17 @@ unsupported:
   - examples/sft/run_peft_fsdp_gptq.sh
   - examples/frod_finetuning/frod_image_classification.py
   - examples/frod_finetuning/frod_text_classification.py
+  # ShiRA（稀疏 mask LoRA）：sparse 算子族在 torch_npu 上无稳定路径。
+  # torch_npu 2.9 在 torch.sparse_coo_tensor 构造处 INTERNAL ASSERT 崩；
+  # 2.12 能跑但 sparse backward kernel 丢梯度 value：
+  # SparseCooTensorWithDimsAndTensorsBackward0 返回的梯度元素数少于期望
+  # （float16 实测 57327≠57344 = q/o_proj 896×896×r32；bf16 实测
+  # 32767≠32768 = k/v_proj 896×128×r32），丢失数量随数据/层变化，
+  # flaky 不可靠——run 35575049729（2026-09-21）bf16 overlay 下第 9/9
+  # 步 backward 仍崩（前 8 步正常），2026-09-20 npu-1 的 bf16 exit 0
+  # 只是没踩中。曾以 2.12+bf16 overlay 上过 supported，现撤回；等
+  # torch_npu 修 sparse backward 再翻案。
+  - examples/shira_finetuning/shira_finetuning.py
   - examples/qalora_finetuning/qalora_gptq_finetuning.py
   - examples/eva_finetuning/eva_finetuning.py
   - examples/eva_finetuning/eva_finetuning_multi_accelerator.py

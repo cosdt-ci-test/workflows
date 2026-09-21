@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import shutil
 import signal
@@ -29,6 +30,10 @@ _OWNED_SERVICES = (
     ('worker.pid', 'fastchat.serve.model_worker'),
     ('controller.pid', 'fastchat.serve.controller'),
 )
+_FSCHAT_PIN_RE = re.compile(
+    r'fschat\[model_worker\]==(?P<version>[0-9][0-9A-Za-z.!+_-]*)'
+)
+_RELEASE_VERSION_RE = re.compile(r'[0-9]+(?:\.[0-9]+)+(?:[0-9A-Za-z.!+_-]*)?')
 
 
 def _is_truthy(value: str | None) -> bool:
@@ -37,6 +42,38 @@ def _is_truthy(value: str | None) -> bool:
 
 def _e2e_enabled() -> bool:
     return _is_truthy(os.environ.get('NPU_READY'))
+
+
+def _documented_fschat_version(text: str) -> str:
+    versions = set(_FSCHAT_PIN_RE.findall(text))
+    if len(versions) != 1:
+        raise RuntimeError(
+            'quick-start must contain exactly one fschat[model_worker] version pin; '
+            f'found {sorted(versions)}'
+        )
+    return versions.pop()
+
+
+def _release_version(upstream_ref: str) -> str:
+    ref = upstream_ref.strip()
+    version = ref[1:] if ref.startswith('v') else ref
+    if not _RELEASE_VERSION_RE.fullmatch(version):
+        raise RuntimeError(
+            f'UPSTREAM_REF {upstream_ref!r} is not a release tag that can be '
+            'mapped to a PyPI version'
+        )
+    return version
+
+
+def _assert_version_alignment(text: str, upstream_ref: str) -> None:
+    documented = _documented_fschat_version(text)
+    monitored = _release_version(upstream_ref)
+    if documented != monitored:
+        raise RuntimeError(
+            'FastChat version mismatch: '
+            f'UPSTREAM_REF={upstream_ref!r} resolves to {monitored!r}, '
+            f'but the quick-start installs fschat=={documented}'
+        )
 
 
 def _merge_sourced_env(script: str) -> None:
@@ -179,6 +216,14 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     )
     _ASCEND_EXTRA = 'https://repo.huaweicloud.com/ascend/repos/pypi'
 
+    def pre_process(self) -> str:
+        text = super().pre_process()
+        upstream_ref = os.environ.get('UPSTREAM_REF', '')
+        if not upstream_ref:
+            raise RuntimeError('UPSTREAM_REF is required for FastChat version alignment')
+        _assert_version_alignment(text, upstream_ref)
+        return text
+
     @classmethod
     def prepare_environment(cls) -> None:
         if not os.path.isfile(_CANN_SET_ENV):
@@ -246,6 +291,28 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     )
     def test_runs_doc(self) -> None:
         self.run_template()
+
+
+class TestVersionAlignment(unittest.TestCase):
+    def test_matching_release_and_document_pin(self) -> None:
+        _assert_version_alignment(
+            'python -m pip install "fschat[model_worker]==0.2.36"',
+            'v0.2.36',
+        )
+
+    def test_mismatch_fails_before_document_execution(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, 'version mismatch'):
+            _assert_version_alignment(
+                'python -m pip install "fschat[model_worker]==0.2.36"',
+                'v0.2.37',
+            )
+
+    def test_non_release_ref_is_rejected(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, 'not a release tag'):
+            _assert_version_alignment(
+                'python -m pip install "fschat[model_worker]==0.2.36"',
+                'main',
+            )
 
 
 if __name__ == '__main__':

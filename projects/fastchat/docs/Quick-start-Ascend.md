@@ -87,31 +87,45 @@ printf '你好\n\n' | FASTCHAT_USE_MODELSCOPE=True \
 
 FastChat 用 controller 管理 model worker，并通过 API server 提供 OpenAI 兼容接口。
 
-**启动 controller、model worker 和 API server。** 日志与进程号保存在当前目录的 `.fastchat` 中。
+**启动服务并发送一次对话请求。** 一个命令完成启动、等待和请求，运行结束或中断时自动停止三个服务；日志保存在当前目录的 `.fastchat` 中。
 
-```shell #test-setup id="start-api"
+```shell #test id="api-chat"
 set -e
 mkdir -p .fastchat
-nohup python -m fastchat.serve.controller >.fastchat/controller.log 2>&1 &
+
+cleanup() {
+  trap - EXIT INT TERM
+  for name in api worker controller; do
+    [ -f ".fastchat/$name.pid" ] || continue
+    pid=$(cat ".fastchat/$name.pid")
+    kill "$pid" 2>/dev/null || true
+    for _ in $(seq 1 50); do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.1
+    done
+    kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
+  done
+  rm -f .fastchat/*.pid
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+python -m fastchat.serve.controller >.fastchat/controller.log 2>&1 &
 echo $! >.fastchat/controller.pid
-FASTCHAT_USE_MODELSCOPE=True nohup python -m fastchat.serve.model_worker \
+FASTCHAT_USE_MODELSCOPE=True python -m fastchat.serve.model_worker \
   --model-path Qwen/Qwen2.5-0.5B-Instruct \
   --model-names Qwen2.5-0.5B-Instruct \
   --revision master \
   --device npu \
   >.fastchat/worker.log 2>&1 &
 echo $! >.fastchat/worker.pid
-nohup python -m fastchat.serve.openai_api_server \
+python -m fastchat.serve.openai_api_server \
   --host 127.0.0.1 \
   --port 8000 \
   >.fastchat/api.log 2>&1 &
 echo $! >.fastchat/api.pid
-```
 
-**发送一次对话请求。** 等待模型注册完成后，调用 OpenAI 兼容的 Chat Completions 接口。
-
-```shell #test id="api-chat"
-set -e
 models=""
 for _ in $(seq 1 180); do
   for name in controller worker api; do
@@ -136,22 +150,6 @@ printf '%s' "$response" | python -c "import json, sys; data=json.load(sys.stdin)
 ```shell #test-result id="api-chat" fuzzy='xxx'
 model: Qwen2.5-0.5B-Instruct
 reply: xxx
-```
-
-**停止服务。** 按启动时保存的进程号依次停止 API server、model worker 和 controller。
-
-```shell #test-setup id="stop-api"
-for name in api worker controller; do
-  [ -f ".fastchat/$name.pid" ] || continue
-  pid=$(cat ".fastchat/$name.pid")
-  kill "$pid" 2>/dev/null || true
-  for _ in $(seq 1 50); do
-    kill -0 "$pid" 2>/dev/null || break
-    sleep 0.1
-  done
-  kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
-done
-rm -f .fastchat/*.pid
 ```
 
 更多 Web UI、多 worker 和评测用法见 [FastChat 官方文档](https://github.com/lm-sys/FastChat)。

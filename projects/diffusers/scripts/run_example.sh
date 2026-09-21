@@ -169,6 +169,10 @@ case "$LAUNCH_PATH" in
     ;;
   *)
     cd "$TARGET_ROOT"
+    # Some examples import a package that sits next to them (e.g.
+    # examples/research_projects/ip_adapter imports `ip_adapter.ip_adapter`);
+    # add the example's own directory to PYTHONPATH.
+    export PYTHONPATH="$(dirname "$LAUNCH_PATH")${PYTHONPATH:+:$PYTHONPATH}"
     case "${LAUNCHER:-}" in
       accelerate-deepspeed)
         prepare_deepspeed_configs

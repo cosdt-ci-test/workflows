@@ -405,6 +405,9 @@ setup_diffusers_research() {
 # wuerstchen-prior / sd-vae-ft-mse). Base only.
 setup_diffusers_research_plain() {
   install_example_stack
+  # autoencoderkl needs lpips (perceptual loss) + taming_transformers;
+  # the ip_adapter tutorials import the `ip_adapter` PyPI package.
+  python -m pip install lpips taming_transformers ip_adapter
 }
 
 # diffusers-t2i-adapter: T2I-Adapter SDXL. The tiny SDXL / tiny adapter models
@@ -418,6 +421,7 @@ setup_diffusers_t2i_adapter() {
 # hf-mirror at run time. Base only.
 setup_diffusers_text_to_image() {
   install_example_stack
+  download_assets sd15
 }
 
 # diffusers-textual-inversion: textual_inversion SD1.5 / SDXL examples. Tiny
@@ -425,6 +429,7 @@ setup_diffusers_text_to_image() {
 # image (fixtures/DOG.jpg). Base only.
 setup_diffusers_textual_inversion() {
   install_example_stack
+  download_assets sd15
 }
 
 # diffusers-unconditional: unconditional_image_generation (DDPM 64px). The
@@ -455,7 +460,7 @@ setup_diffusers_sdxl_online() {
 # online by the example.
 setup_diffusers_flux() {
   install_example_stack
-  python -m pip install "deepspeed>=0.18.2"
+  python -m pip install "deepspeed>=0.18.2" webdataset braceexpand
 }
 
 # diffusers-sd3: SD3-medium examples (dreambooth / controlnet / colab LoRA).

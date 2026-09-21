@@ -14,9 +14,11 @@
 # single-file duplicates) to keep the shared volume small.
 seeds:
   # FLUX.1-dev (12B). Used by the flux-control / controlnet_flux / dreambooth
-  # flux LoRA examples. ~54 GB full repo; patterns drop the fp16 duplicates.
-  - ms_id: black-forest-labs/FLUX.1-dev
-    hf_id: black-forest-labs/FLUX.1-dev
+  # flux LoRA examples. The examples point at the NON-GATED mirror
+  # unsloth/FLUX.1-dev (diffusers layout) instead of black-forest-labs/FLUX.1-dev
+  # (gated), so no HF token is needed; this seed just pre-warms the shared cache.
+  - ms_id: unsloth/FLUX.1-dev
+    hf_id: unsloth/FLUX.1-dev
     kind: model
     allow_patterns:
       - "*.json"

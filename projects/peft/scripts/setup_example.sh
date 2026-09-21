@@ -49,12 +49,46 @@ except urllib.error.HTTPError:
   echo "pip index: $PIP_INDEX_URL"
 }
 
+torch_stack_for_profile() {
+  # Two coexisting torch stacks (2026-09-21), selected per profile:
+  # - default (peft / peft_dreambooth): torch 2.12.0 + torch_npu 2.12.0,
+  #   required by the sparse-COO tuner shira (torch_npu 2.9 crashes at
+  #   torch.sparse_coo_tensor construction plus dense+=sparse).
+  # - peft_29 / peft_ds (the 4 multi-card sft entries): torch 2.9.0 +
+  #   torch_npu 2.9.0.post2, the pre-2026-09-20 verified stack. torch
+  #   2.12's c10d broadcast() computes sm90_or_more via
+  #   torch.cuda.get_device_capability(tensor.device)[0], and torch_npu
+  #   patches Tensor.is_cuda = Tensor.is_npu while its
+  #   get_device_capability shim returns None -> None[0] TypeError.
+  #   That kills FSDP checkpoint save (dist_cp gather_object ->
+  #   broadcast_object_list) and DeepSpeed ZeRO zero-init param
+  #   broadcast (run 35502546409). Upstream torch_npu bug; pin these
+  #   profiles back to 2.9 until fixed.
+  case "$1" in
+    peft_29|peft_ds) printf '2.9.0 2.9.0.post2' ;;
+    *)               printf '2.12.0 2.12.0' ;;
+  esac
+}
+
 ensure_torch_stack() {
+  local torch_ver npu_ver
+  read -r torch_ver npu_ver <<< "$(torch_stack_for_profile "$PROFILE")"
+  if python -c "
+import torch, torch_npu
+raise SystemExit(
+    0 if torch.__version__.startswith('$torch_ver')
+    and torch_npu.__version__.startswith('$npu_ver') else 1)
+"; then
+    echo "reusing image torch stack ($(python -c 'import torch; print(torch.__version__)'))"
+    return
+  fi
+  if [[ "$torch_ver" == "2.9.0" ]]; then
+    echo "installing torch==$torch_ver torch_npu==$npu_ver (pre-2.12 verified stack)"
+    pip_ascend "torch==${torch_ver}" "torch_npu==${npu_ver}"
+    return
+  fi
   # torch 2.12.0 + torch_npu 2.12.0 + CANN 9.1.0 (upgraded 2026-09-20
-  # from 2.9.0 to unblock the sparse-COO tuners shira: torch_npu 2.9
-  # crashes at torch.sparse_coo_tensor construction plus dense+=sparse
-  # off. Reuse the image stack when it already matches, otherwise
-  # install.
+  # from 2.9.0 to unblock the sparse-COO tuners shira, see above).
   #
   # torch==2.12.0 is NOT installed via `pip_ascend`: aliyun (and the
   # cluster pip cache, both PyPI mirrors) only host the CUDA torch
@@ -64,15 +98,6 @@ ensure_torch_stack() {
   # at https://download.pytorch.org/whl/cpu/ - so fetch it by direct
   # URL. We compute the cp tag at runtime because the manifest mixes
   # py3.10 (30 entries) and py3.12 (15 entries) images.
-  if python -c "
-import torch, torch_npu
-raise SystemExit(
-    0 if torch.__version__.startswith('2.12.0')
-    and torch_npu.__version__.startswith('2.12.0') else 1)
-"; then
-    echo "reusing image torch stack ($(python -c 'import torch; print(torch.__version__)'))"
-    return
-  fi
   echo "installing torch==2.12.0+cpu (direct URL) + torch_npu==2.12.0"
   CP_ABI=$(python -c "import sys; print(f'cp{sys.version_info.major}{sys.version_info.minor}')")
   python -m pip install --no-deps \
@@ -169,7 +194,22 @@ setup_peft() {
   python -m pip install -e "$TARGET_ROOT"
   python -m pip install "transformers==4.57.1" "datasets>=4.7.0,<6" \
     "huggingface_hub<1.0" "trl==1.12.0" evaluate scikit-learn
-  install_cpu_torchvision
+  # torchvision only pairs with the 2.12 stack (adamss image example
+  # imports it); the 2.9 profiles are sft-only and don't import
+  # torchvision (its 0.27 wheel links the torch 2.12 ABI).
+  local _torch_ver _npu_ver
+  read -r _torch_ver _npu_ver <<< "$(torch_stack_for_profile "$PROFILE")"
+  if [[ "$_torch_ver" == "2.12.0" ]]; then
+    install_cpu_torchvision
+  fi
+  # t5-base seq2seq FSDP 例（peft_lora_seq2seq_accelerate_fsdp.py）零 CLI，
+  # 数据路径硬编码 cwd 相对 temp/data/FinancialPhraseBank-v1.0/ 下两个
+  # jsonl——从仓内 fixture 放置（run 阶段 cwd=$TARGET_ROOT 直接命中）。
+  mkdir -p "$TARGET_ROOT/temp/data/FinancialPhraseBank-v1.0"
+  cp "$TARGET_ROOT/fixtures/financial_phrasebank/financial_phrase_bank_train.jsonl" \
+     "$TARGET_ROOT/temp/data/FinancialPhraseBank-v1.0/"
+  cp "$TARGET_ROOT/fixtures/financial_phrasebank/financial_phrase_bank_val.jsonl" \
+     "$TARGET_ROOT/temp/data/FinancialPhraseBank-v1.0/"
   python -c "import peft, trl, transformers, datasets, accelerate; print('peft', peft.__version__, '/ trl', trl.__version__, '/ transformers', transformers.__version__)"
 
   # Resolve seeded asset paths for overlay_args. The shared cache root
@@ -232,6 +272,54 @@ setup_peft_dreambooth() {
   echo "installing dreambooth stack (diffusers==0.39.0 + tensorboard, hub<1.0)"
   python -m pip install "huggingface_hub<1.0" "diffusers==0.39.0" tensorboard
   python -c "import diffusers, tensorboard; print('diffusers', diffusers.__version__)"
+  # boft_dreambooth/train_dreambooth.py 缺 hra 已有的两处修复（幂等 sed，
+  # 2026-09-20 npu-1 2.12 实测带 patch 10 步 exit 0）：
+  # (1) :91 log_with=args.report_to → hra 的 "none"→None 映射：否则
+  #     --report_to none 被 accelerate 1.15 filter_trackers 抛
+  #     ValueError("Unsupported logging capability: none")；
+  # (2) :391 init_trackers(...init_kwargs=wandb_init) 无 guard，wandb 分支外
+  #     UnboundLocalError：wandb_init 定义处补 else 分支。
+  python - "$TARGET_ROOT/examples/boft_dreambooth/train_dreambooth.py" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+src = path.read_text()
+patches = [
+    (
+        "        log_with=args.report_to,\n",
+        "        log_with=args.report_to if args.report_to != \"none\" else None,\n",
+    ),
+    (
+        """        wandb_init = {
+            "wandb": {
+                "name": args.wandb_run_name,
+                "mode": "online",
+            }
+        }
+""",
+        """        wandb_init = {
+            "wandb": {
+                "name": args.wandb_run_name,
+                "mode": "online",
+            }
+        }
+    else:
+        wandb_init = None
+""",
+    ),
+]
+for old, new in patches:
+    if new in src:
+        print("boft already patched (skip)", file=sys.stderr)
+        continue
+    if old not in src:
+        print("WARN: boft patch pattern not found (upstream may have fixed it)", file=sys.stderr)
+        continue
+    src = src.replace(old, new, 1)
+    print("boft patched", file=sys.stderr)
+path.write_text(src)
+PY
   mkdir -p "$TARGET_ROOT/data/dreambooth"
 
   # SD v1.5 由 cache-seed 投递（与 accelerate 共享同一缓存卷，2026-09-17
@@ -261,9 +349,20 @@ print(f"{var}={snap}", flush=True)
 PY
 }
 
+setup_peft_29() {
+  # Multi-card fsdp sft entries (run_peft_fsdp.sh /
+  # run_peft_qlora_fsdp.sh): identical deps to setup_peft, only the
+  # torch stack differs (2.9.0 pair, see torch_stack_for_profile).
+  setup_peft
+}
+
 setup_peft_ds() {
   # deepspeed 多卡 sft 例（run_peft_deepspeed.sh /
   # run_peft_qlora_deepspeed_stage3.sh）：setup_peft 之上装 deepspeed。
+  # torch 栈固定 2.9.0 对（torch_stack_for_profile）：torch 2.12 的
+  # c10d broadcast sm90 检查 + torch_npu get_device_capability 返回
+  # None 会在 ZeRO zero-init 的 dist.broadcast(param.data) 直接崩
+  # （run 35502546409）。
   # 0.19.7 的 npu accelerator 自动识别 Ascend + HCCL，coder npu-5
   # 2026-09-18 实跑 ZeRO-3 2 卡 exit 0（loss 4.64）。DS_BUILD_OPS=0
   # 跳过 CPU op 内核编译：ZeRO-3 bf16 训练路径不需要编译 op，且

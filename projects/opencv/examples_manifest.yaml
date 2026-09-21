@@ -99,6 +99,28 @@ supported:
       - --expected-top1 372
     timeout_minutes: 40
 
+  # ===== CPU 算法 smoke（opencv_version.py headless 变种）=====
+  # 走 samples/python/opencv_version.py 的 --build 路径，输出
+  # cv.getBuildInformation()。零 NPU 算子，但 import 时即断言
+  # cv2.dnn.DNN_BACKEND_CANN != 0 —— 等于把 setup_example.sh step 5 的
+  # 算法 sanity 用 self-hosted entry 形式再走一遍，验证整条 setup→run
+  # 链路里 cv2 能稳定装到 source-built wheel 而不是 pip 镜像版。
+  #
+  # 路径解析：wrapper 在
+  # projects/opencv/scripts/test_npu_opencv_version.py 里 monkey-patch
+  # 掉 cv2.destroyAllWindows（CI BUILD_LIST 不编 highgui，这行在镜像下
+  # 抛 cv2.error），其余逻辑全部 exec samples/python/opencv_version.py
+  # 原文件。无 patch、无 fixture、无 overlay arg —— 自包含。
+  #
+  # 期望：exit 0，build info 末段 "CANN: YES"。整腿 < 1 min（纯 CPU
+  # cv.getBuildInformation()），timeout_minutes 设 5 留余量。
+  - path: ../workflows/projects/opencv/scripts/test_npu_opencv_version.py
+    profile: opencv
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args: []
+    timeout_minutes: 5
+
 # ===== unsupported =====
 # 源码重析后的完整清单（53 项 .py + 平台树）。分段：
 #   1. environment_blocked  GUI/交互依赖，headless CI 跑不动（48）

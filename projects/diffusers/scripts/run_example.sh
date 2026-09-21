@@ -134,7 +134,10 @@ count_npus() {
 # ZeRO-3 shards params/grads/optimizer across the cards, so entries that
 # OOM on a single card can run on a2-8. LAUNCHER=accelerate-deepspeed.
 prepare_deepspeed_configs() {
-  local ds_json="${FIXTURE_DIR:?FIXTURE_DIR is required}/ds_zero3.json"
+  # Kept out of FIXTURE_DIR on purpose: some entries use --instance_data_dir
+  # ${FIXTURE_DIR} and iterate every file as an image, so a .json there breaks
+  # them (amused). The DeepSpeed config lives in the project's configs/.
+  local ds_json="${PROJECT_ROOT:?PROJECT_ROOT is required}/configs/ds_zero3.json"
   local cfg_dir="$GITHUB_WORKSPACE/ci_patch"
   mkdir -p "$cfg_dir"
   local npus

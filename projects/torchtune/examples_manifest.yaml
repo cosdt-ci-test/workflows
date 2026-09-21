@@ -2,25 +2,27 @@ version: 1
 scan:
   root: recipes
   include_extensions: ['.py']
-  ref: v0.6.1  # 对账基准 = torchtune latest release tag（meta-pytorch/torchtune@a6290a5），
-                # 不是 main HEAD。release tag 锁定后 manifest 列项不再随 main 漂移；
-                # 新加条目统一对照 release tree 验证存在。audit_examples_manifest.py
-                # 读 scan.ref → git clone --branch v0.6.1 → 与 release 树完全匹配。
+  # 对账基准（human-readable，无机器消费）：本清单的 supported/unsupported
+  # 条目均对照 torchtune v0.6.1 release tag（meta-pytorch/torchtune@a6290a5，
+  # "[release-only] Bump version for 0.6.1 release"）实测 / 静态分析得到。
+  # 升级时人工同步：拉新 release tag 后重跑 setup_example.sh + 实测每条
+  # supported、核对 unsupported（dev/ 下文件 import 链可能有变）。
   # files-only 模型（docs/examples-guard-engine.md §2.7）：对账单位是
   # 入口文件 .py。非 entry point 的包初始化 / YAML 配置 / 文档 / SLURM
   # 启动器若被扫描命中，会落到 unsupported（其扫描后缀与本仓 examples
   # 树里几乎不出现，仅作声明）；所有"已识别不是 example"的条目都列在
-  # unsupported 段。examples 引擎不扫描，本段只是声明。
+  # unsupported 段。
 
 supported:
   # ===== 已在 coder hdc-stable-npu-3（910B4×2, torch 2.11.0+cpu, torch_npu 2.11.0,
   # CANN 9.1.0）端到端跑通（setup_example.sh 实跑 + recipe exit 0），依赖线 pin
   # 见 setup_example.sh 注释 =====
-  # 验证日期：2026-09-18；torchtune checkout=v0.6.1 release tag（meta-pytorch/torchtune@a6290a5
-  # "[release-only] Bump version for 0.6.1 release"）— audit 对账基准。release tag 锁定后，
+  # 验证日期：2026-09-18（最近一轮 distributed 翻案 2026-09-21）；
+  # torchtune checkout=v0.6.1 release tag（meta-pytorch/torchtune@a6290a5
+  # "[release-only] Bump version for 0.6.1 release"）。release tag 锁定后，
   # 本 manifest 列项与 release 树严格对齐；main HEAD bd2a0fc 多出来的
   # recipes/qat_single_device.py / recipes/dev/async_grpo_full_finetune_distributed.py
-  # 不在本期 audit 范围内（不在 release 树中）。
+  # 不在 release 树中（main HEAD 独占），未在本期验证。
   # 关键 pin + patch（per setup_example.sh）：
   #   - setup_torchtune() pin torchao==0.13.0（v0.6.1 用 torchao.dtypes.nf4tensor；
   #     main HEAD 才是 torchao.quantization.NF4Tensor + torchao==0.18.0）

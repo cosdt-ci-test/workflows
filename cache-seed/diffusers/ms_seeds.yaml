@@ -1,0 +1,104 @@
+# ModelScope plants for the diffusers examples.
+#
+# These are the gated / Xet-backed model repos the examples hardcode. On HF
+# they are `gated=auto` (need a token + accepting the license); ModelScope
+# carries mirrors, so seeding them into the shared HF cache lets the examples
+# resolve `from_pretrained(<hf_id>)` locally without any HF token.
+#
+# Planted by scripts/ms_seed.py (cache-seed workflow):
+#   modelscope.snapshot_download(ms_id, allow_patterns=...)
+#     -> <SHARED_CACHE_ROOT>/hub/models--<hf_id>/snapshots/<hf_sha>/...
+#     -> refs/main = real HF commit sha
+#
+# allow_patterns keep only the diffusers components (skip fp16 / flax / onnx /
+# single-file duplicates) to keep the shared volume small.
+seeds:
+  # FLUX.1-dev (12B). Used by the flux-control / controlnet_flux / dreambooth
+  # flux LoRA examples. ~54 GB full repo; patterns drop the fp16 duplicates.
+  - ms_id: black-forest-labs/FLUX.1-dev
+    hf_id: black-forest-labs/FLUX.1-dev
+    kind: model
+    allow_patterns:
+      - "*.json"
+      - "*.txt"
+      - "*.model"
+      - "scheduler/*"
+      - "text_encoder/*"
+      - "text_encoder_2/*"
+      - "tokenizer/*"
+      - "tokenizer_2/*"
+      - "transformer/*"
+      - "vae/*"
+
+  # SD3-medium (2B). dreambooth / controlnet SD3 examples. Gated on HF.
+  - ms_id: AI-ModelScope/stable-diffusion-3-medium-diffusers
+    hf_id: stabilityai/stable-diffusion-3-medium-diffusers
+    kind: model
+    allow_patterns:
+      - "*.json"
+      - "*.txt"
+      - "*.model"
+      - "scheduler/*"
+      - "text_encoder/*"
+      - "text_encoder_2/*"
+      - "text_encoder_3/*"
+      - "tokenizer/*"
+      - "tokenizer_2/*"
+      - "tokenizer_3/*"
+      - "transformer/*"
+      - "vae/*"
+
+  # SD3.5-medium / large. Gated on HF; large is ~67 GB (multi-card only).
+  - ms_id: AI-ModelScope/stable-diffusion-3.5-medium
+    hf_id: stabilityai/stable-diffusion-3.5-medium
+    kind: model
+    allow_patterns:
+      - "*.json"
+      - "*.txt"
+      - "*.model"
+      - "scheduler/*"
+      - "text_encoder/*"
+      - "text_encoder_2/*"
+      - "text_encoder_3/*"
+      - "tokenizer/*"
+      - "tokenizer_2/*"
+      - "tokenizer_3/*"
+      - "transformer/*"
+      - "vae/*"
+
+  - ms_id: AI-ModelScope/stable-diffusion-3.5-large
+    hf_id: stabilityai/stable-diffusion-3.5-large
+    kind: model
+    allow_patterns:
+      - "*.json"
+      - "*.txt"
+      - "*.model"
+      - "scheduler/*"
+      - "text_encoder/*"
+      - "text_encoder_2/*"
+      - "text_encoder_3/*"
+      - "tokenizer/*"
+      - "tokenizer_2/*"
+      - "tokenizer_3/*"
+      - "transformer/*"
+      - "vae/*"
+
+  # HiDream-I1-Full (17B). dreambooth LoRA HiDream example. Gated on HF.
+  - ms_id: AI-ModelScope/HiDream-I1-Full
+    hf_id: HiDream-ai/HiDream-I1-Full
+    kind: model
+    allow_patterns:
+      - "*.json"
+      - "*.txt"
+      - "*.model"
+      - "scheduler/*"
+      - "text_encoder/*"
+      - "text_encoder_2/*"
+      - "text_encoder_3/*"
+      - "text_encoder_4/*"
+      - "tokenizer/*"
+      - "tokenizer_2/*"
+      - "tokenizer_3/*"
+      - "tokenizer_4/*"
+      - "transformer/*"
+      - "vae/*"

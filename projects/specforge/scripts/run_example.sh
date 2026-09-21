@@ -167,7 +167,32 @@ finally:
   return 1
 }
 
+# Resolve the capture contract (method + aux layer ids + run_id) for a typed
+# YAML recipe. The spec-capture flags differ per algorithm (dflash/dflash2/domino
+# -> method dflash; dspark -> dspark; eagle3 -> eagle3) and per draft config
+# (dflash_config.target_layer_ids), so they cannot be hard-coded. We derive them
+# from the same typed composition root specforge uses for managed-local launch:
+# load_config -> resolve_run -> resolve_server_capture_contract. Only the model
+# path override is needed (target config must be resolvable locally).
+resolve_capture() {
+  "$PYTHON" - "$LAUNCH_PATH" "$SPECFORGE_MODEL_PATH" <<'PY'
+import json, sys
+from specforge.config import load_config
+from specforge.application import resolve_run
+from specforge.training.capture_contract import resolve_server_capture_contract
+
+recipe, model = sys.argv[1], sys.argv[2]
+cfg = load_config(recipe, [f"model.target_model_path={model}"])
+resolved = resolve_run(cfg)
+contract = resolve_server_capture_contract(cfg, algorithm=resolved.algorithm)
+print(f"CAP_METHOD={contract.method!r}")
+print(f"CAP_AUX={' '.join(str(i) for i in contract.aux_layer_ids)!r}")
+print(f"CAP_RUN_ID={cfg.run_id!r}")
+PY
+}
+
 start_sglang_capture() {
+  local method="$1" aux_layer_ids="$2"
   pkill -9 -f '^python -m sglang\.launch_server' 2>/dev/null || true
   CAPTURE_DEVICE="${SPECFORGE_CAPTURE_DEVICE:-0}"
   SGLANG_PORT="${SPECFORGE_SGLANG_PORT:-30000}"
@@ -190,12 +215,12 @@ start_sglang_capture() {
     --trust-remote-code \
     --skip-tokenizer-init \
     --tp-size 1 \
-    --mem-fraction-static 0.5 \
+    --mem-fraction-static 0.65 \
     --context-length 1024 \
     --chunked-prefill-size -1 \
     --attention-backend ascend \
-    --enable-spec-capture --spec-capture-method dflash \
-    --spec-capture-aux-layer-ids 1 8 15 22 29 \
+    --enable-spec-capture --spec-capture-method "$method" \
+    --spec-capture-aux-layer-ids $aux_layer_ids \
     --host 127.0.0.1 --port "$SGLANG_PORT" \
     >/tmp/examples-sglang.log 2>&1 &
   SGLANG_PID=$!
@@ -225,9 +250,10 @@ cleanup_services() {
 case "$LAUNCH_PATH" in
   *.yaml|*.yml)
     cd "$TARGET_ROOT"
-    rm -rf outputs/qwen3.5-4b-dflash-npu-online
+    eval "$(resolve_capture)"
+    rm -rf "outputs/${CAP_RUN_ID}"
     start_mooncake
-    start_sglang_capture
+    start_sglang_capture "$CAP_METHOD" "$CAP_AUX"
     trap cleanup_services EXIT
     ASCEND_RT_VISIBLE_DEVICES="${SPECFORGE_TRAINER_DEVICE:-1}" \
     HCCL_CONNECT_TIMEOUT=7200 HCCL_EXEC_TIMEOUT=7200 \

@@ -150,6 +150,53 @@ supported:
     # 2026-09-20 run 35483424375 30min 仍超时（torch 下载挂 28min），提到 60。
     timeout_minutes: 60
 
+  # PPO single_device：Qwen2.5-0.5B policy + smohammadi/tinyllama_rm_sentiment_1b reward/value
+  # upstream PPO yaml（llama2/1B_full_ppo_low_memory_single_device.yaml）用的是
+  # TinyLlama policy + 同款 RM。policy 改 Qwen2.5-0.5B 后 reward 信号架构
+  # 不匹配（RM 没见过 Qwen tokens）— CI smoke 仅验证 recipe 端到端不崩，
+  # 训练效果不在覆盖范围。policy 用 base qwen2_5_0_5b（NOT LoRA：PPO
+  # 要求 policy+ref_policy 共享同一份 base 权重，recipe line 561 的
+  # policy_model.load_state_dict 是 strict=True，base-only state_dict
+  # 加载到 LoRA 模型会缺 lora_a/lora_b keys 必崩）。RM/V 来自 HF 个人
+  # repo smohammadi，ModelScope 不代发；setup_example.sh 新加 HF 镜像
+  # 下载分支（HF_ENDPOINT=hf-mirror.com，coder pod curl 实测 HTTP 200），
+  # cache 命中后用 TT_RM_PATH 复用。reward/V 的 state_dict 通过
+  # reward_hf_to_tune（model_type=REWARD）转换，coder dry-run 已确认
+  # 0 missing / 0 unexpected key。dataset 用本地 jsonl（4 条 prompt），
+  # 不走 HF datasets。`num_steps=1, batch_size=1, ppo_batch_size=1`
+  # smoke 规模（recipe 要求 num_steps % batch_size == 0）。
+  - path: recipes/ppo_full_finetune_single_device.py
+    profile: torchtune
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --config recipes/configs/llama2/1B_full_ppo_low_memory_single_device.yaml  # upstream PPO yaml，overlay 改 llama2→qwen2_5 + cuda→npu
+      - tokenizer.path=${TT_MODEL_PATH}/vocab.json
+      - tokenizer.merges_file=${TT_MODEL_PATH}/merges.txt
+      - checkpointer.checkpoint_dir=${TT_MODEL_PATH}  # policy = Qwen2.5-0.5B
+      - ref_policy_checkpointer.checkpoint_dir=${TT_MODEL_PATH}  # ref_policy 同 policy
+      - value_checkpointer.checkpoint_dir=${TT_RM_PATH}  # value = tinyllama RM
+      - reward_checkpointer.checkpoint_dir=${TT_RM_PATH}  # reward = tinyllama RM
+      - policy_model._component_=torchtune.models.qwen2_5.qwen2_5_0_5b  # base（NOT LoRA，理由见上文注释）
+      - dataset.source=json
+      - dataset.data_files=${TARGET_ROOT}/fixtures/ci_ppo_prompts_4.jsonl
+      - num_steps=1  # upstream 1000: smoke scale
+      - batch_size=1  # recipe 要求 num_steps % batch_size == 0
+      - ppo_batch_size=1  # upstream 16: recipe 在 _setup_training_parameters 读 cfg.ppo_batch_size
+      - ppo_epochs=1
+      - gradient_accumulation_steps=1
+      - forward_batch_size=1
+      - max_generated_tokens=16  # upstream 58: smoke scale
+      - min_response_length=8  # upstream 18: smoke scale
+      - stop_token_ids=[151643,151645]  # Qwen2.5 chat stop tokens (<|endoftext|>, <|im_end|>)
+      - max_seq_len=512  # upstream 2048: smoke scale
+      - kl_coeff=0.01  # recipe 在 _setup_training_hyperparameters 读 cfg.kl_coeff；PPOLoss 不收（main HEAD signature 只接 epsilon/value_clip_range/value_coeff）
+      - device=npu
+    # 2026-09-21 翻案，PPO 1 step 端到端在 coder 跑通（policy 0.5B + RM 1.1B 共 ~3.9GB
+    # HBM）；新加 HF 下载分支让 setup 比其他 recipe 慢（多 ~2.2GB RM 下载，hf-mirror 实测
+    # 18min，HF 直连更慢），留 60min 兜底。
+    timeout_minutes: 60
+
   # 评测：Qwen2.5-0.5B + lm_eval + 自定义 ci_truthfulqa_mc2 任务（本地 JSON 驱动）
   # eleuther_eval recipe 在 __init__ 强检 `version("lm-eval") < "0.4.5"`
   # （**字符串比较**，不是 packaging.version——0.4.10-0.4.49 都被误拒；
@@ -318,15 +365,6 @@ unsupported:
   - recipes/qat_distributed.py                     # inferred: qat_distributed.py:160 `init_process_group(self.distributed_backend)`
   - recipes/qat_lora_finetune_distributed.py       # inferred: qat_lora_finetune_distributed.py:159 `init_process_group(self.distributed_backend)`
   - recipes/knowledge_distillation_distributed.py  # inferred: knowledge_distillation_distributed.py:127 `init_process_group(self.distributed_backend)`
-
-  # ===== runtime-verified: 缺配套依赖，无法启动 =====
-  # ppo_full_finetune_single_device.py: recipes/configs 里唯一 PPO 配置是
-  # mistral/7B_full_ppo_low_memory.yaml（不是 Qwen2.5）；recipe 自身要求
-  # `_value_checkpointer.load_checkpoint()` + `reward_checkpointer.load_checkpoint()`
-  # 两个独立外部权重（带 scalar head 的 REWARD 模型），Qwen2.5-0.5B 上游没现成
-  # RM。合成 REWARD checkpoint 需要新代码（不是 patch torchtune，是 fixture
-  # 准备脚本），超出"零 patch"边界 → 本周期不动。
-  - recipes/ppo_full_finetune_single_device.py
 
   # ===== files-only 排除项（不是 recipe 入口） =====
   # 扫描引擎对账单位是入口文件 .py。这些条目不是 recipe 入口，列出是为了

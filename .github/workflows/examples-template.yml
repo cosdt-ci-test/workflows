@@ -353,6 +353,7 @@ jobs:
       - name: Setup example environment
         env:
           PROFILE: ${{ matrix.example.profile }}
+          EXAMPLE_PATH: ${{ matrix.example.path }}
         run: bash "$PROJECT_ROOT/scripts/setup_example.sh" "$PROFILE"
 
       - name: Run example

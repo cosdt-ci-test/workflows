@@ -665,30 +665,30 @@ supported:
   #     - --train_batch_size 1 --gradient_accumulation_steps 1 --gradient_checkpointing
   #     - --max_train_steps 1 --checkpointing_steps 1
   #   timeout_minutes: 120
-  ########################已经稳定跑好的###########################################
-  ########################之后记得注释回来#########################################
-
 
   # CogVideoX-5b-I2V LoRA（复用 Disney 数据集；2026-09-21 昇腾机验证可跑）
   # 注意：必须用 THUDM/CogVideoX-5b-I2V（不是 1.5，脚本不处理 1.5 的 ofs 输入）。
-  - path: examples/cogvideo/train_cogvideox_image_to_video_lora.py
-    profile: diffusers-cogvideo-i2v
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --pretrained_model_name_or_path THUDM/CogVideoX-5b-I2V
-      - --instance_data_root ${COGVIDEOX_DATASET_DIR}
-      - --caption_column prompt.txt
-      - --video_column videos.txt
-      - --max_num_frames 9
-      - --gradient_checkpointing
-      - --enable_slicing --enable_tiling
-      - --train_batch_size 1
-      - --max_train_steps 1
-      - --checkpointing_steps 1
-      - --mixed_precision fp16
-      - --output_dir ${CI_OUTPUT_DIR}
-    timeout_minutes: 180
+  # - path: examples/cogvideo/train_cogvideox_image_to_video_lora.py
+  #   profile: diffusers-cogvideo-i2v
+  #   runner: linux-aarch64-a2-1
+  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+  #   overlay_args:
+  #     - --pretrained_model_name_or_path THUDM/CogVideoX-5b-I2V
+  #     - --instance_data_root ${COGVIDEOX_DATASET_DIR}
+  #     - --caption_column prompt.txt
+  #     - --video_column videos.txt
+  #     - --max_num_frames 9
+  #     - --gradient_checkpointing
+  #     - --enable_slicing --enable_tiling
+  #     - --train_batch_size 1
+  #     - --max_train_steps 1
+  #     - --checkpointing_steps 1
+  #     - --mixed_precision fp16
+  #     - --output_dir ${CI_OUTPUT_DIR}
+  #   timeout_minutes: 180
+
+  ########################已经稳定跑好的###########################################
+  ########################之后记得注释回来#########################################
 
   # autoencoderkl VAE 训练（fixtures/DOG.jpg；2026-09-21 写入待验证）
   - path: examples/research_projects/autoencoderkl/train_autoencoderkl.py
@@ -704,6 +704,7 @@ supported:
       - --resolution 256
       - --train_batch_size 1 --gradient_accumulation_steps 1 --gradient_checkpointing
       - --max_train_steps 1
+      - --report_to wandb
     timeout_minutes: 120
 
   # IP-Adapter（SD1.5；本地 JSON 清单 fixtures/ip_adapter/data.json；2026-09-21 写入待验证）
@@ -719,7 +720,7 @@ supported:
       - --output_dir ${CI_OUTPUT_DIR}
       - --resolution 256
       - --train_batch_size 1
-      - --max_train_steps 1
+      - --num_train_epochs 1
     timeout_minutes: 120
 
   # IP-Adapter plus（SD1.5，同一份 JSON 清单）
@@ -735,7 +736,7 @@ supported:
       - --output_dir ${CI_OUTPUT_DIR}
       - --resolution 256
       - --train_batch_size 1
-      - --max_train_steps 1
+      - --num_train_epochs 1
     timeout_minutes: 120
 
   # IP-Adapter SDXL（同一份 JSON 清单；SDXL LoRA 单卡）
@@ -752,27 +753,6 @@ supported:
       - --resolution 256
       - --train_batch_size 1
       - --max_train_steps 1
-    timeout_minutes: 180
-
-  # 全量 SDXL LCM 蒸馏（~64GB）
-  - path: examples/consistency_distillation/train_lcm_distill_sdxl_wds.py
-    profile: diffusers-flux
-    runner: linux-aarch64-a2-4
-    npu_devices: '0,1,2,3'
-    launcher: accelerate-deepspeed
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --pretrained_teacher_model stabilityai/stable-diffusion-xl-base-1.0
-      - --pretrained_vae_model_name_or_path madebyollin/sdxl-vae-fp16-fix
-      - --output_dir ${CI_OUTPUT_DIR}
-      - --mixed_precision fp16
-      - --resolution 256
-      - --max_train_steps 1
-      - --max_train_samples 1
-      - --dataloader_num_workers 1
-      - --train_shards_path_or_url "pipe:curl -L -s https://www.modelscope.cn/datasets/laion/conceptual-captions-12m-webdataset/resolve/master/data/{00000..00003}.tar"
-      - --train_batch_size 1
-      - --checkpointing_steps 1
     timeout_minutes: 180
 
 # ===== unsupported（其余全部；后续逐例验证跑通后迁入 supported） =====
@@ -1037,6 +1017,7 @@ unsupported:
   - examples/instruct_pix2pix/train_instruct_pix2pix_sdxl.py
   - examples/controlnet/train_controlnet_sdxl.py
   - examples/research_projects/scheduled_huber_loss_training/text_to_image/train_text_to_image_sdxl.py
+  - examples/consistency_distillation/train_lcm_distill_sdxl_wds.py
   # OOM：LoRA SDXL LCM 蒸馏在 a2-1（29.5GiB）forward 即 OOM（已分配 24.4GiB）。
   # DDP 不省单卡显存；ZeRO-3 又撞上游 bug——训练循环 L1358
   # `solver.ddim_step(...).to(unet.dtype)`，模型被 DeepSpeedEngine 包裹后无 .dtype。

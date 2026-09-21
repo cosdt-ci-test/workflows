@@ -1,123 +1,138 @@
-# Quick Start (Ascend NPU)
+# FastChat 快速入门（Ascend NPU）
 
-在单卡昇腾 NPU 上用 FastChat 命令行（CLI）对 `Qwen/Qwen2.5-0.5B-Instruct` 做**非交互式**推理。
+在单张昇腾 NPU 上安装 FastChat，完成一次命令行对话，再通过 OpenAI 兼容接口调用同一个模型。
 
-> 单卡昇腾 NPU 上非交互式运行 FastChat CLI（`--device npu`），模型经 **ModelScope** 下载（`FASTCHAT_USE_MODELSCOPE=True`）。
+## 环境准备
 
-## 前置条件
+请先安装 CANN，以及与 CANN 匹配的 `torch` 和 `torch_npu`。安装方法见[昇腾环境快速安装指南](https://ascend.github.io/docs/sources/ascend/quick_install.html)和 [Ascend Extension for PyTorch](https://gitcode.com/Ascend/pytorch)。
 
-### 硬件
-
-Atlas 900 A2 单卡（Ascend NPU），并按需完成物理机或容器内的设备挂载。
-
-### 基础软件
-
-在跑本文档**之前**，你的机器上需要已经装好并可用：
-
-- 可用的 Python 环境
-- 可用的 CANN（参考[快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html)）
-- 与 CANN 匹配的 `torch` + `torch_npu`，且 `torch` 能正常 `import`、`torch.npu.is_available() == True`（参考 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch)，按 torch ↔ torch_npu ↔ CANN 三方兼容矩阵选择版本）
-
-按上游 README 的方式设置 CANN 环境变量：
-
-```shell
-source /usr/local/Ascend/ascend-toolkit/set_env.sh
-```
-
-### 本文档示例使用的版本
-
-**配套机器**：
-
-- **机器类型**：Atlas 900 A2 单卡
-- **操作系统**：Ubuntu 22.04
-
-**软件版本**：
+本文示例使用以下版本：
 
 | 组件 | 版本 |
 | --- | --- |
 | Python | 3.12 |
 | CANN | 9.1.0 |
-| torch | 2.9.0+cpu |
+| torch | 2.9.0 |
 | torch_npu | 2.9.0.post2 |
-| transformers | `>=4.31, <5` |
 | fschat | 0.2.36 |
-| 模型 | `Qwen/Qwen2.5-0.5B-Instruct`（经 ModelScope 下载） |
+| transformers | 4.57.6 |
+| modelscope | 1.37.0 |
+| fastapi | 0.141.1 |
+| uvicorn | 0.52.0 |
+| 模型 | [Qwen/Qwen2.5-0.5B-Instruct](https://modelscope.cn/models/Qwen/Qwen2.5-0.5B-Instruct)，约 1 GB |
 
-## 环境检查
+**检查 NPU 运行环境。** 确认 Python 和 PyTorch 版本正确，并且至少有一张 NPU 可用。
 
-检查 Python 版本：
+```shell #test id="check-runtime"
+python <<'PY'
+import sys
+import torch
+import torch_npu
 
-```shell #test id="check-py"
-python --version
+assert torch.npu.is_available()
+assert torch.npu.device_count() > 0
+print(f"Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")
+print("torch", torch.__version__)
+print("torch_npu", torch_npu.__version__)
+print("NPU available:", torch.npu.is_available())
+print("NPU count:", torch.npu.device_count())
+PY
 ```
 
-输出结果如下：
-
-```shell #test-result id="check-py" fuzzy='xxx'
+```shell #test-result id="check-runtime" fuzzy='xxx'
 Python 3.12.xxx
+torch 2.9.0+cpu
+torch_npu 2.9.0.post2
+NPU available: True
+NPU count: xxx
 ```
 
-检查 torch / torch_npu 是否装好且 NPU 设备可用：
+## 安装 FastChat
 
-```shell #test id="check-torch"
-python -c "import torch, torch_npu; print('torch=', torch.__version__); print('torch_npu=', torch_npu.__version__); print('is_available:', torch.npu.is_available()); print('count:', torch.npu.device_count())"
+**安装运行模型与 API 服务所需的包。** PyPI 包名是 `fschat`，导入名是 `fastchat`。
+
+```shell #test id="install-fastchat"
+python -m pip install "fschat[model_worker]==0.2.36" "transformers==4.57.6" "modelscope==1.37.0" "fastapi==0.141.1" "uvicorn==0.52.0"
+python -c "import fastapi, fastchat, modelscope, transformers, uvicorn; print('fastchat', fastchat.__version__); print('transformers', transformers.__version__); print('modelscope', modelscope.__version__); print('fastapi', fastapi.__version__); print('uvicorn', uvicorn.__version__)"
 ```
 
-输出结果如下：
-
-```shell #test-result id="check-torch"
-torch= 2.9.0+cpu
-torch_npu= 2.9.0.post2
-is_available: True
-count: 1
-```
-
-> 如果 `import torch_npu` 失败，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查 torch / torch_npu / CANN 三方兼容矩阵。
-
-## 安装 fschat
-
-```shell #test id="install-fschat"
-python -m pip install "fschat[model_worker]" "transformers<5" modelscope
-python -c "import fastchat, transformers, modelscope; print('fastchat', fastchat.__version__); print('transformers', transformers.__version__); print('modelscope', modelscope.__version__)"
-```
-
-输出结果如下（安装日志较长，此处仅展示最后的版本验证输出）：
-
-```shell #test-result id="install-fschat" fuzzy='xxx' fuzzy='...'
-...fastchat 0.2.36
-transformers xxx
-modelscope xxx
+```shell #test-result id="install-fastchat" fuzzy='...'
 ...
+fastchat 0.2.36
+transformers 4.57.6
+modelscope 1.37.0
+fastapi 0.141.1
+uvicorn 0.52.0
 ```
 
-> - PyPI 发行名为 `fschat`，安装后的 Python 模块目录为 `fastchat`。
-> - `transformers<5`：fschat 0.2.36 与 transformers 5.x 的 API 不兼容，固定在 4.x 最新版。
-> - `modelscope`：使用 `FASTCHAT_USE_MODELSCOPE=True` 下载模型时必需；FastChat 未将其声明为依赖，需显式安装。
-> - 其余依赖已随 `fschat[model_worker]` 一并解析安装。
+## 命令行对话
 
-## 非交互式命令行推理（单卡 NPU）
-
-用管道把预设输入喂给 CLI，`--style programmatic` 会按 `[!OP:user]: ...` / `[!OP:assistant]: ...` 格式打印每一轮消息；第二条 `__END_OF_A_MESSAGE_47582648__` 让 CLI 自动退出，整个命令**无需任何人工交互**即可跑完：
+**运行一轮命令行对话。** 模型首次运行时会自动下载到 ModelScope 默认缓存，回答完成后以空行退出。
 
 ```shell #test id="cli-chat"
-printf '你好\n __END_OF_A_MESSAGE_47582648__\n __END_OF_A_MESSAGE_47582648__\n' | \
-    FASTCHAT_USE_MODELSCOPE=True \
-    python -m fastchat.serve.cli \
-        --model-path Qwen/Qwen2.5-0.5B-Instruct \
-        --revision master \
-        --device npu \
-        --style programmatic \
-        --max-new-tokens 128
+printf '你好\n\n' | FASTCHAT_USE_MODELSCOPE=True \
+  python -m fastchat.serve.cli \
+  --model-path Qwen/Qwen2.5-0.5B-Instruct \
+  --revision master \
+  --device npu \
+  --max-new-tokens 64
 ```
 
-输出结果如下（ProgrammaticChatIO 输出格式；qwen 模板的角色名自带 `<|im_start|>` 标记，`xxx` 为模型回复内容）：
-
-```shell #test-result id="cli-chat" fuzzy='xxx' fuzzy='...'
-...[!OP:<|im_start|>user]: 你好
-...[!OP:<|im_start|>assistant]: xxx...
+```shell #test-result id="cli-chat" fuzzy='...' fuzzy='xxx'
+...你好...
+...xxx...
 ```
 
-> - `FASTCHAT_USE_MODELSCOPE=True`：从 ModelScope 下载模型权重，而不是 HuggingFace Hub；首次运行会下载模型，请耐心等待。
-> - `--revision master`：ModelScope 仓库的默认分支是 `master`，而 FastChat 的 `--revision` 默认值沿用 HuggingFace 惯例的 `main`，需显式指定才能命中 ModelScope 分支。
-> - `--device npu`：使用昇腾 NPU 加速（单卡）。
-> - `--style programmatic`：非交互式输出格式，配合管道输入使用，适合自动化脚本与 CI 验证。
+## OpenAI 兼容 API
+
+FastChat 用 controller 管理 model worker，并通过 API server 提供 OpenAI 兼容接口。
+
+**在第一个终端启动 controller。** controller 负责注册和调度 model worker。
+
+```shell #test-setup id="start-controller"
+python -m fastchat.serve.controller
+```
+
+**在第二个终端启动 model worker。** worker 在 NPU 上加载模型，并以 `Qwen2.5-0.5B-Instruct` 为服务名注册到 controller。
+
+```shell #test-setup id="start-worker"
+FASTCHAT_USE_MODELSCOPE=True python -m fastchat.serve.model_worker \
+  --model-path Qwen/Qwen2.5-0.5B-Instruct \
+  --model-names Qwen2.5-0.5B-Instruct \
+  --revision master \
+  --device npu
+```
+
+**在第三个终端启动 API server。** 服务在 `http://127.0.0.1:8000/v1` 提供 OpenAI 兼容接口。
+
+```shell #test-setup id="start-api"
+python -m fastchat.serve.openai_api_server \
+  --host 127.0.0.1 \
+  --port 8000
+```
+
+**在第四个终端检查模型服务。** model worker 加载完成后，通过 `/v1/models` 查看已经注册的模型。
+
+```shell #test id="check-model"
+curl -fsS http://127.0.0.1:8000/v1/models | python -c "import json, sys; data=json.load(sys.stdin); print('model:', data['data'][0]['id'])"
+```
+
+```shell #test-result id="check-model"
+model: Qwen2.5-0.5B-Instruct
+```
+
+**发送一次对话请求。** 调用 OpenAI 兼容的 Chat Completions 接口并打印模型回复。
+
+```shell #test id="api-chat"
+curl -fsS http://127.0.0.1:8000/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"Qwen2.5-0.5B-Instruct","messages":[{"role":"user","content":"你好"}],"max_tokens":64,"temperature":0}' \
+  | python -c "import json, sys; data=json.load(sys.stdin); reply=data['choices'][0]['message']['content'].strip(); assert reply; print('model:', data['model']); print('reply:', reply)"
+```
+
+```shell #test-result id="api-chat" fuzzy='xxx'
+model: Qwen2.5-0.5B-Instruct
+reply: xxx
+```
+
+更多 Web UI、多 worker 和评测用法见 [FastChat 官方文档](https://github.com/lm-sys/FastChat)。

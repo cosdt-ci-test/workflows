@@ -344,37 +344,205 @@ supported:
       - device=npu
     timeout_minutes: 60
 
+  # LoRA SFT distributed：Qwen2.5-0.5B + alpaca fixture
+  # 复用 upstream qwen2_5/0.5B_lora_single_device.yaml，overlay 强制
+  # dp-shard_dim/replicate_dim 全 1 走 1-rank FSDP；同 full_finetune_distributed
+  # 用同套 ParallelDims 退化模板。FSDP 入口 `init_process_group(self.distributed_backend)`
+  # 拿 "hccl"（torch_npu 2.11.0 在 registry.py:34-43 注册 "npu"→"hccl"）。
+  # coder npu-3 跑通：exit 0, Loss=2.9031 (step 1/1), 模型权重已存到 ${CI_OUTPUT_DIR}。
+  - path: recipes/lora_finetune_distributed.py
+    profile: torchtune
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --config recipes/configs/qwen2_5/0.5B_lora_single_device.yaml
+      - tokenizer.path=${TT_MODEL_PATH}/vocab.json
+      - tokenizer.merges_file=${TT_MODEL_PATH}/merges.txt
+      - checkpointer.checkpoint_dir=${TT_MODEL_PATH}
+      - checkpointer.output_dir=${CI_OUTPUT_DIR}
+      - dataset.source=json
+      - dataset.data_files=${TARGET_ROOT}/fixtures/ci_alpaca_50.json
+      - tensor_parallel_dim=1
+      - context_parallel_dim=1
+      - data_parallel_shard_dim=1
+      - data_parallel_replicate_dim=1
+      - enable_fp8_training=False
+      - gradient_accumulation_steps=1
+      - max_steps_per_epoch=1
+      - batch_size=1
+      - max_seq_len=512
+      - device=npu
+    timeout_minutes: 60
+
+  # 全量 DPO distributed：Qwen2.5-0.5B + 8 行 preference fixture
+  # 全参 DPO（非 LoRA），DPO loss 公式与 lora_dpo_distributed 同，但 model 是
+  # full-parameter qwen2_5_0_5b 走 FSDP；DPO recipe 多读一个 ref_checkpointer
+  # 单独 cfg（与 checkpointer 同指向，ref_policy=初始 policy 权重），上游
+  # 0.5B_full_single_device.yaml 没 lr_scheduler 段，overlay 注入 cosine warmup。
+  # coder npu-3 跑通：exit 0, Loss=0.6931 (= ln 2，DPO 期望初始熵下限)。
+  - path: recipes/full_dpo_distributed.py
+    profile: torchtune
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --config recipes/configs/qwen2_5/0.5B_full_single_device.yaml
+      - tokenizer.path=${TT_MODEL_PATH}/vocab.json
+      - tokenizer.merges_file=${TT_MODEL_PATH}/merges.txt
+      - checkpointer.checkpoint_dir=${TT_MODEL_PATH}
+      - checkpointer.output_dir=${CI_OUTPUT_DIR}
+      - ref_checkpointer._component_=torchtune.training.FullModelHFCheckpointer  # DPO recipe 必须独立 cfg（line 279 读 cfg.ref_checkpointer）
+      - ref_checkpointer.checkpoint_dir=${TT_MODEL_PATH}  # ref_policy = 初始 policy 权重
+      - ref_checkpointer.checkpoint_files=[model.safetensors]
+      - ref_checkpointer.recipe_checkpoint=null
+      - ref_checkpointer.output_dir=${CI_OUTPUT_DIR}
+      - ref_checkpointer.model_type=QWEN2
+      - lr_scheduler._component_=torchtune.training.lr_schedulers.get_cosine_schedule_with_warmup  # upstream 0.5B_full_single_device.yaml 没 lr_scheduler
+      - lr_scheduler.num_warmup_steps=100
+      - loss._component_=torchtune.rlhf.loss.DPOLoss
+      - dataset._component_=torchtune.datasets.preference_dataset  # 偏好数据 builder（chosen/rejected 消息列表）
+      - dataset.source=json
+      - dataset.data_files=${TARGET_ROOT}/fixtures/ci_preference_conv_8.jsonl
+      - tensor_parallel_dim=1
+      - context_parallel_dim=1
+      - data_parallel_shard_dim=1
+      - data_parallel_replicate_dim=1
+      - enable_fp8_training=False
+      - gradient_accumulation_steps=1
+      - max_steps_per_epoch=1
+      - batch_size=1
+      - max_seq_len=512
+      - device=npu
+    timeout_minutes: 60
+
+  # 知识蒸馏 distributed：Qwen2.5-0.5B student + Qwen2.5-1.5B teacher
+  # KD recipe 的 distributed 入口是
+  # `is_distributed()` guard + `StatefulDistributedSampler(num_replicas=self.world_size)`
+  # （recipes/knowledge_distillation_distributed.py:914），不走 init_process_group
+  # 不走 ParallelDims.build_mesh，所以世界大小通过 MASTER_* env + is_distributed()
+  # 单一来源控制。teacher 仍走 FullModelHFCheckpointer 单独 cfg。Qwen2.5-0.5B
+  # student hidden=896 / Qwen2.5-1.5B teacher hidden=1536，KD loss 用 KL 散度
+  # 对齐 token-level logits（linear_cross_entropy wrapper 兼容）。
+  # coder npu-3 跑通：exit 0, Loss=2.94。
+  - path: recipes/knowledge_distillation_distributed.py
+    profile: torchtune
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --config recipes/configs/qwen2/1.5_to_0.5B_KD_lora_single_device.yaml  # upstream qwen2 KD yaml，overlay 改 qwen2→qwen2_5
+      - tokenizer.path=${TT_MODEL_PATH}/vocab.json
+      - tokenizer.merges_file=${TT_MODEL_PATH}/merges.txt
+      - checkpointer.checkpoint_dir=${TT_MODEL_PATH}  # student
+      - checkpointer.output_dir=${CI_OUTPUT_DIR}
+      - model._component_=torchtune.models.qwen2_5.lora_qwen2_5_0_5b
+      - teacher_model._component_=torchtune.models.qwen2_5.qwen2_5_1_5b_instruct
+      - teacher_checkpointer.checkpoint_dir=${TT_TEACHER_PATH}
+      - teacher_checkpointer.output_dir=${CI_OUTPUT_DIR}
+      - dataset.source=json
+      - dataset.data_files=${TARGET_ROOT}/fixtures/ci_alpaca_50.json
+      - max_steps_per_epoch=1
+      - gradient_accumulation_steps=1
+      - batch_size=1
+      - device=npu
+    timeout_minutes: 60
+
+  # 全量 QAT distributed：Qwen2.5-0.5B + Int8DynActInt4WeightQATQuantizer
+  # 与 quantize.py 区别：QAT 在训练时插入 fake-quant 模块（quantizer.prepare(model)
+  # 走 torchao 的 IntxFakeQuantizeConfig），训练完再 quantize_ 才是真量化。
+  # recipe 入口 init_process_group(self.distributed_backend) 拿 "hccl"
+  # （torch_npu 2.11.0 在 registry.py:34-43 注册 "npu"→"hccl"）。overlay 关掉
+  # bitsandbytes.PagedAdamW（CI 镜像不装 bnb）换 torch.optim.AdamW，optim_in_bwd
+  # 走 False（gradient_accumulation_steps=1 但仍会撞 PagedAdamW-only 路径），
+  # 关 enable_activation_checkpointing（0.5B 没必要，AC + QAT offload 一起会撞
+  # 别的 NPU 问题）。qat_distributed.py:602 quantizer_cfg param 与
+  # qat_lora_finetune_distributed.py:478 同源，但后者还要走 QATLoRALinear
+  # （见 unsupported 段那条）。quantizer.groupsize=128 原因同 quantize.py：
+  # Qwen2.5-0.5B hidden=896，896/128=7 整除。
+  # coder npu-3 跑通：exit 0, 4 步 loss 3.45→7.54, FSDP+1-rank mesh。
+  - path: recipes/qat_distributed.py
+    profile: torchtune
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --config recipes/configs/qwen2_5/1.5B_qat_single_device.yaml  # upstream QAT full yaml（qwen2_5 family 没有 0.5B QAT yaml，overlay 替换 model._component_）
+      - model._component_=torchtune.models.qwen2_5.qwen2_5_0_5b
+      - tokenizer.path=${TT_MODEL_PATH}/vocab.json
+      - tokenizer.merges_file=${TT_MODEL_PATH}/merges.txt
+      - checkpointer.checkpoint_dir=${TT_MODEL_PATH}
+      - checkpointer.output_dir=${CI_OUTPUT_DIR}
+      - dataset.source=json
+      - dataset.data_files=${TARGET_ROOT}/fixtures/ci_alpaca_50.json
+      - tensor_parallel_dim=1
+      - context_parallel_dim=1
+      - data_parallel_shard_dim=1
+      - data_parallel_replicate_dim=1
+      - enable_fp8_training=False
+      - optimizer._component_=torch.optim.AdamW  # upstream 默认 bitsandbytes.optim.PagedAdamW；CI 镜像不装 bnb
+      - optimizer.lr=1e-4
+      - optimizer_in_bwd=False
+      - enable_activation_checkpointing=False
+      - quantizer.groupsize=128  # 896/128=7；256 不整除触发 choose_qparams_affine AssertionError
+      - gradient_accumulation_steps=1
+      - max_steps_per_epoch=1
+      - batch_size=1
+      - device=npu
+    timeout_minutes: 60
+
 # ===== unsupported（每条附标签：runtime-verified / inferred / files-only） =====
 unsupported:
-  # ===== inferred: NCCL backend 通过 cfg.device=cuda 落到 init_process_group =====
-  # 5 个 distributed recipes 都通过 `init_process_group(self.distributed_backend)`
-  # 拿 backend；`distributed_backend = training.get_distributed_backend(device_type)`
-  # 读 `torch.distributed.Backend.default_device_backend_map[device_type]`。当
-  # cfg.device 留 upstream 默认值（cuda / cuda + cpu:gloo）时返回 "nccl" /
-  # "cuda:nccl,cpu:gloo"，torch_npu wheel 没 NCCL，c10d 直接
-  # `RuntimeError: Distributed package doesn't have NCCL built in`
-  # （在 torch_npu/distributed/distributed_c10d.py:_patched_new_process_group_helper
-  # 抛）。本周期没单独 coder 跑这 5 条 recipe 端到端验证 — 注释标"inferred"
-  # 而非 "runtime-verified"，因为策略是不许基于"已翻案同模板"推断翻案。
-  # 行号核对自 torchtune main HEAD bd2a0fc（2026-09-21 重新 grep）。
-  # 翻案路径参考 supported 段：cfg.device=npu → map 拿 "hccl" → init OK，
-  # 配套 MASTER_ADDR/PORT/RANK/WORLD_SIZE/LOCAL_RANK env 喂
-  # is_distributed() 守卫（distributed recipes 入口）。
-  - recipes/lora_finetune_distributed.py          # inferred: lora_finetune_distributed.py:151 `init_process_group(self.distributed_backend)`
-  - recipes/full_dpo_distributed.py                # inferred: full_dpo_distributed.py:156 `init_process_group(self.distributed_backend)`
-  - recipes/qat_distributed.py                     # inferred: qat_distributed.py:160 `init_process_group(self.distributed_backend)`
-  - recipes/qat_lora_finetune_distributed.py       # inferred: qat_lora_finetune_distributed.py:159 `init_process_group(self.distributed_backend)`
-  - recipes/knowledge_distillation_distributed.py  # inferred: knowledge_distillation_distributed.py:127 `init_process_group(self.distributed_backend)`
+  # ===== runtime-verified: cross-component ABI gap =====
+  # 2026-09-21 在 coder hdc-stable-npu-3 实跑，QATLoRALinear.__init__ 在
+  # lora.py:231 的 isinstance assert 必崩：
+  #     assert isinstance(activation_qat_config, FakeQuantizeConfig)
+  #     AssertionError
+  # 根因（torchao ABI）：torchtune main HEAD bd2a0fc 的
+  # torchtune/modules/peft/lora.py:222
+  #     from torchao.quantization.qat.api import FakeQuantizeConfig
+  # 期望 Int8DynActInt4WeightQATQuantizer.get_activation_fake_quantize_config()
+  # 返回 `api.FakeQuantizeConfig` 的实例。但 torchao 0.12+ 把返回值改成
+  # `IntxFakeQuantizeConfig`（位于 fake_quantize_config 模块），其 MRO
+  # 只有 `IntxFakeQuantizeConfig → FakeQuantizeConfigBase → ABC → object`，
+  # 并不继承 `api.FakeQuantizeConfig`，assert 必挂。
+  # pin 范围无解（与 torchtune main HEAD + torch 2.11 ABI 兼容的版本）：
+  #   - torchao 0.11.0: api.FakeQuantizeConfig ✓ — 但缺 NF4Tensor，
+  #     `torchtune/modules/common_utils.py:19` `from torchao.quantization
+  #     import NF4Tensor` ImportError，整个 torchtune 加载链断
+  #   - torchao 0.12.0: 报 `from torch._inductor.kernel.flex_attention import`
+  #     ModuleNotFoundError（torch 2.11 还没有 `kernel.flex_attention` 子模块）
+  #   - torchao 0.13.0/0.14.0/0.15.0/0.18.0: NF4Tensor 在；assert 必挂
+  # （per memory `torchao-nf4tensor-api-breaks.md`：0.13 dtypes.nf4tensor /
+  # 0.15 Int4Tensor / 0.18 quantization.NF4Tensor —— 唯独 0.18 在
+  # torchao.quantization 暴露 NF4Tensor，是 main HEAD 唯一能 import 的版
+  # 本，但 QAT 返回类型已经分裂）
+  # qat_distributed.py 用同 Int8DynActInt4WeightQATQuantizer 但不走
+  # QATLoRALinear（qat_distributed.py:677 是 `quantizer.prepare(model)` 不调
+  # swap_lora_linear_with_qat），端到端 4 步 exit 0（loss 3.45→7.54）—
+  # 详见 supported 段那条。
+  - recipes/qat_lora_finetune_distributed.py       # runtime-verified: AssertionError at torchtune/modules/peft/lora.py:231 (torchao 0.18 IntxFakeQuantizeConfig not subclass of api.FakeQuantizeConfig)
 
   # ===== files-only 排除项（不是 recipe 入口） =====
   # 扫描引擎对账单位是入口文件 .py。这些条目不是 recipe 入口，列出是为了
   # 显式声明 examples 引擎会落到 unsupported（其扫描后缀与本仓 examples
   # 树里几乎不出现，仅作声明）：
   #   - __init__.py: torchtune.recipes 包初始化
-  #   - configs/: upstream 公开的 recipe config 树（被 --config 引用）
-  #   - dev/: 维护者工具脚本（不出现在用户路径）
-  #   - full_finetune_multinode.slurm: SLURM 启动器，不是 recipe
+  #   - configs/: upstream 公开的 recipe config 树（被 --config 引用，.yaml 后缀未被扫描命中）
+  #   - dev/: 维护者工具脚本（不在用户路径上，扫描会命中 .py 文件故下面逐文件列出）
+  #   - full_finetune_multinode.slurm: SLURM 启动器，不是 recipe（.slurm 后缀未被扫描命中）
   - recipes/__init__.py
-  - recipes/configs/
-  - recipes/dev/
-  - recipes/full_finetune_multinode.slurm
+
+  # ===== dev/ 维护者工具脚本（不在用户路径上，扫描会命中 .py 文件故列出） =====
+  # 2026-09-21 meta-pytorch/torchtune main HEAD 才有 recipes/dev/ 子树（meta
+  # 迁库后才出现，pytorch/torchtune 老 HEAD 没这个目录）。全部归到 unsupported：
+  # 这些不是用户路径上的 recipe，是维护者实验脚本（CIs/maintainer 调，本仓 CI
+  # 不跑）。具体清单：
+  #   - async_grpo_full_finetune_distributed.py: GRPO async variant of full_finetune_distributed
+  #   - early_exit_finetune_distributed.py: 提前退出分支实验
+  #   - generate_v2.py / generate_v2_distributed.py: 新版 generate，HF generate API 替代
+  #   - grpo_full_finetune_distributed.py: GRPO 单卡/多卡实验
+  #   - lora_finetune_distributed_multi_dataset.py: 多数据集拼接 LoRA 实验
+  - recipes/dev/async_grpo_full_finetune_distributed.py
+  - recipes/dev/early_exit_finetune_distributed.py
+  - recipes/dev/generate_v2.py
+  - recipes/dev/generate_v2_distributed.py
+  - recipes/dev/grpo_full_finetune_distributed.py
+  - recipes/dev/lora_finetune_distributed_multi_dataset.py
+  - recipes/qat_single_device.py  # 单设备版 qat_distributed：和 qat_lora 同源 torchao ABI 阻断；但走 `quantizer.prepare(model)` 不是 QATLoRALinear，理论上能跑 — 没在本周期单跑，留待后续单独跑通后再翻案

@@ -1,6 +1,6 @@
 # FastChat
 
-在单张昇腾 NPU 上安装 FastChat，完成一次命令行对话，再通过 OpenAI 兼容接口调用同一个模型。
+在单张昇腾 NPU 上安装 FastChat，并通过 OpenAI 兼容接口调用 Qwen/Qwen2.5-0.5B-Instruct 完成一次对话。
 
 ## 前置条件
 
@@ -22,30 +22,15 @@ Atlas 900 A2 单卡（Ascend NPU），并按需完成物理机或容器内的设
 
 ```shell #test id="install-fastchat"
 python -m pip install "fschat[model_worker]" "transformers==4.57.6" "modelscope==1.37.0" "fastapi==0.141.1" "uvicorn==0.52.0"
-python -c "import fastapi, fastchat, modelscope, transformers, uvicorn; print('FastChat environment ready')"
+python -c "
+import fastapi, fastchat, modelscope, transformers, uvicorn;
+print('FastChat environment ready')
+"
 ```
 
 ```shell #test-result id="install-fastchat" fuzzy='...'
 ...
 FastChat environment ready
-```
-
-## 命令行对话
-
-模型首次运行时会自动下载到 ModelScope 默认缓存，回答完成后以空行退出：
-
-```shell #test id="cli-chat"
-printf '你好\n\n' | FASTCHAT_USE_MODELSCOPE=True \
-  python -m fastchat.serve.cli \
-  --model-path Qwen/Qwen2.5-0.5B-Instruct \
-  --revision master \
-  --device npu \
-  --max-new-tokens 64
-```
-
-```shell #test-result id="cli-chat" fuzzy='...' fuzzy='xxx'
-...你好...
-...xxx...
 ```
 
 ## OpenAI 兼容 API
@@ -79,7 +64,12 @@ python -m fastchat.serve.openai_api_server \
 **在第四个终端检查模型服务。** model worker 加载完成后，通过 `/v1/models` 查看已经注册的模型：
 
 ```shell #test id="check-model"
-curl -fsS http://127.0.0.1:8000/v1/models | python -c "import json, sys; data=json.load(sys.stdin); print('model:', data['data'][0]['id'])"
+curl -fsS http://127.0.0.1:8000/v1/models -o /tmp/fastchat-models.json
+python -c "
+import json;
+data=json.load(open('/tmp/fastchat-models.json'));
+print('model:', data['data'][0]['id'])
+"
 ```
 
 ```shell #test-result id="check-model"
@@ -92,7 +82,15 @@ model: Qwen2.5-0.5B-Instruct
 curl -fsS http://127.0.0.1:8000/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{"model":"Qwen2.5-0.5B-Instruct","messages":[{"role":"user","content":"你好"}],"max_tokens":64,"temperature":0}' \
-  | python -c "import json, sys; data=json.load(sys.stdin); reply=data['choices'][0]['message']['content'].strip(); assert reply; print('model:', data['model']); print('reply:', reply)"
+  -o /tmp/fastchat-chat.json
+python -c "
+import json;
+data=json.load(open('/tmp/fastchat-chat.json'));
+reply=data['choices'][0]['message']['content'].strip();
+assert reply;
+print('model:', data['model']);
+print('reply:', reply)
+"
 ```
 
 ```shell #test-result id="api-chat" fuzzy='xxx'

@@ -210,6 +210,22 @@ def _fp16_neutral_init(self, *args, **kwargs):
 
 
 _tf.TrainingArguments.__init__ = _fp16_neutral_init
+
+# wandb neutralizer: boft_dreambooth hardcodes wandb_init
+# mode="online" and --report_to wandb; force mode="disabled" so
+# wandb.init becomes wandb's own no-op run without an API key.
+try:
+    import wandb as _wandb
+
+    _real_wandb_init = _wandb.init
+
+    def _init_disabled(*args, **kwargs):
+        kwargs["mode"] = "disabled"
+        return _real_wandb_init(*args, **kwargs)
+
+    _wandb.init = _init_disabled
+except Exception:
+    pass
 PY
   export PYTHONPATH="$shim_dir:${PYTHONPATH:-}"
 }

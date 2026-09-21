@@ -1,12 +1,10 @@
 version: 1
 scan:
   root: examples
-  include_extensions: ['.sh', '.py']  # 仅 .sh/.py；peft/examples 下的所有 .yaml 都是 accelerate/deepspeed/fsdp 运行配置，非 training recipe，不纳入审计
+  include_extensions: ['.sh', '.py']  
+  # 仅 .sh/.py；peft/examples 下的所有 .yaml 都是 accelerate/deepspeed/fsdp 运行配置，非 training recipe，不纳入审计
   # files-only 模型（docs/examples-guard-engine.md §2.7）。扫描范围是 examples/
-  # 下的 .sh/.py；所有被发现的文件必须在 supported[*].path 或 unsupported
-  # 列表里。不再使用 exclude 字段——所有"非 supported 但存在"的 .sh/.py
-  # 都归 unsupported(末尾的"非 example utility"子段)，与 audit_examples_manifest.py
-  # 的 listed_paths() 语义一致(它只 union supported + unsupported)。
+  # 下的 .sh/.py
 
 supported:
   # TRL SFTTrainer LoRA，1 卡 1 step
@@ -175,20 +173,6 @@ supported:
       - --output_dir ${CI_OUTPUT_DIR}
     timeout_minutes: 30
 
-  # ===== fp16 硬编码家族 ×6 + lora_ga 设备分支：coder npu-5 2026-09-18
-  # 逐条实跑 exit 0。此前判"翻案前置 patch"的两个坑现在由 CI shim 绕过
-  # （sitecustomize，见 run_example.sh 三号 patch 注释）：
-  # - TrainingArguments(fp16=True) 硬编码（gralora/lily/peanut/alora/dora/
-  #   road）：torch_npu amp.GradScaler 与 accelerate 1.15 fp16 链路不兼容
-  #   （Adam.step 拒收 grad_scaler kwarg）。shim 把 fp16 kwarg 强制 False；
-  #   全部 supported 条目无一依赖 fp16=True，全局中性化是 no-op。
-  # - lora_ga :178 `device = torch.device("cuda" if torch.cuda.is_available()
-  #   else "cpu")`：原判"落 CPU"是 coder 裸跑没挂 transfer_to_npu；CI shim 下
-  #   is_available()→True、.to()→npu，实测梯度估计 + 训练 + 落盘全通。
-  # gralora/lily/peanut/dora/road 用 ci_text_8_hf（text 字段，train+test 双
-  # split 是脚本硬需求）；alora 用新 fixture ci_alpaca_train_test
-  # （input/output 字段 + 双 split，:149 直接 dataset["test"]） =====
-
   # GraLoRA：0.5B + ci_text_8_hf，npu-5 实跑 1 epoch exit 0（loss 2.37）
   - path: examples/gralora_finetuning/gralora_finetuning.py
     profile: peft
@@ -287,8 +271,7 @@ supported:
     timeout_minutes: 30
 
   # RoAD：同 dora 配方，**必须 a2-1 单卡**——:76 device_map="auto" 在 2 卡
-  # 会把模型切开（mat1 npu:1 vs npu:0 崩），单卡全部落 npu:0（npu-5 单卡
-  # 实测 exit 0，loss 2.37）
+  # 会把模型切开（mat1 npu:1 vs npu:0 崩），单卡全部落 npu:0
   - path: examples/road_finetuning/road_finetuning.py
     profile: peft
     runner: linux-aarch64-a2-1
@@ -338,10 +321,6 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
     timeout_minutes: 120
-
-  # ===== 2026-09-20 npu-1 第二批翻案 ×7（标准 CI 环境：sitecustomize 三
-  # patch shim + HF_ENDPOINT=hf-mirror + 0.5B/seed 资产；上一批"归因待
-  # 复跑"的 backward 崩与 evaluate/pin_memory 挂在标准环境下全部证伪） =====
 
   # MonteCLoRA 序列分类：原判 evaluate.load("glue","mrpc") import 时挂
   # （:33）——那是 npu-3 裸跑离线环境；CI 环境下 evaluate metric 走
@@ -394,7 +373,6 @@ supported:
     timeout_minutes: 30
 
   # UniLoRA：同 kasa 配方（原 backward 崩同为环境假象），npu-1 5 步 exit 0
-  # （loss 3.31）
   - path: examples/unilora_finetuning/unilora_finetuning.py
     profile: peft
     runner: linux-aarch64-a2-1
@@ -458,7 +436,7 @@ supported:
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     timeout_minutes: 30
 
-  # MiSS：Qwen2.5-0.5B + imdb 1%（trl 1.12 需 --loss_type nll 绕开 chunked_nll patch）
+  # MiSS：Qwen2.5-0.5B + imdb 1%
   - path: examples/miss_finetuning/miss_finetuning.py
     profile: peft
     runner: linux-aarch64-a2-1
@@ -514,10 +492,6 @@ supported:
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
       - --num_epochs 1   # 默认 100：压到单 epoch
-    # argparse schema 不收 --model_name_or_path（model 靠 output_dir 含
-    # 'roberta-large' 选 roberta-large，否则硬编码 roberta-base）；roberta-base
-    # 走 setup cp plant 进 hub cache，从 HF 走 from_pretrained('roberta-base')
-    # 命中本地快照，不打 xet
     timeout_minutes: 45
 
   # Supertuning：Qwen2.5-0.5B + guanaco 完整 1 epoch（308 步 exit 0）
@@ -532,8 +506,7 @@ supported:
     timeout_minutes: 45
 
   # CorDA：Qwen2.5-0.5B + 走 --corda_mode False + --lora_r 8 退化普通 LoRA（避开
-  # preprocess.py SVD 产物 + 默认 MetaMathQA 10 万条），coder npu-3 2026-09-17
-  # 实跑 1 epoch 4.35s exit 0，adapter 落 ft/
+  # preprocess.py SVD 产物 + 默认 MetaMathQA 10 万条）
   - path: examples/corda_finetuning/corda_finetuning.py
     profile: peft
     runner: linux-aarch64-a2-1
@@ -637,7 +610,6 @@ supported:
   #   模型默认 google/vit-base-patch16-224-in21k —— ModelScope 均无镜像，走
   #   cache-seed/peft bundle 投递（见 cache-seed/README.md peft 节）。
   # test eval 全量 10000 samples/1250 steps 长跑 ≈15min 是脚本默认行为（无 max_eval_samples 参数）；
-  # 训练 + best eval 已经覆盖主要验证面，test eval 默认跑通但不开 overlay flag。
   - path: examples/adamss_finetuning/image_classification_adamss_asa.py
     profile: peft
     runner: linux-aarch64-a2-1
@@ -647,9 +619,6 @@ supported:
       - --num_epochs 1            # 默认 10：压训练
       - --batch_size 8            # 默认 32：910B4 单卡 32GB 够
       - --output_dir ${CI_OUTPUT_DIR}
-      # 不传 --cache_dir：coder 机的 /home/coder/.hdc/... 持久缓存路径在 CI 无意义；
-      # 数据文件命中 seed 的 hub cache（refs/main sha 对齐），arrow 处理走默认
-      # ~/.cache/huggingface/datasets（同 glue 例）。
     timeout_minutes: 30
 
   # PiSSA：Qwen2.5-0.5B + ci_alpaca_10 fixture + trl 1.12 NLL loss，
@@ -894,7 +863,7 @@ supported:
       - --cutoff_len 256
       - --val_set_size 1
       - --learning_rate 1e-4
-      - --dtype bfloat16   # 默认 float16 在 torch_npu 2.12 sparse backward 崩（见上）
+      - --dtype bfloat16   # 默认 float16 在 torch_npu 2.12 sparse backward 崩
       - --output_dir ${CI_OUTPUT_DIR}
       - --eval_step 100
       - --save_step 100
@@ -902,17 +871,15 @@ supported:
 
   # BOFT dreambooth：SD v1.5 + ci_dummy_image + BOFTConfig。与 hra_dreambooth
   # 同构（utils/args_loader.py + Accelerator），但 v0.21.0 脚本比 hra 少两处
-  # 修复（setup_peft_dreambooth 用 sed 补，幂等）：
-  # (1) :91 log_with=args.report_to → hra 的 "none"→None 映射——否则
-  #     --report_to none 被 accelerate 1.15 filter_trackers 直接
-  #     ValueError("Unsupported logging capability: none")；
-  # (2) :391 init_trackers(...init_kwargs=wandb_init) 无 guard → wandb 分支
-  #     外 UnboundLocalError——补 else: wandb_init = None。
+  # 修复，**零源码 patch 绕过**（2026-09-21 npu-2 实测定论）：
+  # - :391 init_trackers(...init_kwargs=wandb_init) 无 guard、wandb_init 只在
+  #   report_to=="wandb" 分支定义 → 走 --report_to wandb 让 wandb_init 有值；
+  # - wandb_init 硬编码 mode="online" 会要求登录 → run_example.sh 的
+  #   sitecustomize wandb neutralizer 把 wandb.init 强制 disabled（no-op run）。
   # overlay 关键：--use_boft 是 store_true 必须显式开；--wandb_run_name 必传
   # （adapter_name=None 会让 get_peft_model 崩 TypeError）；--validation_prompt
   # 必传（脚本 :88 无条件 args.validation_prompt[0]）。
-  # 2026-09-20 npu-1 单卡 2.12 实跑 10 步 exit 0（loss 0.0017-0.028，
-  # BOFT adapter 训练 + 落盘全通）。
+  # 2026-09-21 npu-2 单卡 2.12 零 patch 实跑 10 步 exit 0（loss 0.0376）。
   - path: examples/boft_dreambooth/train_dreambooth.py
     profile: peft_dreambooth
     runner: linux-aarch64-a2-1
@@ -927,7 +894,7 @@ supported:
       - --use_boft                                # store_true：不开就是裸 UNet 全参微调
       - --max_train_steps 10
       - --train_batch_size 1
-      - --report_to none
+      - --report_to wandb   # 零 patch 关键：wandb 分支定义 wandb_init，shim 中性化 login
       - --output_dir ${CI_OUTPUT_DIR}
       - --mixed_precision no
       - --resolution 256
@@ -940,8 +907,6 @@ supported:
   # （temp/data/FinancialPhraseBank-v1.0/，setup_peft 从仓内 fixture 放置）。
   # t5-base 由 cache-seed plant（ms_id: AI-ModelScope/t5-base → hf_id:
   # t5-base，裸 id 走 hub cache 解析）。
-  # 2026-09-20 npu-1 单卡 2.12 实跑 1 epoch exit 0（train_ppl/eval_ppl/
-  # accuracy 全打印，adapter 落盘）。
   - path: examples/conditional_generation/peft_lora_seq2seq_accelerate_fsdp.py
     profile: peft
     runner: linux-aarch64-a2-1
@@ -952,15 +917,14 @@ supported:
   # + Abirate/english_quotes 数据 + fp16=True + OPT 专属 target_modules。
   # 无需 overlay/patch——模型由 cache-seed plant（AI-ModelScope/opt-350m →
   # facebook/opt-350m），数据走 hf-mirror 运行时下（2508 行小集）。
-  # 关键：本条目是唯一走 bnb 的 supported 例，run_example.sh 的
-  # SKIP_TRANSFER_TO_NPU 白名单（fp4_finetuning/ 目录）对它跳过
-  # transfer_to_npu——bnb 0.50.2 默认 CPU 后端在 NPU 上跑 4-bit NF4，
-  # 挂 transfer_to_npu 反而让 bnb 误走 cuda backend 崩。fp16=True 由
-  # fp16 neutralizer 中性化。
-  # 2026-09-21 npu-2 单卡 2.12 实跑 20 步 exit 0（4.9s/step，trainable
-  # 25M / all 205M，量化 uint8 权重）。
+  # 关键：本条目是唯一走 bnb 的 supported 例（profile peft_fp4 专装 bnb），
+  # run_example.sh 的 SKIP_TRANSFER_TO_NPU 白名单（fp4_finetuning/ 目录）
+  # 对它跳过 transfer_to_npu——bnb 0.50.2 默认 CPU 后端在 NPU 上跑 4-bit
+  # NF4，挂 transfer_to_npu 反而让 bnb 误走 cuda backend 崩。fp16=True 由
+  # fp16 neutralizer 中性化。bnb 不装全局 profile：diffusers 0.39 硬
+  # import bnb，dreambooth 条目挂 transfer_to_npu 时会连带崩。
   - path: examples/fp4_finetuning/finetune_fp4_opt_bnb_peft.py
-    profile: peft
+    profile: peft_fp4
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
     timeout_minutes: 30
@@ -970,8 +934,7 @@ unsupported:
   - examples/conditional_generation/peft_lora_seq2seq_accelerate_ds_zero3_offload.py
   - examples/orthogonal_subspace_learning/osf_continual_learning.py
 
-  # ===== bnb（bitsandbytes）量化族（fp4 已翻 supported，下方为剩余 8 条）
-  # 2026-09-21 npu-2 实测定论 =====
+  # ===== bnb（bitsandbytes）量化
   # bnb 0.50.2 的 4-bit NF4 与 8-bit int8 在 NPU 上**功能可用**：走默认
   # CPU 后端（权重 CPU 内核量化 + npu 矩阵乘），不挂 transfer_to_npu 时
   # QLoRA 4bit/8bit 训练、Linear8bitLt、int8_vectorwise_quant/dequant
@@ -1022,8 +985,7 @@ unsupported:
   - examples/cartridge_self_study/arxiv_train.py
 
 
-  # ===== 非 example 配套物（登记以便 files-only 扫描对账；均非 standalone 训练 recipe，进不了 supported）=====
-  # 2026-09-20 退役 scan.exclude 后，examples/ 下每个 .sh/.py 都须在 supported ∪ unsupported 登记；
+  # ===== 非 example 配套物=====
   # 以下是被训练脚本 import 的库模块 / 自测 / 预处理 / 推理·转换·合成工具，无 trainer.train() 训练闭环。
 
   # --- sft/train.py：run_peft*.sh 共同调用的实现（hfArgumentParser + SFTTrainer），入口是 .sh ---

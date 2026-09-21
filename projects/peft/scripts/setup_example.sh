@@ -201,11 +201,6 @@ setup_peft() {
   read -r _torch_ver _npu_ver <<< "$(torch_stack_for_profile "$PROFILE")"
   if [[ "$_torch_ver" == "2.12.0" ]]; then
     install_cpu_torchvision
-    # bitsandbytes (fp4_finetuning 例的 4-bit NF4)：bnb 0.50.2 走默认
-    # CPU 后端在 NPU 上跑，无需 NPU 专用 kernel；run_example.sh 对其
-    # 跳过 transfer_to_npu（见 SKIP_TRANSFER_TO_NPU）。2.9 栈不装——
-    # 仅 fp4 一条在 2.12 下用 bnb，2.9 的 4 条多卡 sft 不需要。
-    python -m pip install --index-url "$ALIYUN_PIP_INDEX" bitsandbytes
   fi
   # t5-base seq2seq FSDP 例（peft_lora_seq2seq_accelerate_fsdp.py）零 CLI，
   # 数据路径硬编码 cwd 相对 temp/data/FinancialPhraseBank-v1.0/ 下两个
@@ -274,57 +269,12 @@ setup_peft_dreambooth() {
   # git clone github.com/google/dreambooth（runner 网络不通 + 纯死代码，
   # 该路径只用于 clone 自身）；预先 mkdir 空目录即可绕过，无需 patch。
   setup_peft
-  echo "installing dreambooth stack (diffusers==0.39.0 + tensorboard, hub<1.0)"
-  python -m pip install "huggingface_hub<1.0" "diffusers==0.39.0" tensorboard
-  python -c "import diffusers, tensorboard; print('diffusers', diffusers.__version__)"
-  # boft_dreambooth/train_dreambooth.py 缺 hra 已有的两处修复（幂等 sed，
-  # 2026-09-20 npu-1 2.12 实测带 patch 10 步 exit 0）：
-  # (1) :91 log_with=args.report_to → hra 的 "none"→None 映射：否则
-  #     --report_to none 被 accelerate 1.15 filter_trackers 抛
-  #     ValueError("Unsupported logging capability: none")；
-  # (2) :391 init_trackers(...init_kwargs=wandb_init) 无 guard，wandb 分支外
-  #     UnboundLocalError：wandb_init 定义处补 else 分支。
-  python - "$TARGET_ROOT/examples/boft_dreambooth/train_dreambooth.py" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-src = path.read_text()
-patches = [
-    (
-        "        log_with=args.report_to,\n",
-        "        log_with=args.report_to if args.report_to != \"none\" else None,\n",
-    ),
-    (
-        """        wandb_init = {
-            "wandb": {
-                "name": args.wandb_run_name,
-                "mode": "online",
-            }
-        }
-""",
-        """        wandb_init = {
-            "wandb": {
-                "name": args.wandb_run_name,
-                "mode": "online",
-            }
-        }
-    else:
-        wandb_init = None
-""",
-    ),
-]
-for old, new in patches:
-    if new in src:
-        print("boft already patched (skip)", file=sys.stderr)
-        continue
-    if old not in src:
-        print("WARN: boft patch pattern not found (upstream may have fixed it)", file=sys.stderr)
-        continue
-    src = src.replace(old, new, 1)
-    print("boft patched", file=sys.stderr)
-path.write_text(src)
-PY
+  echo "installing dreambooth stack (diffusers==0.39.0 + tensorboard + wandb, hub<1.0)"
+  # wandb：boft_dreambooth 走 --report_to wandb（脚本 `import wandb` 硬性，
+  # wandb_init 只在 wandb 分支定义）；sitecustomize 的 wandb neutralizer
+  # 把 wandb.init 强制 disabled，无需 API key。
+  python -m pip install "huggingface_hub<1.0" "diffusers==0.39.0" tensorboard wandb
+  python -c "import diffusers, tensorboard, wandb; print('diffusers', diffusers.__version__)"
   mkdir -p "$TARGET_ROOT/data/dreambooth"
 
   # SD v1.5 由 cache-seed 投递（与 accelerate 共享同一缓存卷，2026-09-17
@@ -359,6 +309,18 @@ setup_peft_29() {
   # run_peft_qlora_fsdp.sh): identical deps to setup_peft, only the
   # torch stack differs (2.9.0 pair, see torch_stack_for_profile).
   setup_peft
+}
+
+setup_peft_fp4() {
+  # fp4_finetuning/finetune_fp4_opt_bnb_peft.py：唯一走 bnb 的条目。
+  # bnb 0.50.2 走默认 CPU 后端在 NPU 上跑 4-bit NF4（无需 NPU 专用
+  # kernel）；run_example.sh 对该目录跳过 transfer_to_npu（见
+  # SKIP_TRANSFER_TO_NPU）。bnb **不能**进全局 setup_peft：diffusers
+  # 0.39 的 quantizers/auto.py 硬 import bnb，而 dreambooth 条目挂
+  # transfer_to_npu 时 bnb 的 cuda backend 崩 torch._C.
+  # _cuda_getCurrentRawStream——装了 bnb 会把 6 条 dreambooth 全带崩。
+  setup_peft
+  python -m pip install --index-url "$ALIYUN_PIP_INDEX" bitsandbytes
 }
 
 setup_peft_ds() {

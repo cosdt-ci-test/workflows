@@ -252,14 +252,27 @@ case "$LAUNCH_PATH" in
     cd "$TARGET_ROOT"
     eval "$(resolve_capture)"
     rm -rf "outputs/${CAP_RUN_ID}"
-    start_mooncake
-    start_sglang_capture "$CAP_METHOD" "$CAP_AUX"
-    trap cleanup_services EXIT
-    ASCEND_RT_VISIBLE_DEVICES="${SPECFORGE_TRAINER_DEVICE:-1}" \
-    HCCL_CONNECT_TIMEOUT=7200 HCCL_EXEC_TIMEOUT=7200 \
-    PYTHONUNBUFFERED=1 \
-    PYTORCH_NPU_ALLOC_CONF=expandable_segments:True \
-      specforge train -c "$LAUNCH_PATH" "${EXTRA_ARGS[@]}"
+    if [[ "$LAUNCH_PATH" == *"/managed-local/"* ]]; then
+      # managed-local recipes: one `specforge train` owns the whole single-node
+      # stack (Mooncake master + capture server + producer + consumer via the
+      # launch_plan managed supervisor). No external services to start, and the
+      # supervisor assigns device ordinals from the recipe's managed_local
+      # block, so no ASCEND_RT_VISIBLE_DEVICES pin here either.
+      PYTHONUNBUFFERED=1 \
+      PYTORCH_NPU_ALLOC_CONF=expandable_segments:True \
+        specforge train -c "$LAUNCH_PATH" "${EXTRA_ARGS[@]}"
+    else
+      # external recipes: bring the Mooncake master + SGLang capture server up
+      # first, then run `specforge train` against them.
+      start_mooncake
+      start_sglang_capture "$CAP_METHOD" "$CAP_AUX"
+      trap cleanup_services EXIT
+      ASCEND_RT_VISIBLE_DEVICES="${SPECFORGE_TRAINER_DEVICE:-1}" \
+      HCCL_CONNECT_TIMEOUT=7200 HCCL_EXEC_TIMEOUT=7200 \
+      PYTHONUNBUFFERED=1 \
+      PYTORCH_NPU_ALLOC_CONF=expandable_segments:True \
+        specforge train -c "$LAUNCH_PATH" "${EXTRA_ARGS[@]}"
+    fi
     ;;
   *.sh)
     cd "$(dirname "$LAUNCH_PATH")"

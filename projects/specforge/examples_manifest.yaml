@@ -10,18 +10,6 @@ scan:
   include_extensions: ['.sh', '.py', '.yaml']
 
 supported:
-  # ===== 在 coder sglang-hdc（910B4×4，torch 2.10.0 + torch_npu 2.10.0 +
-  # CANN 9.0.0 + sglang 0.5.18）端到端验证通过；recipe 名称带 `-npu` 后缀，
-  # 其他 NPU recipe（dflash2 / domino / mtp）跑全 recipe 需要更多卡，
-  # 列入 unsupported =====
-  #
-  # 端到端 smoke 在 [Quick-start-Ascend.md](docs/Quick-start-Ascend.md) 已
-  # CI 绿（specforge-quick-start.yml 的 5 段 #test 块：smoke-download-model
-  # → smoke-apply-patches → smoke-start-mooncake → smoke-start-sglang →
-  # smoke-train-launch + smoke-train-monitor）。这里把它包成 single-step
-  # overlay 走 examples-template 引擎验证一遍，作为 examples 看护的最小
-  # 入口。overlay 的每条改动与 smoke 的命令行严格对齐——只是把 smoke 那
-  # 段 shell 的整段命令搬到 overlay_args 里（不需要再写 helper shell）。
   - path: examples/configs/online/disaggregated/external/qwen3.5-4b-dflash-online-npu.yaml
     profile: specforge
     runner: linux-aarch64-a2-4                # 4 卡 runner：capture 卡 0、trainer 卡 1，卡 2/3 留给 HCCL buffer
@@ -35,11 +23,6 @@ supported:
       # 序列长度从 recipe 默认 3072 压到 512：smoke 的样本本来就只是 1 条 sharegpt 对话，
       # 3072 会让 attention logits 的 H 维度白算，对 1 步训练没意义；512 是实际样本 token 长度的上限。
       - data.max_length=512
-      # 注入 fixture 路径：recipe 默认指向 ./cache/dataset/train_regen.jsonl，
-      # 那是 scripts/regenerate_train_data.py 的产物（需要先拉 sharegpt 再用
-      # qwen3-8b / qwen3.6-27b 重新生成，单这一项就要 1-2 小时 + 1 张卡跑推理）。
-      # smoke 的数据从 setup_example.sh 写一份 sharegpt_train.jsonl 1 行 fixture
-      # 进 ${FIXTURE_DIR}，这里把它覆到 recipe 字段。
       - data.train_data_path=${FIXTURE_DIR}/sharegpt_train.jsonl
       # 锚点数压到 32：recipe 默认 num_anchors=512 是按 3.5-4B 训练稳定度调的；
       # 1 步训练不会触发 dflash 的 loss_decay 累积，32 个 anchor 已经够
@@ -48,7 +31,6 @@ supported:
       # 关掉周期保存：recipe 默认 save_interval=10000，1 步训练根本到不了，
       # 关掉避免 save 路径空跑检查 + 不在 CI 输出目录堆无用 checkpoint。
       - training.save_interval=0
-      # 日志每步打：recipe 默认 log_interval=50，1 步训练要看到 marker 必须降到 1。
       - training.log_interval=1
       # 关掉 tensorboard 上报：recipe 默认 report_to=tensorboard，未配 TB 路径时会
       # 在 writer.flush() 抛 Warning 阻塞训练；CI 不需要 TB，直接 none。
@@ -220,46 +202,59 @@ supported:
       - model.target_model_path=${SPECFORGE_MODEL_PATH}
     timeout_minutes: 180
 
-# ===== unsupported =====
-unsupported:
-  - examples/configs/offline/colocated/deepseek-v3-671b-eagle3-offline.yaml         
-  - examples/configs/offline/colocated/ling-flash-2.0-eagle3-offline.yaml            
-  - examples/configs/offline/colocated/llama3.1-8b-eagle3-offline.yaml               
-  - examples/configs/offline/colocated/qwen2.5-7b-eagle3-offline.yaml                
-  - examples/configs/offline/colocated/qwen3-coder-480b-a35b-eagle3-offline.yaml     
-  - examples/configs/offline/colocated/qwen3.5-35b-a3b-eagle3-offline.yaml           
-  - examples/configs/offline/disaggregated/qwen2.5-7b-eagle3-offline-disaggregated.yaml  
-  - examples/configs/offline/disaggregated/qwen3-8b-eagle3-offline-disaggregated.yaml     
-  - examples/configs/online/disaggregated/external/deepseek-v3-671b-eagle3-online.yaml    
-  - examples/configs/online/disaggregated/external/gpt-oss-120b-eagle3-online.yaml        
-  - examples/configs/online/disaggregated/external/gpt-oss-20b-eagle3-online.yaml          
-  - examples/configs/online/disaggregated/external/llama3.1-8b-eagle3-online.yaml           
-  - examples/configs/online/disaggregated/external/llama3.3-70b-eagle3-online.yaml          
-  - examples/configs/online/disaggregated/external/llama4-scout-17b-16e-eagle3-online.yaml  
-  - examples/configs/online/disaggregated/external/qwen3-235b-a22b-eagle3-online.yaml      
-  - examples/configs/online/disaggregated/external/qwen3-30b-a3b-eagle3-online.yaml       
-  - examples/configs/online/disaggregated/external/qwen3-30b-a3b-eagle3.1-online.yaml      
-  - examples/configs/online/disaggregated/external/qwen3-32b-eagle3-online.yaml            
-  - examples/configs/online/disaggregated/external/qwen3-8b-dflash-disaggregated.yaml       
-  - examples/configs/online/disaggregated/external/qwen3-8b-eagle3-disaggregated.yaml       
-  - examples/configs/online/disaggregated/external/qwen3-8b-peagle-disaggregated.yaml       
-  - examples/configs/online/disaggregated/external/qwen3-coder-30b-a3b-eagle3-online.yaml   
-  - examples/configs/online/disaggregated/external/qwen3-coder-480b-a35b-eagle3-online.yaml 
-  - examples/configs/online/disaggregated/external/qwen3-coder-next-eagle3-online.yaml     
-  - examples/configs/online/disaggregated/external/qwen3-next-80b-a3b-eagle3-online.yaml    
-  - examples/configs/online/disaggregated/external/qwen3.5-35b-a3b-dflash-online.yaml       
-  - examples/configs/online/disaggregated/external/qwen3.5-35b-a3b-eagle3-online.yaml      
-  - examples/configs/online/disaggregated/external/qwen3.6-27b-dflash-disaggregated.yaml   
-  - examples/configs/online/disaggregated/external/qwen3.6-27b-dflash-online.yaml           
-  - examples/configs/online/disaggregated/external/qwen3.6-27b-domino-online.yaml           
-  - examples/configs/online/disaggregated/external/qwen3.6-27b-dspark-online.yaml           
-  - examples/configs/online/disaggregated/external/qwen3.8-27b-dflash2-disaggregated.yaml   
-  - examples/configs/online/disaggregated/external/qwq-32b-eagle3-online.yaml             
+  # ===== managed-local dflash：单个 `specforge train` 拥有全栈（mooncake +
+  # capture server + producer + consumer 由 launch_plan supervisor 起），
+  # run_example.sh 对 managed-local/ 路径不起外部服务。recipe 锁死的
+  # trainer 卡数通过结构化 overlay 压缩（apply_overrides 对 [...] 走
+  # yaml.safe_load）：nproc_per_node=1 + trainer_cuda_visible_devices=["1"]，
+  # capture server 留卡 0。4B 已端到端验证，8B 的 capture 需
+  # mem_fraction_static=0.65（0.5 会 OOM）。=====
+  - path: examples/configs/online/disaggregated/managed-local/qwen3.5-4b-dflash-disaggregated-npu.yaml
+    profile: specforge
+    runner: linux-aarch64-a2-4
+    image: swr.cn-southwest-2.myhuaweicloud.com/base_image/dockerhub/lmsysorg/sglang:v0.5.18-cann9.0.0-910b
+    overlay_args:
+      - training.max_steps=1
+      - training.batch_size=1
+      - training.accumulation_steps=1
+      - data.max_length=512
+      - data.train_data_path=${FIXTURE_DIR}/sharegpt_train.jsonl
+      - training.num_anchors=32
+      - training.save_interval=0
+      - training.log_interval=1
+      - tracking.report_to=none
+      - deployment.trainer.nproc_per_node=1
+      - deployment.disaggregated.managed_local.trainer_cuda_visible_devices=["1"]
+      - deployment.disaggregated.receive_buffers=pageable
+      - model.target_model_path=${SPECFORGE_MODEL_PATH}
+    timeout_minutes: 180
 
+  - path: examples/configs/online/disaggregated/managed-local/qwen3-8b-dflash-1server-dp7-disaggregated.yaml
+    profile: specforge
+    runner: linux-aarch64-a2-4
+    image: swr.cn-southwest-2.myhuaweicloud.com/base_image/dockerhub/lmsysorg/sglang:v0.5.18-cann9.0.0-910b
+    overlay_args:
+      - training.max_steps=1
+      - training.batch_size=1
+      - training.accumulation_steps=1
+      - training.attention_backend=sdpa
+      - data.max_length=512
+      - data.train_data_path=${FIXTURE_DIR}/sharegpt_train.jsonl
+      - training.num_anchors=32
+      - training.save_interval=0
+      - training.log_interval=1
+      - tracking.report_to=none
+      - deployment.trainer.nproc_per_node=1
+      - deployment.disaggregated.managed_local.trainer_cuda_visible_devices=["1"]
+      - deployment.disaggregated.managed_local.capture_servers=[{"port":30000,"cuda_visible_devices":["0"],"tp_size":1,"mem_fraction_static":0.65}]
+      - deployment.disaggregated.receive_buffers=pageable
+      - model.target_model_path=${SPECFORGE_MODEL_PATH}
+    timeout_minutes: 180
+
+
+unsupported:
 
   - examples/configs/online/disaggregated/external/deepseek-v2-lite-eagle3-online.yaml   
-  - examples/configs/online/disaggregated/external/deepseek-v4-flash-dspark-disaggregated.yaml 
-  - examples/configs/online/disaggregated/external/kimi-k3-dspark-disaggregated.yaml      
   - examples/configs/online/disaggregated/external/lfm2.5-1.2b-instruct-dflash-online.yaml 
   - examples/configs/online/disaggregated/external/ling-flash-2.0-eagle3-online.yaml      
   - examples/configs/online/disaggregated/external/qwen3-8b-domino-disaggregated.yaml    
@@ -267,10 +262,8 @@ unsupported:
   - examples/configs/online/disaggregated/external/qwen3.5-4b-domino-online-npu.yaml     
 
 
-  - examples/configs/online/disaggregated/managed-local/qwen3-8b-dflash-1server-dp7-disaggregated.yaml        
   - examples/configs/online/disaggregated/managed-local/qwen3-8b-domino-1server-dp7-disaggregated.yaml        
   - examples/configs/online/disaggregated/managed-local/qwen3-8b-domino-multiserver-disaggregated.yaml        
-  - examples/configs/online/disaggregated/managed-local/qwen3.5-4b-dflash-disaggregated-npu.yaml              
   - examples/configs/online/disaggregated/managed-local/qwen3.5-4b-mtp-disaggregated-npu.yaml                 
   - examples/configs/online/disaggregated/managed-local/qwen3.6-27b-dflash-1server-dp2-disaggregated.yaml    
   - examples/configs/online/disaggregated/managed-local/qwen3.6-27b-dflash-multiserver-disaggregated.yaml    
@@ -297,13 +290,6 @@ unsupported:
   - examples/configs/offline/colocated/qwen3-8b-eagle3-offline.yaml                       
 
 
-  - examples/data_regeneration/run_qwen_sharegpt_regeneration.sh
-  - examples/data_regeneration/run_qwen3_8b_sharegpt_non_reasoning.sh
-
-
-  - examples/disagg/sync_distributed_checkpoints.py
-
-
   - examples/configs/online/disaggregated/external/qwen2.5-0.5b-eagle3-online.yaml    
   - examples/configs/online/disaggregated/external/qwen3-4b-eagle3-online.yaml        
   - examples/configs/online/disaggregated/external/inkling-dspark-disaggregated.yaml  
@@ -317,3 +303,63 @@ unsupported:
   - examples/disagg/run_online.sh
   - examples/disagg/run_offline.sh
 
+
+  # ===== >4 卡：capture server 超单机 4 卡 runner 物理上限 =====
+  # 这些 recipe 的 target 模型 BF16 权重超 4×32G HBM 能装的范围：capture
+  # server 需 TP 分片（70B→7 卡 / 80B→8 卡 / 120B→11 卡 / 235B→21 卡 /
+  # 480B→41 卡 / 671B→57 卡，DeepSeek-V4-Flash / Kimi-K3 未公开精确值但
+  # 同量级），trainer 另需 1 卡。单机 linux-aarch64-a2-4（4 卡）物理装不下，
+  # 任何 overlay 都无解。MoE 走 EP 或 FP8 可减卡，但 specforge NPU 路径
+  # 只支持 BF16 加载；且这些多数还叠加 eagle3/domino 的 NPU 适配 bug。
+  - examples/configs/online/disaggregated/external/llama3.3-70b-eagle3-online.yaml
+  - examples/configs/online/disaggregated/external/qwen3-coder-next-eagle3-online.yaml
+  - examples/configs/online/disaggregated/external/qwen3-next-80b-a3b-eagle3-online.yaml
+  - examples/configs/online/disaggregated/external/llama4-scout-17b-16e-eagle3-online.yaml
+  - examples/configs/online/disaggregated/external/gpt-oss-120b-eagle3-online.yaml
+  - examples/configs/online/disaggregated/external/qwen3-235b-a22b-eagle3-online.yaml
+  - examples/configs/online/disaggregated/external/qwen3-coder-480b-a35b-eagle3-online.yaml
+  - examples/configs/online/disaggregated/external/deepseek-v3-671b-eagle3-online.yaml
+  - examples/configs/online/disaggregated/external/deepseek-v4-flash-dspark-disaggregated.yaml
+  - examples/configs/online/disaggregated/external/kimi-k3-dspark-disaggregated.yaml
+  - examples/configs/offline/colocated/deepseek-v3-671b-eagle3-offline.yaml         
+  - examples/configs/offline/colocated/ling-flash-2.0-eagle3-offline.yaml            
+  - examples/configs/offline/colocated/llama3.1-8b-eagle3-offline.yaml               
+  - examples/configs/offline/colocated/qwen2.5-7b-eagle3-offline.yaml                
+  - examples/configs/offline/colocated/qwen3-coder-480b-a35b-eagle3-offline.yaml     
+  - examples/configs/offline/colocated/qwen3.5-35b-a3b-eagle3-offline.yaml           
+  - examples/configs/offline/disaggregated/qwen2.5-7b-eagle3-offline-disaggregated.yaml  
+  - examples/configs/offline/disaggregated/qwen3-8b-eagle3-offline-disaggregated.yaml     
+  - examples/configs/online/disaggregated/external/gpt-oss-20b-eagle3-online.yaml          
+  - examples/configs/online/disaggregated/external/llama3.1-8b-eagle3-online.yaml           
+  - examples/configs/online/disaggregated/external/qwen3-30b-a3b-eagle3-online.yaml       
+  - examples/configs/online/disaggregated/external/qwen3-30b-a3b-eagle3.1-online.yaml      
+  - examples/configs/online/disaggregated/external/qwen3-32b-eagle3-online.yaml            
+  - examples/configs/online/disaggregated/external/qwen3-8b-dflash-disaggregated.yaml       
+  - examples/configs/online/disaggregated/external/qwen3-8b-eagle3-disaggregated.yaml       
+  - examples/configs/online/disaggregated/external/qwen3-8b-peagle-disaggregated.yaml       
+  - examples/configs/online/disaggregated/external/qwen3-coder-30b-a3b-eagle3-online.yaml   
+  - examples/configs/online/disaggregated/external/qwen3.5-35b-a3b-dflash-online.yaml       
+  - examples/configs/online/disaggregated/external/qwen3.5-35b-a3b-eagle3-online.yaml      
+  - examples/configs/online/disaggregated/external/qwen3.6-27b-dflash-disaggregated.yaml   
+  - examples/configs/online/disaggregated/external/qwen3.6-27b-dflash-online.yaml           
+  - examples/configs/online/disaggregated/external/qwen3.6-27b-domino-online.yaml           
+  - examples/configs/online/disaggregated/external/qwen3.6-27b-dspark-online.yaml           
+  - examples/configs/online/disaggregated/external/qwen3.8-27b-dflash2-disaggregated.yaml   
+  - examples/configs/online/disaggregated/external/qwq-32b-eagle3-online.yaml             
+
+
+  # ===== data_regeneration 脚本：本身不是 train 入口 =====
+  # 这两个脚本调 scripts/regenerate_train_data.py，用 teacher 推理 + 8B/27B
+  # 模型重新生成对齐分布的训练集；specforge train 的 input 数据由它预生成，
+  # 是 specforge 流程的"上游步骤"而非 training example 本体——examples guard
+  # 看护的是 `specforge train` 入口，无需跑数据再生成。
+  - examples/data_regeneration/run_qwen_sharegpt_regeneration.sh
+  - examples/data_regeneration/run_qwen3_8b_sharegpt_non_reasoning.sh
+
+
+  # ===== utility 脚本（不是 standalone example） =====
+  # sync_distributed_checkpoints.py 是两节点 trainer 之间的 checkpoint relay
+  # helper（README "Checkpoints without shared storage"），调用方是 2-node
+  # trainer；单独跑没有任何业务行为——它等待 run-root 下出现 checkpoint
+  # 子目录才开始打包，没有 checkpoint 就空转。属于 library helper，不是 example。
+  - examples/disagg/sync_distributed_checkpoints.py

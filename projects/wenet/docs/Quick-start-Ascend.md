@@ -133,18 +133,13 @@ snapshot_download('OmniData/AISHELL-1', local_dir='/root/.cache/modelscope/hub/d
 "
 echo "=== 下载后目录结构 ==="
 find /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1
-# 根据实际目录结构创建软链接
-if [ -d "/root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/data_aishell" ]; then
-  ln -sf /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/data_aishell /root/asr-data/OpenSLR/33/data_aishell
-  ln -sf /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/resource_aishell /root/asr-data/OpenSLR/33/resource_aishell
-elif [ -d "/root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33/data_aishell" ]; then
-  ln -sf /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33/data_aishell /root/asr-data/OpenSLR/33/data_aishell
-  ln -sf /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33/resource_aishell /root/asr-data/OpenSLR/33/resource_aishell
-else
-  echo "ERROR: data_aishell not found in expected locations"
-  find /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1 -name "data_aishell" -o -name "resource_aishell" | head -10
-  exit 1
-fi
+# 解压数据集
+cd /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33/
+tar xzf data_aishell.tgz
+tar xzf resource_aishell.tgz
+# 创建软链接
+ln -sf /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33/data_aishell /root/asr-data/OpenSLR/33/data_aishell
+ln -sf /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33/resource_aishell /root/asr-data/OpenSLR/33/resource_aishell
 touch /root/asr-data/OpenSLR/33/data_aishell/.complete
 touch /root/asr-data/OpenSLR/33/resource_aishell/.complete
 echo "=== 软链接验证 ==="

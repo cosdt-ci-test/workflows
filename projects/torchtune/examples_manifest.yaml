@@ -297,24 +297,27 @@ supported:
       - device=npu
     timeout_minutes: 60
 
-# ===== unsupported（每条附 runtime-verified 标签 + 实测失败堆栈） =====
+# ===== unsupported（每条附标签：runtime-verified / inferred / files-only） =====
 unsupported:
-  # ===== runtime-verified: NCCL 在 init_process_group 抛 RuntimeError =====
-  # 5 个 distributed recipes 全部在 `_patched_new_process_group_helper`（torch_npu
-  # 包里的 distributed_c10d.py:681）抛 `RuntimeError: Distributed package doesn't
-  # have NCCL built in`。torch_npu wheel 不带 NCCL（华为 HCCL 替代），NCCL 后端
-  # 字符串直接被拒。需要上游把 backend 改成可配置 + 自动探测 device (cuda/npu)
-  # 并落到对应后端，本 CI 矩阵不解决这层。
-  # 2026-09-21 翻案：lora_dpo_distributed / full_finetune_distributed /
-  # knowledge_distillation_single_device 已被 coder 实证走通
-  # （cfg.device=npu → get_distributed_backend() 拿 HCCL，init 成功），
-  # 见 supported 段对应条目；剩下的 5 个 distributed 同 c10d 路径待下个周期
-  # 单独 coder 跑 recipe 验证（不许基于"已翻案同模板"推断翻案）。
-  - recipes/lora_finetune_distributed.py          # runtime-verified: NCCL @ lora_finetune_distributed.py:918 `init_process_group("cuda:nccl,cpu:gloo")`
-  - recipes/full_dpo_distributed.py                # runtime-verified: NCCL @ full_dpo_distributed.py:1068 `init_process_group("cuda:nccl,cpu:gloo")`
-  - recipes/qat_distributed.py                     # runtime-verified: NCCL @ qat_distributed.py:950 `init_process_group("cuda:nccl,cpu:gloo")`
-  - recipes/qat_lora_finetune_distributed.py       # runtime-verified: NCCL @ qat_lora_finetune_distributed.py:965 `init_process_group(backend="gloo" if cfg.device == "cpu" else "nccl")`
-  - recipes/knowledge_distillation_distributed.py  # runtime-verified: NCCL @ knowledge_distillation_distributed.py:968 `init_process_group("cuda:nccl,cpu:gloo")`
+  # ===== inferred: NCCL backend 通过 cfg.device=cuda 落到 init_process_group =====
+  # 5 个 distributed recipes 都通过 `init_process_group(self.distributed_backend)`
+  # 拿 backend；`distributed_backend = training.get_distributed_backend(device_type)`
+  # 读 `torch.distributed.Backend.default_device_backend_map[device_type]`。当
+  # cfg.device 留 upstream 默认值（cuda / cuda + cpu:gloo）时返回 "nccl" /
+  # "cuda:nccl,cpu:gloo"，torch_npu wheel 没 NCCL，c10d 直接
+  # `RuntimeError: Distributed package doesn't have NCCL built in`
+  # （在 torch_npu/distributed/distributed_c10d.py:_patched_new_process_group_helper
+  # 抛）。本周期没单独 coder 跑这 5 条 recipe 端到端验证 — 注释标"inferred"
+  # 而非 "runtime-verified"，因为策略是不许基于"已翻案同模板"推断翻案。
+  # 行号核对自 torchtune main HEAD bd2a0fc（2026-09-21 重新 grep）。
+  # 翻案路径参考 supported 段：cfg.device=npu → map 拿 "hccl" → init OK，
+  # 配套 MASTER_ADDR/PORT/RANK/WORLD_SIZE/LOCAL_RANK env 喂
+  # is_distributed() 守卫（distributed recipes 入口）。
+  - recipes/lora_finetune_distributed.py          # inferred: lora_finetune_distributed.py:151 `init_process_group(self.distributed_backend)`
+  - recipes/full_dpo_distributed.py                # inferred: full_dpo_distributed.py:156 `init_process_group(self.distributed_backend)`
+  - recipes/qat_distributed.py                     # inferred: qat_distributed.py:160 `init_process_group(self.distributed_backend)`
+  - recipes/qat_lora_finetune_distributed.py       # inferred: qat_lora_finetune_distributed.py:159 `init_process_group(self.distributed_backend)`
+  - recipes/knowledge_distillation_distributed.py  # inferred: knowledge_distillation_distributed.py:127 `init_process_group(self.distributed_backend)`
 
   # ===== runtime-verified: 缺配套依赖，无法启动 =====
   # ppo_full_finetune_single_device.py: recipes/configs 里唯一 PPO 配置是
@@ -325,7 +328,14 @@ unsupported:
   # 准备脚本），超出"零 patch"边界 → 本周期不动。
   - recipes/ppo_full_finetune_single_device.py
 
-
+  # ===== files-only 排除项（不是 recipe 入口） =====
+  # 扫描引擎对账单位是入口文件 .py。这些条目不是 recipe 入口，列出是为了
+  # 显式声明 examples 引擎会落到 unsupported（其扫描后缀与本仓 examples
+  # 树里几乎不出现，仅作声明）：
+  #   - __init__.py: torchtune.recipes 包初始化
+  #   - configs/: upstream 公开的 recipe config 树（被 --config 引用）
+  #   - dev/: 维护者工具脚本（不出现在用户路径）
+  #   - full_finetune_multinode.slurm: SLURM 启动器，不是 recipe
   - recipes/__init__.py
   - recipes/configs/
   - recipes/dev/

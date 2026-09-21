@@ -126,15 +126,21 @@ npu count: 1
 ```shell #test-setup id="download-data"
 pip install modelscope -q
 mkdir -p /root/asr-data/OpenSLR/33
-
-# 下载并获取实际路径
-DATASET_DIR=$(python -c "
+# 诊断：检查缓存状态
+echo "=== 检查 ModelScope 缓存目录 ==="
+ls -la /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/ 2>/dev/null || echo "缓存目录不存在"
+ls -la /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33/ 2>/dev/null || echo "raw/33 目录不存在"
+echo "=== 检查磁盘空间 ==="
+df -h /root/.cache/modelscope
+# 从 ModelScope 下载 AISHELL-1 数据集
+python -c "
 from modelscope import snapshot_download
-print(snapshot_download('OmniData/AISHELL-1', repo_type='dataset'))
-")
-
-echo "Dataset downloaded to: $DATASET_DIR"
-
+snapshot_download('OmniData/AISHELL-1', repo_type='dataset')
+"
+# 诊断：下载后再次检查
+echo "=== 下载后检查缓存目录 ==="
+ls -la /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33/ 2>/dev/null || echo "raw/33 目录不存在"
+ls -lh /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33/*.tgz 2>/dev/null || echo "tgz 文件不存在"
 # 解压数据集到 weNet 期望的目录结构
 cd /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33
 tar -xzf data_aishell.tgz -C /root/asr-data/OpenSLR/33/

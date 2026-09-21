@@ -19,11 +19,14 @@ supported:
   # （case doc §2.5）」来自 2026-09-04~07 应用的 sed patch 链，那 7 个
   # patch 已在 2026-09-17 全部撤掉，目前栈（torch 2.12.0+cpu +
   # torch_npu 2.12.0 + triton-ascend 3.5.0+dev20260701 + CANN 9.1.0）
-  # 下 default 配置走通。预期仍会卡在 c10d broadcast（DTensor
-  # OffsetBasedRNGTracker 的 rng_state .device=None），但现状是
-  # init_weights 阶段在 broadcast 之前 trainer 主路径没炸，loss 正常
-  # 下降——说明 c10d broadcast 触发条件（需要 FSDP mesh rng_state
-  # broadcast）在我们这条 smoke 路径上没命中。
+  # 下 default 配置走通。c10d broadcast 的 sm90 检查（torch 2.12：
+  # `tensor.is_cuda and torch.cuda.get_device_capability(...)[0]>=9`）
+  # 曾在本栈崩——run_example.sh 的 sitecustomize shim import
+  # transfer_to_npu，把 is_cuda patch 成 is_npu、get_device_capability
+  # wrap 到 torch.npu（无 env 返回 None）→ `None[0]` TypeError
+  # （run 35224441230）。已由同一 shim 提前设置
+  # TORCH_NPU_DEVICE_CAPABILITY=9.0 修复（get_device_capability 返回
+  # (9,0)）。单卡 smoke 本也未必命中 FSDP mesh rng_state broadcast。
   # no-patch policy：default ChunkedLossWrapper 是上游决策，不在 setup
   # 层 patch。保留这条作为「default wiring」基线，#2 ce_loss 变体
   # 单独验证 CrossEntropyLoss 直连路径，两条同时留 supported =
@@ -51,8 +54,8 @@ supported:
   # upgrade 时验证上游 CE 配置的 wiring 与 ChunkedLossWrapper 入口
   # 同步未漂移（同 #1）。
   # no-patch policy：ChunkedLossWrapper 是上游决策，不在 setup 层 patch。
-  # ce_loss 变体绕开 ChunkedLossWrapper 路径；预期仍会卡在 c10d
-  # broadcast（同 #1，但 #1 实测没卡）。
+  # ce_loss 变体绕开 ChunkedLossWrapper 路径；c10d broadcast 已由
+  # TORCH_NPU_DEVICE_CAPABILITY=9.0 修复（同 #1）。
   - path: torchtitan/train.py
     profile: torchtitan
     runner: linux-aarch64-a2-1
@@ -77,9 +80,9 @@ supported:
   # --training.dtype bfloat16 是混合精度 smoke；不强校验数值，仅
   # 验证 DTensor forward + HCCL all-reduce + bf16 cast 整条链路不
   # 触发 NPU 算子缺口。
-  # no-patch policy：预期在 init_weights 同 #1 撞 c10d broadcast；
-  # 修好后可能进一步撞 torch 2.13-only FSDP dp_mesh_dims 路径——
-  # 这是上游 torch 的 issue，不在 setup 层 patch。
+  # no-patch policy：c10d broadcast 已由 TORCH_NPU_DEVICE_CAPABILITY=9.0
+  # 修复（同 #1）；修好后可能进一步撞 torch 2.13-only FSDP dp_mesh_dims
+  # 路径——这是上游 torch 的 issue，不在 setup 层 patch。
   # ASCEND_RT_VISIBLE_DEVICES 由 runner 注入（双卡 runner 暴露 0,1）。
   - path: torchtitan/train.py
     profile: torchtitan
@@ -106,12 +109,12 @@ supported:
   # Nothing is fused."），smoke 验证 dispatch 接受 dist_gemm flag 且
   # init 阶段不炸。TP>=2 真路径走 torch.distributed._symmetric_memory
   # （torch 2.13+ API）做 cross-process param shard；torch 2.12 无此
-  # 模块；并且 2-card 上跑 TP=2 + dist_gemm 必撞同 supported #3 的
-  # c10d broadcast，无独立信号。留这条是为「dispatch + flag 解析」回归
+  # 模块（c10d broadcast 现已由 TORCH_NPU_DEVICE_CAPABILITY=9.0 解，见
+  # #1，不再单列）。留这条是为「dispatch + flag 解析」回归
   # 检测 —— 上游哪天在 TP=1 路径上对 dist_gemm flag 加任何 parse-time
   # 校验，这里立刻报红。
-  # 退役条件：TP>=2 路径需 torch 2.13+ ABI 适配 + c10d broadcast 解，
-  # 此后才有意义再开 TP>=2 的 supported。
+  # 退役条件：TP>=2 路径需 torch 2.13+ ABI 适配，此后才有意义再开
+  # TP>=2 的 supported。
   - path: torchtitan/train.py
     profile: torchtitan
     runner: linux-aarch64-a2-1
@@ -138,9 +141,10 @@ supported:
   # torch_npu._inductor 时 import `triton_key` 失败（community triton
   # 3.5.0 不暴露）；同时 _create_flex_attention_mask 用 torch 2.13-only
   # 的 separate_full_blocks kwarg。两条都是上游决策，不在 setup 层
-  # 绕开。预期失败点：c10d broadcast（同 #1）→ 修了之后撞 triton_key
-  # import / separate_full_blocks TypeError。退役条件：上游让 sft
-  # 默认走 sdpa 或暴露 triton_key，或 torch 2.13 ABI 适配。
+  # 绕开。c10d broadcast 已由 TORCH_NPU_DEVICE_CAPABILITY=9.0 修复
+  # （同 #1）→ 接下来撞 triton_key import / separate_full_blocks
+  # TypeError。退役条件：上游让 sft 默认走 sdpa 或暴露 triton_key，
+  # 或 torch 2.13 ABI 适配。
   - path: torchtitan/train.py
     profile: torchtitan
     runner: linux-aarch64-a2-1
@@ -180,7 +184,8 @@ unsupported:
   # dataclass，HBM 是唯一 gate。
   # 2026-09-15 实测证据（单卡 ASCEND_RT_VISIBLE_DEVICES=0，
   # 32 GB × 1 卡，当时 7 个 sed patch 已应用；2026-09-17 撤 patch，
-  # 重新走会先在 init_weights 撞 c10d broadcast，再撞下面列的根因）：
+  # 重新走会先撞下面列的根因；c10d broadcast 现由
+  # TORCH_NPU_DEVICE_CAPABILITY=9.0 修复，见 supported #1）：
   #   - llama3_8b            rc=1
   #       torch.OutOfMemoryError: NPU out of memory. Tried to allocate
   #       1.96 GiB (NPU 0; 29.49 GiB total capacity; 27.96 GiB already
@@ -347,9 +352,9 @@ unsupported:
   #         DTensor / local tensor 重构 API）。CI 镜像（cann:9.1.0-py3.12
   #         + torch 2.12.0+cpu + torch_npu 2.12.0）按 setup_example.sh
   #         第 81-108 行 ensure_torch_stack 走的版本不同，应有
-  #         _local_tensor 可过 import。继续路径预期撞 trainer.py:505
-  #         c10d shim bug（`get_device_capability(None)[0]` NoneType）
-  #         —— 同 llama3_debugmodel 与 CI 35224441230 根因。
+  #         _local_tensor 可过 import。继续路径的 c10d broadcast
+  #         None[0]（trainer.py:505，CI 35224441230 根因）已由
+  #         TORCH_NPU_DEVICE_CAPABILITY=9.0 修复（见 supported #1）。
   #
   # (E) 量化条目 NVFP4 ImportError（同 llama3 量化的 B 类）：
   #     - qwen3_debugmodel_nvfp4

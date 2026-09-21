@@ -40,10 +40,6 @@ else
 fi
 
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
-# fp4_finetuning 等零 CLI 脚本的 TrainingArguments 默认 report_to=wandb，
-# 未装 key 会报 UsageError；disabled 让它落 no-op（其余条目显式
-# --report_to none，不受影响）。
-export WANDB_MODE=disabled
 # bnb 0.50.2 的 dequantize 函数会触发 torch 2.12 dynamo 反复重编译
 # （73s/step → 3s/step）；其余条目不依赖 dynamo 编译路径，全局关闭
 # 无副作用。
@@ -127,7 +123,7 @@ PY
 ensure_passthrough "$LAUNCH_PATH"
 
 
-# One sitecustomize.py, three patches, injected at interpreter startup:
+# One sitecustomize.py, four patches, injected at interpreter startup:
 # 1. CUDA->NPU (transfer_to_npu): most peft examples hardcode
 #    device="cuda"; torch_npu's transfer_to_npu maps torch.cuda onto npu
 #    (also covers `torch.device("cuda" if torch.cuda.is_available() else
@@ -144,13 +140,9 @@ ensure_passthrough "$LAUNCH_PATH"
 #    amp.GradScaler -> TypeError "Adam.step got unexpected keyword
 #    argument grad_scaler". No supported entry relies on fp16=True, so
 #    forcing fp16=False globally is a no-op for every other entry.
-#
-# bitsandbytes (bnb) carve-out: bnb 0.50.2's 4-bit/8-bit run fine on NPU
-# via the default (CPU) backend, but transfer_to_npu makes
-# torch.cuda.is_available()=True which makes bnb import its CUDA backend
-# and crash on torch._C._cuda_getCurrentRawStream (torch is +cpu-built).
-# So for the bnb examples we emit a sitecustomize WITHOUT transfer_to_npu
-# (keeping the fp16 neutralizer + dataset shim, which they still need).
+# 4. wandb neutralizer: boft_dreambooth hardcodes wandb_init
+#    mode="online"; force wandb.init mode="disabled" so it becomes
+#    wandb's own no-op run without an API key.
 prepare_shims() {
   local shim_dir="$GITHUB_WORKSPACE/ci_patch"
   mkdir -p "$shim_dir"

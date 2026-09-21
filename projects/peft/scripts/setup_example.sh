@@ -124,6 +124,36 @@ install_cpu_torchvision() {
   python -m pip install pillow
 }
 
+resolve_seed_envs() {
+  # $@ = alternating (hf_id, env var) pairs. Resolve each seeded asset's
+  # snapshot path from the shared HF hub cache (refs/main -> sha) and
+  # append VAR=<snapshot> to GITHUB_ENV for manifest overlay_args.
+  python - "$@" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+HUB_ROOT = Path(os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))) / "hub"
+pairs = sys.argv[1:]
+if len(pairs) % 2:
+    raise SystemExit("resolve_seed_envs: expected alternating hf_id var pairs")
+for hf_id, var in zip(pairs[::2], pairs[1::2]):
+    repo_dir = HUB_ROOT / f"models--{hf_id.replace('/', '--')}"
+    refs = repo_dir / "refs" / "main"
+    if not refs.is_file():
+        raise SystemExit(
+            f"{hf_id} missing from shared cache root — dispatch the "
+            f"cache-seed workflow (spec: cache-seed/peft/ms_seeds.yaml)")
+    sha = refs.read_text().strip()
+    snap = repo_dir / "snapshots" / sha
+    if not snap.is_dir() or not any(snap.iterdir()):
+        raise SystemExit(f"{hf_id}: refs/main -> {sha[:8]} has no snapshot files")
+    with open(os.environ["GITHUB_ENV"], "a") as fh:
+        fh.write(f"{var}={snap}\n")
+    print(f"{var}={snap}", flush=True)
+PY
+}
+
 # Copy CI fixture data into the target root so that example scripts can
 # load them via a local path under $TARGET_ROOT/fixtures/ (same
 # decoupling from the workflows-checkout subtree as trl).
@@ -218,40 +248,12 @@ setup_peft() {
   # layout, refs/main = real upstream sha; this plant used to live here
   # in setup, moved 2026-09-17 so the seed workflow is the single
   # writer). Nothing downloads in the example jobs anymore.
-  # Hardcoded hub ids (mt0-small / dinov2-base / glue) resolve through
-  # the same seeded cache at example runtime; missing env paths are a
-  # hard error — every example that uses them fails without them.
-  python - <<'PY'
-import os
-from pathlib import Path
-
-HUB_ROOT = Path(os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))) / "hub"
-
-# (hf_id, env var) — consumed by manifest overlay_args
-#   ${SFT_MODEL_PATH}          sft / miss / mica / supertuning
-#   ${ROBERTA_BASE_PATH}       adamss ×2
-#   ${BERT_BASE_UNCASED_PATH}  sequence_classification
-TO_ENV = [
-    ("Qwen/Qwen2.5-0.5B", "SFT_MODEL_PATH"),
-    ("roberta-base", "ROBERTA_BASE_PATH"),
-    ("bert-base-uncased", "BERT_BASE_UNCASED_PATH"),
-]
-
-for hf_id, var in TO_ENV:
-    repo_dir = HUB_ROOT / f"models--{hf_id.replace('/', '--')}"
-    refs = repo_dir / "refs" / "main"
-    if not refs.is_file():
-        raise SystemExit(
-            f"{hf_id} missing from shared cache root — dispatch the "
-            f"cache-seed workflow (spec: cache-seed/peft/ms_seeds.yaml)")
-    sha = refs.read_text().strip()
-    snap = repo_dir / "snapshots" / sha
-    if not snap.is_dir() or not any(snap.iterdir()):
-        raise SystemExit(f"{hf_id}: refs/main -> {sha[:8]} has no snapshot files")
-    with open(os.environ["GITHUB_ENV"], "a") as fh:
-        fh.write(f"{var}={snap}\n")
-    print(f"{var}={snap}", flush=True)
-PY
+  # Hardcoded hub ids (mt0-small / dinov2-base / glue / t5-base /
+  # opt-350m) resolve through the same seeded cache at example runtime;
+  # only ids consumed by overlay_args get an env path here.
+  resolve_seed_envs Qwen/Qwen2.5-0.5B SFT_MODEL_PATH \
+    roberta-base ROBERTA_BASE_PATH \
+    bert-base-uncased BERT_BASE_UNCASED_PATH
 }
 
 setup_peft_dreambooth() {
@@ -281,27 +283,7 @@ setup_peft_dreambooth() {
   # 已 plant；peft 的 ms_seeds.yaml 同步声明，冷缓存时 peft 自己 dispatch
   # 也能补）。resolve refs/main 得 ${SD_MODEL_PATH}，只影响本 profile——
   # 非 SD 例的 setup 不做这个校验，缺资产不拦其它例。
-  python - <<'PY'
-import os
-from pathlib import Path
-
-HUB_ROOT = Path(os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))) / "hub"
-hf_id, var = "stable-diffusion-v1-5/stable-diffusion-v1-5", "SD_MODEL_PATH"
-
-repo_dir = HUB_ROOT / f"models--{hf_id.replace('/', '--')}"
-refs = repo_dir / "refs" / "main"
-if not refs.is_file():
-    raise SystemExit(
-        f"{hf_id} missing from shared cache root — dispatch the "
-        f"cache-seed workflow (spec: cache-seed/peft/ms_seeds.yaml)")
-sha = refs.read_text().strip()
-snap = repo_dir / "snapshots" / sha
-if not snap.is_dir() or not any(snap.iterdir()):
-    raise SystemExit(f"{hf_id}: refs/main -> {sha[:8]} has no snapshot files")
-with open(os.environ["GITHUB_ENV"], "a") as fh:
-    fh.write(f"{var}={snap}\n")
-print(f"{var}={snap}", flush=True)
-PY
+  resolve_seed_envs stable-diffusion-v1-5/stable-diffusion-v1-5 SD_MODEL_PATH
 }
 
 setup_peft_29() {

@@ -201,6 +201,25 @@ supported:
       - model.target_model_path=${SPECFORGE_MODEL_PATH}
     timeout_minutes: 180
 
+  - path: examples/configs/online/disaggregated/external/qwen3-8b-dspark-disaggregated.yaml
+    profile: specforge
+    runner: linux-aarch64-a2-4
+    image: swr.cn-southwest-2.myhuaweicloud.com/base_image/dockerhub/lmsysorg/sglang:v0.5.18-cann9.0.0-910b
+    overlay_args:
+      - training.max_steps=1
+      - training.batch_size=1
+      - training.accumulation_steps=1
+      - training.attention_backend=sdpa
+      - data.max_length=512
+      - data.train_data_path=${FIXTURE_DIR}/sharegpt_train.jsonl
+      - training.save_interval=0
+      - training.log_interval=1
+      - tracking.report_to=none
+      - deployment.trainer.nproc_per_node=1
+      - deployment.disaggregated.receive_buffers=pageable
+      - model.target_model_path=${SPECFORGE_MODEL_PATH}
+    timeout_minutes: 180
+
 # ===== unsupported =====
 unsupported:
   - examples/configs/offline/colocated/deepseek-v3-671b-eagle3-offline.yaml         
@@ -287,7 +306,6 @@ unsupported:
 
   - examples/configs/online/disaggregated/external/qwen2.5-0.5b-eagle3-online.yaml    
   - examples/configs/online/disaggregated/external/qwen3-4b-eagle3-online.yaml        
-  - examples/configs/online/disaggregated/external/qwen3-8b-dspark-disaggregated.yaml 
   - examples/configs/online/disaggregated/external/inkling-dspark-disaggregated.yaml  
   - examples/configs/online/disaggregated/external/longcat-flash-dflash-online.yaml   
   - examples/configs/online/disaggregated/external/longcat-flash-eagle3-online.yaml   

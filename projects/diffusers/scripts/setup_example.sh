@@ -17,9 +17,9 @@ PROFILE="$1"
 
 # Validate the profile before installing anything (contract: unknown
 # profile must exit non-zero before any install).
-SUPPORTED_PROFILES="diffusers-sdxl diffusers-sd15 diffusers-dreambooth diffusers-instruct-pix2pix diffusers-kandinsky diffusers-research diffusers-research-plain diffusers-t2i-adapter diffusers-text-to-image diffusers-textual-inversion diffusers-unconditional diffusers-vqgan diffusers-sdxl-online diffusers-amused diffusers-cogvideo diffusers-lcm diffusers-lcm-sdxl diffusers-controlnet diffusers-controlnet-sdxl diffusers-llada2"
+SUPPORTED_PROFILES="diffusers-sdxl diffusers-sd15 diffusers-dreambooth diffusers-instruct-pix2pix diffusers-kandinsky diffusers-research diffusers-research-plain diffusers-t2i-adapter diffusers-text-to-image diffusers-textual-inversion diffusers-unconditional diffusers-vqgan diffusers-sdxl-online diffusers-flux diffusers-amused diffusers-cogvideo diffusers-cogvideo-i2v diffusers-lcm diffusers-lcm-sdxl diffusers-controlnet diffusers-controlnet-sdxl diffusers-llada2"
 case "$PROFILE" in
-  diffusers-sdxl|diffusers-sd15|diffusers-dreambooth|diffusers-instruct-pix2pix|diffusers-kandinsky|diffusers-research|diffusers-research-plain|diffusers-t2i-adapter|diffusers-text-to-image|diffusers-textual-inversion|diffusers-unconditional|diffusers-vqgan|diffusers-sdxl-online|diffusers-amused|diffusers-cogvideo|diffusers-lcm|diffusers-lcm-sdxl|diffusers-controlnet|diffusers-controlnet-sdxl|diffusers-llada2) ;;
+  diffusers-sdxl|diffusers-sd15|diffusers-dreambooth|diffusers-instruct-pix2pix|diffusers-kandinsky|diffusers-research|diffusers-research-plain|diffusers-t2i-adapter|diffusers-text-to-image|diffusers-textual-inversion|diffusers-unconditional|diffusers-vqgan|diffusers-sdxl-online|diffusers-flux|diffusers-amused|diffusers-cogvideo|diffusers-cogvideo-i2v|diffusers-lcm|diffusers-lcm-sdxl|diffusers-controlnet|diffusers-controlnet-sdxl|diffusers-llada2) ;;
   *)
     echo "unknown profile: ${PROFILE} (supported: ${SUPPORTED_PROFILES})" >&2
     exit 1
@@ -268,25 +268,16 @@ if "sd14" in WANT:
 
 # CogVideoX-2b (transformer + T5 text_encoder + VAE). The ModelScope repo
 # layout is already clean (component dirs only, no single-file/fp16 dupes).
-if "cogvideo" in WANT:
-    snapshot(
-        "COGVIDEOX_MODEL_PATH",
-        "AI-ModelScope/CogVideoX-2b",
-        allow_file_pattern=[
-            "*.json", "*.model",
-            "scheduler/*", "text_encoder/*", "tokenizer/*",
-            "transformer/*", "vae/*",
-        ],
-    )
-    # Dataset: Wild-Heart/Disney-VideoGeneration-Dataset (69 videos, ~25 MB,
-    # Steamboat Willie clips) already in the README's first format:
-    # prompt.txt + videos.txt + videos/. No ModelScope mirror, so pull via
-    # hf-mirror (the engine sets HF_ENDPOINT + HF_HUB_DISABLE_XET).
-    #
-    # NOTE: the videos are Xet-backed. If hf-mirror 302s them to
-    # cas-bridge.xethub.hf.co and the runner cannot reach it, this download
-    # will fail and the dataset must be delivered via cache-seed/diffusers/
-    # instead (same treatment as peft's Xet-backed fixtures).
+# Dataset: Wild-Heart/Disney-VideoGeneration-Dataset (69 videos, ~25 MB,
+# Steamboat Willie clips) already in the README's first format:
+# prompt.txt + videos.txt + videos/. No ModelScope mirror, so pull via
+# hf-mirror (the engine sets HF_ENDPOINT + HF_HUB_DISABLE_XET).
+#
+# NOTE: the videos are Xet-backed. If hf-mirror 302s them to
+# cas-bridge.xethub.hf.co and the runner cannot reach it, this download
+# will fail and the dataset must be delivered via cache-seed/diffusers/
+# instead (same treatment as peft's Xet-backed fixtures).
+def download_disney_dataset() -> None:
     try:
         dataset_dir = WORKSPACE / "datasets" / "disney"
         dataset_dir.mkdir(parents=True, exist_ok=True)
@@ -299,6 +290,25 @@ if "cogvideo" in WANT:
     except Exception as exc:  # noqa: BLE001
         failures.append(f"Wild-Heart/Disney-VideoGeneration-Dataset: {type(exc).__name__}: {exc}")
         print(f"FAIL Wild-Heart/Disney-VideoGeneration-Dataset: {exc}", flush=True)
+
+
+# cogvideo: CogVideoX-2b (ModelScope) + the Disney dataset.
+if "cogvideo" in WANT:
+    snapshot(
+        "COGVIDEOX_MODEL_PATH",
+        "AI-ModelScope/CogVideoX-2b",
+        allow_file_pattern=[
+            "*.json", "*.model",
+            "scheduler/*", "text_encoder/*", "tokenizer/*",
+            "transformer/*", "vae/*",
+        ],
+    )
+    download_disney_dataset()
+
+# cogvideo-dataset: the Disney dataset only (the I2V entry pulls its own
+# CogVideoX-5b-I2V from hf-mirror at run time, so no ModelScope pre-download).
+if "cogvideo-dataset" in WANT:
+    download_disney_dataset()
 
 # 3d_icon dataset (only the advanced dreambooth entries use it): no
 # ModelScope mirror (205 MB imagefolder + metadata.jsonl), so pull it via
@@ -439,6 +449,15 @@ setup_diffusers_sdxl_online() {
   install_example_stack
 }
 
+# diffusers-flux: FLUX.1-dev ControlNet training, run on a2-8 with DeepSpeed
+# ZeRO-3 (launcher: accelerate-deepspeed). deepspeed ships its own NPU
+# accelerator and auto-detects torch_npu. Model (gated) + dataset are fetched
+# online by the example.
+setup_diffusers_flux() {
+  install_example_stack
+  python -m pip install "deepspeed>=0.18.2"
+}
+
 # diffusers-amused: Amused-256 finetuning. ModelScope has neither
 # amused/amused-256 nor the m1guelpf/nouns dataset, so nothing is
 # pre-downloaded: the example fetches both via hf-mirror at run time
@@ -495,6 +514,15 @@ setup_diffusers_cogvideo() {
   # imageio-ffmpeg are the example's own requirements (video export).
   python -m pip install decord2 imageio imageio-ffmpeg
   download_assets cogvideo
+}
+
+# diffusers-cogvideo-i2v: CogVideoX-5b-I2V LoRA finetuning. Same decord/video
+# deps and Disney dataset, but the 5b-I2V model is pulled online (hf-mirror)
+# by the example, so only the dataset is pre-downloaded here.
+setup_diffusers_cogvideo_i2v() {
+  install_example_stack
+  python -m pip install decord2 imageio imageio-ffmpeg
+  download_assets cogvideo-dataset
 }
 
 # diffusers-llada2: LLaDA2 block-refinement training smoke. Base stack is

@@ -25,6 +25,18 @@ scan:
     - examples/research_projects/gligen/make_datasets.py
     - examples/research_projects/rdm/retriever.py
     - examples/research_projects/wuerstchen/text_to_image/modeling_efficient_net_encoder.py
+    # helper 模块 / 数据处理 / 被其它脚本调用（NOT_EXAMPLE，不单独 guard）
+    - examples/research_projects/anytext/anytext.py
+    - examples/research_projects/anytext/anytext_controlnet.py
+    - examples/research_projects/lpl/lpl_loss.py
+    - examples/research_projects/multi_token_textual_inversion/multi_token_clip.py
+    - examples/research_projects/pixart/controlnet_pixart_alpha.py
+    - examples/research_projects/promptdiffusion/convert_original_promptdiffusion_to_diffusers.py
+    - examples/research_projects/rdm/pipeline_rdm.py
+    - examples/server-async/Pipelines.py
+    - examples/cosmos/create_prompts_for_gr1_dataset.py
+    - examples/cosmos/download_and_preprocess_datasets.sh
+    - examples/cosmos3/cosmos_parallel.py
 
 supported:
   # ===== 已在昇腾单卡容器（CANN 9.1.0 / torch 2.9.0 / torch_npu 2.9.0.post2，
@@ -221,24 +233,6 @@ supported:
       - --checkpointing_steps 1
     timeout_minutes: 120
 
-  # ControlNet 训练（SDXL base）。同样用 fill50k 脚本型数据集（datasets<4.0 +
-  # trust_remote_code，profile 已设 HF_DATASETS_TRUST_REMOTE_CODE=1）。
-  # 2026-09-17 昇腾机验证可跑。
-  - path: examples/controlnet/train_controlnet_sdxl.py
-    profile: diffusers-controlnet-sdxl
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --pretrained_model_name_or_path stabilityai/stable-diffusion-xl-base-1.0   # 在线 hf-mirror，fp16 variant ~6.6GB
-      - --variant fp16
-      - --output_dir ${CI_OUTPUT_DIR}
-      - --dataset_name fusing/fill50k
-      - --resolution 256                                  # 512 在 29.5GB 卡上 OOM
-      - --gradient_checkpointing
-      - --train_batch_size 1
-      - --max_train_steps 1
-      - --checkpointing_steps 1
-    timeout_minutes: 120
 
   # LLaDA2 block-refinement 训练 smoke。无硬编码 cuda、用 accelerator；
   # Qwen2.5-0.5B（0.92GB）+ --use_dummy_data（零数据集下载）。
@@ -601,22 +595,6 @@ supported:
 
   # ===== SDXL 系列（在线 hf-mirror，--variant fp16 ~6.6GB；2026-09-20 昇腾机验证可跑）=====
 
-  # InstructPix2Pix SDXL
-  - path: examples/instruct_pix2pix/train_instruct_pix2pix_sdxl.py
-    profile: diffusers-sdxl-online
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --pretrained_model_name_or_path stabilityai/stable-diffusion-xl-base-1.0
-      - --variant fp16
-      - --dataset_name fusing/instructpix2pix-1000-samples
-      - --output_dir ${CI_OUTPUT_DIR}
-      - --resolution 256 --random_flip
-      - --train_batch_size 1 --gradient_accumulation_steps 1 --gradient_checkpointing
-      - --max_train_steps 1 --checkpointing_steps 1
-      - --conditioning_dropout_prob 0.05 --seed 42
-    timeout_minutes: 120
-
   # Diffusion-DPO SDXL
   - path: examples/research_projects/diffusion_dpo/train_diffusion_dpo_sdxl.py
     profile: diffusers-sdxl-online
@@ -678,13 +656,73 @@ supported:
       - --max_train_steps 1 --checkpointing_steps 1
     timeout_minutes: 120
 
+  # ===== FLUX.1-dev ControlNet（8 卡 + DeepSpeed ZeRO-3；2026-09-21 写入待验证）=====
+  # 训练主路径无硬编码 cuda（用 accelerator.device），单卡 OOM，靠 ZeRO-3 分片到 8 卡。
+  # 模型 black-forest-labs/FLUX.1-dev 是 gated（需 token）；用 --dataset_name fusing/fill50k
+  # （小数据集），不碰 63.8GB 的 open_pose_controlnet。
+
+  # controlnet/train_controlnet_flux.py
+  - path: examples/controlnet/train_controlnet_flux.py
+    profile: diffusers-flux
+    runner: linux-aarch64-a2-8
+    npu_devices: '0,1,2,3,4,5,6,7'
+    launcher: accelerate-deepspeed
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --pretrained_model_name_or_path black-forest-labs/FLUX.1-dev
+      - --dataset_name fusing/fill50k
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --resolution 512
+      - --train_batch_size 1
+      - --gradient_checkpointing
+      - --max_train_steps 1
+      - --checkpointing_steps 1
+    timeout_minutes: 240
+
+  # flux-control/train_control_flux.py（数据集 raulc0399/open_pose_controlnet ~63.8GB）
+  - path: examples/flux-control/train_control_flux.py
+    profile: diffusers-flux
+    runner: linux-aarch64-a2-8
+    npu_devices: '0,1,2,3,4,5,6,7'
+    launcher: accelerate-deepspeed
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --pretrained_model_name_or_path black-forest-labs/FLUX.1-dev
+      - --dataset_name raulc0399/open_pose_controlnet
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --resolution 256
+      - --train_batch_size 1
+      - --gradient_checkpointing
+      - --max_train_steps 1
+      - --checkpointing_steps 1
+    timeout_minutes: 240
+
+  # CogVideoX-5b-I2V LoRA（复用 Disney 数据集；2026-09-21 昇腾机验证可跑）
+  # 注意：必须用 THUDM/CogVideoX-5b-I2V（不是 1.5，脚本不处理 1.5 的 ofs 输入）。
+  - path: examples/cogvideo/train_cogvideox_image_to_video_lora.py
+    profile: diffusers-cogvideo-i2v
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --pretrained_model_name_or_path THUDM/CogVideoX-5b-I2V
+      - --instance_data_root ${COGVIDEOX_DATASET_DIR}
+      - --caption_column prompt.txt
+      - --video_column videos.txt
+      - --max_num_frames 9
+      - --gradient_checkpointing
+      - --enable_slicing --enable_tiling
+      - --train_batch_size 1
+      - --max_train_steps 1
+      - --checkpointing_steps 1
+      - --mixed_precision fp16
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 180
+
 # ===== unsupported（其余全部；后续逐例验证跑通后迁入 supported） =====
 unsupported:
   # ===== research_projects 分类说明（2026-09-20 验证）=====
-  # NOT_EXAMPLE：非可运行示例（helper 模块 / 数据准备 / 权重转换）→
-  #   anytext/、gligen/dataset.py、gligen/make_datasets.py、lpl/lpl_loss.py、
-  #   multi_token_textual_inversion/multi_token_clip.py、promptdiffusion/、rdm/、
-  #   pixart/pipeline_*、pixart/controlnet_pixart_alpha.py、wuerstchen/modeling_*
+  # NOT_EXAMPLE：非可运行示例（helper 模块 / 数据准备 / 权重转换 / 被其它脚本
+  #   调用）已统一收进文件头的 scan.exclude（见该段注释），不再逐个列在 unsupported。
   # OTHER_BACKEND：非 NPU 后端 → onnxruntime/、pytorch_xla/、sdxl_flax/、
   #   colossalai/、intel_opts/
   # CUDA_DEP：硬编码 CUDA / CUDA-only 依赖 → control_lora/control_lora.py、
@@ -693,10 +731,9 @@ unsupported:
   #   controlnet/train_controlnet_webdataset.py、diffusion_orpo/*_wds.py、
   #   gligen/train_gligen_text.py、ip_adapter/、sana/*
   # GATED_MODEL：需授权 → sd3_lora_colab/、flux_lora_quantization/*
-  # 模型下载需要令牌
+  # gated
   - examples/advanced_diffusion_training/train_dreambooth_lora_flux_advanced.py
-  - examples/cogvideo/train_cogvideox_image_to_video_lora.py
-  # 数据集open_pose_controlnet 31GB
+  # CUDA硬编码 text_encoding_pipeline.to("cuda")
   - examples/cogview4-control/train_control_cogview4.py
   # community/ 全部不适合看护：
   #  - 105/110 无 if __name__ == "__main__"：是 custom_pipeline 模块（上游用
@@ -825,22 +862,14 @@ unsupported:
   # Flax：transformers 5.x 已移除 FlaxCLIPTextModel（diffusers >=0.40 也移除了
   # Flax），import 阶段即 ImportError
   - examples/controlnet/train_controlnet_flax.py
-  # FLUX.1-dev gated + 爆显存
-  - examples/controlnet/train_controlnet_flux.py
   # SD3 gated + 爆显存（README 要求 ≥80GB）
   - examples/controlnet/train_controlnet_sd3.py
-  # 数据预处理脚本，非 example（无独立看护价值）
-  - examples/cosmos/create_prompts_for_gr1_dataset.py
-  # 数据下载+预处理脚本，非 example
-  - examples/cosmos/download_and_preprocess_datasets.sh
   # Cosmos-Predict2.5-2B 模型仓 101.5GB 且 gated=auto（需 token + 接受 license），
   # 单卡 CI 下不了也放不下；train_lora.sh / eval_lora.sh 是它的包装脚本
   - examples/cosmos/eval_cosmos_predict25_lora.py
   - examples/cosmos/eval_lora.sh
   - examples/cosmos/train_cosmos_predict25_lora.py
   - examples/cosmos/train_lora.sh
-  # 纯 helper 模块（无 main），被 inference_cosmos3.py import
-  - examples/cosmos3/cosmos_parallel.py
   # Cosmos3-Nano 165.6GB / Cosmos3-Super 188GB（64.6B bf16），需多卡 TP/CP 分片，
   # 单卡 CI 不可行；且硬编码 torch.device("cuda")/torch.cuda.set_device/
   # init_device_mesh("cuda")/backend="nccl"，NPU 上不改源码跑不了
@@ -877,7 +906,6 @@ unsupported:
   # flux-control 两条（全量 + LoRA）：代码 device-agnostic（无硬编码 cuda），
   # 但 FLUX.1-dev gated=auto（需 token）+ 仓 64.7GB（transformer bf16 ~24GB），
   # 数据集 raulc0399/open_pose_controlnet 63.8GB —— 模型/数据集均远超单卡
-  - examples/flux-control/train_control_flux.py
   - examples/flux-control/train_control_lora_flux.py
   # 废弃 shim：只 import pipeline + 发一条 outdated 警告，无 __main__、无实际推理
   - examples/inference/image_to_image.py
@@ -903,9 +931,6 @@ unsupported:
   # run_diffuser_locomotion：import d4rl + gym，gym.make("hopper-medium-v2")；README
   # 要求 gym==0.24.1 + free-mujoco-py + d4rl（MuJoCo 二进制，aarch64/py3.12 装不上）
   - examples/reinforcement_learning/run_diffuser_locomotion.py
-  # NOT_EXAMPLE：anytext.py / anytext_controlnet.py 无 __main__（helper 模块）
-  - examples/research_projects/anytext/anytext.py
-  - examples/research_projects/anytext/anytext_controlnet.py
   - examples/research_projects/autoencoder_rae/train_autoencoder_rae.py
   # autoencoderkl：反复要依赖/验证图片，未验证（暂标 unsupported）
   - examples/research_projects/autoencoderkl/train_autoencoderkl.py
@@ -938,32 +963,22 @@ unsupported:
   # lora：用已废弃的 LoRAAttnProcessor(hidden_size=..., cross_attention_dim=...)
   # 构造 API；当前 diffusers 的 LoRAAttnProcessor.__init__() 不收参数（改走 peft）
   - examples/research_projects/lora/train_text_to_image_lora.py
-  # NOT_EXAMPLE：lpl_loss.py 无 __main__（helper 模块）
-  - examples/research_projects/lpl/lpl_loss.py
   - examples/research_projects/lpl/train_sdxl_lpl.py
   - examples/research_projects/multi_subject_dreambooth/train_multi_subject_dreambooth.py
   - examples/research_projects/multi_subject_dreambooth_inpainting/train_multi_subject_dreambooth_inpainting.py
-  # NOT_EXAMPLE：multi_token_clip.py 无 __main__（helper 模块）
-  - examples/research_projects/multi_token_textual_inversion/multi_token_clip.py
   - examples/research_projects/multi_token_textual_inversion/textual_inversion.py
   - examples/research_projects/multi_token_textual_inversion/textual_inversion_flax.py
   # OTHER_BACKEND：onnxruntime training（ORT）
   - examples/research_projects/onnxruntime/text_to_image/train_text_to_image.py
   - examples/research_projects/onnxruntime/textual_inversion/textual_inversion.py
   - examples/research_projects/onnxruntime/unconditional_image_generation/train_unconditional.py
-  # NOT_EXAMPLE：pixart 的 pipeline/controlnet 为库模块（无 __main__）
-  - examples/research_projects/pixart/controlnet_pixart_alpha.py
   - examples/research_projects/pixart/run_pixart_alpha_controlnet_pipeline.py
   - examples/research_projects/pixart/train_controlnet_hf_diffusers.sh
   - examples/research_projects/pixart/train_pixart_controlnet_hf.py
-  # NOT_EXAMPLE：PromptDiffusion 权重转换脚本（需原始 checkpoint，非训练示例）
-  - examples/research_projects/promptdiffusion/convert_original_promptdiffusion_to_diffusers.py
   # OTHER_BACKEND：torch_xla（TPU）
   - examples/research_projects/pytorch_xla/inference/flux/flux_inference.py
   - examples/research_projects/pytorch_xla/inference/flux/flux_inference_spmd.py
   - examples/research_projects/pytorch_xla/training/text_to_image/train_text_to_image_xla.py
-  # NOT_EXAMPLE：rdm 的 pipeline/retriever 为库模块（无 __main__）
-  - examples/research_projects/rdm/pipeline_rdm.py
   # CUDA_DEP：infer.py 硬编码 cuda；train_realfill.py 另需自定义 realfill 数据集
   - examples/research_projects/realfill/infer.py
   - examples/research_projects/realfill/train_realfill.py
@@ -976,6 +991,12 @@ unsupported:
   # OTHER_BACKEND：JAX/Flax
   - examples/research_projects/sdxl_flax/sdxl_single.py
   - examples/research_projects/sdxl_flax/sdxl_single_aot.py
+  # instruct_pix2pix SDXL（全量，非 LoRA）：SDXL 全量微调 + Adam fp32 状态 >
+  # 单卡 29.5GB，NPU OOM（--resolution 256 --gradient_checkpointing 也不够）
+  - examples/instruct_pix2pix/train_instruct_pix2pix_sdxl.py
+  # controlnet SDXL：即使 --resolution 256 --gradient_checkpointing，预计算文本
+  # embedding（compute_embeddings）阶段仍 NPU OOM
+  - examples/controlnet/train_controlnet_sdxl.py
   # scheduled_huber text_to_image SDXL（全量，非 LoRA）：SDXL 全量微调 + Adam
   # fp32 状态 > 单卡 29.5GB，NPU OOM（同目录的 LoRA 版已迁 supported）
   - examples/research_projects/scheduled_huber_loss_training/text_to_image/train_text_to_image_sdxl.py
@@ -986,8 +1007,6 @@ unsupported:
   - examples/research_projects/wuerstchen/text_to_image/train_text_to_image_lora_prior.py
   # CUDA_DEP + GATED_MODEL：硬编码 cuda/mps（无 NPU 分支，L49-66）；模型为 SD3.5（gated）
   - examples/server/server.py
-  # NOT_EXAMPLE + CUDA_DEP：serverasync.py 的 helper 模块（无 __main__）；start() 只认 cuda/mps，L41-58 否则抛错
-  - examples/server-async/Pipelines.py
   # CUDA_DEP + GATED_MODEL：import 时即加载 SD3.5（Pipelines.py 无 cuda/mps 抛错）；且为常驻 HTTP 服务
   - examples/server-async/serverasync.py
   # EXTERNAL_SERVICE：test.py 是 HTTP 客户端，需 serverasync.py 常驻在 localhost:8500

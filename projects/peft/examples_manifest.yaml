@@ -36,8 +36,11 @@ supported:
 
   # SFT + FSDP1（Llama-2-70b 换 0.5B）：fsdp_config.yaml num_processes: 8
   # 原样跑 a2-8；npu-5 2 rank 实跑 1m07s exit 0
+  # profile peft_29：torch 栈锁 2.9.0 对——torch 2.12 c10d broadcast 的
+  # sm90 检查 + torch_npu get_device_capability 返回 None → None[0]
+  # TypeError（FSDP 存点 dist_cp gather_object 路径，run 35502546409）
   - path: examples/sft/run_peft_fsdp.sh
-    profile: peft
+    profile: peft_29
     runner: linux-aarch64-a2-8
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
     overlay_args:
@@ -87,8 +90,9 @@ supported:
   # SFT + QLoRA-FSDP（Llama-2-70b 换 0.5B，bnb 关掉退化成 LoRA+FSDP1）：
   # fsdp_config_qlora.yaml 本就 num_processes: 2，只需 a2-2（不必占 a2-8）；
   # npu-5 2×910B4 2 rank 实跑 1m18s exit 0
+  # profile peft_29：同 run_peft_fsdp.sh，torch 2.12 存点路径崩，锁 2.9.0
   - path: examples/sft/run_peft_qlora_fsdp.sh
-    profile: peft
+    profile: peft_29
     runner: linux-aarch64-a2-2
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
     overlay_args:
@@ -116,6 +120,9 @@ supported:
   # grad_accum 必须跟 4（transformers 硬校验）；profile peft_ds 装
   # deepspeed 0.19.7（npu accelerator 自动识别，DS_BUILD_OPS=0 免编译）；
   # npu-5 1m40s exit 0
+  # torch 栈锁 2.9.0 对：torch 2.12 broadcast sm90 检查 + torch_npu
+  # get_device_capability→None 在 ZeRO zero-init 的 param broadcast 崩
+  # （run 35502546409）
   - path: examples/sft/run_peft_deepspeed.sh
     profile: peft_ds
     runner: linux-aarch64-a2-8
@@ -142,6 +149,8 @@ supported:
   # LoRA）：deepspeed_config_z3_qlora.yaml 本就 num_processes: 2 且无
   # gradient_accumulation_steps 键（transformers 不做硬校验），只需 a2-2
   # （不必占 a2-8）；npu-5 2 rank 实跑 1m38s exit 0
+  # torch 栈锁 2.9.0 对：同 run_peft_deepspeed.sh（存点 gather_object
+  # 路径 + ZeRO broadcast，run 35502546409）
   - path: examples/sft/run_peft_qlora_deepspeed_stage3.sh
     profile: peft_ds
     runner: linux-aarch64-a2-2

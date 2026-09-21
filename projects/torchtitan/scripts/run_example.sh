@@ -95,10 +95,24 @@ fi
 # loader, fbgemm-like helpers) sometimes do, and the c10d backend map
 # test in run_example.sh checks npu.is_available(). The transfer
 # itself is a no-op if no torch.cuda call has been made yet.
+#
+# transfer_to_npu patches torch.Tensor.is_cuda = torch.Tensor.is_npu
+# and wraps torch.cuda.get_device_capability -> torch.npu.get_device_capability.
+# torch 2.12's c10d broadcast() then evaluates
+# `tensor.is_cuda and torch.cuda.get_device_capability(tensor.device)[0] >= 9`
+# (sm90 check), and torch.npu.get_device_capability returns None unless
+# TORCH_NPU_DEVICE_CAPABILITY is set -> `None[0]` TypeError in
+# set_determinism / DTensor OffsetBasedRNGTracker (run 35224441230).
+# Setting the capability env *before* the transfer import makes the
+# shim return (9, 0) so the sm90 check resolves instead of crashing.
+# torch 2.12 is required (torch < 2.12 lacks torch.distributed._local_tensor,
+# which spmd_types==0.2.3 imports) so this env var is the fix, not a downgrade.
 prepare_shims() {
   local shim_dir="$GITHUB_WORKSPACE/ci_patch"
   mkdir -p "$shim_dir"
   cat > "$shim_dir/sitecustomize.py" <<'PY'
+import os
+os.environ.setdefault("TORCH_NPU_DEVICE_CAPABILITY", "9.0")
 from torch_npu.contrib import transfer_to_npu  # noqa: F401  (cuda->npu)
 PY
   export PYTHONPATH="$shim_dir:${PYTHONPATH:-}"

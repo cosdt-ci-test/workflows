@@ -64,7 +64,13 @@ def projects_with_manifest() -> list[dict]:
 def load_manifest(path: Path) -> dict:
     data = yaml.safe_load(path.read_text(encoding='utf-8')) or {}
     scan = load_scan(data.get('scan') or {})
-    return {**data, 'scan': scan}
+    # load_scan normalizes scan_root/unit/include_extensions for the
+    # engine's discover(); it does NOT pass through extra keys like
+    # `ref`. Pass them through verbatim so audit_project can read
+    # scan.ref to pin the git baseline (default branch HEAD otherwise).
+    raw_scan = data.get('scan') or {}
+    scan_extras = {k: v for k, v in raw_scan.items() if k not in scan}
+    return {**data, 'scan': {**scan, **scan_extras}}
 
 
 def discover(target_root: Path, scan: dict) -> set[str]:
@@ -89,12 +95,18 @@ def listed_paths(manifest: dict) -> set[str]:
     return listed
 
 
-def try_clone(repo: str, scan_root: str, cache: Path, project_name: str) -> dict:
+def try_clone(repo: str, scan_root: str, cache: Path, project_name: str,
+              ref: str | None = None) -> dict:
     """Clone with sparse-checkout on scan_root, one automatic retry.
 
     Uses `--depth=1 --filter=blob:none --sparse` so only the scan_root
     tree is fetched; for repos whose scan_root is the whole repo (".")
     this degrades to a normal blob:none clone (still depth=1).
+
+    If `ref` is provided, uses `--branch <ref>` so the baseline matches
+    a specific release tag (instead of the default branch HEAD). This
+    pins the audit to a release contract that does not drift while the
+    repo's main branch moves.
 
     Success = git exits 0 and the scan_root directory exists on disk.
     Failure modes (after one retry):
@@ -111,6 +123,9 @@ def try_clone(repo: str, scan_root: str, cache: Path, project_name: str) -> dict
             shutil.rmtree(target)
         try:
             cmd = ['git', 'clone', '--depth=1', '--filter=blob:none', '--sparse', url, str(target)]
+            if ref:
+                cmd.insert(3, '--branch')
+                cmd.insert(4, ref)
             proc = subprocess.run(cmd, capture_output=True, timeout=CLONE_TIMEOUT)
         except subprocess.TimeoutExpired:
             last_err = f'timeout after {CLONE_TIMEOUT}s'
@@ -162,8 +177,10 @@ def audit_project(project: dict, cache: Path) -> dict:
     manifest_path = REPO_ROOT / project['dir'] / 'examples_manifest.yaml'
     manifest = load_manifest(manifest_path)
     scan_root = manifest['scan']['scan_root']
-    log(f'[{name}] cloning {repo} (scan_root={scan_root}) ...')
-    clone = try_clone(repo, scan_root, cache, name)
+    ref = manifest['scan'].get('ref')
+    ref_str = f' ref={ref}' if ref else ''
+    log(f'[{name}] cloning {repo} (scan_root={scan_root}{ref_str}) ...')
+    clone = try_clone(repo, scan_root, cache, name, ref=ref)
     if not clone['ok']:
         log(f'[{name}] miss: {clone["reason"]}')
         return {'name': name, 'status': 'miss', 'detail': clone['reason']}

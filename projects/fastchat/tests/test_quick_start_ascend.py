@@ -40,9 +40,6 @@ _SERVICE_MODULES = (
     ('worker', 'fastchat.serve.model_worker'),
     ('api', 'fastchat.serve.openai_api_server'),
 )
-_FSCHAT_PIN_RE = re.compile(
-    r'fschat\[model_worker\]==(?P<version>[0-9][0-9A-Za-z.!+_-]*)'
-)
 _RELEASE_VERSION_RE = re.compile(r'[0-9]+(?:\.[0-9]+)+(?:[0-9A-Za-z.!+_-]*)?')
 
 
@@ -52,16 +49,6 @@ def _is_truthy(value: str | None) -> bool:
 
 def _e2e_enabled() -> bool:
     return _is_truthy(os.environ.get('NPU_READY'))
-
-
-def _documented_fschat_version(text: str) -> str:
-    versions = set(_FSCHAT_PIN_RE.findall(text))
-    if len(versions) != 1:
-        raise RuntimeError(
-            'quick-start must contain exactly one fschat[model_worker] version pin; '
-            f'found {sorted(versions)}'
-        )
-    return versions.pop()
 
 
 def _release_version(upstream_ref: str) -> str:
@@ -75,14 +62,28 @@ def _release_version(upstream_ref: str) -> str:
     return version
 
 
-def _assert_version_alignment(text: str, upstream_ref: str) -> None:
-    documented = _documented_fschat_version(text)
+def _installed_fschat_version() -> str:
+    """Return the fschat version actually importable in this interpreter."""
+
+    result = subprocess.run(
+        [sys.executable, '-c', 'import fastchat; print(fastchat.__version__)'],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout.strip()
+
+
+def _assert_version_alignment(installed: str, upstream_ref: str) -> None:
+    """Fail when the installed fschat differs from the monitored release."""
+
+    installed_version = installed.strip()
     monitored = _release_version(upstream_ref)
-    if documented != monitored:
+    if installed_version != monitored:
         raise RuntimeError(
-            'FastChat version mismatch: '
+            'FastChat version mismatch after install: '
             f'UPSTREAM_REF={upstream_ref!r} resolves to {monitored!r}, '
-            f'but the quick-start installs fschat=={documented}'
+            f'but the installed fschat is {installed_version!r}'
         )
 
 
@@ -182,7 +183,6 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         upstream_ref = os.environ.get('UPSTREAM_REF', '')
         if not upstream_ref:
             raise RuntimeError('UPSTREAM_REF is required for FastChat version alignment')
-        _assert_version_alignment(text, upstream_ref)
         return text
 
     def _start_documented_service(self, name: str, command: str, env, cwd) -> None:
@@ -283,6 +283,13 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 if module in cmd.cmd:
                     self._start_documented_service(name, cmd.cmd, env, cwd)
                     return
+        if isinstance(cmd, TestCommand) and cmd.id == 'install-fastchat':
+            super()._run_one(cmd, results, env, cwd, timeout, idx)
+            _assert_version_alignment(
+                _installed_fschat_version(),
+                os.environ.get('UPSTREAM_REF', ''),
+            )
+            return
         if isinstance(cmd, TestCommand) and cmd.id == 'check-model':
             self._wait_for_model_service()
         return super()._run_one(cmd, results, env, cwd, timeout, idx)
@@ -358,25 +365,16 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
 
 class TestVersionAlignment(unittest.TestCase):
-    def test_matching_release_and_document_pin(self) -> None:
-        _assert_version_alignment(
-            'python -m pip install "fschat[model_worker]==0.2.36"',
-            'v0.2.36',
-        )
+    def test_matching_release_and_installed_version(self) -> None:
+        _assert_version_alignment('0.2.36', 'v0.2.36')
 
-    def test_mismatch_fails_before_document_execution(self) -> None:
+    def test_mismatch_fails_after_install(self) -> None:
         with self.assertRaisesRegex(RuntimeError, 'version mismatch'):
-            _assert_version_alignment(
-                'python -m pip install "fschat[model_worker]==0.2.36"',
-                'v0.2.37',
-            )
+            _assert_version_alignment('0.2.36', 'v0.2.37')
 
     def test_non_release_ref_is_rejected(self) -> None:
         with self.assertRaisesRegex(RuntimeError, 'not a release tag'):
-            _assert_version_alignment(
-                'python -m pip install "fschat[model_worker]==0.2.36"',
-                'main',
-            )
+            _assert_version_alignment('0.2.36', 'main')
 
 
 if __name__ == '__main__':

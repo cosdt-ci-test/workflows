@@ -126,23 +126,28 @@ npu count: 1
 ```shell #test-setup id="download-data"
 pip install modelscope -q
 mkdir -p /root/asr-data/OpenSLR/33
-echo "=== 开始下载 AISHELL-1 数据集 ==="
 # 从 ModelScope 下载 AISHELL-1 数据集
 python -c "
 from modelscope import snapshot_download
-result = snapshot_download('OmniData/AISHELL-1', local_dir='/root/asr-data/AISHELL-1', repo_type='dataset')
-print(f'Downloaded to: {result}')
+snapshot_download('OmniData/AISHELL-1', local_dir='/root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1', repo_type='dataset')
 "
-echo "=== 下载完成，检查目录结构 ==="
-ls -la /root/asr-data/AISHELL-1/
-ls -la /root/asr-data/AISHELL-1/raw/33/ 2>/dev/null || echo "raw/33 不存在"
-# 创建 weNet 期望的目录结构（软链接）
-ln -sf /root/asr-data/AISHELL-1/data_aishell /root/asr-data/OpenSLR/33/data_aishell
-ln -sf /root/asr-data/AISHELL-1/resource_aishell /root/asr-data/OpenSLR/33/resource_aishell
-# 创建 .complete 标记文件
+echo "=== 下载后目录结构 ==="
+find /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1 -maxdepth 4 -type d | head -30
+# 根据实际目录结构创建软链接
+if [ -d "/root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/data_aishell" ]; then
+  ln -sf /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/data_aishell /root/asr-data/OpenSLR/33/data_aishell
+  ln -sf /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/resource_aishell /root/asr-data/OpenSLR/33/resource_aishell
+elif [ -d "/root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33/data_aishell" ]; then
+  ln -sf /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33/data_aishell /root/asr-data/OpenSLR/33/data_aishell
+  ln -sf /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33/resource_aishell /root/asr-data/OpenSLR/33/resource_aishell
+else
+  echo "ERROR: data_aishell not found in expected locations"
+  find /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1 -name "data_aishell" -o -name "resource_aishell" | head -10
+  exit 1
+fi
 touch /root/asr-data/OpenSLR/33/data_aishell/.complete
 touch /root/asr-data/OpenSLR/33/resource_aishell/.complete
-echo "=== 目录结构创建完成 ==="
+echo "=== 软链接验证 ==="
 ls -la /root/asr-data/OpenSLR/33/
 ```
 
@@ -151,9 +156,8 @@ ls -la /root/asr-data/OpenSLR/33/
 ```shell #test id="verify-download"
 echo "=== 检查下载标记文件 ==="
 ls /root/asr-data/OpenSLR/33/data_aishell/.complete /root/asr-data/OpenSLR/33/resource_aishell/.complete
-echo "=== 检查 data_aishell 目录 ==="
+echo "=== 检查数据目录 ==="
 ls /root/asr-data/OpenSLR/33/data_aishell/ | head -2
-echo "=== 检查 resource_aishell 目录 ==="
 ls /root/asr-data/OpenSLR/33/resource_aishell/ | head -2
 ```
 
@@ -161,22 +165,13 @@ ls /root/asr-data/OpenSLR/33/resource_aishell/ | head -2
 
 ```shell #test-result id="verify-download"
 === 检查下载标记文件 ===
-... /root/asr-data/OpenSLR/33/data_aishell/.complete
-... /root/asr-data/OpenSLR/33/resource_aishell/.complete
-=== 检查 data_aishell 目录 ===
-... transcript
-... wav
-=== 检查 resource_aishell 目录 ===
-... lexicon.txt
-... speaker.info
-...
-...
-...
-...
-...
-...
-...
-...
+/root/asr-data/OpenSLR/33/data_aishell/.complete
+/root/asr-data/OpenSLR/33/resource_aishell/.complete
+=== 检查数据目录 ===
+transcript
+wav
+lexicon.txt
+speaker.info
 ```
 
 ---

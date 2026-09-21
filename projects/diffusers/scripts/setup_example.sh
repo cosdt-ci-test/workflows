@@ -17,9 +17,9 @@ PROFILE="$1"
 
 # Validate the profile before installing anything (contract: unknown
 # profile must exit non-zero before any install).
-SUPPORTED_PROFILES="diffusers-sdxl diffusers-sd15 diffusers-dreambooth diffusers-instruct-pix2pix diffusers-kandinsky diffusers-research diffusers-research-plain diffusers-t2i-adapter diffusers-text-to-image diffusers-textual-inversion diffusers-unconditional diffusers-vqgan diffusers-sdxl-online diffusers-flux diffusers-sd3 diffusers-amused diffusers-cogvideo diffusers-cogvideo-i2v diffusers-lcm diffusers-lcm-sdxl diffusers-controlnet diffusers-controlnet-sdxl diffusers-llada2"
+SUPPORTED_PROFILES="diffusers-sdxl diffusers-sd15 diffusers-dreambooth diffusers-instruct-pix2pix diffusers-kandinsky diffusers-research diffusers-research-plain diffusers-t2i-adapter diffusers-text-to-image diffusers-textual-inversion diffusers-unconditional diffusers-vqgan diffusers-sdxl-online diffusers-flux diffusers-amused diffusers-cogvideo diffusers-cogvideo-i2v diffusers-lcm diffusers-lcm-sdxl diffusers-controlnet diffusers-controlnet-sdxl diffusers-llada2"
 case "$PROFILE" in
-  diffusers-sdxl|diffusers-sd15|diffusers-dreambooth|diffusers-instruct-pix2pix|diffusers-kandinsky|diffusers-research|diffusers-research-plain|diffusers-t2i-adapter|diffusers-text-to-image|diffusers-textual-inversion|diffusers-unconditional|diffusers-vqgan|diffusers-sdxl-online|diffusers-flux|diffusers-sd3|diffusers-amused|diffusers-cogvideo|diffusers-cogvideo-i2v|diffusers-lcm|diffusers-lcm-sdxl|diffusers-controlnet|diffusers-controlnet-sdxl|diffusers-llada2) ;;
+  diffusers-sdxl|diffusers-sd15|diffusers-dreambooth|diffusers-instruct-pix2pix|diffusers-kandinsky|diffusers-research|diffusers-research-plain|diffusers-t2i-adapter|diffusers-text-to-image|diffusers-textual-inversion|diffusers-unconditional|diffusers-vqgan|diffusers-sdxl-online|diffusers-flux|diffusers-amused|diffusers-cogvideo|diffusers-cogvideo-i2v|diffusers-lcm|diffusers-lcm-sdxl|diffusers-controlnet|diffusers-controlnet-sdxl|diffusers-llada2) ;;
   *)
     echo "unknown profile: ${PROFILE} (supported: ${SUPPORTED_PROFILES})" >&2
     exit 1
@@ -406,8 +406,10 @@ setup_diffusers_research() {
 setup_diffusers_research_plain() {
   install_example_stack
   # autoencoderkl needs lpips (perceptual loss) + taming_transformers;
-  # the ip_adapter tutorials import the `ip_adapter` PyPI package.
-  python -m pip install lpips taming_transformers ip_adapter
+  # the ip_adapter tutorials import the `ip_adapter` PyPI package, whose
+  # requirements.txt (not install_requires) pulls einops + safetensors, so
+  # pip does not fetch them — install them explicitly.
+  python -m pip install lpips taming_transformers ip_adapter einops safetensors
 }
 
 # diffusers-t2i-adapter: T2I-Adapter SDXL. The tiny SDXL / tiny adapter models
@@ -454,21 +456,13 @@ setup_diffusers_sdxl_online() {
   install_example_stack
 }
 
-# diffusers-flux: FLUX.1-dev ControlNet training, run on a2-8 with DeepSpeed
-# ZeRO-3 (launcher: accelerate-deepspeed). deepspeed ships its own NPU
-# accelerator and auto-detects torch_npu. Model (gated) + dataset are fetched
-# online by the example.
+# diffusers-flux: full-model / large-model examples that need DeepSpeed ZeRO-3
+# sharding (launcher: accelerate-deepspeed) on multi-card runners. deepspeed
+# ships its own NPU accelerator and auto-detects torch_npu; webdataset +
+# braceexpand serve the LCM wds example.
 setup_diffusers_flux() {
   install_example_stack
   python -m pip install "deepspeed>=0.18.2" webdataset braceexpand
-}
-
-# diffusers-sd3: SD3-medium examples (dreambooth / controlnet / colab LoRA).
-# The model is gated on HF but planted from ModelScope into the shared cache
-# by cache-seed/diffusers/ms_seeds.yaml, so no HF token is needed here. Base
-# stack only.
-setup_diffusers_sd3() {
-  install_example_stack
 }
 
 # diffusers-amused: Amused-256 finetuning. ModelScope has neither

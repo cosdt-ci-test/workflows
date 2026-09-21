@@ -669,203 +669,6 @@ supported:
   ########################之后记得注释回来#########################################
 
 
-  # ===== FLUX.1-dev ControlNet（8 卡 + DeepSpeed ZeRO-3；2026-09-21 写入待验证）=====
-  # 训练主路径无硬编码 cuda（用 accelerator.device），单卡 OOM，靠 ZeRO-3 分片到 8 卡。
-  # 模型 unsloth/FLUX.1-dev 是 gated（需 token）；用 --dataset_name fusing/fill50k
-  # （小数据集），不碰 63.8GB 的 open_pose_controlnet。
-
-
-  #########################################################################################################
-  ######################模型不可达######################################################################### 
-  # # controlnet/train_controlnet_flux.py
-  # - path: examples/controlnet/train_controlnet_flux.py
-  #   profile: diffusers-flux
-  #   runner: linux-aarch64-a2-8
-  #   npu_devices: '0,1,2,3,4,5,6,7'
-  #   launcher: accelerate-deepspeed
-  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-  #   overlay_args:
-  #     - --pretrained_model_name_or_path unsloth/FLUX.1-dev
-  #     - --dataset_name fusing/fill50k
-  #     - --output_dir ${CI_OUTPUT_DIR}
-  #     - --resolution 512
-  #     - --train_batch_size 1
-  #     - --gradient_checkpointing
-  #     - --max_train_steps 1
-  #     - --checkpointing_steps 1
-  #   timeout_minutes: 240
-
-  # # flux-control/train_control_flux.py（数据集 raulc0399/open_pose_controlnet ~63.8GB）
-  # - path: examples/flux-control/train_control_flux.py
-  #   profile: diffusers-flux
-  #   runner: linux-aarch64-a2-8
-  #   npu_devices: '0,1,2,3,4,5,6,7'
-  #   launcher: accelerate-deepspeed
-  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-  #   overlay_args:
-  #     - --pretrained_model_name_or_path unsloth/FLUX.1-dev
-  #     - --dataset_name raulc0399/open_pose_controlnet
-  #     - --output_dir ${CI_OUTPUT_DIR}
-  #     - --resolution 256
-  #     - --train_batch_size 1
-  #     - --gradient_checkpointing
-  #     - --max_train_steps 1
-  #     - --checkpointing_steps 1
-  #   timeout_minutes: 240
-
-  # # ===== SD3-medium（ModelScope seed 到共享缓存，免 HF token；2026-09-21 写入待验证）=====
-  # # 模型 stabilityai/stable-diffusion-3-medium-diffusers 在 HF 是 gated=auto，
-  # # 但 cache-seed/diffusers/ms_seeds.yaml 从 ModelScope 镜像 plant，运行时不需 token。
-
-  # # dreambooth LoRA SD3
-  # - path: examples/dreambooth/train_dreambooth_lora_sd3.py
-  #   profile: diffusers-sd3
-  #   runner: linux-aarch64-a2-1
-  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-  #   overlay_args:
-  #     - --pretrained_model_name_or_path stabilityai/stable-diffusion-3-medium-diffusers
-  #     - --instance_data_dir ${FIXTURE_DIR}/images
-  #     - --instance_prompt "a photo of sks dog"
-  #     - --output_dir ${CI_OUTPUT_DIR}
-  #     - --resolution 256
-  #     - --train_batch_size 1 --gradient_accumulation_steps 1 --gradient_checkpointing
-  #     - --max_train_steps 1
-  #   timeout_minutes: 120
-
-  # # ControlNet SD3
-  # - path: examples/controlnet/train_controlnet_sd3.py
-  #   profile: diffusers-sd3
-  #   runner: linux-aarch64-a2-1
-  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-  #   overlay_args:
-  #     - --pretrained_model_name_or_path stabilityai/stable-diffusion-3-medium-diffusers
-  #     - --dataset_name fusing/fill50k
-  #     - --output_dir ${CI_OUTPUT_DIR}
-  #     - --resolution 512
-  #     - --train_batch_size 1 --gradient_accumulation_steps 1 --gradient_checkpointing
-  #     - --max_train_steps 1 --checkpointing_steps 1
-  #   timeout_minutes: 120
-
-  # # sd3_lora_colab / dreambooth LoRA SD3 miniature
-  # - path: examples/research_projects/sd3_lora_colab/train_dreambooth_lora_sd3_miniature.py
-  #   profile: diffusers-sd3
-  #   runner: linux-aarch64-a2-1
-  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-  #   overlay_args:
-  #     - --pretrained_model_name_or_path stabilityai/stable-diffusion-3-medium-diffusers
-  #     - --instance_data_dir ${FIXTURE_DIR}/images
-  #     - --instance_prompt "a photo of sks dog"
-  #     - --output_dir ${CI_OUTPUT_DIR}
-  #     - --resolution 256
-  #     - --train_batch_size 1 --gradient_accumulation_steps 1 --gradient_checkpointing
-  #     - --max_train_steps 1
-  #   timeout_minutes: 120
-
-  # # ===== FLUX.1-dev LoRA（8 卡 + DeepSpeed ZeRO-3；2026-09-21 写入待验证）=====
-  # # 模型用非 gated 镜像 unsloth/FLUX.1-dev（diffusers 布局），运行时经 hf-mirror
-  # # 在线下，不需 token。训练主路径无硬编码 cuda。
-
-  # # flux-control LoRA
-  # - path: examples/flux-control/train_control_lora_flux.py
-  #   profile: diffusers-flux
-  #   runner: linux-aarch64-a2-8
-  #   npu_devices: '0,1,2,3,4,5,6,7'
-  #   launcher: accelerate-deepspeed
-  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-  #   overlay_args:
-  #     - --pretrained_model_name_or_path unsloth/FLUX.1-dev
-  #     - --dataset_name raulc0399/open_pose_controlnet
-  #     - --output_dir ${CI_OUTPUT_DIR}
-  #     - --resolution 256
-  #     - --train_batch_size 1
-  #     - --gradient_checkpointing
-  #     - --max_train_steps 1
-  #     - --checkpointing_steps 1
-  #   timeout_minutes: 240
-
-  # # advanced dreambooth LoRA FLUX
-  # - path: examples/advanced_diffusion_training/train_dreambooth_lora_flux_advanced.py
-  #   profile: diffusers-flux
-  #   runner: linux-aarch64-a2-8
-  #   npu_devices: '0,1,2,3,4,5,6,7'
-  #   launcher: accelerate-deepspeed
-  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-  #   overlay_args:
-  #     - --pretrained_model_name_or_path unsloth/FLUX.1-dev
-  #     - --dataset_name LinoyTsaban/3d_icon
-  #     - --instance_prompt "3d icon in the style of TOK"   # 必填（即使传了 --dataset_name）
-  #     - --caption_column prompt
-  #     - --output_dir ${CI_OUTPUT_DIR}
-  #     - --resolution 256
-  #     - --train_batch_size 1
-  #     - --gradient_checkpointing
-  #     - --max_train_steps 1
-  #     - --checkpointing_steps 1
-  #   timeout_minutes: 240
-
-  # # ===== 大模型 + DeepSpeed ZeRO-3 分片（2026-09-21 写入待验证）=====
-  # # 按单卡 32GB 的显存需求分卡：SDXL 全量 ~36GB -> a2-2；全量 LCM ~64GB -> a2-4；
-  # # HiDream ~60GB -> a2-4；FLUX 全量 ~150GB / SD3.5-large ~100GB -> a2-8。
-  # # 脚本都用 accelerator.prepare，ZeRO-3 由 launcher（accelerate-deepspeed）接管。
-
-  # # DreamBooth LoRA HiDream（17B，~60GB；gated 走 ms_seeds）
-  # - path: examples/dreambooth/train_dreambooth_lora_hidream.py
-  #   profile: diffusers-flux
-  #   runner: linux-aarch64-a2-4
-  #   npu_devices: '0,1,2,3'
-  #   launcher: accelerate-deepspeed
-  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-  #   overlay_args:
-  #     - --pretrained_model_name_or_path HiDream-ai/HiDream-I1-Full
-  #     - --dataset_name lambdalabs/naruto-blip-captions
-  #     - --image_column image --caption_column text
-  #     - --instance_prompt "a photo of sks dog"
-  #     - --output_dir ${CI_OUTPUT_DIR}
-  #     - --resolution 256
-  #     - --train_batch_size 1 --gradient_accumulation_steps 1 --gradient_checkpointing
-  #     - --max_train_steps 1 --checkpointing_steps 1
-  #   timeout_minutes: 240
-
-  # # DreamBooth SD3（3.5-large ~100GB；gated 走 ms_seeds）
-  # - path: examples/dreambooth/train_dreambooth_sd3.py
-  #   profile: diffusers-flux
-  #   runner: linux-aarch64-a2-8
-  #   npu_devices: '0,1,2,3,4,5,6,7'
-  #   launcher: accelerate-deepspeed
-  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-  #   overlay_args:
-  #     - --pretrained_model_name_or_path stabilityai/stable-diffusion-3.5-large
-  #     - --dataset_name lambdalabs/naruto-blip-captions
-  #     - --image_column image --caption_column text
-  #     - --instance_prompt "a photo of sks dog"
-  #     - --output_dir ${CI_OUTPUT_DIR}
-  #     - --resolution 256
-  #     - --train_batch_size 1 --gradient_accumulation_steps 1 --gradient_checkpointing
-  #     - --max_train_steps 1 --checkpointing_steps 1
-  #   timeout_minutes: 240
-
-  # # DreamBooth FLUX 全量（~150GB；gated 走 ms_seeds）
-  # - path: examples/dreambooth/train_dreambooth_flux.py
-  #   profile: diffusers-flux
-  #   runner: linux-aarch64-a2-8
-  #   npu_devices: '0,1,2,3,4,5,6,7'
-  #   launcher: accelerate-deepspeed
-  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-  #   overlay_args:
-  #     - --pretrained_model_name_or_path unsloth/FLUX.1-dev
-  #     - --dataset_name lambdalabs/naruto-blip-captions
-  #     - --image_column image --caption_column text
-  #     - --instance_prompt "a photo of sks dog"
-  #     - --output_dir ${CI_OUTPUT_DIR}
-  #     - --resolution 256
-  #     - --train_batch_size 1 --gradient_accumulation_steps 1 --gradient_checkpointing
-  #     - --max_train_steps 1 --checkpointing_steps 1
-  #   timeout_minutes: 240
-
-#######注释###################################################################################################
-
-
-
   # CogVideoX-5b-I2V LoRA（复用 Disney 数据集；2026-09-21 昇腾机验证可跑）
   # 注意：必须用 THUDM/CogVideoX-5b-I2V（不是 1.5，脚本不处理 1.5 的 ofs 输入）。
   - path: examples/cogvideo/train_cogvideox_image_to_video_lora.py
@@ -887,59 +690,6 @@ supported:
       - --output_dir ${CI_OUTPUT_DIR}
     timeout_minutes: 180
 
-  # LCM LoRA SDXL（非 wds，naruto 数据集；2026-09-21 昇腾机验证可跑）
-  # 注意：单进程（a2-1）跑；多卡 DDP 会触发上游 bug（L1358 unet.dtype 未 unwrap）。
-  - path: examples/consistency_distillation/train_lcm_distill_lora_sdxl.py
-    profile: diffusers-lcm-sdxl
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --pretrained_teacher_model stabilityai/stable-diffusion-xl-base-1.0
-      - --pretrained_vae_model_name_or_path madebyollin/sdxl-vae-fp16-fix
-      - --dataset_name lambdalabs/naruto-blip-captions
-      - --output_dir ${CI_OUTPUT_DIR}
-      - --mixed_precision fp16
-      - --resolution 256
-      - --train_batch_size 1
-      - --gradient_accumulation_steps 1
-      - --gradient_checkpointing
-      - --lora_rank 64
-      - --max_train_steps 1
-      - --seed 0
-    timeout_minutes: 120
-
-  # Kandinsky 2.2 prior（~26.57GB；ZeRO-3 到 a2-4；2026-09-21 写入待验证）
-  # NPU 兼容（accelerator.device）；不传 --validation_prompts 以免加载 decoder/prior 验证。
-  - path: examples/kandinsky2_2/text_to_image/train_text_to_image_prior.py
-    profile: diffusers-flux
-    runner: linux-aarch64-a2-4
-    npu_devices: '0,1,2,3'
-    launcher: accelerate-deepspeed
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --pretrained_prior_model_name_or_path kandinsky-community/kandinsky-2-2-prior
-      - --dataset_name lambdalabs/naruto-blip-captions
-      - --output_dir ${CI_OUTPUT_DIR}
-      - --resolution 256
-      - --train_batch_size 1 --gradient_accumulation_steps 1
-      - --max_train_steps 1
-    timeout_minutes: 180
-
-  - path: examples/kandinsky2_2/text_to_image/train_text_to_image_lora_prior.py
-    profile: diffusers-flux
-    runner: linux-aarch64-a2-4
-    npu_devices: '0,1,2,3'
-    launcher: accelerate-deepspeed
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --pretrained_prior_model_name_or_path kandinsky-community/kandinsky-2-2-prior
-      - --dataset_name lambdalabs/naruto-blip-captions
-      - --output_dir ${CI_OUTPUT_DIR}
-      - --resolution 256
-      - --train_batch_size 1 --gradient_accumulation_steps 1
-      - --max_train_steps 1
-    timeout_minutes: 180
-
   # autoencoderkl VAE 训练（fixtures/DOG.jpg；2026-09-21 写入待验证）
   - path: examples/research_projects/autoencoderkl/train_autoencoderkl.py
     profile: diffusers-research-plain
@@ -947,7 +697,7 @@ supported:
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
       - --pretrained_model_name_or_path stabilityai/sd-vae-ft-mse
-      - --dataset_name cifar10
+      - --dataset_name uoft-cs/cifar10
       - --image_column img
       - --validation_image ${FIXTURE_DIR}/images/DOG.jpg
       - --output_dir ${CI_OUTPUT_DIR}
@@ -1002,57 +752,6 @@ supported:
       - --resolution 256
       - --train_batch_size 1
       - --max_train_steps 1
-    timeout_minutes: 180
-
-  # instruct_pix2pix SDXL（全量，~36GB）
-  - path: examples/instruct_pix2pix/train_instruct_pix2pix_sdxl.py
-    profile: diffusers-flux
-    runner: linux-aarch64-a2-2
-    npu_devices: '0,1'
-    launcher: accelerate-deepspeed
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --pretrained_model_name_or_path stabilityai/stable-diffusion-xl-base-1.0
-      - --variant fp16
-      - --dataset_name fusing/instructpix2pix-1000-samples
-      - --output_dir ${CI_OUTPUT_DIR}
-      - --resolution 256 --random_flip
-      - --train_batch_size 1 --gradient_accumulation_steps 1 --gradient_checkpointing
-      - --max_train_steps 1 --checkpointing_steps 1
-      - --conditioning_dropout_prob 0.05 --seed 42
-    timeout_minutes: 180
-
-  - path: examples/controlnet/train_controlnet_sdxl.py
-    profile: diffusers-flux
-    runner: linux-aarch64-a2-2
-    npu_devices: '0,1'
-    launcher: accelerate-deepspeed
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --pretrained_model_name_or_path stabilityai/stable-diffusion-xl-base-1.0
-      - --variant fp16
-      - --dataset_name fusing/fill50k
-      - --output_dir ${CI_OUTPUT_DIR}
-      - --resolution 256
-      - --train_batch_size 1 --gradient_accumulation_steps 1 --gradient_checkpointing
-      - --max_train_steps 1 --checkpointing_steps 1
-    timeout_minutes: 180
-
-  # scheduled_huber text_to_image SDXL（全量，~36GB）
-  - path: examples/research_projects/scheduled_huber_loss_training/text_to_image/train_text_to_image_sdxl.py
-    profile: diffusers-flux
-    runner: linux-aarch64-a2-2
-    npu_devices: '0,1'
-    launcher: accelerate-deepspeed
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --pretrained_model_name_or_path stabilityai/stable-diffusion-xl-base-1.0
-      - --variant fp16
-      - --dataset_name lambdalabs/naruto-blip-captions
-      - --output_dir ${CI_OUTPUT_DIR}
-      - --resolution 256 --center_crop --random_flip
-      - --train_batch_size 1 --gradient_accumulation_steps 1 --gradient_checkpointing
-      - --max_train_steps 1 --checkpointing_steps 1
     timeout_minutes: 180
 
   # 全量 SDXL LCM 蒸馏（~64GB）
@@ -1315,3 +1014,30 @@ unsupported:
   - examples/text_to_image/train_text_to_image_flax.py
   # OTHER_BACKEND：jax/optax/flax（diffusers v0.40 已移除 Flax）
   - examples/textual_inversion/textual_inversion_flax.py
+  # GATED_MODEL / MODEL_UNREACHABLE：SD3-medium / SD3.5-large / HiDream-I1-Full
+  # 在 HF 为 gated=auto（需 token + 接受 license）；FLUX 系（unsloth/FLUX.1-dev）
+  - examples/controlnet/train_controlnet_flux.py
+  - examples/controlnet/train_controlnet_sd3.py
+  - examples/flux-control/train_control_flux.py
+  - examples/flux-control/train_control_lora_flux.py
+  - examples/advanced_diffusion_training/train_dreambooth_lora_flux_advanced.py
+  - examples/dreambooth/train_dreambooth_flux.py
+  - examples/dreambooth/train_dreambooth_lora_sd3.py
+  - examples/dreambooth/train_dreambooth_sd3.py
+  - examples/dreambooth/train_dreambooth_lora_hidream.py
+  - examples/research_projects/sd3_lora_colab/train_dreambooth_lora_sd3_miniature.py
+  # API_CHANGE：diffusers 0.41.0.dev0 的 LoRA 构造 API 不再接受 hidden_size 参数
+  - examples/kandinsky2_2/text_to_image/train_text_to_image_lora_prior.py
+  # INCOMPAT：transformers 5.x 不兼容 CLIP text config
+  # （运行时 max_position_embeddings 读到 0，forward 报 "Sequence length must be
+  # less than max_position_embeddings"；diffusers 0.40+ 必须用 transformers 5.x）
+  - examples/kandinsky2_2/text_to_image/train_text_to_image_prior.py
+  # INCOMPAT：同上，SDXL/CLIP text config 在 transformers 5.x 下
+  # max_position_embeddings 读到 0（Sequence length must be less than ...）
+  - examples/instruct_pix2pix/train_instruct_pix2pix_sdxl.py
+  - examples/controlnet/train_controlnet_sdxl.py
+  - examples/research_projects/scheduled_huber_loss_training/text_to_image/train_text_to_image_sdxl.py
+  # OOM：LoRA SDXL LCM 蒸馏在 a2-1（29.5GiB）forward 即 OOM（已分配 24.4GiB）。
+  # DDP 不省单卡显存；ZeRO-3 又撞上游 bug——训练循环 L1358
+  # `solver.ddim_step(...).to(unet.dtype)`，模型被 DeepSpeedEngine 包裹后无 .dtype。
+  - examples/consistency_distillation/train_lcm_distill_lora_sdxl.py

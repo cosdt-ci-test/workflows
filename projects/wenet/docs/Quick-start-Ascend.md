@@ -133,9 +133,10 @@ ls -la /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33/ 2>/dev/nu
 echo "=== 检查磁盘空间 ==="
 df -h /root/.cache/modelscope
 # 从 ModelScope 下载 AISHELL-1 数据集
+rm -rf /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1
 python -c "
 from modelscope import snapshot_download
-snapshot_download('OmniData/AISHELL-1', repo_type='dataset')
+snapshot_download('OmniData/AISHELL-1', local_dir='/root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1', repo_type='dataset')
 "
 # 诊断：下载后再次检查
 echo "=== 下载后检查缓存目录 ==="

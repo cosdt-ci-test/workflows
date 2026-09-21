@@ -103,26 +103,6 @@ supported:
       - model.target_model_path=${SPECFORGE_MODEL_PATH}
     timeout_minutes: 180
 
-  - path: examples/configs/online/disaggregated/external/qwen2.5-0.5b-dflash-online.yaml
-    profile: specforge
-    runner: linux-aarch64-a2-4
-    image: swr.cn-southwest-2.myhuaweicloud.com/base_image/dockerhub/lmsysorg/sglang:v0.5.18-cann9.0.0-910b
-    overlay_args:
-      - training.max_steps=1
-      - training.batch_size=1
-      - training.accumulation_steps=1
-      - training.attention_backend=sdpa
-      - data.max_length=512
-      - data.train_data_path=${FIXTURE_DIR}/sharegpt_train.jsonl
-      - training.num_anchors=32
-      - training.save_interval=0
-      - training.log_interval=1
-      - tracking.report_to=none
-      - deployment.trainer.nproc_per_node=1
-      - deployment.disaggregated.receive_buffers=pageable
-      - model.target_model_path=${SPECFORGE_MODEL_PATH}
-    timeout_minutes: 180
-
   - path: examples/configs/online/disaggregated/external/qwen3-4b-dflash-online.yaml
     profile: specforge
     runner: linux-aarch64-a2-4
@@ -290,8 +270,23 @@ unsupported:
   - examples/configs/offline/colocated/qwen3-8b-eagle3-offline.yaml                       
 
 
-  - examples/configs/online/disaggregated/external/qwen2.5-0.5b-eagle3-online.yaml    
-  - examples/configs/online/disaggregated/external/qwen3-4b-eagle3-online.yaml        
+  # ===== Qwen2.5 DFLASH/DSPARK：sglang 0.5.18 wheel 上游 Qwen2ForCausalLM
+  # 未实现 set_dflash_layers_to_capture / set_dspark_layers_to_capture，
+  # sglang 在 init_attention_backends → configure_aux_hidden_state_capture
+  # 撞 ValueError 直接 abort scheduler（specforge 启动 DFLASH capture 时
+  # 必走这条 gating）。Qwen3ForCausalLM / Qwen3Moe / Qwen3_5Text /
+  # LlamaForCausalLM 都已实现；仅 Qwen2 / Qwen2MoE 缺。
+  # 实测：CI run 35582843489 job 106279506714 在
+  #   ValueError: Model Qwen2ForCausalLM implements neither
+  #     set_dspark_layers_to_capture nor set_dflash_layers_to_capture,
+  #     one of which is required for DFLASH/DSPARK.
+  # 退出，Setup example 步骤过、Run example 步骤死。等 sglang 上游补
+  # Qwen2ForCausalLM setter 后回移 supported。
+  - examples/configs/online/disaggregated/external/qwen2.5-0.5b-dflash-online.yaml
+
+
+  - examples/configs/online/disaggregated/external/qwen2.5-0.5b-eagle3-online.yaml
+  - examples/configs/online/disaggregated/external/qwen3-4b-eagle3-online.yaml
   - examples/configs/online/disaggregated/external/inkling-dspark-disaggregated.yaml  
   - examples/configs/online/disaggregated/external/longcat-flash-dflash-online.yaml   
   - examples/configs/online/disaggregated/external/longcat-flash-eagle3-online.yaml   

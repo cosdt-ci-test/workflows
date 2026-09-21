@@ -129,20 +129,20 @@ mkdir -p /root/asr-data/OpenSLR/33
 # 从 ModelScope 下载 AISHELL-1 数据集
 python -c "
 from modelscope import snapshot_download
-snapshot_download('OmniData/AISHELL-1', local_dir='/root/asr-data/AISHELL-1', repo_type='dataset')
+snapshot_download('OmniData/AISHELL-1', local_dir='/root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1', repo_type='dataset')
 "
 echo "=== 下载后目录结构 ==="
-find /root/asr-data/AISHELL-1 -maxdepth 4 -type d | head -30
+find /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1 -maxdepth 4 -type d | head -30
 # 根据实际目录结构创建软链接
-if [ -d "/root/asr-data/AISHELL-1/data_aishell" ]; then
-  ln -sf /root/asr-data/AISHELL-1/data_aishell /root/asr-data/OpenSLR/33/data_aishell
-  ln -sf /root/asr-data/AISHELL-1/resource_aishell /root/asr-data/OpenSLR/33/resource_aishell
-elif [ -d "/root/asr-data/AISHELL-1/raw/33/data_aishell" ]; then
-  ln -sf /root/asr-data/AISHELL-1/raw/33/data_aishell /root/asr-data/OpenSLR/33/data_aishell
-  ln -sf /root/asr-data/AISHELL-1/raw/33/resource_aishell /root/asr-data/OpenSLR/33/resource_aishell
+if [ -d "/root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/data_aishell" ]; then
+  ln -sf /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/data_aishell /root/asr-data/OpenSLR/33/data_aishell
+  ln -sf /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/resource_aishell /root/asr-data/OpenSLR/33/resource_aishell
+elif [ -d "/root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33/data_aishell" ]; then
+  ln -sf /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33/data_aishell /root/asr-data/OpenSLR/33/data_aishell
+  ln -sf /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33/resource_aishell /root/asr-data/OpenSLR/33/resource_aishell
 else
   echo "ERROR: data_aishell not found in expected locations"
-  find /root/asr-data/AISHELL-1 -name "data_aishell" -o -name "resource_aishell" | head -10
+  find /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1 -name "data_aishell" -o -name "resource_aishell" | head -10
   exit 1
 fi
 touch /root/asr-data/OpenSLR/33/data_aishell/.complete

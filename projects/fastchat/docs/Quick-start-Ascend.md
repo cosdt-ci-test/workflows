@@ -87,37 +87,31 @@ printf '你好\n\n' | FASTCHAT_USE_MODELSCOPE=True \
 
 FastChat 用 controller 管理 model worker，并通过 API server 提供 OpenAI 兼容接口。
 
-**启动 controller。** controller 负责注册和调度 model worker，日志保存在当前目录的 `.fastchat` 中。
+**在第一个终端启动 controller。** controller 负责注册和调度 model worker。
 
 ```shell #test-setup id="start-controller"
-mkdir -p .fastchat
-python -m fastchat.serve.controller >.fastchat/controller.log 2>&1 &
-echo $! >.fastchat/controller.pid
+python -m fastchat.serve.controller
 ```
 
-**启动 model worker。** worker 在 NPU 上加载模型，并以 `Qwen2.5-0.5B-Instruct` 为服务名注册到 controller。
+**在第二个终端启动 model worker。** worker 在 NPU 上加载模型，并以 `Qwen2.5-0.5B-Instruct` 为服务名注册到 controller。
 
 ```shell #test-setup id="start-worker"
 FASTCHAT_USE_MODELSCOPE=True python -m fastchat.serve.model_worker \
   --model-path Qwen/Qwen2.5-0.5B-Instruct \
   --model-names Qwen2.5-0.5B-Instruct \
   --revision master \
-  --device npu \
-  >.fastchat/worker.log 2>&1 &
-echo $! >.fastchat/worker.pid
+  --device npu
 ```
 
-**启动 API server。** 服务在 `http://127.0.0.1:8000/v1` 提供 OpenAI 兼容接口。
+**在第三个终端启动 API server。** 服务在 `http://127.0.0.1:8000/v1` 提供 OpenAI 兼容接口。
 
 ```shell #test-setup id="start-api"
 python -m fastchat.serve.openai_api_server \
   --host 127.0.0.1 \
-  --port 8000 \
-  >.fastchat/api.log 2>&1 &
-echo $! >.fastchat/api.pid
+  --port 8000
 ```
 
-**检查模型服务。** model worker 加载完成后，通过 `/v1/models` 查看已经注册的模型。
+**在第四个终端检查模型服务。** model worker 加载完成后，通过 `/v1/models` 查看已经注册的模型。
 
 ```shell #test id="check-model"
 curl -fsS http://127.0.0.1:8000/v1/models | python -c "import json, sys; data=json.load(sys.stdin); print('model:', data['data'][0]['id'])"
@@ -139,13 +133,6 @@ curl -fsS http://127.0.0.1:8000/v1/chat/completions \
 ```shell #test-result id="api-chat" fuzzy='xxx'
 model: Qwen2.5-0.5B-Instruct
 reply: xxx
-```
-
-**停止服务。** 使用启动时保存的进程号停止 API server、model worker 和 controller。
-
-```shell #test-setup id="stop-api"
-kill $(cat .fastchat/api.pid .fastchat/worker.pid .fastchat/controller.pid) 2>/dev/null || true
-rm -f .fastchat/*.pid
 ```
 
 更多 Web UI、多 worker 和评测用法见 [FastChat 官方文档](https://github.com/lm-sys/FastChat)。

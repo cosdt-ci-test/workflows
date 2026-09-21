@@ -16,7 +16,11 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from workflows.markdown_doc_test_base import MarkdownDocTestBase, TestCommand
+from workflows.markdown_doc_test_base import (
+    MarkdownDocTestBase,
+    SetupCommand,
+    TestCommand,
+)
 from workflows.model_cache import (
     ensure_safetensors,
     purge_modelscope_corrupt,
@@ -31,10 +35,10 @@ _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
 _MODEL_ID = 'Qwen2.5-0.5B-Instruct'
 _MODELS_URL = 'http://127.0.0.1:8000/v1/models'
 _READINESS_TIMEOUT = 900
-_OWNED_SERVICES = (
-    ('api.pid', 'fastchat.serve.openai_api_server'),
-    ('worker.pid', 'fastchat.serve.model_worker'),
-    ('controller.pid', 'fastchat.serve.controller'),
+_SERVICE_MODULES = (
+    ('controller', 'fastchat.serve.controller'),
+    ('worker', 'fastchat.serve.model_worker'),
+    ('api', 'fastchat.serve.openai_api_server'),
 )
 _FSCHAT_PIN_RE = re.compile(
     r'fschat\[model_worker\]==(?P<version>[0-9][0-9A-Za-z.!+_-]*)'
@@ -100,67 +104,6 @@ def _merge_sourced_env(script: str) -> None:
             continue
         key, _, value = entry.partition('=')
         os.environ[key] = value
-
-
-def _read_pid(path: Path) -> int | None:
-    try:
-        pid = int(path.read_text(encoding='utf-8').strip())
-    except (OSError, ValueError):
-        return None
-    return pid if pid > 1 else None
-
-
-def _process_cmdline(pid: int) -> str:
-    try:
-        return Path(f'/proc/{pid}/cmdline').read_bytes().replace(b'\0', b' ').decode(
-            'utf-8', errors='replace'
-        )
-    except OSError:
-        return ''
-
-
-def _stop_owned_process(pid_file: Path, expected_module: str) -> None:
-    """Stop only the process recorded by the document and matching its module."""
-
-    pid = _read_pid(pid_file)
-    if pid is None:
-        pid_file.unlink(missing_ok=True)
-        return
-
-    cmdline = _process_cmdline(pid)
-    if not cmdline:
-        pid_file.unlink(missing_ok=True)
-        return
-    if expected_module not in cmdline:
-        print(
-            f'cleanup: refusing to stop pid {pid}; expected {expected_module!r}, '
-            f'got {cmdline!r}'
-        )
-        pid_file.unlink(missing_ok=True)
-        return
-
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pid_file.unlink(missing_ok=True)
-        return
-
-    for _ in range(50):
-        if not _process_cmdline(pid):
-            pid_file.unlink(missing_ok=True)
-            return
-        time.sleep(0.1)
-
-    try:
-        os.kill(pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-    pid_file.unlink(missing_ok=True)
-
-
-def _cleanup_services() -> None:
-    for pid_name, expected_module in _OWNED_SERVICES:
-        _stop_owned_process(_SERVICE_DIR / pid_name, expected_module)
 
 
 def _service_log_tail() -> str:
@@ -242,16 +185,64 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         _assert_version_alignment(text, upstream_ref)
         return text
 
+    def _start_documented_service(self, name: str, command: str, env, cwd) -> None:
+        """Run a documented foreground service command concurrently for the test."""
+
+        _SERVICE_DIR.mkdir(parents=True, exist_ok=True)
+        log_handle = (_SERVICE_DIR / f'{name}.log').open('wb')
+        try:
+            process = subprocess.Popen(
+                ['bash', '-c', command],
+                cwd=cwd,
+                env=env,
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+        except Exception:
+            log_handle.close()
+            raise
+        services = getattr(self, '_service_processes', {})
+        services[name] = (process, log_handle)
+        self._service_processes = services
+        self.log(f'service start: {name} pid={process.pid}')
+
+    def _stop_documented_services(self) -> None:
+        services = getattr(self, '_service_processes', {})
+        for process, _log_handle in reversed(tuple(services.values())):
+            if process.poll() is None:
+                try:
+                    os.killpg(process.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+
+        for name, (process, log_handle) in services.items():
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait(timeout=5)
+            finally:
+                log_handle.close()
+            self.log(f'service stop: {name} rc={process.returncode}')
+        self._service_processes = {}
+
     def _wait_for_model_service(self) -> None:
         deadline = time.monotonic() + _READINESS_TIMEOUT
         last_error = 'service has not responded yet'
 
         while time.monotonic() < deadline:
-            stopped: list[str] = []
-            for pid_name, expected_module in _OWNED_SERVICES:
-                pid = _read_pid(_SERVICE_DIR / pid_name)
-                if pid is None or expected_module not in _process_cmdline(pid):
-                    stopped.append(expected_module)
+            services = getattr(self, '_service_processes', {})
+            stopped = [
+                f'{name} (rc={process.returncode})'
+                for name, (process, _log_handle) in services.items()
+                if process.poll() is not None
+            ]
+            missing = {name for name, _module in _SERVICE_MODULES} - services.keys()
+            stopped.extend(f'{name} (not started)' for name in sorted(missing))
             if stopped:
                 raise AssertionError(
                     'FastChat service exited before model registration: '
@@ -287,6 +278,11 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         )
 
     def _run_one(self, cmd, results, env, cwd, timeout, idx):
+        if isinstance(cmd, SetupCommand):
+            for name, module in _SERVICE_MODULES:
+                if module in cmd.cmd:
+                    self._start_documented_service(name, cmd.cmd, env, cwd)
+                    return
         if isinstance(cmd, TestCommand) and cmd.id == 'check-model':
             self._wait_for_model_service()
         return super()._run_one(cmd, results, env, cwd, timeout, idx)
@@ -335,7 +331,6 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         ensure_safetensors()
         purge_modelscope_corrupt(resolve_modelscope_cache())
 
-        _cleanup_services()
         if _WORK_DIR.exists():
             shutil.rmtree(_WORK_DIR)
         _WORK_DIR.mkdir(parents=True)
@@ -347,10 +342,12 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             cls.prepare_environment()
 
     def post_process(self) -> None:
-        _cleanup_services()
-        os.chdir(_PROJECT_DIR)
-        if _WORK_DIR.exists():
-            shutil.rmtree(_WORK_DIR, ignore_errors=True)
+        try:
+            self._stop_documented_services()
+        finally:
+            os.chdir(_PROJECT_DIR)
+            if _WORK_DIR.exists():
+                shutil.rmtree(_WORK_DIR, ignore_errors=True)
 
     @unittest.skipIf(
         not _e2e_enabled(),

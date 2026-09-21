@@ -201,6 +201,11 @@ setup_peft() {
   read -r _torch_ver _npu_ver <<< "$(torch_stack_for_profile "$PROFILE")"
   if [[ "$_torch_ver" == "2.12.0" ]]; then
     install_cpu_torchvision
+    # bitsandbytes (fp4_finetuning 例的 4-bit NF4)：bnb 0.50.2 走默认
+    # CPU 后端在 NPU 上跑，无需 NPU 专用 kernel；run_example.sh 对其
+    # 跳过 transfer_to_npu（见 SKIP_TRANSFER_TO_NPU）。2.9 栈不装——
+    # 仅 fp4 一条在 2.12 下用 bnb，2.9 的 4 条多卡 sft 不需要。
+    python -m pip install --index-url "$ALIYUN_PIP_INDEX" bitsandbytes
   fi
   # t5-base seq2seq FSDP 例（peft_lora_seq2seq_accelerate_fsdp.py）零 CLI，
   # 数据路径硬编码 cwd 相对 temp/data/FinancialPhraseBank-v1.0/ 下两个

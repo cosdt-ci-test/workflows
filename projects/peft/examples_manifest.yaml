@@ -948,15 +948,49 @@ supported:
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
     timeout_minutes: 30
 
+  # FP4（bnb 4-bit NF4 QLoRA）：零 CLI 模块级脚本，硬编码 facebook/opt-350m
+  # + Abirate/english_quotes 数据 + fp16=True + OPT 专属 target_modules。
+  # 无需 overlay/patch——模型由 cache-seed plant（AI-ModelScope/opt-350m →
+  # facebook/opt-350m），数据走 hf-mirror 运行时下（2508 行小集）。
+  # 关键：本条目是唯一走 bnb 的 supported 例，run_example.sh 的
+  # SKIP_TRANSFER_TO_NPU 白名单（fp4_finetuning/ 目录）对它跳过
+  # transfer_to_npu——bnb 0.50.2 默认 CPU 后端在 NPU 上跑 4-bit NF4，
+  # 挂 transfer_to_npu 反而让 bnb 误走 cuda backend 崩。fp16=True 由
+  # fp16 neutralizer 中性化。
+  # 2026-09-21 npu-2 单卡 2.12 实跑 20 步 exit 0（4.9s/step，trainable
+  # 25M / all 205M，量化 uint8 权重）。
+  - path: examples/fp4_finetuning/finetune_fp4_opt_bnb_peft.py
+    profile: peft
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
+    timeout_minutes: 30
+
 unsupported:
   - examples/causal_language_modeling/peft_lora_clm_accelerate_ds_zero3_offload.py
   - examples/conditional_generation/peft_lora_seq2seq_accelerate_ds_zero3_offload.py
   - examples/orthogonal_subspace_learning/osf_continual_learning.py
-  - examples/KappaTune/experiments_kappatune_peft.py
-  - examples/arrow_multitask/arrow_phi3_mini.py
-  - examples/fp4_finetuning/finetune_fp4_opt_bnb_peft.py
-  - examples/int8_training/fine_tune_blip2_int8.py
-  - examples/int8_training/peft_adalora_whisper_large_training.py
+
+  # ===== bnb（bitsandbytes）量化族（fp4 已翻 supported，下方为剩余 8 条）
+  # 2026-09-21 npu-2 实测定论 =====
+  # bnb 0.50.2 的 4-bit NF4 与 8-bit int8 在 NPU 上**功能可用**：走默认
+  # CPU 后端（权重 CPU 内核量化 + npu 矩阵乘），不挂 transfer_to_npu 时
+  # QLoRA 4bit/8bit 训练、Linear8bitLt、int8_vectorwise_quant/dequant
+  # 全通（npu-1/npu-2 双机复现）。为此 run_example.sh 加了
+  # SKIP_TRANSFER_TO_NPU 白名单（fp4_finetuning/int8_training/
+  # loftq_finetuning/KappaTune/arrow_multitask 目录跳过 transfer_to_npu，
+  # 保留 fp16 neutralizer + dataset shim），fp4 由此翻案成功。
+  # 下方 8 条仍未翻，各自有一票否决的独立死因（非 bnb 后端问题）：
+  # - LoftQ 3 条（int8_correction/quantize_save_load/train_gsm8k）：即便
+  #   绕过 shim，peft 源码 loftq_utils.py:70 compute_device="cuda"（无 npu
+  #   分支）在 torch +cpu 下 AssertionError，需源码 patch。
+  # - KappaTune：gated Mixtral-8x7B + 零 CLI 双实验。
+  # - arrow_phi3：纯推理/评估脚本，非训练 example。
+  # - blip2：零 CLI + 硬编码 50 epoch（无 max_steps）+ 2.7b VLM 未 seed。
+  # - whisper：数据 mozilla/common_voice_11_0 在 hf-mirror 不可达。
+  - examples/KappaTune/experiments_kappatune_peft.py   # gated mistralai/Mixtral-8x7B（46GB，需 token）+ 零 CLI 双实验
+  - examples/arrow_multitask/arrow_phi3_mini.py        # 纯推理/评估脚本（evaluate_on_multi_choice_batched + no_grad，无 trainer.train），非训练 example
+  - examples/int8_training/fine_tune_blip2_int8.py     # 零 CLI + 硬编码 50 epoch 手动循环（无 max_steps），blip2-2.7b VLM 未 seed
+  - examples/int8_training/peft_adalora_whisper_large_training.py  # 8bit+AdaLoRA 模型构造已实测可通，但默认数据 mozilla/common_voice_11_0 在 hf-mirror 不可达（DatasetNotFoundError）
   - examples/int8_training/run_adalora_whisper_int8.sh
   - examples/loftq_finetuning/int8_correction.py
   - examples/loftq_finetuning/quantize_save_load.py
@@ -983,16 +1017,19 @@ unsupported:
   # 链接指 mistralrs 自己仓 https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/xlora_zephyr.py）。
   # 无 NPU 后端，NPU 上无解。
   - examples/xlora/xlora_inference_mistralrs.py
-  # cartridge_self_study：train_distill.py 是 README 文档化的"Train cartridge"主入口，arxiv_train.py 是它的 arxiv-default 平行入口（from train_distill import ...），两者 NPU 锁死同根因（device choices=[cpu,mps,cuda,xpu] 无 npu）。synthesize.py / arxiv_synthesize.py 是 stage-1 数据合成（vLLM），无 trainer.train，归 exclude（不是 training example）
+  # cartridge_self_study：train_distill.py 是 README 文档化的"Train cartridge"主入口，arxiv_train.py 是它的 arxiv-default 平行入口（from train_distill import ...），两者 NPU 锁死同根因（device choices=[cpu,mps,cuda,xpu] 无 npu）。synthesize.py / arxiv_synthesize.py 是 stage-1 数据合成（vLLM），无 trainer.train，归非 example 配套物（见下方"非 example 配套物"段）
   - examples/cartridge_self_study/train_distill.py
   - examples/cartridge_self_study/arxiv_train.py
 
 
-  # ----- SFT 配套物：train.py 实现（入口是 run_peft_*.sh ×7；configs/*.yaml 不纳入审计）-----
-  - examples/sft/train.py          # run_peft*.sh 共同调用的实现（hfArgumentParser + SFTTrainer），入口是 .sh
+  # ===== 非 example 配套物（登记以便 files-only 扫描对账；均非 standalone 训练 recipe，进不了 supported）=====
+  # 2026-09-20 退役 scan.exclude 后，examples/ 下每个 .sh/.py 都须在 supported ∪ unsupported 登记；
+  # 以下是被训练脚本 import 的库模块 / 自测 / 预处理 / 推理·转换·合成工具，无 trainer.train() 训练闭环。
 
-  # ----- 各 example 的 utils/ 目录内 helper 模块（目录下无独立 example；逐文件展开）-----
-  # boft_controlnet/utils/（被 train_controlnet.py 通过 from utils.X import Y 引用）
+  # --- sft/train.py：run_peft*.sh 共同调用的实现（hfArgumentParser + SFTTrainer），入口是 .sh ---
+  - examples/sft/train.py
+
+  # --- utils 子包：被对应 train_*.py import 的库代码，无 __main__ 入口，不可独立执行 ---
   - examples/boft_controlnet/utils/__init__.py
   - examples/boft_controlnet/utils/args_loader.py
   - examples/boft_controlnet/utils/dataset.py
@@ -1000,41 +1037,48 @@ unsupported:
   - examples/boft_controlnet/utils/pipeline_controlnet.py
   - examples/boft_controlnet/utils/tracemalloc.py
   - examples/boft_controlnet/utils/unet_2d_condition.py
-  # boft_dreambooth/utils/（被 train_dreambooth.py 引用）
   - examples/boft_dreambooth/utils/__init__.py
   - examples/boft_dreambooth/utils/args_loader.py
   - examples/boft_dreambooth/utils/dataset.py
   - examples/boft_dreambooth/utils/tracemalloc.py
-  # hra_dreambooth/utils/（adapted from boft_dreambooth/utils/，结构相同）
   - examples/hra_dreambooth/utils/__init__.py
   - examples/hra_dreambooth/utils/args_loader.py
   - examples/hra_dreambooth/utils/dataset.py
   - examples/hra_dreambooth/utils/tracemalloc.py
 
-  # ----- __init__.py 包标记（boft_* 子包 init）-----
+  # --- __init__.py 包标记（boft_* 子包 init），空模块 ---
   - examples/boft_controlnet/__init__.py
   - examples/boft_dreambooth/__init__.py
 
-  # ----- 上游自测（peft 仓内 test_*.py / test_*.sh，不是 user-facing example）-----
-  - examples/adamss_finetuning/test_adamss_quick.py
-  - examples/boft_controlnet/test_controlnet.py
-  - examples/boft_controlnet/test_controlnet.sh
-
-  # ----- 单文件 helper 模块（utils.py / datautils.py，每个 example 各列）-----
+  # --- 顶层 helper 模块：训练脚本 import 的数据/工具库，无入口 ---
   - examples/corda_finetuning/datautils.py
   - examples/eva_finetuning/utils.py
   - examples/orthogonal_subspace_learning/utils.py
   - examples/sft/utils.py
 
-  # ----- 数据预处理脚本（preprocess.py）-----
-  - examples/corda_finetuning/preprocess.py          # SVD 产物预处理
-  - examples/pissa_finetuning/preprocess.py          # 主成分预处理
+  # --- 上游自测脚本：非训练入口。
+  # test_adamss_quick.py 是 image_classification_adamss_asa.py 的 100 样本快速版（有 Trainer.train()，
+  #   但 :8 硬编码坏 sys.path、load_dataset("cifar10") 与已支持条目资产不一致，且与已支持条目重复，不翻案）；
+  # test_controlnet.{py,sh} 是 BOFT ControlNet 推理自测，依赖训练产物 checkpoint（model.safetensors/unet）+ SD2.1 ---
+  - examples/adamss_finetuning/test_adamss_quick.py
+  - examples/boft_controlnet/test_controlnet.py
+  - examples/boft_controlnet/test_controlnet.sh
 
-  # ----- 非 training utility（HTTP client / state_dict 转换 / 多 stage 子脚本）-----
-  - examples/bdlora_finetuning/chat.py               # HTTP client（POST localhost:8000/v1/completions），无训练循环
-  - examples/cartridge_self_study/arxiv_synthesize.py # stage-1 数据合成（vLLM prefix caching，无 trainer.train）
-  - examples/cartridge_self_study/synthesize.py      # stage-1 数据合成（vLLM prefix caching，无 trainer.train）
-  - examples/ephemeral_gpu_offloading/load_with_dora.py # load-only benchmark（from_pretrained + merge + save_pretrained，无训练循环）
-  - examples/lora_dreambooth/convert_kohya_ss_sd_lora_to_peft.py  # CPU state_dict 格式转换（kohya_ss 键名映射）
-  - examples/lora_dreambooth/convert_peft_sd_lora_to_kohya_ss.py  # CPU state_dict 格式转换
-  - examples/stable_diffusion/convert_sd_adapter_to_peft.py       # CPU state_dict 格式转换
+  # --- 数据预处理脚本：CorDA/PiSSA 的 SVD 分解初始化（preprocess_corda / pissa init），
+  #     无 trainer.train()，且需 device_map="auto" 加载 7B + 下载校准数据集；
+  #     对应训练脚本 corda/pissa_finetuning.py 已以 --corda_mode False / 退化 LoRA 绕开此步 ---
+  - examples/corda_finetuning/preprocess.py
+  - examples/pissa_finetuning/preprocess.py
+
+  # --- 推理/转换/合成工具脚本：均非训练 recipe ---
+  # chat.py：打 localhost:8000 vLLM 服务的纯 HTTP 客户端（不加载模型）；
+  # synthesize.py / arxiv_synthesize.py：cartridge stage-1 数据合成（vLLM 分支无 NPU 后端，HF 分支非训练）；
+  # load_with_dora.py：硬编码 device_map={"":"cpu"} + 256GiB 内存的 CPU offload 演示（7B 模型）；
+  # convert_*.py ×3：SD LoRA 格式转换（kohya_ss↔peft、lycoris→peft，CPU 纯工具，required 输入 checkpoint/adapter）
+  - examples/bdlora_finetuning/chat.py
+  - examples/cartridge_self_study/arxiv_synthesize.py
+  - examples/cartridge_self_study/synthesize.py
+  - examples/ephemeral_gpu_offloading/load_with_dora.py
+  - examples/lora_dreambooth/convert_kohya_ss_sd_lora_to_peft.py
+  - examples/lora_dreambooth/convert_peft_sd_lora_to_kohya_ss.py
+  - examples/stable_diffusion/convert_sd_adapter_to_peft.py

@@ -303,6 +303,31 @@ teacher = snapshot_download(
 with open(os.environ["GITHUB_ENV"], "a") as fh:
     fh.write(f"TT_TEACHER_PATH={teacher}\n")
 print("TT_TEACHER_PATH=", teacher)
+
+# PPO 翻案 (recipes/ppo_full_finetune_single_device.py) 需要 scalar-head
+# reward model。Qwen2.5-0.5B 上游没有现成 RM，upstream PPO yaml 用
+# smohammadi/tinyllama_rm_sentiment_1b（TinyLlama v1.1 改的 scalar-head
+# 模型，model_type=REWARD + reward_hf_to_tune 转换），2.2GB。ModelScope 不
+# 代发个人 HF repo，走 huggingface_hub + HF_ENDPOINT=hf-mirror.com（中国镜像，
+# coder pod curl 实测 HTTP 200，HF 直连在 coder pod 上 hang）。如果 caller
+# 已经预下载并 export TT_RM_PATH（典型场景：coder 本机 scp），跳过下载。
+if not os.environ.get("TT_RM_PATH"):
+    from huggingface_hub import snapshot_download as _hf_snapshot
+    os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+    rm = _hf_snapshot(
+        "smohammadi/tinyllama_rm_sentiment_1b",
+        cache_dir=os.environ.get(
+            "HF_HOME", os.path.expanduser("~/.cache/huggingface")
+        ),
+        allow_patterns=[
+            "*.json", "*.txt", "*.safetensors", "tokenizer*", "*.model",
+        ],
+    )
+    with open(os.environ["GITHUB_ENV"], "a") as fh:
+        fh.write(f"TT_RM_PATH={rm}\n")
+    print("TT_RM_PATH=", rm)
+else:
+    print("TT_RM_PATH (caller-provided):", os.environ["TT_RM_PATH"])
 PY
 }
 

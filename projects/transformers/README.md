@@ -7,8 +7,8 @@
 ## 清单、fixture 和脚本
 
 - `examples_manifest.yaml` 扫描目标仓 `examples/` 下的 Python、Shell 和 YAML 文件。`supported` 是实际调度的低成本 smoke 用例；其他路径先由 manifest-check 报为新增或失效，不自动占用 NPU。
-- 当前 supported 用例覆盖：generation、GLUE/分类（Trainer + no-trainer）、语言建模（CLM/MLM/FIM，Trainer + no-trainer）、抽取式 QA（含 beam-search 与 seq2seq 变体）、多选（SWAG 双入口）、NER（双入口）、摘要和翻译（Trainer + no-trainer）。全部使用目标仓内小型 fixture、tiny 模型缓存、单卡和单步/少量样本训练。
-- 不纳入 supported 的可执行 example 及原因（见 manifest 内注释）：run_plm（ModelScope 无 tiny xlnet）、run_xnli/run_greedy（硬编码 Hub 数据集，无本地文件入口）；视觉/语音家族待后续批次补 profile 与 fixture。
+- 当前 supported 用例覆盖：generation、GLUE/分类（Trainer + no-trainer）、语言建模（CLM/MLM/FIM，Trainer + no-trainer）、抽取式 QA（含 seq2seq 变体）、多选（SWAG 双入口）、NER（双入口）、摘要和翻译（Trainer + no-trainer）。全部使用目标仓内小型 fixture、tiny 模型缓存、单卡和单步/少量样本训练。
+- 不纳入 supported 的可执行 example 及原因（见 manifest 内注释）：run_qa_beam_search*.py（硬编码 XLNet，ModelScope 无 tiny xlnet）、run_plm（同 XLNet 限制）、run_xnli/run_greedy（硬编码 Hub 数据集，无本地文件入口）；视觉/语音家族待后续批次补 profile 与 fixture。
 - `scripts/setup_example.sh` 按 profile 安装 editable transformers 和 example 依赖；`generation` / `glue` 保持原有依赖，`small-training` 用于 QA、SWAG、NER（额外装 `seqeval`），`lm` 用于 CLM/MLM/FIM，`seq2seq` 用于摘要/翻译/seq2seq-QA（额外装 `sacrebleu`、`rouge-score`、`nltk`）；并把扩展名缺失的 `wiki_text/wiki_00` fixture 拷贝为输出目录下的 `train.txt` 供 LM 用例引用。
 - `scripts/run_example.sh` 对 `run_*_no_trainer.py` 使用 Accelerate 启动，其他普通 Python example 直接执行；脚本只修改目标 checkout 的临时副本来追加参数，不向上游仓库写入、提交或推送。
 - 训练和模型缓存优先使用 runner 上的共享缓存；运行输出写入 `CI_OUTPUT_DIR`，不污染目标 checkout。

@@ -137,6 +137,14 @@ find /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1
 cd /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33/
 tar xzf data_aishell.tgz
 tar xzf resource_aishell.tgz
+echo "=== 解压后目录结构（raw/33） ==="
+find /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33
+echo "=== data_aishell/wav 目录内容抽样（前 10 项） ==="
+ls /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33/data_aishell/wav | head -10
+echo "=== data_aishell/wav 条目总数 ==="
+ls /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33/data_aishell/wav | wc -l
+echo "=== 已解压 wav 文件数 ==="
+find /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33 -iname '*.wav' -type f | wc -
 # 创建软链接
 ln -sf /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33/data_aishell /root/asr-data/OpenSLR/33/data_aishell
 ln -sf /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33/resource_aishell /root/asr-data/OpenSLR/33/resource_aishell

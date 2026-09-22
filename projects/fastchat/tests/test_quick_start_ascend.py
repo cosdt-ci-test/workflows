@@ -34,6 +34,7 @@ _SERVICE_DIR = _WORK_DIR / '.fastchat'
 _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
 _MODEL_ID = 'Qwen2.5-0.5B-Instruct'
 _MODELS_URL = 'http://127.0.0.1:8000/v1/models'
+_CHAT_RESPONSE_PATH = Path('/tmp/fastchat-chat.json')
 _READINESS_TIMEOUT = 900
 _SERVICE_MODULES = (
     ('controller', 'fastchat.serve.controller'),
@@ -85,6 +86,36 @@ def _assert_version_alignment(installed: str, upstream_ref: str) -> None:
             f'UPSTREAM_REF={upstream_ref!r} resolves to {monitored!r}, '
             f'but the installed fschat is {installed_version!r}'
         )
+
+
+def _validate_chat_response(path: Path) -> None:
+    """Validate the documented Chat Completions response."""
+
+    try:
+        data = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise AssertionError(f'invalid chat response file {path}: {exc}') from exc
+
+    try:
+        model = data['model']
+        message = data['choices'][0]['message']
+        role = message['role']
+        content = message['content']
+    except (KeyError, IndexError, TypeError) as exc:
+        raise AssertionError(
+            f'chat response is missing required fields: {data!r}'
+        ) from exc
+
+    if model != _MODEL_ID:
+        raise AssertionError(
+            f'chat response model mismatch: expected {_MODEL_ID!r}, got {model!r}'
+        )
+    if role != 'assistant':
+        raise AssertionError(
+            f'chat response role mismatch: expected "assistant", got {role!r}'
+        )
+    if not isinstance(content, str) or not content.strip():
+        raise AssertionError('chat response assistant content is empty')
 
 
 def _merge_sourced_env(script: str) -> None:
@@ -292,6 +323,10 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             return
         if isinstance(cmd, TestCommand) and cmd.id == 'check-model':
             self._wait_for_model_service()
+        if isinstance(cmd, TestCommand) and cmd.id == 'api-chat':
+            super()._run_one(cmd, results, env, cwd, timeout, idx)
+            _validate_chat_response(_CHAT_RESPONSE_PATH)
+            return
         return super()._run_one(cmd, results, env, cwd, timeout, idx)
 
     @classmethod

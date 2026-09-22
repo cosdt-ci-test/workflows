@@ -330,50 +330,6 @@ jobs:
           repository: ${{ inputs.examples_repo }}
           path: examples
 
-      # Pre-stage the torchtune reward model (smohammadi/tinyllama_rm_sentiment_1b)
-      # via direct curl from hf-mirror.com. setup_example.sh's
-      # `if not os.environ.get("TT_RM_PATH"):` branch uses huggingface_hub's
-      # snapshot_download, which (a) installs huggingface_hub>=1.32.0 from
-      # torchtune deps and (b) then gets downgraded to 0.36.2 by
-      # `pip install transformers==4.57.1` (Requires-Dist: huggingface-hub<1.0).
-      # huggingface_hub 0.36.2 doesn't recognize HF_HUB_DISABLE_XET, so the
-      # mirror's 302→cas-bridge.xethub.hf.co xet resume logic kicks in; on the
-      # cluster's persistent HF cache a stale .incomplete blob from a prior
-      # attempt triggers HTTP 416 "Requested range not satisfiable" (run
-      # 35582685960 / 35582685960, all 8 torchtune recipes failed at
-      # Setup example environment). curl from the same mirror follows the same
-      # 302 to cas-bridge but writes to a per-job path with no shared .incomplete
-      # cache, so the resume bug doesn't trigger.
-      #
-      # Idempotent: skips when the safetensors already has the expected size
-      # (4.14 GB), so warm cluster runners skip the ~30 s download.
-      - name: Pre-stage torchtune reward model (curl, bypass xet-bridge 416)
-        if: matrix.example.profile == 'torchtune'
-        env:
-          TT_RM_PATH: ${{ runner.temp }}/tt_rm
-        run: |
-          mkdir -p "$TT_RM_PATH"
-          cd "$TT_RM_PATH"
-          expected_size=4138080772
-          current_size=$(stat -c%s model.safetensors 2>/dev/null || stat -f%z model.safetensors 2>/dev/null || echo 0)
-          if [ "$current_size" != "$expected_size" ]; then
-            echo "model.safetensors size=$current_size (expected $expected_size); re-downloading"
-            rm -f model.safetensors model.safetensors.part-*
-            curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors --max-time 1500 \
-              -o model.safetensors \
-              "https://hf-mirror.com/smohammadi/tinyllama_rm_sentiment_1b/resolve/main/model.safetensors"
-          else
-            echo "model.safetensors already at expected size; skip"
-          fi
-          for f in config.json tokenizer.json tokenizer.model tokenizer_config.json special_tokens_map.json; do
-            if [ ! -s "$f" ]; then
-              curl -fsSL --retry 3 --max-time 60 -o "$f" \
-                "https://hf-mirror.com/smohammadi/tinyllama_rm_sentiment_1b/resolve/main/$f"
-            fi
-          done
-          ls -la "$TT_RM_PATH"
-          echo "TT_RM_PATH=$TT_RM_PATH" >> "$GITHUB_ENV"
-
       - name: Setup example environment
         env:
           PROFILE: ${{ matrix.example.profile }}

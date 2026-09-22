@@ -147,13 +147,21 @@ PY
     "$DEPS_ROOT"/sgl-kernel-npu/torch_memory_saver-*-cp312-cp312-linux_aarch64.whl \
     "$DEPS_ROOT"/sgl-kernel-npu/sgl_kernel_npu-*-cp312-cp312-linux_aarch64.whl \
     "$DEPS_ROOT"/sgl-kernel-npu/deep_ep-*-cp312-cp312-linux_aarch64.whl
-  # deep_ep's C++ extension ships inside the deep_ep wheel under
-  # deep_ep/ but is imported as a top-level module; the fork's
-  # Dockerfile links it into the site-packages root (relative symlink).
+  # deep_ep's C++ extension ships inside the deep_ep package dir but is
+  # imported as a top-level module, so the fork's Dockerfile links it at
+  # the site-packages root. The glob has to expand *inside* site-packages:
+  # a relative glob is resolved against the CWD, so running this from
+  # anywhere else silently creates a dangling link literally named
+  # "deep_ep_cpp*.so" instead of the module (the run #5 failure).
   local site_dir
   site_dir=$(python -c 'import site; print(site.getsitepackages()[0])')
-  ln -sf deep_ep/deep_ep_cpp*.so "$site_dir/"
-  python -c 'import deep_ep; print("deep_ep ok:", deep_ep.__path__)'
+  (
+    cd "$site_dir"
+    ln -sf deep_ep/deep_ep_cpp*.so .
+  )
+  # deep_ep_cpp.so links against libtorch_npu.so, so import torch_npu
+  # first the way the training runtime does before checking deep_ep.
+  python -c 'import torch_npu, deep_ep; print("deep_ep ok:", deep_ep.__path__)'
 }
 
 # ----- step 4: mbridge / Megatron-Bridge / Megatron-LM + Ascend adaptors -----
@@ -202,6 +210,12 @@ install_slime_editable() {
 
 apply_npu_patches() {
   local patch_root="$SLIME_FORK_ROOT/docker/npu_patch/v0.3.0"
+  # git am records a committer, so an identity must exist or git aborts
+  # with "Committer identity unknown". The fork's Dockerfile sets the same
+  # placeholder via git config; env vars are used here so the step does not
+  # depend on $HOME being writable inside the container.
+  export GIT_AUTHOR_NAME=temp GIT_AUTHOR_EMAIL=temp@example.com
+  export GIT_COMMITTER_NAME=temp GIT_COMMITTER_EMAIL=temp@example.com
   local repo patches
   for repo in sglang Megatron-LM MegatronAdaptor TransformerEngineNPU Megatron-Bridge mbridge; do
     patches="$patch_root/${repo}"

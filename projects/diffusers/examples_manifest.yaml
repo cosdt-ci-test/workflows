@@ -663,8 +663,8 @@ supported:
       - --max_train_steps 1 --checkpointing_steps 1
     timeout_minutes: 120
 
-  CogVideoX-5b-I2V LoRA（复用 Disney 数据集；2026-09-21 昇腾机验证可跑）
-  注意：必须用 THUDM/CogVideoX-5b-I2V（不是 1.5，脚本不处理 1.5 的 ofs 输入）。
+  # CogVideoX-5b-I2V LoRA（复用 Disney 数据集；2026-09-21 昇腾机验证可跑）
+  # 注意：必须用 THUDM/CogVideoX-5b-I2V（不是 1.5，脚本不处理 1.5 的 ofs 输入）。
   - path: examples/cogvideo/train_cogvideox_image_to_video_lora.py
     profile: diffusers-cogvideo-i2v
     runner: linux-aarch64-a2-1

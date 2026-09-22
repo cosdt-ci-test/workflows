@@ -128,7 +128,11 @@ supported:
       - --metrics.log-freq 1
       - --metrics.disable-color-printing
       - --dump-folder ${CI_OUTPUT_DIR}/llama3_debugmodel_2card
-    timeout_minutes: 25
+    # 2026-09-22 CI run 35729620793: a2-2 runner hit cold pip cache, torch 2.12+cpu
+    # wheel (150 MB direct URL from pytorch.org, bypasses cluster cache) stalled
+    # ~30 min before k8s runner killed setup. Bump to 45 min for safe margin:
+    # setup (~5 min warm / ~30 min cold) + train (~5 min).
+    timeout_minutes: 45
 
   # 4) 单卡 + llama3_debugmodel_dist_gemm 变体：TP=1 下 dist_gemm
   # 是 no-op（trainer log: "tp_gemm_backend='dist_gemm' selected but

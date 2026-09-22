@@ -47,7 +47,7 @@ scan:
 # AReaL 栈差异很大，尚未在昇腾 CI 上验证。故先全部列不支持，待环境（镜像可达
 # + 8 卡并行度改版）跑通后再逐条迁入 supported。
 supported:
-  # Qwen2.5-VL-3B Geometry3K GRPO（8 卡；2026-09-22 在 A2-8 上实测跑通）
+  # Qwen2.5-VL-3B Geometry3K GRPO（2 卡；2026-09-22 在 A2-8 上实测跑通）
   - path: examples/vlm/geometry3k_grpo.py
     profile: areal-vlm-grpo
     runner: linux-aarch64-a2-2
@@ -56,8 +56,8 @@ supported:
     overlay_args:
       - --config examples/vlm_npu/qwen2_5_vl_3b_geometry3k_grpo.yaml
       - cluster.n_gpus_per_node=2
-      - rollout.backend=vllm:d4p1t1
-      - actor.backend=fsdp:d4p1t1
+      - rollout.backend=vllm:d1p1t1
+      - actor.backend=fsdp:d1p1t1
       - actor.path=${AREAL_MODEL_PATH}
       - actor.mb_spec.max_tokens_per_mb=1152
       - ref.mb_spec.max_tokens_per_mb=1152

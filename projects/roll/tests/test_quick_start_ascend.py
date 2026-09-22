@@ -38,7 +38,7 @@ import sys
 import unittest
 from pathlib import Path
 
-from workflows.markdown_doc_test_base import MarkdownDocTestBase
+from workflows.markdown_doc_test_base import MarkdownDocTestBase, TestCommand
 from workflows.model_cache import (
     ensure_safetensors,
     purge_modelscope_corrupt,
@@ -66,6 +66,44 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     )
 
     _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
+    _TENSORBOARD_DIR = Path(
+        'ROLL/output/tensorboard/roll-quick-start-npu'
+    )
+
+    def _verify_tensorboard_events(self) -> None:
+        """CI-side guard: the doc only reports success and the metrics path.
+
+        A missing or empty event file means the run produced no metrics; the
+        doc used to assert that inline, which reads like a test script rather
+        than usage. Keeping the check here preserves the coverage.
+        """
+        events = list(self._TENSORBOARD_DIR.glob('*/events.out.tfevents.*'))
+        if not events:
+            raise AssertionError(
+                'no tensorboard event file found under '
+                f'{self._TENSORBOARD_DIR}'
+            )
+        empty = [p for p in events if p.stat().st_size == 0]
+        if empty:
+            raise AssertionError(
+                'tensorboard event file is empty: '
+                + ', '.join(str(p) for p in empty)
+            )
+        self.log(
+            '[Step] verified tensorboard events '
+            f'({len(events)} file(s), first={events[0].stat().st_size}B): '
+            f'{self._TENSORBOARD_DIR}'
+        )
+
+    def _run_one(self, cmd, results, env, cwd, timeout, idx):
+        if (
+            isinstance(cmd, TestCommand)
+            and getattr(cmd, 'id', None) == 'verify-output'
+        ):
+            super()._run_one(cmd, results, env, cwd, timeout, idx)
+            self._verify_tensorboard_events()
+            return
+        return super()._run_one(cmd, results, env, cwd, timeout, idx)
 
     def pre_process(self) -> str:
         doc_path = (

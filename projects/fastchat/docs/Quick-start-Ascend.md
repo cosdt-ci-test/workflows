@@ -18,6 +18,14 @@ Atlas 900 A2 单卡（Ascend NPU），并按需完成物理机或容器内的设
 
 本文档测试环境使用 Python 3.12、CANN 9.1.0 和 `torch_npu` 2.9.0.post2。
 
+## 加载 CANN 环境
+
+运行示例前加载 CANN 环境变量：
+
+```shell
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
+```
+
 ## 安装 FastChat
 
 安装运行模型与 API 服务所需的包：

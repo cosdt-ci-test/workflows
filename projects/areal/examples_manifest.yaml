@@ -50,18 +50,19 @@ supported:
   # Qwen2.5-VL-3B Geometry3K GRPO（2 卡；2026-09-22 在 A2-8 上实测跑通）
   - path: examples/vlm/geometry3k_grpo.py
     profile: areal-vlm-grpo
-    runner: linux-aarch64-a2-2
-    npu_devices: '0,1'
+    runner: linux-aarch64-a2-1
+    npu_devices: '0'
     # CANN 底座（AReaL 的 ghcr 镜像拉不动）；AReaL 栈由 setup_example.sh 安装
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.1-910b-ubuntu22.04-py3.11
     overlay_args:
       - --config examples/vlm_npu/qwen2_5_vl_3b_geometry3k_grpo.yaml
-      - cluster.n_gpus_per_node=2
+      - cluster.n_gpus_per_node=1
       - rollout.backend=vllm:d1p1t1
       - actor.backend=fsdp:d1p1t1
       - actor.path=${AREAL_MODEL_PATH}
-      - actor.mb_spec.max_tokens_per_mb=1152
-      - ref.mb_spec.max_tokens_per_mb=1152
+      - actor.mb_spec.max_tokens_per_mb=512
+      - ref.mb_spec.max_tokens_per_mb=512
+      - vllm.gpu_memory_utilization=0.4
       - gconfig.max_new_tokens=128
       - gconfig.n_samples=1
       - train_dataset.batch_size=8

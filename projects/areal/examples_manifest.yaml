@@ -65,7 +65,7 @@ supported:
       - gconfig.n_samples=1
       - train_dataset.batch_size=8
       - valid_dataset.batch_size=8
-      - total_train_epoch=1
+      - total_train_epochs=1
     timeout_minutes: 240
 unsupported:
   # 训练 / RL 示例（都需要 AReaL NPU 镜像 + 多卡；见上方说明）

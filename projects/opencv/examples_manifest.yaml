@@ -8,6 +8,9 @@ supported:
   # NPU 核心特性用 3 个 self-hosted 脚本看护，覆盖 OpenCV 在 NPU 上的两条
   # 通路：① cv::dnn 的 CANN 后端（分类 + 超分辨率）；② cannops 经典算子。
   # 均已在 910B4 + CANN 9.1.0 实测跑通（细节见各 example docstring）。
+  # timeout_minutes 统一 60：setup_example.sh 冷启动要源码构建 opencv-cann
+  # （~23 min @-j2），3 腿并行时在共享 runner 上还有争抢；40 以下实测会被
+  # 15m/20m 上限在构建中途 kill（run 35725672646 的 cannops 腿）。
   #
   # 1) DNN 分类：mobilenetv2-12.onnx（fixtures 入仓 13.9MB），conv/BN/ReLU/
   #    pooling/FC/softmax 全链路 + top-1=372 与 CPU 参考对齐。
@@ -22,7 +25,7 @@ supported:
       - --input ${TARGET_ROOT}/samples/data/baboon.jpg
       - --imagenet-topk 5
       - --expected-top1 372
-    timeout_minutes: 40
+    timeout_minutes: 60
 
   # 2) cannops 经典算子（cv2.cann.*）：cvtColor/flip/rotate/transpose/
   #    merge/split/add/subtract/bitwise，全部与 CPU 参考逐元素对齐（910B4
@@ -36,7 +39,7 @@ supported:
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
       - --input ${TARGET_ROOT}/samples/data/baboon.jpg
-    timeout_minutes: 15
+    timeout_minutes: 60
 
   # 3) DNN 超分辨率（非分类 layer：Conv/ReLU/Reshape/Transpose=PixelShuffle）。
   #    super-resolution-10.onnx（SubPixel CNN，240KB 入仓），静态 224x224 单
@@ -51,7 +54,7 @@ supported:
     overlay_args:
       - --model ${FIXTURE_DIR}/super-resolution-10.onnx
       - --input ${TARGET_ROOT}/samples/data/baboon.jpg
-    timeout_minutes: 20
+    timeout_minutes: 60
 
 
 unsupported:

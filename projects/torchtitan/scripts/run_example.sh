@@ -168,6 +168,48 @@ def _shim_complex_config(**kwargs):
     kwargs.pop("scaling", None)
     return CosSinRoPE.Config(scaling="none", **kwargs)
 ComplexRoPE.Config = classmethod(lambda cls, **kw: _shim_complex_config(**kw))
+
+# --- ChunkedLossWrapper bypass shim (NPU autograd.Function meta-leak) ---
+# torchtitan v0.3.0 default llama3_debugmodel uses ChunkedLossWrapper, which
+# saves accumulated_grad via ctx.save_for_backward inside
+# _DecoderOutputGradientBackProp.forward and returns it from
+# _DecoderOutputGradientBackProp.backward as the grad for hidden_states.
+# On NPU (torch_npu 2.12.0 + CANN 9.1.0), the C++ autograd engine raises
+# "RuntimeError: The tensor has a non-zero number of elements, but its data
+# is not allocated yet." the moment this custom-Function-returned grad enters
+# the decoder backward graph, regardless of save_for_backward data_ptr
+# validity (verified empirically on hdc-stable-npu-2 2026-09-22 with three
+# patches that all failed identically: clone accumulated_grad before save,
+# contiguous + npu.synchronize around the call site, replace the Function
+# with a manual hidden_states.backward). The saved tensor at backward entry
+# is a real npu:0 bf16 tensor with a valid data_ptr; the leak is in how
+# torch_npu's autograd engine wires the Function-returned grad into the
+# downstream graph traversal.
+#
+# Workaround: replace ChunkedLossWrapper.__call__ with a passthrough that
+# runs lm_head once (to keep FSDP's all_gather_state consistent) and then
+# delegates to vanilla CrossEntropyLoss on the logits. ce_loss variant
+# already takes this path and is verified exit 0 with the same shim set.
+# This drops ChunkedLossWrapper's num_chunks memory-saving benefit on the
+# smoke path; we're keeping the no-source-patch policy by staying in
+# sitecustomize. Upstream fix is on torch_npu autograd; until then this
+# shim is the only way to keep the default / dist_gemm / sft 1-card smoke
+# entries running.
+import torchtitan.components.loss as _clw_loss_mod
+from torchtitan.components.loss import CrossEntropyLoss as _CE
+_orig_clw_init = _clw_loss_mod.ChunkedLossWrapper.__init__
+def _patched_clw_init(self, config, *, compile_config=None):
+    _orig_clw_init(self, config, compile_config=compile_config)
+    self._ce_loss = _CE(_CE.Config())
+def _patched_clw_call(self, pred, labels, global_valid_tokens=None, **loss_inputs):
+    if self.lm_head is not None:
+        logits = self.lm_head(pred)
+    else:
+        logits = pred
+    return self._ce_loss(logits, labels, global_valid_tokens, **loss_inputs)
+_clw_loss_mod.ChunkedLossWrapper.__init__ = _patched_clw_init
+_clw_loss_mod.ChunkedLossWrapper.__call__ = _patched_clw_call
+_clw_loss_mod.ChunkedLossWrapper.set_lm_head = lambda self, lm_head: setattr(self, "lm_head", lm_head) or None
 PY
   export PYTHONPATH="$shim_dir:${PYTHONPATH:-}"
 }

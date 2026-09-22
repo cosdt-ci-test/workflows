@@ -8,10 +8,6 @@
       "device": "cpu",
       "pin_memory": true
     },
-    "offload_param": {
-      "device": "cpu",
-      "pin_memory": true
-    },
     "overlap_comm": true,
     "contiguous_gradients": true
   },

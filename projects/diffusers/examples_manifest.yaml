@@ -751,65 +751,29 @@ supported:
   #     - --max_train_steps 1
   #   timeout_minutes: 120
 
+  # # SDXL LoRA（单卡 a2-1）
+  # - path: examples/dreambooth/train_dreambooth_lora_sdxl.py
+  #   profile: diffusers-sdxl
+  #   runner: linux-aarch64-a2-1
+  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+  #   overlay_args:
+  #     - --pretrained_model_name_or_path stabilityai/stable-diffusion-xl-base-1.0
+  #     - --variant fp16
+  #     - --dataset_name hf-internal-testing/dummy_image_text_data
+  #     - --instance_prompt "a photo of sks dog"
+  #     - --output_dir ${CI_OUTPUT_DIR}
+  #     - --resolution 256
+  #     - --train_batch_size 1
+  #     - --gradient_checkpointing
+  #     - --max_train_steps 1
+  #   timeout_minutes: 120
+
   ########################已经稳定跑好的###########################################
   ########################之后记得注释回来#########################################
 
   # ===== DreamBooth LoRA（2026-09-21 迁入 supported，待验证）=====
   # 模型均非 gated；脚本里的 torch.cuda/bitsandbytes 都是条件分支，不传对应
   # flag 不会触发。多卡只能走 DeepSpeed ZeRO-3（launcher: accelerate-deepspeed）。
-
-  # SDXL LoRA（单卡 a2-1）
-  - path: examples/dreambooth/train_dreambooth_lora_sdxl.py
-    profile: diffusers-sdxl
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --pretrained_model_name_or_path stabilityai/stable-diffusion-xl-base-1.0
-      - --variant fp16
-      - --dataset_name hf-internal-testing/dummy_image_text_data
-      - --instance_prompt "a photo of sks dog"
-      - --output_dir ${CI_OUTPUT_DIR}
-      - --resolution 256
-      - --train_batch_size 1
-      - --gradient_checkpointing
-      - --max_train_steps 1
-    timeout_minutes: 120
-
-  # Lumina2 LoRA（2 卡 ZeRO-3）
-  - path: examples/dreambooth/train_dreambooth_lora_lumina2.py
-    profile: diffusers-lumina2
-    runner: linux-aarch64-a2-2
-    npu_devices: '0,1'
-    launcher: accelerate-deepspeed
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --pretrained_model_name_or_path Alpha-VLLM/Lumina-Image-2.0
-      - --dataset_name lambdalabs/naruto-blip-captions
-      - --instance_prompt "a photo of sks dog"
-      - --output_dir ${CI_OUTPUT_DIR}
-      - --resolution 256
-      - --train_batch_size 1
-      - --gradient_checkpointing
-      - --max_train_steps 1
-    timeout_minutes: 180
-
-  # Z-Image LoRA（2 卡 ZeRO-3）
-  - path: examples/dreambooth/train_dreambooth_lora_z_image.py
-    profile: diffusers-z-image
-    runner: linux-aarch64-a2-2
-    npu_devices: '0,1'
-    launcher: accelerate-deepspeed
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --pretrained_model_name_or_path Tongyi-MAI/Z-Image
-      - --dataset_name lambdalabs/naruto-blip-captions
-      - --instance_prompt "a photo of sks dog"
-      - --output_dir ${CI_OUTPUT_DIR}
-      - --resolution 256
-      - --train_batch_size 1
-      - --gradient_checkpointing
-      - --max_train_steps 1
-    timeout_minutes: 240
 
   # Qwen-Image LoRA（4 卡 ZeRO-3）
   - path: examples/dreambooth/train_dreambooth_lora_qwen_image.py
@@ -828,6 +792,26 @@ supported:
       - --gradient_checkpointing
       - --max_train_steps 1
     timeout_minutes: 240
+    
+  # SANA-Sprint（research_projects/sana；2026-09-22 迁入 supported，待验证）
+  - path: examples/research_projects/sana/train_sana_sprint_diffusers.py
+    profile: diffusers-sana
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --pretrained_model_name_or_path Efficient-Large-Model/SANA_Sprint_1.6B_1024px_teacher_diffusers
+      - --dataset_name brivangl/midjourney-v6-llava
+      - --file_path data/train_000.parquet
+      - --seed 0
+      - --mixed_precision bf16
+      - --resolution 256
+      - --train_batch_size 1
+      - --gradient_accumulation_steps 1
+      - --gradient_checkpointing
+      - --max_train_steps 1
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 180
+
 # ===== unsupported（其余全部；后续逐例验证跑通后迁入 supported） =====
 unsupported:
   # CUDA硬编码 text_encoding_pipeline.to("cuda")
@@ -1010,7 +994,7 @@ unsupported:
   - examples/research_projects/control_lora/control_lora.py
   # DATA_UNREACHABLE：数据集准备成本较高
   - examples/research_projects/controlnet/train_controlnet_webdataset.py
-  # DATA_UNREACHABLE：webdataset 数据集不可达
+  # DATA_UNREACHABLE：get_dataset() 数据集写死键名，原数据集设置为私有无法下载
   - examples/research_projects/diffusion_orpo/train_diffusion_orpo_sdxl_lora_wds.py
   # dreambooth_inpaint_lora：需降级 diffusers（用已废弃的 LoRA processor 构造 API）
   - examples/research_projects/dreambooth_inpaint/train_dreambooth_inpaint_lora.py
@@ -1018,6 +1002,7 @@ unsupported:
   - examples/research_projects/flux_lora_quantization/compute_embeddings.py
   - examples/research_projects/flux_lora_quantization/train_dreambooth_lora_flux_miniature.py
   # DATA_UNREACHABLE：需自定义 gligen 数据集
+  # 自己生成 grounding 标注（make_datasets.py 跑 RAM+GroundingDINO+BLIP2+CLIP），不是现成数据集
   - examples/research_projects/gligen/train_gligen_text.py
   # OTHER_BACKEND：intel_extension_for_pytorch / neural_compressor
   - examples/research_projects/intel_opts/inference_bf16.py
@@ -1048,9 +1033,6 @@ unsupported:
   # CUDA_DEP：infer.py 硬编码 cuda；train_realfill.py 另需自定义 realfill 数据集
   - examples/research_projects/realfill/infer.py
   - examples/research_projects/realfill/train_realfill.py
-  # DATA_UNREACHABLE：midjourney parquet 数据集不可达
-  - examples/research_projects/sana/train_sana_sprint_diffusers.py
-  - examples/research_projects/sana/train_sana_sprint_diffusers.sh
   # GATED_MODEL + CUDA_DEP：SD3 需 gated；且用 bitsandbytes load_in_8bit + device_map（CUDA-only）
   - examples/research_projects/sd3_lora_colab/compute_embeddings.py
   # OTHER_BACKEND：JAX/Flax
@@ -1099,3 +1081,8 @@ unsupported:
   # 未 .to(accelerator.device)，NPU 上 conv 报 "weight is on cpu, different from ...
   # npu:0"；该路径无条件执行，去掉 --validation_image 还会 enumerate(None) 报错
   - examples/research_projects/autoencoderkl/train_autoencoderkl.py
+  # INCOMPAT：transformers 5.x 下文本编码器 attention 的 q_proj.view() 形状错
+  # （Lumina2 的 Gemma2 / Z-Image 的 Qwen3）：RuntimeError shape '[1, 256, -1, 256]'
+  # is invalid for input of size 256。基座栈必须 transformers 5.x，无法降级。
+  - examples/dreambooth/train_dreambooth_lora_lumina2.py
+  - examples/dreambooth/train_dreambooth_lora_z_image.py

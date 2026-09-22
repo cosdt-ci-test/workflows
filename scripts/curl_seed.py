@@ -91,7 +91,7 @@ def plant(hf_id: str, files: list[dict], root: Path) -> None:
         print(f"[skip] {hf_id}@{sha[:8]} already seeded", flush=True)
         return
 
-    (repo_dir / "refs").mkdir(exist_ok=True)
+    (repo_dir / "refs").mkdir(parents=True, exist_ok=True)
     refs.write_text(sha)  # no trailing newline — hub compares without strip
     for spec in files:
         name = spec["name"]

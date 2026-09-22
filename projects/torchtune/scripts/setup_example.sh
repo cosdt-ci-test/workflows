@@ -176,6 +176,39 @@ prepare_fixtures() {
   echo "copied $(find "$dst" -type f | wc -l) fixture file(s) to $dst"
 }
 
+resolve_seed_envs() {
+  # $@ = alternating (hf_id, env var) pairs. Resolve each seeded asset's
+  # snapshot path from the shared HF hub cache (refs/main -> sha) and
+  # append VAR=<snapshot> to GITHUB_ENV for manifest overlay_args.
+  # The shared cache root is populated by the cache-seed workflow
+  # (curl plant: cache-seed/torchtune/curl_seeds.yaml -> SHARED_CACHE_ROOT,
+  # default ~/.cache/huggingface). Nothing downloads in example jobs.
+  python - "$@" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+HUB_ROOT = Path(os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))) / "hub"
+pairs = sys.argv[1:]
+if len(pairs) % 2:
+    raise SystemExit("resolve_seed_envs: expected alternating hf_id var pairs")
+for hf_id, var in zip(pairs[::2], pairs[1::2]):
+    repo_dir = HUB_ROOT / f"models--{hf_id.replace('/', '--')}"
+    refs = repo_dir / "refs" / "main"
+    if not refs.is_file():
+        raise SystemExit(
+            f"{hf_id} missing from shared cache root — dispatch the "
+            f"cache-seed workflow (spec: cache-seed/torchtune/curl_seeds.yaml)")
+    sha = refs.read_text().strip()
+    snap = repo_dir / "snapshots" / sha
+    if not snap.is_dir() or not any(snap.iterdir()):
+        raise SystemExit(f"{hf_id}: refs/main -> {sha[:8]} has no snapshot files")
+    with open(os.environ["GITHUB_ENV"], "a") as fh:
+        fh.write(f"{var}={snap}\n")
+    print(f"{var}={snap}", flush=True)
+PY
+}
+
 setup_torchtune() {
   # torchtune from the guarded checkout. The torchao pin is decided
   # dynamically because the NF4Tensor import path in
@@ -275,9 +308,12 @@ print('torchtune', md.version('torchtune'), '/ torchao', torchao.__version__, '/
   python -m pip install "lm-eval==0.4.5"
   python - <<'PY'
 import os
+import sys
+from pathlib import Path
 # Non-TTY CI logs: throttle tqdm refreshes instead of disabling.
 os.environ.setdefault("TQDM_MININTERVAL", "15")
 from modelscope import snapshot_download
+from safetensors import safe_open
 
 MODEL_CACHE = os.environ.get("MODELSCOPE_CACHE", os.path.expanduser("~/.cache/modelscope"))
 # CI runner containers start with no /root/.cache/modelscope. The
@@ -287,7 +323,34 @@ MODEL_CACHE = os.environ.get("MODELSCOPE_CACHE", os.path.expanduser("~/.cache/mo
 # *.safetensors file). mkdir -p is a no-op on coder where env.sh
 # already exports MODELSCOPE_CACHE to /home/coder/work/modelscope-cache.
 os.makedirs(MODEL_CACHE, exist_ok=True)
-local = snapshot_download("Qwen/Qwen2.5-0.5B-Instruct", cache_dir=MODEL_CACHE)
+
+
+def fetch_verified(ms_id, allow_patterns=None, attempts=3):
+    # snapshot_download 不做 safetensors 完整性校验，且本地缓存命中会
+    # 直接跳过——共享缓存卷上一旦留下截断文件（run 35709073381 KD
+    # teacher: 'incomplete metadata, file not fully covered'），之后每次
+    # 都复用同一残缺文件。下载后 safe_open 读 header 并校验文件覆盖
+    # （毫秒级，不读全量数据），残缺则删掉重下（≤attempts 次）。
+    for attempt in range(attempts):
+        local = snapshot_download(
+            ms_id, cache_dir=MODEL_CACHE, allow_patterns=allow_patterns)
+        corrupt = []
+        for p in Path(local).rglob("*.safetensors"):
+            try:
+                with safe_open(p, framework="pt"):
+                    pass
+            except Exception as exc:  # noqa: BLE001
+                corrupt.append((str(p), repr(exc)))
+        if not corrupt:
+            return local
+        print(f"{ms_id}: corrupt safetensors (attempt {attempt+1}/{attempts}): {corrupt}",
+              file=sys.stderr, flush=True)
+        for p, _ in corrupt:
+            Path(p).unlink(missing_ok=True)
+    raise SystemExit(f"{ms_id}: safetensors still corrupt after {attempts} attempts")
+
+
+local = fetch_verified("Qwen/Qwen2.5-0.5B-Instruct")
 with open(os.environ["GITHUB_ENV"], "a") as fh:
     fh.write(f"TT_MODEL_PATH={local}\n")
 print("TT_MODEL_PATH=", local)
@@ -295,40 +358,32 @@ print("TT_MODEL_PATH=", local)
 # Knowledge-distillation 翻案 (recipes/knowledge_distillation_single_device.py)
 # 也需要 1.5B teacher checkpoint；KD 翻案 + 后续 distributed KD 翻案都用到，
 # 不为它单独 split profile。teacher snapshot 2.88GB / 实测下载 ~3:23。
-teacher = snapshot_download(
+teacher = fetch_verified(
     "Qwen/Qwen2.5-1.5B-Instruct",
-    cache_dir=MODEL_CACHE,
     allow_patterns=["*.json", "*.txt", "*.safetensors", "tokenizer*"],
 )
 with open(os.environ["GITHUB_ENV"], "a") as fh:
     fh.write(f"TT_TEACHER_PATH={teacher}\n")
 print("TT_TEACHER_PATH=", teacher)
-
-# PPO 翻案 (recipes/ppo_full_finetune_single_device.py) 需要 scalar-head
-# reward model。Qwen2.5-0.5B 上游没有现成 RM，upstream PPO yaml 用
-# smohammadi/tinyllama_rm_sentiment_1b（TinyLlama v1.1 改的 scalar-head
-# 模型，model_type=REWARD + reward_hf_to_tune 转换），2.2GB。ModelScope 不
-# 代发个人 HF repo，走 huggingface_hub + HF_ENDPOINT=hf-mirror.com（中国镜像，
-# coder pod curl 实测 HTTP 200，HF 直连在 coder pod 上 hang）。如果 caller
-# 已经预下载并 export TT_RM_PATH（典型场景：coder 本机 scp），跳过下载。
-if not os.environ.get("TT_RM_PATH"):
-    from huggingface_hub import snapshot_download as _hf_snapshot
-    os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
-    rm = _hf_snapshot(
-        "smohammadi/tinyllama_rm_sentiment_1b",
-        cache_dir=os.environ.get(
-            "HF_HOME", os.path.expanduser("~/.cache/huggingface")
-        ),
-        allow_patterns=[
-            "*.json", "*.txt", "*.safetensors", "tokenizer*", "*.model",
-        ],
-    )
-    with open(os.environ["GITHUB_ENV"], "a") as fh:
-        fh.write(f"TT_RM_PATH={rm}\n")
-    print("TT_RM_PATH=", rm)
-else:
-    print("TT_RM_PATH (caller-provided):", os.environ["TT_RM_PATH"])
 PY
+}
+
+setup_torchtune_ppo() {
+  # PPO 全参 finetune（recipes/ppo_full_finetune_single_device.py）需要
+  # scalar-head reward/value 模型 smohammadi/tinyllama_rm_sentiment_1b。
+  # 该 repo 是个人 HF 仓库，ModelScope 不代发，其 model.safetensors 是
+  # xet-backed（hf-mirror 302 到 cas-bridge.xethub.hf.co；且 torchtune 的
+  # huggingface_hub 会被 transformers==4.57.1 压回 0.36.2，不认识
+  # HF_HUB_DISABLE_XET → xet resume 撞 416 / consistency 校验失败，run
+  # 35582685960 全 8 腿挂在这里）。改由 cache-seed workflow 的 curl plant
+  # （cache-seed/torchtune/curl_seeds.yaml）一次性下进共享 HF cache，本
+  # profile 只按需 resolve refs/main 得 TT_RM_PATH，不在 example 里下载。
+  setup_torchtune
+  if [[ -z "${TT_RM_PATH:-}" ]]; then
+    resolve_seed_envs smohammadi/tinyllama_rm_sentiment_1b TT_RM_PATH
+  else
+    echo "TT_RM_PATH (caller-provided): ${TT_RM_PATH}"
+  fi
 }
 
 # Patch two upstream bugs in main HEAD torchtune. v0.6.1 release doesn't

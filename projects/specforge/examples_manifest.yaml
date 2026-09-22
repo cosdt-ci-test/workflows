@@ -231,72 +231,163 @@ supported:
       - model.target_model_path=${SPECFORGE_MODEL_PATH}
     timeout_minutes: 180
 
+  # ===== A 组 candidate（src 上线通过但 e2e 在 910B4 NPU 上游撞墙）已全
+  # 留在 unsupported：参见下文的 Domino Qwen3.5-4B +1 offset、MTP Qwen3.5-4B
+  # 同类问题、Domino prefix_gru dtype mismatch 三段。
+
 
 unsupported:
+  - examples/configs/online/disaggregated/external/deepseek-v2-lite-eagle3-online.yaml
+  - examples/configs/online/disaggregated/external/lfm2.5-1.2b-instruct-dflash-online.yaml
+  - examples/configs/online/disaggregated/external/ling-flash-2.0-eagle3-online.yaml
+  - examples/configs/online/disaggregated/external/qwen3-8b-domino-disaggregated.yaml
+  # qwen3-8b-domino-multiserver-disaggregated 算法同 A 组（domino NPU-compat），
+  # 但 multiserver 拓扑需 2 个 capture server，单机 4 卡 runner 物理装不下；
+  # 待 8 卡 A2 pod 上线后与 qwen3-8b-domino-1server-dp7 同批回移。
+  - examples/configs/online/disaggregated/managed-local/qwen3-8b-domino-multiserver-disaggregated.yaml
 
-  - examples/configs/online/disaggregated/external/deepseek-v2-lite-eagle3-online.yaml   
-  - examples/configs/online/disaggregated/external/lfm2.5-1.2b-instruct-dflash-online.yaml 
-  - examples/configs/online/disaggregated/external/ling-flash-2.0-eagle3-online.yaml      
-  - examples/configs/online/disaggregated/external/qwen3-8b-domino-disaggregated.yaml    
-  - examples/configs/online/disaggregated/external/qwen3-8b-domino-online.yaml          
-  - examples/configs/online/disaggregated/external/qwen3.5-4b-domino-online-npu.yaml     
-
-
-  - examples/configs/online/disaggregated/managed-local/qwen3-8b-domino-1server-dp7-disaggregated.yaml        
-  - examples/configs/online/disaggregated/managed-local/qwen3-8b-domino-multiserver-disaggregated.yaml        
-  - examples/configs/online/disaggregated/managed-local/qwen3.5-4b-mtp-disaggregated-npu.yaml                 
-  - examples/configs/online/disaggregated/managed-local/qwen3.6-27b-dflash-1server-dp2-disaggregated.yaml    
-  - examples/configs/online/disaggregated/managed-local/qwen3.6-27b-dflash-multiserver-disaggregated.yaml    
-  - examples/configs/online/disaggregated/managed-local/qwen3.6-27b-dflash2-disaggregated.yaml               
-  - examples/configs/online/disaggregated/managed-local/qwen3.6-27b-dspark-disaggregated.yaml                  
-  - examples/configs/online/disaggregated/managed-local/qwen3.8-27b-dflash2-4server-dp4-disaggregated.yaml    
+  - examples/configs/online/disaggregated/managed-local/qwen3.6-27b-dflash-1server-dp2-disaggregated.yaml
+  - examples/configs/online/disaggregated/managed-local/qwen3.6-27b-dflash-multiserver-disaggregated.yaml
+  - examples/configs/online/disaggregated/managed-local/qwen3.6-27b-dflash2-disaggregated.yaml
+  - examples/configs/online/disaggregated/managed-local/qwen3.6-27b-dspark-disaggregated.yaml
+  - examples/configs/online/disaggregated/managed-local/qwen3.8-27b-dflash2-4server-dp4-disaggregated.yaml
 
 
-  - examples/disagg/run_offline_2node.sh
   - examples/disagg/run_qwen3_8b_dflash_disagg_2node.sh
   - examples/disagg/run_qwen3.8_27b_dflash2_disagg_2node.sh
   - examples/disagg/run_inkling_dspark_disagg_2node.sh
-  - examples/disagg/run_qwen3.6-27b-domino.sh            
-
+  - examples/disagg/run_qwen3.6-27b-domino.sh
 
   - examples/configs/offline/colocated/qwen3.5-4b-dflash-offline-amd.yaml
   - examples/configs/online/disaggregated/external/qwen3.5-4b-dflash-online-amd.yaml
-
 
   - examples/configs/offline/colocated/qwen3-4b-dspark-offline.yaml                       
   - examples/configs/offline/colocated/qwen3-8b-dflash-offline.yaml                       
   - examples/configs/offline/colocated/qwen3-8b-domino-offline.yaml                      
   - examples/configs/offline/colocated/qwen3-8b-dspark-offline.yaml                      
-  - examples/configs/offline/colocated/qwen3-8b-eagle3-offline.yaml                       
+  - examples/configs/offline/colocated/qwen3-8b-eagle3-offline.yaml
 
+  # ===== DSPARK 非 Qwen target 模型：target 模型未在 coder 落地，没法 e2e 跑通 =====
+  # inkling-dspark-disaggregated target=thinkingmachines/Inkling（HF gated
+  # 仓库，thinking machines 自家模型）+ sglang_attention_backend=fa4 +
+  # quantization=modelopt_fp4，是 DSPARK + 异构 cache 拓扑。coder 本地
+  # modelscope cache 只有 config.json 没有 weights，且 Inkling 是 HF gated
+  # 不在 modelscope API 10010205001 record not found（gated repo "Meta 审核
+  # 流程" 同类限制），无法走本地路径做 e2e smoke。glm-5.2-dspark 同类问题
+  # （target=THUDM/GLM-5.2，modelscope 未预下载 + 走 fp8 NPU 路径可能未
+  # 实测兼容）。两条都留 unsupported 等本地 weights 落地 + NPU 验证。
+  # longcat-flash-dflash-online target=meituan/LongCat-Flash（已 sglang 0.5.18
+  # 含 set_dflash_layers_to_capture），但 recipe 默认 sglang_attention_
+  # backend=fa4 + quantization=modelopt_fp4，NPU ascend attention backend
+  # 不支持 fa4，且 modelopt_fp4 没在 NPU 镜像预装；同样 e2e 没跑通。
+  - examples/configs/online/disaggregated/external/inkling-dspark-disaggregated.yaml
+  - examples/configs/online/disaggregated/external/longcat-flash-dflash-online.yaml
+  - examples/configs/online/disaggregated/external/glm-5.2-dspark-disaggregated.yaml
+
+  # ===== EAGLE3 算法：specforge train 1 步在 910B4 NPU 端到端跑不通 =====
+  # 全部 6 条 EAGLE3 external online recipe（qwen2.5-0.5b / qwen3-4b /
+  # gemma3-1b / phi4 / deepseek-v2-lite / longcat-flash）已在 2026-09-22
+  # coder sglang-hdc（2x 910B4，sglang 0.5.18-cann9.1.0 镜像 + CANN 9.1.0）
+  # 跑通 sglang capture server 健康启动（每条 recipe 的 target model 类
+  # Qwen2ForCausalLM/Qwen3ForCausalLM/Gemma3ForCausalLM/Phi3ForCausalLM
+  # 继承自 LlamaForCausalLM/DeepseekV2ForCausalLM/LongcatFlashForCausalLM
+  # 都实现了 set_eagle3_layers_to_capture），但 specforge train consumer
+  # 必撞 triton-ascend BiShengHIR compile 错误：
+  #   1) specforge/core/loss.py:50 LogSoftmaxLoss.forward 在 vocab=151936
+  #      的 log_softmax forward kernel 编译时
+  #      MLIRCompilationError: ub overflow, requires 2621696 bits while
+  #      1572864 bits available（910B4 UB 上限 ~192KB，tile 过大）
+  #   2) specforge/algorithms/eagle3/model.py:599 _compute_target_p（被
+  #      @torch.compile(dynamic=None) 装饰）在 argmax over target vocab
+  #      时 triton emit `_tmp3_next, _tmp3_index_next = triton_helpers
+  #      .maximum_with_index(_tmp3, _tmp3_index, tmp2, rindex)`，
+  #      triton-ascend 不知道 rindex 变量 → NameError('rindex is not defined')。
+  # 实测 qwen2.5-0.5b-eagle3（无 TORCHDYNAMO_DISABLE=1 时）就触发第 2 条
+  # （@torch.compile 装饰器路径），设 TORCHDYNAMO_DISABLE=1 关掉 dynamo
+  # 走 eager 路径则落第 1 条（loss.py:50 triton 自定义 autograd kernel
+  # 仍然走 triton-ascend 编译）。两条都不可在 NPU 上解决。
+  # qwen3-4b-eagle3 在更早的 target_head.load_weights 阶段还多撞一条：
+  # Qwen3-4B config.json tie_word_embeddings=true，specforge 默认
+  # lm_head_key="lm_head.weight" 在 model.safetensors.index.json 找不到
+  # 这个 weight（共享给 embed_tokens.weight），target_head 端必须设
+  # lm_head_key="model.embed_tokens.weight" 才能加载；recipe 没覆这个。
+  # 总结：6 条 EAGLE3 全部 (capture OK + train 必崩)，留在 unsupported
+  # 等 specforge 上游：
+  #   (a) 改 _compute_target_p 用 _compute_target_p_eager 分块路径
+  #   (b) LogSoftmaxLoss kernel 改 row-wise 小 tile 或换 ATen log_softmax
+  #   (c) target_head.load_weights 处理 tie_word_embeddings=true
+  # 全都是上游 specforge 改动，recipe 端 overlay 改不了；用户约束
+  # "不能打任何patch"也禁止本地 patch。
+  - examples/configs/online/disaggregated/external/qwen2.5-0.5b-eagle3-online.yaml
+  - examples/configs/online/disaggregated/external/qwen3-4b-eagle3-online.yaml
+  - examples/configs/online/disaggregated/external/gemma3-1b-eagle3-online.yaml
+  - examples/configs/online/disaggregated/external/phi4-eagle3-online.yaml
+  - examples/configs/online/disaggregated/external/deepseek-v2-lite-eagle3-online.yaml
+  - examples/configs/online/disaggregated/external/longcat-flash-eagle3-online.yaml
 
   # ===== Qwen2.5 DFLASH/DSPARK：sglang 0.5.18 wheel 上游 Qwen2ForCausalLM
   # 未实现 set_dflash_layers_to_capture / set_dspark_layers_to_capture，
   # sglang 在 init_attention_backends → configure_aux_hidden_state_capture
   # 撞 ValueError 直接 abort scheduler（specforge 启动 DFLASH capture 时
   # 必走这条 gating）。Qwen3ForCausalLM / Qwen3Moe / Qwen3_5Text /
-  # LlamaForCausalLM 都已实现；仅 Qwen2 / Qwen2MoE 缺。
-  # 实测：CI run 35582843489 job 106279506714 在
-  #   ValueError: Model Qwen2ForCausalLM implements neither
-  #     set_dspark_layers_to_capture nor set_dflash_layers_to_capture,
-  #     one of which is required for DFLASH/DSPARK.
-  # 退出，Setup example 步骤过、Run example 步骤死。等 sglang 上游补
+  # LlamaForCausalLM 都已实现；仅 Qwen2 / Qwen2MoE 缺。等 sglang 上游补
   # Qwen2ForCausalLM setter 后回移 supported。
   - examples/configs/online/disaggregated/external/qwen2.5-0.5b-dflash-online.yaml
 
 
-  - examples/configs/online/disaggregated/external/qwen2.5-0.5b-eagle3-online.yaml
-  - examples/configs/online/disaggregated/external/qwen3-4b-eagle3-online.yaml
-  - examples/configs/online/disaggregated/external/inkling-dspark-disaggregated.yaml  
-  - examples/configs/online/disaggregated/external/longcat-flash-dflash-online.yaml   
-  - examples/configs/online/disaggregated/external/longcat-flash-eagle3-online.yaml   
-  - examples/configs/online/disaggregated/external/gemma3-1b-eagle3-online.yaml       
-  - examples/configs/online/disaggregated/external/glm-5.2-dspark-disaggregated.yaml  
-  - examples/configs/online/disaggregated/external/phi4-eagle3-online.yaml           
+  # ===== Domino Qwen3.5-4B external online：sglang 上游 qwen3_vl / qwen3_5 的
+  # dflash 层索引 +1 offset bug 必撞 IndexError =====
+  # qwen3.5-4b-domino.json dflash_config.target_layer_ids=[3,11,19,27,31]，
+  # 但 sglang 0.5.18 /sgl-workspace/sglang/python/sglang/srt/models/qwen3_vl.py:1488
+  # set_dflash_layers_to_capture 走 self.model.set_dflash_layers_to_capture(
+  # [val + 1 for val in layer_ids])，31 → 32 越界 model.num_hidden_layers=32。
+  # 撞 /sgl-workspace/sglang/python/sglang/srt/models/qwen3_5.py:1401
+  #   setattr(self.layers[layer_id], "_is_layer_to_capture", True)
+  # 抛 IndexError: index 32 is out of range，sglang scheduler abort，specforge
+  # train 端走不到。trim31 自定义 draft_config (target_layer_ids 砍 31) 可让
+  # capture 端通过，但 recipe 端改 draft_model_config path 走 run_example.sh
+  # 不被允许（脚本硬编码 $TARGET_ROOT/$EXAMPLE_REL 前缀，recipe YAML 必须放
+  # 在 specforge 源码 examples/configs/ 下才能被 CI flow 正常解析）。qwen3.py
+  # 也带 +1 shift 但 max=33 配 36 层 OK，所以 qwen3-8b-domino / dflash 端 OK
+  # ——仅 Qwen3.5 家族（qwen3_5.py / qwen3_vl.py 链路）撞这条 +1 越界。
+  # 待 sglang 上游 qwen3_vl / qwen3_5 把 +1 offset 改成 max(val+1, num_hidden_layers-1) clamp
+  # 或拆开 Qwen3.5 vs Qwen3 的 set_dflash 调用分契约后回移 supported。
+  - examples/configs/online/disaggregated/external/qwen3.5-4b-domino-online-npu.yaml
+  # qwen3.5-4b-mtp 同 Qwen3.5 家族，mtp 算法 sglang 端走 native_mtp
+  # 捕获路径（qwen3_5_mtp.py forward_batch.spec_info.hidden_states），
+  # 同样被 qwen3_5.py / qwen3_vl.py 的 +1 offset 撞层索引越界。
+  - examples/configs/online/disaggregated/managed-local/qwen3.5-4b-mtp-disaggregated-npu.yaml
 
-
-  - examples/disagg/run_online.sh
-  - examples/disagg/run_offline.sh
+  # ===== Domino Qwen3-8B：sglang capture 端 OK，但 specforge train DominoDraftModel
+  # prefix_gru nn.GRU 权重 dtype 与 embed_tokens input dtype 撞 torch 强类型 =====
+  # qwen3-8b-domino.json dflash_config.target_layer_ids=[1,9,17,25,33] 配
+  # num_hidden_layers=36，qwen3.py:706 set_dflash_layers_to_capture 自带 +1
+  # shift 但 33+1=34<36 OK，所以 sglang capture server 端健康启动（实测
+  # 910B4 + ascend attention backend + dflash method 跑通 /generate，5 条 prompt
+  # throughput ~1600 tokens/s）。但 specforge consumer train 端必撞
+  #   File "specforge/modeling/draft/domino.py", line 80, in _run_gru
+  #     return self.prefix_gru(gru_inputs)[0]
+  #   File "torch/nn/modules/rnn.py", line 307, in check_input
+  #     raise ValueError(input must have the type torch.bfloat16,
+  #                      got type torch.float16)
+  # 根因：DominoDraftModel.__init__ 创建 nn.GRU(input_size=..., hidden_size=gru_hidden_dim)
+  # 跟着 Qwen3PreTrainedModel.post_init() 走 config.dtype=bfloat16（draft config
+  # 默认 dtype）变 bf16；specforge/modeling/draft/base.py:141 load_embedding 从
+  # target model 复制 embed_tokens.weight 到 draft 是 .copy_() 会跨 dtype cast，
+  # 但 head_token_embeddings = self.embed_tokens(head_token_ids) 走的是共享的
+  # target_embed_tokens（来自 dflash_family_model.py:392 self.embed_tokens =
+  # target_embed_tokens，target 用 bf16），所以 prev_token_embeddings 是 bf16
+  # 输入到 GRU 应该匹配——但实测报 fp16 错误，说明 GRU 实际保持 bf16 而
+  # 走的是另一个 embedding 路径。overlay model.torch_dtype=float16 让 draft
+  # 整体转 fp16 不能修复：GRU 仍报 bf16 期望。"不能打任何patch" 约束禁止本地
+  # patch specforge/modeling/draft/domino.py 的 NPU GRU dtype 守门逻辑；
+  # 等 specforge 上游把 _run_gru 的 npu-bf16 守门扩展到 (bf16|fp16) 双 dtype
+  # 或把 prefix_gru dtype 改成跟 embed_tokens 一致再回移 supported。
+  # qwen3-8b-domino-1server-dp7-disaggregated 是 managed-local 同构（recipe
+  # 默认 num_anchors=32、attention_backend=flex_attention、capture_servers=
+  # 1 卡 TP1 mem_fraction=0.5），同样撞 prefix_gru dtype。
+  - examples/configs/online/disaggregated/external/qwen3-8b-domino-online.yaml
+  - examples/configs/online/disaggregated/managed-local/qwen3-8b-domino-1server-dp7-disaggregated.yaml
 
 
   # ===== >4 卡：capture server 超单机 4 卡 runner 物理上限 =====
@@ -357,4 +448,20 @@ unsupported:
   # helper（README "Checkpoints without shared storage"），调用方是 2-node
   # trainer；单独跑没有任何业务行为——它等待 run-root 下出现 checkpoint
   # 子目录才开始打包，没有 checkpoint 就空转。属于 library helper，不是 example。
+  # run_online.sh / run_offline.sh / run_offline_2node.sh 是 specforge train
+  # 的 recipe-agnostic dispatch wrapper：源码本体只有 3 步（CONFIG= 必须显式
+  # export → 校验 `specforge` 在 PATH → `exec specforge train --config
+  # "$CONFIG" "$@"` 或带 --role），没有任何绑死的 recipe 或默认行为；调用方
+  # 必须自己选 YAML path（如 `CONFIG=examples/configs/online/disaggregated/
+  # external/qwen3.5-4b-dflash-online-npu.yaml ./examples/disagg/run_online.sh
+  # --role producer`），未设 CONFIG 直接 exit 2。run_offline_2node.sh 是 2-node
+  # 版本，额外校验 NODE_RANK ∈ {0,1} + NUM_NODES=2，然后 `exec specforge train
+  # --config "$config" --role "$role" "$@"`——属于 caller 必须先把 head/worker
+  # 各自分配好再分别调用的 dispatcher。functional 等价于 `specforge train
+  # --config $CONFIG $@`（或 `--role`），examples engine 把它们当独立 example
+  # 跑必然 exit 2——recipes 已被 examples/configs/**.yaml 各自枚举，dispatcher
+  # 本身不属于 example 类别。
   - examples/disagg/sync_distributed_checkpoints.py
+  - examples/disagg/run_online.sh
+  - examples/disagg/run_offline.sh
+  - examples/disagg/run_offline_2node.sh

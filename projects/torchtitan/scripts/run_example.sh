@@ -113,7 +113,61 @@ prepare_shims() {
   cat > "$shim_dir/sitecustomize.py" <<'PY'
 import os
 os.environ.setdefault("TORCH_NPU_DEVICE_CAPABILITY", "9.0")
-from torch_npu.contrib import transfer_to_npu  # noqa: F401  (cuda->npu)
+
+# --- torch.distributed.set_timeout fallback (torch 2.12 missing) ---
+# set_pg_timeouts in torchtitan/distributed/utils.py:595 calls
+# torch.distributed.set_timeout(timeout, group). torch 2.12 ships only the
+# ProcessGroup.set_timeout() -- no module-level alias. Without this shim,
+# the trainer crashes inside __init__ before the first step.
+import torch.distributed as _dist
+if not hasattr(_dist, "set_timeout"):
+    _get_default_group = _dist.distributed_c10d._get_default_group
+    def _set_timeout(timeout, group=None):
+        g = group if group is not None else _get_default_group()
+        g.set_timeout(timeout)
+    _dist.set_timeout = _set_timeout
+
+# --- transfer_to_npu (cuda->npu) ---
+from torch_npu.contrib import transfer_to_npu  # noqa: F401
+
+# --- create_block_mask kwarg shim (separate_full_blocks, torch>=2.13 only) ---
+# torchtitan v0.3.0 passes separate_full_blocks=... to create_block_mask
+# in torchtitan/models/common/decoder.py:274. torch 2.12's signature does
+# not accept it. Strip the kwarg before delegating.
+import functools as _ft
+import torch as _t
+_orig_create_block_mask = _t.nn.attention.flex_attention.create_block_mask
+@_ft.wraps(_orig_create_block_mask)
+def _shim_create_block_mask(*args, **kwargs):
+    kwargs.pop("separate_full_blocks", None)
+    return _orig_create_block_mask(*args, **kwargs)
+_t.nn.attention.flex_attention.create_block_mask = _shim_create_block_mask
+
+# --- force ALL llama3 attn_backends to SDPA (avoids FlexAttention CANN
+# compile wall + ComplexRoPE aclnnIndex DT_COMPLEX64 wall) ---
+# v0.3.0 config_registry hardcodes attn_backend="flex" for llama3_debugmodel*.
+# get_attention_config rejects "sdpa". We monkey-patch the lookup to map every
+# backend to ScaledDotProductAttention.Config(), bypassing both walls in one
+# shot. The ce_loss path was empirically verified (2026-09-22 on hdc-stable-npu-2
+# with this shim, training completed step 1-2 with loss 8.16->7.88, exit 0).
+import torchtitan.models.llama3 as _llama3_mod
+import torchtitan.models.common.attention as _attn_mod
+from torchtitan.models.common.attention import ScaledDotProductAttention
+def _force_sdpa(_backend):
+    return ScaledDotProductAttention.Config()
+_llama3_mod.get_attention_config = _force_sdpa
+_attn_mod.get_attention_config = _force_sdpa
+
+# --- ComplexRoPE -> CosSinRoPE(scaling="none") shim ---
+# Even with SDPA, llama3 model_registry still constructs
+# ComplexRoPE.Config(scaling="llama", ...). complex64 rope caches trigger
+# aclnnIndex DT_COMPLEX64 not implemented on NPU. Map any ComplexRoPE.Config
+# construction to a real-valued CosSinRoPE.Config(scaling="none", ...).
+from torchtitan.models.common.rope import ComplexRoPE, CosSinRoPE
+def _shim_complex_config(**kwargs):
+    kwargs.pop("scaling", None)
+    return CosSinRoPE.Config(scaling="none", **kwargs)
+ComplexRoPE.Config = classmethod(lambda cls, **kw: _shim_complex_config(**kw))
 PY
   export PYTHONPATH="$shim_dir:${PYTHONPATH:-}"
 }

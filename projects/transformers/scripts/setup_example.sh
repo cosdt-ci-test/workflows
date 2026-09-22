@@ -20,8 +20,14 @@ case "$PROFILE" in
   small-training)
     DEPS=(accelerate datasets evaluate seqeval)
     ;;
+  lm)
+    DEPS=(accelerate datasets)
+    ;;
+  seq2seq)
+    DEPS=(accelerate datasets evaluate sacrebleu rouge-score nltk)
+    ;;
   *)
-    echo "unknown profile: $PROFILE (supported: generation glue small-training)" >&2
+    echo "unknown profile: $PROFILE (supported: generation glue small-training lm seq2seq)" >&2
     exit 1
     ;;
 esac
@@ -65,9 +71,17 @@ MODEL_CACHE = os.environ.get("MODELSCOPE_CACHE", os.path.expanduser("~/.cache/mo
 mapping = {
     "DISTILBERT_PATH": "distilbert/distilbert-base-uncased",
     "TINYGPT2_PATH": "sshleifer/tiny-gpt2",
+    "TINYMBART_PATH": "sshleifer/tiny-mbart",
 }
 for env_name, model_id in mapping.items():
     local = snapshot_download(model_id, cache_dir=MODEL_CACHE)
     with open(os.environ["GITHUB_ENV"], "a") as fh:
         fh.write(f"{env_name}={local}\n")
 PY
+
+# LM-family examples infer the dataset loader from the train_file suffix and
+# reject the extensionless wiki_text/wiki_00 fixture, so expose it as train.txt
+# in the job output dir for the ${CI_OUTPUT_DIR}/train.txt overlay args.
+: "${CI_OUTPUT_DIR:=$GITHUB_WORKSPACE/output}"
+mkdir -p "$CI_OUTPUT_DIR"
+cp "$TARGET_ROOT/tests/fixtures/tests_samples/wiki_text/wiki_00" "$CI_OUTPUT_DIR/train.txt"

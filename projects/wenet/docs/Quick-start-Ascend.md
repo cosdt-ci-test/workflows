@@ -90,6 +90,11 @@ cd wenet
 pip install -e .[torch-npu]
 pip install -r requirements.txt
 pip install "deepspeed==0.14.4"
+# train_utils.py 无条件 import tensorboardX；requirements.txt 是开发全量清单
+# （含 flake8/clang-format/openai-whisper 等与训练无关项），aarch64 上任一包
+# 解析失败会导致整张清单未安装，且失败被命令块尾部的 rc 静默吞掉，
+# 故训练核心依赖在安装步骤显式补齐（装失败将在此步骤快速失败）
+pip install tensorboardX
 ```
 
 安装 sox：

@@ -55,7 +55,7 @@ supported:
     image: ghcr.io/hwvanici/areal_npu:v1.0.5-a2
     overlay_args:
       - --config examples/vlm_npu/qwen2_5_vl_3b_geometry3k_grpo.yaml
-      - cluster.n_gpus_per_node=8
+      - cluster.n_gpus_per_node=2
       - rollout.backend=vllm:d4p1t1
       - actor.backend=fsdp:d4p1t1
       - actor.path=${AREAL_MODEL_PATH}
@@ -65,7 +65,7 @@ supported:
       - gconfig.n_samples=1
       - train_dataset.batch_size=8
       - valid_dataset.batch_size=8
-      - total_train_epochs=1
+      - +total_train_steps=1
     timeout_minutes: 240
 unsupported:
   # 训练 / RL 示例（都需要 AReaL NPU 镜像 + 多卡；见上方说明）
@@ -86,6 +86,9 @@ unsupported:
   - examples/vlm/geometry3k_sft.py
   - examples/vlm/clevr_count_70k_grpo.py
   - examples/vlm/clevr_count_70k_sft.py
+  # UPSTREAM_BUG：workflow_kwargs 里 reward_fn=virl39k_reward_fn 传的是函数对象
+  # （geometry3k_grpo.py 传的是字符串路径），local scheduler RPC JSON 序列化失败：
+  # "Object of type function is not JSON serializable"。需改源码传字符串路径。
   - examples/vlm_npu/virl39k_grpo.py
   - examples/agent_workflow/train.py
   - examples/agent_service/run_agent_service.py

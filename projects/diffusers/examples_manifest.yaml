@@ -775,31 +775,13 @@ supported:
   # 模型均非 gated；脚本里的 torch.cuda/bitsandbytes 都是条件分支，不传对应
   # flag 不会触发。多卡只能走 DeepSpeed ZeRO-3（launcher: accelerate-deepspeed）。
 
-  # Qwen-Image LoRA（4 卡 ZeRO-3）
-  - path: examples/dreambooth/train_dreambooth_lora_qwen_image.py
-    profile: diffusers-qwen-image
-    runner: linux-aarch64-a2-4
-    npu_devices: '0,1,2,3'
-    launcher: accelerate-deepspeed
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --pretrained_model_name_or_path Qwen/Qwen-Image
-      - --dataset_name lambdalabs/naruto-blip-captions
-      - --instance_prompt "a photo of sks dog"
-      - --output_dir ${CI_OUTPUT_DIR}
-      - --resolution 256
-      - --train_batch_size 1
-      - --gradient_checkpointing
-      - --max_train_steps 1
-    timeout_minutes: 240
-    
   # SANA-Sprint（research_projects/sana；2026-09-22 迁入 supported，待验证）
   - path: examples/research_projects/sana/train_sana_sprint_diffusers.py
     profile: diffusers-sana
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - --pretrained_model_name_or_path Efficient-Large-Model/SANA_Sprint_1.6B_1024px_teacher_diffusers
+      - --pretrained_model_name_or_path ${SANA_SPRINT_TEACHER_PATH}
       - --dataset_name brivangl/midjourney-v6-llava
       - --file_path data/train_000.parquet
       - --seed 0
@@ -1086,3 +1068,7 @@ unsupported:
   # is invalid for input of size 256。基座栈必须 transformers 5.x，无法降级。
   - examples/dreambooth/train_dreambooth_lora_lumina2.py
   - examples/dreambooth/train_dreambooth_lora_z_image.py
+  # OOM：Qwen-Image（20B）+ ZeRO-3 在 a2-4 上 host OOM（Signal 9 SIGKILL，内核
+  # OOM killer）；去掉 ds_zero3.json 的 offload_param 后仍 OOM（DeepSpeed 初始化
+  # 仍要把整个模型 + 文本编码器放到 CPU）
+  - examples/dreambooth/train_dreambooth_lora_qwen_image.py

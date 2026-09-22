@@ -123,7 +123,7 @@ install_example_stack() {
 }
 
 # download_assets <what>: comma-separated tokens from
-# {sdxl, sdxl-vae, sd15, 3d-icon, cogvideo, ip-adapter}. Each token exports a path to
+# {sdxl, sdxl-vae, sd15, 3d-icon, cogvideo, ip-adapter, sana-sprint}. Each token exports a path to
 # GITHUB_ENV under the name overlay_args reference:
 #   sdxl      -> SDXL_BASE_PATH    (AI-ModelScope/stable-diffusion-xl-base-1.0)
 #   sdxl-vae  -> SDXL_VAE_PATH     (AI-ModelScope/sdxl-vae-fp16-fix)
@@ -349,6 +349,23 @@ if "ip-adapter" in WANT:
         failures.append(f"AI-ModelScope/IP-Adapter: {type(exc).__name__}: {exc}")
         print(f"FAIL AI-ModelScope/IP-Adapter: {exc}", flush=True)
 
+# sana-sprint: the SANA-Sprint teacher model for research_projects/sana. The
+# script reads <path>/transformer/diffusion_pytorch_model.safetensors directly
+# (load_file, not from_pretrained), so --pretrained_model_name_or_path must be
+# a LOCAL directory; pre-download it here.
+if "sana-sprint" in WANT:
+    try:
+        dest = WORKSPACE / "sana_sprint_teacher"
+        dest.mkdir(parents=True, exist_ok=True)
+        hf_snapshot(
+            "Efficient-Large-Model/SANA_Sprint_1.6B_1024px_teacher_diffusers",
+            local_dir=str(dest),
+        )
+        export("SANA_SPRINT_TEACHER_PATH", str(dest))
+    except Exception as exc:  # noqa: BLE001
+        failures.append(f"SANA_Sprint_1.6B: {type(exc).__name__}: {exc}")
+        print(f"FAIL SANA_Sprint_1.6B: {exc}", flush=True)
+
 if exports:
     with open(ENV_FILE, "a", encoding="utf-8") as handle:
         for key, value in exports.items():
@@ -556,11 +573,13 @@ setup_diffusers_cogvideo_i2v() {
   download_assets cogvideo-dataset
 }
 
-# diffusers-sana: Sana LoRA DreamBooth. Base only; the model
-# (Efficient-Large-Model/Sana_1600M_1024px_BF16_diffusers) + dataset are
-# fetched via hf-mirror at run time.
+# diffusers-sana: research_projects/sana (SANA-Sprint) + Sana LoRA DreamBooth.
+# The sprint script reads <path>/transformer/diffusion_pytorch_model.safetensors
+# with load_file(), so its --pretrained_model_name_or_path must be a local dir;
+# pre-download the teacher model here.
 setup_diffusers_sana() {
   install_example_stack
+  download_assets sana-sprint
 }
 
 # diffusers-lumina2: Lumina2 LoRA DreamBooth (2-card ZeRO-3). deepspeed is

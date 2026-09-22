@@ -252,16 +252,14 @@ unsupported:
   - examples/configs/online/disaggregated/managed-local/qwen3.8-27b-dflash2-4server-dp4-disaggregated.yaml    
 
 
-  - examples/disagg/run_offline_2node.sh
   - examples/disagg/run_qwen3_8b_dflash_disagg_2node.sh
   - examples/disagg/run_qwen3.8_27b_dflash2_disagg_2node.sh
   - examples/disagg/run_inkling_dspark_disagg_2node.sh
-  - examples/disagg/run_qwen3.6-27b-domino.sh            
+  - examples/disagg/run_qwen3.6-27b-domino.sh
 
 
   - examples/configs/offline/colocated/qwen3.5-4b-dflash-offline-amd.yaml
   - examples/configs/online/disaggregated/external/qwen3.5-4b-dflash-online-amd.yaml
-
 
   - examples/configs/offline/colocated/qwen3-4b-dspark-offline.yaml                       
   - examples/configs/offline/colocated/qwen3-8b-dflash-offline.yaml                       
@@ -395,15 +393,20 @@ unsupported:
   # helper（README "Checkpoints without shared storage"），调用方是 2-node
   # trainer；单独跑没有任何业务行为——它等待 run-root 下出现 checkpoint
   # 子目录才开始打包，没有 checkpoint 就空转。属于 library helper，不是 example。
-  # run_online.sh / run_offline.sh 是 specforge train 的 recipe-agnostic
-  # dispatch wrapper：源码本体只有 3 步（CONFIG= 必须显式 export →
-  # 校验 `specforge` 在 PATH → `exec specforge train --config "$CONFIG" "$@"`），
-  # 没有任何绑死的 recipe 或默认行为；调用方必须自己选 YAML path（如
-  # `CONFIG=examples/configs/online/disaggregated/external/qwen3.5-4b-dflash-
-  # online-npu.yaml ./examples/disagg/run_online.sh --role producer`），未设
-  # CONFIG 直接 exit 2。functional 等价于 `specforge train --config $CONFIG $@`，
-  # examples engine 把它们当独立 example 跑必然 exit 2——recipes 已被
-  # examples/configs/**.yaml 各自枚举，dispatcher 本身不属于 example 类别。
+  # run_online.sh / run_offline.sh / run_offline_2node.sh 是 specforge train
+  # 的 recipe-agnostic dispatch wrapper：源码本体只有 3 步（CONFIG= 必须显式
+  # export → 校验 `specforge` 在 PATH → `exec specforge train --config
+  # "$CONFIG" "$@"` 或带 --role），没有任何绑死的 recipe 或默认行为；调用方
+  # 必须自己选 YAML path（如 `CONFIG=examples/configs/online/disaggregated/
+  # external/qwen3.5-4b-dflash-online-npu.yaml ./examples/disagg/run_online.sh
+  # --role producer`），未设 CONFIG 直接 exit 2。run_offline_2node.sh 是 2-node
+  # 版本，额外校验 NODE_RANK ∈ {0,1} + NUM_NODES=2，然后 `exec specforge train
+  # --config "$config" --role "$role" "$@"`——属于 caller 必须先把 head/worker
+  # 各自分配好再分别调用的 dispatcher。functional 等价于 `specforge train
+  # --config $CONFIG $@`（或 `--role`），examples engine 把它们当独立 example
+  # 跑必然 exit 2——recipes 已被 examples/configs/**.yaml 各自枚举，dispatcher
+  # 本身不属于 example 类别。
   - examples/disagg/sync_distributed_checkpoints.py
   - examples/disagg/run_online.sh
   - examples/disagg/run_offline.sh
+  - examples/disagg/run_offline_2node.sh

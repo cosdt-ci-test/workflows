@@ -60,10 +60,11 @@ jobs:
         with:
             project: opencv
             # supported = 3 self-hosted NPU smoke legs (source: project,
-            # see manifest). max_parallel stays 1 so the source build of
-            # opencv-cann on the shared NPU runner serializes (~23 min
-            # cold @-j2; the k8s runner pods are ephemeral so it never
-            # caches).
+            # see manifest). max_parallel 4 lets all 3 legs run in
+            # parallel; each leg's setup_example.sh source-builds
+            # opencv-cann (~23 min cold @-j2) when the image has no
+            # pre-built install, so cold pods serialize on the shared
+            # runner regardless.
             upstream_repo: opencv/opencv
             target_ref: ${{ inputs.target_ref }}
-            max_parallel: 1
+            max_parallel: 4

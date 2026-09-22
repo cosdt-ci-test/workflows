@@ -123,7 +123,7 @@ install_example_stack() {
 }
 
 # download_assets <what>: comma-separated tokens from
-# {sdxl, sdxl-vae, sd15, 3d-icon, cogvideo}. Each token exports a path to
+# {sdxl, sdxl-vae, sd15, 3d-icon, cogvideo, ip-adapter}. Each token exports a path to
 # GITHUB_ENV under the name overlay_args reference:
 #   sdxl      -> SDXL_BASE_PATH    (AI-ModelScope/stable-diffusion-xl-base-1.0)
 #   sdxl-vae  -> SDXL_VAE_PATH     (AI-ModelScope/sdxl-vae-fp16-fix)
@@ -328,6 +328,27 @@ if "3d-icon" in WANT:
         failures.append(f"linoyts/3d_icon: {type(exc).__name__}: {exc}")
         print(f"FAIL linoyts/3d_icon: {exc}", flush=True)
 
+# ip-adapter: CLIP image encoders for the IP-Adapter tutorials. The tutorials
+# call CLIPVisionModelWithProjection.from_pretrained(<path>) with no subfolder,
+# but the upstream repo keeps the encoders under models/image_encoder (SD1.5)
+# and sdxl_models/image_encoder (SDXL); point --image_encoder_path at the local
+# subdirs. ModelScope (AI-ModelScope/IP-Adapter) carries the same shas as
+# h94/IP-Adapter, avoiding the Xet-backed hf-mirror download of the weights.
+if "ip-adapter" in WANT:
+    try:
+        local = Path(
+            snapshot_download(
+                "AI-ModelScope/IP-Adapter",
+                cache_dir=str(MODEL_CACHE),
+                allow_file_pattern=["models/image_encoder/*", "sdxl_models/image_encoder/*"],
+            )
+        )
+        export("IP_ADAPTER_IMAGE_ENCODER_PATH", str(local / "models" / "image_encoder"))
+        export("IP_ADAPTER_SDXL_IMAGE_ENCODER_PATH", str(local / "sdxl_models" / "image_encoder"))
+    except Exception as exc:  # noqa: BLE001
+        failures.append(f"AI-ModelScope/IP-Adapter: {type(exc).__name__}: {exc}")
+        print(f"FAIL AI-ModelScope/IP-Adapter: {exc}", flush=True)
+
 if exports:
     with open(ENV_FILE, "a", encoding="utf-8") as handle:
         for key, value in exports.items():
@@ -410,6 +431,9 @@ setup_diffusers_research_plain() {
   # requirements.txt (not install_requires) pulls einops + safetensors, so
   # pip does not fetch them — install them explicitly.
   python -m pip install lpips taming_transformers ip_adapter einops safetensors
+  # The IP-Adapter tutorials take the CLIP image encoder as a local path; the
+  # repo keeps it under models/image_encoder + sdxl_models/image_encoder.
+  download_assets ip-adapter
 }
 
 # diffusers-t2i-adapter: T2I-Adapter SDXL. The tiny SDXL / tiny adapter models

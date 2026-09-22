@@ -690,23 +690,6 @@ supported:
   ########################已经稳定跑好的###########################################
   ########################之后记得注释回来#########################################
 
-  # autoencoderkl VAE 训练（fixtures/DOG.jpg；2026-09-21 写入待验证）
-  - path: examples/research_projects/autoencoderkl/train_autoencoderkl.py
-    profile: diffusers-research-plain
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --pretrained_model_name_or_path stabilityai/sd-vae-ft-mse
-      - --dataset_name uoft-cs/cifar10
-      - --image_column img
-      - --validation_image ${FIXTURE_DIR}/images/DOG.jpg
-      - --output_dir ${CI_OUTPUT_DIR}
-      - --resolution 256
-      - --train_batch_size 1 --gradient_accumulation_steps 1 --gradient_checkpointing
-      - --max_train_steps 1
-      - --report_to wandb
-    timeout_minutes: 120
-
   # IP-Adapter（SD1.5；本地 JSON 清单 fixtures/ip_adapter/data.json；2026-09-21 写入待验证）
   - path: examples/research_projects/ip_adapter/tutorial_train_ip-adapter.py
     profile: diffusers-research-plain
@@ -714,7 +697,7 @@ supported:
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
       - --pretrained_model_name_or_path stable-diffusion-v1-5/stable-diffusion-v1-5
-      - --image_encoder_path h94/IP-Adapter
+      - --image_encoder_path ${IP_ADAPTER_IMAGE_ENCODER_PATH}
       - --data_json_file ${FIXTURE_DIR}/ip_adapter/data.json
       - --data_root_path ${FIXTURE_DIR}/images
       - --output_dir ${CI_OUTPUT_DIR}
@@ -730,7 +713,7 @@ supported:
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
       - --pretrained_model_name_or_path stable-diffusion-v1-5/stable-diffusion-v1-5
-      - --image_encoder_path h94/IP-Adapter
+      - --image_encoder_path ${IP_ADAPTER_IMAGE_ENCODER_PATH}
       - --data_json_file ${FIXTURE_DIR}/ip_adapter/data.json
       - --data_root_path ${FIXTURE_DIR}/images
       - --output_dir ${CI_OUTPUT_DIR}
@@ -746,13 +729,13 @@ supported:
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
       - --pretrained_model_name_or_path stabilityai/stable-diffusion-xl-base-1.0
-      - --image_encoder_path h94/IP-Adapter
+      - --image_encoder_path ${IP_ADAPTER_SDXL_IMAGE_ENCODER_PATH}
       - --data_json_file ${FIXTURE_DIR}/ip_adapter/data.json
       - --data_root_path ${FIXTURE_DIR}/images
       - --output_dir ${CI_OUTPUT_DIR}
       - --resolution 256
       - --train_batch_size 1
-      - --max_train_steps 1
+      - --num_train_epochs 1
     timeout_minutes: 180
 
 # ===== unsupported（其余全部；后续逐例验证跑通后迁入 supported） =====
@@ -1022,3 +1005,7 @@ unsupported:
   # DDP 不省单卡显存；ZeRO-3 又撞上游 bug——训练循环 L1358
   # `solver.ddim_step(...).to(unet.dtype)`，模型被 DeepSpeedEngine 包裹后无 .dtype。
   - examples/consistency_distillation/train_lcm_distill_lora_sdxl.py
+  # BUG：final validation 用 AutoencoderKL.from_pretrained(output_dir) 加载到 CPU，
+  # 未 .to(accelerator.device)，NPU 上 conv 报 "weight is on cpu, different from ...
+  # npu:0"；该路径无条件执行，去掉 --validation_image 还会 enumerate(None) 报错
+  - examples/research_projects/autoencoderkl/train_autoencoderkl.py

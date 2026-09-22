@@ -159,8 +159,6 @@ ls /root/asr-data/OpenSLR/33/data_aishell/.complete /root/asr-data/OpenSLR/33/re
 echo "=== 检查数据目录 ==="
 ls /root/asr-data/OpenSLR/33/data_aishell/ | head -2
 ls /root/asr-data/OpenSLR/33/resource_aishell/ | head -2
-echo "=== 检查已解压 wav 文件数 ==="
-find /root/asr-data/OpenSLR/33/data_aishell/wav -iname '*.wav' -type f | wc -l
 ```
 
 输出结果如下：
@@ -174,8 +172,6 @@ transcript
 wav
 lexicon.txt
 speaker.info
-=== 检查已解压 wav 文件数 ===
-141600
 ```
 
 ---

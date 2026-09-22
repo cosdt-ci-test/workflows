@@ -492,6 +492,53 @@ else:
 PY
     fi
   done
+
+  # Bug 5: lora_dpo_distributed.py:691 and full_dpo_distributed.py:886
+  # both do:
+  #     num_tokens = 0
+  #     ...
+  #     num_tokens += torch.tensor(batch[0].numel())
+  # and later call
+  #     torch.distributed.all_reduce(num_tokens)
+  # `torch.tensor(...)` defaults to CPU, so `num_tokens` becomes a CPU
+  # scalar tensor — and the hccl backend only accepts NPU tensors for
+  # collectives (init succeeded thanks to Bug 4 patch, but the first
+  # all_reduce on a CPU tensor raises
+  # `RuntimeError: No backend type associated with device type cpu`,
+  # CI run 35729818620 lora_dpo_distributed + full_dpo_distributed
+  # legs). lora_finetune_distributed / full_finetune_distributed /
+  # knowledge_distillation_distributed use a different num_tokens
+  # expression (device tensor from `(batch["labels"] != ignore).sum()`
+  # after batch_to_device) so they're already on-device and don't need
+  # this patch.
+  #
+  # Fix: route the new tensor through self._device, mirroring how the
+  # other recipes keep it device-resident. Single line per file.
+  #
+  # Guard: `num_tokens += torch.tensor(batch[0].numel())` is the only
+  # literal match in the file (unique per recipe, line numbers shifted
+  # by upstream edits but the anchor string survives).
+  for recipe in lora_dpo_distributed.py full_dpo_distributed.py; do
+    local rp="$TARGET_ROOT/recipes/$recipe"
+    if [[ -f "$rp" ]] && grep -qF 'num_tokens += torch.tensor(batch[0].numel())' "$rp"; then
+      echo "patching $rp: route num_tokens += through self._device (NPU-only)"
+      _PATCH_RECIPE="$rp" python - <<'PY'
+import pathlib, os
+p = pathlib.Path(os.environ["_PATCH_RECIPE"])
+src = p.read_text()
+needle = 'num_tokens += torch.tensor(batch[0].numel())'
+replacement = 'num_tokens += torch.tensor(batch[0].numel(), device=self._device)'
+if needle not in src:
+    raise SystemExit("anchor missing in %s" % p)
+if replacement in src:
+    print("  already patched (race), skipping: %s" % p)
+else:
+    src = src.replace(needle, replacement, 1)
+    p.write_text(src)
+    print("  patched: %s" % p)
+PY
+    fi
+  done
 }
 
 supported_profiles() {

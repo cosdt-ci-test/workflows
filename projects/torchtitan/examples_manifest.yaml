@@ -175,7 +175,6 @@ supported:
     timeout_minutes: 20
 
 unsupported:
-  # ===== 实证失败（不再视为"待支持"）=====
   # flux_debugmodel：源 scan 看起来可上，但实证 1 卡 full_dtensor 路径连撞
   # 五道墙，全部不是"NPU 缺算子"，是 v0.3.0 source-level + 离线 pod 缺网络
   # 共同叠加：(1) flux/parallelize.py:70 `assert dp_mesh is not None` —— 1 卡

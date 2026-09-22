@@ -735,6 +735,22 @@ supported:
   #     - --num_train_epochs 1
   #   timeout_minutes: 180
 
+  #   # Sana 1600M LoRA（单卡 a2-1）
+  # - path: examples/dreambooth/train_dreambooth_lora_sana.py
+  #   profile: diffusers-sana
+  #   runner: linux-aarch64-a2-1
+  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+  #   overlay_args:
+  #     - --pretrained_model_name_or_path Efficient-Large-Model/Sana_1600M_1024px_BF16_diffusers
+  #     - --dataset_name lambdalabs/naruto-blip-captions
+  #     - --instance_prompt "a photo of sks dog"
+  #     - --output_dir ${CI_OUTPUT_DIR}
+  #     - --resolution 256
+  #     - --train_batch_size 1
+  #     - --gradient_checkpointing
+  #     - --max_train_steps 1
+  #   timeout_minutes: 120
+
   ########################已经稳定跑好的###########################################
   ########################之后记得注释回来#########################################
 
@@ -748,25 +764,9 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - --pretrained_model_name_or_path ${SDXL_BASE_PATH}
+      - --pretrained_model_name_or_path stabilityai/stable-diffusion-xl-base-1.0
       - --variant fp16
       - --dataset_name hf-internal-testing/dummy_image_text_data
-      - --instance_prompt "a photo of sks dog"
-      - --output_dir ${CI_OUTPUT_DIR}
-      - --resolution 256
-      - --train_batch_size 1
-      - --gradient_checkpointing
-      - --max_train_steps 1
-    timeout_minutes: 120
-
-  # Sana 1600M LoRA（单卡 a2-1）
-  - path: examples/dreambooth/train_dreambooth_lora_sana.py
-    profile: diffusers-sana
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --pretrained_model_name_or_path Efficient-Large-Model/Sana_1600M_1024px_BF16_diffusers
-      - --dataset_name lambdalabs/naruto-blip-captions
       - --instance_prompt "a photo of sks dog"
       - --output_dir ${CI_OUTPUT_DIR}
       - --resolution 256
@@ -987,12 +987,12 @@ unsupported:
   - examples/dreambooth/train_dreambooth_lora_ideogram4.py
   # cuda 硬编码
   - examples/dreambooth/train_dreambooth_lora_krea2.py
-  # lora_decoder：上游 bug——line 428 给 LoRAAttnAddedKVProcessor 传 hidden_size，
-  # 当前 diffusers 的 __init__ 不收该参数 → TypeError
+  # line 428 给 LoRAAttnAddedKVProcessor 传 hidden_size，
+  # 当前 diffusers 版本太高 __init__ 不收该参数 → TypeError
   - examples/kandinsky2_2/text_to_image/train_text_to_image_lora_decoder.py
   # profiling 硬编码 CUDA：helper profiling_utils.py 用 torch.cuda.Event /
   # ProfilerActivity.CUDA / pipe.to("cuda")（NPU 对应 torch.npu.Event /
-  # ProfilerActivity.NPU，API 不同）；且模型是 FLUX.1-dev(12B) / Wan2.1-14B 等
+  # ProfilerActivity.NPU，API 不同）
   - examples/profiling/profiling_pipelines.py
   - examples/profiling/run_profiling.sh
   # diffusion_policy：checkpoint dorsar/diffusion_policy 与当前 diffusers 的
@@ -1008,13 +1008,13 @@ unsupported:
   - examples/research_projects/colossalai/train_dreambooth_colossalai.py
   # CUDA_DEP：硬编码 .to("cuda")
   - examples/research_projects/control_lora/control_lora.py
-  # DATA_UNREACHABLE：webdataset 数据集不可达
+  # DATA_UNREACHABLE：数据集准备成本较高
   - examples/research_projects/controlnet/train_controlnet_webdataset.py
   # DATA_UNREACHABLE：webdataset 数据集不可达
   - examples/research_projects/diffusion_orpo/train_diffusion_orpo_sdxl_lora_wds.py
   # dreambooth_inpaint_lora：需降级 diffusers（用已废弃的 LoRA processor 构造 API）
   - examples/research_projects/dreambooth_inpaint/train_dreambooth_inpaint_lora.py
-  # GATED_MODEL + CUDA_DEP：FLUX.1-dev 需授权 + bitsandbytes
+  # GATED_MODEL + CUDA_DEP：FLUX.1-dev Gated + bitsandbytes
   - examples/research_projects/flux_lora_quantization/compute_embeddings.py
   - examples/research_projects/flux_lora_quantization/train_dreambooth_lora_flux_miniature.py
   # DATA_UNREACHABLE：需自定义 gligen 数据集
@@ -1024,7 +1024,7 @@ unsupported:
   - examples/research_projects/intel_opts/textual_inversion/textual_inversion_bf16.py
   - examples/research_projects/intel_opts/textual_inversion_dfq/text2images.py
   - examples/research_projects/intel_opts/textual_inversion_dfq/textual_inversion.py
-  # DATA_UNREACHABLE：需自定义人脸数据集
+  # DATA_UNREACHABLE：需自定义人脸数据集：用 insightface 提取人脸 normed_embedding
   - examples/research_projects/ip_adapter/tutorial_train_faceid.py
   # lora：用已废弃的 LoRAAttnProcessor(hidden_size=..., cross_attention_dim=...)
   # 构造 API；当前 diffusers 的 LoRAAttnProcessor.__init__() 不收参数（改走 peft）
@@ -1051,14 +1051,13 @@ unsupported:
   # DATA_UNREACHABLE：midjourney parquet 数据集不可达
   - examples/research_projects/sana/train_sana_sprint_diffusers.py
   - examples/research_projects/sana/train_sana_sprint_diffusers.sh
-  # GATED_MODEL + CUDA_DEP：SD3 需授权；且用 bitsandbytes load_in_8bit + device_map（CUDA-only）
+  # GATED_MODEL + CUDA_DEP：SD3 需 gated；且用 bitsandbytes load_in_8bit + device_map（CUDA-only）
   - examples/research_projects/sd3_lora_colab/compute_embeddings.py
   # OTHER_BACKEND：JAX/Flax
   - examples/research_projects/sdxl_flax/sdxl_single.py
   - examples/research_projects/sdxl_flax/sdxl_single_aot.py
   # wuerstchen prior / lora_prior：import diffusers.pipelines.wuerstchen，该模块在
   # 当前 diffusers 已删除（WuerstchenPrior / DEFAULT_STAGE_C_TIMESTEPS 都没了）
-  # → ModuleNotFoundError，跑不了
   - examples/research_projects/wuerstchen/text_to_image/train_text_to_image_prior.py
   - examples/research_projects/wuerstchen/text_to_image/train_text_to_image_lora_prior.py
   # CUDA_DEP + GATED_MODEL：硬编码 cuda/mps（无 NPU 分支，L49-66）；模型为 SD3.5（gated）
@@ -1069,8 +1068,8 @@ unsupported:
   - examples/text_to_image/train_text_to_image_flax.py
   # OTHER_BACKEND：jax/optax/flax（diffusers v0.40 已移除 Flax）
   - examples/textual_inversion/textual_inversion_flax.py
-  # GATED_MODEL / MODEL_UNREACHABLE：SD3-medium / SD3.5-large / HiDream-I1-Full
-  # 在 HF 为 gated=auto（需 token + 接受 license）；FLUX 系（unsloth/FLUX.1-dev）
+  # 以下 10 个：GATED_MODEL / MODEL_UNREACHABLE：SD3-medium / SD3.5-large / HiDream-I1-Full / FLUX 系
+  # 在 HF 为 gated=auto（需 token + 接受 license）
   - examples/controlnet/train_controlnet_flux.py
   - examples/controlnet/train_controlnet_sd3.py
   - examples/flux-control/train_control_flux.py
@@ -1083,12 +1082,11 @@ unsupported:
   - examples/research_projects/sd3_lora_colab/train_dreambooth_lora_sd3_miniature.py
   # API_CHANGE：diffusers 0.41.0.dev0 的 LoRA 构造 API 不再接受 hidden_size 参数
   - examples/kandinsky2_2/text_to_image/train_text_to_image_lora_prior.py
+  # 以下 5 个：
   # INCOMPAT：transformers 5.x 不兼容 CLIP text config
   # （运行时 max_position_embeddings 读到 0，forward 报 "Sequence length must be
   # less than max_position_embeddings"；diffusers 0.40+ 必须用 transformers 5.x）
   - examples/kandinsky2_2/text_to_image/train_text_to_image_prior.py
-  # INCOMPAT：同上，SDXL/CLIP text config 在 transformers 5.x 下
-  # max_position_embeddings 读到 0（Sequence length must be less than ...）
   - examples/instruct_pix2pix/train_instruct_pix2pix_sdxl.py
   - examples/controlnet/train_controlnet_sdxl.py
   - examples/research_projects/scheduled_huber_loss_training/text_to_image/train_text_to_image_sdxl.py

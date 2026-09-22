@@ -563,19 +563,25 @@ setup_diffusers_sana() {
   install_example_stack
 }
 
-# diffusers-lumina2: Lumina2 LoRA DreamBooth (2-card ZeRO-3). Base only.
+# diffusers-lumina2: Lumina2 LoRA DreamBooth (2-card ZeRO-3). deepspeed is
+# required by the accelerate-deepspeed launcher.
 setup_diffusers_lumina2() {
   install_example_stack
+  python -m pip install "deepspeed>=0.18.2"
 }
 
-# diffusers-z-image: Z-Image LoRA DreamBooth (2-card ZeRO-3). Base only.
+# diffusers-z-image: Z-Image LoRA DreamBooth (2-card ZeRO-3). deepspeed is
+# required by the accelerate-deepspeed launcher.
 setup_diffusers_z_image() {
   install_example_stack
+  python -m pip install "deepspeed>=0.18.2"
 }
 
-# diffusers-qwen-image: Qwen-Image LoRA DreamBooth (4-card ZeRO-3). Base only.
+# diffusers-qwen-image: Qwen-Image LoRA DreamBooth (4-card ZeRO-3). deepspeed
+# is required by the accelerate-deepspeed launcher.
 setup_diffusers_qwen_image() {
   install_example_stack
+  python -m pip install "deepspeed>=0.18.2"
 }
 
 # diffusers-llada2: LLaDA2 block-refinement training smoke. Base stack is

@@ -31,7 +31,7 @@ supported:
   # 层 patch。保留这条作为「default wiring」基线，#2 ce_loss 变体
   # 单独验证 CrossEntropyLoss 直连路径，两条同时留 supported =
   # default vs ce_loss wiring 漂移检测（CI 成本翻倍但信号独立）。
-  - path: torchtitan/train.py
+  - path: torchtitan/models/llama3/config_registry.py
     profile: torchtitan
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
@@ -96,7 +96,7 @@ supported:
   # 修复（同 #1）；修好后可能进一步撞 torch 2.13-only FSDP dp_mesh_dims
   # 路径——这是上游 torch 的 issue，不在 setup 层 patch。
   # ASCEND_RT_VISIBLE_DEVICES 由 runner 注入（双卡 runner 暴露 0,1）。
-  - path: torchtitan/train.py
+  - path: torchtitan/models/llama3/config_registry.py
     profile: torchtitan
     runner: linux-aarch64-a2-2
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
@@ -127,7 +127,7 @@ supported:
   # 校验，这里立刻报红。
   # 退役条件：TP>=2 路径需 torch 2.13+ ABI 适配，此后才有意义再开
   # TP>=2 的 supported。
-  - path: torchtitan/train.py
+  - path: torchtitan/models/llama3/config_registry.py
     profile: torchtitan
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
@@ -157,7 +157,7 @@ supported:
   # （同 #1）→ 接下来撞 triton_key import / separate_full_blocks
   # TypeError。退役条件：上游让 sft 默认走 sdpa 或暴露 triton_key，
   # 或 torch 2.13 ABI 适配。
-  - path: torchtitan/train.py
+  - path: torchtitan/models/llama3/config_registry.py
     profile: torchtitan
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12

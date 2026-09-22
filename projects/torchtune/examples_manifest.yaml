@@ -154,15 +154,19 @@ supported:
   # 要求 policy+ref_policy 共享同一份 base 权重，recipe line 561 的
   # policy_model.load_state_dict 是 strict=True，base-only state_dict
   # 加载到 LoRA 模型会缺 lora_a/lora_b keys 必崩）。RM/V 来自 HF 个人
-  # repo smohammadi，ModelScope 不代发；setup_example.sh 新加 HF 镜像
-  # 下载分支（HF_ENDPOINT=hf-mirror.com，coder pod curl 实测 HTTP 200），
-  # cache 命中后用 TT_RM_PATH 复用。reward/V 的 state_dict 通过
-  # reward_hf_to_tune（model_type=REWARD）转换，coder dry-run 已确认
-  # 0 missing / 0 unexpected key。dataset 用本地 jsonl（4 条 prompt），
-  # 不走 HF datasets。`num_steps=1, batch_size=1, ppo_batch_size=1`
-  # smoke 规模（recipe 要求 num_steps % batch_size == 0）。
+  # repo smohammadi/tinyllama_rm_sentiment_1b，ModelScope 不代发，且其
+  # model.safetensors 是 xet-backed（hf-mirror 302 到 cas-bridge，加上
+  # transformers 把 huggingface_hub 压回 0.36.2 不认 HF_HUB_DISABLE_XET
+  # → 416 / consistency 校验失败，run 35582685960 全 8 腿挂）。改走
+  # cache-seed repo bundle 投递到共享 HF cache，setup 用 torchtune_ppo
+  # profile 按需 resolve refs/main 得 TT_RM_PATH（仅 PPO 这条腿下载）。
+  # reward/V 的 state_dict 通过 reward_hf_to_tune（model_type=REWARD）
+  # 转换，coder dry-run 已确认 0 missing / 0 unexpected key。dataset
+  # 用本地 jsonl（4 条 prompt），不走 HF datasets。`num_steps=1,
+  # batch_size=1, ppo_batch_size=1` smoke 规模（recipe 要求
+  # num_steps % batch_size == 0）。
   - path: recipes/ppo_full_finetune_single_device.py
-    profile: torchtune
+    profile: torchtune_ppo
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
@@ -189,8 +193,8 @@ supported:
       - kl_coeff=0.01  # recipe 在 _setup_training_hyperparameters 读 cfg.kl_coeff；PPOLoss 不收（main HEAD signature 只接 epsilon/value_clip_range/value_coeff）
       - device=npu
     # 2026-09-21 翻案，PPO 1 step 端到端在 coder 跑通（policy 0.5B + RM 1.1B 共 ~3.9GB
-    # HBM）；新加 HF 下载分支让 setup 比其他 recipe 慢（多 ~2.2GB RM 下载，hf-mirror 实测
-    # 18min，HF 直连更慢），留 60min 兜底。
+    # HBM）。RM 由 cache-seed repo bundle 投递（torchtune_ppo profile 按需 resolve），
+    # setup 不再走 hf-mirror 下载，无额外下载时间；仍留 60min 兜底（teacher/Qwen 下载）。
     timeout_minutes: 60
 
   # 评测：Qwen2.5-0.5B + lm_eval + 自定义 ci_truthfulqa_mc2 任务（本地 JSON 驱动）

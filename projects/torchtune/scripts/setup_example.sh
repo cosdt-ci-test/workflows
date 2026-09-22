@@ -176,6 +176,39 @@ prepare_fixtures() {
   echo "copied $(find "$dst" -type f | wc -l) fixture file(s) to $dst"
 }
 
+resolve_seed_envs() {
+  # $@ = alternating (hf_id, env var) pairs. Resolve each seeded asset's
+  # snapshot path from the shared HF hub cache (refs/main -> sha) and
+  # append VAR=<snapshot> to GITHUB_ENV for manifest overlay_args.
+  # The shared cache root is populated by the cache-seed workflow
+  # (repo bundle: cache-seed/torchtune/manifest.yaml -> SHARED_CACHE_ROOT,
+  # default ~/.cache/huggingface). Nothing downloads in example jobs.
+  python - "$@" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+HUB_ROOT = Path(os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))) / "hub"
+pairs = sys.argv[1:]
+if len(pairs) % 2:
+    raise SystemExit("resolve_seed_envs: expected alternating hf_id var pairs")
+for hf_id, var in zip(pairs[::2], pairs[1::2]):
+    repo_dir = HUB_ROOT / f"models--{hf_id.replace('/', '--')}"
+    refs = repo_dir / "refs" / "main"
+    if not refs.is_file():
+        raise SystemExit(
+            f"{hf_id} missing from shared cache root — dispatch the "
+            f"cache-seed workflow (spec: cache-seed/torchtune/manifest.yaml)")
+    sha = refs.read_text().strip()
+    snap = repo_dir / "snapshots" / sha
+    if not snap.is_dir() or not any(snap.iterdir()):
+        raise SystemExit(f"{hf_id}: refs/main -> {sha[:8]} has no snapshot files")
+    with open(os.environ["GITHUB_ENV"], "a") as fh:
+        fh.write(f"{var}={snap}\n")
+    print(f"{var}={snap}", flush=True)
+PY
+}
+
 setup_torchtune() {
   # torchtune from the guarded checkout. The torchao pin is decided
   # dynamically because the NF4Tensor import path in
@@ -303,32 +336,24 @@ teacher = snapshot_download(
 with open(os.environ["GITHUB_ENV"], "a") as fh:
     fh.write(f"TT_TEACHER_PATH={teacher}\n")
 print("TT_TEACHER_PATH=", teacher)
-
-# PPO 翻案 (recipes/ppo_full_finetune_single_device.py) 需要 scalar-head
-# reward model。Qwen2.5-0.5B 上游没有现成 RM，upstream PPO yaml 用
-# smohammadi/tinyllama_rm_sentiment_1b（TinyLlama v1.1 改的 scalar-head
-# 模型，model_type=REWARD + reward_hf_to_tune 转换），2.2GB。ModelScope 不
-# 代发个人 HF repo，走 huggingface_hub + HF_ENDPOINT=hf-mirror.com（中国镜像，
-# coder pod curl 实测 HTTP 200，HF 直连在 coder pod 上 hang）。如果 caller
-# 已经预下载并 export TT_RM_PATH（典型场景：coder 本机 scp），跳过下载。
-if not os.environ.get("TT_RM_PATH"):
-    from huggingface_hub import snapshot_download as _hf_snapshot
-    os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
-    rm = _hf_snapshot(
-        "smohammadi/tinyllama_rm_sentiment_1b",
-        cache_dir=os.environ.get(
-            "HF_HOME", os.path.expanduser("~/.cache/huggingface")
-        ),
-        allow_patterns=[
-            "*.json", "*.txt", "*.safetensors", "tokenizer*", "*.model",
-        ],
-    )
-    with open(os.environ["GITHUB_ENV"], "a") as fh:
-        fh.write(f"TT_RM_PATH={rm}\n")
-    print("TT_RM_PATH=", rm)
-else:
-    print("TT_RM_PATH (caller-provided):", os.environ["TT_RM_PATH"])
 PY
+}
+
+setup_torchtune_ppo() {
+  # PPO 全参 finetune（recipes/ppo_full_finetune_single_device.py）需要
+  # scalar-head reward/value 模型 smohammadi/tinyllama_rm_sentiment_1b。
+  # 该 repo 是个人 HF 仓库，ModelScope 不代发，其 model.safetensors 是
+  # xet-backed（hf-mirror 302 到 cas-bridge.xethub.hf.co；且 torchtune 的
+  # huggingface_hub 会被 transformers==4.57.1 压回 0.36.2，不认识
+  # HF_HUB_DISABLE_XET → xet resume 撞 416 / consistency 校验失败，run
+  # 35582685960 全 8 腿挂在这里）。改走 cache-seed repo bundle 投递到共享
+  # HF cache，本 profile 按需 resolve refs/main 得 TT_RM_PATH，不下载。
+  setup_torchtune
+  if [[ -z "${TT_RM_PATH:-}" ]]; then
+    resolve_seed_envs smohammadi/tinyllama_rm_sentiment_1b TT_RM_PATH
+  else
+    echo "TT_RM_PATH (caller-provided): ${TT_RM_PATH}"
+  fi
 }
 
 # Patch two upstream bugs in main HEAD torchtune. v0.6.1 release doesn't

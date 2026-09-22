@@ -30,7 +30,7 @@ repo bundle 侧（仅 ModelScope 没有的）      GitHub 仓库                
 本机（代理直连 HF）                        cache-seed/<project>/    cache-seed.yml
 huggingface_hub 下内容       ──────>       manifest.yaml          ─→ scripts/cache_seed.py
 scripts/bundle_cache.py       ──────>       <prefix>/<file>        ─→ 拷贝 → SHARED_CACHE_ROOT
-                                           <file>.part-aa/ab/...    → sha256 校验
+                                            <file>.part-0000/0001/... → sha256 校验
 ```
 
 ## 单校验
@@ -47,7 +47,7 @@ scripts/bundle_cache.py       ──────>       <prefix>/<file>        �
 | 内容 | runner 共享缓存目标 | 备注 |
 |---|---|---|
 | `<prefix>/<file>` | `<SHARED_CACHE_ROOT>/<prefix>/<file>` | 直接 cp，拷完校验 |
-| `<prefix>/<file>.part-aa/ab/...` | `<SHARED_CACHE_ROOT>/<prefix>/<file>` | cat 拼回，拷完校验 |
+| `<prefix>/<file>.part-0000/0001/...` | `<SHARED_CACHE_ROOT>/<prefix>/<file>` | cat 拼回，拷完校验 |
 
 `<prefix>` 由 staging 时 `--prefix` 指定；CI 不另设 `extract_to`，路径里直接编码。
 
@@ -219,3 +219,41 @@ shim（run_example.sh 里 monkey-patch `datasets.load_dataset` 把单文件路�
 未走 seed——与 peft/accelerate 的 `models--Qwen--Qwen2.5-0.5B` 是同一资产，共享
 缓存卷里已 plant，若后续要统一可再加条目并让 setup 改从 refs/main 解析
 `${LLM_MODEL_PATH}`。
+
+## torchtune 的现状（2026-09-22 PPO reward model 迁入 repo bundle）
+
+PPO recipe（`recipes/ppo_full_finetune_single_device.py`）的 reward/value 模型
+`smohammadi/tinyllama_rm_sentiment_1b` 是个人 HF 仓库，**ModelScope 不代发**，且
+`model.safetensors`（4.14 GB）是 xet-backed。原 setup 走
+`huggingface_hub.snapshot_download` + `HF_ENDPOINT=hf-mirror.com`，但
+torchtune 的 hub 依赖被 `transformers==4.57.1` 压回 0.36.2（不认
+`HF_HUB_DISABLE_XET`），mirror 302 到 cas-bridge.xethub.hf.co 后 xet resume 撞
+HTTP 416 / consistency 校验失败（run 35582685960 全 8 腿挂在 Setup 步骤）。
+
+改走 **repo bundle**（ModelScope 无镜像，进不了 `ms_seeds.yaml`），投递到共享
+HF cache 的 hub 布局（`hub/models--smohammadi--tinyllama_rm_sentiment_1b/`），
+setup 用 `resolve_seed_envs` 从 `refs/main` 解析 `${TT_RM_PATH}`；并且只有
+`torchtune_ppo` profile（PPO 这条腿）才 resolve，其余 7 腿不再碰这个资产。
+
+staging（本机代理直连 HF 下载 → 分片 → push）：
+
+```bash
+export HF_HOME=/tmp/hf HTTPS_PROXY=http://127.0.0.1:7890
+python3 - <<'PY'
+from huggingface_hub import snapshot_download
+snapshot_download("smohammadi/tinyllama_rm_sentiment_1b",
+                  allow_patterns=["*.json", "*.txt", "*.safetensors", "tokenizer*", "*.model"])
+PY
+python scripts/bundle_cache.py --project torchtune \
+  --src /tmp/hf/hub/models--smohammadi--tinyllama_rm_sentiment_1b \
+  --prefix hub/models--smohammadi--tinyllama_rm_sentiment_1b
+git add cache-seed/torchtune && git commit -m "torchtune: seed RM (xet-backed, ModelScope absent)"
+git push
+# 再 dispatch cache-seed workflow（projects=torchtune）
+```
+
+> `bundle_cache.py` 会把 4.14 GB 的 `model.safetensors` 按 95MB 切成
+> `.part-*` 分片提交；`snapshots/<sha>/` 下的小文件（config/tokenizer）原样进
+> 仓。投递后 setup 的 `resolve_seed_envs smohammadi/tinyllama_rm_sentiment_1b
+> TT_RM_PATH` 拿到 snapshot 路径，torchtune 的 FullModelHFCheckpointer
+> （model_type=REWARD）直接读本地目录，全程不打网络。

@@ -791,6 +791,7 @@ supported:
       - --gradient_accumulation_steps 1
       - --gradient_checkpointing
       - --max_train_steps 1
+      - --dataloader_num_workers 4
       - --output_dir ${CI_OUTPUT_DIR}
     timeout_minutes: 180
 

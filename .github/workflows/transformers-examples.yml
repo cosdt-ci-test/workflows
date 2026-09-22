@@ -220,6 +220,9 @@ jobs:
       PROJECT_ROOT: ${{ github.workspace }}/workflows/projects/transformers
       TARGET_ROOT: ${{ github.workspace }}/target
       FIXTURE_DIR: ${{ github.workspace }}/workflows/projects/transformers/fixtures
+      # Job-level so setup_example.sh can place fixtures (train.txt) into the
+      # output dir referenced by manifest overlay_args before the run step.
+      CI_OUTPUT_DIR: ${{ github.workspace }}/output
       PIP_INDEX_URL: https://pypi.tuna.tsinghua.edu.cn/simple
       PIP_TRUSTED_HOST: repo.huaweicloud.com
       HF_ENDPOINT: https://hf-mirror.com

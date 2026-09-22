@@ -308,9 +308,12 @@ print('torchtune', md.version('torchtune'), '/ torchao', torchao.__version__, '/
   python -m pip install "lm-eval==0.4.5"
   python - <<'PY'
 import os
+import sys
+from pathlib import Path
 # Non-TTY CI logs: throttle tqdm refreshes instead of disabling.
 os.environ.setdefault("TQDM_MININTERVAL", "15")
 from modelscope import snapshot_download
+from safetensors import safe_open
 
 MODEL_CACHE = os.environ.get("MODELSCOPE_CACHE", os.path.expanduser("~/.cache/modelscope"))
 # CI runner containers start with no /root/.cache/modelscope. The
@@ -320,7 +323,34 @@ MODEL_CACHE = os.environ.get("MODELSCOPE_CACHE", os.path.expanduser("~/.cache/mo
 # *.safetensors file). mkdir -p is a no-op on coder where env.sh
 # already exports MODELSCOPE_CACHE to /home/coder/work/modelscope-cache.
 os.makedirs(MODEL_CACHE, exist_ok=True)
-local = snapshot_download("Qwen/Qwen2.5-0.5B-Instruct", cache_dir=MODEL_CACHE)
+
+
+def fetch_verified(ms_id, allow_patterns=None, attempts=3):
+    # snapshot_download 不做 safetensors 完整性校验，且本地缓存命中会
+    # 直接跳过——共享缓存卷上一旦留下截断文件（run 35709073381 KD
+    # teacher: 'incomplete metadata, file not fully covered'），之后每次
+    # 都复用同一残缺文件。下载后 safe_open 读 header 并校验文件覆盖
+    # （毫秒级，不读全量数据），残缺则删掉重下（≤attempts 次）。
+    for attempt in range(attempts):
+        local = snapshot_download(
+            ms_id, cache_dir=MODEL_CACHE, allow_patterns=allow_patterns)
+        corrupt = []
+        for p in Path(local).rglob("*.safetensors"):
+            try:
+                with safe_open(p, framework="pt"):
+                    pass
+            except Exception as exc:  # noqa: BLE001
+                corrupt.append((str(p), repr(exc)))
+        if not corrupt:
+            return local
+        print(f"{ms_id}: corrupt safetensors (attempt {attempt+1}/{attempts}): {corrupt}",
+              file=sys.stderr, flush=True)
+        for p, _ in corrupt:
+            Path(p).unlink(missing_ok=True)
+    raise SystemExit(f"{ms_id}: safetensors still corrupt after {attempts} attempts")
+
+
+local = fetch_verified("Qwen/Qwen2.5-0.5B-Instruct")
 with open(os.environ["GITHUB_ENV"], "a") as fh:
     fh.write(f"TT_MODEL_PATH={local}\n")
 print("TT_MODEL_PATH=", local)
@@ -328,9 +358,8 @@ print("TT_MODEL_PATH=", local)
 # Knowledge-distillation 翻案 (recipes/knowledge_distillation_single_device.py)
 # 也需要 1.5B teacher checkpoint；KD 翻案 + 后续 distributed KD 翻案都用到，
 # 不为它单独 split profile。teacher snapshot 2.88GB / 实测下载 ~3:23。
-teacher = snapshot_download(
+teacher = fetch_verified(
     "Qwen/Qwen2.5-1.5B-Instruct",
-    cache_dir=MODEL_CACHE,
     allow_patterns=["*.json", "*.txt", "*.safetensors", "tokenizer*"],
 )
 with open(os.environ["GITHUB_ENV"], "a") as fh:

@@ -50,8 +50,8 @@ supported:
   # Qwen2.5-VL-3B Geometry3K GRPO（8 卡；2026-09-22 在 A2-8 上实测跑通）
   - path: examples/vlm/geometry3k_grpo.py
     profile: areal-vlm-grpo
-    runner: linux-aarch64-a2-8
-    npu_devices: '0,1,2,3,4,5,6,7'
+    runner: linux-aarch64-a2-2
+    npu_devices: '0,1'
     image: ghcr.io/hwvanici/areal_npu:v1.0.5-a2
     overlay_args:
       - --config examples/vlm_npu/qwen2_5_vl_3b_geometry3k_grpo.yaml

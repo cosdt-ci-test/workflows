@@ -267,7 +267,24 @@ unsupported:
   - examples/configs/offline/colocated/qwen3-8b-dflash-offline.yaml                       
   - examples/configs/offline/colocated/qwen3-8b-domino-offline.yaml                      
   - examples/configs/offline/colocated/qwen3-8b-dspark-offline.yaml                      
-  - examples/configs/offline/colocated/qwen3-8b-eagle3-offline.yaml                       
+  - examples/configs/offline/colocated/qwen3-8b-eagle3-offline.yaml
+
+  # ===== DSPARK 非 Qwen target 模型：target 模型未在 coder 落地，没法 e2e 跑通 =====
+  # inkling-dspark-disaggregated target=thinkingmachines/Inkling（HF gated
+  # 仓库，thinking machines 自家模型）+ sglang_attention_backend=fa4 +
+  # quantization=modelopt_fp4，是 DSPARK + 异构 cache 拓扑。coder 本地
+  # modelscope cache 只有 config.json 没有 weights，且 Inkling 是 HF gated
+  # 不在 modelscope API 10010205001 record not found（gated repo "Meta 审核
+  # 流程" 同类限制），无法走本地路径做 e2e smoke。glm-5.2-dspark 同类问题
+  # （target=THUDM/GLM-5.2，modelscope 未预下载 + 走 fp8 NPU 路径可能未
+  # 实测兼容）。两条都留 unsupported 等本地 weights 落地 + NPU 验证。
+  # longcat-flash-dflash-online target=meituan/LongCat-Flash（已 sglang 0.5.18
+  # 含 set_dflash_layers_to_capture），但 recipe 默认 sglang_attention_
+  # backend=fa4 + quantization=modelopt_fp4，NPU ascend attention backend
+  # 不支持 fa4，且 modelopt_fp4 没在 NPU 镜像预装；同样 e2e 没跑通。
+  - examples/configs/online/disaggregated/external/inkling-dspark-disaggregated.yaml
+  - examples/configs/online/disaggregated/external/longcat-flash-dflash-online.yaml
+  - examples/configs/online/disaggregated/external/glm-5.2-dspark-disaggregated.yaml
 
   # ===== EAGLE3 算法：specforge train 1 步在 910B4 NPU 端到端跑不通 =====
   # 全部 6 条 EAGLE3 external online recipe（qwen2.5-0.5b / qwen3-4b /
@@ -310,43 +327,14 @@ unsupported:
   - examples/configs/online/disaggregated/external/deepseek-v2-lite-eagle3-online.yaml
   - examples/configs/online/disaggregated/external/longcat-flash-eagle3-online.yaml
 
-
-  # ===== DSPARK 非 Qwen target 模型：target 模型未在 coder 落地，没法 e2e 跑通 =====
-  # inkling-dspark-disaggregated target=thinkingmachines/Inkling（HF gated
-  # 仓库，thinking machines 自家模型）+ sglang_attention_backend=fa4 +
-  # quantization=modelopt_fp4，是 DSPARK + 异构 cache 拓扑。coder 本地
-  # modelscope cache 只有 config.json 没有 weights，且 Inkling 是 HF gated
-  # 不在 modelscope API 10010205001 record not found（gated repo "Meta 审核
-  # 流程" 同类限制），无法走本地路径做 e2e smoke。glm-5.2-dspark 同类问题
-  # （target=THUDM/GLM-5.2，modelscope 未预下载 + 走 fp8 NPU 路径可能未
-  # 实测兼容）。两条都留 unsupported 等本地 weights 落地 + NPU 验证。
-  # longcat-flash-dflash-online target=meituan/LongCat-Flash（已 sglang 0.5.18
-  # 含 set_dflash_layers_to_capture），但 recipe 默认 sglang_attention_
-  # backend=fa4 + quantization=modelopt_fp4，NPU ascend attention backend
-  # 不支持 fa4，且 modelopt_fp4 没在 NPU 镜像预装；同样 e2e 没跑通。
-  - examples/configs/online/disaggregated/external/inkling-dspark-disaggregated.yaml
-  - examples/configs/online/disaggregated/external/longcat-flash-dflash-online.yaml
-  - examples/configs/online/disaggregated/external/glm-5.2-dspark-disaggregated.yaml
-
-
-  - examples/disagg/run_online.sh
-  - examples/disagg/run_offline.sh
-
-
   # ===== Qwen2.5 DFLASH/DSPARK：sglang 0.5.18 wheel 上游 Qwen2ForCausalLM
   # 未实现 set_dflash_layers_to_capture / set_dspark_layers_to_capture，
   # sglang 在 init_attention_backends → configure_aux_hidden_state_capture
   # 撞 ValueError 直接 abort scheduler（specforge 启动 DFLASH capture 时
   # 必走这条 gating）。Qwen3ForCausalLM / Qwen3Moe / Qwen3_5Text /
-  # LlamaForCausalLM 都已实现；仅 Qwen2 / Qwen2MoE 缺。
-  # 实测：CI run 35582843489 job 106279506714 在
-  #   ValueError: Model Qwen2ForCausalLM implements neither
-  #     set_dspark_layers_to_capture nor set_dflash_layers_to_capture,
-  #     one of which is required for DFLASH/DSPARK.
-  # 退出，Setup example 步骤过、Run example 步骤死。等 sglang 上游补
+  # LlamaForCausalLM 都已实现；仅 Qwen2 / Qwen2MoE 缺。等 sglang 上游补
   # Qwen2ForCausalLM setter 后回移 supported。
   - examples/configs/online/disaggregated/external/qwen2.5-0.5b-dflash-online.yaml
-
 
 
   # ===== >4 卡：capture server 超单机 4 卡 runner 物理上限 =====
@@ -407,4 +395,15 @@ unsupported:
   # helper（README "Checkpoints without shared storage"），调用方是 2-node
   # trainer；单独跑没有任何业务行为——它等待 run-root 下出现 checkpoint
   # 子目录才开始打包，没有 checkpoint 就空转。属于 library helper，不是 example。
+  # run_online.sh / run_offline.sh 是 specforge train 的 recipe-agnostic
+  # dispatch wrapper：源码本体只有 3 步（CONFIG= 必须显式 export →
+  # 校验 `specforge` 在 PATH → `exec specforge train --config "$CONFIG" "$@"`），
+  # 没有任何绑死的 recipe 或默认行为；调用方必须自己选 YAML path（如
+  # `CONFIG=examples/configs/online/disaggregated/external/qwen3.5-4b-dflash-
+  # online-npu.yaml ./examples/disagg/run_online.sh --role producer`），未设
+  # CONFIG 直接 exit 2。functional 等价于 `specforge train --config $CONFIG $@`，
+  # examples engine 把它们当独立 example 跑必然 exit 2——recipes 已被
+  # examples/configs/**.yaml 各自枚举，dispatcher 本身不属于 example 类别。
   - examples/disagg/sync_distributed_checkpoints.py
+  - examples/disagg/run_online.sh
+  - examples/disagg/run_offline.sh

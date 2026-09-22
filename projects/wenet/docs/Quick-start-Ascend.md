@@ -216,6 +216,37 @@ wc -l data/train/wav.scp data/train/text data/dev/wav.scp data/test/wav.scp | aw
 
 ---
 
+## 7. 生成 CMVN、词典与 data.list（stage 1-3）
+
+stage 1 去除转写文本中的词间空格（普通话字符建模标准做法）并计算全局 CMVN 统计，stage 2 从训练转写生成字符级词典 `data/dict/lang_char.txt`，stage 3 将 `wav.scp`/`text` 组织为训练可读的 `data.list`（raw 格式，每行一条 utterance 的 JSON）。三者均为训练（stage 4）的前置产物，缺少时训练启动即报 `FileNotFoundError: data/dict/lang_char.txt`：
+
+```shell #test-setup id="prep-cmvn-dict"
+cd wenet/examples/aishell/s0
+bash run_npu.sh --stage 1 --stop_stage 3 --data /root/asr-data/OpenSLR/33
+```
+
+验证三个前置产物（`data.list` 行数与对应 `wav.scp`/`text` 一致）：
+
+```shell #test id="verify-stages123"
+cd wenet/examples/aishell/s0
+test -f data/train/global_cmvn && echo "global_cmvn ok"
+test -f data/dict/lang_char.txt && echo "lang_char.txt ok"
+wc -l data/train/data.list data/dev/data.list data/test/data.list | awk '{print $1, $2}'
+```
+
+输出结果如下：
+
+```shell #test-result id="verify-stages123"
+global_cmvn ok
+lang_char.txt ok
+120098 data/train/data.list
+14326 data/dev/data.list
+7176 data/test/data.list
+141600 total
+```
+
+---
+
 ## 10. 模型训练（stage 4）
 
 `run_npu.sh` 脚本中实现了 NPU 卡号的自动获取和相关环境变量设置，可直接启动昇腾 NPU 上的模型训练。为控制时长，将 `max_epoch` 从 240 缩短到 1（其余参数全部保持脚本默认值）：

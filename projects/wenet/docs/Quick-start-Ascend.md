@@ -139,13 +139,20 @@ snapshot_download('OmniData/AISHELL-1', local_dir='/root/.cache/modelscope/hub/d
 echo "=== 下载后目录结构 ==="
 find /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1
 # 解压数据集：data_aishell.tgz 内层 wav/ 下是按说话人二次打包的 *.tar.gz，
-# 必须再解压内层包（对齐官方 local/download_and_untar.sh），否则 stage 0 找不到任何 wav
+# 必须再解压内层包（对齐官方 local/download_and_untar.sh），否则 stage 0 找不到任何 wav。
+# 解压产物随 modelscope 缓存卷跨 run 保留：用标记文件 wav/.extracted 做幂等判断，
+# 首次解压后（约 40min）后续 run 直接跳过整段；缓存卷被清空时标记随之消失，自动重新解压
 cd /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33/
-tar xzf data_aishell.tgz
-tar xzf resource_aishell.tgz
-cd data_aishell/wav
-for x in *.tar.gz; do tar xzf "$x"; done
-rm -f *.tar.gz
+if [ ! -f data_aishell/wav/.extracted ]; then
+  tar xzf data_aishell.tgz
+  tar xzf resource_aishell.tgz
+  (
+    cd data_aishell/wav
+    for x in *.tar.gz; do tar xzf "$x"; done
+    rm -f *.tar.gz
+    touch .extracted
+  )
+fi
 cd ../..
 # 创建软链接
 ln -sf /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33/data_aishell /root/asr-data/OpenSLR/33/data_aishell

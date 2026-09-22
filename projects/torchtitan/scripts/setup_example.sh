@@ -158,6 +158,13 @@ setup_torchtitan() {
     "tyro>=1.0.5" "tokenizers>=0.15.0" safetensors einops pillow \
     "torchdata>=0.8.0" "datasets>=3.6.0,<4.8.0" tensorboard wandb \
     "spmd_types==0.2.3"
+  # flux_debugmodel imports transformers (CLIPTokenizer/T5Tokenizer from
+  # torchtitan/models/flux/tokenizer.py); pin transformers==4.57.1 +
+  # huggingface_hub<1.0 per [[xet-bridge-416-hf-mirror-curl-bypass]].
+  # sentencepiece is required by T5Tokenizer.from_pretrained; not a transitive
+  # dep of transformers, must be installed explicitly.
+  python -m pip install -i "$ALIYUN_PIP_INDEX" \
+    "transformers==4.57.1" sentencepiece protobuf
   python -c "import torchtitan; print('torchtitan', torchtitan.__version__)"
   write_launchers
 }

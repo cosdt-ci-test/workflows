@@ -460,11 +460,12 @@ setup_diffusers_t2i_adapter() {
 }
 
 # diffusers-text-to-image: text_to_image SD1.5 / SDXL (full + LoRA) examples.
-# Tiny SD models and the dummy_image_text_data dataset are fetched via
-# hf-mirror at run time. Base only.
+# Models/dataset fetched via hf-mirror at run time. deepspeed is required by
+# the accelerate-deepspeed launcher used by the full SDXL fine-tune (ZeRO-3).
 setup_diffusers_text_to_image() {
   install_example_stack
   download_assets sd15
+  python -m pip install "deepspeed>=0.18.2"
 }
 
 # diffusers-textual-inversion: textual_inversion SD1.5 / SDXL examples. Tiny

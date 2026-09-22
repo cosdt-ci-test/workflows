@@ -220,7 +220,7 @@ shim（run_example.sh 里 monkey-patch `datasets.load_dataset` 把单文件路�
 缓存卷里已 plant，若后续要统一可再加条目并让 setup 改从 refs/main 解析
 `${LLM_MODEL_PATH}`。
 
-## torchtune 的现状（2026-09-22 PPO reward model 迁入 repo bundle）
+## torchtune 的现状（2026-09-22 PPO reward model 走 setup 内 curl）
 
 PPO recipe（`recipes/ppo_full_finetune_single_device.py`）的 reward/value 模型
 `smohammadi/tinyllama_rm_sentiment_1b` 是个人 HF 仓库，**ModelScope 不代发**，且
@@ -230,30 +230,13 @@ torchtune 的 hub 依赖被 `transformers==4.57.1` 压回 0.36.2（不认
 `HF_HUB_DISABLE_XET`），mirror 302 到 cas-bridge.xethub.hf.co 后 xet resume 撞
 HTTP 416 / consistency 校验失败（run 35582685960 全 8 腿挂在 Setup 步骤）。
 
-改走 **repo bundle**（ModelScope 无镜像，进不了 `ms_seeds.yaml`），投递到共享
-HF cache 的 hub 布局（`hub/models--smohammadi--tinyllama_rm_sentiment_1b/`），
-setup 用 `resolve_seed_envs` 从 `refs/main` 解析 `${TT_RM_PATH}`；并且只有
-`torchtune_ppo` profile（PPO 这条腿）才 resolve，其余 7 腿不再碰这个资产。
+**不进 cache-seed**：4.14 GB 打 repo bundle 会让 `hdc` 每次 checkout 拉整个
+HEAD 树而 HTTP 504（run 35694653606 只活了 2 腿、cache-seed 自身也 checkout 失败，
+run 35702569867）。改由 `setup_example.sh` 的 `fetch_tinyllama_rm()`（仅
+`torchtune_ppo` profile 调用）用 **curl 整文件下载**（hf-mirror 直下字节正确，
+sha256 `6697a3…` 校验 + 幂等），落共享 HF cache（`~/.cache/huggingface/
+torchtune/tinyllama_rm_sentiment_1b/`），首条 PPO 腿下载、后续幂等跳过。纯 curl
+不走 huggingface_hub 的 xet 断点续传路径，故不受 416 影响。
 
-staging（本机代理直连 HF 下载 → 分片 → push）：
-
-```bash
-export HF_HOME=/tmp/hf HTTPS_PROXY=http://127.0.0.1:7890
-python3 - <<'PY'
-from huggingface_hub import snapshot_download
-snapshot_download("smohammadi/tinyllama_rm_sentiment_1b",
-                  allow_patterns=["*.json", "*.txt", "*.safetensors", "tokenizer*", "*.model"])
-PY
-python scripts/bundle_cache.py --project torchtune \
-  --src /tmp/hf/hub/models--smohammadi--tinyllama_rm_sentiment_1b \
-  --prefix hub/models--smohammadi--tinyllama_rm_sentiment_1b
-git add cache-seed/torchtune && git commit -m "torchtune: seed RM (xet-backed, ModelScope absent)"
-git push
-# 再 dispatch cache-seed workflow（projects=torchtune）
-```
-
-> `bundle_cache.py` 会把 4.14 GB 的 `model.safetensors` 按 95MB 切成
-> `.part-*` 分片提交；`snapshots/<sha>/` 下的小文件（config/tokenizer）原样进
-> 仓。投递后 setup 的 `resolve_seed_envs smohammadi/tinyllama_rm_sentiment_1b
-> TT_RM_PATH` 拿到 snapshot 路径，torchtune 的 FullModelHFCheckpointer
-> （model_type=REWARD）直接读本地目录，全程不打网络。
+若日后 ModelScope 出现该 repo 的镜像，可改回 `ms_seeds.yaml` plant 并让 setup
+从 `refs/main` 解析，去掉 curl 分支。

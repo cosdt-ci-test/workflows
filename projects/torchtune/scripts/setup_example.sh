@@ -176,37 +176,48 @@ prepare_fixtures() {
   echo "copied $(find "$dst" -type f | wc -l) fixture file(s) to $dst"
 }
 
-resolve_seed_envs() {
-  # $@ = alternating (hf_id, env var) pairs. Resolve each seeded asset's
-  # snapshot path from the shared HF hub cache (refs/main -> sha) and
-  # append VAR=<snapshot> to GITHUB_ENV for manifest overlay_args.
-  # The shared cache root is populated by the cache-seed workflow
-  # (repo bundle: cache-seed/torchtune/manifest.yaml -> SHARED_CACHE_ROOT,
-  # default ~/.cache/huggingface). Nothing downloads in example jobs.
-  python - "$@" <<'PY'
-import os
-import sys
-from pathlib import Path
+fetch_tinyllama_rm() {
+  # Scalar-head reward/value model smohammadi/tinyllama_rm_sentiment_1b
+  # (PPO only). Personal HF repo, no ModelScope mirror, and its
+  # model.safetensors is xet-backed: hf-mirror 302s to
+  # cas-bridge.xethub.hf.co, and huggingface_hub gets pinned back to
+  # 0.36.2 by transformers==4.57.1 (doesn't honor HF_HUB_DISABLE_XET) so
+  # its xet resume logic hits HTTP 416 / consistency-check failure (run
+  # 35582685960, all 8 legs). Plain curl whole-file download does not
+  # exercise that resume path and is byte-correct (verified sha256
+  # 6697a3…). Drop the files into the persistent shared HF cache so the
+  # first PPO leg warms it and later legs skip on sha256 match.
+  local root="${HF_HOME:-$HOME/.cache/huggingface}"
+  local dir="$root/torchtune/tinyllama_rm_sentiment_1b"
+  local base="https://hf-mirror.com/smohammadi/tinyllama_rm_sentiment_1b/resolve/main"
+  local expected_sha="6697a3f12a082b0e5b1ecb70d826365d2e76780950bfcd171470b7e408c44afa"
+  mkdir -p "$dir"
 
-HUB_ROOT = Path(os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))) / "hub"
-pairs = sys.argv[1:]
-if len(pairs) % 2:
-    raise SystemExit("resolve_seed_envs: expected alternating hf_id var pairs")
-for hf_id, var in zip(pairs[::2], pairs[1::2]):
-    repo_dir = HUB_ROOT / f"models--{hf_id.replace('/', '--')}"
-    refs = repo_dir / "refs" / "main"
-    if not refs.is_file():
-        raise SystemExit(
-            f"{hf_id} missing from shared cache root — dispatch the "
-            f"cache-seed workflow (spec: cache-seed/torchtune/manifest.yaml)")
-    sha = refs.read_text().strip()
-    snap = repo_dir / "snapshots" / sha
-    if not snap.is_dir() or not any(snap.iterdir()):
-        raise SystemExit(f"{hf_id}: refs/main -> {sha[:8]} has no snapshot files")
-    with open(os.environ["GITHUB_ENV"], "a") as fh:
-        fh.write(f"{var}={snap}\n")
-    print(f"{var}={snap}", flush=True)
-PY
+  if [[ -f "$dir/model.safetensors" ]] \
+    && [[ "$(sha256sum "$dir/model.safetensors" | awk '{print $1}')" == "$expected_sha" ]]; then
+    echo "tinyllama RM already present + sha256 ok, skipping download"
+  else
+    echo "downloading tinyllama RM model.safetensors (~4.14GB) from hf-mirror"
+    rm -f "$dir/model.safetensors"
+    curl -fL --retry 5 --retry-delay 5 --retry-all-errors --max-time 2500 \
+      -C - -o "$dir/model.safetensors" "$base/model.safetensors"
+    if [[ "$(sha256sum "$dir/model.safetensors" | awk '{print $1}')" != "$expected_sha" ]]; then
+      echo "FATAL: model.safetensors sha256 mismatch after download" >&2
+      rm -f "$dir/model.safetensors"
+      return 1
+    fi
+  fi
+
+  for f in config.json special_tokens_map.json tokenizer.json tokenizer.model tokenizer_config.json; do
+    if [[ ! -s "$dir/$f" ]]; then
+      curl -fsSL --retry 3 --max-time 120 -o "$dir/$f" "$base/$f" || return 1
+    fi
+  done
+
+  {
+    echo "TT_RM_PATH=$dir"
+  } >> "${GITHUB_ENV:?GITHUB_ENV is required}"
+  echo "TT_RM_PATH=$dir"
 }
 
 setup_torchtune() {
@@ -346,11 +357,11 @@ setup_torchtune_ppo() {
   # xet-backed（hf-mirror 302 到 cas-bridge.xethub.hf.co；且 torchtune 的
   # huggingface_hub 会被 transformers==4.57.1 压回 0.36.2，不认识
   # HF_HUB_DISABLE_XET → xet resume 撞 416 / consistency 校验失败，run
-  # 35582685960 全 8 腿挂在这里）。改走 cache-seed repo bundle 投递到共享
-  # HF cache，本 profile 按需 resolve refs/main 得 TT_RM_PATH，不下载。
+  # 35582685960 全 8 腿挂在这里）。只有 PPO 这条腿需要 RM，故单独
+  # profile：curl 整文件下载到共享 HF cache，幂等（sha256 命中跳过）。
   setup_torchtune
   if [[ -z "${TT_RM_PATH:-}" ]]; then
-    resolve_seed_envs smohammadi/tinyllama_rm_sentiment_1b TT_RM_PATH
+    fetch_tinyllama_rm
   else
     echo "TT_RM_PATH (caller-provided): ${TT_RM_PATH}"
   fi

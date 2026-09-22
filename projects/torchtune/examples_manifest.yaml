@@ -157,9 +157,11 @@ supported:
   # repo smohammadi/tinyllama_rm_sentiment_1b，ModelScope 不代发，且其
   # model.safetensors 是 xet-backed（hf-mirror 302 到 cas-bridge，加上
   # transformers 把 huggingface_hub 压回 0.36.2 不认 HF_HUB_DISABLE_XET
-  # → 416 / consistency 校验失败，run 35582685960 全 8 腿挂）。改走
-  # cache-seed repo bundle 投递到共享 HF cache，setup 用 torchtune_ppo
-  # profile 按需 resolve refs/main 得 TT_RM_PATH（仅 PPO 这条腿下载）。
+  # → 416 / consistency 校验失败，run 35582685960 全 8 腿挂）。不能打
+  # cache-seed repo bundle：4.14GB 塞进 git 会让每次 checkout 拉整个
+  # HEAD 树而 504（run 35694653606 只活了 2 腿）。改 torchtune_ppo
+  # profile + setup 里 curl 整文件下载（hf-mirror 直下字节正确，sha256
+  # 校验 + 幂等），落共享 HF cache，仅 PPO 这条腿下载。
   # reward/V 的 state_dict 通过 reward_hf_to_tune（model_type=REWARD）
   # 转换，coder dry-run 已确认 0 missing / 0 unexpected key。dataset
   # 用本地 jsonl（4 条 prompt），不走 HF datasets。`num_steps=1,
@@ -192,10 +194,9 @@ supported:
       - max_seq_len=512  # upstream 2048: smoke scale
       - kl_coeff=0.01  # recipe 在 _setup_training_hyperparameters 读 cfg.kl_coeff；PPOLoss 不收（main HEAD signature 只接 epsilon/value_clip_range/value_coeff）
       - device=npu
-    # 2026-09-21 翻案，PPO 1 step 端到端在 coder 跑通（policy 0.5B + RM 1.1B 共 ~3.9GB
-    # HBM）。RM 由 cache-seed repo bundle 投递（torchtune_ppo profile 按需 resolve），
-    # setup 不再走 hf-mirror 下载，无额外下载时间；仍留 60min 兜底（teacher/Qwen 下载）。
-    timeout_minutes: 60
+    # PPO 冷缓存多一次 ~4.14GB RM 下载（hf-mirror curl ~20min，落共享 HF
+    # cache 后幂等跳过）；叠加冷 torch 下载，留 90min 兜底。
+    timeout_minutes: 90
 
   # 评测：Qwen2.5-0.5B + lm_eval + 自定义 ci_truthfulqa_mc2 任务（本地 JSON 驱动）
   # eleuther_eval recipe 在 __init__ 强检 `version("lm-eval") < "0.4.5"`
@@ -246,21 +247,6 @@ supported:
     # 用 30min 全过，对齐到 30。2026-09-20 run 35483424375 30min 仍超时
     # （torch 下载挂 28min 直接超时），提到 60 兜底（同 xtuner 35483448757）。
     timeout_minutes: 60
-
-  # ===== 2026-09-21 coder hdc-stable-npu-3 翻案 =====
-  # 关键修正：之前 manifest 注释说"试 distributed_backend=hccl overlay 仍落
-  # NCCL"，那是 torch_npu 2.11 之前 import 未注册 `default_device_backend_map["npu"]="hccl"`
-  # 的旧事实。torch_npu 2.11.0 在 `torch_npu/_init/registry/distributed.py:34-43`
-  # 已经把 `"npu":"hccl"` 写进 map，所以 `cfg.device=npu` 时 `get_distributed_backend()`
-  # 直接拿 "hccl"，`init_process_group(backend="hccl")` 走通。
-  # 翻案 4 条 smoke + 3 条 recipe 端到端（KD / lora_dpo_dist / full_finetune_dist）
-  # exit 0；详见 coder 实测 trace：
-  #   - KD single_device：student 1.85 + teacher 5.12 GiB HBM, 12s, loss=3.66
-  #   - lora_dpo_distributed：FSDP+DPO world_size=1, 1.35 GiB, loss=0.693
-  #   - full_finetune_distributed：ParallelDims+FSDP+init_process_group hccl,
-  #     0.94 GiB, loss=3.89
-  # 共同前提：run_example.sh 需 export MASTER_ADDR/PORT/RANK/WORLD_SIZE/LOCAL_RANK
-  # (distributed recipes 入口 is_distributed() 守卫；单卡 KD 不需要)。
 
   # 知识蒸馏 single_device：Qwen2.5-0.5B student + Qwen2.5-1.5B teacher
   # recipe 自身硬编 StatefulDistributedSampler(num_replicas=1, rank=0)，
@@ -490,8 +476,7 @@ supported:
 # ===== unsupported（每条附标签：runtime-verified / inferred / files-only） =====
 unsupported:
   # ===== runtime-verified: cross-component ABI gap =====
-  # 2026-09-21 在 coder hdc-stable-npu-3 实跑，QATLoRALinear.__init__ 在
-  # lora.py:231 的 isinstance assert 必崩：
+  # QATLoRALinear.__init__ 在lora.py:231 的 isinstance assert 必崩：
   #     assert isinstance(activation_qat_config, FakeQuantizeConfig)
   #     AssertionError
   # 根因（torchao ABI）：torchtune main HEAD bd2a0fc 的
@@ -515,8 +500,7 @@ unsupported:
   # 本，但 QAT 返回类型已经分裂）
   # qat_distributed.py 用同 Int8DynActInt4WeightQATQuantizer 但不走
   # QATLoRALinear（qat_distributed.py:677 是 `quantizer.prepare(model)` 不调
-  # swap_lora_linear_with_qat），端到端 4 步 exit 0（loss 3.45→7.54）—
-  # 详见 supported 段那条。
+  # swap_lora_linear_with_qat），端到端 4 步 exit 0（loss 3.45→7.54。
   - recipes/qat_lora_finetune_distributed.py
 
   # ===== files-only 排除项（不是 recipe 入口） =====
@@ -530,10 +514,6 @@ unsupported:
   - recipes/__init__.py
 
   # ===== dev/ 维护者工具脚本（按 import 链逐文件分类） =====
-  # v0.6.1 release tag 上 recipes/dev/ 实际有 5 个 .py，main HEAD bd2a0fc
-  # 额外多 1 个（async_grpo_full_finetune_distributed.py）— 不在 release
-  # 树中，本期 audit 不扫，按"release-only"原则不列。
-
   # 早期退出训练实验：引入 torchtune.modules.early_exit_loss + layer_dropout，
   # 对每一 transformer 层后插 early-exit 头，训练时联合主 loss + 多个 exit
   # head 的辅助 loss；不是 stable recipe API（早期实验，可能随 main 改动）。

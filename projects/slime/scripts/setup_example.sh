@@ -255,18 +255,34 @@ PY
 setup_slime_fully_async() {
   check_npu_devices 4
   python -m pip install -q "modelscope==1.37.0"
-  local model_dir="$DEPS_ROOT/weights/Qwen2.5-0.5B-Instruct"
-  TQDM_MININTERVAL=15 python - <<'PY'
+  # snapshot_download() returns the real cache path (under the runner's
+  # persistent ModelScope cache), and that value is what the converter
+  # needs: --hf-checkpoint must be an existing directory, because
+  # transformers treats a non-existent path as a Hub repo id and dies with
+  # HFValidationError. Hand the resolved path to the shell via a file.
+  local model_path_file="$DEPS_ROOT/model_path.txt"
+  TQDM_MININTERVAL=15 python - "$model_path_file" <<'PY'
 import os
+import sys
 from modelscope import snapshot_download
+model_path_file = sys.argv[1]
 local = snapshot_download(
     "Qwen/Qwen2.5-0.5B-Instruct",
     cache_dir=os.environ.get("MODELSCOPE_CACHE", os.path.expanduser("~/.cache/modelscope")),
 )
 print("model snapshot:", local)
+with open(model_path_file, "w") as fh:
+    fh.write(local + "\n")
 with open(os.environ["GITHUB_ENV"], "a") as fh:
     fh.write(f"SLIME_MODEL_PATH={local}\n")
 PY
+  local model_dir
+  model_dir=$(cat "$model_path_file")
+  if [[ ! -d "$model_dir" ]]; then
+    echo "model snapshot dir missing: $model_dir" >&2
+    exit 1
+  fi
+  echo "using HF checkpoint: $model_dir"
   local torch_dist="$DEPS_ROOT/weights-MA/Qwen2.5-0.5B-Instruct_torch_dist"
   mkdir -p "$DEPS_ROOT/weights-MA"
   if [[ ! -d "$torch_dist" ]]; then

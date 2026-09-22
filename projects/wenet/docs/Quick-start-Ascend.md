@@ -133,18 +133,15 @@ snapshot_download('OmniData/AISHELL-1', local_dir='/root/.cache/modelscope/hub/d
 "
 echo "=== 下载后目录结构 ==="
 find /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1
-# 解压数据集
+# 解压数据集：data_aishell.tgz 内层 wav/ 下是按说话人二次打包的 *.tar.gz，
+# 必须再解压内层包（对齐官方 local/download_and_untar.sh），否则 stage 0 找不到任何 wav
 cd /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33/
 tar xzf data_aishell.tgz
 tar xzf resource_aishell.tgz
-echo "=== 解压后目录结构（raw/33） ==="
-find /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33
-echo "=== data_aishell/wav 目录内容抽样（前 10 项） ==="
-ls /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33/data_aishell/wav | head -10
-echo "=== data_aishell/wav 条目总数 ==="
-ls /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33/data_aishell/wav | wc -l
-echo "=== 已解压 wav 文件数 ==="
-find /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33 -iname '*.wav' -type f | wc -
+cd data_aishell/wav
+for x in *.tar.gz; do tar xzf "$x"; done
+rm -f *.tar.gz
+cd ../..
 # 创建软链接
 ln -sf /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33/data_aishell /root/asr-data/OpenSLR/33/data_aishell
 ln -sf /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33/resource_aishell /root/asr-data/OpenSLR/33/resource_aishell
@@ -162,6 +159,8 @@ ls /root/asr-data/OpenSLR/33/data_aishell/.complete /root/asr-data/OpenSLR/33/re
 echo "=== 检查数据目录 ==="
 ls /root/asr-data/OpenSLR/33/data_aishell/ | head -2
 ls /root/asr-data/OpenSLR/33/resource_aishell/ | head -2
+echo "=== 检查已解压 wav 文件数 ==="
+find /root/asr-data/OpenSLR/33/data_aishell/wav -iname '*.wav' -type f | wc -l
 ```
 
 输出结果如下：
@@ -175,6 +174,8 @@ transcript
 wav
 lexicon.txt
 speaker.info
+=== 检查已解压 wav 文件数 ===
+141600
 ```
 
 ---

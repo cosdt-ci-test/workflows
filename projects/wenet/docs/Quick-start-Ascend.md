@@ -206,16 +206,16 @@ wc -l data/train/wav.scp data/train/text data/dev/wav.scp data/test/wav.scp | aw
 
 ## 10. 模型训练（stage 4）
 
-`run_npu.sh` 脚本中实现了 NPU 卡号的自动获取和相关环境变量设置，可直接启动昇腾 NPU 上的模型训练。为控制时长，将 `max_epoch` 从 240 缩短到 5（其余参数全部保持脚本默认值）：
+`run_npu.sh` 脚本中实现了 NPU 卡号的自动获取和相关环境变量设置，可直接启动昇腾 NPU 上的模型训练。为控制时长，将 `max_epoch` 从 240 缩短到 1（其余参数全部保持脚本默认值）：
 
 > **注意**：训练产物校验放在命令尾部，快速失败：
 
 ```shell #test-setup id="train"
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 cd wenet/examples/aishell/s0
-cp conf/train_conformer.yaml conf/train_conformer_5ep.yaml
-sed -i 's/max_epoch: .*/max_epoch: 5/' conf/train_conformer_5ep.yaml
-bash run_npu.sh --stage 4 --stop_stage 4 --train_config conf/train_conformer_5ep.yaml --data /root/asr-data/OpenSLR/33
+cp conf/train_conformer.yaml conf/train_conformer_1ep.yaml
+sed -i 's/max_epoch: .*/max_epoch: 1/' conf/train_conformer_1ep.yaml
+bash run_npu.sh --stage 4 --stop_stage 4 --train_config conf/train_conformer_1ep.yaml --data /root/asr-data/OpenSLR/33
 ```
 
 训练完成后检查输出：
@@ -223,7 +223,7 @@ bash run_npu.sh --stage 4 --stop_stage 4 --train_config conf/train_conformer_5ep
 ```shell #test id="verify-train"
 cd wenet/examples/aishell/s0
 ls -la exp/conformer/train.yaml
-ls exp/conformer/*.pt | head -5
+ls exp/conformer/epoch_*.pt
 ```
 
 输出结果如下：
@@ -231,28 +231,24 @@ ls exp/conformer/*.pt | head -5
 ```shell #test-result id="verify-train"
 ... exp/conformer/train.yaml
 exp/conformer/epoch_0.pt
-exp/conformer/epoch_1.pt
-exp/conformer/epoch_2.pt
-exp/conformer/epoch_3.pt
-exp/conformer/epoch_4.pt
 ```
 
 ---
 
 ## 11. 测试推理（stage 5）
 
-stage 5 为模型测试推理阶段，将测试集中语音文件识别为文本。此外，stage 5 还提供平均模型的功能：当 `${average_checkpoint}` 为 `true`（脚本默认值）时，将交叉验证集上最佳的 `${average_num}` 个模型平均，生成增强模型 `avg_5.pt`，供解码与导出使用：
+stage 5 为模型测试推理阶段，将测试集中语音文件识别为文本。此外，stage 5 还提供平均模型的功能：当 `${average_checkpoint}` 为 `true`（脚本默认值）时，将交叉验证集上最佳的 `${average_num}` 个模型平均，生成增强模型 `avg_1.pt`，供解码与导出使用：
 
 ```shell #test-setup id="infer"
 cd wenet/examples/aishell/s0
-bash run_npu.sh --stage 5 --stop_stage 5 --average_num 5 --data /root/asr-data/OpenSLR/33
+bash run_npu.sh --stage 5 --stop_stage 5 --average_num 1 --data /root/asr-data/OpenSLR/33
 ```
 
 验证推理结果（测试集 7176 条全部识别完成，并抽样打印前两条识别文本）：
 
 ```shell #test id="verify-infer"
 cd wenet/examples/aishell/s0
-test -f exp/conformer/avg_5.pt && echo "avg_5.pt ok"
+test -f exp/conformer/avg_1.pt && echo "avg_1.pt ok"
 wc -l exp/conformer/ctc_greedy_search/text | awk '{print $1}'
 head -2 exp/conformer/ctc_greedy_search/text
 ```
@@ -260,7 +256,7 @@ head -2 exp/conformer/ctc_greedy_search/text
 输出结果如下（xxx 为识别文本，随模型收敛情况变化）：
 
 ```shell #test-result id="verify-infer" fuzzy='xxx'
-avg_5.pt ok
+avg_1.pt ok
 7176
 xxx
 xxx
@@ -270,11 +266,11 @@ xxx
 
 ## 12. 导出训练好的模型（stage 6）
 
-stage 6 为模型导出阶段，`wenet/bin/export_jit.py` 使用 `Libtorch` 导出以上训练好的模型（基于 stage 5 生成的 `avg_5.pt`），导出的模型可用于其他编程语言（如 C++）的推理：
+stage 6 为模型导出阶段，`wenet/bin/export_jit.py` 使用 `Libtorch` 导出以上训练好的模型（基于 stage 5 生成的 `avg_1.pt`），导出的模型可用于其他编程语言（如 C++）的推理：
 
 ```shell #test-setup id="export"
 cd wenet/examples/aishell/s0
-bash run_npu.sh --stage 6 --stop_stage 6 --average_num 5
+bash run_npu.sh --stage 6 --stop_stage 6 --average_num 1
 ```
 
 验证导出产物：
@@ -305,7 +301,7 @@ ls data/dict/lang_char.txt data/train/data.list data/dev/data.list data/test/dat
 echo "=== 训练输出 ==="
 ls exp/conformer/train.yaml exp/conformer/final.pt | sort
 echo "=== 推理输出 ==="
-ls exp/conformer/avg_5.pt exp/conformer/ctc_greedy_search/text exp/conformer/ctc_prefix_beam_search/text | sort
+ls exp/conformer/avg_1.pt exp/conformer/ctc_greedy_search/text exp/conformer/ctc_prefix_beam_search/text | sort
 echo "=== 导出输出 ==="
 ls exp/conformer/final.zip exp/conformer/final_quant.zip | sort
 echo "=== 流程完成 ==="
@@ -323,7 +319,7 @@ data/train/data.list
 exp/conformer/final.pt
 exp/conformer/train.yaml
 === 推理输出 ===
-exp/conformer/avg_5.pt
+exp/conformer/avg_1.pt
 exp/conformer/ctc_greedy_search/text
 exp/conformer/ctc_prefix_beam_search/text
 === 导出输出 ===

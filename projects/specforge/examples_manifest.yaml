@@ -269,6 +269,69 @@ unsupported:
   - examples/configs/offline/colocated/qwen3-8b-dspark-offline.yaml                      
   - examples/configs/offline/colocated/qwen3-8b-eagle3-offline.yaml                       
 
+  # ===== EAGLE3 算法：specforge train 1 步在 910B4 NPU 端到端跑不通 =====
+  # 全部 6 条 EAGLE3 external online recipe（qwen2.5-0.5b / qwen3-4b /
+  # gemma3-1b / phi4 / deepseek-v2-lite / longcat-flash）已在 2026-09-22
+  # coder sglang-hdc（2x 910B4，sglang 0.5.18-cann9.1.0 镜像 + CANN 9.1.0）
+  # 跑通 sglang capture server 健康启动（每条 recipe 的 target model 类
+  # Qwen2ForCausalLM/Qwen3ForCausalLM/Gemma3ForCausalLM/Phi3ForCausalLM
+  # 继承自 LlamaForCausalLM/DeepseekV2ForCausalLM/LongcatFlashForCausalLM
+  # 都实现了 set_eagle3_layers_to_capture），但 specforge train consumer
+  # 必撞 triton-ascend BiShengHIR compile 错误：
+  #   1) specforge/core/loss.py:50 LogSoftmaxLoss.forward 在 vocab=151936
+  #      的 log_softmax forward kernel 编译时
+  #      MLIRCompilationError: ub overflow, requires 2621696 bits while
+  #      1572864 bits available（910B4 UB 上限 ~192KB，tile 过大）
+  #   2) specforge/algorithms/eagle3/model.py:599 _compute_target_p（被
+  #      @torch.compile(dynamic=None) 装饰）在 argmax over target vocab
+  #      时 triton emit `_tmp3_next, _tmp3_index_next = triton_helpers
+  #      .maximum_with_index(_tmp3, _tmp3_index, tmp2, rindex)`，
+  #      triton-ascend 不知道 rindex 变量 → NameError('rindex is not defined')。
+  # 实测 qwen2.5-0.5b-eagle3（无 TORCHDYNAMO_DISABLE=1 时）就触发第 2 条
+  # （@torch.compile 装饰器路径），设 TORCHDYNAMO_DISABLE=1 关掉 dynamo
+  # 走 eager 路径则落第 1 条（loss.py:50 triton 自定义 autograd kernel
+  # 仍然走 triton-ascend 编译）。两条都不可在 NPU 上解决。
+  # qwen3-4b-eagle3 在更早的 target_head.load_weights 阶段还多撞一条：
+  # Qwen3-4B config.json tie_word_embeddings=true，specforge 默认
+  # lm_head_key="lm_head.weight" 在 model.safetensors.index.json 找不到
+  # 这个 weight（共享给 embed_tokens.weight），target_head 端必须设
+  # lm_head_key="model.embed_tokens.weight" 才能加载；recipe 没覆这个。
+  # 总结：6 条 EAGLE3 全部 (capture OK + train 必崩)，留在 unsupported
+  # 等 specforge 上游：
+  #   (a) 改 _compute_target_p 用 _compute_target_p_eager 分块路径
+  #   (b) LogSoftmaxLoss kernel 改 row-wise 小 tile 或换 ATen log_softmax
+  #   (c) target_head.load_weights 处理 tie_word_embeddings=true
+  # 全都是上游 specforge 改动，recipe 端 overlay 改不了；用户约束
+  # "不能打任何patch"也禁止本地 patch。
+  - examples/configs/online/disaggregated/external/qwen2.5-0.5b-eagle3-online.yaml
+  - examples/configs/online/disaggregated/external/qwen3-4b-eagle3-online.yaml
+  - examples/configs/online/disaggregated/external/gemma3-1b-eagle3-online.yaml
+  - examples/configs/online/disaggregated/external/phi4-eagle3-online.yaml
+  - examples/configs/online/disaggregated/external/deepseek-v2-lite-eagle3-online.yaml
+  - examples/configs/online/disaggregated/external/longcat-flash-eagle3-online.yaml
+
+
+  # ===== DSPARK 非 Qwen target 模型：target 模型未在 coder 落地，没法 e2e 跑通 =====
+  # inkling-dspark-disaggregated target=thinkingmachines/Inkling（HF gated
+  # 仓库，thinking machines 自家模型）+ sglang_attention_backend=fa4 +
+  # quantization=modelopt_fp4，是 DSPARK + 异构 cache 拓扑。coder 本地
+  # modelscope cache 只有 config.json 没有 weights，且 Inkling 是 HF gated
+  # 不在 modelscope API 10010205001 record not found（gated repo "Meta 审核
+  # 流程" 同类限制），无法走本地路径做 e2e smoke。glm-5.2-dspark 同类问题
+  # （target=THUDM/GLM-5.2，modelscope 未预下载 + 走 fp8 NPU 路径可能未
+  # 实测兼容）。两条都留 unsupported 等本地 weights 落地 + NPU 验证。
+  # longcat-flash-dflash-online target=meituan/LongCat-Flash（已 sglang 0.5.18
+  # 含 set_dflash_layers_to_capture），但 recipe 默认 sglang_attention_
+  # backend=fa4 + quantization=modelopt_fp4，NPU ascend attention backend
+  # 不支持 fa4，且 modelopt_fp4 没在 NPU 镜像预装；同样 e2e 没跑通。
+  - examples/configs/online/disaggregated/external/inkling-dspark-disaggregated.yaml
+  - examples/configs/online/disaggregated/external/longcat-flash-dflash-online.yaml
+  - examples/configs/online/disaggregated/external/glm-5.2-dspark-disaggregated.yaml
+
+
+  - examples/disagg/run_online.sh
+  - examples/disagg/run_offline.sh
+
 
   # ===== Qwen2.5 DFLASH/DSPARK：sglang 0.5.18 wheel 上游 Qwen2ForCausalLM
   # 未实现 set_dflash_layers_to_capture / set_dspark_layers_to_capture，
@@ -284,19 +347,6 @@ unsupported:
   # Qwen2ForCausalLM setter 后回移 supported。
   - examples/configs/online/disaggregated/external/qwen2.5-0.5b-dflash-online.yaml
 
-
-  - examples/configs/online/disaggregated/external/qwen2.5-0.5b-eagle3-online.yaml
-  - examples/configs/online/disaggregated/external/qwen3-4b-eagle3-online.yaml
-  - examples/configs/online/disaggregated/external/inkling-dspark-disaggregated.yaml  
-  - examples/configs/online/disaggregated/external/longcat-flash-dflash-online.yaml   
-  - examples/configs/online/disaggregated/external/longcat-flash-eagle3-online.yaml   
-  - examples/configs/online/disaggregated/external/gemma3-1b-eagle3-online.yaml       
-  - examples/configs/online/disaggregated/external/glm-5.2-dspark-disaggregated.yaml  
-  - examples/configs/online/disaggregated/external/phi4-eagle3-online.yaml           
-
-
-  - examples/disagg/run_online.sh
-  - examples/disagg/run_offline.sh
 
 
   # ===== >4 卡：capture server 超单机 4 卡 runner 物理上限 =====

@@ -52,7 +52,8 @@ supported:
     profile: areal-vlm-grpo
     runner: linux-aarch64-a2-2
     npu_devices: '0,1'
-    image: ghcr.io/hwvanici/areal_npu:v1.0.5-a2
+    # CANN 底座（AReaL 的 ghcr 镜像拉不动）；AReaL 栈由 setup_example.sh 安装
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.1-910b-ubuntu22.04-py3.11
     overlay_args:
       - --config examples/vlm_npu/qwen2_5_vl_3b_geometry3k_grpo.yaml
       - cluster.n_gpus_per_node=2

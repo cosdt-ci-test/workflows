@@ -6,8 +6,9 @@ import os
 import shutil
 import subprocess
 import unittest
+from pathlib import Path
 
-from workflows.markdown_doc_test_base import MarkdownDocTestBase
+from workflows.markdown_doc_test_base import MarkdownDocTestBase, TestCommand
 from workflows.model_cache import (
     ensure_safetensors,
     purge_modelscope_corrupt,
@@ -50,6 +51,46 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     _CONSTRAINTS_FILE = '/tmp/xdit_npu_constraints.txt'
     _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
     _PROJECT_ROOT = '/root/xdit-test'
+    _GENERATED_PNG = Path('results/sd3_npu.png')
+
+    def _verify_generated_png(self) -> None:
+        """CI-side guard: the doc only reports the saved image path.
+
+        Empty or truncated images are the failure mode the doc used to assert
+        inline; keeping the check here preserves the coverage without exposing
+        size / magic-byte assertions to readers of the quick start. Both the
+        single-card and the 2-card block write the same path, so this runs
+        after each of them.
+        """
+        if not self._GENERATED_PNG.is_file():
+            raise AssertionError(
+                f'generated image not found: {self._GENERATED_PNG}'
+            )
+        image = self._GENERATED_PNG.read_bytes()
+        if len(image) <= 50_000:
+            raise AssertionError(
+                'generated image is suspiciously small '
+                f'({len(image)} bytes): {self._GENERATED_PNG}'
+            )
+        if image[:8] != b'\x89PNG\r\n\x1a\n':
+            raise AssertionError(
+                'generated image is not a PNG '
+                f'(magic={image[:8]!r}): {self._GENERATED_PNG}'
+            )
+        self.log(
+            f'[Step] verified generated PNG ({len(image)}B): '
+            f'{self._GENERATED_PNG}'
+        )
+
+    def _run_one(self, cmd, results, env, cwd, timeout, idx):
+        if (
+            isinstance(cmd, TestCommand)
+            and getattr(cmd, 'id', None) in ('xdit-sd3-smoke', 'xdit-sd3-2card')
+        ):
+            super()._run_one(cmd, results, env, cwd, timeout, idx)
+            self._verify_generated_png()
+            return
+        return super()._run_one(cmd, results, env, cwd, timeout, idx)
 
     @classmethod
     def prepare_environment(cls) -> None:
@@ -71,18 +112,15 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         with open(cls._CONSTRAINTS_FILE, 'w', encoding='utf-8') as f:
             f.write('\n'.join(cls._CUDA_CONSTRAINTS) + '\n')
         os.environ['PIP_CONSTRAINT'] = cls._CONSTRAINTS_FILE
-        os.environ['UV_CONSTRAINT'] = cls._CONSTRAINTS_FILE
 
-        # 2) install uv
-        subprocess.run(['python', '-m', 'pip', 'install', 'uv'], check=True)
-
-        # 3) purge stale xfuser from image
-        subprocess.run(['uv', 'pip', 'uninstall', '-y', 'xfuser'],
+        # 2) purge stale xfuser from image so the doc install block really
+        # installs the PyPI release instead of keeping a baked-in copy
+        subprocess.run(['python', '-m', 'pip', 'uninstall', '-y', 'xfuser'],
             capture_output=True, text=True, check=False)
         stale = os.path.join(cls._PROJECT_ROOT, 'xDiT')
         if os.path.isdir(stale): shutil.rmtree(stale, ignore_errors=True)
 
-        # 4) torch stack probe: reuse usable 2.9.0 stack when available
+        # 3) torch stack probe: reuse usable 2.9.0 stack when available
         ps = 'import torch, torch_npu\nraise SystemExit(0 if torch.npu.is_available() else 1)\n'
         probe = subprocess.run(['python', '-c', ps], capture_output=True, check=False)
         if probe.returncode == 0:
@@ -92,15 +130,15 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         else:
             print('setup: torch probe failed, doc install-torch will install the pinned stack')
 
-        # 5) doc execution cwd
+        # 4) doc execution cwd
         os.makedirs(cls._PROJECT_ROOT, exist_ok=True)
         os.chdir(cls._PROJECT_ROOT)
         print(f'setup: cwd -> {os.getcwd()}')
 
-        # 6) expose both cards (single-card + 2-card ulysses)
+        # 5) expose both cards (single-card + 2-card ulysses)
         os.environ['ASCEND_RT_VISIBLE_DEVICES'] = '0,1'
 
-        # 7) safetensors + modelscope cache validation
+        # 6) safetensors + modelscope cache validation
         ensure_safetensors()
         try:
             purge_modelscope_corrupt(resolve_modelscope_cache())

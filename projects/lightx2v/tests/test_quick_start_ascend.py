@@ -5,8 +5,12 @@ from __future__ import annotations
 import os
 import subprocess
 import unittest
+from pathlib import Path
 
-from workflows.markdown_doc_test_base import MarkdownDocTestBase
+from workflows.markdown_doc_test_base import (
+    MarkdownDocTestBase,
+    TestCommand,
+)
 from workflows.model_cache import (
     ensure_safetensors,
     purge_modelscope_corrupt,
@@ -81,6 +85,49 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
     _PROJECT_ROOT = '/root/lightx2v-test'
 
+    _OUTPUT_VIDEO = Path('save_results/output_lightx2v_wan_t2v.mp4')
+
+    def _verify_output_video(self) -> None:
+        """CI-side guard: the doc only reports that the video was saved.
+
+        Empty or truncated videos are the failure mode the doc used to assert
+        inline; keeping the check here preserves the coverage without exposing
+        container / moov-box assertions to readers of the quick start.
+        """
+        if not self._OUTPUT_VIDEO.is_file():
+            raise AssertionError(
+                f'generated video not found: {self._OUTPUT_VIDEO}'
+            )
+        data = self._OUTPUT_VIDEO.read_bytes()
+        if len(data) <= 100_000:
+            raise AssertionError(
+                'generated video is suspiciously small '
+                f'({len(data)} bytes): {self._OUTPUT_VIDEO}'
+            )
+        if data[4:8] != b'ftyp':
+            raise AssertionError(
+                'generated video is not an MP4 '
+                f'(magic={data[4:8]!r}): {self._OUTPUT_VIDEO}'
+            )
+        if b'moov' not in data:
+            raise AssertionError(
+                f'truncated MP4, no moov box: {self._OUTPUT_VIDEO}'
+            )
+        self.log(
+            f'[Step] verified output video ({len(data)}B): '
+            f'{self._OUTPUT_VIDEO}'
+        )
+
+    def _run_one(self, cmd, results, env, cwd, timeout, idx):
+        if (
+            isinstance(cmd, TestCommand)
+            and getattr(cmd, 'id', None) == 'lightx2v-wan-t2v'
+        ):
+            super()._run_one(cmd, results, env, cwd, timeout, idx)
+            self._verify_output_video()
+            return
+        return super()._run_one(cmd, results, env, cwd, timeout, idx)
+
     @classmethod
     def prepare_environment(cls) -> None:
         if os.path.isfile(cls._CANN_SET_ENV):
@@ -102,12 +149,6 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         with open(cls._CONSTRAINTS_FILE, 'w', encoding='utf-8') as fh:
             fh.write('\n'.join(cls._CUDA_CONSTRAINTS) + '\n')
         os.environ['PIP_CONSTRAINT'] = cls._CONSTRAINTS_FILE
-        os.environ['UV_CONSTRAINT'] = cls._CONSTRAINTS_FILE
-
-        subprocess.run(
-            ['python', '-m', 'pip', 'install', 'uv'],
-            check=True,
-        )
 
         _PROBE_SCRIPT = (
             'import torch, torch_npu\n'

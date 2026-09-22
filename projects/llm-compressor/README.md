@@ -13,7 +13,7 @@
 四个 `profile` 的绿灯不是同一句话。未知 profile 会在安装任何包之前非 0 退出。
 
 - **`npu_inference`**：上游 `examples/compressed_inference/fp8_compressed_inference.py` 能加载公开的 FP8 压缩 TinyLlama，并且 `compressed_model` 与 `inputs` 都在 `npu:0` 上完成 `generate`。进程 exit 0 但张量在 CPU 上，会被判红。这不是 `oneshot()` 量化绿。当前这条是诚实红：模型能加载到 `npu:0`，但 `generate` 在 FP8 解压时触发 `aclnnInplaceCopy`（错误码 561103）。同一条命令把 `device_map` 设成 `cpu` 时可以解压，说明失败在昇腾拷贝算子。
-- **`cpu`**：上游 `examples/quantization_w8a8_fp8/llama3_example.py` 在 CPU 上做完数据无关 FP8 PTQ（`oneshot` + 保存）。这条**不是**昇腾推理绿。setup 只装 CPU `torch`，并卸掉 `torch_npu`，避免 `dispatch_model` 把后续 `generate` 派到 NPU、再撞上上面那条解压红灯。权重从 ModelScope `LLM-Research/Meta-Llama-3-8B-Instruct` 预取，种进 Hugging Face 缓存里的 `meta-llama/Meta-Llama-3-8B-Instruct`，不改上游脚本里的模型 ID。种完之后 setup 会把 `HF_HUB_OFFLINE` / `TRANSFORMERS_OFFLINE` 写进下一 step，避免 `from_pretrained` 再去 Hub 要真实 commit（门禁模型没 token 会 401，种进去的 snapshot 名字也对不上 Hub SHA）。
+- **`cpu`**：清单里 `profile: cpu` 的 example 在 CPU 上做完 `oneshot`。这条**不是**昇腾推理绿。setup 只装 CPU `torch`，并卸掉 `torch_npu`，避免 `dispatch_model` 把后续 `generate` 派到 NPU。每条 example 要的权重和校准数据按路径预取：先从 ModelScope 种进 Hugging Face 缓存，种不上再走 Hugging Face。脚本里的模型 ID 和数据集名字不改。种完之后 setup 会把 `HF_HUB_OFFLINE` / `TRANSFORMERS_OFFLINE` / `HF_DATASETS_OFFLINE` 写进下一 step。参数落到 `npu:*` 判红。数据无关 FP8 和现有 Llama-3-8B 那条是同一类；带校准的 GPTQ / AWQ 脚本本身已经写了切片，32GiB 里是否跑得完由这次运行决定。
 - **`npu_int8`**：上游 `examples/quantization_w8a8_int8/gemma2_example.py`。库的 `get_main_device()` 在装了 `torch_npu` 时会把 Sequential GPTQ 放到 `npu:0`。这条当前是诚实红：Gemma-2-2B 的 `mlp.down_proj` 输入维是 9216，`torch.linalg.cholesky` 走 `aclnnLinalgCholesky` 时要求 last dim ≤ 8192（错误码 161002 / EZ1001）。Gemma 权重从 ModelScope `LLM-Research/gemma-2-2b-it` 预取到 `google/gemma-2-2b-it`。上游调用是 `oneshot(dataset="perfectblend", num_calibration_samples=512)` 且不传 `splits`：库会把约 140 万条全部 tokenize 进内存，32GiB cgroup 会在 GPTQ 开始前 OOM（exit 137）。`run_example.sh` 补上 `splits=train[:512]`，只去掉这份看护噪音，不改 GPTQ 配方。
 - **`npu_autoround`**：上游 `examples/autoround/quantization_wNa16/qwen3_example_custom_dataset.py`。Sequential AutoRound 在 `npu:0` 上跑完 36 层 W4A16（约 45 分钟），随后 `dispatch_for_generation` + `generate` 的参数仍在 `npu:0`。Qwen3-8B 从 ModelScope `Qwen/Qwen3-8B` 预取；校准数据是脚本自己切的 `ultrachat_200k` `train_sft` 前 128 条。AutoRound 初始化会打印 `Using default calibration dataset NeelNanda/pile-10k`，实际量化用的是已经 capture 的那 128 条，不会再去拉 pile-10k。
 
@@ -29,14 +29,14 @@
 
 打了标签、会被看护的步骤：
 
-- example：压缩推理；CPU 上的数据无关 FP8 `oneshot`；INT8 GPTQ 之后的 NPU 生成；AutoRound W4A16 之后的 NPU 生成
+- example：压缩推理；CPU 上的 `oneshot`，包括数据无关 FP8 和脚本自带校准切片的 GPTQ / AWQ；INT8 GPTQ 之后的 NPU 生成；AutoRound W4A16 之后的 NPU 生成
 - Quick Start：检查 Python、安装 torch / torch_npu、安装 llm-compressor、`oneshot()` GPTQ、保存、重载、NPU 前向
 
 无标签、**不看护**的步骤：
 
 - `source set_env.sh` 和 `export PATH`（Quick Start 测试在 `prepare_environment` 里做等价的 CANN 注入）
 - `npu-smi info`（设备表每次不同，正文只要求退出码 0）
-- 清单 `unsupported` 里的其余上游 example，原因写在 [examples_manifest.yaml](examples_manifest.yaml)：CUDA 写死、NVIDIA NVFP4/MXFP 打包、多卡 DDP、门禁或超大模型、多模态、MoE / 剪枝 / QuIP 等非基础路径，以及 `.claude/skills` 模板
+- 清单 `unsupported` 里的其余上游 example，原因写在 [examples_manifest.yaml](examples_manifest.yaml)：CUDA 写死、NVIDIA NVFP4/MXFP 打包、多卡 DDP、门禁或超大模型、多模态、MoE / 剪枝 / QuIP 等非基础路径。`examples/.claude` 与 `examples/.agents` 下的技能模板不是 example，不进清单。
 
 ## 触发
 

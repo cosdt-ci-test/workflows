@@ -5,6 +5,10 @@ set -euo pipefail
 
 export PYTHONNOUSERSITE=1
 
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=cpu_example_spec.sh
+source "$SCRIPT_DIR/cpu_example_spec.sh"
+
 if [[ $# -lt 1 ]]; then
   echo "usage: $0 <example-relpath>" >&2
   exit 2
@@ -14,21 +18,17 @@ EXAMPLE_REL="$1"
 TARGET_ROOT="${TARGET_ROOT:?TARGET_ROOT is required}"
 CI_OUTPUT_DIR="${CI_OUTPUT_DIR:?CI_OUTPUT_DIR is required}"
 
-case "$EXAMPLE_REL" in
-  examples/compressed_inference/fp8_compressed_inference.py)
-    KIND=npu_inference
-    ;;
-  examples/quantization_w8a8_fp8/llama3_example.py)
-    KIND=cpu_oneshot
-    ;;
-  examples/quantization_w8a8_int8/gemma2_example.py|examples/autoround/quantization_wNa16/qwen3_example_custom_dataset.py)
-    KIND=npu_oneshot
-    ;;
-  *)
-    echo "unsupported llm-compressor guard path: $EXAMPLE_REL" >&2
-    exit 1
-    ;;
-esac
+if cpu_example_spec "$EXAMPLE_REL" >/dev/null; then
+  KIND=cpu_oneshot
+elif [[ "$EXAMPLE_REL" == examples/compressed_inference/fp8_compressed_inference.py ]]; then
+  KIND=npu_inference
+elif [[ "$EXAMPLE_REL" == examples/quantization_w8a8_int8/gemma2_example.py \
+    || "$EXAMPLE_REL" == examples/autoround/quantization_wNa16/qwen3_example_custom_dataset.py ]]; then
+  KIND=npu_oneshot
+else
+  echo "unsupported llm-compressor guard path: $EXAMPLE_REL" >&2
+  exit 1
+fi
 
 EXAMPLE_PATH="$TARGET_ROOT/$EXAMPLE_REL"
 if [[ ! -f "$EXAMPLE_PATH" ]]; then
@@ -70,7 +70,10 @@ if accel is not None:
         accel.max_memory_allocated = lambda device=None: 0
 
 path = sys.argv[1]
-ns = runpy.run_path(path)
+# `python <script>` sets __name__ and argv. runpy's default name skips
+# `if __name__ == "__main__"`, and this process's argv breaks argparse.
+sys.argv = [path]
+ns = runpy.run_path(path, run_name='__main__')
 model = ns.get('model')
 if model is None:
     raise SystemExit('oneshot example did not expose model')
@@ -82,7 +85,10 @@ if any(device.startswith('npu') for device in param_devices):
     )
 config = getattr(model, 'config', None)
 qc = getattr(config, 'quantization_config', None) if config is not None else None
-save_hits = list(Path.cwd().glob('*-FP8-Dynamic'))
+save_hits = [
+    entry for entry in Path.cwd().iterdir()
+    if entry.is_dir() and (entry / 'config.json').is_file()
+]
 if qc is None and not save_hits:
     raise SystemExit('oneshot finished without quantization_config or save dir')
 print('LLM_COMPRESSOR_ONESHOT_DEVICE=cpu')

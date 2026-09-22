@@ -158,10 +158,10 @@ supported:
   # model.safetensors 是 xet-backed（hf-mirror 302 到 cas-bridge，加上
   # transformers 把 huggingface_hub 压回 0.36.2 不认 HF_HUB_DISABLE_XET
   # → 416 / consistency 校验失败，run 35582685960 全 8 腿挂）。不能打
-  # cache-seed repo bundle：4.14GB 塞进 git 会让每次 checkout 拉整个
-  # HEAD 树而 504（run 35694653606 只活了 2 腿）。改 torchtune_ppo
-  # profile + setup 里 curl 整文件下载（hf-mirror 直下字节正确，sha256
-  # 校验 + 幂等），落共享 HF cache，仅 PPO 这条腿下载。
+  # cache-seed repo bundle（4.14GB 塞 git 让 checkout 拉爆 504）。改由
+  # cache-seed workflow 的 curl plant（curl_seeds.yaml，hf-mirror 整文件
+  # GET + sha256 校验）一次性下进共享 HF cache，setup 用 torchtune_ppo
+  # profile 按需 resolve refs/main 得 TT_RM_PATH，仅 PPO 这条腿读。
   # reward/V 的 state_dict 通过 reward_hf_to_tune（model_type=REWARD）
   # 转换，coder dry-run 已确认 0 missing / 0 unexpected key。dataset
   # 用本地 jsonl（4 条 prompt），不走 HF datasets。`num_steps=1,
@@ -194,9 +194,9 @@ supported:
       - max_seq_len=512  # upstream 2048: smoke scale
       - kl_coeff=0.01  # recipe 在 _setup_training_hyperparameters 读 cfg.kl_coeff；PPOLoss 不收（main HEAD signature 只接 epsilon/value_clip_range/value_coeff）
       - device=npu
-    # PPO 冷缓存多一次 ~4.14GB RM 下载（hf-mirror curl ~20min，落共享 HF
-    # cache 后幂等跳过）；叠加冷 torch 下载，留 90min 兜底。
-    timeout_minutes: 90
+    # RM 由 cache-seed curl plant 一次性下进共享缓存，example 不下载；
+    # 与其它 recipe 同 60min 即可（PPO 不额外下载）。
+    timeout_minutes: 60
 
   # 评测：Qwen2.5-0.5B + lm_eval + 自定义 ci_truthfulqa_mc2 任务（本地 JSON 驱动）
   # eleuther_eval recipe 在 __init__ 强检 `version("lm-eval") < "0.4.5"`

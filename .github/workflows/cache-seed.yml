@@ -84,3 +84,6 @@ jobs:
 
       - name: Seed shared cache (ModelScope plants)
         run: python scripts/ms_seed.py --projects "${{ inputs.projects }}"
+
+      - name: Seed shared cache (curl downloads)
+        run: python scripts/curl_seed.py --projects "${{ inputs.projects }}"

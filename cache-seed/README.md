@@ -220,7 +220,7 @@ shim（run_example.sh 里 monkey-patch `datasets.load_dataset` 把单文件路�
 缓存卷里已 plant，若后续要统一可再加条目并让 setup 改从 refs/main 解析
 `${LLM_MODEL_PATH}`。
 
-## torchtune 的现状（2026-09-22 PPO reward model 走 setup 内 curl）
+## torchtune 的现状（2026-09-22 PPO reward model 走 curl plant）
 
 PPO recipe（`recipes/ppo_full_finetune_single_device.py`）的 reward/value 模型
 `smohammadi/tinyllama_rm_sentiment_1b` 是个人 HF 仓库，**ModelScope 不代发**，且
@@ -230,13 +230,20 @@ torchtune 的 hub 依赖被 `transformers==4.57.1` 压回 0.36.2（不认
 `HF_HUB_DISABLE_XET`），mirror 302 到 cas-bridge.xethub.hf.co 后 xet resume 撞
 HTTP 416 / consistency 校验失败（run 35582685960 全 8 腿挂在 Setup 步骤）。
 
-**不进 cache-seed**：4.14 GB 打 repo bundle 会让 `hdc` 每次 checkout 拉整个
-HEAD 树而 HTTP 504（run 35694653606 只活了 2 腿、cache-seed 自身也 checkout 失败，
-run 35702569867）。改由 `setup_example.sh` 的 `fetch_tinyllama_rm()`（仅
-`torchtune_ppo` profile 调用）用 **curl 整文件下载**（hf-mirror 直下字节正确，
-sha256 `6697a3…` 校验 + 幂等），落共享 HF cache（`~/.cache/huggingface/
-torchtune/tinyllama_rm_sentiment_1b/`），首条 PPO 腿下载、后续幂等跳过。纯 curl
-不走 huggingface_hub 的 xet 断点续传路径，故不受 416 影响。
+**也不能打 repo bundle**：4.14 GB 分片进 git 会让 `hdc` 每次 checkout 拉整个
+HEAD 树而 HTTP 504（run 35694653606 只活了 2 腿、cache-seed 自身 checkout 也
+504，run 35702569867）。
 
-若日后 ModelScope 出现该 repo 的镜像，可改回 `ms_seeds.yaml` plant 并让 setup
-从 `refs/main` 解析，去掉 curl 分支。
+所以引入**第三半边 curl plant**（`scripts/curl_seed.py` + 各项目的
+`cache-seed/<project>/curl_seeds.yaml`）：由 cache-seed workflow 用
+`curl https://hf-mirror.com/<hf_id>/resolve/main/<file>` 整文件 GET（不走
+huggingface_hub 的 xet 断点续传，字节正确），按 spec 声明的 sha256 流式校验，
+落到共享 HF cache 的 hub 布局（`hub/models--<hf_id>/snapshots/<sha>/` + 
+`refs/main`）。setup 端用 `resolve_seed_envs smohammadi/tinyllama_rm_sentiment_1b
+TT_RM_PATH` 从 `refs/main` 解析，仅 `torchtune_ppo` 这条腿读，不在 example 里下载。
+
+spec：`cache-seed/torchtune/curl_seeds.yaml`（6 文件 + sha256，model.safetensors
+sha256 `6697a3…`）。
+
+若日后 ModelScope 出现该 repo 的镜像，可改回 `ms_seeds.yaml` plant，删掉
+`curl_seeds.yaml`。

@@ -79,7 +79,7 @@ echo "${UPSTREAM_REF}"
 ```shell #test-setup id="clone" load="upstream_ref>>UPSTREAM_REF"
 git clone https://github.com/wenet-e2e/wenet.git
 cd wenet
-git checkout <UPSTREAM_REF>
+git checkout main
 ```
 
 安装 WeNet 及其 NPU 依赖（与官方安装指南一致：`[torch-npu]` extra 已将 torch / torch-npu / torchaudio 钉在推荐版本 2.2.0，并附带 `numpy<2`；`requirements.txt` 只约束 `deepspeed>=0.14.0`，为避免 pip 解析到与 torch 2.2.0 不兼容的 0.16+，安装后显式回钉 0.14.4）：

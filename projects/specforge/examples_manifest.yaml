@@ -231,32 +231,32 @@ supported:
       - model.target_model_path=${SPECFORGE_MODEL_PATH}
     timeout_minutes: 180
 
+  # ===== A 组 candidate（src 上线通过但 e2e 在 910B4 NPU 上游撞墙）已全
+  # 留在 unsupported：参见下文的 Domino Qwen3.5-4B +1 offset、MTP Qwen3.5-4B
+  # 同类问题、Domino prefix_gru dtype mismatch 三段。
+
 
 unsupported:
+  - examples/configs/online/disaggregated/external/deepseek-v2-lite-eagle3-online.yaml
+  - examples/configs/online/disaggregated/external/lfm2.5-1.2b-instruct-dflash-online.yaml
+  - examples/configs/online/disaggregated/external/ling-flash-2.0-eagle3-online.yaml
+  - examples/configs/online/disaggregated/external/qwen3-8b-domino-disaggregated.yaml
+  # qwen3-8b-domino-multiserver-disaggregated 算法同 A 组（domino NPU-compat），
+  # 但 multiserver 拓扑需 2 个 capture server，单机 4 卡 runner 物理装不下；
+  # 待 8 卡 A2 pod 上线后与 qwen3-8b-domino-1server-dp7 同批回移。
+  - examples/configs/online/disaggregated/managed-local/qwen3-8b-domino-multiserver-disaggregated.yaml
 
-  - examples/configs/online/disaggregated/external/deepseek-v2-lite-eagle3-online.yaml   
-  - examples/configs/online/disaggregated/external/lfm2.5-1.2b-instruct-dflash-online.yaml 
-  - examples/configs/online/disaggregated/external/ling-flash-2.0-eagle3-online.yaml      
-  - examples/configs/online/disaggregated/external/qwen3-8b-domino-disaggregated.yaml    
-  - examples/configs/online/disaggregated/external/qwen3-8b-domino-online.yaml          
-  - examples/configs/online/disaggregated/external/qwen3.5-4b-domino-online-npu.yaml     
-
-
-  - examples/configs/online/disaggregated/managed-local/qwen3-8b-domino-1server-dp7-disaggregated.yaml        
-  - examples/configs/online/disaggregated/managed-local/qwen3-8b-domino-multiserver-disaggregated.yaml        
-  - examples/configs/online/disaggregated/managed-local/qwen3.5-4b-mtp-disaggregated-npu.yaml                 
-  - examples/configs/online/disaggregated/managed-local/qwen3.6-27b-dflash-1server-dp2-disaggregated.yaml    
-  - examples/configs/online/disaggregated/managed-local/qwen3.6-27b-dflash-multiserver-disaggregated.yaml    
-  - examples/configs/online/disaggregated/managed-local/qwen3.6-27b-dflash2-disaggregated.yaml               
-  - examples/configs/online/disaggregated/managed-local/qwen3.6-27b-dspark-disaggregated.yaml                  
-  - examples/configs/online/disaggregated/managed-local/qwen3.8-27b-dflash2-4server-dp4-disaggregated.yaml    
+  - examples/configs/online/disaggregated/managed-local/qwen3.6-27b-dflash-1server-dp2-disaggregated.yaml
+  - examples/configs/online/disaggregated/managed-local/qwen3.6-27b-dflash-multiserver-disaggregated.yaml
+  - examples/configs/online/disaggregated/managed-local/qwen3.6-27b-dflash2-disaggregated.yaml
+  - examples/configs/online/disaggregated/managed-local/qwen3.6-27b-dspark-disaggregated.yaml
+  - examples/configs/online/disaggregated/managed-local/qwen3.8-27b-dflash2-4server-dp4-disaggregated.yaml
 
 
   - examples/disagg/run_qwen3_8b_dflash_disagg_2node.sh
   - examples/disagg/run_qwen3.8_27b_dflash2_disagg_2node.sh
   - examples/disagg/run_inkling_dspark_disagg_2node.sh
   - examples/disagg/run_qwen3.6-27b-domino.sh
-
 
   - examples/configs/offline/colocated/qwen3.5-4b-dflash-offline-amd.yaml
   - examples/configs/online/disaggregated/external/qwen3.5-4b-dflash-online-amd.yaml
@@ -333,6 +333,61 @@ unsupported:
   # LlamaForCausalLM 都已实现；仅 Qwen2 / Qwen2MoE 缺。等 sglang 上游补
   # Qwen2ForCausalLM setter 后回移 supported。
   - examples/configs/online/disaggregated/external/qwen2.5-0.5b-dflash-online.yaml
+
+
+  # ===== Domino Qwen3.5-4B external online：sglang 上游 qwen3_vl / qwen3_5 的
+  # dflash 层索引 +1 offset bug 必撞 IndexError =====
+  # qwen3.5-4b-domino.json dflash_config.target_layer_ids=[3,11,19,27,31]，
+  # 但 sglang 0.5.18 /sgl-workspace/sglang/python/sglang/srt/models/qwen3_vl.py:1488
+  # set_dflash_layers_to_capture 走 self.model.set_dflash_layers_to_capture(
+  # [val + 1 for val in layer_ids])，31 → 32 越界 model.num_hidden_layers=32。
+  # 撞 /sgl-workspace/sglang/python/sglang/srt/models/qwen3_5.py:1401
+  #   setattr(self.layers[layer_id], "_is_layer_to_capture", True)
+  # 抛 IndexError: index 32 is out of range，sglang scheduler abort，specforge
+  # train 端走不到。trim31 自定义 draft_config (target_layer_ids 砍 31) 可让
+  # capture 端通过，但 recipe 端改 draft_model_config path 走 run_example.sh
+  # 不被允许（脚本硬编码 $TARGET_ROOT/$EXAMPLE_REL 前缀，recipe YAML 必须放
+  # 在 specforge 源码 examples/configs/ 下才能被 CI flow 正常解析）。qwen3.py
+  # 也带 +1 shift 但 max=33 配 36 层 OK，所以 qwen3-8b-domino / dflash 端 OK
+  # ——仅 Qwen3.5 家族（qwen3_5.py / qwen3_vl.py 链路）撞这条 +1 越界。
+  # 待 sglang 上游 qwen3_vl / qwen3_5 把 +1 offset 改成 max(val+1, num_hidden_layers-1) clamp
+  # 或拆开 Qwen3.5 vs Qwen3 的 set_dflash 调用分契约后回移 supported。
+  - examples/configs/online/disaggregated/external/qwen3.5-4b-domino-online-npu.yaml
+  # qwen3.5-4b-mtp 同 Qwen3.5 家族，mtp 算法 sglang 端走 native_mtp
+  # 捕获路径（qwen3_5_mtp.py forward_batch.spec_info.hidden_states），
+  # 同样被 qwen3_5.py / qwen3_vl.py 的 +1 offset 撞层索引越界。
+  - examples/configs/online/disaggregated/managed-local/qwen3.5-4b-mtp-disaggregated-npu.yaml
+
+  # ===== Domino Qwen3-8B：sglang capture 端 OK，但 specforge train DominoDraftModel
+  # prefix_gru nn.GRU 权重 dtype 与 embed_tokens input dtype 撞 torch 强类型 =====
+  # qwen3-8b-domino.json dflash_config.target_layer_ids=[1,9,17,25,33] 配
+  # num_hidden_layers=36，qwen3.py:706 set_dflash_layers_to_capture 自带 +1
+  # shift 但 33+1=34<36 OK，所以 sglang capture server 端健康启动（实测
+  # 910B4 + ascend attention backend + dflash method 跑通 /generate，5 条 prompt
+  # throughput ~1600 tokens/s）。但 specforge consumer train 端必撞
+  #   File "specforge/modeling/draft/domino.py", line 80, in _run_gru
+  #     return self.prefix_gru(gru_inputs)[0]
+  #   File "torch/nn/modules/rnn.py", line 307, in check_input
+  #     raise ValueError(input must have the type torch.bfloat16,
+  #                      got type torch.float16)
+  # 根因：DominoDraftModel.__init__ 创建 nn.GRU(input_size=..., hidden_size=gru_hidden_dim)
+  # 跟着 Qwen3PreTrainedModel.post_init() 走 config.dtype=bfloat16（draft config
+  # 默认 dtype）变 bf16；specforge/modeling/draft/base.py:141 load_embedding 从
+  # target model 复制 embed_tokens.weight 到 draft 是 .copy_() 会跨 dtype cast，
+  # 但 head_token_embeddings = self.embed_tokens(head_token_ids) 走的是共享的
+  # target_embed_tokens（来自 dflash_family_model.py:392 self.embed_tokens =
+  # target_embed_tokens，target 用 bf16），所以 prev_token_embeddings 是 bf16
+  # 输入到 GRU 应该匹配——但实测报 fp16 错误，说明 GRU 实际保持 bf16 而
+  # 走的是另一个 embedding 路径。overlay model.torch_dtype=float16 让 draft
+  # 整体转 fp16 不能修复：GRU 仍报 bf16 期望。"不能打任何patch" 约束禁止本地
+  # patch specforge/modeling/draft/domino.py 的 NPU GRU dtype 守门逻辑；
+  # 等 specforge 上游把 _run_gru 的 npu-bf16 守门扩展到 (bf16|fp16) 双 dtype
+  # 或把 prefix_gru dtype 改成跟 embed_tokens 一致再回移 supported。
+  # qwen3-8b-domino-1server-dp7-disaggregated 是 managed-local 同构（recipe
+  # 默认 num_anchors=32、attention_backend=flex_attention、capture_servers=
+  # 1 卡 TP1 mem_fraction=0.5），同样撞 prefix_gru dtype。
+  - examples/configs/online/disaggregated/external/qwen3-8b-domino-online.yaml
+  - examples/configs/online/disaggregated/managed-local/qwen3-8b-domino-1server-dp7-disaggregated.yaml
 
 
   # ===== >4 卡：capture server 超单机 4 卡 runner 物理上限 =====

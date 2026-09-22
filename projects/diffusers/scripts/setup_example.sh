@@ -17,9 +17,9 @@ PROFILE="$1"
 
 # Validate the profile before installing anything (contract: unknown
 # profile must exit non-zero before any install).
-SUPPORTED_PROFILES="diffusers-sdxl diffusers-sd15 diffusers-dreambooth diffusers-instruct-pix2pix diffusers-kandinsky diffusers-research diffusers-research-plain diffusers-t2i-adapter diffusers-text-to-image diffusers-textual-inversion diffusers-unconditional diffusers-vqgan diffusers-sdxl-online diffusers-flux diffusers-amused diffusers-cogvideo diffusers-cogvideo-i2v diffusers-lcm diffusers-lcm-sdxl diffusers-controlnet diffusers-controlnet-sdxl diffusers-llada2"
+SUPPORTED_PROFILES="diffusers-sdxl diffusers-sd15 diffusers-dreambooth diffusers-instruct-pix2pix diffusers-kandinsky diffusers-research diffusers-research-plain diffusers-t2i-adapter diffusers-text-to-image diffusers-textual-inversion diffusers-unconditional diffusers-vqgan diffusers-sdxl-online diffusers-flux diffusers-sana diffusers-lumina2 diffusers-z-image diffusers-qwen-image diffusers-amused diffusers-cogvideo diffusers-cogvideo-i2v diffusers-lcm diffusers-lcm-sdxl diffusers-controlnet diffusers-controlnet-sdxl diffusers-llada2"
 case "$PROFILE" in
-  diffusers-sdxl|diffusers-sd15|diffusers-dreambooth|diffusers-instruct-pix2pix|diffusers-kandinsky|diffusers-research|diffusers-research-plain|diffusers-t2i-adapter|diffusers-text-to-image|diffusers-textual-inversion|diffusers-unconditional|diffusers-vqgan|diffusers-sdxl-online|diffusers-flux|diffusers-amused|diffusers-cogvideo|diffusers-cogvideo-i2v|diffusers-lcm|diffusers-lcm-sdxl|diffusers-controlnet|diffusers-controlnet-sdxl|diffusers-llada2) ;;
+  diffusers-sdxl|diffusers-sd15|diffusers-dreambooth|diffusers-instruct-pix2pix|diffusers-kandinsky|diffusers-research|diffusers-research-plain|diffusers-t2i-adapter|diffusers-text-to-image|diffusers-textual-inversion|diffusers-unconditional|diffusers-vqgan|diffusers-sdxl-online|diffusers-flux|diffusers-sana|diffusers-lumina2|diffusers-z-image|diffusers-qwen-image|diffusers-amused|diffusers-cogvideo|diffusers-cogvideo-i2v|diffusers-lcm|diffusers-lcm-sdxl|diffusers-controlnet|diffusers-controlnet-sdxl|diffusers-llada2) ;;
   *)
     echo "unknown profile: ${PROFILE} (supported: ${SUPPORTED_PROFILES})" >&2
     exit 1
@@ -554,6 +554,28 @@ setup_diffusers_cogvideo_i2v() {
   install_example_stack
   python -m pip install decord2 imageio imageio-ffmpeg
   download_assets cogvideo-dataset
+}
+
+# diffusers-sana: Sana LoRA DreamBooth. Base only; the model
+# (Efficient-Large-Model/Sana_1600M_1024px_BF16_diffusers) + dataset are
+# fetched via hf-mirror at run time.
+setup_diffusers_sana() {
+  install_example_stack
+}
+
+# diffusers-lumina2: Lumina2 LoRA DreamBooth (2-card ZeRO-3). Base only.
+setup_diffusers_lumina2() {
+  install_example_stack
+}
+
+# diffusers-z-image: Z-Image LoRA DreamBooth (2-card ZeRO-3). Base only.
+setup_diffusers_z_image() {
+  install_example_stack
+}
+
+# diffusers-qwen-image: Qwen-Image LoRA DreamBooth (4-card ZeRO-3). Base only.
+setup_diffusers_qwen_image() {
+  install_example_stack
 }
 
 # diffusers-llada2: LLaDA2 block-refinement training smoke. Base stack is

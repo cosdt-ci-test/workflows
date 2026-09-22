@@ -687,57 +687,147 @@ supported:
   #     - --output_dir ${CI_OUTPUT_DIR}
   #   timeout_minutes: 180
 
+  # # IP-Adapter（SD1.5；本地 JSON 清单 fixtures/ip_adapter/data.json；2026-09-21 写入待验证）
+  # - path: examples/research_projects/ip_adapter/tutorial_train_ip-adapter.py
+  #   profile: diffusers-research-plain
+  #   runner: linux-aarch64-a2-1
+  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+  #   overlay_args:
+  #     - --pretrained_model_name_or_path stable-diffusion-v1-5/stable-diffusion-v1-5
+  #     - --image_encoder_path ${IP_ADAPTER_IMAGE_ENCODER_PATH}
+  #     - --data_json_file ${FIXTURE_DIR}/ip_adapter/data.json
+  #     - --data_root_path ${FIXTURE_DIR}/images
+  #     - --output_dir ${CI_OUTPUT_DIR}
+  #     - --resolution 256
+  #     - --train_batch_size 1
+  #     - --num_train_epochs 1
+  #   timeout_minutes: 120
+
+  # # IP-Adapter plus（SD1.5，同一份 JSON 清单）
+  # - path: examples/research_projects/ip_adapter/tutorial_train_plus.py
+  #   profile: diffusers-research-plain
+  #   runner: linux-aarch64-a2-1
+  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+  #   overlay_args:
+  #     - --pretrained_model_name_or_path stable-diffusion-v1-5/stable-diffusion-v1-5
+  #     - --image_encoder_path ${IP_ADAPTER_IMAGE_ENCODER_PATH}
+  #     - --data_json_file ${FIXTURE_DIR}/ip_adapter/data.json
+  #     - --data_root_path ${FIXTURE_DIR}/images
+  #     - --output_dir ${CI_OUTPUT_DIR}
+  #     - --resolution 256
+  #     - --train_batch_size 1
+  #     - --num_train_epochs 1
+  #   timeout_minutes: 120
+
+  # # IP-Adapter SDXL（同一份 JSON 清单；SDXL LoRA 单卡）
+  # - path: examples/research_projects/ip_adapter/tutorial_train_sdxl.py
+  #   profile: diffusers-research-plain
+  #   runner: linux-aarch64-a2-1
+  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+  #   overlay_args:
+  #     - --pretrained_model_name_or_path stabilityai/stable-diffusion-xl-base-1.0
+  #     - --image_encoder_path ${IP_ADAPTER_SDXL_IMAGE_ENCODER_PATH}
+  #     - --data_json_file ${FIXTURE_DIR}/ip_adapter/data.json
+  #     - --data_root_path ${FIXTURE_DIR}/images
+  #     - --output_dir ${CI_OUTPUT_DIR}
+  #     - --resolution 256
+  #     - --train_batch_size 1
+  #     - --num_train_epochs 1
+  #   timeout_minutes: 180
+
   ########################已经稳定跑好的###########################################
   ########################之后记得注释回来#########################################
 
-  # IP-Adapter（SD1.5；本地 JSON 清单 fixtures/ip_adapter/data.json；2026-09-21 写入待验证）
-  - path: examples/research_projects/ip_adapter/tutorial_train_ip-adapter.py
-    profile: diffusers-research-plain
+  # ===== DreamBooth LoRA（2026-09-21 迁入 supported，待验证）=====
+  # 模型均非 gated；脚本里的 torch.cuda/bitsandbytes 都是条件分支，不传对应
+  # flag 不会触发。多卡只能走 DeepSpeed ZeRO-3（launcher: accelerate-deepspeed）。
+
+  # SDXL LoRA（单卡 a2-1）
+  - path: examples/dreambooth/train_dreambooth_lora_sdxl.py
+    profile: diffusers-sdxl
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - --pretrained_model_name_or_path stable-diffusion-v1-5/stable-diffusion-v1-5
-      - --image_encoder_path ${IP_ADAPTER_IMAGE_ENCODER_PATH}
-      - --data_json_file ${FIXTURE_DIR}/ip_adapter/data.json
-      - --data_root_path ${FIXTURE_DIR}/images
+      - --pretrained_model_name_or_path ${SDXL_BASE_PATH}
+      - --variant fp16
+      - --dataset_name hf-internal-testing/dummy_image_text_data
+      - --instance_prompt "a photo of sks dog"
       - --output_dir ${CI_OUTPUT_DIR}
       - --resolution 256
       - --train_batch_size 1
-      - --num_train_epochs 1
+      - --gradient_checkpointing
+      - --max_train_steps 1
     timeout_minutes: 120
 
-  # IP-Adapter plus（SD1.5，同一份 JSON 清单）
-  - path: examples/research_projects/ip_adapter/tutorial_train_plus.py
-    profile: diffusers-research-plain
+  # Sana 1600M LoRA（单卡 a2-1）
+  - path: examples/dreambooth/train_dreambooth_lora_sana.py
+    profile: diffusers-sana
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - --pretrained_model_name_or_path stable-diffusion-v1-5/stable-diffusion-v1-5
-      - --image_encoder_path ${IP_ADAPTER_IMAGE_ENCODER_PATH}
-      - --data_json_file ${FIXTURE_DIR}/ip_adapter/data.json
-      - --data_root_path ${FIXTURE_DIR}/images
+      - --pretrained_model_name_or_path Efficient-Large-Model/Sana_1600M_1024px_BF16_diffusers
+      - --dataset_name lambdalabs/naruto-blip-captions
+      - --instance_prompt "a photo of sks dog"
       - --output_dir ${CI_OUTPUT_DIR}
       - --resolution 256
       - --train_batch_size 1
-      - --num_train_epochs 1
+      - --gradient_checkpointing
+      - --max_train_steps 1
     timeout_minutes: 120
 
-  # IP-Adapter SDXL（同一份 JSON 清单；SDXL LoRA 单卡）
-  - path: examples/research_projects/ip_adapter/tutorial_train_sdxl.py
-    profile: diffusers-research-plain
-    runner: linux-aarch64-a2-1
+  # Lumina2 LoRA（2 卡 ZeRO-3）
+  - path: examples/dreambooth/train_dreambooth_lora_lumina2.py
+    profile: diffusers-lumina2
+    runner: linux-aarch64-a2-2
+    npu_devices: '0,1'
+    launcher: accelerate-deepspeed
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - --pretrained_model_name_or_path stabilityai/stable-diffusion-xl-base-1.0
-      - --image_encoder_path ${IP_ADAPTER_SDXL_IMAGE_ENCODER_PATH}
-      - --data_json_file ${FIXTURE_DIR}/ip_adapter/data.json
-      - --data_root_path ${FIXTURE_DIR}/images
+      - --pretrained_model_name_or_path Alpha-VLLM/Lumina-Image-2.0
+      - --dataset_name lambdalabs/naruto-blip-captions
+      - --instance_prompt "a photo of sks dog"
       - --output_dir ${CI_OUTPUT_DIR}
       - --resolution 256
       - --train_batch_size 1
-      - --num_train_epochs 1
+      - --gradient_checkpointing
+      - --max_train_steps 1
     timeout_minutes: 180
 
+  # Z-Image LoRA（2 卡 ZeRO-3）
+  - path: examples/dreambooth/train_dreambooth_lora_z_image.py
+    profile: diffusers-z-image
+    runner: linux-aarch64-a2-2
+    npu_devices: '0,1'
+    launcher: accelerate-deepspeed
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --pretrained_model_name_or_path Tongyi-MAI/Z-Image
+      - --dataset_name lambdalabs/naruto-blip-captions
+      - --instance_prompt "a photo of sks dog"
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --resolution 256
+      - --train_batch_size 1
+      - --gradient_checkpointing
+      - --max_train_steps 1
+    timeout_minutes: 240
+
+  # Qwen-Image LoRA（4 卡 ZeRO-3）
+  - path: examples/dreambooth/train_dreambooth_lora_qwen_image.py
+    profile: diffusers-qwen-image
+    runner: linux-aarch64-a2-4
+    npu_devices: '0,1,2,3'
+    launcher: accelerate-deepspeed
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --pretrained_model_name_or_path Qwen/Qwen-Image
+      - --dataset_name lambdalabs/naruto-blip-captions
+      - --instance_prompt "a photo of sks dog"
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --resolution 256
+      - --train_batch_size 1
+      - --gradient_checkpointing
+      - --max_train_steps 1
+    timeout_minutes: 240
 # ===== unsupported（其余全部；后续逐例验证跑通后迁入 supported） =====
 unsupported:
   # CUDA硬编码 text_encoding_pipeline.to("cuda")
@@ -860,11 +950,10 @@ unsupported:
   - examples/community/unclip_image_interpolation.py
   - examples/community/unclip_text_interpolation.py
   - examples/community/wildcard_stable_diffusion.py
-  # Flax：transformers 5.x 已移除 FlaxCLIPTextModel（diffusers >=0.40 也移除了
-  # Flax），import 阶段即 ImportError
+  # diffusers >= 0.40 需要 transformers >= 5.0
+  # Flax：transformers 5.x 已移除 FlaxCLIPTextModel（diffusers >=0.40 也移除了 Flax）
   - examples/controlnet/train_controlnet_flax.py
-  # Cosmos-Predict2.5-2B 模型仓 101.5GB 且 gated=auto（需 token + 接受 license），
-  # 无 ModelScope 镜像
+  # Cosmos-Predict2.5-2B 模型仓 gated=auto（需 token + 接受 license），
   - examples/cosmos/eval_cosmos_predict25_lora.py
   - examples/cosmos/eval_lora.sh
   - examples/cosmos/train_cosmos_predict25_lora.py
@@ -878,23 +967,26 @@ unsupported:
   # <new1> 切成多个 token（[3,32]），与 initializer_token 的 [32] 维度不一致 →
   # RuntimeError: expand。纯 transformers 版本不兼容，与 NPU 无关。
   - examples/custom_diffusion/train_custom_diffusion.py
-  # sample_llada2：默认模型 inclusionAI/LLaDA2.0-mini 30.28GB（flash-CAP 191.65GB），
-  # 超单卡；且走 device_map="auto" + trust_remote_code，NPU 上未验证
+  # device_map="auto" + trust_remote_code，不支持NPU
   - examples/discrete_diffusion/sample_llada2.py
+  # Flax不兼容新版本 diffusers 和 transformers
   - examples/dreambooth/train_dreambooth_flax.py
+  # gated
   - examples/dreambooth/train_dreambooth_lora_flux.py
+  # gated
   - examples/dreambooth/train_dreambooth_lora_flux_kontext.py
+  # gated
   - examples/dreambooth/train_dreambooth_lora_flux2.py
+  # gated
   - examples/dreambooth/train_dreambooth_lora_flux2_img2img.py
+  # gated
   - examples/dreambooth/train_dreambooth_lora_flux2_klein.py
+  # gated
   - examples/dreambooth/train_dreambooth_lora_flux2_klein_img2img.py
+  # gated
   - examples/dreambooth/train_dreambooth_lora_ideogram4.py
+  # cuda 硬编码
   - examples/dreambooth/train_dreambooth_lora_krea2.py
-  - examples/dreambooth/train_dreambooth_lora_lumina2.py
-  - examples/dreambooth/train_dreambooth_lora_qwen_image.py
-  - examples/dreambooth/train_dreambooth_lora_sana.py
-  - examples/dreambooth/train_dreambooth_lora_sdxl.py
-  - examples/dreambooth/train_dreambooth_lora_z_image.py
   # lora_decoder：上游 bug——line 428 给 LoRAAttnAddedKVProcessor 传 hidden_size，
   # 当前 diffusers 的 __init__ 不收该参数 → TypeError
   - examples/kandinsky2_2/text_to_image/train_text_to_image_lora_decoder.py

@@ -70,7 +70,7 @@ supported:
   # no-patch policy：CrossEntropyLoss 直连 + SDPA + CosSinRoPE 都是上
   # 游决策，sitecustomize shim 不是改源，是 monkey-patch 函数 / 类
   # method（见 [[no-source-patch-policy]] 边界讨论）。
-  - path: torchtitan/models/llama3/config_registry.py:llama3_debugmodel_ce_loss
+  - path: torchtitan/train.py
     profile: torchtitan
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12

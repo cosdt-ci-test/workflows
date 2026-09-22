@@ -42,6 +42,7 @@ jobs:
       # 6-12 h range on a single 910B4; 120 min was mock-data-era only.
       # Schedule stays off while a single run eats half a day.
       timeout_minutes: 720
+      fixed_ref: main
       upstream_repo: wenet-e2e/wenet
       doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/wenet/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
       doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/wenet/docs/Quick-start-Ascend.md

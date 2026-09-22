@@ -28,8 +28,13 @@ slime 上游 `THUDM/slime` 发布 release（当前 v0.3.2）但没有任何昇�
   sglang v0.5.13 源码（pyproject_npu.toml）→ torch/torch_npu 2.10.0、torchvision 0.25.0 →
   sgl-kernel-npu `2026.08.21`（py312-cann9.1.0-910b-aarch64，GitHub release 直下）→
   mbridge@89eb1088 → Megatron-Bridge@dev_rl → Megatron-LM@1dcf0dafa →
-  MegatronAdaptor@f707a3b6 → TransformerEngineNPU@47d60449 → triton-ascend 3.2.1 →
+  MegatronAdaptor@f707a3b6 → TransformerEngineNPU@47d60449 + RMSNorm fix@cecf4a2a → triton-ascend 3.2.1 →
   transformers 5.3.0 → `pip install -e` fork → `git am docker/npu_patch/v0.3.0/*` 六组补丁。
+  fork 固定的 TransformerEngineNPU `47d60449` 会在 Megatron 通过旧接口传入
+  `hidden_size` 时过早初始化 RMSNorm，导致 `normalized_shape=None`，`torch_dist`
+  转换无法构建最后一个 pipeline rank。setup 保留该基线，只 cherry-pick 官方修复
+  `cecf4a2a`（GitCode [MR !86](https://gitcode.com/Ascend/TransformerEngineNPU/merge_requests/86)），
+  避免带入其间 17 个无关提交。
 - 外部源码克隆失败时的回退链：sglang / Megatron-LM 走 gitcode `gh_mirrors` 镜像；
   MegatronAdaptor / TransformerEngineNPU / fork 本体原生就在 gitcode。
 

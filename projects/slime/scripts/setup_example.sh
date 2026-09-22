@@ -25,6 +25,11 @@ readonly MEGATRON_COMMIT=1dcf0dafa884ad52ffb243625717a3471643e087
 readonly MBRIDGE_COMMIT=89eb10887887bc74853f89a4de258c0702932a1c
 readonly MEGATRON_ADAPTOR_COMMIT=f707a3b6
 readonly TRANSFORMER_ENGINE_NPU_COMMIT=47d60449
+# The fork pin calls the RMSNorm parent constructor before resolving the
+# legacy hidden_size argument. Apply only Ascend's targeted fix from
+# TransformerEngineNPU!86; checking out that newer commit directly would
+# also pull in 17 unrelated commits.
+readonly TRANSFORMER_ENGINE_NPU_RMSNORM_FIX_COMMIT=cecf4a2a
 readonly SGL_KERNEL_NPU_VERSION=2026.08.21
 readonly SGL_KERNEL_NPU_URL="https://github.com/sgl-project/sgl-kernel-npu/releases/download/${SGL_KERNEL_NPU_VERSION}/sgl-kernel-npu-${SGL_KERNEL_NPU_VERSION}-torch2.10.0-py312-cann9.1.0-910b-aarch64.zip"
 readonly SLIME_FORK_URL=https://gitcode.com/Ascend/slime-ascend.git
@@ -192,6 +197,8 @@ install_megatron_stack() {
   dest="$DEPS_ROOT/TransformerEngineNPU"
   git_clone "https://gitcode.com/Ascend/TransformerEngineNPU.git" '' "$dest"
   git -C "$dest" checkout "$TRANSFORMER_ENGINE_NPU_COMMIT"
+  git -C "$dest" -c user.name=temp -c user.email=temp@example.com \
+    cherry-pick "$TRANSFORMER_ENGINE_NPU_RMSNORM_FIX_COMMIT"
   python -m pip install -e "$dest"
 }
 

@@ -112,6 +112,8 @@ supported:
       - --per_device_train_batch_size 1
       - --output_dir ${CI_OUTPUT_DIR}
     timeout_minutes: 60
+  # 上游 breakage：脚本引用 accelerate 的 DistributedType.TPU，新版 accelerate 已移除该枚举，
+  # 报 "AttributeError: type object 'DistributedType' has no attribute 'TPU'"，与 NPU 环境无关，待上游修复后恢复。
   - path: examples/pytorch/language-modeling/run_clm_no_trainer.py
     profile: lm
     runner: linux-aarch64-a2-2
@@ -137,6 +139,8 @@ supported:
       - --per_device_train_batch_size 1
       - --output_dir ${CI_OUTPUT_DIR}
     timeout_minutes: 60
+  # 上游 breakage：同 run_clm_no_trainer，脚本引用已移除的 accelerate DistributedType.TPU 枚举，
+  # 报 AttributeError，与 NPU 环境无关，待上游修复后恢复。
   - path: examples/pytorch/language-modeling/run_mlm_no_trainer.py
     profile: lm
     runner: linux-aarch64-a2-2
@@ -149,6 +153,8 @@ supported:
       - --per_device_train_batch_size 1
       - --output_dir ${CI_OUTPUT_DIR}
     timeout_minutes: 60
+  # 上游 breakage：vocab 扩容分支对 Embedding 模块直接调用 .mean(dim=0)，
+  # 报 "'Embedding' object has no attribute 'mean'"（原意应为对 weight 张量取均值），上游 bug，待修复后恢复。
   - path: examples/pytorch/language-modeling/run_fim.py
     profile: lm
     runner: linux-aarch64-a2-2
@@ -164,6 +170,8 @@ supported:
       - --per_device_train_batch_size 1
       - --output_dir ${CI_OUTPUT_DIR}
     timeout_minutes: 60
+  # 上游 breakage：脚本 from huggingface_hub import Repository，该类已从新版 huggingface_hub 移除，
+  # 报 ImportError: cannot import name 'Repository'，待上游修复后恢复。
   - path: examples/pytorch/language-modeling/run_fim_no_trainer.py
     profile: lm
     runner: linux-aarch64-a2-2

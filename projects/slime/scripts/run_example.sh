@@ -164,7 +164,7 @@ import importlib.util
 import sys
 from pathlib import Path
 
-fork_root, num_gpus, model_type, train_script, *train_args = sys.argv
+fork_root, num_gpus, model_type, train_script, *train_args = sys.argv[1:]
 
 # The fork execute_train() owns ray start/submit, NPU resource
 # injection and the runtime env; load it straight from the fork tree.

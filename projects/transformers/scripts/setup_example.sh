@@ -18,13 +18,13 @@ case "$PROFILE" in
     DEPS=(accelerate datasets evaluate scikit-learn)
     ;;
   small-training)
-    DEPS=(accelerate datasets evaluate seqeval)
+    DEPS=(accelerate datasets evaluate seqeval tiktoken)
     ;;
   lm)
     DEPS=(accelerate datasets evaluate)
     ;;
   seq2seq)
-    DEPS=(accelerate datasets evaluate sacrebleu rouge-score nltk)
+    DEPS=(accelerate datasets evaluate sacrebleu rouge-score nltk tiktoken)
     ;;
   *)
     echo "unknown profile: $PROFILE (supported: generation glue small-training lm seq2seq)" >&2
@@ -99,6 +99,36 @@ fi
 # LM-family examples infer the dataset loader from the train_file suffix and
 # reject the extensionless wiki_text/wiki_00 fixture, so expose it as train.txt
 # in the job output dir for the ${CI_OUTPUT_DIR}/train.txt overlay args.
+# tiktoken note: transformers main's tokenizer loading probes the vocab file in
+# tiktoken format before falling back to sentencepiece, so sentencepiece-only
+# models (xlnet spiece.model, mbart sentencepiece.bpe.model) fail with
+# "ValueError: tiktoken is required" unless the package is installed.
 : "${CI_OUTPUT_DIR:=$GITHUB_WORKSPACE/output}"
 mkdir -p "$CI_OUTPUT_DIR"
 cp "$TARGET_ROOT/tests/fixtures/tests_samples/wiki_text/wiki_00" "$CI_OUTPUT_DIR/train.txt"
+
+# Trainer-based classification examples map string labels through label_to_id
+# inside datasets.map(), but datasets keeps the original string column type and
+# casts the ints back to str, so torch_default_data_collator crashes with
+# "too many dimensions 'str'". Emit int-label copies of the MRPC fixture for
+# the run_glue.py / run_classification.py overlay args.
+python - "$TARGET_ROOT" "$CI_OUTPUT_DIR" <<'PY'
+import csv
+import os
+import sys
+
+target, out = sys.argv[1], sys.argv[2]
+label2id = {"equivalent": "0", "not_equivalent": "1"}
+for split in ("train", "dev"):
+    src = os.path.join(target, "tests", "fixtures", "tests_samples", "MRPC", f"{split}.csv")
+    with open(src, newline="", encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        fields = reader.fieldnames
+        rows = list(reader)
+    with open(os.path.join(out, f"mrpc_{split}.csv"), "w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=fields)
+        writer.writeheader()
+        for row in rows:
+            row["label"] = label2id[row["label"]]
+            writer.writerow(row)
+PY

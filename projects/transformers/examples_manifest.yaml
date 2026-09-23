@@ -185,8 +185,8 @@ supported:
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
       - --model_name_or_path ${DISTILBERT_PATH}
-      - --train_file ${TARGET_ROOT}/tests/fixtures/tests_samples/MRPC/train.csv
-      - --validation_file ${TARGET_ROOT}/tests/fixtures/tests_samples/MRPC/dev.csv
+      - --train_file ${CI_OUTPUT_DIR}/mrpc_train.csv
+      - --validation_file ${CI_OUTPUT_DIR}/mrpc_dev.csv
       - --max_seq_length 64
       - --do_train
       - --max_steps 1
@@ -200,8 +200,8 @@ supported:
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
       - --model_name_or_path ${DISTILBERT_PATH}
-      - --train_file ${TARGET_ROOT}/tests/fixtures/tests_samples/MRPC/train.csv
-      - --validation_file ${TARGET_ROOT}/tests/fixtures/tests_samples/MRPC/dev.csv
+      - --train_file ${CI_OUTPUT_DIR}/mrpc_train.csv
+      - --validation_file ${CI_OUTPUT_DIR}/mrpc_dev.csv
       - --text_column_names sentence1,sentence2
       - --label_column_name label
       - --do_train

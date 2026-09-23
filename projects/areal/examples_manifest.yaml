@@ -47,25 +47,29 @@ scan:
 # AReaL 栈差异很大，尚未在昇腾 CI 上验证。故先全部列不支持，待环境（镜像可达
 # + 8 卡并行度改版）跑通后再逐条迁入 supported。
 supported:
-  # Qwen2.5-VL-3B Geometry3K GRPO（8 卡；2026-09-22 在 A2-8 上实测跑通）
+  # Qwen2.5-VL-3B Geometry3K GRPO（2 卡；2026-09-22 在 A2-8 上实测跑通）
   - path: examples/vlm/geometry3k_grpo.py
     profile: areal-vlm-grpo
-    runner: linux-aarch64-a2-8
-    npu_devices: '0,1,2,3,4,5,6,7'
-    image: ghcr.io/hwvanici/areal_npu:v1.0.5-a2
+    runner: linux-aarch64-a2-1
+    npu_devices: '0'
+    # CANN 底座（AReaL 的 ghcr 镜像拉不动；SWR 上没有 9.0.1-py3.11 tag）；
+    # AReaL 栈由 setup_example.sh 安装。注意此底座是 CANN 9.1.0 / py3.12，
+    # 与 AReaL 官方镜像的 9.0.1 / py3.11 有差异。
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
       - --config examples/vlm_npu/qwen2_5_vl_3b_geometry3k_grpo.yaml
-      - cluster.n_gpus_per_node=8
-      - rollout.backend=vllm:d4p1t1
-      - actor.backend=fsdp:d4p1t1
+      - cluster.n_gpus_per_node=1
+      - rollout.backend=vllm:d1p1t1
+      - actor.backend=fsdp:d1p1t1
       - actor.path=${AREAL_MODEL_PATH}
-      - actor.mb_spec.max_tokens_per_mb=1152
-      - ref.mb_spec.max_tokens_per_mb=1152
+      - actor.mb_spec.max_tokens_per_mb=512
+      - ref.mb_spec.max_tokens_per_mb=512
+      - vllm.gpu_memory_utilization=0.4
       - gconfig.max_new_tokens=128
       - gconfig.n_samples=1
       - train_dataset.batch_size=8
       - valid_dataset.batch_size=8
-      - total_train_epochs=1
+      - +total_train_steps=1
     timeout_minutes: 240
 unsupported:
   # 训练 / RL 示例（都需要 AReaL NPU 镜像 + 多卡；见上方说明）
@@ -86,6 +90,9 @@ unsupported:
   - examples/vlm/geometry3k_sft.py
   - examples/vlm/clevr_count_70k_grpo.py
   - examples/vlm/clevr_count_70k_sft.py
+  # UPSTREAM_BUG：workflow_kwargs 里 reward_fn=virl39k_reward_fn 传的是函数对象
+  # （geometry3k_grpo.py 传的是字符串路径），local scheduler RPC JSON 序列化失败：
+  # "Object of type function is not JSON serializable"。需改源码传字符串路径。
   - examples/vlm_npu/virl39k_grpo.py
   - examples/agent_workflow/train.py
   - examples/agent_service/run_agent_service.py

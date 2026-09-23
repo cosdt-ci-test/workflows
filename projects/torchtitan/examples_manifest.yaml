@@ -13,24 +13,35 @@ scan:
   # 记录，不依赖 scan 的扫描结果。
 
 supported:
-  # 1) 单卡 + default llama3_debugmodel 配置（ChunkedLossWrapper 路径）。
-  # 2026-09-17 在 hdc-stable-npu-4 实测 rc=0，loss 8.17→7.84（2 step），
-  # 之前 manifest 说的「ChunkedLossWrapper 在 NPU 触发 meta 张量泄漏
-  # （case doc §2.5）」来自 2026-09-04~07 应用的 sed patch 链，那 7 个
-  # patch 已在 2026-09-17 全部撤掉，目前栈（torch 2.12.0+cpu +
-  # torch_npu 2.12.0 + triton-ascend 3.5.0+dev20260701 + CANN 9.1.0）
-  # 下 default 配置走通。c10d broadcast 的 sm90 检查（torch 2.12：
-  # `tensor.is_cuda and torch.cuda.get_device_capability(...)[0]>=9`）
-  # 曾在本栈崩——run_example.sh 的 sitecustomize shim import
-  # transfer_to_npu，把 is_cuda patch 成 is_npu、get_device_capability
-  # wrap 到 torch.npu（无 env 返回 None）→ `None[0]` TypeError
-  # （run 35224441230）。已由同一 shim 提前设置
-  # TORCH_NPU_DEVICE_CAPABILITY=9.0 修复（get_device_capability 返回
-  # (9,0)）。单卡 smoke 本也未必命中 FSDP mesh rng_state broadcast。
-  # no-patch policy：default ChunkedLossWrapper 是上游决策，不在 setup
-  # 层 patch。保留这条作为「default wiring」基线，#2 ce_loss 变体
-  # 单独验证 CrossEntropyLoss 直连路径，两条同时留 supported =
-  # default vs ce_loss wiring 漂移检测（CI 成本翻倍但信号独立）。
+  # 1) 单卡 + default llama3_debugmodel 配置。
+  # 2026-09-22 在 hdc-stable-npu-2 用 4 件 sitecustomize shim + 1 件
+  # CLI overlay（--parallelism.spmd-backend full_dtensor）实证 exit 0，
+  # loss 8.12→7.72（2 step）。绕开两道 NPU 硬墙：(a) FlexAttention CANN
+  # bishengir compile wall — get_attention_config monkey-patch 强制所有
+  # llama3 backend 返回 ScaledDotProductAttention.Config()（v0.3.0
+  # config_registry 硬编 attn_backend="flex"，tyro CLI 拿不到）；
+  # (b) ComplexRoPE aclnnIndex DT_COMPLEX64 wall — ComplexRoPE.Config
+  # classmethod remap 到 CosSinRoPE.Config(scaling="none")。再加上
+  # ChunkedLossWrapper bypass shim（见 run_example.sh prepare_shims
+  # 末段注释）：default wiring 走 ChunkedLossWrapper + autograd Function
+  # _DecoderOutputGradientBackProp，saved tensor 在 forward 入口
+  # 正常（real npu:0 bf16 + 有效 data_ptr），但 Function 返回的 grad
+  # 进入 decoder backward graph 时 torch_npu C++ engine 抛
+  # "RuntimeError: The tensor has a non-zero number of elements, but its
+  # data is not allocated yet." —— 上游 torch_npu autograd engine 对
+  # custom Function-returned grad 的接线 bug。三个 patch 在 coder -2 上
+  # 都试过且失败：clone accumulated_grad before save、contiguous+npu.
+  # synchronize 包裹、整个 Function class monkey-patch。**唯一走通的
+  # 方式：ChunkedLossWrapper.__call__ monkey-patch 走 lm_head + CE 直连
+  # （绕过 _DecoderOutputGradientBackProp）。** 之前 2026-09-17 在
+  # hdc-stable-npu-4 看到的「无 patch 跑通」是侥幸的 allocator race
+  # window；CI 集群 (run 35723129271 2026-09-22) 上 4 条 ChunkedLoss
+  # 路径全 deterministic 撞这墙。保留 #2 ce_loss 变体是为了保留
+  # CrossEntropyLoss 直连 vs default wiring 漂移检测（信号独立，
+  # CI 成本翻倍可接受）。no-source-patch policy 维持：所有改动都在
+  # sitecustomize shim 里，没改 torchtitan 源。退役条件：torch_npu 上游
+  # 修 custom Function grad wiring；或上游在 ChunkedLossWrapper 上加
+  # `if torch.npu.is_available(): grad_propagate_via_native()` 分支。
   - path: torchtitan/models/llama3/config_registry.py
     profile: torchtitan
     runner: linux-aarch64-a2-1
@@ -92,10 +103,14 @@ supported:
   # --training.dtype bfloat16 是混合精度 smoke；不强校验数值，仅
   # 验证 DTensor forward + HCCL all-reduce + bf16 cast 整条链路不
   # 触发 NPU 算子缺口。
-  # no-patch policy：c10d broadcast 已由 TORCH_NPU_DEVICE_CAPABILITY=9.0
-  # 修复（同 #1）；修好后可能进一步撞 torch 2.13-only FSDP dp_mesh_dims
-  # 路径——这是上游 torch 的 issue，不在 setup 层 patch。
+  # 同 #1：sitecustomize 的 ChunkedLossWrapper bypass shim（lm_head +
+  # CrossEntropyLoss 直连）必须开，否则 2 卡路径同样撞
+  # _DecoderOutputGradientBackProp NPU meta-leak。c10d broadcast 已由
+  # TORCH_NPU_DEVICE_CAPABILITY=9.0 修复（同 #1）。
   # ASCEND_RT_VISIBLE_DEVICES 由 runner 注入（双卡 runner 暴露 0,1）。
+  # coder 上 2 卡 torchrun 验证受 HCCL ranktable 配置限制，未跑；CI 集群
+  # 由 a2-2 runner 注入正确 ASCEND_RT_VISIBLE_DEVICES=0,1 + HCCL_SOCKET
+  # _IFNAME，是真验证点。退役条件：同 #1。
   - path: torchtitan/models/llama3/config_registry.py
     profile: torchtitan
     runner: linux-aarch64-a2-2
@@ -113,7 +128,11 @@ supported:
       - --metrics.log-freq 1
       - --metrics.disable-color-printing
       - --dump-folder ${CI_OUTPUT_DIR}/llama3_debugmodel_2card
-    timeout_minutes: 25
+    # 2026-09-22 CI run 35729620793: a2-2 runner hit cold pip cache, torch 2.12+cpu
+    # wheel (150 MB direct URL from pytorch.org, bypasses cluster cache) stalled
+    # ~30 min before k8s runner killed setup. Bump to 45 min for safe margin:
+    # setup (~5 min warm / ~30 min cold) + train (~5 min).
+    timeout_minutes: 45
 
   # 4) 单卡 + llama3_debugmodel_dist_gemm 变体：TP=1 下 dist_gemm
   # 是 no-op（trainer log: "tp_gemm_backend='dist_gemm' selected but
@@ -125,6 +144,8 @@ supported:
   # #1，不再单列）。留这条是为「dispatch + flag 解析」回归
   # 检测 —— 上游哪天在 TP=1 路径上对 dist_gemm flag 加任何 parse-time
   # 校验，这里立刻报红。
+  # 2026-09-22 在 hdc-stable-npu-2 用 sitecustomize 的 ChunkedLossWrapper
+  # bypass shim（同 #1）实证 exit 0，loss 6.01→5.98（2 step）。
   # 退役条件：TP>=2 路径需 torch 2.13+ ABI 适配，此后才有意义再开
   # TP>=2 的 supported。
   - path: torchtitan/models/llama3/config_registry.py
@@ -149,14 +170,13 @@ supported:
   # 注册的 SFT 配置（不是独立 module），训练走 torchtitan/train.py
   # 同一入口。smoke 验证 SFT 数据通路（ChatDataLoader /
   # CrossEntropyLoss / Trainer）。
-  # no-patch policy：sft_debugmodel 写死 attn_backend="flex"，走到
-  # torch_npu._inductor 时 import `triton_key` 失败（community triton
-  # 3.5.0 不暴露）；同时 _create_flex_attention_mask 用 torch 2.13-only
-  # 的 separate_full_blocks kwarg。两条都是上游决策，不在 setup 层
-  # 绕开。c10d broadcast 已由 TORCH_NPU_DEVICE_CAPABILITY=9.0 修复
-  # （同 #1）→ 接下来撞 triton_key import / separate_full_blocks
-  # TypeError。退役条件：上游让 sft 默认走 sdpa 或暴露 triton_key，
-  # 或 torch 2.13 ABI 适配。
+  # 2026-09-22 在 hdc-stable-npu-2 用 sitecustomize 的 4 件 overlay +
+  # ChunkedLossWrapper bypass shim（必须让 lm_head 跑一次以保 FSDP
+  # all_gather_state 一致，v1 不跑 lm_head 会触发 FSDP pre-backward
+  # assert + AICore "scalar address out of bounds"）实证 exit 0，
+  # loss 8.11→7.69（2 step）。c10d broadcast / FlexAttention CANN 墙
+  # / ComplexRoPE aclnnIndex 墙 三道同 #1 + #2 一起过。
+  # 退役条件：同 #1。
   - path: torchtitan/models/llama3/config_registry.py
     profile: torchtitan
     runner: linux-aarch64-a2-1
@@ -200,18 +220,14 @@ unsupported:
   # 性质；按 [[no-source-patch-policy]] 应继续留 unsupported，注释归档实证结论。
   - torchtitan/models/flux/config_registry.py:flux_debugmodel
 
-
   # --- llama3 系：flex 墙 + ComplexRoPE 复数墙 + ChunkedLoss 墙（三墙全中）---
   # ComplexRoPE(scaling="llama") 用 torch.polar/view_as_complex 生成 complex64（models/common/rope.py:233,261），
   # NPU aclnnIndex 无 DT_COMPLEX64 实现；默认 loss=ChunkedLossWrapper（components/loss.py:567，
   # backward-inside-forward 在 NPU 触发 meta 张量泄漏）。
-  - torchtitan/train.py # llama3_debugmodel 1-card
-  - torchtitan/train.py # llama3_debugmodel 2-card
-  # dist_gemm：TP=1 时 validate_dist_gemm_preconditions（models/common/dist_gemm.py:88）不触发、只 warn 退回
-  # stock projection（见 launcher 注释），dist_gemm 本身非额外障碍，但 flex+ComplexRoPE+ChunkedLoss 三墙仍在。
-  - torchtitan/train.py # llama3_debugmodel_dist_gemm 1-card
-  # sft_debugmodel：ChatDataLoader + attn_backend="flex"，同上三墙；数据走本地 tests/assets/sft_test（非墙）。
-  - torchtitan/train.py # sft_debugmodel 1-card
+  # debugmodel / debugmodel_2card / debugmodel_dist_gemm / sft_debugmodel 这 4 条
+  # 在 2026-09-22 通过 sitecustomize 的 5-overlay 模板（含 ChunkedLossWrapper
+  # bypass shim）实证 exit 0，已移到 supported 段；下方仅留 llama3_8b + 其它
+  # variants（未走 sitecustomize 验证）。
 
   # llama3_8b：与 debugmodel 同一三墙（flex+ComplexRoPE+ChunkedLoss），仅 arch 规模更大。
   - torchtitan/models/llama3/config_registry.py:llama3_8b
@@ -263,7 +279,6 @@ unsupported:
   # sft_full / sft_debugmodel：flex 墙。
   - torchtitan/experiments/transformers_modeling_backend/config_registry.py:transformers_modeling_backend_sft_full
   - torchtitan/experiments/transformers_modeling_backend/config_registry.py:transformers_modeling_backend_sft_debugmodel
-
 
 
   # ===== experiments/torchft:torchft 包整体不在 NPU 覆盖范围 =====

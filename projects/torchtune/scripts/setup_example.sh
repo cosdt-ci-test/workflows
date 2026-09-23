@@ -4,46 +4,37 @@
 # torchtune itself is installed from TARGET_ROOT (the release checkout
 # under test), so the guarded tag is exactly the code that runs.
 #
-# Dependency line (mirror Quick-start-Ascend.md lines 85-88, 114-117, 168-172;
-# quick-start is the canonical install path for torchtune on this image):
-#   torch 2.11.0+cpu + torch_npu 2.11.0 + torchvision 0.26.0+cpu
-#   + transformers 4.57.1 + omegaconf + tokenizers + safetensors
-#   + modelscope 1.37.0
-# - torch 2.11.0 + torch_npu 2.11.0: pin explicit in ensure_torch_stack()
-#   below (was: "reuse whatever image ships", which was 2.9.0+cpu). The +cpu
-#   wheel comes from aliyun's mirror of pytorch.org/whl/cpu; the cluster pip
-#   cache ships only CUDA torch wheels (Requires-Dist: cuda-toolkit), which
-#   collide with constraints-npu.txt's cuda-toolkit<0 — see
-#   torchtitan-cuda-torch-wheel-trap memory. torch 2.11.0 is also the floor
-#   for `from torch.nn.functional import ScalingType` that torchao 0.18
-#   needs, so upgrading makes the main HEAD path in the dynamic case below
-#   work too (instead of being a known-broken documented limitation).
-# - torchvision 0.26.0+cpu: pinned by ensure_torch_stack(). main HEAD
-#   unconditionally imports torchvision at torchtune/data/_utils.py:12,
-#   triggered by `from torchtune import datasets` (datasets/__init__.py:7 →
-#   multimodal → _llava → data._messages → data → data._utils → import
-#   torchvision). v0.6.1 doesn't hit this (no torchvision import in
-#   data/_utils.py). Per upstream's published compat table, torch 2.11 ↔
-#   torchvision 0.26; pinning ≤0.28 also dodges v0.29.0's stable ABI
-#   requirement (see torchvision-v29-stable-abi memory). The +cpu wheel
-#   is the only one in the aliyun pytorch-wheels/cpu find-links repo, so
-#   plain `torchvision==0.26.0` resolves to the +cpu aarch64 wheel.
-# - transformers 4.57.1: matches torchtune v0.6.x's LlamaModel / Qwen2
-#   forward signatures; 5.x has renamed some attributes.
-# - torchao pin: still decided dynamically inside setup_torchtune() because
-#   the NF4Tensor import path in torchtune/modules/common_utils.py:19 has
-#   moved three times (0.10-0.13 use torchao.dtypes.nf4tensor, 0.14-0.17
-#   don't have the symbol, 0.18+ re-expose it under torchao.quantization).
-#   v0.6.x release tag hits the first path (pin 0.13.0); main HEAD hits the
-#   third (pin 0.18.0, now compatible thanks to the torch 2.11.0 upgrade
-#   above). The case statement at the bottom of setup_torchtune() does
-#   the probe.
-# - non-editable torchtune install: PEP 660 editable makes
-#   `torchtune.__file__` = None, which breaks `torchtune/_cli/cp.py:15`'s
-#   `Path(torchtune.__file__).parent.parent`. Quick-start line 171 uses
-#   `uv pip install .` for the same reason; we use `pip install .` here
-#   (recipes are run as `python recipes/<x>.py`, so no editable hot-reload
-#   is needed).
+# Profile split (2026-09-22, after CI run 35721666282 7-leg fail):
+# The original `setup_torchtune` profile pinned torch_npu==2.11.0 in a
+# shared `ensure_torch_stack` function. That single pin couldn't satisfy
+# both:
+#   - single-device recipes (generate / quantize / eleuther_eval / ppo /
+#     lora_finetune_single / full_finetune_single / lora_dpo_single):
+#     torch_npu 2.11.0 works; pre-download was the problem (ModelScope
+#     ._____temp staging dir missing on cold container → FileDownloadError).
+#   - distributed recipes (lora_finetune_distributed / full_finetune_distributed /
+#     lora_dpo_distributed / full_dpo_distributed / knowledge_distillation_distributed):
+#     torch_npu 2.11.0's c10d hccl backend raises
+#     `RuntimeError: Distributed package doesn't have NCCL built in`
+#     at recipe `init_process_group(self.distributed_backend)`, AND
+#     its `dist.broadcast` from `_distributed.py:92` on a CPU tensor
+#     raises `No backend type associated with device type cpu`
+#     (per torch.distributed.pipelining × torch_npu c10d ABI gap memory).
+#
+# So each profile now does its own torch stack install. The shared path
+# keeps ONLY what's truly universal (pip index selection, pip upgrade,
+# fixture copy, HF_ENDPOINT mirror); `ensure_torch_stack` is now a
+# per-profile helper that takes the torch_npu version as $1 (default
+# 2.11.0 for single; TBD for distributed, set after npu-3 verification).
+#
+# Asset sourcing (also 2026-09-22): pre-download of
+# Qwen/Qwen2.5-{0.5,1.5}B-Instruct no longer lives in setup; it's
+# declared in cache-seed/torchtune/ms_seeds.yaml and planted into the
+# shared HF hub cache by the cache-seed workflow. setup only calls
+# `resolve_seed_envs` to read `refs/main` and inject TT_MODEL_PATH /
+# TT_TEACHER_PATH for the overlay args. (The 1.5B safetensors 2.88GB
+# was what made the cold-container ModelScope download fail; offloading
+# to a one-time seed dispatch removes the per-job network cost too.)
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
@@ -84,25 +75,32 @@ except urllib.error.HTTPError:
   echo "pip index: $PIP_INDEX_URL"
 }
 
+# Per-profile torch stack install (torch/torchvision versions are
+# uniform across profiles; torch_npu version varies).
+#
+# $1 = torch_npu version (mandatory; caller picks the version that
+#      matches the recipes it serves).
+#
+# Why torch + torchvision stay the same across profiles:
+#   - torch 2.11.0+cpu: floor for `from torch.nn.functional import
+#     ScalingType` that torchao 0.18 needs (main HEAD path). The +cpu
+#     wheel comes from aliyun's mirror of pytorch.org/whl/cpu; the
+#     cluster pip cache ships only CUDA torch wheels (Requires-Dist:
+#     cuda-toolkit) which collide with constraints-npu.txt's
+#     cuda-toolkit<0 — see torchtitan-cuda-torch-wheel-trap memory.
+#     `--find-links` to the +cpu-only directory sidesteps it.
+#   - torchvision 0.26.0+cpu: main HEAD unconditionally imports
+#     torchvision at torchtune/data/_utils.py:12, triggered by
+#     `from torchtune import datasets` (datasets/__init__.py:7 →
+#     multimodal → _llava → data._messages → data → data._utils →
+#     import torchvision). Per upstream's published compat table,
+#     torch 2.11 ↔ torchvision 0.26; pinning ≤0.28 also dodges the
+#     v0.29.0 stable ABI requirement (calls stable::permute, torch
+#     2.14 only; torch_npu has no 2.14 release) — see
+#     torchvision-v29-stable-abi memory. The +cpu wheel is the only
+#     one in the aliyun pytorch-wheels/cpu find-links repo.
 ensure_torch_stack() {
-  # Mirror Quick-start-Ascend.md lines 85-88: pin torch==2.11.0+cpu +
-  # torch_npu==2.11.0 explicitly so the setup is independent of what the
-  # image happens to ship. Quick-start verified end-to-end on this same
-  # CANN 9.1.0 image; reusing that line lets the dynamic torchao case
-  # below work for both v0.6.x release (torchao 0.13.0) and main HEAD
-  # (torchao 0.18.0, needs ScalingType from torch.nn.functional which is
-  # torch 2.11+).
-  #
-  # The +cpu torch wheel is fetched from aliyun's mirror of
-  # pytorch.org/whl/cpu via --find-links. Pure-Python deps of the +cpu
-  # torch (filelock / typing-extensions / sympy / networkx / jinja2 /
-  # fsspec / mpmath / markupsafe / setuptools) are resolved through
-  # PIP_INDEX_URL (cluster cache, set by select_pip_index above). None
-  # of those need CUDA, so constraints-npu.txt's cuda-toolkit<0 doesn't
-  # fire. (Contrast with `pip install -i aliyun torch==X.Y.Z` from
-  # torchtitan-cuda-torch-wheel-trap memory: that pulls the CUDA torch
-  # wheel directly, whose Requires-Dist: cuda-toolkit collides with
-  # constraints — --find-links to a +cpu-only directory sidesteps it.)
+  local torch_npu_version="${1:?ensure_torch_stack requires torch_npu version as \$1}"
   echo "installing torch==2.11.0+cpu (aliyun pytorch-wheels/cpu find-links, deps from PIP_INDEX_URL)"
   # The 148MB torch+cpu aarch64 wheel is the long pole of setup — CI run
   # 35483424375 (2026-09-20) saw every leg print the "Downloading torch-
@@ -126,27 +124,12 @@ ensure_torch_stack() {
     python -m pip install --find-links "$TORCH_WHEEL_DIR" torch==2.11.0 || \
       python -m pip install --find-links https://mirrors.aliyun.com/pytorch-wheels/cpu torch==2.11.0
   fi
-  # main HEAD torchtune (post-multimodal merge) unconditionally imports
-  # torchvision at torchtune/data/_utils.py:12 — this sits upstream of
-  # torchtune.datasets (datasets/__init__.py:7 → multimodal → _llava →
-  # data._messages → data → data._utils → import torchvision), so
-  # `import torchtune` fails with ModuleNotFoundError when torchvision is
-  # absent. v0.6.1 release doesn't hit this path (data/_utils.py has no
-  # torchvision import there), but main HEAD does, so we always install
-  # it for consistency.
-  #
-  # Per torchvision's published compat table, torch 2.11 → torchvision 0.26.
-  # Pinning 0.26.0 also sidesteps the v0.29.0 stable-ABI requirement (it
-  # calls stable::permute which is torch 2.14 only; torch_npu has no 2.14
-  # release) — see torchvision-v29-stable-abi memory. The +cpu wheel is
-  # the only one in the aliyun pytorch-wheels/cpu find-links repo, so
-  # plain "torchvision==0.26.0" resolves to the +cpu aarch64 wheel.
-  echo "installing torchvision==0.26.0+cpu (main HEAD data/_utils.py unconditional import; matches torch 2.11 per upstream compat table)"
+  echo "installing torchvision==0.26.0+cpu (matches torch 2.11 per upstream compat table)"
   python -m pip install \
     --find-links https://mirrors.aliyun.com/pytorch-wheels/cpu \
     torchvision==0.26.0
-  echo "installing torch_npu==2.11.0 (Huawei ascend index)"
-  pip_ascend torch_npu==2.11.0
+  echo "installing torch_npu==${torch_npu_version} (Huawei ascend index)"
+  pip_ascend "torch_npu==${torch_npu_version}"
 }
 
 # Copy CI fixture data files into the target root so that example
@@ -181,8 +164,10 @@ resolve_seed_envs() {
   # snapshot path from the shared HF hub cache (refs/main -> sha) and
   # append VAR=<snapshot> to GITHUB_ENV for manifest overlay_args.
   # The shared cache root is populated by the cache-seed workflow
-  # (curl plant: cache-seed/torchtune/curl_seeds.yaml -> SHARED_CACHE_ROOT,
-  # default ~/.cache/huggingface). Nothing downloads in example jobs.
+  # (ms plant: cache-seed/torchtune/ms_seeds.yaml;
+  #  curl plant: cache-seed/torchtune/curl_seeds.yaml;
+  #  → SHARED_CACHE_ROOT, default ~/.cache/huggingface).
+  # Nothing downloads in example jobs anymore.
   python - "$@" <<'PY'
 import os
 import sys
@@ -198,7 +183,7 @@ for hf_id, var in zip(pairs[::2], pairs[1::2]):
     if not refs.is_file():
         raise SystemExit(
             f"{hf_id} missing from shared cache root — dispatch the "
-            f"cache-seed workflow (spec: cache-seed/torchtune/curl_seeds.yaml)")
+            f"cache-seed workflow (spec: cache-seed/torchtune/ms_seeds.yaml)")
     sha = refs.read_text().strip()
     snap = repo_dir / "snapshots" / sha
     if not snap.is_dir() or not any(snap.iterdir()):
@@ -209,22 +194,14 @@ for hf_id, var in zip(pairs[::2], pairs[1::2]):
 PY
 }
 
-setup_torchtune() {
-  # torchtune from the guarded checkout. The torchao pin is decided
-  # dynamically because the NF4Tensor import path in
-  # torchtune/modules/common_utils.py:19 has moved three times:
-  #
-  #   torchao 0.10-0.13 : torchao.dtypes.nf4tensor.NF4Tensor  (v0.6.x)
-  #   torchao 0.14-0.17 : dtypes submodule deleted; quantization
-  #                       renamed NF4Tensor -> Int4Tensor. Anything
-  #                       importing NF4Tensor breaks here.
-  #   torchao 0.18+     : torchao.quantization.NF4Tensor
-  #                       re-exposed (main HEAD post PR #2960).
-  #
-  # Picking the wrong line is fatal — v0.6.x + torchao 0.18 throws
-  # ModuleNotFoundError on import; main + torchao 0.13 throws the
-  # same. There is no single torchao that satisfies both import paths,
-  # so we must probe the actual checkout before pinning.
+# Install torchtune + its declared deps (transformers / omegaconf /
+# tokenizers / safetensors / tqdm / pyyaml). Shared by every profile —
+# the version selection / dynamic torchao probe are torchtune-checkout-
+# dependent and have nothing to do with the torch_npu version split
+# above. Probe runs against the installed source (non-editable, see
+# Quick-start-Ascend.md:164-167), so it reflects whatever ref the
+# engine checked out (release tag OR main HEAD).
+install_torchtune_pkg() {
   echo "installing torchtune from $TARGET_ROOT (non-editable, see Quick-start-Ascend.md:164-167)"
   patch_main_head_bugs
   python -m pip install "$TARGET_ROOT"
@@ -232,10 +209,7 @@ setup_torchtune() {
     tokenizers safetensors tqdm pyyaml
 
   # Probe which NF4Tensor import path the torchtune checkout uses, then
-  # install the matching torchao exact pin. Probe runs against the
-  # installed source (non-editable, see Quick-start-Ascend.md:164-167),
-  # so it reflects whatever ref the engine checked out (release tag
-  # OR main HEAD).
+  # install the matching torchao exact pin.
   local import_path torchao_pin
   import_path="$(python -c "
 import importlib.util, pathlib
@@ -288,14 +262,16 @@ import torchao, omegaconf, transformers
 import torchtune  # noqa: just to confirm the import chain
 print('torchtune', md.version('torchtune'), '/ torchao', torchao.__version__, '/ transformers', transformers.__version__)
 "
+}
 
-  # Pre-download the example model from ModelScope (China-reachable)
-  # because runners cannot reach HuggingFace. The local snapshot dir
-  # is exported as TT_MODEL_PATH for overlay_args to reference.
-  # Pinned to the doc's verified line: modelscope>=1.38 splits the hub
-  # code into modelscope-hub, and the fresh 1.40.1 wheel's loose
-  # ">=0.4.2" floor breaks import when the mirror lags on hub 0.4.3.
-  python -m pip install "modelscope==1.37.0"
+# Profile: single-device recipes. torch_npu 2.11.0 is verified to
+# work for these on coder npu-3; the previous blocker was the per-job
+# ModelScope download failing on cold /root/.cache/modelscope, now
+# moved to cache-seed/torchtune/ms_seeds.yaml plant.
+setup_torchtune_single() {
+  ensure_torch_stack 2.11.0
+  install_torchtune_pkg
+
   # lm_eval is only needed for the eleuther_eval recipe (not declared as
   # an upstream dep of torchtune). The recipe's __init__ checks
   # `version("lm-eval") < "0.4.5"` (recipes/eleuther_eval.py:446) using
@@ -306,79 +282,39 @@ print('torchtune', md.version('torchtune'), '/ torchao', torchao.__version__, '/
   # (lowest acceptable) to keep the floor obvious; the import chain only
   # uses evaluator/models/tasks/utils which is stable across 0.4.x.
   python -m pip install "lm-eval==0.4.5"
-  python - <<'PY'
-import os
-import sys
-from pathlib import Path
-# Non-TTY CI logs: throttle tqdm refreshes instead of disabling.
-os.environ.setdefault("TQDM_MININTERVAL", "15")
-from modelscope import snapshot_download
-from safetensors import safe_open
 
-MODEL_CACHE = os.environ.get("MODELSCOPE_CACHE", os.path.expanduser("~/.cache/modelscope"))
-# CI runner containers start with no /root/.cache/modelscope. The
-# default cache path returned by os.path.expanduser is not created by
-# modelscope itself — snapshot_download fails mid-transfer when the
-# ._____temp staging dir cannot be opened (FileDownloadError on the
-# *.safetensors file). mkdir -p is a no-op on coder where env.sh
-# already exports MODELSCOPE_CACHE to /home/coder/work/modelscope-cache.
-os.makedirs(MODEL_CACHE, exist_ok=True)
-
-
-def fetch_verified(ms_id, allow_patterns=None, attempts=3):
-    # snapshot_download 不做 safetensors 完整性校验，且本地缓存命中会
-    # 直接跳过——共享缓存卷上一旦留下截断文件（run 35709073381 KD
-    # teacher: 'incomplete metadata, file not fully covered'），之后每次
-    # 都复用同一残缺文件。下载后 safe_open 读 header 并校验文件覆盖
-    # （毫秒级，不读全量数据），残缺则删掉重下（≤attempts 次）。
-    for attempt in range(attempts):
-        local = snapshot_download(
-            ms_id, cache_dir=MODEL_CACHE, allow_patterns=allow_patterns)
-        corrupt = []
-        for p in Path(local).rglob("*.safetensors"):
-            try:
-                with safe_open(p, framework="pt"):
-                    pass
-            except Exception as exc:  # noqa: BLE001
-                corrupt.append((str(p), repr(exc)))
-        if not corrupt:
-            return local
-        print(f"{ms_id}: corrupt safetensors (attempt {attempt+1}/{attempts}): {corrupt}",
-              file=sys.stderr, flush=True)
-        for p, _ in corrupt:
-            Path(p).unlink(missing_ok=True)
-    raise SystemExit(f"{ms_id}: safetensors still corrupt after {attempts} attempts")
-
-
-local = fetch_verified("Qwen/Qwen2.5-0.5B-Instruct")
-with open(os.environ["GITHUB_ENV"], "a") as fh:
-    fh.write(f"TT_MODEL_PATH={local}\n")
-print("TT_MODEL_PATH=", local)
-
-# Knowledge-distillation 翻案 (recipes/knowledge_distillation_single_device.py)
-# 也需要 1.5B teacher checkpoint；KD 翻案 + 后续 distributed KD 翻案都用到，
-# 不为它单独 split profile。teacher snapshot 2.88GB / 实测下载 ~3:23。
-teacher = fetch_verified(
-    "Qwen/Qwen2.5-1.5B-Instruct",
-    allow_patterns=["*.json", "*.txt", "*.safetensors", "tokenizer*"],
-)
-with open(os.environ["GITHUB_ENV"], "a") as fh:
-    fh.write(f"TT_TEACHER_PATH={teacher}\n")
-print("TT_TEACHER_PATH=", teacher)
-PY
+  # Resolve model snapshot paths from the cache-seed workflow. The
+  # shared HF hub cache is populated by ms_seed.py per
+  # cache-seed/torchtune/ms_seeds.yaml (Qwen/Qwen2.5-0.5B-Instruct for
+  # student / SFT base; Qwen/Qwen2.5-1.5B-Instruct for KD teacher).
+  # No network access in this leg — TT_MODEL_PATH / TT_TEACHER_PATH
+  # point into ~/.cache/huggingface/hub/.
+  resolve_seed_envs Qwen/Qwen2.5-0.5B-Instruct TT_MODEL_PATH
+  resolve_seed_envs Qwen/Qwen2.5-1.5B-Instruct TT_TEACHER_PATH
 }
 
+# Profile: distributed recipes. torch_npu stays at 2.11.0 — verified
+# on coder npu-3 (2026-09-22) that hccl init succeeds AND that the
+# two upstream bugs patched by patch_main_head_bugs() below are
+# sufficient for end-to-end exit 0 (Loss 2.92→0.47 for full_finetune,
+# 49 steps in 12s). See patch_main_head_bugs comments for the exact
+# lines.
+setup_torchtune_distributed() {
+  ensure_torch_stack 2.11.0
+  install_torchtune_pkg
+
+  resolve_seed_envs Qwen/Qwen2.5-0.5B-Instruct TT_MODEL_PATH
+  resolve_seed_envs Qwen/Qwen2.5-1.5B-Instruct TT_TEACHER_PATH
+}
+
+# Profile: PPO full finetune single_device. Needs the RM
+# smohammadi/tinyllama_rm_sentiment_1b in addition to the base
+# single-device stack. RM is delivered by the curl plant at
+# cache-seed/torchtune/curl_seeds.yaml (xet-backed file, can't go
+# through huggingface_hub 0.36.2; ms_seed.py doesn't apply because
+# the repo isn't on ModelScope).
 setup_torchtune_ppo() {
-  # PPO 全参 finetune（recipes/ppo_full_finetune_single_device.py）需要
-  # scalar-head reward/value 模型 smohammadi/tinyllama_rm_sentiment_1b。
-  # 该 repo 是个人 HF 仓库，ModelScope 不代发，其 model.safetensors 是
-  # xet-backed（hf-mirror 302 到 cas-bridge.xethub.hf.co；且 torchtune 的
-  # huggingface_hub 会被 transformers==4.57.1 压回 0.36.2，不认识
-  # HF_HUB_DISABLE_XET → xet resume 撞 416 / consistency 校验失败，run
-  # 35582685960 全 8 腿挂在这里）。改由 cache-seed workflow 的 curl plant
-  # （cache-seed/torchtune/curl_seeds.yaml）一次性下进共享 HF cache，本
-  # profile 只按需 resolve refs/main 得 TT_RM_PATH，不在 example 里下载。
-  setup_torchtune
+  setup_torchtune_single
   if [[ -z "${TT_RM_PATH:-}" ]]; then
     resolve_seed_envs smohammadi/tinyllama_rm_sentiment_1b TT_RM_PATH
   else
@@ -386,15 +322,42 @@ setup_torchtune_ppo() {
   fi
 }
 
-# Patch two upstream bugs in main HEAD torchtune. v0.6.1 release doesn't
-# have either; the grep guards make these no-ops there. Operates on the
-# SOURCE in $TARGET_ROOT before `pip install` copies it to site-packages,
-# so the installed files inherit the fixes. If torchtune ever ships a
-# fix upstream, the grep guard causes the patch to become a no-op
-# automatically — no script change needed.
+# Profile: QAT + LoRA distributed (recipes/qat_lora_finetune_distributed.py).
+# Differs from torchtune_distributed in two ways, both unsolvable by
+# overlay (see the qat_lora entry comments in examples_manifest.yaml):
+#
+#   1) torchao ABI: QATLoRALinear.__init__ (torchtune/modules/peft/lora.py:223)
+#      asserts isinstance(activation_qat_config, FakeQuantizeConfig), but
+#      torchao 0.12+ returns IntxFakeQuantizeConfig (MRO stops at
+#      FakeQuantizeConfigBase) from get_activation_fake_quantize_config()
+#      → assert fails. torchao 0.11.0 returns api.FakeQuantizeConfig AND
+#      still ships torchao.dtypes.nf4tensor.NF4Tensor (the v0.6.1
+#      common_utils.py:19 import chain), so downgrade after the probe in
+#      install_torchtune_pkg pinned 0.13.0.
+#   2) Model: the entry uses llama3_2/1B_qat_lora.yaml natively
+#      (lora_llama3_2_1b). Llama-3.2-1B-Instruct comes from the
+#      cache-seed ms plant (LLM-Research mirror → meta-llama hf_id hub
+#      layout), resolved via refs/main; no per-job download.
+setup_torchtune_qat_lora() {
+  ensure_torch_stack 2.11.0
+  install_torchtune_pkg
+  echo "pinning torchao==0.11.0 (QATLoRALinear FakeQuantizeConfig ABI)"
+  python -m pip install "torchao==0.11.0"
+  resolve_seed_envs meta-llama/Llama-3.2-1B-Instruct TT_LLAMA32_PATH
+}
+
+# Patch upstream bugs in main HEAD torchtune (and v0.6.1 distributed
+# recipes that hardcode a CUDA-only backend string + a v0.6.1
+# _broadcast_tensor that doesn't handle hccl). Each block has a
+# grep/string guard so the patch becomes a no-op on refs where the
+# anchor is absent — no script change needed if torchtune upstream
+# ships a fix. Operates on the SOURCE in $TARGET_ROOT before
+# `pip install` copies it to site-packages, so the installed files
+# inherit the fixes.
 patch_main_head_bugs() {
   local dpo="$TARGET_ROOT/torchtune/rlhf/loss/dpo.py"
   local quant="$TARGET_ROOT/torchtune/training/quantization.py"
+  local dist_py="$TARGET_ROOT/torchtune/training/_distributed.py"
 
   # Bug 1: torchtune/rlhf/loss/dpo.py:14 does
   #     T = TypeVar("T", bound=dataclass)
@@ -466,6 +429,176 @@ else:
     print("  already patched (race), skipping: %s" % p)
 PY
   fi
+
+  # Bug 3: torchtune/training/_distributed.py:_broadcast_tensor handles
+  # nccl by moving CPU tensors to CUDA before broadcast:
+  #     if dist.get_backend() == "nccl":
+  #         tensor = tensor.to(get_device("cuda"))
+  #     dist.broadcast(tensor, src=src, group=None)
+  # but does NOT handle hccl. On NPU, training.set_seed builds
+  # `rand_seed` on CPU (`torch.empty(1, dtype=torch.int64).random_()`)
+  # and `_broadcast_tensor` then hits hccl with a CPU tensor →
+  # RuntimeError: No backend type associated with device type cpu
+  # (CI run 35721666282 full_finetune_distributed leg). Verified fix on
+  # coder npu-3 (2026-09-22): mirror the nccl branch for hccl, moving
+  # CPU → NPU before broadcast and back after.
+  #
+  # Guard: `if dist.get_backend() == "nccl":` exists in both v0.6.1 and
+  # main HEAD; we extend this conditional rather than replace it, so
+  # the anchor remains valid regardless of upstream edits.
+  if [[ -f "$dist_py" ]] && grep -qF 'if dist.get_backend() == "nccl":' "$dist_py"; then
+    echo "patching $dist_py: extend _broadcast_tensor to handle hccl (CPU → NPU)"
+    _PATCH_DIST="$dist_py" python - <<'PY'
+import pathlib, os
+p = pathlib.Path(os.environ["_PATCH_DIST"])
+src = p.read_text()
+needle = '''        if dist.get_backend() == "nccl":
+            tensor = tensor.to(get_device("cuda"))
+        dist.broadcast(tensor, src=src, group=None)'''
+addition_template = '''        backend = dist.get_backend()
+        if backend == "nccl":
+            tensor = tensor.to(get_device("cuda"))
+        elif backend == "hccl":
+            # hccl backend only supports NPU tensors; torchtune creates
+            # rand_seed on CPU in training.set_seed, so move it to NPU
+            # before broadcast and back after. Mirrors the nccl branch
+            # above (per torch.distributed.pipelining × torch_npu c10d
+            # ABI gap memory). NPU-only patch — no effect on CUDA runs.
+            tensor = tensor.to(get_device("npu"))
+        dist.broadcast(tensor, src=src, group=None)'''
+if needle not in src:
+    raise SystemExit("anchor missing in _distributed.py: %s" % p)
+if 'elif backend == "hccl":' in src:
+    print("  already patched (race), skipping: %s" % p)
+else:
+    src = src.replace(needle, addition_template, 1)
+    p.write_text(src)
+    print("  patched: %s" % p)
+PY
+  fi
+
+  # Bug 4: 5 distributed recipes hardcode
+  #     init_process_group("cuda:nccl,cpu:gloo")
+  # at recipe_main() before constructing the recipe. The multi-backend
+  # string is parsed by torch.distributed as "use nccl for cuda tensors,
+  # gloo for cpu tensors" — and torch.distributed on the CI image
+  # (torch==2.11.0+cpu) does NOT ship the nccl backend → init raises
+  # "Distributed package doesn't have NCCL built in" (CI run 35721666282,
+  # lora_dpo_distributed / lora_finetune_distributed / full_dpo_distributed
+  # / knowledge_distillation_distributed legs; qat_distributed has the
+  # same call site at line 950, verified 2026-09-22 on coder npu-1 with
+  # the llama2/7B_qat_full.yaml overlay entry). On NPU we never use nccl
+  # or gloo anyway (hccl handles NPU tensors, world_size=1 means no
+  # actual collectives), so the simplest fix is to call init_process_group
+  # with just "hccl". Verified fix on coder npu-3 (2026-09-22): all 4
+  # recipes exit 0 after the patch; qat_distributed exit 0 on npu-1.
+  #
+  # Guard: anchor is the literal `init_process_group("cuda:nccl,cpu:gloo")`
+  # call site (one per recipe); the string is unique per file so a plain
+  # `grep -lF` is enough.
+  for recipe in lora_dpo_distributed.py lora_finetune_distributed.py \
+                full_dpo_distributed.py knowledge_distillation_distributed.py \
+                qat_distributed.py; do
+    local rp="$TARGET_ROOT/recipes/$recipe"
+    if [[ -f "$rp" ]] && grep -qF 'init_process_group("cuda:nccl,cpu:gloo")' "$rp"; then
+      echo "patching $rp: replace cuda:nccl,cpu:gloo → hccl (NPU-only)"
+      _PATCH_RECIPE="$rp" python - <<'PY'
+import pathlib, os
+p = pathlib.Path(os.environ["_PATCH_RECIPE"])
+src = p.read_text()
+needle = 'init_process_group("cuda:nccl,cpu:gloo")'
+replacement = 'init_process_group("hccl")'
+if needle not in src:
+    raise SystemExit("anchor missing in %s" % p)
+if replacement in src:
+    print("  already patched (race), skipping: %s" % p)
+else:
+    src = src.replace(needle, replacement, 1)
+    p.write_text(src)
+    print("  patched: %s" % p)
+PY
+    fi
+  done
+
+  # Bug 5: lora_dpo_distributed.py:691 and full_dpo_distributed.py:886
+  # both do:
+  #     num_tokens = 0
+  #     ...
+  #     num_tokens += torch.tensor(batch[0].numel())
+  # and later call
+  #     torch.distributed.all_reduce(num_tokens)
+  # `torch.tensor(...)` defaults to CPU, so `num_tokens` becomes a CPU
+  # scalar tensor — and the hccl backend only accepts NPU tensors for
+  # collectives (init succeeded thanks to Bug 4 patch, but the first
+  # all_reduce on a CPU tensor raises
+  # `RuntimeError: No backend type associated with device type cpu`,
+  # CI run 35729818620 lora_dpo_distributed + full_dpo_distributed
+  # legs). lora_finetune_distributed / full_finetune_distributed /
+  # knowledge_distillation_distributed use a different num_tokens
+  # expression (device tensor from `(batch["labels"] != ignore).sum()`
+  # after batch_to_device) so they're already on-device and don't need
+  # this patch.
+  #
+  # Fix: route the new tensor through self._device, mirroring how the
+  # other recipes keep it device-resident. Single line per file.
+  #
+  # Guard: `num_tokens += torch.tensor(batch[0].numel())` is the only
+  # literal match in the file (unique per recipe, line numbers shifted
+  # by upstream edits but the anchor string survives).
+  for recipe in lora_dpo_distributed.py full_dpo_distributed.py; do
+    local rp="$TARGET_ROOT/recipes/$recipe"
+    if [[ -f "$rp" ]] && grep -qF 'num_tokens += torch.tensor(batch[0].numel())' "$rp"; then
+      echo "patching $rp: route num_tokens += through self._device (NPU-only)"
+      _PATCH_RECIPE="$rp" python - <<'PY'
+import pathlib, os
+p = pathlib.Path(os.environ["_PATCH_RECIPE"])
+src = p.read_text()
+needle = 'num_tokens += torch.tensor(batch[0].numel())'
+replacement = 'num_tokens += torch.tensor(batch[0].numel(), device=self._device)'
+if needle not in src:
+    raise SystemExit("anchor missing in %s" % p)
+if replacement in src:
+    print("  already patched (race), skipping: %s" % p)
+else:
+    src = src.replace(needle, replacement, 1)
+    p.write_text(src)
+    print("  patched: %s" % p)
+PY
+    fi
+  done
+
+  # Bug 6: qat_lora_finetune_distributed.py:965 selects the backend from
+  # cfg.device:
+  #     init_process_group(backend="gloo" if cfg.device == "cpu" else "nccl")
+  # With device=npu the "nccl" branch is taken and torch 2.11.0+cpu has
+  # no nccl → "Distributed package doesn't have NCCL built in". Same
+  # class as Bug 4 but a different call-site shape (keyword arg + ternary
+  # instead of a literal multi-backend string), so it gets its own
+  # patch: replace the else-branch backend with "hccl" (the recipe's
+  # set_seed CPU→broadcast is then handled by the Bug 3 patch above).
+  # Verified 2026-09-22 on coder npu-1 (llama3_2/1B_qat_lora.yaml +
+  # torchao 0.11.0, exit 0).
+  #
+  # Guard: the ternary literal is unique in the file.
+  local qat_lora="$TARGET_ROOT/recipes/qat_lora_finetune_distributed.py"
+  if [[ -f "$qat_lora" ]] && grep -qF 'init_process_group(backend="gloo" if cfg.device == "cpu" else "nccl")' "$qat_lora"; then
+    echo "patching $qat_lora: nccl → hccl in init_process_group ternary (NPU-only)"
+    _PATCH_RECIPE="$qat_lora" python - <<'PY'
+import pathlib, os
+p = pathlib.Path(os.environ["_PATCH_RECIPE"])
+src = p.read_text()
+needle = 'init_process_group(backend="gloo" if cfg.device == "cpu" else "nccl")'
+replacement = 'init_process_group(backend="gloo" if cfg.device == "cpu" else "hccl")'
+if needle not in src:
+    raise SystemExit("anchor missing in %s" % p)
+if replacement in src:
+    print("  already patched (race), skipping: %s" % p)
+else:
+    src = src.replace(needle, replacement, 1)
+    p.write_text(src)
+    print("  patched: %s" % p)
+PY
+  fi
 }
 
 supported_profiles() {
@@ -488,8 +621,9 @@ export PIP_CONSTRAINT="$(cd "$HERE/.." && pwd)/constraints-npu.txt"
 # which triggers transformers.AutoConfig.from_pretrained("gpt2"). On coder pods
 # huggingface.co is unreachable (curl hang); on CI runner it's fine. Setting
 # HF_ENDPOINT=https://hf-mirror.com routes both cases through the China mirror
-# for the gpt2 config only (the torchtune model itself comes from ModelScope
-# via TT_MODEL_PATH, so this doesn't affect Qwen2.5-0.5B-Instruct downloads).
+# for the gpt2 config only (the torchtune model itself comes from cache-seed
+# into the HF hub cache, so this doesn't affect Qwen2.5-0.5B-Instruct — that
+# asset's resolve_seed_envs lookup is local-cache only).
 # CI cluster has direct HF egress; on direct egress the env is harmless (just
 # changes the endpoint). Idempotent: if the runner already exports HF_ENDPOINT
 # the keep-existing behavior lets operators override the mirror.
@@ -501,7 +635,6 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 
 select_pip_index
 python -m pip install -U pip setuptools wheel
-ensure_torch_stack
 prepare_fixtures
 
 "setup_${PROFILE}"

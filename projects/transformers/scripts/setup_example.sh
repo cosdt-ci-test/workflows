@@ -21,7 +21,7 @@ case "$PROFILE" in
     DEPS=(accelerate datasets evaluate seqeval)
     ;;
   lm)
-    DEPS=(accelerate datasets)
+    DEPS=(accelerate datasets evaluate)
     ;;
   seq2seq)
     DEPS=(accelerate datasets evaluate sacrebleu rouge-score nltk)

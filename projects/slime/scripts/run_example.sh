@@ -19,7 +19,18 @@ EXAMPLE_REL="$1"
 TARGET_ROOT="${TARGET_ROOT:?TARGET_ROOT is required}"
 CI_OUTPUT_DIR="${CI_OUTPUT_DIR:?CI_OUTPUT_DIR is required}"
 EXAMPLES_ROOT="${EXAMPLES_ROOT:-$TARGET_ROOT}"
+GITHUB_WORKSPACE="${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is required}"
+DEPS_ROOT="$GITHUB_WORKSPACE/deps"
+SLIME_PROJECT_ENV="$DEPS_ROOT/slime-example.env"
+if [[ -f "$SLIME_PROJECT_ENV" ]]; then
+  # GITHUB_ENV normally carries values between Actions steps. Keep a
+  # workspace-local copy as a fallback for container runners where that
+  # file-command handoff was not reflected in the next step's environment.
+  # shellcheck disable=SC1090
+  source "$SLIME_PROJECT_ENV"
+fi
 SLIME_FORK_ROOT="${SLIME_FORK_ROOT:?SLIME_FORK_ROOT was not exported by setup}"
+export PYTHONPATH="$DEPS_ROOT/sglang/python:$SLIME_FORK_ROOT:$DEPS_ROOT/Megatron-LM:$DEPS_ROOT/Megatron-Bridge/src:${PYTHONPATH:-}"
 
 EXAMPLE_PATH="$EXAMPLES_ROOT/$EXAMPLE_REL"
 if [[ ! -f "$EXAMPLE_PATH" ]]; then
@@ -121,6 +132,7 @@ export HYDRA_FULL_ERROR=1
 # if one is set.
 export WANDB_MODE=offline
 export PYTHONUNBUFFERED=1
+export TRANSFORMERS_VERBOSITY="${TRANSFORMERS_VERBOSITY:-error}"
 
 # run-id derived ray dashboard port avoids collisions between parallel
 # matrix legs that share a runner.

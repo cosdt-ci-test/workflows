@@ -28,15 +28,24 @@ slime 上游 `THUDM/slime` 发布 release（当前 v0.3.2）但没有任何昇�
   sglang v0.5.13 源码（pyproject_npu.toml）→ torch/torch_npu 2.10.0、torchvision 0.25.0 →
   sgl-kernel-npu `2026.08.21`（py312-cann9.1.0-910b-aarch64，GitHub release 直下）→
   mbridge@89eb1088 → Megatron-Bridge@dev_rl → Megatron-LM@1dcf0dafa →
-  MegatronAdaptor@f707a3b6 → TransformerEngineNPU@47d60449 + RMSNorm fix@cecf4a2a → triton-ascend 3.2.1 →
-  transformers 5.3.0 → `pip install -e` fork → `git am docker/npu_patch/v0.3.0/*` 六组补丁。
-  fork 固定的 TransformerEngineNPU `47d60449` 会在 Megatron 通过旧接口传入
-  `hidden_size` 时过早初始化 RMSNorm，导致 `normalized_shape=None`，`torch_dist`
-  转换无法构建最后一个 pipeline rank。setup 保留该基线，只 cherry-pick 官方修复
-  `cecf4a2a`（GitCode [MR !86](https://gitcode.com/Ascend/TransformerEngineNPU/merge_requests/86)），
-  避免带入其间 17 个无关提交。
+  MegatronAdaptor@f707a3b6 → TransformerEngineNPU@47d60449 → triton-ascend 3.2.1 →
+  Transformers（fork requirements 未 pin；#8 实际解析为 5.8.1）→ `pip install -e` fork →
+  按 fork 的真实目录名应用 `docker/npu_patch/v0.3.0/` 补丁。
+  #8 日志中 `Megatron-LM`、`TransformerEngineNPU`、`Megatron-Bridge` 三组补丁因
+  仓库名与补丁目录名不同而被静默跳过；setup 现显式映射到 `megatron`、
+  `transformer_engine_npu`、`megatron-bridge`，并在必需补丁缺失时立即失败。TE 补丁
+  本身包含 RMSNorm 初始化修复，因此不再额外 cherry-pick 重复改动。
 - 外部源码克隆失败时的回退链：sglang / Megatron-LM 走 gitcode `gh_mirrors` 镜像；
   MegatronAdaptor / TransformerEngineNPU / fork 本体原生就在 gitcode。
+
+## 日志与步骤间配置
+
+- #8 完整日志超过 14 MB，其中约 97% 是 Transformers 5.8.1 在 4 个转换进程中重复
+  输出的 `Accessing ... image_processing_*_fast` 兼容别名 warning。setup 在转换时及
+  后续运行步骤设 `TRANSFORMERS_VERBOSITY=error`，压掉重复 warning 并保留错误级日志。
+- setup 同时把 fork、模型、转换 checkpoint、fixture 等路径写入 workspace 下的
+  `deps/slime-example.env`；运行步骤先 source 此文件，再使用 GitHub 的 `GITHUB_ENV`
+  传递值，避免容器 runner 未传递 file-command 环境变量时直接失败。
 
 ## 缓存事实
 

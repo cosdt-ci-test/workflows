@@ -35,15 +35,12 @@ ENTRY_TRAIN_SCRIPTS = {
 }
 
 # Pin table copied from the fork's Dockerfile ARGs and quick_install.sh.
-# TransformerEngineNPU keeps the fork base and cherry-picks the targeted
-# RMSNorm constructor fix from TransformerEngineNPU!86.
 FORK_PINS = {
     "sglang_ref": "v0.5.13",
     "megatron_commit_prefix": "1dcf0dafa",
     "mbridge_commit_prefix": "89eb1088",
     "megatron_adaptor_commit": "f707a3b6",
     "transformer_engine_npu_commit": "47d60449",
-    "transformer_engine_npu_rmsnorm_fix_commit": "cecf4a2a",
     "torch": "2.10.0",
     "torch_npu": "2.10.0",
     "torchvision": "0.25.0",
@@ -135,7 +132,6 @@ def test_setup_pins_match_fork_recipe() -> None:
         f"{FORK_PINS['mbridge_commit_prefix']}",
         FORK_PINS["megatron_adaptor_commit"],
         FORK_PINS["transformer_engine_npu_commit"],
-        FORK_PINS["transformer_engine_npu_rmsnorm_fix_commit"],
         f"torch=={FORK_PINS['torch']}",
         f"torch_npu=={FORK_PINS['torch_npu']}",
         f"torchvision=={FORK_PINS['torchvision']}",
@@ -146,7 +142,10 @@ def test_setup_pins_match_fork_recipe() -> None:
         FORK_PINS["board_tag"],
     ):
         assert needle in setup, f"setup_example.sh missing fork pin: {needle}"
-    assert 'cherry-pick "$TRANSFORMER_ENGINE_NPU_RMSNORM_FIX_COMMIT"' in setup
+    assert '"TransformerEngineNPU:transformer_engine_npu"' in setup
+    assert '"Megatron-LM:megatron"' in setup
+    assert '"Megatron-Bridge:megatron-bridge"' in setup
+    assert 'required NPU patch directory missing:' in setup
 
 
 def test_run_example_exports_npu_contract() -> None:

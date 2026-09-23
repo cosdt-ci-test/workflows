@@ -25,11 +25,6 @@ readonly MEGATRON_COMMIT=1dcf0dafa884ad52ffb243625717a3471643e087
 readonly MBRIDGE_COMMIT=89eb10887887bc74853f89a4de258c0702932a1c
 readonly MEGATRON_ADAPTOR_COMMIT=f707a3b6
 readonly TRANSFORMER_ENGINE_NPU_COMMIT=47d60449
-# The fork pin calls the RMSNorm parent constructor before resolving the
-# legacy hidden_size argument. Apply only Ascend's targeted fix from
-# TransformerEngineNPU!86; checking out that newer commit directly would
-# also pull in 17 unrelated commits.
-readonly TRANSFORMER_ENGINE_NPU_RMSNORM_FIX_COMMIT=cecf4a2a
 readonly SGL_KERNEL_NPU_VERSION=2026.08.21
 readonly SGL_KERNEL_NPU_URL="https://github.com/sgl-project/sgl-kernel-npu/releases/download/${SGL_KERNEL_NPU_VERSION}/sgl-kernel-npu-${SGL_KERNEL_NPU_VERSION}-torch2.10.0-py312-cann9.1.0-910b-aarch64.zip"
 readonly SLIME_FORK_URL=https://gitcode.com/Ascend/slime-ascend.git
@@ -112,14 +107,20 @@ append_github_env() {
   printf '%s\n' "$1" >> "$GITHUB_ENV"
 }
 
+append_project_env() {
+  local key="${1%%=*}" value="${1#*=}"
+  append_github_env "$1"
+  printf 'export %s=%q\n' "$key" "$value" >> "$SLIME_PROJECT_ENV"
+}
+
 # ----- step 1: the Ascend fork (installed package + execution root) -----
 clone_slime_fork() {
   git_clone "$SLIME_FORK_URL" '' "$SLIME_FORK_ROOT" --depth 1
   local sha
   sha=$(git -C "$SLIME_FORK_ROOT" rev-parse HEAD)
   echo "slime-ascend fork HEAD: $sha"
-  append_github_env "SLIME_FORK_HEAD_SHA=$sha"
-  append_github_env "SLIME_FORK_ROOT=$SLIME_FORK_ROOT"
+  append_project_env "SLIME_FORK_HEAD_SHA=$sha"
+  append_project_env "SLIME_FORK_ROOT=$SLIME_FORK_ROOT"
 }
 
 # ----- step 2: sglang from source with the fork's NPU pyproject -----
@@ -130,7 +131,7 @@ install_sglang_source() {
   mv "$dest/python/pyproject_npu.toml" "$dest/python/pyproject.toml"
   python -m pip install -e "$dest/python[all_npu]"
   # sglang's python/ package dir must be importable by the launcher.
-  append_github_env "PYTHONPATH=$dest/python:${SLIME_FORK_ROOT}:\${PYTHONPATH}"
+  append_project_env "PYTHONPATH=$dest/python:${SLIME_FORK_ROOT}:$DEPS_ROOT/Megatron-LM:$DEPS_ROOT/Megatron-Bridge/src:${PYTHONPATH:-}"
 }
 
 # ----- step 3: prebuilt NPU kernel wheels (torch_memory_saver / sgl_kernel_npu / deep_ep) -----
@@ -197,8 +198,6 @@ install_megatron_stack() {
   dest="$DEPS_ROOT/TransformerEngineNPU"
   git_clone "https://gitcode.com/Ascend/TransformerEngineNPU.git" '' "$dest"
   git -C "$dest" checkout "$TRANSFORMER_ENGINE_NPU_COMMIT"
-  git -C "$dest" -c user.name=temp -c user.email=temp@example.com \
-    cherry-pick "$TRANSFORMER_ENGINE_NPU_RMSNORM_FIX_COMMIT"
   python -m pip install -e "$dest"
 }
 
@@ -223,12 +222,35 @@ apply_npu_patches() {
   # depend on $HOME being writable inside the container.
   export GIT_AUTHOR_NAME=temp GIT_AUTHOR_EMAIL=temp@example.com
   export GIT_COMMITTER_NAME=temp GIT_COMMITTER_EMAIL=temp@example.com
-  local repo patches
-  for repo in sglang Megatron-LM MegatronAdaptor TransformerEngineNPU Megatron-Bridge mbridge; do
-    patches="$patch_root/${repo}"
-    [[ -d "$patches" ]] || { echo "no NPU patches for $repo, skipping"; continue; }
-    echo "applying $(ls "$patches" | wc -l) NPU patches to $repo"
-    git -C "$DEPS_ROOT/$repo" am --whitespace=fix "$patches"/*
+  local repo patch_dir patches
+  local -a patch_specs=(
+    "sglang:sglang"
+    "Megatron-LM:megatron"
+    "TransformerEngineNPU:transformer_engine_npu"
+    "Megatron-Bridge:megatron-bridge"
+    "mbridge:mbridge"
+  )
+  for patch_spec in "${patch_specs[@]}"; do
+    repo="${patch_spec%%:*}"
+    patch_dir="${patch_spec#*:}"
+    patches="$patch_root/$patch_dir"
+    if [[ ! -d "$patches" ]]; then
+      echo "required NPU patch directory missing: $patches" >&2
+      return 1
+    fi
+    shopt -s nullglob
+    local -a patch_files=("$patches"/*)
+    shopt -u nullglob
+    if ((${#patch_files[@]} == 0)); then
+      echo "required NPU patch directory is empty: $patches" >&2
+      return 1
+    fi
+    if [[ ! -d "$DEPS_ROOT/$repo/.git" ]]; then
+      echo "patch target repository missing: $DEPS_ROOT/$repo" >&2
+      return 1
+    fi
+    echo "applying ${#patch_files[@]} NPU patches from $patch_dir to $repo"
+    git -C "$DEPS_ROOT/$repo" am --whitespace=fix "${patch_files[@]}"
   done
 }
 
@@ -280,8 +302,6 @@ local = snapshot_download(
 print("model snapshot:", local)
 with open(model_path_file, "w") as fh:
     fh.write(local + "\n")
-with open(os.environ["GITHUB_ENV"], "a") as fh:
-    fh.write(f"SLIME_MODEL_PATH={local}\n")
 PY
   local model_dir
   model_dir=$(cat "$model_path_file")
@@ -290,6 +310,7 @@ PY
     exit 1
   fi
   echo "using HF checkpoint: $model_dir"
+  append_project_env "SLIME_MODEL_PATH=$model_dir"
   local torch_dist="$DEPS_ROOT/weights-MA/Qwen2.5-0.5B-Instruct_torch_dist"
   mkdir -p "$DEPS_ROOT/weights-MA"
   if [[ ! -d "$torch_dist" ]]; then
@@ -302,6 +323,11 @@ PY
       # MODEL_ARGS comes from scripts/models/qwen2.5-0.5B.sh (the same
       # contract as the fork's command_utils.convert_checkpoint).
       # shellcheck disable=SC2086
+      # Transformers 5.8.x emits one compatibility warning per lazy alias
+      # lookup; thousands of aliases multiplied by four torchrun ranks made
+      # setup logs exceed 12 MB. Keep errors visible while suppressing that
+      # repetitive library warning during conversion.
+      export TRANSFORMERS_VERBOSITY=error
       torchrun --nproc-per-node 4 \
         tools/convert_hf_to_torch_dist.py \
         ${MODEL_ARGS[@]} \
@@ -311,8 +337,8 @@ PY
   else
     echo "torch_dist checkpoint already present: $torch_dist"
   fi
-  append_github_env "SLIME_TORCH_DIST_PATH=$torch_dist"
-  append_github_env "SLIME_FIXTURE_JSONL=$FIXTURE_DIR/ci_dapo_16.jsonl"
+  append_project_env "SLIME_TORCH_DIST_PATH=$torch_dist"
+  append_project_env "SLIME_FIXTURE_JSONL=$FIXTURE_DIR/ci_dapo_16.jsonl"
 }
 
 supported_profiles() {
@@ -330,9 +356,16 @@ FIXTURE_DIR="${FIXTURE_DIR:-$GITHUB_WORKSPACE/workflows/projects/slime/fixtures}
 GITHUB_WORKSPACE="${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is required}"
 GITHUB_ENV="${GITHUB_ENV:?GITHUB_ENV is required}"
 DEPS_ROOT="$GITHUB_WORKSPACE/deps"
+SLIME_PROJECT_ENV="$DEPS_ROOT/slime-example.env"
 SLIME_FORK_ROOT="$DEPS_ROOT/slime-ascend"
 export SLIME_FORK_ROOT
 mkdir -p "$DEPS_ROOT"
+: > "$SLIME_PROJECT_ENV"
+
+# Keep the verbosity setting for the separate run step as well. This only
+# changes Transformers' logger level; shell errors and other libraries stay
+# visible.
+append_project_env "TRANSFORMERS_VERBOSITY=error"
 
 # Vendor CANN/ATB env scripts assume a login shell and reference optional
 # variables (e.g. $ZSH_VERSION) without ${VAR:-} guards. Under this
@@ -368,4 +401,3 @@ apply_npu_patches
 
 "setup_${PROFILE}"
 verify_installed_runtime
-

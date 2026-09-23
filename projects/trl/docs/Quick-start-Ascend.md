@@ -40,16 +40,16 @@ python -c "import trl; print('trl', trl.__version__)"
 trl xxx
 ```
 
-## 使用样例：最小 SFT LoRA 后训练
+## 示例一：SFT LoRA 后训练
 
 用 Qwen2.5-0.5B-Instruct 和 ModelScope 的 `HuggingFaceH4/ultrafeedback_binarized` SFT 子集进行 5 步 LoRA 微调，模型与数据集会自动下载，适配器保存到 `output/trl-sft-lora`。
 
-安装 SFT / DPO 示例依赖：
+安装示例依赖：
 
 ```shell #test-setup
 python -m pip install peft "transformers>=4.56.2,<5.0" datasets "modelscope==1.37.0"
 ```
-
+运行 SFT 训练脚本：
 ```python #test id="sft-lora"
 import os
 import shutil
@@ -103,7 +103,7 @@ print("LoRA adapter saved to: output/trl-sft-lora")
 print("TRL_SFT_DONE")
 ```
 
-输出结果类似如下（训练日志走 stderr，stdout 只保留首尾标记）：
+输出结果类似如下：
 
 ```shell #test-result id="sft-lora"
 ...
@@ -111,7 +111,7 @@ LoRA adapter saved to: output/trl-sft-lora
 TRL_SFT_DONE
 ```
 
-## 切换方法：偏好优化 DPO LoRA
+## 示例二：偏好优化 DPO LoRA
 
 再用相同模型和数据集运行 3 步 DPO LoRA，适配器保存到 `output/trl-dpo-lora`。
 
@@ -180,7 +180,7 @@ print("LoRA adapter saved to: output/trl-dpo-lora")
 print("TRL_DPO_DONE")
 ```
 
-输出结果类似如下（训练日志走 stderr，stdout 只保留首尾标记）：
+输出结果类似如下：
 
 ```shell #test-result id="dpo-lora"
 ...
@@ -188,4 +188,4 @@ LoRA adapter saved to: output/trl-dpo-lora
 TRL_DPO_DONE
 ```
 
-更多方法（GRPO / PPO / Reward / KTO 等）入口形态一致，切换对应的 `Trainer` / `Config` 即可；GRPO 依赖 vLLM 生成，不在本示例运行。更多用法见 [TRL examples](https://github.com/huggingface/trl/tree/main/examples)。
+更多方法（GRPO / PPO / Reward / KTO 等）见 [TRL examples](https://github.com/huggingface/trl/tree/main/examples)。

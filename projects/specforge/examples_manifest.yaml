@@ -48,7 +48,7 @@ supported:
       - model.target_model_path=${SPECFORGE_MODEL_PATH}
       # Qwen3.5-4B 是 hybrid Mamba/GDN，文本 decoder 嵌在 model.language_model.*；
       # smoke train 的 FSDP 初始化要从这个嵌套路径拿 embed，否则会拿 None。
-      - model.embedding_key="model.language_model.embed_tokens.weight"
+      - model.embedding_key=model.language_model.embed_tokens.weight
       # run_id 是 dflash consumer 拿 SQLite WAL + mooncake store_id 的命名空间；
       # recipe 默认 qwen3.5-4b-dflash-npu-online，CI 输出目录要清旧日志避免
       # _claim_fresh_control_path 拒绝继续跑。直接复用 recipe 默认值即可，
@@ -81,7 +81,7 @@ supported:
       - model.target_model_path=${SPECFORGE_MODEL_PATH}
       # recipe 把 embedding_key 写成了 model.embed_tokens.weight；Qwen3.5-4B 是
       # hybrid Mamba/GDN，文本 decoder 嵌在 model.language_model.* 下。
-      - model.embedding_key="model.language_model.embed_tokens.weight"
+      - model.embedding_key=model.language_model.embed_tokens.weight
     timeout_minutes: 180
 
   - path: examples/configs/online/disaggregated/external/qwen3-4b-dspark-disaggregated.yaml
@@ -184,11 +184,23 @@ supported:
 
   # ===== managed-local dflash：单个 `specforge train` 拥有全栈（mooncake +
   # capture server + producer + consumer 由 launch_plan supervisor 起），
-  # run_example.sh 对 managed-local/ 路径不起外部服务。recipe 锁死的
+  # run_example.sh 对 managed-local/ 路径不起外部服务，但 supervisor 的
+  # capture server 是本进程子进程、继承 env——run_example.sh 需先 export
+  # atb lib（Qwen3.5 族 lazy-load libatb.so，否则 server 在首个
+  # _npu_reshape_and_cache 处 OSError 退出，status -9）。recipe 锁死的
   # trainer 卡数通过结构化 overlay 压缩（apply_overrides 对 [...] 走
   # yaml.safe_load）：nproc_per_node=1 + trainer_cuda_visible_devices=["1"]，
-  # capture server 留卡 0。4B 已端到端验证，8B 的 capture 需
-  # mem_fraction_static=0.65（0.5 会 OOM）。=====
+  # capture server 留卡 0。8B 的 capture 需 mem_fraction_static=0.65（0.5
+  # 会 OOM）。
+  # 注意 overlay 传递链（run 35811075823 两腿失败的根因，2026-09-23 修复）：
+  # run_example.sh 的 expand_overlay 曾用 shlex.split 剥掉 item 内的双引号、
+  # eval "EXTRA_ARGS=( ... )" 的双引号包裹层又会吞掉 token 内的双引号——
+  # ["1"] 变 [1]（int，List[str] 拒绝）、{"port":30000,...} 变 YAML flow
+  # {port:30000,...}（无空格冒号全解析成单个 key）。现改为每 item 原样
+  # 一个 argv 元素 + 无包裹 eval，结构化 overlay 经真实 load_config 验证；
+  # 4B managed-local 全链路（overlay→load_config→supervisor 全栈）在 coder
+  # 2x910B4 以 CI 同款调用端到端跑通（step 1 + 干净退出），此前该 entry
+  # 在 CI 从未绿过（先撞配置解析，再会撞 libatb）。=====
   - path: examples/configs/online/disaggregated/managed-local/qwen3.5-4b-dflash-disaggregated-npu.yaml
     profile: specforge
     runner: linux-aarch64-a2-4

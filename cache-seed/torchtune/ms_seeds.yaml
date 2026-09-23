@@ -33,3 +33,13 @@ seeds:
   - ms_id: Qwen/Qwen2.5-1.5B-Instruct
     hf_id: Qwen/Qwen2.5-1.5B-Instruct
     kind: model
+  # QAT + LoRA distributed（recipes/qat_lora_finetune_distributed.py）
+  # 用 Llama-3.2-1B：Qwen2.5 attention 带 bias，QATLoRALinear 强制
+  # use_bias=False 会静默丢 bias（load_from_full_model_state_dict 撞
+  # q_proj.bias missing）；Llama-3.2 无 attention bias（hidden=2048 也
+  # 整除 groupsize=256）。MS 镜像 LLM-Research 在 HF 侧没有同名 repo，
+  # hf_id 用 meta-llama 官方 id 只为拿 refs/main 的真实 sha + 统一 hub
+  # 布局（snapshot 内容仍来自 MS 镜像，含 original/tokenizer.model）。
+  - ms_id: LLM-Research/Llama-3.2-1B-Instruct
+    hf_id: meta-llama/Llama-3.2-1B-Instruct
+    kind: model

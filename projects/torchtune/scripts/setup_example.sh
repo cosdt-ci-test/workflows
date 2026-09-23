@@ -322,6 +322,30 @@ setup_torchtune_ppo() {
   fi
 }
 
+# Profile: QAT + LoRA distributed (recipes/qat_lora_finetune_distributed.py).
+# Differs from torchtune_distributed in two ways, both unsolvable by
+# overlay (see the qat_lora entry comments in examples_manifest.yaml):
+#
+#   1) torchao ABI: QATLoRALinear.__init__ (torchtune/modules/peft/lora.py:223)
+#      asserts isinstance(activation_qat_config, FakeQuantizeConfig), but
+#      torchao 0.12+ returns IntxFakeQuantizeConfig (MRO stops at
+#      FakeQuantizeConfigBase) from get_activation_fake_quantize_config()
+#      → assert fails. torchao 0.11.0 returns api.FakeQuantizeConfig AND
+#      still ships torchao.dtypes.nf4tensor.NF4Tensor (the v0.6.1
+#      common_utils.py:19 import chain), so downgrade after the probe in
+#      install_torchtune_pkg pinned 0.13.0.
+#   2) Model: the entry uses llama3_2/1B_qat_lora.yaml natively
+#      (lora_llama3_2_1b). Llama-3.2-1B-Instruct comes from the
+#      cache-seed ms plant (LLM-Research mirror → meta-llama hf_id hub
+#      layout), resolved via refs/main; no per-job download.
+setup_torchtune_qat_lora() {
+  ensure_torch_stack 2.11.0
+  install_torchtune_pkg
+  echo "pinning torchao==0.11.0 (QATLoRALinear FakeQuantizeConfig ABI)"
+  python -m pip install "torchao==0.11.0"
+  resolve_seed_envs meta-llama/Llama-3.2-1B-Instruct TT_LLAMA32_PATH
+}
+
 # Patch upstream bugs in main HEAD torchtune (and v0.6.1 distributed
 # recipes that hardcode a CUDA-only backend string + a v0.6.1
 # _broadcast_tensor that doesn't handle hccl). Each block has a
@@ -453,7 +477,7 @@ else:
 PY
   fi
 
-  # Bug 4: 4 distributed recipes hardcode
+  # Bug 4: 5 distributed recipes hardcode
   #     init_process_group("cuda:nccl,cpu:gloo")
   # at recipe_main() before constructing the recipe. The multi-backend
   # string is parsed by torch.distributed as "use nccl for cuda tensors,
@@ -461,17 +485,20 @@ PY
   # (torch==2.11.0+cpu) does NOT ship the nccl backend → init raises
   # "Distributed package doesn't have NCCL built in" (CI run 35721666282,
   # lora_dpo_distributed / lora_finetune_distributed / full_dpo_distributed
-  # / knowledge_distillation_distributed legs). On NPU we never use nccl
+  # / knowledge_distillation_distributed legs; qat_distributed has the
+  # same call site at line 950, verified 2026-09-22 on coder npu-1 with
+  # the llama2/7B_qat_full.yaml overlay entry). On NPU we never use nccl
   # or gloo anyway (hccl handles NPU tensors, world_size=1 means no
   # actual collectives), so the simplest fix is to call init_process_group
   # with just "hccl". Verified fix on coder npu-3 (2026-09-22): all 4
-  # recipes exit 0 after the patch.
+  # recipes exit 0 after the patch; qat_distributed exit 0 on npu-1.
   #
   # Guard: anchor is the literal `init_process_group("cuda:nccl,cpu:gloo")`
   # call site (one per recipe); the string is unique per file so a plain
   # `grep -lF` is enough.
   for recipe in lora_dpo_distributed.py lora_finetune_distributed.py \
-                full_dpo_distributed.py knowledge_distillation_distributed.py; do
+                full_dpo_distributed.py knowledge_distillation_distributed.py \
+                qat_distributed.py; do
     local rp="$TARGET_ROOT/recipes/$recipe"
     if [[ -f "$rp" ]] && grep -qF 'init_process_group("cuda:nccl,cpu:gloo")' "$rp"; then
       echo "patching $rp: replace cuda:nccl,cpu:gloo → hccl (NPU-only)"
@@ -539,6 +566,39 @@ else:
 PY
     fi
   done
+
+  # Bug 6: qat_lora_finetune_distributed.py:965 selects the backend from
+  # cfg.device:
+  #     init_process_group(backend="gloo" if cfg.device == "cpu" else "nccl")
+  # With device=npu the "nccl" branch is taken and torch 2.11.0+cpu has
+  # no nccl → "Distributed package doesn't have NCCL built in". Same
+  # class as Bug 4 but a different call-site shape (keyword arg + ternary
+  # instead of a literal multi-backend string), so it gets its own
+  # patch: replace the else-branch backend with "hccl" (the recipe's
+  # set_seed CPU→broadcast is then handled by the Bug 3 patch above).
+  # Verified 2026-09-22 on coder npu-1 (llama3_2/1B_qat_lora.yaml +
+  # torchao 0.11.0, exit 0).
+  #
+  # Guard: the ternary literal is unique in the file.
+  local qat_lora="$TARGET_ROOT/recipes/qat_lora_finetune_distributed.py"
+  if [[ -f "$qat_lora" ]] && grep -qF 'init_process_group(backend="gloo" if cfg.device == "cpu" else "nccl")' "$qat_lora"; then
+    echo "patching $qat_lora: nccl → hccl in init_process_group ternary (NPU-only)"
+    _PATCH_RECIPE="$qat_lora" python - <<'PY'
+import pathlib, os
+p = pathlib.Path(os.environ["_PATCH_RECIPE"])
+src = p.read_text()
+needle = 'init_process_group(backend="gloo" if cfg.device == "cpu" else "nccl")'
+replacement = 'init_process_group(backend="gloo" if cfg.device == "cpu" else "hccl")'
+if needle not in src:
+    raise SystemExit("anchor missing in %s" % p)
+if replacement in src:
+    print("  already patched (race), skipping: %s" % p)
+else:
+    src = src.replace(needle, replacement, 1)
+    p.write_text(src)
+    print("  patched: %s" % p)
+PY
+  fi
 }
 
 supported_profiles() {

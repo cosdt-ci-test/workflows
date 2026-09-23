@@ -52,10 +52,11 @@ supported:
     profile: areal-vlm-grpo
     runner: linux-aarch64-a2-1
     npu_devices: '0'
-    # 底座：官方 vllm-ascend v0.23.0 应用镜像（CANN 9.0.1 / py3.11，自带 torch 2.10
-    # / torch_npu 2.10.0.post2 / vLLM 0.23.0 / vLLM-Ascend releases/v0.23.0）；
-    # 其余（Megatron / MindSpeed / AReaL 依赖 / Megatron-Bridge）由 setup_example.sh 装。
-    image: swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/vllm-ascend/vllm-ascend:v0.23.0
+    # 底座：AReaL 官方 NPU 镜像（CANN 9.0.1 / py3.11，自带完整栈：torch 2.10 /
+    # torch_npu 2.10.0.post2 / vLLM 0.23.0 / vLLM-Ascend releases/v0.23.0 /
+    # Megatron / MindSpeed / Megatron-Bridge / AReaL 依赖）；setup_example.sh
+    # 只装待测 AReaL 源码 + 预下模型。
+    image: ghcr.io/hwvanici/areal_npu:v1.0.5-a2
     overlay_args:
       - --config examples/vlm_npu/qwen2_5_vl_3b_geometry3k_grpo.yaml
       - cluster.n_gpus_per_node=1
@@ -77,7 +78,7 @@ supported:
     profile: areal-vlm-mt-grpo
     runner: linux-aarch64-a2-1
     npu_devices: '0'
-    image: swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/vllm-ascend/vllm-ascend:v0.23.0
+    image: ghcr.io/hwvanici/areal_npu:v1.0.5-a2
     overlay_args:
       - --config examples/multi_turn_vlm/qwen3_vl_2b_geometry3k_grpo_mt.yaml
       - scheduler.type=local

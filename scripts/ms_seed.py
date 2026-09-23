@@ -91,6 +91,15 @@ def plant(ms_id: str, hf_id: str, kind: str, root: Path,
 
     model_cache = Path(os.environ.get(
         "MODELSCOPE_CACHE", os.path.expanduser("~/.cache/modelscope")))
+    # CI runner containers start with no /root/.cache/modelscope; the
+    # default cache path returned by os.path.expanduser is not created by
+    # modelscope itself, so snapshot_download fails mid-transfer when the
+    # ._____temp staging dir cannot be opened (FileDownloadError on the
+    # *.safetensors file). Same mkdir-p safeguard as torchtune's old
+    # setup_example.sh; peft/accelerate cold-cache dispatches have not
+    # been observed failing here, but the cost of the no-op on hot
+    # caches (env.sh-exported MODELSCOPE_CACHE path) is zero.
+    model_cache.mkdir(parents=True, exist_ok=True)
     src = Path(snapshot_download(
         ms_id, cache_dir=str(model_cache), repo_type=kind,
         allow_patterns=allow_patterns,
@@ -103,6 +112,13 @@ def plant(ms_id: str, hf_id: str, kind: str, root: Path,
     n_bytes = 0
     for item in src.rglob("*"):
         if not item.is_file():
+            continue
+        if item.name == "dataset_infos.json":
+            # datasets 3.x deprecates dataset_infos.json (replaced by the
+            # README YAML frontmatter). ModelScope mirrors often carry a
+            # stale 1.x/2.x copy whose features lack `dtype` — datasets
+            # 3.x then crashes parsing it (Value missing dtype). Drop it
+            # so load_dataset falls back to the README config instead.
             continue
         dest = snap_dir / item.relative_to(src)
         dest.parent.mkdir(parents=True, exist_ok=True)

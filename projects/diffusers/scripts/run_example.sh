@@ -124,6 +124,38 @@ PY
 
 ensure_passthrough "$LAUNCH_PATH"
 
+# Visible NPU count for the multi-card launcher.
+count_npus() {
+  "$PYTHON" -c "import torch, torch_npu; print(torch.npu.device_count())"
+}
+
+# Materialize an accelerate+DeepSpeed launch config whose num_processes follows
+# the visible NPU count. ZeRO-3 shards params/grads/optimizer across the cards,
+# so entries that OOM on a single card (e.g. full SDXL fine-tune) can run on
+# a2-2 / a2-4. LAUNCHER=accelerate-deepspeed.
+prepare_deepspeed_configs() {
+  local ds_json="${PROJECT_ROOT:?PROJECT_ROOT is required}/configs/ds_zero3.json"
+  local cfg_dir="$GITHUB_WORKSPACE/ci_patch"
+  mkdir -p "$cfg_dir"
+  local npus
+  npus=$(count_npus)
+  cat > "$cfg_dir/accelerate-deepspeed.yml" <<EOF
+compute_environment: LOCAL_MACHINE
+deepspeed_config:
+  deepspeed_config_file: $ds_json
+  zero3_init_flag: true
+distributed_type: DEEPSPEED
+machine_rank: 0
+main_training_function: main
+num_machines: 1
+num_processes: $npus
+rdzv_backend: static
+same_network: true
+use_cpu: false
+EOF
+  echo "deepspeed launch config: $cfg_dir/accelerate-deepspeed.yml (ds: $ds_json, $npus npu(s))"
+}
+
 # Shell examples run with cwd = the example's directory; Python entry
 # points run with cwd = the target root (diffusers examples resolve
 # their own paths relative to the repo root).
@@ -134,10 +166,28 @@ case "$LAUNCH_PATH" in
     ;;
   *)
     cd "$TARGET_ROOT"
-    # Training examples expect the upstream entrypoint. Single process;
-    # the script's own --mixed_precision controls the precision, so the
-    # launcher's is pinned to `no` to avoid a conflict.
-    accelerate launch --num_processes 1 --num_machines 1 \
-      --mixed_precision no "$LAUNCH_PATH" "${EXTRA_ARGS[@]}"
+    # Some examples import a package that sits next to them (e.g.
+    # examples/research_projects/ip_adapter imports `ip_adapter.ip_adapter`);
+    # add the example's own directory to PYTHONPATH.
+    export PYTHONPATH="$(dirname "$LAUNCH_PATH")${PYTHONPATH:+:$PYTHONPATH}"
+    case "${LAUNCHER:-}" in
+      accelerate-deepspeed)
+        prepare_deepspeed_configs
+        "$PYTHON" -m accelerate.commands.launch \
+          --config_file "$GITHUB_WORKSPACE/ci_patch/accelerate-deepspeed.yml" \
+          "$LAUNCH_PATH" "${EXTRA_ARGS[@]}"
+        ;;
+      "")
+        # Training examples expect the upstream entrypoint. Single process;
+        # the script's own --mixed_precision controls the precision, so the
+        # launcher's is pinned to `no` to avoid a conflict.
+        accelerate launch --num_processes 1 --num_machines 1 \
+          --mixed_precision no "$LAUNCH_PATH" "${EXTRA_ARGS[@]}"
+        ;;
+      *)
+        echo "unknown LAUNCHER: $LAUNCHER (supported: accelerate-deepspeed)" >&2
+        exit 2
+        ;;
+    esac
     ;;
 esac

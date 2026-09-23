@@ -1,20 +1,5 @@
 #!/usr/bin/env bash
-# Prepare the CI environment for one supported accelerate example.
-# $1 is the manifest profile. Unknown profiles fail before any install.
-# accelerate itself is installed from TARGET_ROOT (the release checkout
-# under test), so the guarded tag is exactly the code that runs.
-#
-# The upstream examples/requirements.txt is deliberately NOT installed
-# wholesale: we install the checkout plus the minimal NLP+CV stack instead.
-#
-# Asset sourcing (2026-09-17, supersedes the 2026-09-16 hf-mirror Xet
-# incident): every model/dataset the supported examples hardcode is
-# seeded into the runners' shared cache root by the cache-seed workflow
-# (ModelScope download → HF hub cache layout; spec:
-# cache-seed/accelerate/ms_seeds.yaml, executed by scripts/ms_seed.py).
-# The pool shares one persistent cache volume, so one dispatch warms
-# every runner. Setup here only installs the stack and validates the
-# seeded assets resolve locally; nothing downloads weights at runtime.
+
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
@@ -127,24 +112,23 @@ import sys
 from pathlib import Path
 
 CHECKS = {
-    "infer-phi2": ("microsoft/phi-2", "model",
+    "infer-phi2": ("microsoft/phi-2",
                    ["model-00001-of-00002.safetensors",
                     "model-00002-of-00002.safetensors"]),
-    "infer-sd": ("stable-diffusion-v1-5/stable-diffusion-v1-5", "model",
+    "infer-sd": ("stable-diffusion-v1-5/stable-diffusion-v1-5",
                  ["model_index.json",
                   "unet/diffusion_pytorch_model.safetensors",
                   "vae/diffusion_pytorch_model.safetensors",
                   "text_encoder/model.safetensors",
                   "safety_checker/model.safetensors"]),
-    "infer-tts": ("facebook/mms-tts-eng", "model",
+    "infer-tts": ("facebook/mms-tts-eng",
                   ["model.safetensors", "vocab.json"]),
-    "infer-llava": ("llava-hf/LLaVA-NeXT-Video-7B-hf", "model",
+    "infer-llava": ("llava-hf/LLaVA-NeXT-Video-7B-hf",
                     [f"model-0000{i}-of-00003.safetensors" for i in (1, 2, 3)]),
 }
-repo, kind, must_have = CHECKS[sys.argv[1]]
+repo, must_have = CHECKS[sys.argv[1]]
 hub_root = Path(os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))) / "hub"
-repo_kind = "models" if kind == "model" else "datasets"
-repo_dir = f"{repo_kind}--{repo.replace('/', '--')}"
+repo_dir = f"models--{repo.replace('/', '--')}"
 sha = (hub_root / repo_dir / "refs" / "main").read_text().strip()
 snap = hub_root / repo_dir / "snapshots" / sha
 missing = [f for f in must_have if not (snap / f).is_file()]

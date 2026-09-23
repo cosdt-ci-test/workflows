@@ -17,9 +17,9 @@ PROFILE="$1"
 
 # Validate the profile before installing anything (contract: unknown
 # profile must exit non-zero before any install).
-SUPPORTED_PROFILES="diffusers-sdxl diffusers-sd15 diffusers-dreambooth diffusers-instruct-pix2pix diffusers-kandinsky diffusers-amused diffusers-cogvideo diffusers-lcm diffusers-lcm-sdxl diffusers-controlnet diffusers-controlnet-sdxl diffusers-llada2"
+SUPPORTED_PROFILES="diffusers-sdxl diffusers-sd15 diffusers-dreambooth diffusers-instruct-pix2pix diffusers-kandinsky diffusers-research diffusers-research-plain diffusers-t2i-adapter diffusers-text-to-image diffusers-textual-inversion diffusers-unconditional diffusers-vqgan diffusers-sdxl-online diffusers-flux diffusers-sana diffusers-lumina2 diffusers-z-image diffusers-qwen-image diffusers-amused diffusers-cogvideo diffusers-cogvideo-i2v diffusers-lcm diffusers-lcm-sdxl diffusers-controlnet diffusers-controlnet-sdxl diffusers-llada2"
 case "$PROFILE" in
-  diffusers-sdxl|diffusers-sd15|diffusers-dreambooth|diffusers-instruct-pix2pix|diffusers-kandinsky|diffusers-amused|diffusers-cogvideo|diffusers-lcm|diffusers-lcm-sdxl|diffusers-controlnet|diffusers-controlnet-sdxl|diffusers-llada2) ;;
+  diffusers-sdxl|diffusers-sd15|diffusers-dreambooth|diffusers-instruct-pix2pix|diffusers-kandinsky|diffusers-research|diffusers-research-plain|diffusers-t2i-adapter|diffusers-text-to-image|diffusers-textual-inversion|diffusers-unconditional|diffusers-vqgan|diffusers-sdxl-online|diffusers-flux|diffusers-sana|diffusers-lumina2|diffusers-z-image|diffusers-qwen-image|diffusers-amused|diffusers-cogvideo|diffusers-cogvideo-i2v|diffusers-lcm|diffusers-lcm-sdxl|diffusers-controlnet|diffusers-controlnet-sdxl|diffusers-llada2) ;;
   *)
     echo "unknown profile: ${PROFILE} (supported: ${SUPPORTED_PROFILES})" >&2
     exit 1
@@ -123,7 +123,7 @@ install_example_stack() {
 }
 
 # download_assets <what>: comma-separated tokens from
-# {sdxl, sdxl-vae, sd15, 3d-icon, cogvideo}. Each token exports a path to
+# {sdxl, sdxl-vae, sd15, 3d-icon, cogvideo, ip-adapter, sana-sprint}. Each token exports a path to
 # GITHUB_ENV under the name overlay_args reference:
 #   sdxl      -> SDXL_BASE_PATH    (AI-ModelScope/stable-diffusion-xl-base-1.0)
 #   sdxl-vae  -> SDXL_VAE_PATH     (AI-ModelScope/sdxl-vae-fp16-fix)
@@ -143,7 +143,14 @@ from modelscope import snapshot_download
 WORKSPACE = Path(os.environ["GITHUB_WORKSPACE"])
 ENV_FILE = os.environ["GITHUB_ENV"]
 MODEL_CACHE = Path(os.environ.get("MODELSCOPE_CACHE", os.path.expanduser("~/.cache/modelscope")))
+MODEL_CACHE.mkdir(parents=True, exist_ok=True)
 WANT = {item.strip() for item in os.environ.get("DIFFUSERS_DOWNLOAD", "").split(",") if item.strip()}
+
+# ModelScope's snapshot_download gives up on a single file once its own
+# retries are exhausted (e.g. "1 file(s) failed to download out of 16"),
+# which fails the whole setup. Re-run it a few times: each pass resumes /
+# re-fetches only what is still missing.
+DOWNLOAD_ATTEMPTS = 3
 
 exports: dict[str, str] = {}
 failures: list[str] = []
@@ -154,13 +161,54 @@ def export(name: str, path: str) -> None:
     print(f"{name}={path}", flush=True)
 
 
+def corrupt_safetensors(root: Path) -> list[Path]:
+    # A truncated / half-written safetensors file fails to open ("incomplete
+    # metadata, file not fully covered"). snapshot_download trusts files that
+    # already exist, so a corrupt one is never re-fetched on its own: detect it,
+    # delete it, and let the retry loop re-download.
+    from safetensors import safe_open
+
+    bad: list[Path] = []
+    for path in sorted(root.rglob("*.safetensors")):
+        try:
+            with safe_open(path, framework="pt") as handle:
+                handle.keys()
+        except Exception as exc:  # noqa: BLE001
+            print(f"corrupt {path}: {exc}", flush=True)
+            bad.append(path)
+    return bad
+
+
 def snapshot(name: str, ms_id: str, **kwargs) -> None:
-    try:
-        local = Path(snapshot_download(ms_id, cache_dir=str(MODEL_CACHE), **kwargs))
-        export(name, str(local))
-    except Exception as exc:  # noqa: BLE001 - report and continue
-        failures.append(f"{ms_id}: {type(exc).__name__}: {exc}")
-        print(f"FAIL {ms_id}: {exc}", flush=True)
+    last: Exception | None = None
+    for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+        try:
+            local = Path(snapshot_download(ms_id, cache_dir=str(MODEL_CACHE), **kwargs))
+            bad = corrupt_safetensors(local)
+            if bad:
+                for path in bad:
+                    path.unlink()
+                raise RuntimeError(f"{len(bad)} corrupt safetensors file(s) removed; re-downloading")
+            export(name, str(local))
+            return
+        except Exception as exc:  # noqa: BLE001 - retry, then report
+            last = exc
+            print(f"retry {attempt}/{DOWNLOAD_ATTEMPTS} {ms_id}: {type(exc).__name__}: {exc}", flush=True)
+    failures.append(f"{ms_id}: {type(last).__name__}: {last}")
+    print(f"FAIL {ms_id}: {last}", flush=True)
+
+
+def hf_snapshot(repo_id: str, **kwargs) -> str:
+    from huggingface_hub import snapshot_download as hf_snapshot_download
+
+    last: Exception | None = None
+    for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+        try:
+            return hf_snapshot_download(repo_id, **kwargs)
+        except Exception as exc:  # noqa: BLE001 - retry, then report
+            last = exc
+            print(f"retry {attempt}/{DOWNLOAD_ATTEMPTS} {repo_id}: {type(exc).__name__}: {exc}", flush=True)
+    raise last
 
 
 # SDXL base components only. The repo also carries sd_xl_base_1.0.safetensors
@@ -220,6 +268,31 @@ if "sd14" in WANT:
 
 # CogVideoX-2b (transformer + T5 text_encoder + VAE). The ModelScope repo
 # layout is already clean (component dirs only, no single-file/fp16 dupes).
+# Dataset: Wild-Heart/Disney-VideoGeneration-Dataset (69 videos, ~25 MB,
+# Steamboat Willie clips) already in the README's first format:
+# prompt.txt + videos.txt + videos/. No ModelScope mirror, so pull via
+# hf-mirror (the engine sets HF_ENDPOINT + HF_HUB_DISABLE_XET).
+#
+# NOTE: the videos are Xet-backed. If hf-mirror 302s them to
+# cas-bridge.xethub.hf.co and the runner cannot reach it, this download
+# will fail and the dataset must be delivered via cache-seed/diffusers/
+# instead (same treatment as peft's Xet-backed fixtures).
+def download_disney_dataset() -> None:
+    try:
+        dataset_dir = WORKSPACE / "datasets" / "disney"
+        dataset_dir.mkdir(parents=True, exist_ok=True)
+        hf_snapshot(
+            "Wild-Heart/Disney-VideoGeneration-Dataset",
+            repo_type="dataset",
+            local_dir=str(dataset_dir),
+        )
+        export("COGVIDEOX_DATASET_DIR", str(dataset_dir))
+    except Exception as exc:  # noqa: BLE001
+        failures.append(f"Wild-Heart/Disney-VideoGeneration-Dataset: {type(exc).__name__}: {exc}")
+        print(f"FAIL Wild-Heart/Disney-VideoGeneration-Dataset: {exc}", flush=True)
+
+
+# cogvideo: CogVideoX-2b (ModelScope) + the Disney dataset.
 if "cogvideo" in WANT:
     snapshot(
         "COGVIDEOX_MODEL_PATH",
@@ -230,40 +303,21 @@ if "cogvideo" in WANT:
             "transformer/*", "vae/*",
         ],
     )
-    # Dataset: Wild-Heart/Disney-VideoGeneration-Dataset (69 videos, ~25 MB,
-    # Steamboat Willie clips) already in the README's first format:
-    # prompt.txt + videos.txt + videos/. No ModelScope mirror, so pull via
-    # hf-mirror (the engine sets HF_ENDPOINT + HF_HUB_DISABLE_XET).
-    #
-    # NOTE: the videos are Xet-backed. If hf-mirror 302s them to
-    # cas-bridge.xethub.hf.co and the runner cannot reach it, this download
-    # will fail and the dataset must be delivered via cache-seed/diffusers/
-    # instead (same treatment as peft's Xet-backed fixtures).
-    try:
-        from huggingface_hub import snapshot_download as hf_snapshot_download
+    download_disney_dataset()
 
-        dataset_dir = WORKSPACE / "datasets" / "disney"
-        dataset_dir.mkdir(parents=True, exist_ok=True)
-        hf_snapshot_download(
-            "Wild-Heart/Disney-VideoGeneration-Dataset",
-            repo_type="dataset",
-            local_dir=str(dataset_dir),
-        )
-        export("COGVIDEOX_DATASET_DIR", str(dataset_dir))
-    except Exception as exc:  # noqa: BLE001
-        failures.append(f"Wild-Heart/Disney-VideoGeneration-Dataset: {type(exc).__name__}: {exc}")
-        print(f"FAIL Wild-Heart/Disney-VideoGeneration-Dataset: {exc}", flush=True)
+# cogvideo-dataset: the Disney dataset only (the I2V entry pulls its own
+# CogVideoX-5b-I2V from hf-mirror at run time, so no ModelScope pre-download).
+if "cogvideo-dataset" in WANT:
+    download_disney_dataset()
 
 # 3d_icon dataset (only the advanced dreambooth entries use it): no
 # ModelScope mirror (205 MB imagefolder + metadata.jsonl), so pull it via
 # hf-mirror into the workspace and point --dataset_name at the local directory.
 if "3d-icon" in WANT:
     try:
-        from huggingface_hub import snapshot_download as hf_snapshot_download
-
         dataset_dir = WORKSPACE / "datasets" / "3d_icon"
         dataset_dir.mkdir(parents=True, exist_ok=True)
-        hf_snapshot_download(
+        hf_snapshot(
             "linoyts/3d_icon",
             repo_type="dataset",
             local_dir=str(dataset_dir),
@@ -273,6 +327,44 @@ if "3d-icon" in WANT:
     except Exception as exc:  # noqa: BLE001
         failures.append(f"linoyts/3d_icon: {type(exc).__name__}: {exc}")
         print(f"FAIL linoyts/3d_icon: {exc}", flush=True)
+
+# ip-adapter: CLIP image encoders for the IP-Adapter tutorials. The tutorials
+# call CLIPVisionModelWithProjection.from_pretrained(<path>) with no subfolder,
+# but the upstream repo keeps the encoders under models/image_encoder (SD1.5)
+# and sdxl_models/image_encoder (SDXL); point --image_encoder_path at the local
+# subdirs. ModelScope (AI-ModelScope/IP-Adapter) carries the same shas as
+# h94/IP-Adapter, avoiding the Xet-backed hf-mirror download of the weights.
+if "ip-adapter" in WANT:
+    try:
+        local = Path(
+            snapshot_download(
+                "AI-ModelScope/IP-Adapter",
+                cache_dir=str(MODEL_CACHE),
+                allow_file_pattern=["models/image_encoder/*", "sdxl_models/image_encoder/*"],
+            )
+        )
+        export("IP_ADAPTER_IMAGE_ENCODER_PATH", str(local / "models" / "image_encoder"))
+        export("IP_ADAPTER_SDXL_IMAGE_ENCODER_PATH", str(local / "sdxl_models" / "image_encoder"))
+    except Exception as exc:  # noqa: BLE001
+        failures.append(f"AI-ModelScope/IP-Adapter: {type(exc).__name__}: {exc}")
+        print(f"FAIL AI-ModelScope/IP-Adapter: {exc}", flush=True)
+
+# sana-sprint: the SANA-Sprint teacher model for research_projects/sana. The
+# script reads <path>/transformer/diffusion_pytorch_model.safetensors directly
+# (load_file, not from_pretrained), so --pretrained_model_name_or_path must be
+# a LOCAL directory; pre-download it here.
+if "sana-sprint" in WANT:
+    try:
+        dest = WORKSPACE / "sana_sprint_teacher"
+        dest.mkdir(parents=True, exist_ok=True)
+        hf_snapshot(
+            "Efficient-Large-Model/SANA_Sprint_1.6B_1024px_teacher_diffusers",
+            local_dir=str(dest),
+        )
+        export("SANA_SPRINT_TEACHER_PATH", str(dest))
+    except Exception as exc:  # noqa: BLE001
+        failures.append(f"SANA_Sprint_1.6B: {type(exc).__name__}: {exc}")
+        print(f"FAIL SANA_Sprint_1.6B: {exc}", flush=True)
 
 if exports:
     with open(ENV_FILE, "a", encoding="utf-8") as handle:
@@ -318,11 +410,11 @@ setup_diffusers_sd15() {
   download_assets sd15,3d-icon
 }
 
-# diffusers-dreambooth: SD1.4 dreambooth / dreambooth-LoRA training examples.
-# The dataset is the repo's own docs/source/en/imgs, so no dataset download.
+# diffusers-dreambooth: SD1.5 dreambooth / dreambooth-LoRA training examples.
+# The model is pulled online (hf-mirror) by the example; the dataset is the
+# fixture image (fixtures/DOG.jpg), so no download here.
 setup_diffusers_dreambooth() {
   install_example_stack
-  download_assets sd14
 }
 
 # diffusers-instruct-pix2pix: SD1.5 InstructPix2Pix. The dataset
@@ -337,6 +429,82 @@ setup_diffusers_instruct_pix2pix() {
 # dataset are fetched by the example at run time.
 setup_diffusers_kandinsky() {
   install_example_stack
+}
+
+# diffusers-research: research_projects SD1.5 training examples. Base + SD1.5
+# predownload; datasets (naruto / fixtures/DOG.jpg) at run time.
+setup_diffusers_research() {
+  install_example_stack
+  download_assets sd15
+}
+
+# diffusers-research-plain: research_projects examples that fetch their own
+# model + dataset at run time (cifar10 / inpainting / instruct-pix2pix /
+# wuerstchen-prior / sd-vae-ft-mse). Base only.
+setup_diffusers_research_plain() {
+  install_example_stack
+  # autoencoderkl needs lpips (perceptual loss) + taming_transformers;
+  # the ip_adapter tutorials import the `ip_adapter` PyPI package, whose
+  # requirements.txt (not install_requires) pulls einops + safetensors, so
+  # pip does not fetch them — install them explicitly.
+  python -m pip install lpips taming_transformers ip_adapter einops safetensors
+  # The IP-Adapter tutorials take the CLIP image encoder as a local path; the
+  # repo keeps it under models/image_encoder + sdxl_models/image_encoder.
+  download_assets ip-adapter
+}
+
+# diffusers-t2i-adapter: T2I-Adapter SDXL. The tiny SDXL / tiny adapter models
+# and the fill10 dataset are fetched via hf-mirror at run time. Base only.
+setup_diffusers_t2i_adapter() {
+  install_example_stack
+}
+
+# diffusers-text-to-image: text_to_image SD1.5 / SDXL (full + LoRA) examples.
+# Models/dataset fetched via hf-mirror at run time. deepspeed is required by
+# the accelerate-deepspeed launcher used by the full SDXL fine-tune (ZeRO-3).
+setup_diffusers_text_to_image() {
+  install_example_stack
+  download_assets sd15
+  python -m pip install "deepspeed>=0.18.2"
+}
+
+# diffusers-textual-inversion: textual_inversion SD1.5 / SDXL examples. Tiny
+# models are fetched via hf-mirror at run time; the dataset is the fixture
+# image (fixtures/DOG.jpg). Base only.
+setup_diffusers_textual_inversion() {
+  install_example_stack
+  download_assets sd15
+}
+
+# diffusers-unconditional: unconditional_image_generation (DDPM 64px). The
+# ddpm_dummy config and dummy_image_class_data dataset are fetched via
+# hf-mirror at run time. Base only.
+setup_diffusers_unconditional() {
+  install_example_stack
+}
+
+# diffusers-vqgan: VQGAN training (VQModel + Paella discriminator + timm
+# perceptual loss). timm is the example's own requirement; the dataset is the
+# tiny dummy_image_text_data and timm vgg19 weights are fetched at run time.
+setup_diffusers_vqgan() {
+  install_example_stack
+  python -m pip install timm
+}
+
+# diffusers-sdxl-online: SDXL examples that pull the model + datasets online
+# (hf-mirror) at run time, using the fp16 variant (~6.6GB) to keep the
+# download small. Base only.
+setup_diffusers_sdxl_online() {
+  install_example_stack
+}
+
+# diffusers-flux: full-model / large-model examples that need DeepSpeed ZeRO-3
+# sharding (launcher: accelerate-deepspeed) on multi-card runners. deepspeed
+# ships its own NPU accelerator and auto-detects torch_npu; webdataset +
+# braceexpand serve the LCM wds example.
+setup_diffusers_flux() {
+  install_example_stack
+  python -m pip install "deepspeed>=0.18.2" webdataset braceexpand
 }
 
 # diffusers-amused: Amused-256 finetuning. ModelScope has neither
@@ -365,7 +533,7 @@ setup_diffusers_controlnet() {
 setup_diffusers_controlnet_sdxl() {
   install_example_stack
   echo "HF_DATASETS_TRUST_REMOTE_CODE=1" >> "$GITHUB_ENV"
-  download_assets sdxl
+  # SDXL is pulled online (hf-mirror, --variant fp16) by the example.
 }
 
 # diffusers-lcm: LCM consistency-distillation webdataset examples with an
@@ -381,7 +549,7 @@ setup_diffusers_lcm() {
 setup_diffusers_lcm_sdxl() {
   install_example_stack
   python -m pip install webdataset braceexpand
-  download_assets sdxl,sdxl-vae
+  # SDXL teacher + fp16-safe VAE are pulled online (hf-mirror) by the example.
 }
 
 # diffusers-cogvideo: CogVideoX-2b LoRA finetuning. decord + imageio /
@@ -395,6 +563,45 @@ setup_diffusers_cogvideo() {
   # imageio-ffmpeg are the example's own requirements (video export).
   python -m pip install decord2 imageio imageio-ffmpeg
   download_assets cogvideo
+}
+
+# diffusers-cogvideo-i2v: CogVideoX-5b-I2V LoRA finetuning. Same decord/video
+# deps and Disney dataset, but the 5b-I2V model is pulled online (hf-mirror)
+# by the example, so only the dataset is pre-downloaded here.
+setup_diffusers_cogvideo_i2v() {
+  install_example_stack
+  python -m pip install decord2 imageio imageio-ffmpeg
+  download_assets cogvideo-dataset
+}
+
+# diffusers-sana: research_projects/sana (SANA-Sprint) + Sana LoRA DreamBooth.
+# The sprint script reads <path>/transformer/diffusion_pytorch_model.safetensors
+# with load_file(), so its --pretrained_model_name_or_path must be a local dir;
+# pre-download the teacher model here.
+setup_diffusers_sana() {
+  install_example_stack
+  download_assets sana-sprint
+}
+
+# diffusers-lumina2: Lumina2 LoRA DreamBooth (2-card ZeRO-3). deepspeed is
+# required by the accelerate-deepspeed launcher.
+setup_diffusers_lumina2() {
+  install_example_stack
+  python -m pip install "deepspeed>=0.18.2"
+}
+
+# diffusers-z-image: Z-Image LoRA DreamBooth (2-card ZeRO-3). deepspeed is
+# required by the accelerate-deepspeed launcher.
+setup_diffusers_z_image() {
+  install_example_stack
+  python -m pip install "deepspeed>=0.18.2"
+}
+
+# diffusers-qwen-image: Qwen-Image LoRA DreamBooth (4-card ZeRO-3). deepspeed
+# is required by the accelerate-deepspeed launcher.
+setup_diffusers_qwen_image() {
+  install_example_stack
+  python -m pip install "deepspeed>=0.18.2"
 }
 
 # diffusers-llada2: LLaDA2 block-refinement training smoke. Base stack is

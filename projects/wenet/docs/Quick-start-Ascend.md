@@ -79,7 +79,7 @@ echo "${UPSTREAM_REF}"
 ```shell #test-setup id="clone" load="upstream_ref>>UPSTREAM_REF"
 git clone https://github.com/wenet-e2e/wenet.git
 cd wenet
-git checkout <UPSTREAM_REF>
+git checkout main
 ```
 
 安装 WeNet 及其 NPU 依赖（与官方安装指南一致：`[torch-npu]` extra 已将 torch / torch-npu / torchaudio 钉在推荐版本 2.2.0，并附带 `numpy<2`；`requirements.txt` 只约束 `deepspeed>=0.14.0`，为避免 pip 解析到与 torch 2.2.0 不兼容的 0.16+，安装后显式回钉 0.14.4）：
@@ -126,49 +126,55 @@ npu count: 1
 ```shell #test-setup id="download-data"
 pip install modelscope -q
 mkdir -p /root/asr-data/OpenSLR/33
-
-# 下载并获取实际路径
-DATASET_DIR=$(python -c "
+# 从 ModelScope 下载 AISHELL-1 数据集
+python -c "
 from modelscope import snapshot_download
-print(snapshot_download('OmniData/AISHELL-1', repo_type='dataset'))
-")
-
-echo "Dataset downloaded to: $DATASET_DIR"
-
-# 解压数据集到 weNet 期望的目录结构
-cd /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33
-tar -xzf data_aishell.tgz -C /root/asr-data/OpenSLR/33/
-tar -xzf resource_aishell.tgz -C /root/asr-data/OpenSLR/33/
-# 创建 .complete 标记文件
+snapshot_download('OmniData/AISHELL-1', local_dir='/root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1', repo_type='dataset')
+"
+echo "=== 下载后目录结构 ==="
+find /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1
+# 解压数据集
+cd /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33/
+tar xzf data_aishell.tgz
+tar xzf resource_aishell.tgz
+echo "=== 解压后目录结构（raw/33） ==="
+find /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33
+echo "=== data_aishell/wav 目录内容抽样（前 10 项） ==="
+ls /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33/data_aishell/wav | head -10
+echo "=== data_aishell/wav 条目总数 ==="
+ls /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33/data_aishell/wav | wc -l
+echo "=== 已解压 wav 文件数 ==="
+find /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33 -iname '*.wav' -type f | wc -
+# 创建软链接
+ln -sf /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33/data_aishell /root/asr-data/OpenSLR/33/data_aishell
+ln -sf /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33/resource_aishell /root/asr-data/OpenSLR/33/resource_aishell
 touch /root/asr-data/OpenSLR/33/data_aishell/.complete
 touch /root/asr-data/OpenSLR/33/resource_aishell/.complete
+echo "=== 软链接验证 ==="
+ls -la /root/asr-data/OpenSLR/33/
 ```
 
 验证 `data_aishell` 与 `resource_aishell` 两个数据包均下载完成：
 
 ```shell #test id="verify-download"
 echo "=== 检查下载标记文件 ==="
-ls -la /root/asr-data/OpenSLR/33/data_aishell/.complete /root/asr-data/OpenSLR/33/resource_aishell/.complete
-echo "=== 检查数据目录内容 ==="
-ls /root/asr-data/OpenSLR/33/data_aishell/ | head -5
-ls /root/asr-data/OpenSLR/33/resource_aishell/ | head -5
+ls /root/asr-data/OpenSLR/33/data_aishell/.complete /root/asr-data/OpenSLR/33/resource_aishell/.complete
+echo "=== 检查数据目录 ==="
+ls /root/asr-data/OpenSLR/33/data_aishell/ | head -2
+ls /root/asr-data/OpenSLR/33/resource_aishell/ | head -2
 ```
 
 输出结果如下：
 
 ```shell #test-result id="verify-download"
 === 检查下载标记文件 ===
-... /root/asr-data/OpenSLR/33/data_aishell/.complete
-... /root/asr-data/OpenSLR/33/resource_aishell/.complete
-=== 检查数据目录内容 ===
-...
-...
-...
-...
-...
-...
-...
-...
+/root/asr-data/OpenSLR/33/data_aishell/.complete
+/root/asr-data/OpenSLR/33/resource_aishell/.complete
+=== 检查数据目录 ===
+transcript
+wav
+lexicon.txt
+speaker.info
 ```
 
 ---

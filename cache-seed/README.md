@@ -30,7 +30,7 @@ repo bundle 侧（仅 ModelScope 没有的）      GitHub 仓库                
 本机（代理直连 HF）                        cache-seed/<project>/    cache-seed.yml
 huggingface_hub 下内容       ──────>       manifest.yaml          ─→ scripts/cache_seed.py
 scripts/bundle_cache.py       ──────>       <prefix>/<file>        ─→ 拷贝 → SHARED_CACHE_ROOT
-                                           <file>.part-aa/ab/...    → sha256 校验
+                                            <file>.part-0000/0001/... → sha256 校验
 ```
 
 ## 单校验
@@ -47,7 +47,7 @@ scripts/bundle_cache.py       ──────>       <prefix>/<file>        �
 | 内容 | runner 共享缓存目标 | 备注 |
 |---|---|---|
 | `<prefix>/<file>` | `<SHARED_CACHE_ROOT>/<prefix>/<file>` | 直接 cp，拷完校验 |
-| `<prefix>/<file>.part-aa/ab/...` | `<SHARED_CACHE_ROOT>/<prefix>/<file>` | cat 拼回，拷完校验 |
+| `<prefix>/<file>.part-0000/0001/...` | `<SHARED_CACHE_ROOT>/<prefix>/<file>` | cat 拼回，拷完校验 |
 
 `<prefix>` 由 staging 时 `--prefix` 指定；CI 不另设 `extract_to`，路径里直接编码。
 
@@ -203,3 +203,47 @@ git add cache-seed/accelerate && git commit -m "accelerate: re-seed datasets" &&
 ```
 
 历史 bundle 也可从 git 直接恢复：`git checkout 0242ba8 -- cache-seed/accelerate`。
+
+## xtuner 的现状（2026-09-20 数据集迁入）
+
+之前 train_hf.py 的 `--dataset_name_or_path` 用仓内 8 行 fixture + sitecustomize
+shim（run_example.sh 里 monkey-patch `datasets.load_dataset` 把单文件路径改成
+`load_dataset("json", data_files=...)`）。现改为 seed `tatsu-lab/alpaca`
+（HF，~52k 行），load_dataset 原生命中本地缓存，fixture 与 shim 均删。
+
+| 资产 | `ms_id`（ModelScope） | `hf_id`（例里硬编码/overlay 传） | 备注 |
+|---|---|---|---|
+| alpaca 数据集 | `OmniData/alpaca` | `tatsu-lab/alpaca` | 原 id 镜像 `angelala00/tatsu-lab-alpaca` 把 parquet 放仓库根、缺 `data/` 前缀；OmniData 布局与 HF 一致。其陈旧 `dataset_infos.json`（features 缺 `dtype`，datasets 3.x 解析崩）由 ms_seed.py 统一丢弃 |
+
+注意：xtuner 的模型（Qwen2.5-0.5B）暂仍由 setup 直接 ModelScope 下载（老模式），
+未走 seed——与 peft/accelerate 的 `models--Qwen--Qwen2.5-0.5B` 是同一资产，共享
+缓存卷里已 plant，若后续要统一可再加条目并让 setup 改从 refs/main 解析
+`${LLM_MODEL_PATH}`。
+
+## torchtune 的现状（2026-09-22 PPO reward model 走 curl plant）
+
+PPO recipe（`recipes/ppo_full_finetune_single_device.py`）的 reward/value 模型
+`smohammadi/tinyllama_rm_sentiment_1b` 是个人 HF 仓库，**ModelScope 不代发**，且
+`model.safetensors`（4.14 GB）是 xet-backed。原 setup 走
+`huggingface_hub.snapshot_download` + `HF_ENDPOINT=hf-mirror.com`，但
+torchtune 的 hub 依赖被 `transformers==4.57.1` 压回 0.36.2（不认
+`HF_HUB_DISABLE_XET`），mirror 302 到 cas-bridge.xethub.hf.co 后 xet resume 撞
+HTTP 416 / consistency 校验失败（run 35582685960 全 8 腿挂在 Setup 步骤）。
+
+**也不能打 repo bundle**：4.14 GB 分片进 git 会让 `hdc` 每次 checkout 拉整个
+HEAD 树而 HTTP 504（run 35694653606 只活了 2 腿、cache-seed 自身 checkout 也
+504，run 35702569867）。
+
+所以引入**第三半边 curl plant**（`scripts/curl_seed.py` + 各项目的
+`cache-seed/<project>/curl_seeds.yaml`）：由 cache-seed workflow 用
+`curl https://hf-mirror.com/<hf_id>/resolve/main/<file>` 整文件 GET（不走
+huggingface_hub 的 xet 断点续传，字节正确），按 spec 声明的 sha256 流式校验，
+落到共享 HF cache 的 hub 布局（`hub/models--<hf_id>/snapshots/<sha>/` + 
+`refs/main`）。setup 端用 `resolve_seed_envs smohammadi/tinyllama_rm_sentiment_1b
+TT_RM_PATH` 从 `refs/main` 解析，仅 `torchtune_ppo` 这条腿读，不在 example 里下载。
+
+spec：`cache-seed/torchtune/curl_seeds.yaml`（6 文件 + sha256，model.safetensors
+sha256 `6697a3…`）。
+
+若日后 ModelScope 出现该 repo 的镜像，可改回 `ms_seeds.yaml` plant，删掉
+`curl_seeds.yaml`。

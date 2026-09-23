@@ -6,10 +6,21 @@
 # as-is and let any NPU-stack bug surface in CI. If a supported example
 # fails because of a torch_npu / triton-ascend / CANN issue, the entry
 # stays in supported but its run fails — that's the signal upstream
-# needs. The seven sed patches previously applied here (and the
-# TORCH_NPU_DEVICE_CAPABILITY=9.0 env var in each launcher) are all
-# reverted in this commit. Quick-start-Ascend.md and the case doc still
-# describe the patches as historical record of what would be needed.
+# needs. The seven sed patches previously applied here are all reverted
+# in this commit. Quick-start-Ascend.md and the case doc still describe
+# the patches as historical record of what would be needed.
+#
+# One exception to "no patch": run_example.sh's sitecustomize shim sets
+# TORCH_NPU_DEVICE_CAPABILITY=9.0 before importing transfer_to_npu.
+# That is not a source patch — it is the official torch_npu compatibility
+# switch for get_device_capability (which otherwise returns None), needed
+# because torch 2.12's c10d broadcast() computes
+# `tensor.is_cuda and torch.cuda.get_device_capability(...)[0] >= 9`.
+# transfer_to_npu maps is_cuda->is_npu and wraps get_device_capability to
+# the torch.npu shim, so without the env var the sm90 check hits
+# `None[0]` TypeError (run 35224441230). There is no downgrade path:
+# torch < 2.12 lacks torch.distributed._local_tensor, which spmd_types
+# (the v0.3.0 default SPMD backend) imports.
 #
 # What we DO install: CANN 9.1.0 + torch 2.12.0+cpu + torch_npu 2.12.0
 # + triton-ascend 3.5.0+dev20260701 + the v0.3.0 release checkout +
@@ -147,6 +158,13 @@ setup_torchtitan() {
     "tyro>=1.0.5" "tokenizers>=0.15.0" safetensors einops pillow \
     "torchdata>=0.8.0" "datasets>=3.6.0,<4.8.0" tensorboard wandb \
     "spmd_types==0.2.3"
+  # flux_debugmodel imports transformers (CLIPTokenizer/T5Tokenizer from
+  # torchtitan/models/flux/tokenizer.py); pin transformers==4.57.1 +
+  # huggingface_hub<1.0 per [[xet-bridge-416-hf-mirror-curl-bypass]].
+  # sentencepiece is required by T5Tokenizer.from_pretrained; not a transitive
+  # dep of transformers, must be installed explicitly.
+  python -m pip install -i "$ALIYUN_PIP_INDEX" \
+    "transformers==4.57.1" sentencepiece protobuf
   python -c "import torchtitan; print('torchtitan', torchtitan.__version__)"
   write_launchers
 }

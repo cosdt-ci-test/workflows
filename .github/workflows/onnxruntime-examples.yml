@@ -426,7 +426,7 @@ jobs:
       - name: Validate manifest check result
         run: |
           set -euo pipefail
-          python3 -m pip install -q check-jsonschema
+          python3 -m pip install -q "check-jsonschema==0.38.0"
           files=()
           for file in \
             manifest_check_result.json \
@@ -600,7 +600,7 @@ jobs:
       - name: Validate result.json
         run: |
           set -euo pipefail
-          python3 -m pip install -q check-jsonschema
+          python3 -m pip install -q "check-jsonschema==0.38.0"
           check-jsonschema --schemafile workflows/schemas/result.schema.json \
             output/result.json
 

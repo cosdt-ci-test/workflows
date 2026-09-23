@@ -55,7 +55,7 @@ supported:
     # CANN 底座：SWR ascendhub 有 9.0.1-910b-ubuntu22.04-py3.11，与 AReaL 官方镜像
     # （ghcr.io/hwvanici/areal_npu:v1.0.5-a2）的底座一致（CANN 9.0.1 / py3.11）。
     # AReaL 栈（torch 2.10 + vllm-ascend releases/v0.23.0）由 setup_example.sh 安装。
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.1-910b-ubuntu22.04-py3.11
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.11
     overlay_args:
       - --config examples/vlm_npu/qwen2_5_vl_3b_geometry3k_grpo.yaml
       - cluster.n_gpus_per_node=1
@@ -67,6 +67,30 @@ supported:
       - vllm.gpu_memory_utilization=0.4
       - gconfig.max_new_tokens=128
       - gconfig.n_samples=1
+      - train_dataset.batch_size=8
+      - valid_dataset.batch_size=8
+      - +total_train_steps=1
+    timeout_minutes: 240
+  # Qwen3-VL-2B-Instruct Geometry3K 多轮 tool-calling GRPO（单卡；FSDP 后端）。
+  # env_factory 是字符串点路径（可 JSON 序列化），不同于 virl39k 的函数对象 bug。
+  - path: examples/multi_turn_vlm/geometry3k_grpo_mt.py
+    profile: areal-vlm-mt-grpo
+    runner: linux-aarch64-a2-1
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.11
+    overlay_args:
+      - --config examples/multi_turn_vlm/qwen3_vl_2b_geometry3k_grpo_mt.yaml
+      - scheduler.type=local
+      - cluster.n_gpus_per_node=1
+      - rollout.backend=vllm:d1p1t1
+      - actor.backend=fsdp:d1p1t1
+      - actor.path=${AREAL_MODEL_PATH}
+      - actor.mb_spec.max_tokens_per_mb=1024
+      - ref.mb_spec.max_tokens_per_mb=1024
+      - vllm.gpu_memory_utilization=0.4
+      - gconfig.n_samples=1
+      - gconfig.max_new_tokens=128
+      - max_turns=2
       - train_dataset.batch_size=8
       - valid_dataset.batch_size=8
       - +total_train_steps=1
@@ -85,7 +109,6 @@ unsupported:
   - examples/alignment/hhrlhf_rw.py
   - examples/distillation/mopd/mopd_rl.py
   - examples/multi_turn_math/gsm8k_rl_mt.py
-  - examples/multi_turn_vlm/geometry3k_grpo_mt.py
   - examples/multi_turn_vlm/run_geometry3k_grpo_mt_npu.sh
   - examples/vlm/geometry3k_sft.py
   - examples/vlm/clevr_count_70k_grpo.py

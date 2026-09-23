@@ -20,9 +20,10 @@ fi
 
 PROFILE="$1"
 
-SUPPORTED_PROFILES="areal-vlm-grpo"
+SUPPORTED_PROFILES="areal-vlm-grpo areal-vlm-mt-grpo"
 case "$PROFILE" in
-  areal-vlm-grpo) ;;
+  areal-vlm-grpo) MODEL_ID="Qwen/Qwen2.5-VL-3B-Instruct" ;;
+  areal-vlm-mt-grpo) MODEL_ID="Qwen/Qwen3-VL-2B-Instruct" ;;
   *)
     echo "unknown profile: ${PROFILE} (supported: ${SUPPORTED_PROFILES})" >&2
     exit 1
@@ -109,12 +110,14 @@ echo "USE_OPTIMIZED_MODEL=0" >> "$GITHUB_ENV"
 # manifest references as ${AREAL_MODEL_PATH}.
 export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
 python3 -m pip install -q "huggingface_hub<1.0"
+export AREAL_MODEL_ID="$MODEL_ID"
 python3 - <<'PY'
 import os
 from huggingface_hub import snapshot_download
 
-dest = os.path.join(os.environ["GITHUB_WORKSPACE"], "areal_models", "Qwen2.5-VL-3B-Instruct")
-snapshot_download("Qwen/Qwen2.5-VL-3B-Instruct", local_dir=dest)
+model_id = os.environ["AREAL_MODEL_ID"]
+dest = os.path.join(os.environ["GITHUB_WORKSPACE"], "areal_models", model_id.split("/")[-1])
+snapshot_download(model_id, local_dir=dest)
 with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as fh:
     fh.write(f"AREAL_MODEL_PATH={dest}\n")
 print(f"AREAL_MODEL_PATH={dest}", flush=True)

@@ -26,8 +26,11 @@ case "$PROFILE" in
   seq2seq)
     DEPS=(accelerate datasets evaluate sacrebleu rouge-score nltk sentencepiece tiktoken)
     ;;
+  vision)
+    DEPS=(accelerate datasets evaluate)
+    ;;
   *)
-    echo "unknown profile: $PROFILE (supported: generation glue small-training lm seq2seq)" >&2
+    echo "unknown profile: $PROFILE (supported: generation glue small-training lm seq2seq vision)" >&2
     exit 1
     ;;
 esac
@@ -54,6 +57,13 @@ fi
 # and its torch requirement is already satisfied by the image build.
 python -m pip install -e "$TARGET_ROOT"
 python -m pip install "${DEPS[@]}"
+# torchvision is only needed by the vision profile. Its wheel pins an exact
+# torch== requirement that would upgrade (and break) the image's NPU
+# torch/torch_npu stack, so install it without deps; the examples only use
+# the transforms / read_image surface, which links nothing NPU-specific.
+if [[ "$PROFILE" == "vision" ]]; then
+  python -m pip install --no-deps "torchvision==0.24.1"
+fi
 
 # Pre-download example model weights from ModelScope (China-reachable) so the
 # examples load them from a local path instead of the blocked HuggingFace CDN.
@@ -111,6 +121,31 @@ else
   echo "warning: tiny xlnet download via hf-mirror.com failed; beam-search examples will fail" >&2
 fi
 
+# Vision/audio-family tiny random models (hf-internal-testing org) also only
+# exist on HuggingFace; pull them through the same hf-mirror.com channel.
+# Each repo carries its config + weights + processor/tokenizer files, so the
+# examples can load everything from the local snapshot dir.
+for pair in \
+  "TINYVIT_PATH:hf-internal-testing/tiny-random-ViTModel" \
+  "TINYMAE_PATH:hf-internal-testing/tiny-random-ViTMAEModel" \
+  "TINYCLIP_PATH:hf-internal-testing/tiny-random-CLIPModel" \
+  "TINYWAV2VEC2_PATH:hf-internal-testing/tiny-random-Wav2Vec2Model"
+do
+  env_name="${pair%%:*}"
+  repo_id="${pair#*:}"
+  if local_dir=$(python - "$repo_id" <<'PY'
+import sys
+from huggingface_hub import snapshot_download
+
+print(snapshot_download(sys.argv[1], endpoint="https://hf-mirror.com"))
+PY
+  ); then
+    echo "$env_name=$local_dir" >> "$GITHUB_ENV"
+  else
+    echo "warning: $repo_id download via hf-mirror.com failed; related vision examples will fail" >&2
+  fi
+done
+
 # LM-family examples infer the dataset loader from the train_file suffix and
 # reject the extensionless wiki_text/wiki_00 fixture, so expose it as train.txt
 # in the job output dir for the ${CI_OUTPUT_DIR}/train.txt overlay args.
@@ -147,4 +182,54 @@ for split in ("train", "dev"):
         for row in rows:
             row["label"] = label2id[row["label"]]
             writer.writerow(row)
+PY
+
+# Batch-2 (vision/audio family) data preparation:
+# - ImageFolder tree for image classification / MAE / MIM: datasets' imagefolder
+#   builder scans <root>/<split>/<label>/*, so mirror the 3 COCO fixture images
+#   into a 3-class train/val layout.
+# - CLIP: json rows {image_path, captions} referencing the COCO fixture images.
+# - Audio classification: json rows {audio, label} over 1-second silent wavs
+#   written with the stdlib wave module (keeps the profile free of audio deps).
+mkdir -p "$CI_OUTPUT_DIR/imgcls/train" "$CI_OUTPUT_DIR/imgcls/val"
+coco_dir="$TARGET_ROOT/tests/fixtures/tests_samples/COCO"
+for split in train val; do
+  mkdir -p "$CI_OUTPUT_DIR/imgcls/$split/class_a" "$CI_OUTPUT_DIR/imgcls/$split/class_b" "$CI_OUTPUT_DIR/imgcls/$split/class_c"
+  cp "$coco_dir/apple.jpg" "$CI_OUTPUT_DIR/imgcls/$split/class_a/apple.jpg"
+  cp "$coco_dir/000000039769.png" "$CI_OUTPUT_DIR/imgcls/$split/class_b/000000039769.png"
+  cp "$coco_dir/000000004016.png" "$CI_OUTPUT_DIR/imgcls/$split/class_c/000000004016.png"
+done
+
+python - "$TARGET_ROOT" "$CI_OUTPUT_DIR" <<'PY'
+import json
+import os
+import sys
+import wave
+
+target, out = sys.argv[1], sys.argv[2]
+coco = os.path.join(target, "tests", "fixtures", "tests_samples", "COCO")
+
+# CLIP: plain string captions; the example auto-detects the first two json
+# columns as image_column / caption_column.
+clip_rows = [
+    {"image_path": os.path.join(coco, "apple.jpg"), "captions": "a red apple"},
+    {"image_path": os.path.join(coco, "000000039769.png"), "captions": "cats sitting on a couch"},
+    {"image_path": os.path.join(coco, "000000004016.png"), "captions": "a city street"},
+]
+with open(os.path.join(out, "clip_train.json"), "w", encoding="utf-8") as fh:
+    json.dump(clip_rows, fh)
+
+# Audio classification: silent 16 kHz mono wavs, 1 s of 16-bit zeros; the
+# feature extractor does its own padding/normalization.
+audio_rows = []
+for name, label in (("a.wav", "a"), ("b.wav", "b")):
+    path = os.path.join(out, name)
+    with wave.open(path, "wb") as fh:
+        fh.setnchannels(1)
+        fh.setsampwidth(2)
+        fh.setframerate(16000)
+        fh.writeframes(b"\x00\x00" * 16000)
+    audio_rows.append({"audio": {"path": path}, "label": label})
+with open(os.path.join(out, "audio_train.json"), "w", encoding="utf-8") as fh:
+    json.dump(audio_rows, fh)
 PY

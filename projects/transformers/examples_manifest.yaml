@@ -322,6 +322,111 @@ supported:
       - --per_device_train_batch_size 1
       - --output_dir ${CI_OUTPUT_DIR}
     timeout_minutes: 60
+  # --- 批次 2（视觉/音频类）：vision profile，tiny-random 模型走 hf-mirror 通道 ---
+  - path: examples/pytorch/image-classification/run_image_classification.py
+    profile: vision
+    runner: linux-aarch64-a2-2
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --model_name_or_path ${TINYVIT_PATH}
+      - --train_dir ${CI_OUTPUT_DIR}/imgcls/train
+      - --validation_dir ${CI_OUTPUT_DIR}/imgcls/val
+      - --remove_unused_columns False
+      - --max_train_samples 4
+      - --do_train
+      - --max_steps 1
+      - --per_device_train_batch_size 1
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 60
+  - path: examples/pytorch/image-classification/run_image_classification_no_trainer.py
+    profile: vision
+    runner: linux-aarch64-a2-2
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --model_name_or_path ${TINYVIT_PATH}
+      - --train_dir ${CI_OUTPUT_DIR}/imgcls/train
+      - --validation_dir ${CI_OUTPUT_DIR}/imgcls/val
+      - --max_train_steps 1
+      - --per_device_train_batch_size 1
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 60
+  - path: examples/pytorch/image-pretraining/run_mae.py
+    profile: vision
+    runner: linux-aarch64-a2-2
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --model_name_or_path ${TINYMAE_PATH}
+      - --train_dir ${CI_OUTPUT_DIR}/imgcls/train
+      - --validation_dir ${CI_OUTPUT_DIR}/imgcls/val
+      - --max_train_samples 4
+      - --do_train
+      - --max_steps 1
+      - --per_device_train_batch_size 1
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 60
+  - path: examples/pytorch/image-pretraining/run_mim.py
+    profile: vision
+    runner: linux-aarch64-a2-2
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --model_name_or_path ${TINYMAE_PATH}
+      - --train_dir ${CI_OUTPUT_DIR}/imgcls/train
+      - --validation_dir ${CI_OUTPUT_DIR}/imgcls/val
+      - --max_train_samples 4
+      - --do_train
+      - --max_steps 1
+      - --per_device_train_batch_size 1
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 60
+  - path: examples/pytorch/image-pretraining/run_mim_no_trainer.py
+    profile: vision
+    runner: linux-aarch64-a2-2
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --model_name_or_path ${TINYMAE_PATH}
+      - --train_dir ${CI_OUTPUT_DIR}/imgcls/train
+      - --validation_dir ${CI_OUTPUT_DIR}/imgcls/val
+      - --max_train_steps 1
+      - --per_device_train_batch_size 1
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 60
+  - path: examples/pytorch/contrastive-image-text/run_clip.py
+    profile: vision
+    runner: linux-aarch64-a2-2
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --model_name_or_path ${TINYCLIP_PATH}
+      - --train_file ${CI_OUTPUT_DIR}/clip_train.json
+      - --remove_unused_columns False
+      - --max_train_samples 4
+      - --do_train
+      - --max_steps 1
+      - --per_device_train_batch_size 1
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 60
+  - path: examples/pytorch/audio-classification/run_audio_classification.py
+    profile: vision
+    runner: linux-aarch64-a2-2
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --model_name_or_path ${TINYWAV2VEC2_PATH}
+      - --train_file ${CI_OUTPUT_DIR}/audio_train.json
+      - --audio_column_name audio
+      - --label_column_name label
+      - --max_length_seconds 1
+      - --max_train_samples 4
+      - --do_train
+      - --max_steps 1
+      - --per_device_train_batch_size 1
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 60
 unsupported:
   # --- 多卡并行：TP/DP/CP 组合需 torchrun 4~8 卡，单卡 NPU 不适用 ---
   - examples/3D_parallel.py
@@ -392,14 +497,10 @@ unsupported:
   - examples/pytorch/language-modeling/run_mlm_no_trainer.py
   - examples/pytorch/language-modeling/run_fim.py
   - examples/pytorch/language-modeling/run_fim_no_trainer.py
-  # --- 批次 2（视觉类）：待补 vision profile（torchvision 及检测/分割依赖）---
-  - examples/pytorch/audio-classification/run_audio_classification.py
-  - examples/pytorch/contrastive-image-text/run_clip.py
-  - examples/pytorch/image-classification/run_image_classification.py
-  - examples/pytorch/image-classification/run_image_classification_no_trainer.py
-  - examples/pytorch/image-pretraining/run_mae.py
-  - examples/pytorch/image-pretraining/run_mim.py
-  - examples/pytorch/image-pretraining/run_mim_no_trainer.py
+  # --- 数据/模型可用性受限（脚本硬编码 Hub 数据集，Runner 无法访问 Hub，无本地文件入口）---
+  # object-detection / instance-segmentation / semantic-segmentation 共 6 条：
+  #   main 分支脚本仅支持 load_dataset(<hub_id>)，无 --train_file/--train_dir 参数，
+  #   且 COCO/ADE20k 数据 schema 特定，无法用本地 packaged 目录伪造
   - examples/pytorch/instance-segmentation/run_instance_segmentation.py
   - examples/pytorch/instance-segmentation/run_instance_segmentation_no_trainer.py
   - examples/pytorch/object-detection/run_object_detection.py

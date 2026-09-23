@@ -54,8 +54,11 @@ mkdir -p "$WORKSPACE_DIR"
 export PIP_EXTRA_INDEX_URL=https://triton-ascend.osinfra.cn/pypi/simple/
 export PIP_TRUSTED_HOST=triton-ascend.osinfra.cn
 export SOC_VERSION=ascend910b1
+# CANN's set_env.sh reads possibly-unset vars (e.g. ZSH_VERSION); relax `set -u`.
+set +u
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 source /usr/local/Ascend/nnal/atb/set_env.sh
+set -u
 
 # System build deps + pip/uv bootstrap (for cloning / building MindSpeed).
 apt-get update -y

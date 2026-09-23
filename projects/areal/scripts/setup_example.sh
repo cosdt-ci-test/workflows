@@ -2,16 +2,13 @@
 # Prepare the CI environment for one supported AReaL example.
 # $1 is the manifest profile. Unknown profiles fail before any install.
 #
-# AReaL's NPU support lives on the `ascend-v1.0.5` branch (not main) and needs
-# a specific stack (CANN 9.0.1 / py3.11 / torch 2.10 / torch_npu 2.10.0.post2 /
-# vLLM 0.23.0 + vLLM-Ascend / transformers 5.5.4 / Megatron-Core 0.16.1 /
-# MindSpeed / Megatron-Bridge). The upstream ghcr image
-# (ghcr.io/hwvanici/areal_npu:v1.0.5-a2) is not reachable from the runners.
-# Instead the CI base image is the official vllm-ascend v0.23.0 release image
-# (swr.cn-southwest-2.../base_image/ascend-ci/vllm-ascend/vllm-ascend:v0.23.0),
-# which already ships torch / torch_npu / vLLM / vLLM-Ascend; this script only
-# installs the remaining pieces (Megatron-Core, MindSpeed, AReaL deps,
-# Megatron-Bridge, AReaL). It is a translation of the repo's Dockerfile.a2.
+# AReaL's NPU support lives on the `ascend-v1.0.5` branch (not main). The CI base
+# image is AReaL's official NPU image (ghcr.io/hwvanici/areal_npu:v1.0.5-a2),
+# which already ships the full stack: CANN 9.0.1 / py3.11 / torch 2.10 /
+# torch_npu 2.10.0.post2 / vLLM 0.23.0 + vLLM-Ascend releases/v0.23.0 /
+# transformers 5.5.4 / Megatron-Core 0.16.1 / MindSpeed / Megatron-Bridge under
+# /areal-workspace, plus all AReaL Python deps from pyproject.npu.toml. So this
+# script only installs the AReaL source under test and pre-downloads the model.
 #
 # Contract: docs/guarding-examples.md "项目运行脚本契约".
 set -euo pipefail
@@ -38,57 +35,16 @@ if [[ -z "${TARGET_ROOT:-}" || -z "${GITHUB_WORKSPACE:-}" || -z "${GITHUB_ENV:-}
   exit 2
 fi
 
-# Pinned to the versions shipped by the v1.0.5 A2 image (see README/Dockerfile.a2).
-MEGATRON_TAG=core_v0.16.1
-MINDSPEED_BRANCH=core_r0.16.0
-MINDSPEED_COMMIT=79626c1380b78f5cea8a971f265a49f96b04d416
-MEGATRON_BRIDGE_COMMIT=de93536e
-WORKSPACE_DIR="$GITHUB_WORKSPACE/areal-workspace"
-mkdir -p "$WORKSPACE_DIR"
+# The image ships the whole stack (Megatron/MindSpeed/Bridge sources + Python
+# deps) under /areal-workspace.
+WORKSPACE_DIR=/areal-workspace
 
-# The base image is the official vllm-ascend v0.23.0 release image, which already
-# ships torch 2.10 / torch_npu 2.10.0.post2 / vLLM 0.23.0 / vLLM-Ascend
-# releases/v0.23.0 — so those are NOT rebuilt here. AReaL's vLLM sleep/wake
-# patches are skipped too (the image ships non-editable installs); CI runs a
-# single training step, so sleep/wake is not exercised.
-export PIP_EXTRA_INDEX_URL=https://triton-ascend.osinfra.cn/pypi/simple/
-export PIP_TRUSTED_HOST=triton-ascend.osinfra.cn
-export SOC_VERSION=ascend910b1
-# CANN's set_env.sh reads possibly-unset vars (e.g. ZSH_VERSION); relax `set -u`.
-set +u
-source /usr/local/Ascend/ascend-toolkit/set_env.sh
-source /usr/local/Ascend/nnal/atb/set_env.sh
-set -u
-
-# System build deps + pip/uv bootstrap (for cloning / building MindSpeed).
-apt-get update -y
-apt-get install -y --no-install-recommends \
-  gcc g++ cmake libnuma-dev wget git curl jq build-essential gawk clang-15
-update-alternatives --install /usr/bin/clang clang /usr/bin/clang-15 20
-update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-15 20
-python3 -m pip install -U pip "setuptools==80.10.2" uv
-
-# Megatron & MindSpeed (megatron-core lives inside the MindSpeed tree).
-git clone --depth 1 --branch "$MEGATRON_TAG" https://github.com/NVIDIA/Megatron-LM.git "$WORKSPACE_DIR/Megatron-LM"
-git clone --branch "$MINDSPEED_BRANCH" https://gitcode.com/Ascend/MindSpeed.git "$WORKSPACE_DIR/MindSpeed"
-git -C "$WORKSPACE_DIR/MindSpeed" checkout "$MINDSPEED_COMMIT"
-cp -r "$WORKSPACE_DIR/Megatron-LM/megatron" "$WORKSPACE_DIR/MindSpeed/megatron"
-python3 -m pip install -e "$WORKSPACE_DIR/MindSpeed" --no-deps
-
-# AReaL deps (pyproject.npu.toml). No --upgrade: keep vllm-ascend's torch stack.
-# uv only accepts the filename `pyproject.toml` for `-r`, so stage a copy.
-mkdir -p /tmp/areal-npu
-cp "$TARGET_ROOT/pyproject.npu.toml" /tmp/areal-npu/pyproject.toml
-UV_HTTP_TIMEOUT=300 uv pip install -r /tmp/areal-npu/pyproject.toml --system --group dev
-
-# Megatron-Bridge
-git clone https://github.com/NVIDIA-NeMo/Megatron-Bridge.git "$WORKSPACE_DIR/Megatron-Bridge"
-git -C "$WORKSPACE_DIR/Megatron-Bridge" checkout "$MEGATRON_BRIDGE_COMMIT"
-
-# AReaL itself (release checkout under test).
+# Install the AReaL source under test (the image has a possibly-stale /AReaL).
+command -v uv >/dev/null 2>&1 || python3 -m pip install -q uv
 uv pip install --no-deps -e "$TARGET_ROOT" --system
 
-# Runtime env (mirrors the image's ENV).
+# Runtime env (mirrors the image's ENV; written to GITHUB_ENV so the run step
+# inherits it).
 echo "PYTHONPATH=$WORKSPACE_DIR/MindSpeed:$WORKSPACE_DIR/Megatron-Bridge/src:${PYTHONPATH:-}" >> "$GITHUB_ENV"
 echo "HCCL_IF_BASE_PORT=63000" >> "$GITHUB_ENV"
 echo "HCCL_NPU_SOCKET_PORT_RANGE=62100-62350" >> "$GITHUB_ENV"
@@ -99,8 +55,8 @@ echo "WANDB_MODE=disabled" >> "$GITHUB_ENV"
 echo "PYTORCH_NPU_ALLOC_CONF=expandable_segments:True" >> "$GITHUB_ENV"
 echo "USE_OPTIMIZED_MODEL=0" >> "$GITHUB_ENV"
 
-# The FSDP/Megatron engine loads safetensors from a LOCAL directory (it does
-# not accept a HF repo id), so pre-download the model and export the path the
+# The FSDP/Megatron engine loads safetensors from a LOCAL directory (it does not
+# accept a HF repo id), so pre-download the model and export the path the
 # manifest references as ${AREAL_MODEL_PATH}.
 export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
 python3 -m pip install -q "huggingface_hub<1.0"

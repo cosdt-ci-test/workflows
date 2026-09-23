@@ -231,6 +231,65 @@ supported:
       - model.target_model_path=${SPECFORGE_MODEL_PATH}
     timeout_minutes: 180
 
+  # ===== offline/colocated（2026-09-23 coder 2x910B4 端到端实测通过）：
+  # 纯 torch trainer（sdpa）读盘训练，前置 prepare_hidden_states.py（in-proc
+  # sglang capture，--sglang-attention-backend ascend，不需要 mooncake、不
+  # 需要 spec-capture server patch），run_example.sh 的 offline 分支自动跑
+  # 预生成步骤。qwen3-4b-dspark-offline（step 1 loss=3.715）与 qwen3-8b-
+  # dflash-offline（step 1 loss=13.96）直接实测通过；qwen3-8b-dspark-offline
+  # 为两个已验证半程的组合（8B dflash in-proc capture + 8B dspark trainer，
+  # 后者由 supported 的 online qwen3-8b-dspark-disaggregated 证明）。
+  # mem-fraction：4B 0.5 即可、8B 需 >=0.537，统一用 SPECFORGE_PREPARE_
+  # MEM_FRACTION 默认 0.65。=====
+  - path: examples/configs/offline/colocated/qwen3-4b-dspark-offline.yaml
+    profile: specforge
+    runner: linux-aarch64-a2-4
+    image: swr.cn-southwest-2.myhuaweicloud.com/base_image/dockerhub/lmsysorg/sglang:v0.5.18-cann9.0.0-910b
+    overlay_args:
+      - training.max_steps=1
+      - training.batch_size=1
+      - training.attention_backend=sdpa
+      - data.max_length=512
+      - training.save_interval=0
+      - training.log_interval=1
+      - tracking.report_to=none
+      - deployment.trainer.nproc_per_node=1
+      - model.target_model_path=${SPECFORGE_MODEL_PATH}
+    timeout_minutes: 180
+
+  - path: examples/configs/offline/colocated/qwen3-8b-dflash-offline.yaml
+    profile: specforge
+    runner: linux-aarch64-a2-4
+    image: swr.cn-southwest-2.myhuaweicloud.com/base_image/dockerhub/lmsysorg/sglang:v0.5.18-cann9.0.0-910b
+    overlay_args:
+      - training.max_steps=1
+      - training.batch_size=1
+      - training.attention_backend=sdpa
+      - data.max_length=512
+      - training.num_anchors=32
+      - training.save_interval=0
+      - training.log_interval=1
+      - tracking.report_to=none
+      - deployment.trainer.nproc_per_node=1
+      - model.target_model_path=${SPECFORGE_MODEL_PATH}
+    timeout_minutes: 180
+
+  - path: examples/configs/offline/colocated/qwen3-8b-dspark-offline.yaml
+    profile: specforge
+    runner: linux-aarch64-a2-4
+    image: swr.cn-southwest-2.myhuaweicloud.com/base_image/dockerhub/lmsysorg/sglang:v0.5.18-cann9.0.0-910b
+    overlay_args:
+      - training.max_steps=1
+      - training.batch_size=1
+      - training.attention_backend=sdpa
+      - data.max_length=512
+      - training.save_interval=0
+      - training.log_interval=1
+      - tracking.report_to=none
+      - deployment.trainer.nproc_per_node=1
+      - model.target_model_path=${SPECFORGE_MODEL_PATH}
+    timeout_minutes: 180
+
 unsupported:
   # ===== LFM2.5 DFLASH：sglang 0.5.18 无 LFM2 capture setter（2026-09-23 源码确认）。
   # LiquidAI/LFM2.5-1.2B-Instruct 在 ModelScope 存在（Code 200），arch=
@@ -310,26 +369,16 @@ unsupported:
   - examples/disagg/run_inkling_dspark_disagg_2node.sh
   - examples/disagg/run_qwen3.6-27b-domino.sh
 
-  # ===== offline/colocated：训练本体 NPU 可跑（2026-09-23 coder 2x910B4
-  # 端到端实测），卡在 examples engine 需要"预生成 hidden states"前置步骤。
-  # offline 流程 = scripts/prepare_hidden_states.py（in-proc sglang capture，
-  # 走原生 set_dflash/dspark setter，不需要 spec-capture patch、不需要
-  # mooncake）+ `specforge train`（纯 torch trainer 读盘）。
-  # qwen3-4b-dspark-offline：实测通过（--sglang-attention-backend ascend +
-  # LD_LIBRARY_PATH 加 atb lib + training.attention_backend=sdpa overlay，
-  # step 1 loss=3.715）。qwen3-8b-dflash-offline：实测通过（同机制，
-  # --sglang-mem-fraction-static 0.65，step 1 loss=13.96）。qwen3-8b-
-  # dspark-offline 与 4b-dspark 同构（dspark offline trainer 已验证）。
-  # 回移 supported 的前置条件：run_example.sh 需为 offline recipe 增加
-  # prepare_hidden_states 预步骤（对齐 external recipe 的 mooncake+sglang
-  # 预启动逻辑——engine 改动，非 example 改动）。
-  # qwen3-8b-domino-offline：domino GRU 链阻断（见 Domino 块）。
+  # ===== offline/colocated 其余两条（2026-09-23 分析）：
+  # qwen3-4b-dspark-offline / qwen3-8b-dflash-offline / qwen3-8b-dspark-
+  # offline 三条 dflash/dspark 家族已回移 supported（run_example.sh 增加了
+  # offline 分支：prepare_hidden_states in-proc capture 预步骤 + 纯 torch
+  # trainer）。
+  # qwen3-8b-domino-offline：domino GRU 链阻断（见 Domino 块），offline 不改
+  # 变 trainer 侧的 GRU/DynamicGRUV2Grad 问题。
   # qwen3-8b-eagle3-offline：LogSoftmaxLoss vocab 151936 > 131072，
   # Python 层直接拒绝（见 EAGLE3 块）。=====
-  - examples/configs/offline/colocated/qwen3-4b-dspark-offline.yaml
-  - examples/configs/offline/colocated/qwen3-8b-dflash-offline.yaml
   - examples/configs/offline/colocated/qwen3-8b-domino-offline.yaml
-  - examples/configs/offline/colocated/qwen3-8b-dspark-offline.yaml
   - examples/configs/offline/colocated/qwen3-8b-eagle3-offline.yaml
 
   # ===== AMD (ROCm MI355X) 专用配置：torch 2.13+rocm7.2 / sglang dsv4 attention

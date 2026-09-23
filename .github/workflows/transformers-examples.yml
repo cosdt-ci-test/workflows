@@ -190,7 +190,7 @@ jobs:
         # supported matrix is produced by check_examples_manifest.py; this
         # validation step is not the matrix gate.
         run: |
-          python3 -m pip install -q check-jsonschema
+          python3 -m pip install -q "check-jsonschema==0.38.0"
           check-jsonschema --schemafile workflows/schemas/manifest_check_result.schema.json manifest_check_result.json
         continue-on-error: true
       - uses: actions/upload-artifact@v4

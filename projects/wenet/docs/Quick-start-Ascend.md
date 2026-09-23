@@ -293,6 +293,10 @@ exp/conformer/epoch_0.pt
 stage 5 为模型测试推理阶段，将测试集中语音文件识别为文本。此外，stage 5 还提供平均模型的功能：当 `${average_checkpoint}` 为 `true`（脚本默认值）时，将交叉验证集上最佳的 `${average_num}` 个模型平均，生成增强模型 `avg_1.pt`，供解码与导出使用：
 
 ```shell #test-setup id="infer"
+# CANN 环境必须显式加载：否则 LD_LIBRARY_PATH 缺少 libascendcl 等库路径，
+# recognize.py 里 import torch_npu 会静默失败（ImportError 被
+# is_torch_npu_available 吞掉只打印提示），随后 torch.device('npu') 直接崩溃
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
 cd wenet/examples/aishell/s0
 bash run_npu.sh --stage 5 --stop_stage 5 --average_num 1 --data /root/asr-data/OpenSLR/33
 ```
@@ -322,6 +326,7 @@ xxx
 stage 6 为模型导出阶段，`wenet/bin/export_jit.py` 使用 `Libtorch` 导出以上训练好的模型（基于 stage 5 生成的 `avg_1.pt`），导出的模型可用于其他编程语言（如 C++）的推理：
 
 ```shell #test-setup id="export"
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
 cd wenet/examples/aishell/s0
 bash run_npu.sh --stage 6 --stop_stage 6 --average_num 1
 ```

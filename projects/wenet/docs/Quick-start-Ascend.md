@@ -258,6 +258,13 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 cd wenet/examples/aishell/s0
 cp conf/train_conformer.yaml conf/train_conformer_1ep.yaml
 sed -i 's/max_epoch: .*/max_epoch: 1/' conf/train_conformer_1ep.yaml
+# NPU fork-safety 适配：主进程初始化 CANN 后 fork 出的 DataLoader worker 会段
+# 错误（torch_npu 2.2 + CANN 8.0 已知问题），必须单进程读取（num_workers=0）。
+# torch 2.2 还要求 num_workers=0 时 persistent_workers=False 且
+# prefetch_factor=None，否则 DataLoader 构造直接 ValueError，一并条件化
+sed -i 's/^num_workers=.*/num_workers=0/' run_npu.sh
+sed -i 's/persistent_workers=True/persistent_workers=args.num_workers > 0/g' wenet/wenet/utils/train_utils.py
+sed -i 's/prefetch_factor=args.prefetch/prefetch_factor=args.prefetch if args.num_workers > 0 else None/g' wenet/wenet/utils/train_utils.py
 bash run_npu.sh --stage 4 --stop_stage 4 --train_config conf/train_conformer_1ep.yaml --data /root/asr-data/OpenSLR/33
 ```
 

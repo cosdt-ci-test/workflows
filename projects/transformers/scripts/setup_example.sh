@@ -27,7 +27,7 @@ case "$PROFILE" in
     DEPS=(accelerate datasets evaluate sacrebleu rouge-score nltk sentencepiece tiktoken)
     ;;
   vision)
-    DEPS=(accelerate datasets evaluate)
+    DEPS=(accelerate datasets evaluate pillow)
     ;;
   *)
     echo "unknown profile: $PROFILE (supported: generation glue small-training lm seq2seq vision)" >&2

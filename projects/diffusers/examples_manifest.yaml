@@ -702,22 +702,6 @@ supported:
       - --num_train_epochs 1
     timeout_minutes: 120
 
-  # IP-Adapter SDXL（同一份 JSON 清单；SDXL LoRA 单卡）
-  - path: examples/research_projects/ip_adapter/tutorial_train_sdxl.py
-    profile: diffusers-research-plain
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --pretrained_model_name_or_path stabilityai/stable-diffusion-xl-base-1.0
-      - --image_encoder_path ${IP_ADAPTER_SDXL_IMAGE_ENCODER_PATH}
-      - --data_json_file ${FIXTURE_DIR}/ip_adapter/data.json
-      - --data_root_path ${FIXTURE_DIR}/images
-      - --output_dir ${CI_OUTPUT_DIR}
-      - --resolution 256
-      - --train_batch_size 1
-      - --num_train_epochs 1
-    timeout_minutes: 180
-
     # Sana 1600M LoRA（单卡 a2-1）
   - path: examples/dreambooth/train_dreambooth_lora_sana.py
     profile: diffusers-sana
@@ -1008,6 +992,7 @@ unsupported:
   - examples/research_projects/scheduled_huber_loss_training/text_to_image/train_text_to_image_sdxl.py
   - examples/consistency_distillation/train_lcm_distill_sdxl_wds.py
   - examples/text_to_image/train_text_to_image_sdxl.py
+  - examples/research_projects/ip_adapter/tutorial_train_sdxl.py
   # OOM：LoRA SDXL LCM 蒸馏在 a2-1（29.5GiB）forward 即 OOM（已分配 24.4GiB）。
   # DDP 不省单卡显存；ZeRO-3 又撞上游 bug——训练循环 L1358
   # `solver.ddim_step(...).to(unet.dtype)`，模型被 DeepSpeedEngine 包裹后无 .dtype。

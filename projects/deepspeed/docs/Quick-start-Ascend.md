@@ -187,6 +187,7 @@ deepspeed --num_gpus 1 train_cifar10.py
 ...
 epoch 1 avg loss: xxx
 Finished Training
+...
 ```
 
 ### 多卡分布式训练
@@ -207,6 +208,7 @@ deepspeed --num_gpus 2 train_cifar10.py
 ...
 epoch 1 avg loss: xxx
 Finished Training
+...
 ```
 
 ## 更多用法

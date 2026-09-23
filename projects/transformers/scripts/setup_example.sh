@@ -79,6 +79,23 @@ for env_name, model_id in mapping.items():
         fh.write(f"{env_name}={local}\n")
 PY
 
+# tiny xlnet exists only on HuggingFace (ModelScope 404s the repo); pull it via
+# the China-reachable hf-mirror.com mirror for the beam-search QA examples.
+# Kept non-fatal so a mirror outage cannot fail the unrelated example jobs.
+if TINYXLNET=$(python - <<'PY'
+from huggingface_hub import snapshot_download
+
+print(snapshot_download(
+    "sshleifer/tiny-xlnet-base-cased",
+    endpoint="https://hf-mirror.com",
+))
+PY
+); then
+  echo "TINYXLNET_PATH=$TINYXLNET" >> "$GITHUB_ENV"
+else
+  echo "warning: tiny xlnet download via hf-mirror.com failed; beam-search examples will fail" >&2
+fi
+
 # LM-family examples infer the dataset loader from the train_file suffix and
 # reject the extensionless wiki_text/wiki_00 fixture, so expose it as train.txt
 # in the job output dir for the ${CI_OUTPUT_DIR}/train.txt overlay args.

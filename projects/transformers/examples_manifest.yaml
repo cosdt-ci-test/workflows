@@ -112,20 +112,6 @@ supported:
       - --per_device_train_batch_size 1
       - --output_dir ${CI_OUTPUT_DIR}
     timeout_minutes: 60
-  # 上游 breakage：脚本引用 accelerate 的 DistributedType.TPU，新版 accelerate 已移除该枚举，
-  # 报 "AttributeError: type object 'DistributedType' has no attribute 'TPU'"，与 NPU 环境无关，待上游修复后恢复。
-  - path: examples/pytorch/language-modeling/run_clm_no_trainer.py
-    profile: lm
-    runner: linux-aarch64-a2-2
-    npu_devices: '0'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --model_name_or_path ${TINYGPT2_PATH}
-      - --train_file ${CI_OUTPUT_DIR}/train.txt
-      - --max_train_steps 1
-      - --per_device_train_batch_size 1
-      - --output_dir ${CI_OUTPUT_DIR}
-    timeout_minutes: 60
   - path: examples/pytorch/language-modeling/run_mlm.py
     profile: lm
     runner: linux-aarch64-a2-2
@@ -136,53 +122,6 @@ supported:
       - --train_file ${CI_OUTPUT_DIR}/train.txt
       - --do_train
       - --max_steps 1
-      - --per_device_train_batch_size 1
-      - --output_dir ${CI_OUTPUT_DIR}
-    timeout_minutes: 60
-  # 上游 breakage：同 run_clm_no_trainer，脚本引用已移除的 accelerate DistributedType.TPU 枚举，
-  # 报 AttributeError，与 NPU 环境无关，待上游修复后恢复。
-  - path: examples/pytorch/language-modeling/run_mlm_no_trainer.py
-    profile: lm
-    runner: linux-aarch64-a2-2
-    npu_devices: '0'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --model_name_or_path ${DISTILBERT_PATH}
-      - --train_file ${CI_OUTPUT_DIR}/train.txt
-      - --max_train_steps 1
-      - --per_device_train_batch_size 1
-      - --output_dir ${CI_OUTPUT_DIR}
-    timeout_minutes: 60
-  # 上游 breakage：vocab 扩容分支对 Embedding 模块直接调用 .mean(dim=0)，
-  # 报 "'Embedding' object has no attribute 'mean'"（原意应为对 weight 张量取均值），上游 bug，待修复后恢复。
-  - path: examples/pytorch/language-modeling/run_fim.py
-    profile: lm
-    runner: linux-aarch64-a2-2
-    npu_devices: '0'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --model_name_or_path ${TINYGPT2_PATH}
-      - --train_file ${CI_OUTPUT_DIR}/train.txt
-      - --fim_rate 0.5
-      - --fim_spm_rate 0.5
-      - --do_train
-      - --max_steps 1
-      - --per_device_train_batch_size 1
-      - --output_dir ${CI_OUTPUT_DIR}
-    timeout_minutes: 60
-  # 上游 breakage：脚本 from huggingface_hub import Repository，该类已从新版 huggingface_hub 移除，
-  # 报 ImportError: cannot import name 'Repository'，待上游修复后恢复。
-  - path: examples/pytorch/language-modeling/run_fim_no_trainer.py
-    profile: lm
-    runner: linux-aarch64-a2-2
-    npu_devices: '0'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --model_name_or_path ${TINYGPT2_PATH}
-      - --train_file ${CI_OUTPUT_DIR}/train.txt
-      - --fim_rate 0.5
-      - --fim_spm_rate 0.5
-      - --max_train_steps 1
       - --per_device_train_batch_size 1
       - --output_dir ${CI_OUTPUT_DIR}
     timeout_minutes: 60
@@ -443,6 +382,16 @@ unsupported:
   - examples/pytorch/question-answering/trainer_qa.py
   - examples/pytorch/question-answering/trainer_seq2seq_qa.py
   - examples/pytorch/question-answering/utils_qa.py
+  # --- 上游 breakage（transformers main 自身损坏，manifest 层无法修复，上游修复后恢复）---
+  # run_clm_no_trainer.py / run_mlm_no_trainer.py：引用 accelerate 的 DistributedType.TPU，
+  #   新版 accelerate 已移除该枚举，报 "AttributeError: no attribute 'TPU'"，与 NPU 环境无关
+  # run_fim.py：vocab 扩容分支对 Embedding 模块直接调用 .mean(dim=0)，
+  #   报 "'Embedding' object has no attribute 'mean'"（原意应为对 weight 张量取均值）
+  # run_fim_no_trainer.py：from huggingface_hub import Repository，该类已从新版 huggingface_hub 移除，报 ImportError
+  - examples/pytorch/language-modeling/run_clm_no_trainer.py
+  - examples/pytorch/language-modeling/run_mlm_no_trainer.py
+  - examples/pytorch/language-modeling/run_fim.py
+  - examples/pytorch/language-modeling/run_fim_no_trainer.py
   # --- 批次 2（视觉类）：待补 vision profile（torchvision 及检测/分割依赖）---
   - examples/pytorch/audio-classification/run_audio_classification.py
   - examples/pytorch/contrastive-image-text/run_clip.py

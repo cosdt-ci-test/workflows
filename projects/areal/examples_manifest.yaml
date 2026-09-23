@@ -52,10 +52,10 @@ supported:
     profile: areal-vlm-grpo
     runner: linux-aarch64-a2-1
     npu_devices: '0'
-    # CANN 底座（AReaL 的 ghcr 镜像拉不动；SWR 上没有 9.0.1-py3.11 tag）；
-    # AReaL 栈由 setup_example.sh 安装。注意此底座是 CANN 9.1.0 / py3.12，
-    # 与 AReaL 官方镜像的 9.0.1 / py3.11 有差异。
-    image: quay.io/ascend/cann:9.0.1-910b-ubuntu22.04-py3.11
+    # CANN 底座：SWR ascendhub 有 9.0.1-910b-ubuntu22.04-py3.11，与 AReaL 官方镜像
+    # （ghcr.io/hwvanici/areal_npu:v1.0.5-a2）的底座一致（CANN 9.0.1 / py3.11）。
+    # AReaL 栈（torch 2.10 + vllm-ascend releases/v0.23.0）由 setup_example.sh 安装。
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.1-910b-ubuntu22.04-py3.11
     overlay_args:
       - --config examples/vlm_npu/qwen2_5_vl_3b_geometry3k_grpo.yaml
       - cluster.n_gpus_per_node=1

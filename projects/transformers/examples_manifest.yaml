@@ -359,6 +359,7 @@ supported:
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
       - --model_name_or_path ${TINYMAE_PATH}
+      - --dataset_name imagefolder
       - --train_dir ${CI_OUTPUT_DIR}/imgcls/train
       - --validation_dir ${CI_OUTPUT_DIR}/imgcls/val
       - --max_train_samples 4
@@ -374,6 +375,7 @@ supported:
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
       - --model_name_or_path ${TINYMAE_PATH}
+      - --dataset_name imagefolder
       - --train_dir ${CI_OUTPUT_DIR}/imgcls/train
       - --validation_dir ${CI_OUTPUT_DIR}/imgcls/val
       - --max_train_samples 4
@@ -389,6 +391,7 @@ supported:
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
       - --model_name_or_path ${TINYMAE_PATH}
+      - --dataset_name imagefolder
       - --train_dir ${CI_OUTPUT_DIR}/imgcls/train
       - --validation_dir ${CI_OUTPUT_DIR}/imgcls/val
       - --max_train_steps 1
@@ -403,6 +406,8 @@ supported:
     overlay_args:
       - --model_name_or_path ${TINYCLIP_PATH}
       - --train_file ${CI_OUTPUT_DIR}/clip_train.json
+      - --image_column image_path
+      - --caption_column captions
       - --remove_unused_columns False
       - --max_train_samples 4
       - --do_train
@@ -417,7 +422,7 @@ supported:
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
       - --model_name_or_path ${TINYWAV2VEC2_PATH}
-      - --train_file ${CI_OUTPUT_DIR}/audio_train.json
+      - --dataset_name ${CI_OUTPUT_DIR}/audio_data
       - --audio_column_name audio
       - --label_column_name label
       - --max_length_seconds 1

@@ -27,7 +27,7 @@ case "$PROFILE" in
     DEPS=(accelerate datasets evaluate sacrebleu rouge-score nltk sentencepiece tiktoken)
     ;;
   vision)
-    DEPS=(accelerate datasets evaluate pillow)
+    DEPS=(accelerate datasets evaluate pillow scikit-learn soundfile)
     ;;
   *)
     echo "unknown profile: $PROFILE (supported: generation glue small-training lm seq2seq vision)" >&2
@@ -220,7 +220,11 @@ with open(os.path.join(out, "clip_train.json"), "w", encoding="utf-8") as fh:
     json.dump(clip_rows, fh)
 
 # Audio classification: silent 16 kHz mono wavs, 1 s of 16-bit zeros; the
-# feature extractor does its own padding/normalization.
+# feature extractor does its own padding/normalization. The script only
+# accepts --dataset_name (its --train_file field is defined but never
+# consumed upstream), so the json must live in a directory named
+# train.json for the packaged json builder to expose a "train" split.
+mkdir -p "$CI_OUTPUT_DIR/audio_data"
 audio_rows = []
 for name, label in (("a.wav", "a"), ("b.wav", "b")):
     path = os.path.join(out, name)
@@ -230,6 +234,6 @@ for name, label in (("a.wav", "a"), ("b.wav", "b")):
         fh.setframerate(16000)
         fh.writeframes(b"\x00\x00" * 16000)
     audio_rows.append({"audio": {"path": path}, "label": label})
-with open(os.path.join(out, "audio_train.json"), "w", encoding="utf-8") as fh:
+with open(os.path.join(out, "audio_data", "train.json"), "w", encoding="utf-8") as fh:
     json.dump(audio_rows, fh)
 PY

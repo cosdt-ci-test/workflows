@@ -75,6 +75,21 @@ mapping = {
 }
 for env_name, model_id in mapping.items():
     local = snapshot_download(model_id, cache_dir=MODEL_CACHE)
+    if model_id == "sshleifer/tiny-mbart":
+        import json
+
+        cfg_path = os.path.join(local, "config.json")
+        with open(cfg_path, encoding="utf-8") as fh:
+            cfg = json.load(fh)
+        # The ModelScope snapshot lacks decoder_start_token_id; transformers
+        # main no longer falls back to model-class defaults, so the mbart
+        # summarize/seq2seq_qa examples raise "Make sure that
+        # `config.decoder_start_token_id` is correctly defined". Inject the
+        # mbart standard value (eos </s> id) idempotently.
+        if cfg.get("decoder_start_token_id") is None:
+            cfg["decoder_start_token_id"] = 2
+            with open(cfg_path, "w", encoding="utf-8") as fh:
+                json.dump(cfg, fh, indent=2)
     with open(os.environ["GITHUB_ENV"], "a") as fh:
         fh.write(f"{env_name}={local}\n")
 PY

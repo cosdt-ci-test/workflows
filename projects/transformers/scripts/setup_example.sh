@@ -18,13 +18,13 @@ case "$PROFILE" in
     DEPS=(accelerate datasets evaluate scikit-learn)
     ;;
   small-training)
-    DEPS=(accelerate datasets evaluate seqeval tiktoken)
+    DEPS=(accelerate datasets evaluate seqeval sentencepiece tiktoken)
     ;;
   lm)
     DEPS=(accelerate datasets evaluate)
     ;;
   seq2seq)
-    DEPS=(accelerate datasets evaluate sacrebleu rouge-score nltk tiktoken)
+    DEPS=(accelerate datasets evaluate sacrebleu rouge-score nltk sentencepiece tiktoken)
     ;;
   *)
     echo "unknown profile: $PROFILE (supported: generation glue small-training lm seq2seq)" >&2
@@ -99,10 +99,11 @@ fi
 # LM-family examples infer the dataset loader from the train_file suffix and
 # reject the extensionless wiki_text/wiki_00 fixture, so expose it as train.txt
 # in the job output dir for the ${CI_OUTPUT_DIR}/train.txt overlay args.
-# tiktoken note: transformers main's tokenizer loading probes the vocab file in
-# tiktoken format before falling back to sentencepiece, so sentencepiece-only
-# models (xlnet spiece.model, mbart sentencepiece.bpe.model) fail with
-# "ValueError: tiktoken is required" unless the package is installed.
+# sentencepiece note: transformers main loads sentencepiece-only vocab files
+# (xlnet spiece.model, mbart sentencepiece.bpe.model) via SentencePieceExtractor
+# and only falls back to a tiktoken parse when that import/extraction fails, so
+# the sentencepiece package must be installed or loading crashes with
+# "ValueError: Error parsing line ... in spiece.model".
 : "${CI_OUTPUT_DIR:=$GITHUB_WORKSPACE/output}"
 mkdir -p "$CI_OUTPUT_DIR"
 cp "$TARGET_ROOT/tests/fixtures/tests_samples/wiki_text/wiki_00" "$CI_OUTPUT_DIR/train.txt"

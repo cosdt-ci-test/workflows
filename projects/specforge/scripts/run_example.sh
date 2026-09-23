@@ -46,10 +46,17 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 python -c "import torch, torch_npu; print('NPU available:', torch.npu.is_available(), 'devices:', torch.npu.device_count())"
 
 expand_overlay() {
-  # The workflow serializes manifest.overlay_args as JSON. Expand each
-  # item with shell quoting intact, then allow CI paths such as
-  # ${CI_OUTPUT_DIR} / ${SPECFORGE_MODEL_PATH} to resolve only in this
-  # job's environment.
+  # The workflow serializes manifest.overlay_args as JSON. Each array item is
+  # exactly ONE CLI argument (a JSON array of strings is argv-shaped), passed
+  # through verbatim after ${CI_OUTPUT_DIR} / ${SPECFORGE_MODEL_PATH}-style
+  # env expansion. Do NOT shlex.split the items: posix shlex strips embedded
+  # double quotes, which corrupts structured specforge overrides —
+  # trainer_cuda_visible_devices=["1"] would arrive as [1] (int, rejected by
+  # the List[str] schema) and
+  # capture_servers=[{"port":30000,...}] as YAML flow {port:30000,...} whose
+  # colon-without-space keys all parse wrong (run 35811075823, both
+  # managed-local legs). Quoted values in the manifest are YAML/JSON syntax,
+  # not shell quoting, and must survive intact.
   "$PYTHON" - <<'PY'
 import json
 import os
@@ -71,7 +78,7 @@ tokens = []
 for item in items:
     if not isinstance(item, str) or not item.strip():
         raise SystemExit('OVERLAY_ARGS items must be non-empty strings')
-    tokens.extend(shlex.split(os.path.expandvars(item), posix=True))
+    tokens.append(os.path.expandvars(item))
 print(' '.join(shlex.quote(token) for token in tokens))
 PY
 }
@@ -85,7 +92,13 @@ if ! OVERLAY_TOKENS="$(expand_overlay)"; then
   echo "FAILED - OVERLAY_ARGS expansion error (see above)" >&2
   exit 1
 fi
-eval "EXTRA_ARGS=( $OVERLAY_TOKENS )"
+# NOTE: the eval argument is deliberately NOT wrapped in double quotes.
+# OVERLAY_TOKENS is a space-joined list of shlex.quote'd tokens; eval must
+# re-parse them with that quoting intact. A `eval "EXTRA_ARGS=( ... )"` wrapper
+# would treat every embedded double quote as a string delimiter and silently
+# strip it — exactly what corrupted the structured managed-local overlays in
+# run 35811075823 (["1"] -> [1], {"port":30000,...} -> {port:30000,...}).
+eval EXTRA_ARGS=\($OVERLAY_TOKENS\)
 
 echo "running $LAUNCH_PATH with ${#EXTRA_ARGS[@]} overlay args"
 if ((${#EXTRA_ARGS[@]})); then
@@ -365,6 +378,15 @@ case "$LAUNCH_PATH" in
       # block, so no ASCEND_RT_VISIBLE_DEVICES pin here either.
       eval "$(resolve_capture)"
       rm -rf "outputs/${CAP_RUN_ID}"
+      # The supervisor spawns the capture server as a child of this process, so
+      # it inherits our env — export the atb lib here for the same reason
+      # start_sglang_capture does (Qwen3.5-family models lazy-load libatb.so
+      # through torch_npu op_plugin; without it the server dies at first
+      # _npu_reshape_and_cache with OSError from torch.ops.load_library).
+      ATB_LIB=/usr/local/Ascend/nnal/atb/9.0.0/atb/cxx_abi_1/lib
+      if [[ -d "$ATB_LIB" ]]; then
+        export LD_LIBRARY_PATH="$ATB_LIB:${LD_LIBRARY_PATH:-}"
+      fi
       PYTHONUNBUFFERED=1 \
       PYTORCH_NPU_ALLOC_CONF=expandable_segments:True \
         specforge train -c "$LAUNCH_PATH" "${EXTRA_ARGS[@]}"

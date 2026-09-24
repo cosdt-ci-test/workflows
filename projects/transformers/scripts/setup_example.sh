@@ -190,7 +190,10 @@ PY
 #   into a 3-class train/val layout.
 # - CLIP: json rows {image_path, captions} referencing the COCO fixture images.
 # - Audio classification: json rows {audio, label} over 1-second silent wavs
-#   written with the stdlib wave module (keeps the profile free of audio deps).
+#   written with the stdlib wave module (keeps the profile free of audio deps);
+#   the example unconditionally reads a "validation" split, so emit both
+#   train.json and validation.json for the packaged json builder.
+echo "[setup] vision data prep: CI_OUTPUT_DIR=${CI_OUTPUT_DIR:-<unset>} TARGET_ROOT=$TARGET_ROOT"
 mkdir -p "$CI_OUTPUT_DIR/imgcls/train" "$CI_OUTPUT_DIR/imgcls/val"
 coco_dir="$TARGET_ROOT/tests/fixtures/tests_samples/COCO"
 for split in train val; do
@@ -199,6 +202,7 @@ for split in train val; do
   cp "$coco_dir/000000039769.png" "$CI_OUTPUT_DIR/imgcls/$split/class_b/000000039769.png"
   cp "$coco_dir/000000004016.png" "$CI_OUTPUT_DIR/imgcls/$split/class_c/000000004016.png"
 done
+echo "[setup] imagefolder tree:"; ls -R "$CI_OUTPUT_DIR/imgcls" | head -30
 
 python - "$TARGET_ROOT" "$CI_OUTPUT_DIR" <<'PY'
 import json
@@ -226,7 +230,7 @@ with open(os.path.join(out, "clip_train.json"), "w", encoding="utf-8") as fh:
 # train.json for the packaged json builder to expose a "train" split.
 os.makedirs(os.path.join(out, "audio_data"), exist_ok=True)
 audio_rows = []
-for name, label in (("a.wav", "a"), ("b.wav", "b")):
+for name, label in (("a.wav", "a"), ("b.wav", "b"), ("c.wav", "b")):
     path = os.path.join(out, name)
     with wave.open(path, "wb") as fh:
         fh.setnchannels(1)
@@ -234,6 +238,12 @@ for name, label in (("a.wav", "a"), ("b.wav", "b")):
         fh.setframerate(16000)
         fh.writeframes(b"\x00\x00" * 16000)
     audio_rows.append({"audio": {"path": path}, "label": label})
+# The audio example reads a "validation" split unconditionally, so expose both
+# splits (each row gets a distinct wav path since the Audio feature indexes
+# files by path).
+os.makedirs(os.path.join(out, "audio_data"), exist_ok=True)
 with open(os.path.join(out, "audio_data", "train.json"), "w", encoding="utf-8") as fh:
-    json.dump(audio_rows, fh)
+    json.dump(audio_rows[:2], fh)
+with open(os.path.join(out, "audio_data", "validation.json"), "w", encoding="utf-8") as fh:
+    json.dump(audio_rows[2:], fh)
 PY

@@ -332,6 +332,7 @@ supported:
       - --model_name_or_path ${TINYVIT_PATH}
       - --train_dir ${CI_OUTPUT_DIR}/imgcls/train
       - --validation_dir ${CI_OUTPUT_DIR}/imgcls/val
+      - --train_val_split 0.0
       - --remove_unused_columns False
       - --max_train_samples 4
       - --do_train

@@ -228,22 +228,26 @@ with open(os.path.join(out, "clip_train.json"), "w", encoding="utf-8") as fh:
 # accepts --dataset_name (its --train_file field is defined but never
 # consumed upstream), so the json must live in a directory named
 # train.json for the packaged json builder to expose a "train" split.
-os.makedirs(os.path.join(out, "audio_data"), exist_ok=True)
-audio_rows = []
-for name, label in (("a.wav", "a"), ("b.wav", "b"), ("c.wav", "b")):
-    path = os.path.join(out, name)
-    with wave.open(path, "wb") as fh:
-        fh.setnchannels(1)
-        fh.setsampwidth(2)
-        fh.setframerate(16000)
-        fh.writeframes(b"\x00\x00" * 16000)
-    audio_rows.append({"audio": {"path": path}, "label": label})
-# The audio example reads a "validation" split unconditionally, so expose both
-# splits (each row gets a distinct wav path since the Audio feature indexes
-# files by path).
-os.makedirs(os.path.join(out, "audio_data"), exist_ok=True)
-with open(os.path.join(out, "audio_data", "train.json"), "w", encoding="utf-8") as fh:
-    json.dump(audio_rows[:2], fh)
-with open(os.path.join(out, "audio_data", "validation.json"), "w", encoding="utf-8") as fh:
-    json.dump(audio_rows[2:], fh)
+# Audio classification: the example reads ClassLabel.names off the label
+# column, which the packaged json builder cannot provide, so lay the wavs out
+# as an audiofolder tree instead — the builder derives the ClassLabel ("label"
+# column) from the class subdirectories and train/validation from split dirs.
+audio_root = os.path.join(out, "audio_data")
+os.makedirs(audio_root, exist_ok=True)
+# Drop json fixtures from earlier iterations: the audiofolder builder must not
+# see stale split files left over on the persistent job output volume.
+for stale in ("train.json", "validation.json"):
+    stale_path = os.path.join(audio_root, stale)
+    if os.path.exists(stale_path):
+        os.remove(stale_path)
+for split, names in (("train", ("a.wav", "b.wav")), ("validation", ("c.wav",))):
+    for name in names:
+        cls_dir = os.path.join(audio_root, split, "a" if name.startswith("a") else "b")
+        os.makedirs(cls_dir, exist_ok=True)
+        path = os.path.join(cls_dir, name)
+        with wave.open(path, "wb") as fh:
+            fh.setnchannels(1)
+            fh.setsampwidth(2)
+            fh.setframerate(16000)
+            fh.writeframes(b"\x00\x00" * 16000)
 PY

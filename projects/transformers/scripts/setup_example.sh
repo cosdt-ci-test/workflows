@@ -224,7 +224,7 @@ with open(os.path.join(out, "clip_train.json"), "w", encoding="utf-8") as fh:
 # accepts --dataset_name (its --train_file field is defined but never
 # consumed upstream), so the json must live in a directory named
 # train.json for the packaged json builder to expose a "train" split.
-mkdir -p "$CI_OUTPUT_DIR/audio_data"
+os.makedirs(os.path.join(out, "audio_data"), exist_ok=True)
 audio_rows = []
 for name, label in (("a.wav", "a"), ("b.wav", "b")):
     path = os.path.join(out, name)

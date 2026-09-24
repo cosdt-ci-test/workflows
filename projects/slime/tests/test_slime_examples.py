@@ -215,6 +215,18 @@ def test_run_example_exports_npu_contract() -> None:
         assert needle in run_script, f"run_example.sh missing: {needle}"
 
 
+def test_retool_ray_uses_declared_four_card_visibility() -> None:
+    run_script = (PROJECT_ROOT / "scripts" / "run_example.sh").read_text(
+        encoding="utf-8")
+    assert 'export SLIME_RETOOL_DEVICES="$ASCEND_RT_VISIBLE_DEVICES"' in run_script
+    assert 'retool_devices = os.environ.get("SLIME_RETOOL_DEVICES")' in run_script
+    assert 'os.environ["ASCEND_RT_VISIBLE_DEVICES"] = retool_devices' in run_script
+    assert 'os.environ["CUDA_VISIBLE_DEVICES"] = retool_devices' in run_script
+    assert '"ASCEND_RT_VISIBLE_DEVICES": retool_devices' in run_script
+    assert '"CUDA_VISIBLE_DEVICES": retool_devices' in run_script
+    assert 'print_retool_worker_errors()' in run_script
+
+
 
 
 # Entries whose CI train recipe is carried by manifest overlay_args.

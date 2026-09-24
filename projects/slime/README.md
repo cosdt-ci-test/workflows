@@ -86,7 +86,13 @@ ReTool 的上游 `.sh` 包含 CUDA 检测、Ray 清理、四卡 colocate/TP2 配
 数据和 W&B。项目 runner 保留四卡布局及自定义生成/奖励函数；setup 补齐
 `jinja2`、`psutil`，从 ModelScope 下载模型并用 fork 工具转为 `_torch_dist`。
 `tool_sandbox.py` 会在容器内执行模型生成的 Python 代码，因此仅使用本地 fixture
-与最小权限 workflow；这条尚无 fork NPU 端到端先例，首次 CI 以真实日志验收。
+与最小权限 workflow；这条尚无 fork NPU 端到端先例，需以远程训练日志验收。
+
+`slime-examples #14` 的 ReTool 已完成环境安装与 SGLang 启动，但四卡 Ray 训练
+actor 在创建时抛出无源码位置的 `AssertionError`。日志显示 fork 的
+`execute_train()` 给 worker 写入 `0,1,2,3,4,5,6,7`，与 runner 实际四卡不一致；
+项目 runner 现通过 `extra_env_vars` 覆盖为可见的四卡，并在再次失败时最多打印
+四份 Ray worker 错误日志的短尾段。此修复需下一次手动 workflow 验证。
 
 ### 阶段三候选
 

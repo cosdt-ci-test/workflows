@@ -165,6 +165,7 @@ case "$entry_key" in
     # The upstream .sh hardcodes CUDA/path/sweep settings; keep its
     # four-card colocate + TP2 ReTool recipe through fork execute_train.
     require_visible_devices 4 '0,1,2,3'
+    export SLIME_RETOOL_DEVICES="$ASCEND_RT_VISIBLE_DEVICES"
     NUM_GPUS=4
     MODEL_TYPE=qwen3-4B-Instruct-2507
     TRAIN_SCRIPT=train.py
@@ -268,6 +269,7 @@ def start_opd_teacher():
 
 
 launch_options = {}
+retool_devices = os.environ.get("SLIME_RETOOL_DEVICES")
 if teacher_device:
     train_devices = os.environ["SLIME_OPD_TRAIN_DEVICES"]
     # The fork builds Ray's runtime env from its own defaults, so override
@@ -286,6 +288,37 @@ if teacher_device:
             "GLOO_SOCKET_IFNAME": "lo",
         },
     }
+elif retool_devices:
+    # execute_train() otherwise hardcodes 0..7 in its Ray runtime env,
+    # even though this colocated job reserves only four physical NPUs.
+    os.environ["ASCEND_RT_VISIBLE_DEVICES"] = retool_devices
+    os.environ["CUDA_VISIBLE_DEVICES"] = retool_devices
+    launch_options = {
+        "extra_env_vars": {
+            "ASCEND_RT_VISIBLE_DEVICES": retool_devices,
+            "CUDA_VISIBLE_DEVICES": retool_devices,
+        },
+    }
+    print(f"ReTool Ray-visible NPUs: {retool_devices}", flush=True)
+
+
+def print_retool_worker_errors():
+    # Ray's submitted-job traceback may omit the actor's real assertion
+    # site. Keep a bounded excerpt from its local worker logs on failure.
+    logs = Path("/tmp/ray/session_latest/logs")
+    if not logs.exists():
+        return
+    try:
+        candidates = list(logs.glob("worker-*.err"))
+        candidates += list(logs.glob("python-core-worker-*.log"))
+        for path in sorted(candidates, key=lambda item: item.stat().st_mtime, reverse=True)[:4]:
+            with path.open(errors="replace") as output:
+                tail = "".join(deque(output, maxlen=35))
+            if "Traceback" in tail or "AssertionError" in tail or "ERROR" in tail:
+                print(f"Ray worker log tail ({path.name}):\n{tail}", flush=True)
+    except OSError as log_error:
+        print(f"could not read Ray worker diagnostics: {log_error}", flush=True)
+
 
 try:
     module.execute_train(
@@ -295,6 +328,10 @@ try:
         train_script=train_script,
         **launch_options,
     )
+except Exception:
+    if retool_devices:
+        print_retool_worker_errors()
+    raise
 finally:
     if teacher_process and teacher_process.poll() is None:
         os.killpg(teacher_process.pid, signal.SIGTERM)

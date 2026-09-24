@@ -1,0 +1,42 @@
+# areal examples guard - project thin trigger.
+#
+# Calls the common engine .github/workflows/examples-template.yml;
+# this file only declares what varies per project: schedule,
+# concurrency, upstream repo, dispatch input forwarding, and matrix
+# parallelism. See docs/examples-guard-engine.md for the design.
+#
+# NOTE: AReaL's NPU support lives on the `ascend-v1.0.5` branch (not main).
+# Dispatch with target_ref=ascend-v1.0.5 (or pin it here) so the checkout has
+# the NPU examples and configs.
+
+name: areal-examples
+
+concurrency:
+  group: ${{ github.event_name == 'schedule' && 'areal-examples-schedule' || format('manual-{0}', github.run_id) }}
+  cancel-in-progress: false
+
+on:
+  # Bring-up phase: keep the schedule disabled until a few manual rounds are
+  # green. Re-enable when ready:
+  # schedule:
+  #   - cron: '0 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: Branch, tag, or SHA to test (AReaL NPU support is on ascend-v1.0.5)
+        required: false
+        default: ascend-v1.0.5
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  areal-examples:
+    uses: ./.github/workflows/examples-template.yml
+    with:
+      project: areal
+      upstream_repo: areal-project/AReaL
+      target_ref: ${{ inputs.target_ref }}
+      max_parallel: 1

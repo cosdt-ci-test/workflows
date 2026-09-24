@@ -124,19 +124,16 @@ PY
 
 ensure_passthrough "$LAUNCH_PATH"
 
-# Visible NPU count for multi-card launchers.
+# Visible NPU count for the multi-card launcher.
 count_npus() {
   "$PYTHON" -c "import torch, torch_npu; print(torch.npu.device_count())"
 }
 
-# Materialize an accelerate+DeepSpeed launch config whose num_processes
-# follows the visible NPU count (same trick as the accelerate project).
-# ZeRO-3 shards params/grads/optimizer across the cards, so entries that
-# OOM on a single card can run on a2-8. LAUNCHER=accelerate-deepspeed.
+# Materialize an accelerate+DeepSpeed launch config whose num_processes follows
+# the visible NPU count. ZeRO-3 shards params/grads/optimizer across the cards,
+# so entries that OOM on a single card (e.g. full SDXL fine-tune) can run on
+# a2-2 / a2-4. LAUNCHER=accelerate-deepspeed.
 prepare_deepspeed_configs() {
-  # Kept out of FIXTURE_DIR on purpose: some entries use --instance_data_dir
-  # ${FIXTURE_DIR} and iterate every file as an image, so a .json there breaks
-  # them (amused). The DeepSpeed config lives in the project's configs/.
   local ds_json="${PROJECT_ROOT:?PROJECT_ROOT is required}/configs/ds_zero3.json"
   local cfg_dir="$GITHUB_WORKSPACE/ci_patch"
   mkdir -p "$cfg_dir"
@@ -169,6 +166,10 @@ case "$LAUNCH_PATH" in
     ;;
   *)
     cd "$TARGET_ROOT"
+    # Some examples import a package that sits next to them (e.g.
+    # examples/research_projects/ip_adapter imports `ip_adapter.ip_adapter`);
+    # add the example's own directory to PYTHONPATH.
+    export PYTHONPATH="$(dirname "$LAUNCH_PATH")${PYTHONPATH:+:$PYTHONPATH}"
     case "${LAUNCHER:-}" in
       accelerate-deepspeed)
         prepare_deepspeed_configs

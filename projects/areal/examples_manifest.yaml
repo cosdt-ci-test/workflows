@@ -1,0 +1,109 @@
+version: 1
+scan:
+  root: examples
+  include_extensions: ['.py', '.sh']
+  exclude:
+    - '**/test_*'
+    - '**/conftest.py'
+    - '**/__init__.py'
+    - '**/config.py'                  # 配置模块，非可执行 example
+    - '**/configs.py'
+    - '**/prompts.py'
+    - '**/utils.py'
+    - '**/reward_score.py'            # countdown 的奖励实现，被 train.py 调用
+    - 'examples/scaffolding/core/**'  # scaffolding 的库实现
+    - 'examples/scaffolding/fake_tools.py'
+    - 'examples/scaffolding/real_tools.py'
+    - 'examples/scaffolding/task.py'
+    - 'examples/scaffolding/worker.py'
+    - 'examples/scaffolding/workflow.py'
+    - 'examples/scaffolding/controllers.py'
+    - 'examples/scaffolding/search_reward.py'
+    - 'examples/search_agent/tongyi_deepresearch/react_agent.py'
+    - 'examples/search_agent/tongyi_deepresearch/tool_search.py'
+    - 'examples/search_agent/tongyi_deepresearch/tool_visit.py'
+    - 'examples/terminal_bench/agent/**'
+    - 'examples/terminal_bench/workflow/**'
+    - 'examples/terminal_bench/agent_rl_config.py'
+    - 'examples/tir/tools/**'
+    - 'examples/tir/tool_manager.py'
+    - 'examples/tir/tir_workflow.py'
+    - 'examples/tau2/agent.py'
+    - 'examples/tau2/utils.py'
+    - 'examples/openclaw/_fmt.py'
+    - 'examples/openclaw/demo_lifecycle.py'
+    - 'examples/openclaw/set_reward.py'
+    - 'examples/openclaw/start_session.py'
+    - 'examples/agent_service/agent.py'
+    - 'examples/multi_turn_vlm/geo3k_env.py'
+    - 'examples/docs/debug/cmp_rollout.py'
+    - 'examples/sandbox_daytona/reward_example.py'
+
+# AReaL 的 NPU 支持在 ascend-v1.0.5 分支维护（非 main），需要专用镜像
+# ghcr.io/hwvanici/areal_npu:v1.0.5-a2（CANN 9.0.1 / torch 2.10 / torch_npu
+# 2.10 / vLLM-Ascend / Megatron-Core / MindSpeed / Megatron-Bridge），且官方
+# quick start（VLM GRPO / Qwen2.5-VL-3B / Geometry3K）按单节点 16 NPU 编写。
+# 我们的 runner 池最大 a2-8，且标准镜像（CANN 9.1.0 / py3.12 / torch 2.9）与
+# AReaL 栈差异很大，尚未在昇腾 CI 上验证。故先全部列不支持，待环境（镜像可达
+# + 8 卡并行度改版）跑通后再逐条迁入 supported。
+supported:
+  # Qwen2.5-VL-3B Geometry3K GRPO（2 卡；2026-09-22 在 A2-8 上实测跑通）
+  - path: examples/vlm/geometry3k_grpo.py
+    profile: areal-vlm-grpo
+    runner: linux-aarch64-a2-1
+    npu_devices: '0'
+    # CANN 底座（AReaL 的 ghcr 镜像拉不动；SWR 上没有 9.0.1-py3.11 tag）；
+    # AReaL 栈由 setup_example.sh 安装。注意此底座是 CANN 9.1.0 / py3.12，
+    # 与 AReaL 官方镜像的 9.0.1 / py3.11 有差异。
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --config examples/vlm_npu/qwen2_5_vl_3b_geometry3k_grpo.yaml
+      - cluster.n_gpus_per_node=1
+      - rollout.backend=vllm:d1p1t1
+      - actor.backend=fsdp:d1p1t1
+      - actor.path=${AREAL_MODEL_PATH}
+      - actor.mb_spec.max_tokens_per_mb=512
+      - ref.mb_spec.max_tokens_per_mb=512
+      - vllm.gpu_memory_utilization=0.4
+      - gconfig.max_new_tokens=128
+      - gconfig.n_samples=1
+      - train_dataset.batch_size=8
+      - valid_dataset.batch_size=8
+      - +total_train_steps=1
+    timeout_minutes: 240
+unsupported:
+  # 训练 / RL 示例（都需要 AReaL NPU 镜像 + 多卡；见上方说明）
+  - examples/math/gsm8k_rl.py
+  - examples/math/gsm8k_sft.py
+  - examples/math/gsm8k_eval.py
+  - examples/math/aime_rl.py
+  - examples/math/boba_grpo.py
+  - examples/countdown/train.py
+  - examples/camel/train.py
+  - examples/code/train.py
+  - examples/alignment/hhrlhf_dpo.py
+  - examples/alignment/hhrlhf_rw.py
+  - examples/distillation/mopd/mopd_rl.py
+  - examples/multi_turn_math/gsm8k_rl_mt.py
+  - examples/multi_turn_vlm/geometry3k_grpo_mt.py
+  - examples/multi_turn_vlm/run_geometry3k_grpo_mt_npu.sh
+  - examples/vlm/geometry3k_sft.py
+  - examples/vlm/clevr_count_70k_grpo.py
+  - examples/vlm/clevr_count_70k_sft.py
+  # UPSTREAM_BUG：workflow_kwargs 里 reward_fn=virl39k_reward_fn 传的是函数对象
+  # （geometry3k_grpo.py 传的是字符串路径），local scheduler RPC JSON 序列化失败：
+  # "Object of type function is not JSON serializable"。需改源码传字符串路径。
+  - examples/vlm_npu/virl39k_grpo.py
+  - examples/agent_workflow/train.py
+  - examples/agent_service/run_agent_service.py
+  - examples/tau2/train.py
+  - examples/terminal_bench/train.py
+  - examples/tir/train_tir.py
+  - examples/scaffolding/gsm8k_rlvr_scaffolding.py
+  - examples/scaffolding/search_scaffolding.py
+  - examples/search_agent/tongyi_deepresearch/train.py
+  - examples/openai_agents/train_agents.py
+  - examples/openclaw/train.py
+  - examples/experimental/inference_service/online_rollout.py
+  - examples/experimental/inference_service/human_in_the_loop_demo.py
+  - examples/experimental/inference_service/tau2_rollout.py

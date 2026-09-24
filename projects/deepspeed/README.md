@@ -43,7 +43,7 @@ CIFAR 单卡和两卡 MoE 共用 `ds_cifar` profile。setup 从固定 revision �
 
 Run #22 中 10 条已有 9 条通过；两卡 MoE 已完成两个 rank 的 HCCL 初始化并创建 EP=2 group，首次 forward 才在 DeepSpeed `sharded_moe._capacity()` 触发 `torch.compile`，随后因镜像没有 Triton 后端而报 `ModuleNotFoundError: triton`。这是 DeepSpeed 0.19.7 将 MoE helper 从 TorchScript 改为 `torch.compile` 后产生的可选编译路径（[issue #7835](https://github.com/deepspeedai/DeepSpeed/issues/7835)、[PR #7840](https://github.com/deepspeedai/DeepSpeed/pull/7840)）；后续 [PR #7875](https://github.com/deepspeedai/DeepSpeed/pull/7875) 的 fallback 无法捕获 `torch.compile` 在首次调用时才发生的懒编译失败。项目 runner 因此仅对 CIFAR MoE 命令设置 `TORCH_COMPILE_DISABLE=1`，让该 helper 走 eager；两卡 launcher、HCCL、MoE 和 EP=2 训练语义均保留，也不要求为一个未由 example 声明的可选优化安装版本敏感的 Triton-Ascend。
 
-其余约 224 条列入 unsupported：同一逻辑 example 的 `.sh` 启动包装已并入对应 `.py` 条目，每一条都带一行内联中文注释，注明具体不支持原因（多机多卡 mpi/NCCL、需 ImageNet/大模型、绑 CUDA 算子、NVMe 硬件、性能基准、compression 需 patch、依赖远程 HF 数据集等），见 manifest。清单与磁盘的差异只打印路径，不使 job 失败；例外：`supported` 条目的 path 已不在磁盘上时 manifest-check 立即判红。
+其余约 240 条列入 unsupported：同一逻辑 example 的 `.sh` 启动包装已并入对应 `.py` 条目，每一条都带一行内联中文注释，注明具体不支持原因（多机多卡 mpi/NCCL、需 ImageNet/大模型、绑 CUDA 算子、NVMe 硬件、性能基准、compression 需 patch、依赖远程 HF 数据集等）；原 `scan.exclude` 中的 16 个配套目录也在此登记，见 manifest。清单与磁盘的差异只打印路径，不使 job 失败；例外：`supported` 条目的 path 已不在磁盘上时 manifest-check 立即判红。
 
 第二阶段以第一阶段 10/10 远程全绿为门槛；届时再评估加入 `linux-aarch64-a2-8` 的 HF AutoTP=8 和两卡 ZenFlow 单配置 smoke，未验收前不进入 supported，也不启用 schedule。
 

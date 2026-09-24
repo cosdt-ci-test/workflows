@@ -75,8 +75,11 @@ class TensorDictExamplesContract(unittest.TestCase):
         self.assertIn('runpy.run_path(sys.argv[1], run_name="__main__")', run)
         self.assertIn('leaf.device.type != "npu"', run)
         self.assertIn('"NPU is unavailable; refusing CPU fallback"', run)
+        self.assertIn('torch==2.9.0 torch_npu==2.9.0.post2', setup)
+        self.assertIn('reusing compatible torch/torch_npu stack', setup)
+        self.assertLess(setup.index('installing torch==2.9.0'), setup.index('import torch\nimport torch_npu\n\nprint('))
         self.assertIn('uv pip install --system --no-deps -e "$TARGET_ROOT"', setup)
-        self.assertNotIn("pip install torch", setup)
+        self.assertNotIn('pip install -e "$TARGET_ROOT"', setup)
 
     def test_thin_trigger_and_registry(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "tensordict-examples.yml").read_text(

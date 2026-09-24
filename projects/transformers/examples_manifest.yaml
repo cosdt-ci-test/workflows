@@ -49,6 +49,25 @@ supported:
       - --max_train_steps 1
       - --output_dir ${CI_OUTPUT_DIR}
     timeout_minutes: 60
+  - path: examples/pytorch/question-answering/run_qa_beam_search_no_trainer.py
+    profile: small-training
+    runner: linux-aarch64-a2-2
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --model_name_or_path ${TINYXLNET_PATH}
+      - --train_file ${TARGET_ROOT}/tests/fixtures/tests_samples/SQUAD/sample.json
+      - --validation_file ${TARGET_ROOT}/tests/fixtures/tests_samples/SQUAD/sample.json
+      - --version_2_with_negative
+      - --max_seq_length 128
+      - --doc_stride 64
+      - --max_train_samples 4
+      - --max_eval_samples 4
+      - --per_device_train_batch_size 1
+      - --per_device_eval_batch_size 1
+      - --max_train_steps 1
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 60
   - path: examples/pytorch/multiple-choice/run_swag_no_trainer.py
     profile: small-training
     runner: linux-aarch64-a2-2
@@ -59,25 +78,6 @@ supported:
       - --train_file ${TARGET_ROOT}/tests/fixtures/tests_samples/swag/sample.json
       - --validation_file ${TARGET_ROOT}/tests/fixtures/tests_samples/swag/sample.json
       - --max_seq_length 64
-      - --per_device_train_batch_size 1
-      - --per_device_eval_batch_size 1
-      - --max_train_steps 1
-      - --output_dir ${CI_OUTPUT_DIR}
-    timeout_minutes: 60
-  - path: examples/pytorch/question-answering/run_qa_beam_search_no_trainer.py
-    profile: small-training
-    runner: linux-aarch64-a2-2
-    npu_devices: '0'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --model_name_or_path ${DISTILBERT_PATH}
-      - --train_file ${TARGET_ROOT}/tests/fixtures/tests_samples/SQUAD/sample.json
-      - --validation_file ${TARGET_ROOT}/tests/fixtures/tests_samples/SQUAD/sample.json
-      - --version_2_with_negative
-      - --max_seq_length 128
-      - --doc_stride 64
-      - --max_train_samples 4
-      - --max_eval_samples 4
       - --per_device_train_batch_size 1
       - --per_device_eval_batch_size 1
       - --max_train_steps 1
@@ -112,18 +112,6 @@ supported:
       - --per_device_train_batch_size 1
       - --output_dir ${CI_OUTPUT_DIR}
     timeout_minutes: 60
-  - path: examples/pytorch/language-modeling/run_clm_no_trainer.py
-    profile: lm
-    runner: linux-aarch64-a2-2
-    npu_devices: '0'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --model_name_or_path ${TINYGPT2_PATH}
-      - --train_file ${CI_OUTPUT_DIR}/train.txt
-      - --max_train_steps 1
-      - --per_device_train_batch_size 1
-      - --output_dir ${CI_OUTPUT_DIR}
-    timeout_minutes: 60
   - path: examples/pytorch/language-modeling/run_mlm.py
     profile: lm
     runner: linux-aarch64-a2-2
@@ -137,47 +125,6 @@ supported:
       - --per_device_train_batch_size 1
       - --output_dir ${CI_OUTPUT_DIR}
     timeout_minutes: 60
-  - path: examples/pytorch/language-modeling/run_mlm_no_trainer.py
-    profile: lm
-    runner: linux-aarch64-a2-2
-    npu_devices: '0'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --model_name_or_path ${DISTILBERT_PATH}
-      - --train_file ${CI_OUTPUT_DIR}/train.txt
-      - --max_train_steps 1
-      - --per_device_train_batch_size 1
-      - --output_dir ${CI_OUTPUT_DIR}
-    timeout_minutes: 60
-  - path: examples/pytorch/language-modeling/run_fim.py
-    profile: lm
-    runner: linux-aarch64-a2-2
-    npu_devices: '0'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --model_name_or_path ${TINYGPT2_PATH}
-      - --train_file ${CI_OUTPUT_DIR}/train.txt
-      - --fim_rate 0.5
-      - --fim_spm_rate 0.5
-      - --do_train
-      - --max_steps 1
-      - --per_device_train_batch_size 1
-      - --output_dir ${CI_OUTPUT_DIR}
-    timeout_minutes: 60
-  - path: examples/pytorch/language-modeling/run_fim_no_trainer.py
-    profile: lm
-    runner: linux-aarch64-a2-2
-    npu_devices: '0'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --model_name_or_path ${TINYGPT2_PATH}
-      - --train_file ${CI_OUTPUT_DIR}/train.txt
-      - --fim_rate 0.5
-      - --fim_spm_rate 0.5
-      - --max_train_steps 1
-      - --per_device_train_batch_size 1
-      - --output_dir ${CI_OUTPUT_DIR}
-    timeout_minutes: 60
   - path: examples/pytorch/text-classification/run_glue.py
     profile: glue
     runner: linux-aarch64-a2-2
@@ -185,8 +132,8 @@ supported:
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
       - --model_name_or_path ${DISTILBERT_PATH}
-      - --train_file ${TARGET_ROOT}/tests/fixtures/tests_samples/MRPC/train.csv
-      - --validation_file ${TARGET_ROOT}/tests/fixtures/tests_samples/MRPC/dev.csv
+      - --train_file ${CI_OUTPUT_DIR}/mrpc_train.csv
+      - --validation_file ${CI_OUTPUT_DIR}/mrpc_dev.csv
       - --max_seq_length 64
       - --do_train
       - --max_steps 1
@@ -200,8 +147,8 @@ supported:
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
       - --model_name_or_path ${DISTILBERT_PATH}
-      - --train_file ${TARGET_ROOT}/tests/fixtures/tests_samples/MRPC/train.csv
-      - --validation_file ${TARGET_ROOT}/tests/fixtures/tests_samples/MRPC/dev.csv
+      - --train_file ${CI_OUTPUT_DIR}/mrpc_train.csv
+      - --validation_file ${CI_OUTPUT_DIR}/mrpc_dev.csv
       - --text_column_names sentence1,sentence2
       - --label_column_name label
       - --do_train
@@ -251,7 +198,7 @@ supported:
     npu_devices: '0'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - --model_name_or_path ${DISTILBERT_PATH}
+      - --model_name_or_path ${TINYXLNET_PATH}
       - --train_file ${TARGET_ROOT}/tests/fixtures/tests_samples/SQUAD/sample.json
       - --validation_file ${TARGET_ROOT}/tests/fixtures/tests_samples/SQUAD/sample.json
       - --version_2_with_negative
@@ -279,6 +226,7 @@ supported:
       - --max_train_samples 4
       - --do_train
       - --max_steps 1
+      - --num_beams 1
       - --per_device_train_batch_size 1
       - --output_dir ${CI_OUTPUT_DIR}
     timeout_minutes: 60
@@ -310,6 +258,7 @@ supported:
       - --validation_file ${TARGET_ROOT}/tests/fixtures/tests_samples/xsum/sample.json
       - --text_column document
       - --summary_column summary
+      - --lang en_XX
       - --max_source_length 64
       - --max_target_length 16
       - --max_train_samples 4
@@ -332,6 +281,7 @@ supported:
       - --max_source_length 64
       - --max_target_length 16
       - --num_train_epochs 1
+      - --num_beams 1
       - --per_device_train_batch_size 1
       - --output_dir ${CI_OUTPUT_DIR}
     timeout_minutes: 60
@@ -368,6 +318,128 @@ supported:
       - --max_source_length 64
       - --max_target_length 64
       - --num_train_epochs 1
+      - --num_beams 1
+      - --per_device_train_batch_size 1
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 60
+  # --- 批次 2（视觉/音频类）：vision profile，tiny-random 模型走 hf-mirror 通道 ---
+  - path: examples/pytorch/image-classification/run_image_classification.py
+    profile: vision
+    runner: linux-aarch64-a2-2
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --model_name_or_path ${TINYVIT_PATH}
+      - --train_dir ${CI_OUTPUT_DIR}/imgcls/train
+      - --validation_dir ${CI_OUTPUT_DIR}/imgcls/val
+      - --train_val_split 0.0
+      - --remove_unused_columns False
+      - --max_train_samples 3
+      - --do_train
+      - --max_steps 1
+      - --per_device_train_batch_size 1
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 60
+  - path: examples/pytorch/image-classification/run_image_classification_no_trainer.py
+    profile: vision
+    runner: linux-aarch64-a2-2
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --model_name_or_path ${TINYVIT_PATH}
+      - --train_dir ${CI_OUTPUT_DIR}/imgcls/train
+      - --validation_dir ${CI_OUTPUT_DIR}/imgcls/val
+      - --max_train_steps 1
+      - --per_device_train_batch_size 1
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 60
+  - path: examples/pytorch/image-pretraining/run_mae.py
+    profile: vision
+    runner: linux-aarch64-a2-2
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --model_name_or_path ${TINYMAE_PATH}
+      - --dataset_name imagefolder
+      - --train_dir ${CI_OUTPUT_DIR}/imgcls/train/**
+      - --validation_dir ${CI_OUTPUT_DIR}/imgcls/val/**
+      - --train_val_split 0
+      - --max_train_samples 3
+      - --do_train
+      - --max_steps 1
+      - --per_device_train_batch_size 1
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 60
+  - path: examples/pytorch/image-pretraining/run_mim.py
+    profile: vision
+    runner: linux-aarch64-a2-2
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --model_name_or_path ${TINYMAE_PATH}
+      # transformers main removed ViTMAEConfig.encoder_stride but run_mim*.py
+      # still falls back to config.encoder_stride when the flag is unset, so
+      # pass it explicitly (any value; unused by the 5.x decoder_pred).
+      - --encoder_stride 1
+      - --dataset_name imagefolder
+      - --train_dir ${CI_OUTPUT_DIR}/imgcls/train/**
+      - --validation_dir ${CI_OUTPUT_DIR}/imgcls/val/**
+      - --train_val_split 0
+      - --max_train_samples 3
+      - --do_train
+      - --max_steps 1
+      - --per_device_train_batch_size 1
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 60
+  - path: examples/pytorch/image-pretraining/run_mim_no_trainer.py
+    profile: vision
+    runner: linux-aarch64-a2-2
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --model_name_or_path ${TINYMAE_PATH}
+      # Same upstream breakage as run_mim.py: config.encoder_stride no longer
+      # exists in transformers main, so pass the flag explicitly.
+      - --encoder_stride 1
+      - --dataset_name imagefolder
+      - --train_dir ${CI_OUTPUT_DIR}/imgcls/train/**
+      - --validation_dir ${CI_OUTPUT_DIR}/imgcls/val/**
+      - --train_val_split 0
+      - --max_train_steps 1
+      - --per_device_train_batch_size 1
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 60
+  - path: examples/pytorch/contrastive-image-text/run_clip.py
+    profile: vision
+    runner: linux-aarch64-a2-2
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --model_name_or_path ${TINYCLIP_PATH}
+      - --train_file ${CI_OUTPUT_DIR}/clip_train.json
+      - --image_column image_path
+      - --caption_column captions
+      - --remove_unused_columns False
+      - --max_train_samples 4
+      - --do_train
+      - --max_steps 1
+      - --per_device_train_batch_size 1
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 60
+  - path: examples/pytorch/audio-classification/run_audio_classification.py
+    profile: vision
+    runner: linux-aarch64-a2-2
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --model_name_or_path ${TINYWAV2VEC2_PATH}
+      - --dataset_name ${CI_OUTPUT_DIR}/audio_data
+      - --audio_column_name audio
+      - --label_column_name label
+      - --max_length_seconds 1
+      - --max_train_samples 4
+      - --do_train
+      - --max_steps 1
       - --per_device_train_batch_size 1
       - --output_dir ${CI_OUTPUT_DIR}
     timeout_minutes: 60
@@ -431,14 +503,20 @@ unsupported:
   - examples/pytorch/question-answering/trainer_qa.py
   - examples/pytorch/question-answering/trainer_seq2seq_qa.py
   - examples/pytorch/question-answering/utils_qa.py
-  # --- 批次 2（视觉类）：待补 vision profile（torchvision 及检测/分割依赖）---
-  - examples/pytorch/audio-classification/run_audio_classification.py
-  - examples/pytorch/contrastive-image-text/run_clip.py
-  - examples/pytorch/image-classification/run_image_classification.py
-  - examples/pytorch/image-classification/run_image_classification_no_trainer.py
-  - examples/pytorch/image-pretraining/run_mae.py
-  - examples/pytorch/image-pretraining/run_mim.py
-  - examples/pytorch/image-pretraining/run_mim_no_trainer.py
+  # --- 上游 breakage（transformers main 自身损坏，manifest 层无法修复，上游修复后恢复）---
+  # run_clm_no_trainer.py / run_mlm_no_trainer.py：引用 accelerate 的 DistributedType.TPU，
+  #   新版 accelerate 已移除该枚举，报 "AttributeError: no attribute 'TPU'"，与 NPU 环境无关
+  # run_fim.py：vocab 扩容分支对 Embedding 模块直接调用 .mean(dim=0)，
+  #   报 "'Embedding' object has no attribute 'mean'"（原意应为对 weight 张量取均值）
+  # run_fim_no_trainer.py：from huggingface_hub import Repository，该类已从新版 huggingface_hub 移除，报 ImportError
+  - examples/pytorch/language-modeling/run_clm_no_trainer.py
+  - examples/pytorch/language-modeling/run_mlm_no_trainer.py
+  - examples/pytorch/language-modeling/run_fim.py
+  - examples/pytorch/language-modeling/run_fim_no_trainer.py
+  # --- 数据/模型可用性受限（脚本硬编码 Hub 数据集，Runner 无法访问 Hub，无本地文件入口）---
+  # object-detection / instance-segmentation / semantic-segmentation 共 6 条：
+  #   main 分支脚本仅支持 load_dataset(<hub_id>)，无 --train_file/--train_dir 参数，
+  #   且 COCO/ADE20k 数据 schema 特定，无法用本地 packaged 目录伪造
   - examples/pytorch/instance-segmentation/run_instance_segmentation.py
   - examples/pytorch/instance-segmentation/run_instance_segmentation_no_trainer.py
   - examples/pytorch/object-detection/run_object_detection.py
@@ -451,7 +529,8 @@ unsupported:
   - examples/pytorch/speech-recognition/run_speech_recognition_ctc_adapter.py
   - examples/pytorch/speech-recognition/run_speech_recognition_seq2seq.py
   # --- 数据/模型可用性受限：依赖 Hub 数据集或缺失 tiny 模型 ---
-  # run_plm.py：需要 XLNet 模型，ModelScope 无可用 tiny xlnet
+  # run_plm.py：需要 XLNetLMHeadModel；tiny xlnet 现可经 setup_example.sh 的
+  # hf-mirror.com 通道下载（TINYXLNET_PATH），如需放开可复用该通道
   - examples/pytorch/language-modeling/run_plm.py
   # run_xnli.py：硬编码从 Hub 下载 xnli 数据集，无本地文件入口
   - examples/pytorch/text-classification/run_xnli.py

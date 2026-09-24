@@ -28,26 +28,43 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 
 ## 安装 FastChat
 
-安装运行模型与 API 服务所需的包：
+安装 FastChat：
 
 ```shell #test id="install-fastchat"
-python -m pip install "fschat[model_worker]" "transformers==4.57.6" "modelscope==1.37.0" "fastapi==0.141.1" "uvicorn==0.52.0"
+python -m pip install fschat
 python -c "
-import fastapi, fastchat, modelscope, transformers, uvicorn;
-print('FastChat environment ready')
+import fastchat
+print('FastChat version:', fastchat.__version__)
 "
 ```
 
-输出结果如下：
+输出结果如下，其中 `xxx` 表示实际安装的 FastChat 版本号：
 
-```shell #test-result id="install-fastchat" fuzzy='...'
+```shell #test-result id="install-fastchat" fuzzy='...' fuzzy='xxx'
 ...
-FastChat environment ready
+FastChat version: xxx
 ```
 
 ## OpenAI 兼容 API
 
 FastChat 用 controller 管理 model worker，并通过 API server 提供 OpenAI 兼容接口。
+
+安装本示例所需的模型 worker、ModelScope 及 API 服务依赖：
+
+```shell #test id="install-api-deps"
+python -m pip install "fschat[model_worker]" "transformers==4.57.6" "modelscope==1.37.0" "fastapi==0.141.1" "uvicorn==0.52.0"
+python -c "
+import fastapi, modelscope, transformers, uvicorn
+print('FastChat API environment ready')
+"
+```
+
+输出结果如下：
+
+```shell #test-result id="install-api-deps" fuzzy='...'
+...
+FastChat API environment ready
+```
 
 controller、model worker 和 API server 都是前台服务，启动后需要保持运行。实际操作时，可分别使用独立终端或进程管理工具；以下命令按服务依赖顺序执行。
 

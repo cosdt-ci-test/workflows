@@ -38,35 +38,28 @@ print('FastChat version:', fastchat.__version__)
 "
 ```
 
-输出结果如下，其中 `xxx` 表示实际安装的 FastChat 版本号：
+输出结果如下：
 
 ```shell #test-result id="install-fastchat" fuzzy='...' fuzzy='xxx'
 ...
 FastChat version: xxx
 ```
 
-## OpenAI 兼容 API
+:::{note}
+`xxx` 表示实际安装的 FastChat 版本号。
+:::
+
+## 运行示例：OpenAI 兼容 API
 
 FastChat 用 controller 管理 model worker，并通过 API server 提供 OpenAI 兼容接口。
 
 安装本示例所需的模型 worker、ModelScope 及 API 服务依赖：
 
-```shell #test id="install-api-deps"
+```shell #test-setup id="install-api-deps"
 python -m pip install "fschat[model_worker]" "transformers==4.57.6" "modelscope==1.37.0" "fastapi==0.141.1" "uvicorn==0.52.0"
-python -c "
-import fastapi, modelscope, transformers, uvicorn
-print('FastChat API environment ready')
-"
 ```
 
-输出结果如下：
-
-```shell #test-result id="install-api-deps" fuzzy='...'
-...
-FastChat API environment ready
-```
-
-controller、model worker 和 API server 都是前台服务，启动后需要保持运行。实际操作时，可分别使用独立终端或进程管理工具；以下命令按服务依赖顺序执行。
+controller、model worker 和 API server 都是前台服务，启动后需要保持运行。
 
 **启动 controller。** controller 负责注册和调度 model worker：
 
@@ -99,7 +92,7 @@ curl -fsS http://127.0.0.1:8000/v1/models -o /tmp/fastchat-models.json
 python -m json.tool --no-ensure-ascii /tmp/fastchat-models.json
 ```
 
-输出结果如下，其中 `xxx` 表示动态生成的标识与时间戳，`...` 表示省略的字段：
+输出结果如下：
 
 ```shell #test-result id="check-model" fuzzy='xxx' fuzzy='...'
 {
@@ -116,6 +109,10 @@ python -m json.tool --no-ensure-ascii /tmp/fastchat-models.json
 }
 ```
 
+:::{note}
+`xxx` 表示动态生成的标识与时间戳，`...` 表示省略的字段。
+:::
+
 发送一次对话请求，调用 OpenAI 兼容的 Chat Completions 接口并打印模型回复：
 
 ```shell #test id="api-chat"
@@ -126,7 +123,7 @@ curl -fsS http://127.0.0.1:8000/v1/chat/completions \
 python -m json.tool --no-ensure-ascii /tmp/fastchat-chat.json
 ```
 
-输出结果如下，其中 `xxx` 表示每次请求动态生成的 ID、时间戳、模型回复和 token 统计等内容，`...` 表示省略的字段：
+输出结果如下：
 
 ```shell #test-result id="api-chat" fuzzy='xxx' fuzzy='...'
 {
@@ -149,5 +146,9 @@ python -m json.tool --no-ensure-ascii /tmp/fastchat-chat.json
     }
 }
 ```
+
+:::{note}
+`xxx` 表示每次请求动态生成的 ID、时间戳、模型回复和 token 统计等内容，`...` 表示省略的字段。
+:::
 
 更多 Web UI、多 worker 和评测用法见 [FastChat 官方文档](https://github.com/lm-sys/FastChat)。

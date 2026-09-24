@@ -314,9 +314,14 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 if module in cmd.cmd:
                     self._start_documented_service(name, cmd.cmd, env, cwd)
                     return
-        if isinstance(cmd, TestCommand) and cmd.id in (
-            'install-fastchat', 'install-api-deps'
-        ):
+            if 'fschat[model_worker]' in cmd.cmd:
+                super()._run_one(cmd, results, env, cwd, timeout, idx)
+                _assert_version_alignment(
+                    _installed_fschat_version(),
+                    os.environ.get('UPSTREAM_REF', ''),
+                )
+                return
+        if isinstance(cmd, TestCommand) and cmd.id == 'install-fastchat':
             super()._run_one(cmd, results, env, cwd, timeout, idx)
             _assert_version_alignment(
                 _installed_fschat_version(),

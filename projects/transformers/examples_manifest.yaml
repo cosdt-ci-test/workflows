@@ -377,6 +377,10 @@ supported:
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
       - --model_name_or_path ${TINYMAE_PATH}
+      # transformers main removed ViTMAEConfig.encoder_stride but run_mim*.py
+      # still falls back to config.encoder_stride when the flag is unset, so
+      # pass it explicitly (any value; unused by the 5.x decoder_pred).
+      - --encoder_stride 1
       - --dataset_name imagefolder
       - --train_dir ${CI_OUTPUT_DIR}/imgcls/train/**
       - --validation_dir ${CI_OUTPUT_DIR}/imgcls/val/**
@@ -394,6 +398,9 @@ supported:
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
       - --model_name_or_path ${TINYMAE_PATH}
+      # Same upstream breakage as run_mim.py: config.encoder_stride no longer
+      # exists in transformers main, so pass the flag explicitly.
+      - --encoder_stride 1
       - --dataset_name imagefolder
       - --train_dir ${CI_OUTPUT_DIR}/imgcls/train/**
       - --validation_dir ${CI_OUTPUT_DIR}/imgcls/val/**

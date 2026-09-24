@@ -4,37 +4,20 @@
 # torchtune itself is installed from TARGET_ROOT (the release checkout
 # under test), so the guarded tag is exactly the code that runs.
 #
-# Profile split (2026-09-22, after CI run 35721666282 7-leg fail):
-# The original `setup_torchtune` profile pinned torch_npu==2.11.0 in a
-# shared `ensure_torch_stack` function. That single pin couldn't satisfy
-# both:
-#   - single-device recipes (generate / quantize / eleuther_eval / ppo /
-#     lora_finetune_single / full_finetune_single / lora_dpo_single):
-#     torch_npu 2.11.0 works; pre-download was the problem (ModelScope
-#     ._____temp staging dir missing on cold container → FileDownloadError).
-#   - distributed recipes (lora_finetune_distributed / full_finetune_distributed /
-#     lora_dpo_distributed / full_dpo_distributed / knowledge_distillation_distributed):
-#     torch_npu 2.11.0's c10d hccl backend raises
-#     `RuntimeError: Distributed package doesn't have NCCL built in`
-#     at recipe `init_process_group(self.distributed_backend)`, AND
-#     its `dist.broadcast` from `_distributed.py:92` on a CPU tensor
-#     raises `No backend type associated with device type cpu`
-#     (per torch.distributed.pipelining × torch_npu c10d ABI gap memory).
+# Zero-source-patch policy: supported examples run WITHOUT modifying
+# upstream source — anything that needs a source patch belongs in
+# unsupported. The one distributed recipe in supported
+# (full_finetune_distributed) needs no patch: backend resolves via
+# get_distributed_backend("npu") → hccl, and the manifest's seed=42
+# overlay skips _broadcast_tensor's CPU broadcast (training/seed.py
+# only broadcasts when seed is None).
 #
-# So each profile now does its own torch stack install. The shared path
-# keeps ONLY what's truly universal (pip index selection, pip upgrade,
-# fixture copy, HF_ENDPOINT mirror); `ensure_torch_stack` is now a
-# per-profile helper that takes the torch_npu version as $1 (default
-# 2.11.0 for single; TBD for distributed, set after npu-3 verification).
-#
-# Asset sourcing (also 2026-09-22): pre-download of
-# Qwen/Qwen2.5-{0.5,1.5}B-Instruct no longer lives in setup; it's
-# declared in cache-seed/torchtune/ms_seeds.yaml and planted into the
-# shared HF hub cache by the cache-seed workflow. setup only calls
+# Asset sourcing: pre-download of Qwen/Qwen2.5-{0.5,1.5}B-Instruct
+# is declared in cache-seed/torchtune/ms_seeds.yaml and planted into
+# the shared HF hub cache by the cache-seed workflow. setup only calls
 # `resolve_seed_envs` to read `refs/main` and inject TT_MODEL_PATH /
-# TT_TEACHER_PATH for the overlay args. (The 1.5B safetensors 2.88GB
-# was what made the cold-container ModelScope download fail; offloading
-# to a one-time seed dispatch removes the per-job network cost too.)
+# TT_TEACHER_PATH for the overlay args; nothing downloads in example
+# jobs.
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
@@ -203,7 +186,6 @@ PY
 # engine checked out (release tag OR main HEAD).
 install_torchtune_pkg() {
   echo "installing torchtune from $TARGET_ROOT (non-editable, see Quick-start-Ascend.md:164-167)"
-  patch_main_head_bugs
   python -m pip install "$TARGET_ROOT"
   python -m pip install "transformers==4.57.1" "omegaconf>=2.3,<3" \
     tokenizers safetensors tqdm pyyaml
@@ -293,18 +275,15 @@ setup_torchtune_single() {
   resolve_seed_envs Qwen/Qwen2.5-1.5B-Instruct TT_TEACHER_PATH
 }
 
-# Profile: distributed recipes. torch_npu stays at 2.11.0 — verified
-# on coder npu-3 (2026-09-22) that hccl init succeeds AND that the
-# two upstream bugs patched by patch_main_head_bugs() below are
-# sufficient for end-to-end exit 0 (Loss 2.92→0.47 for full_finetune,
-# 49 steps in 12s). See patch_main_head_bugs comments for the exact
-# lines.
+# Profile: full_finetune_distributed — supported 里唯一的 distributed
+# recipe。免补丁路径：backend 走 get_distributed_backend("npu") → hccl
+# （torch_npu 2.11.0 registry），seed 走 manifest overlay seed=42 绕过
+# _broadcast_tensor 的 CPU broadcast。teacher（1.5B）只有 KD single_device
+# 用（torchtune_single profile），这里不 resolve。
 setup_torchtune_distributed() {
   ensure_torch_stack 2.11.0
   install_torchtune_pkg
-
   resolve_seed_envs Qwen/Qwen2.5-0.5B-Instruct TT_MODEL_PATH
-  resolve_seed_envs Qwen/Qwen2.5-1.5B-Instruct TT_TEACHER_PATH
 }
 
 # Profile: PPO full finetune single_device. Needs the RM
@@ -319,285 +298,6 @@ setup_torchtune_ppo() {
     resolve_seed_envs smohammadi/tinyllama_rm_sentiment_1b TT_RM_PATH
   else
     echo "TT_RM_PATH (caller-provided): ${TT_RM_PATH}"
-  fi
-}
-
-# Profile: QAT + LoRA distributed (recipes/qat_lora_finetune_distributed.py).
-# Differs from torchtune_distributed in two ways, both unsolvable by
-# overlay (see the qat_lora entry comments in examples_manifest.yaml):
-#
-#   1) torchao ABI: QATLoRALinear.__init__ (torchtune/modules/peft/lora.py:223)
-#      asserts isinstance(activation_qat_config, FakeQuantizeConfig), but
-#      torchao 0.12+ returns IntxFakeQuantizeConfig (MRO stops at
-#      FakeQuantizeConfigBase) from get_activation_fake_quantize_config()
-#      → assert fails. torchao 0.11.0 returns api.FakeQuantizeConfig AND
-#      still ships torchao.dtypes.nf4tensor.NF4Tensor (the v0.6.1
-#      common_utils.py:19 import chain), so downgrade after the probe in
-#      install_torchtune_pkg pinned 0.13.0.
-#   2) Model: the entry uses llama3_2/1B_qat_lora.yaml natively
-#      (lora_llama3_2_1b). Llama-3.2-1B-Instruct comes from the
-#      cache-seed ms plant (LLM-Research mirror → meta-llama hf_id hub
-#      layout), resolved via refs/main; no per-job download.
-setup_torchtune_qat_lora() {
-  ensure_torch_stack 2.11.0
-  install_torchtune_pkg
-  echo "pinning torchao==0.11.0 (QATLoRALinear FakeQuantizeConfig ABI)"
-  python -m pip install "torchao==0.11.0"
-  resolve_seed_envs meta-llama/Llama-3.2-1B-Instruct TT_LLAMA32_PATH
-}
-
-# Patch upstream bugs in main HEAD torchtune (and v0.6.1 distributed
-# recipes that hardcode a CUDA-only backend string + a v0.6.1
-# _broadcast_tensor that doesn't handle hccl). Each block has a
-# grep/string guard so the patch becomes a no-op on refs where the
-# anchor is absent — no script change needed if torchtune upstream
-# ships a fix. Operates on the SOURCE in $TARGET_ROOT before
-# `pip install` copies it to site-packages, so the installed files
-# inherit the fixes.
-patch_main_head_bugs() {
-  local dpo="$TARGET_ROOT/torchtune/rlhf/loss/dpo.py"
-  local quant="$TARGET_ROOT/torchtune/training/quantization.py"
-  local dist_py="$TARGET_ROOT/torchtune/training/_distributed.py"
-
-  # Bug 1: torchtune/rlhf/loss/dpo.py:14 does
-  #     T = TypeVar("T", bound=dataclass)
-  # but the header only imports torch + torchtune internals — no
-  # `from typing import TypeVar`, no `from typing import Optional/Tuple`,
-  # no `from dataclasses import dataclass`. The class body itself
-  # also references Optional[T] / Tuple[...] at type annotations on
-  # PreferenceLoss.forward, so all four names must be in scope at
-  # class-definition time (not just call time). `import torchtune.rlhf.loss`
-  # → `from .dpo import DPOLoss` → NameError cascading from TypeVar →
-  # Optional. Triggered by `lora_dpo_single_device.py` via overlay_args
-  # `loss._component_=torchtune.rlhf.loss.DPOLoss`.
-  #
-  # Guard: `from torchtune.utils._logging import deprecated` exists in
-  # main HEAD only (v0.6.1's dpo.py has no such import line at all —
-  # it's a different file shape). The previous guard
-  # `! grep -q "^from typing import.*TypeVar"` was wrong: v0.6.1 also
-  # has no TypeVar import, so the guard was TRUE there and the assert
-  # inside the python heredoc blew up with
-  # `AssertionError: anchor missing in dpo.py` (CI run 35329364605,
-  # tested ref=v0.6.1). Using the deprecated-import as the discriminator
-  # means the patch only fires on ref where the bug is actually present.
-  if [[ -f "$dpo" ]] && grep -qF "from torchtune.utils._logging import deprecated" "$dpo"; then
-    echo "patching $dpo: adding typing/dataclass imports (main HEAD bug)"
-    _PATCH_DPO="$dpo" python - <<'PY'
-import pathlib, os, sys
-p = pathlib.Path(os.environ["_PATCH_DPO"])
-src = p.read_text()
-needle = "from torchtune.utils._logging import deprecated\n"
-assert needle in src, "anchor missing in dpo.py: %s" % p
-addition = "from typing import Optional, Tuple, TypeVar\nfrom dataclasses import dataclass\n"
-if "from typing import" not in src.split(needle)[0]:
-    src = src.replace(needle, needle + addition, 1)
-    p.write_text(src)
-    print("  patched: %s" % p)
-else:
-    print("  already patched (race), skipping: %s" % p)
-PY
-  fi
-
-  # Bug 2: torchtune/training/quantization.py imports `from torch import nn`
-  # only (no bare `import torch`), but the Int8DynActInt4WeightQuantizer
-  # uses `weight_dtype=torch.int4` at the call site. `quantize.py`
-  # recipe triggers this and aborts with NameError. Add bare `import torch`
-  # so the `torch.int4` lookup resolves.
-  #
-  # Guard: `weight_dtype=torch.int4` exists in main HEAD only. v0.6.1's
-  # Int8DynActInt4WeightQuantizer uses the older
-  # `int8_dynamic_activation_int4_weight(groupsize)` callable from torchao
-  # 0.13, no `torch.int4` lookup, so no patch needed there. Same mistake
-  # as the dpo guard above: the previous `! grep -q "^import torch$"`
-  # check was TRUE for v0.6.1 too (v0.6.1 has no bare `import torch`
-  # either, only `from torch import nn`), so the patch would fire and
-  # silently add a redundant `import torch` — harmless but misleading.
-  if [[ -f "$quant" ]] && grep -qF "weight_dtype=torch.int4" "$quant"; then
-    echo "patching $quant: adding bare 'import torch' (main HEAD bug)"
-    _PATCH_QUANT="$quant" python - <<'PY'
-import pathlib, os
-p = pathlib.Path(os.environ["_PATCH_QUANT"])
-src = p.read_text()
-needle = "from typing import Callable, Optional\n"
-assert needle in src, "anchor missing in quantization.py: %s" % p
-addition = "import torch\n"
-if "import torch\n" not in src.split("from typing import Callable, Optional\n")[0]:
-    src = src.replace(needle, needle + addition, 1)
-    p.write_text(src)
-    print("  patched: %s" % p)
-else:
-    print("  already patched (race), skipping: %s" % p)
-PY
-  fi
-
-  # Bug 3: torchtune/training/_distributed.py:_broadcast_tensor handles
-  # nccl by moving CPU tensors to CUDA before broadcast:
-  #     if dist.get_backend() == "nccl":
-  #         tensor = tensor.to(get_device("cuda"))
-  #     dist.broadcast(tensor, src=src, group=None)
-  # but does NOT handle hccl. On NPU, training.set_seed builds
-  # `rand_seed` on CPU (`torch.empty(1, dtype=torch.int64).random_()`)
-  # and `_broadcast_tensor` then hits hccl with a CPU tensor →
-  # RuntimeError: No backend type associated with device type cpu
-  # (CI run 35721666282 full_finetune_distributed leg). Verified fix on
-  # coder npu-3 (2026-09-22): mirror the nccl branch for hccl, moving
-  # CPU → NPU before broadcast and back after.
-  #
-  # Guard: `if dist.get_backend() == "nccl":` exists in both v0.6.1 and
-  # main HEAD; we extend this conditional rather than replace it, so
-  # the anchor remains valid regardless of upstream edits.
-  if [[ -f "$dist_py" ]] && grep -qF 'if dist.get_backend() == "nccl":' "$dist_py"; then
-    echo "patching $dist_py: extend _broadcast_tensor to handle hccl (CPU → NPU)"
-    _PATCH_DIST="$dist_py" python - <<'PY'
-import pathlib, os
-p = pathlib.Path(os.environ["_PATCH_DIST"])
-src = p.read_text()
-needle = '''        if dist.get_backend() == "nccl":
-            tensor = tensor.to(get_device("cuda"))
-        dist.broadcast(tensor, src=src, group=None)'''
-addition_template = '''        backend = dist.get_backend()
-        if backend == "nccl":
-            tensor = tensor.to(get_device("cuda"))
-        elif backend == "hccl":
-            # hccl backend only supports NPU tensors; torchtune creates
-            # rand_seed on CPU in training.set_seed, so move it to NPU
-            # before broadcast and back after. Mirrors the nccl branch
-            # above (per torch.distributed.pipelining × torch_npu c10d
-            # ABI gap memory). NPU-only patch — no effect on CUDA runs.
-            tensor = tensor.to(get_device("npu"))
-        dist.broadcast(tensor, src=src, group=None)'''
-if needle not in src:
-    raise SystemExit("anchor missing in _distributed.py: %s" % p)
-if 'elif backend == "hccl":' in src:
-    print("  already patched (race), skipping: %s" % p)
-else:
-    src = src.replace(needle, addition_template, 1)
-    p.write_text(src)
-    print("  patched: %s" % p)
-PY
-  fi
-
-  # Bug 4: 5 distributed recipes hardcode
-  #     init_process_group("cuda:nccl,cpu:gloo")
-  # at recipe_main() before constructing the recipe. The multi-backend
-  # string is parsed by torch.distributed as "use nccl for cuda tensors,
-  # gloo for cpu tensors" — and torch.distributed on the CI image
-  # (torch==2.11.0+cpu) does NOT ship the nccl backend → init raises
-  # "Distributed package doesn't have NCCL built in" (CI run 35721666282,
-  # lora_dpo_distributed / lora_finetune_distributed / full_dpo_distributed
-  # / knowledge_distillation_distributed legs; qat_distributed has the
-  # same call site at line 950, verified 2026-09-22 on coder npu-1 with
-  # the llama2/7B_qat_full.yaml overlay entry). On NPU we never use nccl
-  # or gloo anyway (hccl handles NPU tensors, world_size=1 means no
-  # actual collectives), so the simplest fix is to call init_process_group
-  # with just "hccl". Verified fix on coder npu-3 (2026-09-22): all 4
-  # recipes exit 0 after the patch; qat_distributed exit 0 on npu-1.
-  #
-  # Guard: anchor is the literal `init_process_group("cuda:nccl,cpu:gloo")`
-  # call site (one per recipe); the string is unique per file so a plain
-  # `grep -lF` is enough.
-  for recipe in lora_dpo_distributed.py lora_finetune_distributed.py \
-                full_dpo_distributed.py knowledge_distillation_distributed.py \
-                qat_distributed.py; do
-    local rp="$TARGET_ROOT/recipes/$recipe"
-    if [[ -f "$rp" ]] && grep -qF 'init_process_group("cuda:nccl,cpu:gloo")' "$rp"; then
-      echo "patching $rp: replace cuda:nccl,cpu:gloo → hccl (NPU-only)"
-      _PATCH_RECIPE="$rp" python - <<'PY'
-import pathlib, os
-p = pathlib.Path(os.environ["_PATCH_RECIPE"])
-src = p.read_text()
-needle = 'init_process_group("cuda:nccl,cpu:gloo")'
-replacement = 'init_process_group("hccl")'
-if needle not in src:
-    raise SystemExit("anchor missing in %s" % p)
-if replacement in src:
-    print("  already patched (race), skipping: %s" % p)
-else:
-    src = src.replace(needle, replacement, 1)
-    p.write_text(src)
-    print("  patched: %s" % p)
-PY
-    fi
-  done
-
-  # Bug 5: lora_dpo_distributed.py:691 and full_dpo_distributed.py:886
-  # both do:
-  #     num_tokens = 0
-  #     ...
-  #     num_tokens += torch.tensor(batch[0].numel())
-  # and later call
-  #     torch.distributed.all_reduce(num_tokens)
-  # `torch.tensor(...)` defaults to CPU, so `num_tokens` becomes a CPU
-  # scalar tensor — and the hccl backend only accepts NPU tensors for
-  # collectives (init succeeded thanks to Bug 4 patch, but the first
-  # all_reduce on a CPU tensor raises
-  # `RuntimeError: No backend type associated with device type cpu`,
-  # CI run 35729818620 lora_dpo_distributed + full_dpo_distributed
-  # legs). lora_finetune_distributed / full_finetune_distributed /
-  # knowledge_distillation_distributed use a different num_tokens
-  # expression (device tensor from `(batch["labels"] != ignore).sum()`
-  # after batch_to_device) so they're already on-device and don't need
-  # this patch.
-  #
-  # Fix: route the new tensor through self._device, mirroring how the
-  # other recipes keep it device-resident. Single line per file.
-  #
-  # Guard: `num_tokens += torch.tensor(batch[0].numel())` is the only
-  # literal match in the file (unique per recipe, line numbers shifted
-  # by upstream edits but the anchor string survives).
-  for recipe in lora_dpo_distributed.py full_dpo_distributed.py; do
-    local rp="$TARGET_ROOT/recipes/$recipe"
-    if [[ -f "$rp" ]] && grep -qF 'num_tokens += torch.tensor(batch[0].numel())' "$rp"; then
-      echo "patching $rp: route num_tokens += through self._device (NPU-only)"
-      _PATCH_RECIPE="$rp" python - <<'PY'
-import pathlib, os
-p = pathlib.Path(os.environ["_PATCH_RECIPE"])
-src = p.read_text()
-needle = 'num_tokens += torch.tensor(batch[0].numel())'
-replacement = 'num_tokens += torch.tensor(batch[0].numel(), device=self._device)'
-if needle not in src:
-    raise SystemExit("anchor missing in %s" % p)
-if replacement in src:
-    print("  already patched (race), skipping: %s" % p)
-else:
-    src = src.replace(needle, replacement, 1)
-    p.write_text(src)
-    print("  patched: %s" % p)
-PY
-    fi
-  done
-
-  # Bug 6: qat_lora_finetune_distributed.py:965 selects the backend from
-  # cfg.device:
-  #     init_process_group(backend="gloo" if cfg.device == "cpu" else "nccl")
-  # With device=npu the "nccl" branch is taken and torch 2.11.0+cpu has
-  # no nccl → "Distributed package doesn't have NCCL built in". Same
-  # class as Bug 4 but a different call-site shape (keyword arg + ternary
-  # instead of a literal multi-backend string), so it gets its own
-  # patch: replace the else-branch backend with "hccl" (the recipe's
-  # set_seed CPU→broadcast is then handled by the Bug 3 patch above).
-  # Verified 2026-09-22 on coder npu-1 (llama3_2/1B_qat_lora.yaml +
-  # torchao 0.11.0, exit 0).
-  #
-  # Guard: the ternary literal is unique in the file.
-  local qat_lora="$TARGET_ROOT/recipes/qat_lora_finetune_distributed.py"
-  if [[ -f "$qat_lora" ]] && grep -qF 'init_process_group(backend="gloo" if cfg.device == "cpu" else "nccl")' "$qat_lora"; then
-    echo "patching $qat_lora: nccl → hccl in init_process_group ternary (NPU-only)"
-    _PATCH_RECIPE="$qat_lora" python - <<'PY'
-import pathlib, os
-p = pathlib.Path(os.environ["_PATCH_RECIPE"])
-src = p.read_text()
-needle = 'init_process_group(backend="gloo" if cfg.device == "cpu" else "nccl")'
-replacement = 'init_process_group(backend="gloo" if cfg.device == "cpu" else "hccl")'
-if needle not in src:
-    raise SystemExit("anchor missing in %s" % p)
-if replacement in src:
-    print("  already patched (race), skipping: %s" % p)
-else:
-    src = src.replace(needle, replacement, 1)
-    p.write_text(src)
-    print("  patched: %s" % p)
-PY
   fi
 }
 

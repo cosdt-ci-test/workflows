@@ -43,7 +43,7 @@ scan:
 # ghcr.io/hwvanici/areal_npu:v1.0.5-a2（CANN 9.0.1 / torch 2.10 / torch_npu
 # 2.10 / vLLM-Ascend / Megatron-Core / MindSpeed / Megatron-Bridge）。
 supported:
-  # Qwen2.5-VL-3B Geometry3K GRPO（单卡；2026-09-22 实测跑通）
+  # Qwen2.5-VL-3B Geometry3K GRPO（单卡；2026-09-24 实测跑通）
   - path: examples/vlm/geometry3k_grpo.py
     profile: areal-vlm-grpo
     runner: linux-aarch64-a2-1
@@ -54,23 +54,29 @@ supported:
       - cluster.n_gpus_per_node=1
       - rollout.backend=vllm:d1p1t1
       - actor.backend=fsdp:d1p1t1
+      # 单卡 NPU 必加：3B 全参 GRPO 与同卡 vLLM 共存，不 offload 会在
+      # optimizer.step() 建 Adam state 时 OOM；默认 xccl 权重同步在 actor 与
+      # rollout worker 同占物理 device 0 时建不起 HCCL 组（EI0015），改 disk。
+      - +actor.fsdp.offload_params=true
+      - +actor.weight_update_mode=disk
       - actor.path=${AREAL_MODEL_PATH}
       - actor.mb_spec.max_tokens_per_mb=512
       - ref.mb_spec.max_tokens_per_mb=512
-      - vllm.gpu_memory_utilization=0.4
+      - vllm.gpu_memory_utilization=0.2
       - gconfig.max_new_tokens=128
       - gconfig.n_samples=1
-      - train_dataset.batch_size=8
-      - valid_dataset.batch_size=8
       # Online dataset: keep train_dataset.path / valid_dataset.path at the
       # YAML default (hiyouga/geometry3k) so AReaL downloads it through
       # HF_ENDPOINT (hf-mirror.com). Raise the data-service setup timeout
       # for the cold first-time download.
-      - train_dataset.setup_timeout=600
-      - valid_dataset.setup_timeout=600
+      - train_dataset.batch_size=2
+      - valid_dataset.batch_size=2
+      - +train_dataset.setup_timeout=600
+      - +valid_dataset.setup_timeout=600
       - +total_train_steps=1
     timeout_minutes: 240
   # Qwen3-VL-2B-Instruct Geometry3K 多轮 tool-calling GRPO（单卡；FSDP 后端）。
+  # 单卡配方待本机实测；offload + disk 与上面 geometry3k 那条同理必加。
   # env_factory 是字符串点路径（可 JSON 序列化），不同于 virl39k 的函数对象 bug。
   - path: examples/multi_turn_vlm/geometry3k_grpo_mt.py
     profile: areal-vlm-mt-grpo
@@ -83,20 +89,25 @@ supported:
       - cluster.n_gpus_per_node=1
       - rollout.backend=vllm:d1p1t1
       - actor.backend=fsdp:d1p1t1
+      # 单卡 NPU 必加，理由同 geometry3k 那条（optimizer-state OOM + 单卡 xccl
+      # 建不起 HCCL 组）。max_tokens_per_mb 不要低于 1024：它同时是 workflow
+      # 的 max_tokens_per_traj，一张 448x448 图的视觉 token 就可能超过它。
+      - +actor.fsdp.offload_params=true
+      - +actor.weight_update_mode=disk
       - actor.path=${AREAL_MODEL_PATH}
       - actor.mb_spec.max_tokens_per_mb=1024
       - ref.mb_spec.max_tokens_per_mb=1024
-      - vllm.gpu_memory_utilization=0.4
+      - vllm.gpu_memory_utilization=0.2
       - gconfig.n_samples=1
       - gconfig.max_new_tokens=128
       - max_turns=2
-      - train_dataset.batch_size=8
-      - valid_dataset.batch_size=8
       # Online dataset: keep the YAML default path (hiyouga/geometry3k); AReaL
       # downloads it through HF_ENDPOINT (hf-mirror.com). Raise the
       # data-service setup timeout for the cold first-time download.
-      - train_dataset.setup_timeout=600
-      - valid_dataset.setup_timeout=600
+      - train_dataset.batch_size=2
+      - valid_dataset.batch_size=2
+      - +train_dataset.setup_timeout=600
+      - +valid_dataset.setup_timeout=600
       - +total_train_steps=1
     timeout_minutes: 240
 unsupported:

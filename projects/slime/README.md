@@ -59,17 +59,17 @@ slime 上游 `THUDM/slime` 发布 release（当前 v0.3.2）但没有任何昇�
 
 ## supported 清单与压缩口径
 
-### 已接入（阶段一 #12 全绿；阶段二 OPD 待手动验收）
+### 已接入（fully-async #12、OPD #13 全绿；ReTool 待手动验收）
 
 | example | runner | 配方出处 | 压缩口径 |
 |---|---|---|---|
 | `examples/fully_async/run-qwen2.5-0.5B-fully_async.sh` | a2-4 | fork NPU nightly `tests/tests_npu/nightly_CI/test_qwen2.5_0.5B_fully_async_short_npu.py`（昇腾已验证） | actor 1 + rollout 3、TP/PP/CP/EP 全 1、`--num-rollout 2`、response 1024（nightly 为 8192）、数据换仓内 16 行 fixture；显式关闭两类 dropout 并沿用 temperature 0.8 对齐训练/推理策略 |
-| `examples/on_policy_distillation/run-qwen3-8B-opd.sh` | a2-8 | fork NPU ST `tests/tests_npu/st/test_qwen2.5_0.5B_opd_sglang_npu.py` | 同型号 Qwen2.5-0.5B student/teacher，Ray 中 actor 4 + rollout 3、独立 teacher 1 卡；2 个 rollout、fixture 16 行、response 1024。保留 SGLang teacher token-logprob 与 OPD KL 链路；尚待远程验证。 |
+| `examples/on_policy_distillation/run-qwen3-8B-opd.sh` | a2-8 | fork NPU ST `tests/tests_npu/st/test_qwen2.5_0.5B_opd_sglang_npu.py` | 同型号 Qwen2.5-0.5B student/teacher，Ray 中 actor 4 + rollout 3、独立 teacher 1 卡；2 个 rollout、fixture 16 行、response 1024。#13 已通过。 |
+| `examples/retool/retool_qwen3_4b_rl.sh` | a2-4 | fork 自带 ReTool `.sh`（暂无 NPU 回归先例） | ModelScope Qwen3-4B-Instruct-2507、四卡 colocate/TP2、两次 rollout、8 行本地工具调用数学 fixture；自定义生成、工具 sandbox 和奖励路径待远程验证。 |
 
 执行不直接跑上游 `.sh`（硬编码 `/root` 绝对路径、无 `"$@"` 透传），由
-manifest `overlay_args` 承载完整训练配方（逐块注释对应 fork 测试的参数组），
-`run_example.sh` 只做两件事：把 `MODEL_TYPE`/`TRAIN_SCRIPT` 这两个引擎
-透传不了的调用元数据按条目映射好，然后内联调用 fork 自己的
+manifest `overlay_args` 承载 CI 训练配方；`run_example.sh` 映射引擎无法透传的
+`MODEL_TYPE`/`TRAIN_SCRIPT`、管理 OPD teacher 与 ReTool 模块路径，然后调用 fork 自己的
 `slime.utils.external_utils.command_utils.execute_train()`（ray start/submit、
 NPU 资源注入都由 fork 框架代码完成）。模型 `--hf-checkpoint` 走 ModelScope
 本地路径，`--ref-load` 用 fork 自带 `tools/convert_hf_to_torch_dist.py`
@@ -82,12 +82,11 @@ OPD 的上游 `.sh` 会启动 teacher、轮询健康接口，再启动 Ray 训�
 teacher。训练参数留在 manifest。环境仍是现有华为 CANN 镜像 + setup 按 fork
 `quick_install.sh`/NPU Dockerfile 安装的 NPU 栈，不拉取新的国外容器镜像。
 
-### 阶段二后续候选（OPD 验收后）
-
-- `examples/retool/retool_qwen3_4b_rl.sh`：4 卡 colocate（TP2、engine 2），模型换
-  `Qwen/Qwen3-4B-Instruct-2507`（ModelScope 不可达时降 Qwen3-0.6B）；sandbox 为
-  纯本地 subprocess。没有 OPD 那样完整的 fork NPU 回归先例，因此本轮不与 OPD
-  同时提升，以便远程失败时归因。
+ReTool 的上游 `.sh` 包含 CUDA 检测、Ray 清理、四卡 colocate/TP2 配置与固定模型、
+数据和 W&B。项目 runner 保留四卡布局及自定义生成/奖励函数；setup 补齐
+`jinja2`、`psutil`，从 ModelScope 下载模型并用 fork 工具转为 `_torch_dist`。
+`tool_sandbox.py` 会在容器内执行模型生成的 Python 代码，因此仅使用本地 fixture
+与最小权限 workflow；这条尚无 fork NPU 端到端先例，首次 CI 以真实日志验收。
 
 ### 阶段三候选
 
@@ -107,11 +106,12 @@ teacher。训练参数留在 manifest。环境仍是现有华为 CANN 镜像 + s
 
 ## 数据与模型
 
-- 模型：全部走 ModelScope（Qwen2.5-0.5B-Instruct 已验证；ReTool 候选
-  Qwen3-4B-Instruct-2507 接入前先验可达性）。
+- 模型：全部走 ModelScope（Qwen2.5-0.5B-Instruct 已验证；ReTool 使用
+  [Qwen3-4B-Instruct-2507](https://modelscope.cn/models/Qwen/Qwen3-4B-Instruct-2507)，需首次 CI 确认实际下载与转换）。
 - 数据：`fixtures/ci_dapo_16.jsonl` 为 16 行 DAPO-Math-17k 同 schema 真实样本
   （`prompt` 为 `[{content, role}]` 消息列表、`label` 为字符串答案，deepscaler
-  本地 CPU 校验），不依赖 hf-mirror 数据集下载。
+  本地 CPU 校验）；ReTool 使用 `fixtures/ci_retool_math_8.jsonl`，提示模型先调用
+  `code_interpreter` 再以 boxed 答案作答。不依赖 hf-mirror 数据集下载。
 
 ## 运行时环境契约
 

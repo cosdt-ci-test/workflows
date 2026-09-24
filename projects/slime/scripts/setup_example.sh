@@ -348,6 +348,58 @@ setup_slime_opd() {
   prepare_qwen25_assets
 }
 
+setup_slime_retool() {
+  check_npu_devices 4
+  # The fork's ReTool modules import these at module load; its launcher
+  # assumes they are preinstalled in the upstream container image.
+  python -m pip install -q "modelscope==1.37.0" jinja2 psutil
+  python -c 'import jinja2, psutil; print("ReTool deps:", jinja2.__version__, psutil.__version__)'
+
+  local model_path_file="$DEPS_ROOT/retool_model_path.txt"
+  TQDM_MININTERVAL=15 python - "$model_path_file" <<'PY'
+import os
+import sys
+from modelscope import snapshot_download
+local = snapshot_download(
+    "Qwen/Qwen3-4B-Instruct-2507",
+    cache_dir=os.environ.get("MODELSCOPE_CACHE", os.path.expanduser("~/.cache/modelscope")),
+)
+print("ReTool model snapshot:", local)
+with open(sys.argv[1], "w") as output:
+    output.write(local + "\n")
+PY
+  local model_dir
+  model_dir=$(cat "$model_path_file")
+  if [[ ! -d "$model_dir" ]]; then
+    echo "ReTool model snapshot dir missing: $model_dir" >&2
+    exit 1
+  fi
+  append_project_env "SLIME_MODEL_PATH=$model_dir"
+
+  local torch_dist="$DEPS_ROOT/weights-MA/Qwen3-4B-Instruct-2507_torch_dist"
+  mkdir -p "$DEPS_ROOT/weights-MA"
+  if [[ ! -d "$torch_dist" ]]; then
+    echo "converting Qwen3-4B-Instruct-2507 to torch_dist (4 procs)"
+    (
+      cd "$SLIME_FORK_ROOT"
+      # shellcheck disable=SC1091
+      source scripts/models/qwen3-4B-Instruct-2507.sh
+      export PYTHONPATH="$DEPS_ROOT/Megatron-LM:$DEPS_ROOT/Megatron-Bridge/src:$PYTHONPATH"
+      export TRANSFORMERS_VERBOSITY=error
+      # shellcheck disable=SC2086
+      torchrun --nproc-per-node 4 \
+        tools/convert_hf_to_torch_dist.py \
+        ${MODEL_ARGS[@]} \
+        --hf-checkpoint "$model_dir" \
+        --save "$torch_dist"
+    )
+  else
+    echo "torch_dist checkpoint already present: $torch_dist"
+  fi
+  append_project_env "SLIME_TORCH_DIST_PATH=$torch_dist"
+  append_project_env "SLIME_FIXTURE_JSONL=$FIXTURE_DIR/ci_retool_math_8.jsonl"
+}
+
 supported_profiles() {
   declare -F | awk '/^declare -f setup_/ { sub(/^declare -f setup_/, ""); print }' | paste -sd' ' -
 }

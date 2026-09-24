@@ -161,6 +161,15 @@ case "$entry_key" in
     MODEL_TYPE=qwen2.5-0.5B
     TRAIN_SCRIPT=train.py
     ;;
+  examples/retool/retool_qwen3_4b_rl.sh)
+    # The upstream .sh hardcodes CUDA/path/sweep settings; keep its
+    # four-card colocate + TP2 ReTool recipe through fork execute_train.
+    require_visible_devices 4 '0,1,2,3'
+    NUM_GPUS=4
+    MODEL_TYPE=qwen3-4B-Instruct-2507
+    TRAIN_SCRIPT=train.py
+    export PYTHONPATH="$SLIME_FORK_ROOT/examples/retool:$PYTHONPATH"
+    ;;
   *)
     echo "no engine-call metadata mapping for $entry_key" >&2
     exit 1

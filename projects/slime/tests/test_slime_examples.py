@@ -28,12 +28,22 @@ EXPECTED_SUPPORTED = {
         ),
         "timeout_minutes": 300,
     },
+    "examples/retool/retool_qwen3_4b_rl.sh": {
+        "profile": "slime_retool",
+        "runner": "linux-aarch64-a2-4",
+        "image": (
+            "swr.cn-south-1.myhuaweicloud.com/ascendhub/"
+            "cann:9.1.0-910b-ubuntu22.04-py3.12"
+        ),
+        "timeout_minutes": 300,
+    },
 }
 
 # Entries whose execution recipe needs a minimum visible-device count.
 ENTRY_DEVICE_REQUIREMENTS = {
     "examples/fully_async/run-qwen2.5-0.5B-fully_async.sh": 4,
     "examples/on_policy_distillation/run-qwen3-8B-opd.sh": 8,
+    "examples/retool/retool_qwen3_4b_rl.sh": 4,
 }
 
 # Engine-call metadata that the engine cannot pass through; each
@@ -41,10 +51,12 @@ ENTRY_DEVICE_REQUIREMENTS = {
 ENTRY_MODEL_TYPES = {
     "examples/fully_async/run-qwen2.5-0.5B-fully_async.sh": "qwen2.5-0.5B",
     "examples/on_policy_distillation/run-qwen3-8B-opd.sh": "qwen2.5-0.5B",
+    "examples/retool/retool_qwen3_4b_rl.sh": "qwen3-4B-Instruct-2507",
 }
 ENTRY_TRAIN_SCRIPTS = {
     "examples/fully_async/run-qwen2.5-0.5B-fully_async.sh": "train_async.py",
     "examples/on_policy_distillation/run-qwen3-8B-opd.sh": "train.py",
+    "examples/retool/retool_qwen3_4b_rl.sh": "train.py",
 }
 
 # Pin table copied from the fork's Dockerfile ARGs and quick_install.sh.
@@ -141,6 +153,20 @@ def test_fixture_rows_match_dapo_schema() -> None:
         assert isinstance(row["label"], str)
 
 
+def test_retool_fixture_requests_tool_calls() -> None:
+    fixture = PROJECT_ROOT / "fixtures" / "ci_retool_math_8.jsonl"
+    rows = [json.loads(line) for line in fixture.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert len(rows) == 8
+    for row in rows:
+        assert set(row) == {"prompt", "label"}
+        assert len(row["prompt"]) == 1
+        prompt = row["prompt"][0]
+        assert prompt["role"] == "user"
+        assert "code_interpreter" in prompt["content"]
+        assert "\\boxed{" in prompt["content"]
+        assert row["label"].isdigit()
+
+
 def test_setup_pins_match_fork_recipe() -> None:
     setup = (PROJECT_ROOT / "scripts" / "setup_example.sh").read_text(encoding="utf-8")
     for needle in (
@@ -165,6 +191,11 @@ def test_setup_pins_match_fork_recipe() -> None:
     assert 'setup_slime_opd()' in setup
     assert 'check_npu_devices 8' in setup
     assert 'prepare_qwen25_assets' in setup
+    assert 'setup_slime_retool()' in setup
+    assert 'Qwen/Qwen3-4B-Instruct-2507' in setup
+    assert 'source scripts/models/qwen3-4B-Instruct-2507.sh' in setup
+    assert 'jinja2 psutil' in setup
+    assert 'SLIME_FIXTURE_JSONL=$FIXTURE_DIR/ci_retool_math_8.jsonl' in setup
 
 
 def test_run_example_exports_npu_contract() -> None:
@@ -186,8 +217,8 @@ def test_run_example_exports_npu_contract() -> None:
 
 
 
-# Entries whose full CI train recipe is carried by manifest overlay_args.
-# Recipe source per entry: the fork's NPU CI test named in the comment.
+# Entries whose CI train recipe is carried by manifest overlay_args.
+# Sources are the fork's NPU tests or the entry's upstream launcher.
 RECIPE_OVERLAY_REQUIRED = {
     "examples/fully_async/run-qwen2.5-0.5B-fully_async.sh": [
         "--hf-checkpoint ${SLIME_MODEL_PATH}",
@@ -211,6 +242,22 @@ RECIPE_OVERLAY_REQUIRED = {
         "--num-rollout 2",
         "--actor-num-gpus-per-node 4",
         "--rollout-num-gpus 3",
+        "--sglang-device npu",
+        "--ci-test",
+    ],
+    "examples/retool/retool_qwen3_4b_rl.sh": [
+        "--hf-checkpoint ${SLIME_MODEL_PATH}",
+        "--ref-load ${SLIME_TORCH_DIST_PATH}",
+        "--prompt-data ${SLIME_FIXTURE_JSONL}",
+        "--custom-generate-function-path generate_with_retool.generate",
+        "--custom-rm-path generate_with_retool.reward_func",
+        "--reward-key score",
+        "--colocate",
+        "--actor-num-gpus-per-node 4",
+        "--num-gpus-per-node 4",
+        "--tensor-model-parallel-size 2",
+        "--rollout-num-gpus-per-engine 2",
+        "--num-rollout 2",
         "--sglang-device npu",
         "--ci-test",
     ],

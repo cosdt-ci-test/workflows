@@ -80,6 +80,44 @@ supported:
       - "--attention-backend flash"
       - --ci-test
 
+  # retool_qwen3_4b_rl.sh：工具调用强化学习；可复刻 CUDA 启动器，用四卡 NPU 和短 rollout 验证。
+  - path: examples/retool/retool_qwen3_4b_rl.sh
+    profile: slime_retool
+    runner: linux-aarch64-a2-4
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    timeout_minutes: 300
+    overlay_args:
+      - "--hf-checkpoint ${SLIME_MODEL_PATH}"
+      - "--ref-load ${SLIME_TORCH_DIST_PATH}"
+      - "--prompt-data ${SLIME_FIXTURE_JSONL}"
+      - "--input-key prompt"
+      - "--label-key label"
+      - --apply-chat-template
+      - "--reward-key score"
+      - "--custom-generate-function-path generate_with_retool.generate"
+      - "--custom-rm-path generate_with_retool.reward_func"
+      - "--num-rollout 2"
+      - "--rollout-batch-size 4"
+      - "--n-samples-per-prompt 2"
+      - "--global-batch-size 8"
+      - "--rollout-max-response-len 512"
+      - "--rollout-max-context-len 2048"
+      - "--rollout-temperature 0.8"
+      - "--attention-dropout 0.0"
+      - "--hidden-dropout 0.0"
+      - --colocate
+      - "--actor-num-gpus-per-node 4"
+      - "--num-gpus-per-node 4"
+      - "--tensor-model-parallel-size 2"
+      - "--rollout-num-gpus-per-engine 2"
+      - "--sglang-device npu"
+      - "--sglang-mem-fraction-static 0.65"
+      - "--sglang-cuda-graph-max-bs 16"
+      - "--max-tokens-per-gpu 4096"
+      - --use-dynamic-batch-size
+      - "--attention-backend flash"
+      - --ci-test
+
 unsupported:
   # __init__.py：标记 examples 包；非独立样例。
   - examples/__init__.py
@@ -145,8 +183,6 @@ unsupported:
   - examples/retool/retool_glm4.7_flash_rl_npu.sh
   # retool_qwen3_4b_sft.sh：工具调用 SFT；与 RL 版本共用工具链，待 RL 配方验证后接入。
   - examples/retool/retool_qwen3_4b_sft.sh
-  # retool_qwen3_4b_rl.sh：工具调用 RL；启动脚本依赖 CUDA，需复刻 NPU 配方。
-  - examples/retool/retool_qwen3_4b_rl.sh
   # generate_with_retool.py：工具调用 rollout 与奖励；非独立样例。
   - examples/retool/generate_with_retool.py
   # rl_data_preprocess.py：RL 数据预处理；非独立训练样例。

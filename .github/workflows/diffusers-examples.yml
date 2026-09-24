@@ -44,4 +44,4 @@ jobs:
       project: diffusers
       upstream_repo: huggingface/diffusers
       target_ref: ${{ inputs.target_ref }}
-      max_parallel: 4
+      max_parallel: 8

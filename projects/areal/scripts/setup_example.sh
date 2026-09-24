@@ -55,6 +55,25 @@ echo "WANDB_MODE=disabled" >> "$GITHUB_ENV"
 echo "PYTORCH_NPU_ALLOC_CONF=expandable_segments:True" >> "$GITHUB_ENV"
 echo "USE_OPTIMIZED_MODEL=0" >> "$GITHUB_ENV"
 
+# Pre-download the Geometry3K dataset to local Arrow cache (avoids runtime hf_hub
+# version conflicts when load_dataset() resolves the HF repo card).
+python3 -m pip install -q datasets
+python3 <<'PY'
+from datasets import load_dataset
+import os
+
+REPO = "hiyouga/geometry3k"
+DEST = "/workspace/datasets/geometry3k"
+os.makedirs(DEST, exist_ok=True)
+
+print("Caching geometry3k to local Arrow...", flush=True)
+ds = load_dataset(REPO)
+for split in ("train", "test"):
+    ds[split].save_to_disk(f"{DEST}/{split}")
+    print(f"Cached {split}: {len(ds[split])} samples", flush=True)
+PY
+echo "AREAL_GEOMETRY3K_PATH=/workspace/datasets/geometry3k" >> "$GITHUB_ENV"
+
 # The FSDP/Megatron engine loads safetensors from a LOCAL directory (it does not
 # accept a HF repo id), so pre-download the model and export the path the
 # manifest references as ${AREAL_MODEL_PATH}.

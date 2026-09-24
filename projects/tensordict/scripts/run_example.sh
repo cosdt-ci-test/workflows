@@ -6,6 +6,8 @@ set -euo pipefail
 : "${CI_OUTPUT_DIR:?CI_OUTPUT_DIR is required}"
 entry="${1:-}"
 case "$entry" in
+  tutorials/sphinx_tuto/export.py|\
+  tutorials/sphinx_tuto/functional.py|\
   tutorials/sphinx_tuto/tensordict_keys.py|\
   tutorials/sphinx_tuto/tensordict_shapes.py|\
   tutorials/sphinx_tuto/tensordict_preallocation.py) ;;
@@ -31,6 +33,7 @@ mkdir -p "$CI_OUTPUT_DIR"
 python - "$tutorial" <<'PY'
 import runpy
 import sys
+from pathlib import Path
 
 import torch
 import torch_npu
@@ -43,15 +46,37 @@ torch.set_default_device("npu:0")
 
 # Run the unmodified upstream file, including its own assertions.
 namespace = runpy.run_path(sys.argv[1], run_name="__main__")
-result = namespace.get("tensordict")
-if not isinstance(result, TensorDictBase):
-    raise SystemExit("tutorial did not leave a TensorDict result for device verification")
-leaves = list(result.values(include_nested=True, leaves_only=True))
-if not leaves or not all(isinstance(leaf, torch.Tensor) for leaf in leaves):
-    raise SystemExit("tutorial result has no tensor leaves")
-bad = [str(leaf.device) for leaf in leaves if leaf.device.type != "npu"]
-if bad:
-    raise SystemExit(f"tutorial fell back from NPU: leaf devices={bad}")
+
+def require_npu(value, label):
+    if isinstance(value, TensorDictBase):
+        leaves = list(value.values(include_nested=True, leaves_only=True))
+    elif isinstance(value, torch.Tensor):
+        leaves = [value]
+    elif isinstance(value, (tuple, list)):
+        leaves = [leaf for part in value for leaf in require_npu(part, label)]
+    elif isinstance(value, dict):
+        leaves = [leaf for part in value.values() for leaf in require_npu(part, label)]
+    else:
+        raise SystemExit(f"{label}: unexpected result type {type(value).__name__}")
+    if not leaves or not all(isinstance(leaf, torch.Tensor) for leaf in leaves):
+        raise SystemExit(f"{label}: no tensor leaves to verify")
+    bad = [str(leaf.device) for leaf in leaves if leaf.device.type != "npu"]
+    if bad:
+        raise SystemExit(f"{label}: fell back from NPU; leaf devices={bad}")
+    return leaves
+
+name = Path(sys.argv[1]).name
+if name == "functional.py":
+    checked = require_npu(namespace.get("params_stack"), "parameter ensemble")
+    checked += require_npu(namespace.get("y"), "functional_call output")
+elif name == "export.py":
+    x = namespace.get("x")
+    checked = require_npu(x, "export input")
+    checked += require_npu(list(namespace["model"].parameters()), "export model")
+    exported_output = namespace["model_export"].module()(x=x)
+    checked += require_npu(exported_output, "exported module output")
+else:
+    checked = require_npu(namespace.get("tensordict"), "tutorial TensorDict")
 torch.npu.synchronize()
-print(f"NPU tutorial passed: {sys.argv[1]} ({len(leaves)} NPU tensor leaves)")
+print(f"NPU tutorial passed: {sys.argv[1]} ({len(checked)} NPU tensor leaves)")
 PY

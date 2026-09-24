@@ -1,7 +1,8 @@
-"""Static contract for the first TensorDict NPU tutorial guard."""
+"""Static contract for the TensorDict NPU tutorial guard."""
 
 from __future__ import annotations
 
+import ast
 import unittest
 from pathlib import Path
 
@@ -28,6 +29,8 @@ TUTORIALS = {
     "zarr_storage.py",
 }
 SUPPORTED = {
+    "export.py",
+    "functional.py",
     "tensordict_keys.py",
     "tensordict_shapes.py",
     "tensordict_preallocation.py",
@@ -52,8 +55,8 @@ class TensorDictExamplesContract(unittest.TestCase):
             {path.removeprefix(prefix) for path in supported_paths | unsupported_paths},
             TUTORIALS,
         )
-        self.assertEqual(len(supported), 3)
-        self.assertEqual(len(unsupported), 11)
+        self.assertEqual(len(supported), 5)
+        self.assertEqual(len(unsupported), 9)
 
         lines = text.splitlines()
         for item in supported:
@@ -71,9 +74,16 @@ class TensorDictExamplesContract(unittest.TestCase):
     def test_launcher_requires_real_npu_results(self) -> None:
         run = (PROJECT / "scripts" / "run_example.sh").read_text(encoding="utf-8")
         setup = (PROJECT / "scripts" / "setup_example.sh").read_text(encoding="utf-8")
+        manifest = yaml.safe_load(MANIFEST_PATH.read_text(encoding="utf-8"))
+        for item in manifest["supported"]:
+            self.assertIn(item["path"], run)
+        python_body = run.split('python - "$tutorial" <<\'PY\'\n', 1)[1].split("\nPY", 1)[0]
+        ast.parse(python_body)
         self.assertIn('torch.set_default_device("npu:0")', run)
         self.assertIn('runpy.run_path(sys.argv[1], run_name="__main__")', run)
         self.assertIn('leaf.device.type != "npu"', run)
+        self.assertIn('require_npu(namespace.get("params_stack")', run)
+        self.assertIn('require_npu(exported_output, "exported module output")', run)
         self.assertIn('"NPU is unavailable; refusing CPU fallback"', run)
         self.assertIn('torch==2.9.0 torch_npu==2.9.0.post2', setup)
         self.assertIn('reusing compatible torch/torch_npu stack', setup)

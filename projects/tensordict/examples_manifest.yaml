@@ -1,11 +1,23 @@
 version: 1
 # 只把上游可运行的教程 .py 作为对账单位；不把文档、图片或 benchmarks 当成 example。
-# supported 表示源码静态判断可在 NPU 上尝试，真实兼容性仍待手动 workflow 验证。
+# 首批 3 条已在 examples #2 上通过；新增条目仍待手动 workflow 验证。
 scan:
   root: tutorials/sphinx_tuto
   include_extensions: ['.py']
 
 supported:
+  # 导出教程用固定形状合成输入演示 TensorDictModule 的 torch.export 与导出模块前向；无需外部资源，启动器检查模型、输入和导出输出均在 NPU，待实机验收。
+  - path: tutorials/sphinx_tuto/export.py
+    profile: tensordict_npu
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    timeout_minutes: 90
+  # 函数式教程演示参数替换、vmap 集成和 functional_call；只用小型合成张量，可检查参数栈和最终输出驻留 NPU，待实机验收。
+  - path: tutorials/sphinx_tuto/functional.py
+    profile: tensordict_npu
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    timeout_minutes: 90
   # 键操作教程演示 set/update/嵌套键与展平；仅用微型合成张量，项目启动器将默认设备设为 NPU 并验证最终叶子设备。
   - path: tutorials/sphinx_tuto/tensordict_keys.py
     profile: tensordict_npu
@@ -27,8 +39,6 @@ supported:
 
 unsupported:
   - tutorials/sphinx_tuto/data_fashion.py  # FashionMNIST 数据加载与双模型训练；device 只在 CUDA/CPU 间选择，NPU runner 会回落 CPU，且下载数据、5 epoch 暂无法从 CLI 压缩。
-  - tutorials/sphinx_tuto/export.py  # torch.export 导出 TensorDictModule；多次图捕获的 NPU 兼容性尚未上卡验证，CPU 成功不能作为 NPU 看护。
-  - tutorials/sphinx_tuto/functional.py  # 参数替换、vmap 和 functional_call；虽用合成数据，但 vmap 的 NPU 兼容性需在基础操作通过后单独验证。
   - tutorials/sphinx_tuto/serialization_speed.py  # 多格式序列化吞吐基准；重复写盘及绘图主要测 CPU/磁盘，缺少稳定的 NPU 功能验收语义。
   - tutorials/sphinx_tuto/streamed_tensordict.py  # asyncio 模拟流与 lazy stack；涉及 Python 整数和 nested tensor densify，NPU 驻留与算子兼容性待单独验证。
   - tutorials/sphinx_tuto/tensorclass_fashion.py  # FashionMNIST tensorclass 数据加载与训练；device 硬选 CUDA/CPU、自动下载数据且固定 5 epoch，原样执行不能覆盖 NPU。

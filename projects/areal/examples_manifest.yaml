@@ -75,8 +75,8 @@ supported:
       - +valid_dataset.setup_timeout=600
       - +total_train_steps=1
     timeout_minutes: 240
-  # Qwen3-VL-2B-Instruct Geometry3K 多轮 tool-calling GRPO（单卡；FSDP 后端）。
-  # 单卡配方待本机实测；offload + disk 与上面 geometry3k 那条同理必加。
+  # Qwen3-VL-2B-Instruct Geometry3K 多轮 tool-calling GRPO（单卡；2026-09-24 实测跑通）。
+  # offload + disk + 关 mean 归约与上面 geometry3k 那条同理必加。
   # env_factory 是字符串点路径（可 JSON 序列化），不同于 virl39k 的函数对象 bug。
   - path: examples/multi_turn_vlm/geometry3k_grpo_mt.py
     profile: areal-vlm-mt-grpo
@@ -92,14 +92,18 @@ supported:
       # 单卡 NPU 必加，理由同 geometry3k 那条（optimizer-state OOM + 单卡 xccl
       # 建不起 HCCL 组）。max_tokens_per_mb 不要低于 1024：它同时是 workflow
       # 的 max_tokens_per_traj，一张 448x448 图的视觉 token 就可能超过它。
+      # reward_norm/adv_norm 批级归约走 float64，HCCL 不支持 double allreduce，
+      # 故关掉 mean 归约（std_level 本就是 null）。
       - +actor.fsdp.offload_params=true
       - +actor.weight_update_mode=disk
+      - actor.reward_norm.mean_level=null
+      - actor.adv_norm.mean_level=null
       - actor.path=${AREAL_MODEL_PATH}
       - actor.mb_spec.max_tokens_per_mb=1024
       - ref.mb_spec.max_tokens_per_mb=1024
       - vllm.gpu_memory_utilization=0.2
       - gconfig.n_samples=1
-      - gconfig.max_new_tokens=128
+      - gconfig.max_new_tokens=64
       - max_turns=2
       # Online dataset: keep the YAML default path (hiyouga/geometry3k); AReaL
       # downloads it through HF_ENDPOINT (hf-mirror.com). Raise the

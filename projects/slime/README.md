@@ -63,7 +63,7 @@ slime 上游 `THUDM/slime` 发布 release（当前 v0.3.2）但没有任何昇�
 
 | example | runner | 配方出处 | 压缩口径 |
 |---|---|---|---|
-| `examples/fully_async/run-qwen2.5-0.5B-fully_async.sh` | a2-4 | fork NPU nightly `tests/tests_npu/nightly_CI/test_qwen2.5_0.5B_fully_async_short_npu.py`（昇腾已验证） | actor 1 + rollout 3、TP/PP/CP/EP 全 1、`--num-rollout 2`、response 1024（nightly 为 8192）、数据换仓内 16 行 fixture |
+| `examples/fully_async/run-qwen2.5-0.5B-fully_async.sh` | a2-4 | fork NPU nightly `tests/tests_npu/nightly_CI/test_qwen2.5_0.5B_fully_async_short_npu.py`（昇腾已验证） | actor 1 + rollout 3、TP/PP/CP/EP 全 1、`--num-rollout 2`、response 1024（nightly 为 8192）、数据换仓内 16 行 fixture；显式关闭两类 dropout 并沿用 temperature 0.8 对齐训练/推理策略 |
 
 执行不直接跑上游 `.sh`（硬编码 `/root` 绝对路径、无 `"$@"` 透传），由
 manifest `overlay_args` 承载完整训练配方（逐块注释对应 fork 测试的参数组），
@@ -114,6 +114,11 @@ NPU 资源注入都由 fork 框架代码完成）。模型 `--hf-checkpoint` 走
 `CUDA_DEVICE_MAX_CONNECTIONS=1`、HCCL 端口段、
 `PYTORCH_NPU_ALLOC_CONF=expandable_segments:True`（fork 原值；与 roll 的 vLLM
 CaMemAllocator 场景不同，这里不 unset）、`WANDB_MODE=offline`。
+
+`slime-examples #11` 首次进入训练后，fork 的 CI logprob 检查发现训练与 rollout 差异为
+2.628（阈值 0.1）：Megatron 默认 attention/hidden dropout 均为 0.1，而 fork nightly
+配方将两者设为 0。manifest 现对齐该配方并固定 rollout temperature 0.8。该次 run 的
+fixture rollout reward 与 advantage 均为 0，修复后还需手动验收确认训练 step 获得非零奖励信号。
 
 ## CI 接口
 

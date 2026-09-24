@@ -44,6 +44,10 @@ supported:
       - "--label-key label"
       - --apply-chat-template
       - "--rm-type deepscaler"
+      # -- 对齐 fork nightly：推理/训练策略相同，避免 logprob 一致性断言失败 --
+      - "--rollout-temperature 0.8"
+      - "--attention-dropout 0.0"
+      - "--hidden-dropout 0.0"
       # -- 规模压缩旋钮（nightly: rollout 3 / batch 8 / gbs 32 / samples 4→4 保持） --
       - "--num-rollout 2"
       - "--rollout-batch-size 4"

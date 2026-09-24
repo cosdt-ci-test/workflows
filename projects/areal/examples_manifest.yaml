@@ -41,21 +41,13 @@ scan:
 
 # AReaL 的 NPU 支持在 ascend-v1.0.5 分支维护（非 main），需要专用镜像
 # ghcr.io/hwvanici/areal_npu:v1.0.5-a2（CANN 9.0.1 / torch 2.10 / torch_npu
-# 2.10 / vLLM-Ascend / Megatron-Core / MindSpeed / Megatron-Bridge），且官方
-# quick start（VLM GRPO / Qwen2.5-VL-3B / Geometry3K）按单节点 16 NPU 编写。
-# 我们的 runner 池最大 a2-8，且标准镜像（CANN 9.1.0 / py3.12 / torch 2.9）与
-# AReaL 栈差异很大，尚未在昇腾 CI 上验证。故先全部列不支持，待环境（镜像可达
-# + 8 卡并行度改版）跑通后再逐条迁入 supported。
+# 2.10 / vLLM-Ascend / Megatron-Core / MindSpeed / Megatron-Bridge）。
 supported:
   # Qwen2.5-VL-3B Geometry3K GRPO（2 卡；2026-09-22 在 A2-8 上实测跑通）
   - path: examples/vlm/geometry3k_grpo.py
     profile: areal-vlm-grpo
     runner: linux-aarch64-a2-1
     npu_devices: '0'
-    # 底座：AReaL 官方 NPU 镜像（CANN 9.0.1 / py3.11，自带完整栈：torch 2.10 /
-    # torch_npu 2.10.0.post2 / vLLM 0.23.0 / vLLM-Ascend releases/v0.23.0 /
-    # Megatron / MindSpeed / Megatron-Bridge / AReaL 依赖）；setup_example.sh
-    # 只装待测 AReaL 源码 + 预下模型。
     image: ghcr.io/hwvanici/areal_npu:v1.0.5-a2
     overlay_args:
       - --config examples/vlm_npu/qwen2_5_vl_3b_geometry3k_grpo.yaml
@@ -70,6 +62,8 @@ supported:
       - gconfig.n_samples=1
       - train_dataset.batch_size=8
       - valid_dataset.batch_size=8
+      - train_dataset.path=${AREAL_GEOMETRY3K_PATH}/train
+      - valid_dataset.path=${AREAL_GEOMETRY3K_PATH}/test
       - +total_train_steps=1
     timeout_minutes: 240
   # Qwen3-VL-2B-Instruct Geometry3K 多轮 tool-calling GRPO（单卡；FSDP 后端）。
@@ -94,10 +88,11 @@ supported:
       - max_turns=2
       - train_dataset.batch_size=8
       - valid_dataset.batch_size=8
+      - train_dataset.path=${AREAL_GEOMETRY3K_PATH}/train
+      - valid_dataset.path=${AREAL_GEOMETRY3K_PATH}/test
       - +total_train_steps=1
     timeout_minutes: 240
 unsupported:
-  # 训练 / RL 示例（都需要 AReaL NPU 镜像 + 多卡；见上方说明）
   - examples/math/gsm8k_rl.py
   - examples/math/gsm8k_sft.py
   - examples/math/gsm8k_eval.py

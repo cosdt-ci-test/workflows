@@ -10,6 +10,31 @@ scan:
   include_extensions: ['.sh', '.py', '.yaml']
 
 supported:
+  # ===== 2026-09-24 overlay 消融（coder sglang-hdc 2×910B4，ed64d27 + sglang
+  # 0.5.18 + CANN 9.0）：qwen3.5-4b-dflash-online-npu 删 max_length/save_interval/
+  # batch_size/accumulation_steps 后 1 步跑通（11min，step1+consumer_done 落盘）；
+  # qwen3-4b-dspark-disaggregated 再删 report_to/nproc_per_node 共 7 项同样跑通
+  # （6min）。分级结论：
+  #   必须——target_model_path（HF 不可达）/ train_data_path（recipe 默认路径在
+  #     CI workdir 不存在）/ receive_buffers=pageable（schema 默认 pinned，NPU
+  #     崩，run 35225016001）/ attention_backend=sdpa（recipe 缺省或显式
+  #     flex_attention，flex 在 NPU 直接 ValueError "only supported on CUDA,
+  #     CPU or HPU"）/ report_to=none（recipe 为 tensorboard|wandb，镜像和
+  #     setup 都不装两者）/ nproc_per_node=1（recipe 8|14|7 卡，runner 只有
+  #     4 卡）/ embedding_key（qwen3.5 hybrid 嵌套路径）/ batch_size 或
+  #     accumulation_steps 压 1（仅当 recipe 默认推高 optimizer 窗口使 1 行
+  #     fixture 凑不满一个窗口：qwen3.5 族 2×4=8、qwen3-8b-dspark accum=512、
+  #     offline-8b-dflash batch=4；FeatureDataLoader drop_last=True）。
+  #   已删（纯冗余）——save_interval=0（1 步永不触发周期保存，训练结束 final
+  #     state 照常落盘）/ data.max_length=512（fixture ~130 token，3072 默认
+  #     产出相同 batch）/ 与 recipe|schema 默认重合的 batch_size=1、
+  #     accumulation_steps=1、report_to=none、nproc_per_node=1。
+  #   保留（有效果的非必须项）——num_anchors=32（producer 提速，锚点数按
+  #     min(num_anchors, max_valid) 自动钳制，非必须）/ log_interval=1（1 步
+  #     训练唯一的 loss 输出行，默认 50 时无指标日志）。
+  # 注意：offline 条目删 max_length 未单独实测（prepare_hidden_states.py 也
+  # 消费该值，语义为截断上限，fixture 远短于 512/3072，推定等价），下次 CI
+  # 跑 offline 腿时自然验证。=====
   - path: examples/configs/online/disaggregated/external/qwen3.5-4b-dflash-online-npu.yaml
     profile: specforge
     runner: linux-aarch64-a2-4                # 4 卡 runner：capture 卡 0、trainer 卡 1，卡 2/3 留给 HCCL buffer
@@ -17,23 +42,22 @@ supported:
     overlay_args:
       # 训练规模压到 1 步：recipe 默认 num_epochs=10 / max_steps=10000 / batch_size=2 / accumulation_steps=4
       # → 单 epoch 几十小时；CI 1 步即可验证 producer→mooncake→consumer 链路。
+      # batch/accum 压 1：默认 2×4=8 refs/优化步窗口，全靠 num_epochs=10 × 1 行
+      # fixture = 10 refs 恰好凑满一个窗口（2026-09-24 消融实测可删但脆弱）。
       - training.max_steps=1
       - training.batch_size=1
       - training.accumulation_steps=1
-      # 序列长度从 recipe 默认 3072 压到 512：smoke 的样本本来就只是 1 条 sharegpt 对话，
-      # 3072 会让 attention logits 的 H 维度白算，对 1 步训练没意义；512 是实际样本 token 长度的上限。
-      - data.max_length=512
       - data.train_data_path=${FIXTURE_DIR}/sharegpt_train.jsonl
       # 锚点数压到 32：recipe 默认 num_anchors=512 是按 3.5-4B 训练稳定度调的；
       # 1 步训练不会触发 dflash 的 loss_decay 累积，32 个 anchor 已经够
       # producer 走完一整条采样链；锚点越少单步耗时越短（实测从 ~120s 降到 ~30s）。
+      # 非必须（dflash_family_model.py:448 按 min(num_anchors, max_valid) 自动
+      # 钳制，512 在短样本下也能跑通），留作 producer 提速。
       - training.num_anchors=32
-      # 关掉周期保存：recipe 默认 save_interval=10000，1 步训练根本到不了，
-      # 关掉避免 save 路径空跑检查 + 不在 CI 输出目录堆无用 checkpoint。
-      - training.save_interval=0
+      # 1 步训练唯一的 loss 输出行（recipe 默认 log_interval=50 时 1 步无指标日志）。
       - training.log_interval=1
-      # 关掉 tensorboard 上报：recipe 默认 report_to=tensorboard，未配 TB 路径时会
-      # 在 writer.flush() 抛 Warning 阻塞训练；CI 不需要 TB，直接 none。
+      # 关掉 tensorboard 上报：recipe 默认 report_to=tensorboard，而镜像/setup 都
+      # 不装 tensorboard（SummaryWriter=None，tracker 构建直接报错）；CI 不需要 TB。
       - tracking.report_to=none
       # trainer 进程数压到 1：recipe 默认 nproc_per_node=8 是按 8 卡 A2 pod 调的，
       # smoke 只用卡 1 跑 trainer，单进程足够；卡 0 给 sglang capture server。
@@ -70,10 +94,8 @@ supported:
       - training.max_steps=1
       - training.batch_size=1
       - training.accumulation_steps=1
-      - data.max_length=512
       - data.train_data_path=${FIXTURE_DIR}/sharegpt_train.jsonl
       - training.num_anchors=32
-      - training.save_interval=0
       - training.log_interval=1
       - tracking.report_to=none
       - deployment.trainer.nproc_per_node=1
@@ -88,17 +110,13 @@ supported:
     profile: specforge
     runner: linux-aarch64-a2-4
     image: swr.cn-southwest-2.myhuaweicloud.com/base_image/dockerhub/lmsysorg/sglang:v0.5.18-cann9.0.0-910b
+    # 2026-09-24 消融实测本条最小集（+log_interval）：recipe 已是 batch_size=1 /
+    # nproc_per_node=1，accumulation_steps / report_to 走 schema 默认 1 / none。
     overlay_args:
       - training.max_steps=1
-      - training.batch_size=1
-      - training.accumulation_steps=1
       - training.attention_backend=sdpa
-      - data.max_length=512
       - data.train_data_path=${FIXTURE_DIR}/sharegpt_train.jsonl
-      - training.save_interval=0
       - training.log_interval=1
-      - tracking.report_to=none
-      - deployment.trainer.nproc_per_node=1
       - deployment.disaggregated.receive_buffers=pageable
       - model.target_model_path=${SPECFORGE_MODEL_PATH}
     timeout_minutes: 180
@@ -109,13 +127,10 @@ supported:
     image: swr.cn-southwest-2.myhuaweicloud.com/base_image/dockerhub/lmsysorg/sglang:v0.5.18-cann9.0.0-910b
     overlay_args:
       - training.max_steps=1
-      - training.batch_size=1
-      - training.accumulation_steps=1
+      - training.batch_size=1  # recipe 默认 4：1 行 fixture + drop_last=True 凑不出 batch，必须压 1
       - training.attention_backend=sdpa
-      - data.max_length=512
       - data.train_data_path=${FIXTURE_DIR}/sharegpt_train.jsonl
       - training.num_anchors=32
-      - training.save_interval=0
       - training.log_interval=1
       - tracking.report_to=none
       - deployment.trainer.nproc_per_node=1
@@ -129,13 +144,10 @@ supported:
     image: swr.cn-southwest-2.myhuaweicloud.com/base_image/dockerhub/lmsysorg/sglang:v0.5.18-cann9.0.0-910b
     overlay_args:
       - training.max_steps=1
-      - training.batch_size=1
-      - training.accumulation_steps=1
+      - training.batch_size=1  # recipe 默认 4：1 行 fixture + drop_last=True 凑不出 batch，必须压 1
       - training.attention_backend=sdpa
-      - data.max_length=512
       - data.train_data_path=${FIXTURE_DIR}/sharegpt_train.jsonl
       - training.num_anchors=32
-      - training.save_interval=0
       - training.log_interval=1
       - tracking.report_to=none
       - deployment.trainer.nproc_per_node=1
@@ -149,13 +161,10 @@ supported:
     image: swr.cn-southwest-2.myhuaweicloud.com/base_image/dockerhub/lmsysorg/sglang:v0.5.18-cann9.0.0-910b
     overlay_args:
       - training.max_steps=1
-      - training.batch_size=1
-      - training.accumulation_steps=1
+      - training.batch_size=1  # recipe 默认 4：1 行 fixture + drop_last=True 凑不出 batch，必须压 1
       - training.attention_backend=sdpa
-      - data.max_length=512
       - data.train_data_path=${FIXTURE_DIR}/sharegpt_train.jsonl
       - training.num_anchors=32
-      - training.save_interval=0
       - training.log_interval=1
       - tracking.report_to=none
       - deployment.trainer.nproc_per_node=1
@@ -169,15 +178,10 @@ supported:
     image: swr.cn-southwest-2.myhuaweicloud.com/base_image/dockerhub/lmsysorg/sglang:v0.5.18-cann9.0.0-910b
     overlay_args:
       - training.max_steps=1
-      - training.batch_size=1
-      - training.accumulation_steps=1
+      - training.accumulation_steps=1  # recipe 默认 512：10 refs 凑不满一个 512 窗口 → 0 步，必须压 1
       - training.attention_backend=sdpa
-      - data.max_length=512
       - data.train_data_path=${FIXTURE_DIR}/sharegpt_train.jsonl
-      - training.save_interval=0
       - training.log_interval=1
-      - tracking.report_to=none
-      - deployment.trainer.nproc_per_node=1
       - deployment.disaggregated.receive_buffers=pageable
       - model.target_model_path=${SPECFORGE_MODEL_PATH}
     timeout_minutes: 180
@@ -209,10 +213,8 @@ supported:
       - training.max_steps=1
       - training.batch_size=1
       - training.accumulation_steps=1
-      - data.max_length=512
       - data.train_data_path=${FIXTURE_DIR}/sharegpt_train.jsonl
       - training.num_anchors=32
-      - training.save_interval=0
       - training.log_interval=1
       - tracking.report_to=none
       - deployment.trainer.nproc_per_node=1
@@ -227,15 +229,11 @@ supported:
     image: swr.cn-southwest-2.myhuaweicloud.com/base_image/dockerhub/lmsysorg/sglang:v0.5.18-cann9.0.0-910b
     overlay_args:
       - training.max_steps=1
-      - training.batch_size=1
-      - training.accumulation_steps=1
+      - training.batch_size=1  # recipe 默认 2：压 1 让 1 行 fixture 稳定凑满窗口
       - training.attention_backend=sdpa
-      - data.max_length=512
       - data.train_data_path=${FIXTURE_DIR}/sharegpt_train.jsonl
       - training.num_anchors=32
-      - training.save_interval=0
       - training.log_interval=1
-      - tracking.report_to=none
       - deployment.trainer.nproc_per_node=1
       - deployment.disaggregated.managed_local.trainer_cuda_visible_devices=["1"]
       - deployment.disaggregated.managed_local.capture_servers=[{"port":30000,"cuda_visible_devices":["0"],"tp_size":1,"mem_fraction_static":0.65}]
@@ -257,15 +255,12 @@ supported:
     profile: specforge
     runner: linux-aarch64-a2-4
     image: swr.cn-southwest-2.myhuaweicloud.com/base_image/dockerhub/lmsysorg/sglang:v0.5.18-cann9.0.0-910b
+    # recipe 已是 batch_size=1 / nproc_per_node=1，accumulation_steps / report_to
+    # 走 schema 默认 1 / none（同 qwen3-4b-dspark-disaggregated 消融结论）。
     overlay_args:
       - training.max_steps=1
-      - training.batch_size=1
       - training.attention_backend=sdpa
-      - data.max_length=512
-      - training.save_interval=0
       - training.log_interval=1
-      - tracking.report_to=none
-      - deployment.trainer.nproc_per_node=1
       - model.target_model_path=${SPECFORGE_MODEL_PATH}
     timeout_minutes: 180
 
@@ -275,14 +270,10 @@ supported:
     image: swr.cn-southwest-2.myhuaweicloud.com/base_image/dockerhub/lmsysorg/sglang:v0.5.18-cann9.0.0-910b
     overlay_args:
       - training.max_steps=1
-      - training.batch_size=1
+      - training.batch_size=1  # recipe 默认 4：prepare 只产 1 个样本，drop_last=True 下凑不出 batch，必须压 1
       - training.attention_backend=sdpa
-      - data.max_length=512
       - training.num_anchors=32
-      - training.save_interval=0
       - training.log_interval=1
-      - tracking.report_to=none
-      - deployment.trainer.nproc_per_node=1
       - model.target_model_path=${SPECFORGE_MODEL_PATH}
     timeout_minutes: 180
 
@@ -290,15 +281,12 @@ supported:
     profile: specforge
     runner: linux-aarch64-a2-4
     image: swr.cn-southwest-2.myhuaweicloud.com/base_image/dockerhub/lmsysorg/sglang:v0.5.18-cann9.0.0-910b
+    # recipe 已是 batch_size=1 / nproc_per_node=1，accumulation_steps / report_to
+    # 走 schema 默认 1 / none（同 qwen3-4b-dspark-disaggregated 消融结论）。
     overlay_args:
       - training.max_steps=1
-      - training.batch_size=1
       - training.attention_backend=sdpa
-      - data.max_length=512
-      - training.save_interval=0
       - training.log_interval=1
-      - tracking.report_to=none
-      - deployment.trainer.nproc_per_node=1
       - model.target_model_path=${SPECFORGE_MODEL_PATH}
     timeout_minutes: 180
 

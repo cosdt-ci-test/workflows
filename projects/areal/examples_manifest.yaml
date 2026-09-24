@@ -48,7 +48,7 @@ supported:
     profile: areal-vlm-grpo
     runner: linux-aarch64-a2-1
     npu_devices: '0'
-    image: ghcr.io/hwvanici/areal_npu:v1.0.5-a2
+    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
     overlay_args:
       - --config examples/vlm_npu/qwen2_5_vl_3b_geometry3k_grpo.yaml
       - cluster.n_gpus_per_node=1
@@ -72,7 +72,7 @@ supported:
     profile: areal-vlm-mt-grpo
     runner: linux-aarch64-a2-1
     npu_devices: '0'
-    image: ghcr.io/hwvanici/areal_npu:v1.0.5-a2
+    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
     overlay_args:
       - --config examples/multi_turn_vlm/qwen3_vl_2b_geometry3k_grpo_mt.yaml
       - scheduler.type=local
@@ -101,6 +101,9 @@ unsupported:
   - examples/countdown/train.py
   - examples/camel/train.py
   - examples/code/train.py
+  # alignment：需要 NPU + Anthropic/hh-rlhf（私有 gated dataset）；默认 8 卡
+  # actor.backend=fsdp:d8p1t1 → 单卡放不下 7B。可改为 fsdp:d1p1t1 + path=gsm8k，但
+  # DPO trainer 是否支持 NPU FSDP 路径需验证。
   - examples/alignment/hhrlhf_dpo.py
   - examples/alignment/hhrlhf_rw.py
   - examples/distillation/mopd/mopd_rl.py
@@ -113,7 +116,12 @@ unsupported:
   # （geometry3k_grpo.py 传的是字符串路径），local scheduler RPC JSON 序列化失败：
   # "Object of type function is not JSON serializable"。需改源码传字符串路径。
   - examples/vlm_npu/virl39k_grpo.py
+  # agent_workflow：需要 OpenAI-compatible API key（math_agent workflow 调外部 LLM）；
+  # 默认 rollout backend = sglang（Ascend 不支持 SGLang，只能 vllm）；
+  # dataset path = openai/gsm8k（私有 gated repo）。完全依赖外部 API。
   - examples/agent_workflow/train.py
+  # agent_service：不需要 NPU，本地跑需要 CLAUDE/ANTHROPIC API key + 交互式 stdin（无 TTY）；
+  # run_agent_service.py 是常驻服务 demo，没有 pass/fail 终点。
   - examples/agent_service/run_agent_service.py
   - examples/tau2/train.py
   - examples/terminal_bench/train.py

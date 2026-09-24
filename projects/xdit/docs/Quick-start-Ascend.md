@@ -25,10 +25,18 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 
 ## 安装 PyTorch NPU 栈
 
-`torch`、`torch_npu` 与 `triton` 三者版本严格配套，按 [CANN 与 PyTorch 配套表](https://github.com/Ascend/pytorch/blob/master/COMPATIBILITY.md) 选择与 CANN 匹配的组合：
+参考的版本配套如下（更多组合见 [CANN 与 PyTorch 配套表](https://github.com/Ascend/pytorch/blob/master/COMPATIBILITY.md)）：
+
+| CANN | PyTorch | `torch_npu` 安装包 |
+| --- | --- | --- |
+| 9.1.0 | 2.9.0 | 2.9.0.post6 |
+| 9.1.0 | 2.10.0 | 2.10.0.post4 |
+| 9.1.0 | 2.11.0 | 2.11.0 |
+
+本示例使用第一行的组合：
 
 ```shell #test-setup id="xdit-install-torch"
-pip install torch==2.9.0 torch_npu==2.9.0.post6 triton==3.5.0
+pip install torch==2.9.0 torch_npu==2.9.0.post6
 ```
 
 ## 安装 xDiT
@@ -51,22 +59,21 @@ xDiT version: xxx
 
 ## 运行示例：文生图
 
-安装模型下载所需的 ModelScope：
+安装示例使用的 Triton 和模型下载所需的 ModelScope：
 
 ```shell #test-setup
-pip install "modelscope==1.37.0"
+pip install triton==3.5.0 "modelscope==1.37.0"
 ```
 
 用 [SD3 medium](https://modelscope.cn/models/stabilityai/stable-diffusion-3-medium-diffusers) 在单卡上生成一张 256×256 的图。模型约 28 GB。
 
-先把下面这个脚本写入 `sd3_npu.py`：
+将下面的 Python 代码保存为 `sd3_npu.py`：
 
-```python #test-setup id="write-script"
-from pathlib import Path
-
-script = """
+```python
 import os
 import sys
+import time
+
 import torch
 import torch_npu
 from modelscope import snapshot_download
@@ -94,6 +101,8 @@ pipe = xFuserStableDiffusion3Pipeline.from_pretrained(
 ).to(f"npu:{local_rank}")
 pipe.prepare_run(input_config)
 
+torch.npu.synchronize(device=local_rank)
+start = time.perf_counter()
 output = pipe(
     height=input_config.height,
     width=input_config.width,
@@ -103,17 +112,20 @@ output = pipe(
     guidance_scale=input_config.guidance_scale,
     generator=torch.Generator(device="npu").manual_seed(input_config.seed),
 )
+torch.npu.synchronize(device=local_rank)
+elapsed = time.perf_counter() - start
+
 os.makedirs("results", exist_ok=True)
 if pipe.is_dp_last_group():
-    output.images[0].save("results/sd3_npu.png")
-    print("saved: results/sd3_npu.png")
+    world_size = get_world_group().world_size
+    path = f"results/sd3_npu{world_size}_ulysses{engine_args.ulysses_degree}.png"
+    output.images[0].save(path)
+    print(f"inference time: {elapsed:.2f} sec")
+    print(f"image saved to {path}")
 get_runtime_state().destroy_distributed_env()
-"""
-
-Path("sd3_npu.py").write_text(script.lstrip("\n"), encoding="utf-8")
 ```
 
-脚本已写入 `sd3_npu.py`。用 `torchrun` 在单卡上运行：
+用 `torchrun` 在单卡上运行：
 
 ```shell #test id="xdit-sd3-smoke"
 torchrun --nproc_per_node=1 sd3_npu.py --prompt "a tiny test sketch" --height 256 --width 256 --num_inference_steps 1 --seed 42
@@ -121,9 +133,10 @@ torchrun --nproc_per_node=1 sd3_npu.py --prompt "a tiny test sketch" --height 25
 
 输出结果如下：
 
-```shell #test-result id="xdit-sd3-smoke"
+```shell #test-result id="xdit-sd3-smoke" fuzzy='...' fuzzy='xxx'
 ...
-saved: results/sd3_npu.png
+inference time: xxx sec
+image saved to results/sd3_npu1_ulysses1.png
 ```
 
 ### 多卡运行示例
@@ -136,10 +149,13 @@ torchrun --nproc_per_node=2 sd3_npu.py --prompt "a tiny test sketch" --height 25
 
 输出结果如下：
 
-```shell #test-result id="xdit-sd3-2card"
+```shell #test-result id="xdit-sd3-2card" fuzzy='...' fuzzy='xxx'
 ...
-saved: results/sd3_npu.png
+inference time: xxx sec
+image saved to results/sd3_npu2_ulysses2.png
 ```
+
+其中 `xxx` 为实际推理耗时，单位为秒。
 
 ## 更多用法
 

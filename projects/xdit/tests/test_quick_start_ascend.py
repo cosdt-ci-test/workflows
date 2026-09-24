@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import unittest
@@ -24,6 +25,16 @@ def _is_truthy(value: str | None) -> bool:
 
 def _e2e_enabled() -> bool:
     return _is_truthy(os.environ.get('NPU_READY'))
+
+
+def _write_example_script(document: str) -> None:
+    """Write the single reader-facing Python example into the test cwd."""
+    blocks = re.findall(r'(?ms)^```python[ \t]*\r?\n(.*?)^```[ \t]*$', document)
+    if len(blocks) != 1:
+        raise AssertionError(f'expected one unlabeled Python example, found {len(blocks)}')
+    script = blocks[0].rstrip() + '\n'
+    compile(script, 'sd3_npu.py', 'exec')
+    Path('sd3_npu.py').write_text(script, encoding='utf-8')
 
 
 class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
@@ -51,46 +62,42 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     _CONSTRAINTS_FILE = '/tmp/xdit_npu_constraints.txt'
     _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
     _PROJECT_ROOT = '/root/xdit-test'
-    _GENERATED_PNG = Path('results/sd3_npu.png')
+    _GENERATED_PNGS = {
+        'xdit-sd3-smoke': Path('results/sd3_npu1_ulysses1.png'),
+        'xdit-sd3-2card': Path('results/sd3_npu2_ulysses2.png'),
+    }
 
-    def _verify_generated_png(self) -> None:
-        """CI-side guard: the doc only reports the saved image path.
-
-        Empty or truncated images are the failure mode the doc used to assert
-        inline; keeping the check here preserves the coverage without exposing
-        size / magic-byte assertions to readers of the quick start. Both the
-        single-card and the 2-card block write the same path, so this runs
-        after each of them.
-        """
-        if not self._GENERATED_PNG.is_file():
-            raise AssertionError(
-                f'generated image not found: {self._GENERATED_PNG}'
-            )
-        image = self._GENERATED_PNG.read_bytes()
+    def _verify_generated_png(self, path: Path) -> None:
+        """Keep the PNG integrity check in CI, not in the quick start."""
+        if not path.is_file():
+            raise AssertionError(f'generated image not found: {path}')
+        image = path.read_bytes()
         if len(image) <= 50_000:
             raise AssertionError(
                 'generated image is suspiciously small '
-                f'({len(image)} bytes): {self._GENERATED_PNG}'
+                f'({len(image)} bytes): {path}'
             )
         if image[:8] != b'\x89PNG\r\n\x1a\n':
             raise AssertionError(
                 'generated image is not a PNG '
-                f'(magic={image[:8]!r}): {self._GENERATED_PNG}'
+                f'(magic={image[:8]!r}): {path}'
             )
         self.log(
             f'[Step] verified generated PNG ({len(image)}B): '
-            f'{self._GENERATED_PNG}'
+            f'{path}'
         )
 
     def _run_one(self, cmd, results, env, cwd, timeout, idx):
-        if (
-            isinstance(cmd, TestCommand)
-            and getattr(cmd, 'id', None) in ('xdit-sd3-smoke', 'xdit-sd3-2card')
-        ):
+        if isinstance(cmd, TestCommand) and cmd.id in self._GENERATED_PNGS:
             super()._run_one(cmd, results, env, cwd, timeout, idx)
-            self._verify_generated_png()
+            self._verify_generated_png(self._GENERATED_PNGS[cmd.id])
             return
         return super()._run_one(cmd, results, env, cwd, timeout, idx)
+
+    def pre_process(self) -> str:
+        document = super().pre_process()
+        _write_example_script(document)
+        return document
 
     @classmethod
     def prepare_environment(cls) -> None:

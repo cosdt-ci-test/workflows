@@ -52,7 +52,12 @@ echo "USE_OPTIMIZED_MODEL=0" >> "$GITHUB_ENV"
 # -------------------------------------------------------
 # 3. Pre-download Model & Dataset (using image's native tools)
 # -------------------------------------------------------
+# Model and dataset are both fetched online (no local fixtures). Export the
+# Hub mirror through GITHUB_ENV so the run-example step inherits it too: AReaL
+# downloads the dataset at train time via `load_dataset` inside the data
+# service, not here.
 export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
+echo "HF_ENDPOINT=${HF_ENDPOINT}" >> "$GITHUB_ENV"
 export AREAL_MODEL_ID="$MODEL_ID"
 
 python3 <<'PY'

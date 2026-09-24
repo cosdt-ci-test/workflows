@@ -12,187 +12,14 @@ scan:
   # 本清单 supported/unsupported 都按 「(path, overlay_args)」组合语义
   # 记录，不依赖 scan 的扫描结果。
 
-supported:
-  # 1) 单卡 + default llama3_debugmodel 配置。
-  # 2026-09-22 在 hdc-stable-npu-2 用 4 件 sitecustomize shim + 1 件
-  # CLI overlay（--parallelism.spmd-backend full_dtensor）实证 exit 0，
-  # loss 8.12→7.72（2 step）。绕开两道 NPU 硬墙：(a) FlexAttention CANN
-  # bishengir compile wall — get_attention_config monkey-patch 强制所有
-  # llama3 backend 返回 ScaledDotProductAttention.Config()（v0.3.0
-  # config_registry 硬编 attn_backend="flex"，tyro CLI 拿不到）；
-  # (b) ComplexRoPE aclnnIndex DT_COMPLEX64 wall — ComplexRoPE.Config
-  # classmethod remap 到 CosSinRoPE.Config(scaling="none")。再加上
-  # ChunkedLossWrapper bypass shim（见 run_example.sh prepare_shims
-  # 末段注释）：default wiring 走 ChunkedLossWrapper + autograd Function
-  # _DecoderOutputGradientBackProp，saved tensor 在 forward 入口
-  # 正常（real npu:0 bf16 + 有效 data_ptr），但 Function 返回的 grad
-  # 进入 decoder backward graph 时 torch_npu C++ engine 抛
-  # "RuntimeError: The tensor has a non-zero number of elements, but its
-  # data is not allocated yet." —— 上游 torch_npu autograd engine 对
-  # custom Function-returned grad 的接线 bug。三个 patch 在 coder -2 上
-  # 都试过且失败：clone accumulated_grad before save、contiguous+npu.
-  # synchronize 包裹、整个 Function class monkey-patch。**唯一走通的
-  # 方式：ChunkedLossWrapper.__call__ monkey-patch 走 lm_head + CE 直连
-  # （绕过 _DecoderOutputGradientBackProp）。** 之前 2026-09-17 在
-  # hdc-stable-npu-4 看到的「无 patch 跑通」是侥幸的 allocator race
-  # window；CI 集群 (run 35723129271 2026-09-22) 上 4 条 ChunkedLoss
-  # 路径全 deterministic 撞这墙。保留 #2 ce_loss 变体是为了保留
-  # CrossEntropyLoss 直连 vs default wiring 漂移检测（信号独立，
-  # CI 成本翻倍可接受）。no-source-patch policy 维持：所有改动都在
-  # sitecustomize shim 里，没改 torchtitan 源。退役条件：torch_npu 上游
-  # 修 custom Function grad wiring；或上游在 ChunkedLossWrapper 上加
-  # `if torch.npu.is_available(): grad_propagate_via_native()` 分支。
-  - path: torchtitan/models/llama3/config_registry.py
-    profile: torchtitan
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    exec: scripts/run_llama3_debugmodel_1card.sh
-    overlay_args:
-      - --module llama3
-      - --config llama3_debugmodel
-      - --comm.mode default
-      - --training.steps 2
-      - --training.local-batch-size 1
-      - --training.seq-len 256
-      - --metrics.log-freq 1
-      - --metrics.disable-color-printing
-      - --dump-folder ${CI_OUTPUT_DIR}/llama3_debugmodel_1card
-    timeout_minutes: 20
-
-  # 2) 单卡 + CE loss 配置变体：llama3_debugmodel_ce_loss 是上游
-  # registry 内置的 CE 损失等价配置（CrossEntropyLoss 直接接线，不走
-  # ChunkedLossWrapper）。2026-09-22 在 hdc-stable-npu-2 实测 rc=0，
-  # loss 8.16→7.88（2 step），sitecustomize shim（run_example.sh
-  # prepare_shims）完成 4 件 overlay：
-  #   1) torch.distributed.set_timeout 兜底（torch 2.12 缺模块级 alias，
-  #      走 `(group or _get_default_group()).set_timeout(timeout)`）
-  #   2) create_block_mask strip separate_full_blocks kwarg（torch 2.12
-  #      签名无此参数，v0.3.0 decoder.py:274 仍传，torch>=2.13 才有）
-  #   3) get_attention_config 强制返回 ScaledDotProductAttention.Config()
-  #      （绕 CANN bishengir flex 编译墙；config_registry 硬编
-  #      attn_backend="flex" 通过此处统一 remap）
-  #   4) ComplexRoPE.Config(scaling="llama", ...) classmethod remap 为
-  #      CosSinRoPE.Config(scaling="none", ...)（绕 aclnnIndex
-  #      DT_COMPLEX64 not implemented；即使用 SDPA 路径 model construction
-  #      仍触到 ComplexRoPE cache 构建）
-  # 详见 [[torchtitan-ce-loss-1card-sitecustomize-2026-09-22]]。CLI
-  # 额外加 `--parallelism.spmd-backend full_dtensor` 绕 spmd_types 缺
-  # `torch.distributed._local_tensor`（Quick-start 限制四）。
-  # no-patch policy：CrossEntropyLoss 直连 + SDPA + CosSinRoPE 都是上
-  # 游决策，sitecustomize shim 不是改源，是 monkey-patch 函数 / 类
-  # method（见 [[no-source-patch-policy]] 边界讨论）。
-  - path: torchtitan/models/llama3/config_registry.py
-    profile: torchtitan
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    timeout_minutes: 30
-    exec: scripts/run_llama3_debugmodel_ce_loss_1card.sh
-    overlay_args:
-      - --module llama3
-      - --config llama3_debugmodel_ce_loss
-      - --parallelism.spmd-backend full_dtensor
-      - --comm.mode default
-      - --training.steps 2
-      - --training.local-batch-size 1
-      - --training.seq-len 256
-
-  # 3) 双卡：FSDP shard=2 + full_dtensor 后端 + bf16。
-  # --parallelism.spmd-backend full_dtensor 是 CLI 切换（不是 sed
-  # patch）：默认 spmd_types 后端需 torch >=2.13 的 FSDP dp_mesh_dims
-  # 翻译，2.12 上 multi-card 必触发 ValueError（Quick-start §限制四）。
-  # --training.dtype bfloat16 是混合精度 smoke；不强校验数值，仅
-  # 验证 DTensor forward + HCCL all-reduce + bf16 cast 整条链路不
-  # 触发 NPU 算子缺口。
-  # 同 #1：sitecustomize 的 ChunkedLossWrapper bypass shim（lm_head +
-  # CrossEntropyLoss 直连）必须开，否则 2 卡路径同样撞
-  # _DecoderOutputGradientBackProp NPU meta-leak。c10d broadcast 已由
-  # TORCH_NPU_DEVICE_CAPABILITY=9.0 修复（同 #1）。
-  # ASCEND_RT_VISIBLE_DEVICES 由 runner 注入（双卡 runner 暴露 0,1）。
-  # coder 上 2 卡 torchrun 验证受 HCCL ranktable 配置限制，未跑；CI 集群
-  # 由 a2-2 runner 注入正确 ASCEND_RT_VISIBLE_DEVICES=0,1 + HCCL_SOCKET
-  # _IFNAME，是真验证点。退役条件：同 #1。
-  - path: torchtitan/models/llama3/config_registry.py
-    profile: torchtitan
-    runner: linux-aarch64-a2-2
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    exec: scripts/run_llama3_debugmodel_2card.sh
-    overlay_args:
-      - --module llama3
-      - --config llama3_debugmodel
-      - --comm.mode default
-      - --parallelism.spmd-backend full_dtensor
-      - --training.dtype bfloat16
-      - --training.steps 2
-      - --training.local-batch-size 1
-      - --training.seq-len 256
-      - --metrics.log-freq 1
-      - --metrics.disable-color-printing
-      - --dump-folder ${CI_OUTPUT_DIR}/llama3_debugmodel_2card
-    # 2026-09-22 CI run 35729620793: a2-2 runner hit cold pip cache, torch 2.12+cpu
-    # wheel (150 MB direct URL from pytorch.org, bypasses cluster cache) stalled
-    # ~30 min before k8s runner killed setup. Bump to 45 min for safe margin:
-    # setup (~5 min warm / ~30 min cold) + train (~5 min).
-    timeout_minutes: 45
-
-  # 4) 单卡 + llama3_debugmodel_dist_gemm 变体：TP=1 下 dist_gemm
-  # 是 no-op（trainer log: "tp_gemm_backend='dist_gemm' selected but
-  # tensor parallelism is not active; running the stock projections.
-  # Nothing is fused."），smoke 验证 dispatch 接受 dist_gemm flag 且
-  # init 阶段不炸。TP>=2 真路径走 torch.distributed._symmetric_memory
-  # （torch 2.13+ API）做 cross-process param shard；torch 2.12 无此
-  # 模块（c10d broadcast 现已由 TORCH_NPU_DEVICE_CAPABILITY=9.0 解，见
-  # #1，不再单列）。留这条是为「dispatch + flag 解析」回归
-  # 检测 —— 上游哪天在 TP=1 路径上对 dist_gemm flag 加任何 parse-time
-  # 校验，这里立刻报红。
-  # 2026-09-22 在 hdc-stable-npu-2 用 sitecustomize 的 ChunkedLossWrapper
-  # bypass shim（同 #1）实证 exit 0，loss 6.01→5.98（2 step）。
-  # 退役条件：TP>=2 路径需 torch 2.13+ ABI 适配，此后才有意义再开
-  # TP>=2 的 supported。
-  - path: torchtitan/models/llama3/config_registry.py
-    profile: torchtitan
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    exec: scripts/run_llama3_debugmodel_dist_gemm_1card.sh
-    overlay_args:
-      - --module llama3
-      - --config llama3_debugmodel_dist_gemm
-      - --comm.mode default
-      - --training.steps 2
-      - --training.local-batch-size 1
-      - --training.seq-len 256
-      - --metrics.log-freq 1
-      - --metrics.disable-color-printing
-      - --dump-folder ${CI_OUTPUT_DIR}/llama3_debugmodel_dist_gemm_1card
-    timeout_minutes: 20
-
-  # 5) SFT example 1-card：--module llama3 --config sft_debugmodel。
-  # sft_debugmodel 是 torchtitan/models/llama3/config_registry.py:349
-  # 注册的 SFT 配置（不是独立 module），训练走 torchtitan/train.py
-  # 同一入口。smoke 验证 SFT 数据通路（ChatDataLoader /
-  # CrossEntropyLoss / Trainer）。
-  # 2026-09-22 在 hdc-stable-npu-2 用 sitecustomize 的 4 件 overlay +
-  # ChunkedLossWrapper bypass shim（必须让 lm_head 跑一次以保 FSDP
-  # all_gather_state 一致，v1 不跑 lm_head 会触发 FSDP pre-backward
-  # assert + AICore "scalar address out of bounds"）实证 exit 0，
-  # loss 8.11→7.69（2 step）。c10d broadcast / FlexAttention CANN 墙
-  # / ComplexRoPE aclnnIndex 墙 三道同 #1 + #2 一起过。
-  # 退役条件：同 #1。
-  - path: torchtitan/models/llama3/config_registry.py
-    profile: torchtitan
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    exec: scripts/run_sft_debugmodel_1card.sh
-    overlay_args:
-      - --module llama3
-      - --config sft_debugmodel
-      - --comm.mode default
-      - --training.steps 2
-      - --training.local-batch-size 1
-      - --training.seq-len 256
-      - --metrics.log-freq 1
-      - --metrics.disable-color-printing
-      - --dump-folder ${CI_OUTPUT_DIR}/sft_debugmodel_1card
-    timeout_minutes: 20
+# No supported examples (2026-09-24): all five llama3 debugmodel variants
+# (debugmodel 1-card / 2-card, ce_loss, dist_gemm, sft) moved to unsupported
+# because they only run on the NPU stack via runtime monkey-patches
+# (sitecustomize shim in run_example.sh) or source sed patches, which
+# contradict the no-source-patch policy. Version alignment cannot remove
+# them either (need CANN/triton-ascend/torch_npu upstream fixes; see the
+# llama3 block under unsupported).
+supported: []
 
 unsupported:
   # flux_debugmodel：源 scan 看起来可上，但实证 1 卡 full_dtensor 路径连撞
@@ -224,10 +51,20 @@ unsupported:
   # ComplexRoPE(scaling="llama") 用 torch.polar/view_as_complex 生成 complex64（models/common/rope.py:233,261），
   # NPU aclnnIndex 无 DT_COMPLEX64 实现；默认 loss=ChunkedLossWrapper（components/loss.py:567，
   # backward-inside-forward 在 NPU 触发 meta 张量泄漏）。
-  # debugmodel / debugmodel_2card / debugmodel_dist_gemm / sft_debugmodel 这 4 条
-  # 在 2026-09-22 通过 sitecustomize 的 5-overlay 模板（含 ChunkedLossWrapper
-  # bypass shim）实证 exit 0，已移到 supported 段；下方仅留 llama3_8b + 其它
-  # variants（未走 sitecustomize 验证）。
+  # 以下 5 条（debugmodel 单卡 / debugmodel 双卡 / debugmodel_dist_gemm /
+  # sft_debugmodel + ce_loss 变体）在 2026-09-22 靠 run_example.sh 的
+  # sitecustomize monkey-patch（SDPA 强制 / CosSinRoPE 替换 / ChunkedLossWrapper
+  # bypass / set_timeout 补缺 / create_block_mask 剥离）实证 exit 0，一度移入
+  # supported。2026-09-24 决策移回 unsupported：这些 monkey-patch 虽不落盘
+  # （run_example.sh:5 禁止 git add/commit/push），但运行时覆盖了上游函数/类，
+  # 等价于 patch；且调整依赖版本无法消除——退役分别需要 CANN/triton-ascend
+  # 支持编译 inductor flex 模板（限制一）、aclnnIndex 支持 complex64（限制二）、
+  # torch_npu 发布配套 torch≥2.13 的版本（限制三/五，同时解除 set_timeout /
+  # separate_full_blocks / spmd_types 三处版本错配）。上游修复后再移回 supported。
+  - torchtitan/models/llama3/config_registry.py:llama3_debugmodel
+  - torchtitan/models/llama3/config_registry.py:llama3_debugmodel_ce_loss
+  - torchtitan/models/llama3/config_registry.py:llama3_debugmodel_dist_gemm
+  - torchtitan/models/llama3/config_registry.py:sft_debugmodel
 
   # llama3_8b：与 debugmodel 同一三墙（flex+ComplexRoPE+ChunkedLoss），仅 arch 规模更大。
   - torchtitan/models/llama3/config_registry.py:llama3_8b

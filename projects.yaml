@@ -345,6 +345,7 @@ projects:
     runner: linux-aarch64-a2-1
     dir: projects/tensordict
     workflows:
+      examples: .github/workflows/tensordict-examples.yml
       quick_start: .github/workflows/tensordict-quick-start.yml
   # Ascend/vision ships annotated git tags only (no GitHub Releases
   # published), so /releases/latest 404s and /releases returns []. The

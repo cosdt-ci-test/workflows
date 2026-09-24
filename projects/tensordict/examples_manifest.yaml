@@ -1,0 +1,39 @@
+version: 1
+# 只把上游可运行的教程 .py 作为对账单位；不把文档、图片或 benchmarks 当成 example。
+# supported 表示源码静态判断可在 NPU 上尝试，真实兼容性仍待手动 workflow 验证。
+scan:
+  root: tutorials/sphinx_tuto
+  include_extensions: ['.py']
+
+supported:
+  # 键操作教程演示 set/update/嵌套键与展平；仅用微型合成张量，项目启动器将默认设备设为 NPU 并验证最终叶子设备。
+  - path: tutorials/sphinx_tuto/tensordict_keys.py
+    profile: tensordict_npu
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    timeout_minutes: 90
+  # 形状教程演示切片、堆叠、变形和 gather；小型随机张量无需模型或数据下载，可在 NPU 默认设备上执行并检查结果。
+  - path: tutorials/sphinx_tuto/tensordict_shapes.py
+    profile: tensordict_npu
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    timeout_minutes: 90
+  # 预分配教程演示逐行写入 TensorDict；仅创建 10×3 的合成张量，可直接检验 NPU 上的分配和赋值。
+  - path: tutorials/sphinx_tuto/tensordict_preallocation.py
+    profile: tensordict_npu
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    timeout_minutes: 90
+
+unsupported:
+  - tutorials/sphinx_tuto/data_fashion.py  # FashionMNIST 数据加载与双模型训练；device 只在 CUDA/CPU 间选择，NPU runner 会回落 CPU，且下载数据、5 epoch 暂无法从 CLI 压缩。
+  - tutorials/sphinx_tuto/export.py  # torch.export 导出 TensorDictModule；多次图捕获的 NPU 兼容性尚未上卡验证，CPU 成功不能作为 NPU 看护。
+  - tutorials/sphinx_tuto/functional.py  # 参数替换、vmap 和 functional_call；虽用合成数据，但 vmap 的 NPU 兼容性需在基础操作通过后单独验证。
+  - tutorials/sphinx_tuto/serialization_speed.py  # 多格式序列化吞吐基准；重复写盘及绘图主要测 CPU/磁盘，缺少稳定的 NPU 功能验收语义。
+  - tutorials/sphinx_tuto/streamed_tensordict.py  # asyncio 模拟流与 lazy stack；涉及 Python 整数和 nested tensor densify，NPU 驻留与算子兼容性待单独验证。
+  - tutorials/sphinx_tuto/tensorclass_fashion.py  # FashionMNIST tensorclass 数据加载与训练；device 硬选 CUDA/CPU、自动下载数据且固定 5 epoch，原样执行不能覆盖 NPU。
+  - tutorials/sphinx_tuto/tensorclass_imagenet.py  # 图像分类/加载性能教程；device 硬选 CUDA/CPU，且要求预置 hymenoptera 图像目录，NUM_WORKERS/FRACTION 不改变设备。
+  - tutorials/sphinx_tuto/tensordict_memory.py  # 内存映射教程；可执行部分以 memmap_/memmap_like 磁盘存储为主，CUDA 示例仅在注释里，不能证明 NPU 执行。
+  - tutorials/sphinx_tuto/tensordict_module.py  # TensorDictModule/Sequential 与编译性能演示；无条件执行多组 torch.compile 基准，NPU 后端和耗时需单独评估。
+  - tutorials/sphinx_tuto/tensordict_slicing.py  # 切片与布尔掩码；torch.BoolTensor 固定构造 CPU 掩码，和 NPU 张量混合索引需上卡确认。
+  - tutorials/sphinx_tuto/zarr_storage.py  # Zarr/ZipStore 序列化教程；核心为 CPU/磁盘后端且需额外 zarr 依赖，不是首批 NPU 计算用例。

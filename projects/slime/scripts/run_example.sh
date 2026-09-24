@@ -60,6 +60,11 @@ else
   PYTHON=python
 fi
 
+# OPD's teacher listens on a separate local port. The manifest expands
+# this value into --rm-url before the fork launcher starts Ray.
+export SLIME_TEACHER_PORT=$((13141 + ${GITHUB_RUN_ID:-0} % 1000))
+export SLIME_TEACHER_URL="http://127.0.0.1:${SLIME_TEACHER_PORT}/generate"
+
 expand_overlay() {
   "$PYTHON" - <<'PY'
 import json
@@ -118,9 +123,6 @@ require_visible_devices() {
 # Ray must not rewrite the visible-device mask, HCCL needs its port range
 # and the NPU allocator keeps expandable_segments (no vLLM CaMemAllocator
 # in this stack, unlike projects/roll).
-require_visible_devices 4 '0,1,2,3'
-# Total visible devices drive the Ray resource count (fork NUM_GPUS).
-NUM_GPUS=$(IFS=,; set -- $ASCEND_RT_VISIBLE_DEVICES; echo "$#")
 export RAY_EXPERIMENTAL_NOSET_ASCEND_RT_VISIBLE_DEVICES=1
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 export HCCL_HOST_SOCKET_PORT_RANGE="${HCCL_HOST_SOCKET_PORT_RANGE:-60000-60050}"
@@ -144,8 +146,20 @@ case "$entry_key" in
   examples/fully_async/run-qwen2.5-0.5B-fully_async.sh)
     # Recipe source: tests/tests_npu/nightly_CI/
     # test_qwen2.5_0.5B_fully_async_short_npu.py (fork-verified on NPU).
+    require_visible_devices 4 '0,1,2,3'
+    NUM_GPUS=4
     MODEL_TYPE=qwen2.5-0.5B
     TRAIN_SCRIPT=train_async.py
+    ;;
+  examples/on_policy_distillation/run-qwen3-8B-opd.sh)
+    # Fork NPU ST: 4 actor + 3 rollout devices in Ray, 1 teacher server.
+    require_visible_devices 8 '0,1,2,3,4,5,6,7'
+    IFS=',' read -r -a opd_devices <<< "$ASCEND_RT_VISIBLE_DEVICES"
+    export SLIME_OPD_TRAIN_DEVICES="$(IFS=,; echo "${opd_devices[*]:0:7}")"
+    export SLIME_OPD_TEACHER_DEVICE="${opd_devices[7]}"
+    NUM_GPUS=7
+    MODEL_TYPE=qwen2.5-0.5B
+    TRAIN_SCRIPT=train.py
     ;;
   *)
     echo "no engine-call metadata mapping for $entry_key" >&2
@@ -161,7 +175,13 @@ cd "$SLIME_FORK_ROOT"
 
 "$PYTHON" - "$SLIME_FORK_ROOT" "$NUM_GPUS" "$MODEL_TYPE" "$TRAIN_SCRIPT" "${EXTRA_ARGS[@]}" <<'PY'
 import importlib.util
+import os
+import signal
+import subprocess
 import sys
+import time
+import urllib.request
+from collections import deque
 from pathlib import Path
 
 fork_root, num_gpus, model_type, train_script, *train_args = sys.argv[1:]
@@ -179,10 +199,99 @@ spec.loader.exec_module(module)
 
 print(f"execute_train: model_type={model_type} train_script={train_script} num_gpus={num_gpus}")
 print("train args:", " ".join(train_args))
-module.execute_train(
-    train_args=" ".join(train_args),
-    num_gpus_per_node=int(num_gpus),
-    megatron_model_type=model_type,
-    train_script=train_script,
-)
+
+teacher_device = os.environ.get("SLIME_OPD_TEACHER_DEVICE")
+teacher_process = None
+teacher_log = Path(os.environ["CI_OUTPUT_DIR"]) / "opd-teacher.log"
+
+
+def teacher_log_tail():
+    if teacher_log.exists():
+        print("teacher log (last 40 lines):", flush=True)
+        with teacher_log.open(errors="replace") as output:
+            print("".join(deque(output, maxlen=40)), flush=True)
+
+
+def start_opd_teacher():
+    global teacher_process
+    teacher_env = os.environ.copy()
+    teacher_env.update({
+        "CUDA_VISIBLE_DEVICES": teacher_device,
+        "ASCEND_RT_VISIBLE_DEVICES": teacher_device,
+        "GLOO_SOCKET_IFNAME": "lo",
+        "NCCL_SOCKET_IFNAME": "lo",
+        "TP_SOCKET_IFNAME": "lo",
+        "no_proxy": "127.0.0.1",
+    })
+    for proxy in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
+        teacher_env.pop(proxy, None)
+    command = [
+        sys.executable, "-m", "sglang.launch_server",
+        "--model-path", os.environ["SLIME_MODEL_PATH"],
+        "--host", "127.0.0.1",
+        "--port", os.environ["SLIME_TEACHER_PORT"],
+        "--tp", "1",
+        "--mem-fraction-static", "0.6",
+    ]
+    with teacher_log.open("w") as output:
+        teacher_process = subprocess.Popen(
+            command, env=teacher_env, stdout=output,
+            stderr=subprocess.STDOUT, start_new_session=True,
+        )
+    print(f"OPD teacher: device={teacher_device} pid={teacher_process.pid} log={teacher_log}", flush=True)
+    health_url = os.environ["SLIME_TEACHER_URL"].removesuffix("/generate") + "/health_generate"
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    deadline = time.monotonic() + 600
+    while time.monotonic() < deadline:
+        if teacher_process.poll() is not None:
+            teacher_log_tail()
+            raise RuntimeError(f"OPD teacher exited with code {teacher_process.returncode}")
+        try:
+            with opener.open(health_url, timeout=3) as response:
+                if response.status == 200:
+                    print("OPD teacher ready", flush=True)
+                    return
+        except Exception:
+            pass
+        time.sleep(5)
+    teacher_log_tail()
+    raise TimeoutError("OPD teacher did not become healthy within 600 seconds")
+
+
+launch_options = {}
+if teacher_device:
+    train_devices = os.environ["SLIME_OPD_TRAIN_DEVICES"]
+    # The fork builds Ray's runtime env from its own defaults, so override
+    # the hard-coded 0..7 mask to keep the teacher's physical NPU isolated.
+    os.environ["ASCEND_RT_VISIBLE_DEVICES"] = train_devices
+    os.environ["CUDA_VISIBLE_DEVICES"] = train_devices
+    launch_options = {
+        "before_ray_job_submit": start_opd_teacher,
+        "extra_env_vars": {
+            "ASCEND_RT_VISIBLE_DEVICES": train_devices,
+            "CUDA_VISIBLE_DEVICES": train_devices,
+            "ASCEND_TOOLKIT_HOME": "/usr/local/Ascend/ascend-toolkit/latest/",
+            "ASCEND_HOME_PATH": "/usr/local/Ascend/ascend-toolkit/latest/",
+            "HCCL_IF_IP": "127.0.0.1",
+            "TP_SOCKET_IFNAME": "lo",
+            "GLOO_SOCKET_IFNAME": "lo",
+        },
+    }
+
+try:
+    module.execute_train(
+        train_args=" ".join(train_args),
+        num_gpus_per_node=int(num_gpus),
+        megatron_model_type=model_type,
+        train_script=train_script,
+        **launch_options,
+    )
+finally:
+    if teacher_process and teacher_process.poll() is None:
+        os.killpg(teacher_process.pid, signal.SIGTERM)
+        try:
+            teacher_process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            os.killpg(teacher_process.pid, signal.SIGKILL)
+            teacher_process.wait()
 PY

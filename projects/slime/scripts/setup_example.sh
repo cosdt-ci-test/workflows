@@ -276,13 +276,10 @@ print("slime resolves inside fork tree", fork_root)
 PY
 }
 
-# ----- profile: slime_fully_async -----
-# Mirrors the fork's verified NPU nightly config
-# tests/tests_npu/nightly_CI/test_qwen2.5_0.5B_fully_async_short_npu.py:
-# HF weights + a torch_dist ref checkpoint converted with the fork's own
-# tools/convert_hf_to_torch_dist.py (4 procs; conversion is ray-free).
-setup_slime_fully_async() {
-  check_npu_devices 4
+# ----- shared Qwen2.5-0.5B assets for fully async and OPD -----
+# Both fork NPU recipes use the same HF weights and torch_dist checkpoint.
+# Conversion uses the fork's own tool (4 procs; conversion is ray-free).
+prepare_qwen25_assets() {
   python -m pip install -q "modelscope==1.37.0"
   # snapshot_download() returns the real cache path (under the runner's
   # persistent ModelScope cache), and that value is what the converter
@@ -339,6 +336,16 @@ PY
   fi
   append_project_env "SLIME_TORCH_DIST_PATH=$torch_dist"
   append_project_env "SLIME_FIXTURE_JSONL=$FIXTURE_DIR/ci_dapo_16.jsonl"
+}
+
+setup_slime_fully_async() {
+  check_npu_devices 4
+  prepare_qwen25_assets
+}
+
+setup_slime_opd() {
+  check_npu_devices 8
+  prepare_qwen25_assets
 }
 
 supported_profiles() {

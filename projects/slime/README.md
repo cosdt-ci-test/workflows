@@ -59,11 +59,12 @@ slime 上游 `THUDM/slime` 发布 release（当前 v0.3.2）但没有任何昇�
 
 ## supported 清单与压缩口径
 
-### 阶段一（当前）
+### 已接入（阶段一 #12 全绿；阶段二 OPD 待手动验收）
 
 | example | runner | 配方出处 | 压缩口径 |
 |---|---|---|---|
 | `examples/fully_async/run-qwen2.5-0.5B-fully_async.sh` | a2-4 | fork NPU nightly `tests/tests_npu/nightly_CI/test_qwen2.5_0.5B_fully_async_short_npu.py`（昇腾已验证） | actor 1 + rollout 3、TP/PP/CP/EP 全 1、`--num-rollout 2`、response 1024（nightly 为 8192）、数据换仓内 16 行 fixture；显式关闭两类 dropout 并沿用 temperature 0.8 对齐训练/推理策略 |
+| `examples/on_policy_distillation/run-qwen3-8B-opd.sh` | a2-8 | fork NPU ST `tests/tests_npu/st/test_qwen2.5_0.5B_opd_sglang_npu.py` | 同型号 Qwen2.5-0.5B student/teacher，Ray 中 actor 4 + rollout 3、独立 teacher 1 卡；2 个 rollout、fixture 16 行、response 1024。保留 SGLang teacher token-logprob 与 OPD KL 链路；尚待远程验证。 |
 
 执行不直接跑上游 `.sh`（硬编码 `/root` 绝对路径、无 `"$@"` 透传），由
 manifest `overlay_args` 承载完整训练配方（逐块注释对应 fork 测试的参数组），
@@ -74,14 +75,19 @@ NPU 资源注入都由 fork 框架代码完成）。模型 `--hf-checkpoint` 走
 本地路径，`--ref-load` 用 fork 自带 `tools/convert_hf_to_torch_dist.py`
 现转的 `_torch_dist` 目录（torchrun 4 procs）。
 
-### 阶段二（阶段一远程绿后）
+OPD 的上游 `.sh` 会启动 teacher、轮询健康接口，再启动 Ray 训练；但脚本写死
+`/root/Qwen3-32B`、`nvidia-smi` 和 CUDA 卡号，不能直接用于昇腾 CI。项目 launcher
+复刻相同步骤：在第 8 张 NPU 启动本地 SGLang teacher，确认
+`/health_generate` 就绪后，以前 7 张卡执行 fork 的 `execute_train()`；结束时关闭
+teacher。训练参数留在 manifest。环境仍是现有华为 CANN 镜像 + setup 按 fork
+`quick_install.sh`/NPU Dockerfile 安装的 NPU 栈，不拉取新的国外容器镜像。
 
-- `examples/on_policy_distillation/run-qwen3-8B-opd.sh`：sglang teacher 模式，
-  复刻 fork `tests/tests_npu/st/test_qwen2.5_0.5B_opd_sglang_npu.py`（0.5B student +
-  同模型 teacher，7 train + 1 teacher，a2-8）。原脚本 teacher Qwen3-32B 在 64GB 卡放不下。
+### 阶段二后续候选（OPD 验收后）
+
 - `examples/retool/retool_qwen3_4b_rl.sh`：4 卡 colocate（TP2、engine 2），模型换
   `Qwen/Qwen3-4B-Instruct-2507`（ModelScope 不可达时降 Qwen3-0.6B）；sandbox 为
-  纯本地 subprocess。
+  纯本地 subprocess。没有 OPD 那样完整的 fork NPU 回归先例，因此本轮不与 OPD
+  同时提升，以便远程失败时归因。
 
 ### 阶段三候选
 
@@ -101,7 +107,7 @@ NPU 资源注入都由 fork 框架代码完成）。模型 `--hf-checkpoint` 走
 
 ## 数据与模型
 
-- 模型：全部走 ModelScope（Qwen2.5-0.5B-Instruct 已验证；阶段二候选
+- 模型：全部走 ModelScope（Qwen2.5-0.5B-Instruct 已验证；ReTool 候选
   Qwen3-4B-Instruct-2507 接入前先验可达性）。
 - 数据：`fixtures/ci_dapo_16.jsonl` 为 16 行 DAPO-Math-17k 同 schema 真实样本
   （`prompt` 为 `[{content, role}]` 消息列表、`label` 为字符串答案，deepscaler
@@ -118,7 +124,11 @@ CaMemAllocator 场景不同，这里不 unset）、`WANDB_MODE=offline`。
 `slime-examples #11` 首次进入训练后，fork 的 CI logprob 检查发现训练与 rollout 差异为
 2.628（阈值 0.1）：Megatron 默认 attention/hidden dropout 均为 0.1，而 fork nightly
 配方将两者设为 0。manifest 现对齐该配方并固定 rollout temperature 0.8。该次 run 的
-fixture rollout reward 与 advantage 均为 0，修复后还需手动验收确认训练 step 获得非零奖励信号。
+fixture rollout reward 与 advantage 均为 0。#12 已完成 2 个 rollout 与训练 step、整体成功，
+但 reward / advantage / loss / grad_norm 仍为 0，因此只能视为运行链路验证，
+不能证明现有数学 fixture 产生了有效的优化信号。OPD 的纯蒸馏后处理设计上返回
+标量 reward 0，学习信号应来自 teacher-logprob 的 KL 项；远程验收需检查该项与
+teacher 请求成功，不能只看退出码。
 
 ## CI 接口
 
@@ -127,7 +137,7 @@ fixture rollout reward 与 advantage 均为 0，修复后还需手动验收确�
 - artifact：`slime-examples-<run_id>-<job_index>`（公共引擎统一命名）。
 - schedule：bring-up 期注释关闭；手动轮次全绿后由维护者决定启用（启用后由上游
   release tag 变化或上次 scheduled failure 触发）。
-- `max_parallel: 1`（bring-up），阶段二起可提 2。
+- `max_parallel: 1`（bring-up 阶段保持；避免 4 卡和 8 卡任务并发争用资源）。
 
 ## 本地验证
 

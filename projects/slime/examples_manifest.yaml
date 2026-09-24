@@ -69,6 +69,51 @@ supported:
       - "--attention-backend flash"
       - --ci-test
 
+  # OPD 蒸馏：复刻 fork NPU ST test_qwen2.5_0.5B_opd_sglang_npu.py 的
+  # 4 actor + 3 rollout (Ray) + 1 独立 SGLang teacher 布局。保留原 example 的
+  # sglang teacher/logprob + KL 训练路径，把 8B/32B 换成 ModelScope 同款 0.5B
+  # student/teacher，并缩为 2 个 rollout；teacher 服务由 runner 在本机启停。
+  - path: examples/on_policy_distillation/run-qwen3-8B-opd.sh
+    profile: slime_opd
+    runner: linux-aarch64-a2-8
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    timeout_minutes: 300
+    overlay_args:
+      # 本地权重、fixture 与独立 teacher 服务（由 run_example.sh 提供 URL）。
+      - "--hf-checkpoint ${SLIME_MODEL_PATH}"
+      - "--ref-load ${SLIME_TORCH_DIST_PATH}"
+      - --use-dist-ckpt
+      - "--prompt-data ${SLIME_FIXTURE_JSONL}"
+      - "--input-key prompt"
+      - "--label-key label"
+      - --apply-chat-template
+      - "--custom-rm-path slime.rollout.on_policy_distillation.reward_func"
+      - "--custom-reward-post-process-path slime.rollout.on_policy_distillation.post_process_rewards"
+      - "--rm-url ${SLIME_TEACHER_URL}"
+      - --use-opd
+      - "--opd-type sglang"
+      - "--opd-kl-coef 1.0"
+      # fork NPU ST 的训练/推理一致性与 CI 规模。
+      - "--rollout-temperature 0.8"
+      - "--attention-dropout 0.0"
+      - "--hidden-dropout 0.0"
+      - "--num-rollout 2"
+      - "--rollout-batch-size 4"
+      - "--n-samples-per-prompt 4"
+      - "--global-batch-size 16"
+      - "--rollout-max-response-len 1024"
+      - "--actor-num-gpus-per-node 4"
+      - "--rollout-num-gpus 3"
+      - "--sglang-device npu"
+      - "--sglang-mem-fraction-static 0.6"
+      - "--sglang-cuda-graph-max-bs 16"
+      - "--max-tokens-per-gpu 4096"
+      - --use-dynamic-batch-size
+      - "--megatron-to-hf-mode bridge"
+      - --use-flash-attn
+      - "--attention-backend flash"
+      - --ci-test
+
 unsupported:
   # __init__.py：examples 顶层包标记，非独立运行入口。
   - examples/__init__.py
@@ -160,12 +205,7 @@ unsupported:
   # rollout_with_multi_agents.py 被 run-qwen3-30B-A3B-multi-agent.sh 以
   # --custom-generate-function-path examples.multi_agent.rollout_with_multi_agents.generate_with_multi_agents 调用，非独立入口。
   - examples/multi_agent/rollout_with_multi_agents.py
-  # ===== on_policy_distillation：阶段二接入（teacher 规模需换小） =====
-  # run-qwen3-8B-opd.sh：sglang teacher 模式，但 teacher Qwen3-32B --tp 1 在 910B 64GB 卡放不下
-  # （bf16 约 64GB > mem-fraction 0.6 可用），student Qwen3-8B + 7 卡分离布局需整体复刻；
-  # 阶段二复刻 fork tests/tests_npu/st/test_qwen2.5_0.5B_opd_sglang_npu.py（0.5B student +
-  # 同模型 teacher，7 train + 1 teacher）的已验证配方接入。
-  - examples/on_policy_distillation/run-qwen3-8B-opd.sh
+  # ===== on_policy_distillation：其他 teacher 变体仍暂缓 =====
   # run-qwen3-8B-opd-megatron.sh：megatron teacher 模式（--opd-type megatron），需预转 _torch_dist
   # teacher 权重且 NPU 无验证先例；阶段二仅接 sglang teacher 模式。
   - examples/on_policy_distillation/run-qwen3-8B-opd-megatron.sh

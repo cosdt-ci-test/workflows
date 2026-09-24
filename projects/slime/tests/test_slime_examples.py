@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import yaml
@@ -18,20 +19,32 @@ EXPECTED_SUPPORTED = {
         ),
         "timeout_minutes": 300,
     },
+    "examples/on_policy_distillation/run-qwen3-8B-opd.sh": {
+        "profile": "slime_opd",
+        "runner": "linux-aarch64-a2-8",
+        "image": (
+            "swr.cn-south-1.myhuaweicloud.com/ascendhub/"
+            "cann:9.1.0-910b-ubuntu22.04-py3.12"
+        ),
+        "timeout_minutes": 300,
+    },
 }
 
 # Entries whose execution recipe needs a minimum visible-device count.
 ENTRY_DEVICE_REQUIREMENTS = {
     "examples/fully_async/run-qwen2.5-0.5B-fully_async.sh": 4,
+    "examples/on_policy_distillation/run-qwen3-8B-opd.sh": 8,
 }
 
 # Engine-call metadata that the engine cannot pass through; each
 # supported entry must have a per-entry mapping in run_example.sh.
 ENTRY_MODEL_TYPES = {
     "examples/fully_async/run-qwen2.5-0.5B-fully_async.sh": "qwen2.5-0.5B",
+    "examples/on_policy_distillation/run-qwen3-8B-opd.sh": "qwen2.5-0.5B",
 }
 ENTRY_TRAIN_SCRIPTS = {
     "examples/fully_async/run-qwen2.5-0.5B-fully_async.sh": "train_async.py",
+    "examples/on_policy_distillation/run-qwen3-8B-opd.sh": "train.py",
 }
 
 # Pin table copied from the fork's Dockerfile ARGs and quick_install.sh.
@@ -63,7 +76,7 @@ def test_supported_entries_match_plan() -> None:
     manifest = load_manifest()
     supported = {entry["path"]: entry for entry in manifest["supported"]}
     assert set(supported) == set(EXPECTED_SUPPORTED), (
-        f"phase-1 supported set drifted: {sorted(supported)}")
+        f"supported set drifted: {sorted(supported)}")
     for path, expectations in EXPECTED_SUPPORTED.items():
         entry = supported[path]
         for field, expected in expectations.items():
@@ -149,6 +162,9 @@ def test_setup_pins_match_fork_recipe() -> None:
     assert '"Megatron-LM:megatron"' in setup
     assert '"Megatron-Bridge:megatron-bridge"' in setup
     assert 'required NPU patch directory missing:' in setup
+    assert 'setup_slime_opd()' in setup
+    assert 'check_npu_devices 8' in setup
+    assert 'prepare_qwen25_assets' in setup
 
 
 def test_run_example_exports_npu_contract() -> None:
@@ -161,6 +177,9 @@ def test_run_example_exports_npu_contract() -> None:
         "PYTORCH_NPU_ALLOC_CONF=expandable_segments:True",
         "WANDB_MODE=offline",
         "require_visible_devices 4",
+        "require_visible_devices 8",
+        "SLIME_OPD_TEACHER_DEVICE",
+        "before_ray_job_submit",
     ):
         assert needle in run_script, f"run_example.sh missing: {needle}"
 
@@ -177,6 +196,21 @@ RECIPE_OVERLAY_REQUIRED = {
         "--rollout-function-path slime.rollout.fully_async_rollout.generate_rollout_fully_async",
         "--num-rollout 2",
         "--rollout-max-response-len 1024",
+        "--sglang-device npu",
+        "--ci-test",
+    ],
+    "examples/on_policy_distillation/run-qwen3-8B-opd.sh": [
+        "--hf-checkpoint ${SLIME_MODEL_PATH}",
+        "--ref-load ${SLIME_TORCH_DIST_PATH}",
+        "--prompt-data ${SLIME_FIXTURE_JSONL}",
+        "--custom-rm-path slime.rollout.on_policy_distillation.reward_func",
+        "--custom-reward-post-process-path slime.rollout.on_policy_distillation.post_process_rewards",
+        "--rm-url ${SLIME_TEACHER_URL}",
+        "--use-opd",
+        "--opd-type sglang",
+        "--num-rollout 2",
+        "--actor-num-gpus-per-node 4",
+        "--rollout-num-gpus 3",
         "--sglang-device npu",
         "--ci-test",
     ],
@@ -209,6 +243,15 @@ def test_run_example_maps_engine_call_metadata() -> None:
     # per-entry branches after the metadata case).
     assert run_script.count("module.execute_train(") == 1
     assert "fork_root" in run_script and "command_utils.py" in run_script
+
+
+def test_inline_launcher_python_is_syntactically_valid() -> None:
+    run_script = (PROJECT_ROOT / "scripts" / "run_example.sh").read_text(
+        encoding="utf-8")
+    blocks = re.findall(r"<<'PY'\n(.*?)\nPY", run_script, re.DOTALL)
+    assert len(blocks) == 2
+    for block in blocks:
+        compile(block, "run_example.sh:<inline Python>", "exec")
 
 def test_workflow_registers_engine_call() -> None:
     workflow = (

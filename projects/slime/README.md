@@ -151,7 +151,7 @@ teacher 请求成功，不能只看退出码。
 ## 本地验证
 
 ```bash
-python -m pytest tests/test_check_supported_entries.py tests/test_curl_seed.py -q
+python -m pytest tests/test_check_supported_entries.py -q
 python -m pytest projects/roll/tests/test_roll_examples.py -q  # regression: shared-engine contract
 bash -n projects/slime/scripts/setup_example.sh
 bash -n projects/slime/scripts/run_example.sh

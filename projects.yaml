@@ -256,7 +256,6 @@ projects:
       # Ascend/slime-ascend main HEAD, cloned and installed by
       # projects/slime/scripts/setup_example.sh. See projects/slime/README.md.
       examples: .github/workflows/slime-examples.yml
-      quick_start: .github/workflows/slime-quick-start.yml
   # specforge quick start runs an end-to-end 1-step training smoke on
   # 4-card NPU: installs torch 2.11.0 / torch_npu 2.11.0 / sglang 0.5.14
   # (matching specforge's pinned pyproject), then a single #test block

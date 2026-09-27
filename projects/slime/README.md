@@ -54,8 +54,10 @@ slime 上游 `THUDM/slime` 发布 release（当前 v0.3.2）但没有任何昇�
   Qwen2.5-0.5B-Instruct 首次冷下载后跨 run 命中。
 - pip 走集群缓存代理（`select_pip_index` 探测 `cache-service.nginx-pypi-cache`），
   失败回退清华源。
-- **不使用 cache-seed**：模型全走 ModelScope、数据用仓内 fixture、sgl-kernel wheel
-  是 GitHub release 资产（CI 本身就在 GitHub 上，带 `--retry 3` 直下即可）。
+- 模型全走 ModelScope，数据用仓内 fixture。`sgl-kernel-npu` Release ZIP 则由
+  `cache-seed/slime/curl_seeds.yaml` 一次性投递到共享缓存；三个 example setup
+  校验命中后直接安装，不再分别访问 GitHub。#17 证明直连可能持续慢于五分钟；
+  缓存缺失或损坏时仍允许 job 本地 Range 续传兜底，但不算缓存验收通过。
 
 ## supported 清单与压缩口径
 
@@ -149,7 +151,7 @@ teacher 请求成功，不能只看退出码。
 ## 本地验证
 
 ```bash
-python -m pytest projects/slime/tests tests/test_check_supported_entries.py -q
+python -m pytest tests/test_check_supported_entries.py tests/test_curl_seed.py -q
 python -m pytest projects/roll/tests/test_roll_examples.py -q  # regression: shared-engine contract
 bash -n projects/slime/scripts/setup_example.sh
 bash -n projects/slime/scripts/run_example.sh

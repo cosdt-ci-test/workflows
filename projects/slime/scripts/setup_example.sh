@@ -27,6 +27,9 @@ readonly MEGATRON_ADAPTOR_COMMIT=f707a3b6
 readonly TRANSFORMER_ENGINE_NPU_COMMIT=47d60449
 readonly SGL_KERNEL_NPU_VERSION=2026.08.21
 readonly SGL_KERNEL_NPU_URL="https://github.com/sgl-project/sgl-kernel-npu/releases/download/${SGL_KERNEL_NPU_VERSION}/sgl-kernel-npu-${SGL_KERNEL_NPU_VERSION}-torch2.10.0-py312-cann9.1.0-910b-aarch64.zip"
+# Pinned release-asset digest from the GitHub API. A resumed transfer is
+# accepted only when the complete archive matches this value.
+readonly SGL_KERNEL_NPU_SHA256=8a12a3b861ea7ae331a1640ad5140203cebc0edae9964b002d33a1b02be462d1
 readonly SLIME_FORK_URL=https://gitcode.com/Ascend/slime-ascend.git
 readonly SGLANG_GITCODE_URL=https://gitcode.com/gh_mirrors/sg/sglang.git
 readonly MEGATRON_GITCODE_URL=https://gitcode.com/gh_mirrors/me/Megatron-LM.git
@@ -137,10 +140,52 @@ install_sglang_source() {
 # ----- step 3: prebuilt NPU kernel wheels (torch_memory_saver / sgl_kernel_npu / deep_ep) -----
 install_sgl_kernel_npu() {
   local bundle="$DEPS_ROOT/sgl-kernel-npu.zip"
-  # GitHub release CDN sometimes closes an idle TLS stream (curl 56).
-  # Retry that class of transfer error too, and discard partial bundles.
-  curl -L --fail --retry 5 --retry-all-errors --retry-delay 10 \
-    --connect-timeout 30 --max-time 300 -o "$bundle" "$SGL_KERNEL_NPU_URL"
+  local cache_root="${SHARED_CACHE_ROOT:-${HOME:?HOME is required}/.cache/huggingface}"
+  local cached_bundle="$cache_root/third_party/slime/${SGL_KERNEL_NPU_URL##*/}"
+  local attempt actual_sha curl_status
+  if [[ -f "$cached_bundle" ]]; then
+    if actual_sha=$(sha256sum "$cached_bundle" 2>/dev/null) && \
+       [[ "${actual_sha%% *}" == "$SGL_KERNEL_NPU_SHA256" ]]; then
+      bundle="$cached_bundle"
+      echo "sgl-kernel-npu shared cache hit: $bundle (sha256 ok)"
+    else
+      echo "warning: sgl-kernel-npu shared cache checksum mismatch: $cached_bundle" >&2
+    fi
+  fi
+  if [[ "$bundle" != "$cached_bundle" ]]; then
+    echo "warning: sgl-kernel-npu shared cache unavailable; downloading directly. Seed cache-seed/slime first." >&2
+    # On #17 each 300-second attempt downloaded only part of this 12.7 MB
+    # asset, then restarted at byte zero. Keep job-local partial bytes and
+    # resume after a broken connection; never modify the shared cache here.
+    for attempt in 1 2 3 4 5 6; do
+      echo "sgl-kernel-npu download attempt $attempt/6 (bytes present: $(stat -c %s "$bundle" 2>/dev/null || echo 0))"
+      if curl --location --fail --silent --show-error --continue-at - \
+        --connect-timeout 30 --speed-limit 1024 --speed-time 120 \
+        --output "$bundle" "$SGL_KERNEL_NPU_URL"; then
+        actual_sha=$(sha256sum "$bundle")
+        actual_sha=${actual_sha%% *}
+        if [[ "$actual_sha" == "$SGL_KERNEL_NPU_SHA256" ]]; then
+          echo "sgl-kernel-npu direct download sha256 verified: $actual_sha"
+          break
+        fi
+        echo "sgl-kernel-npu checksum mismatch; restarting download" >&2
+        : > "$bundle"
+      else
+        curl_status=$?
+        # Exit 33 means the server rejected Range; a fresh request is the
+        # only valid fallback. Other transfer errors leave resumable bytes.
+        if ((curl_status == 33)); then
+          echo "sgl-kernel-npu server refused resume; restarting download" >&2
+          : > "$bundle"
+        fi
+      fi
+      if ((attempt == 6)); then
+        echo "sgl-kernel-npu download failed after $attempt attempts" >&2
+        return 1
+      fi
+      sleep 10
+    done
+  fi
   # The CANN image does not ship unzip; use the stdlib zipfile module
   # (also gives us explicit overwrite semantics).
   python - "$bundle" "$DEPS_ROOT/sgl-kernel-npu" <<'PY'

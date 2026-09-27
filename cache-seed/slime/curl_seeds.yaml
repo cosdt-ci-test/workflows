@@ -1,0 +1,9 @@
+# Prebuilt NPU kernels used by every supported slime example. Seed once on
+# the shared runner volume; keep only this spec in Git, not the binary ZIP.
+# Version matches the fork's py3.12 / torch 2.10.0 / CANN 9.1.0 / 910b stack.
+version: 1
+assets:
+  - url: https://github.com/sgl-project/sgl-kernel-npu/releases/download/2026.08.21/sgl-kernel-npu-2026.08.21-torch2.10.0-py312-cann9.1.0-910b-aarch64.zip
+    path: third_party/slime/sgl-kernel-npu-2026.08.21-torch2.10.0-py312-cann9.1.0-910b-aarch64.zip
+    sha256: 8a12a3b861ea7ae331a1640ad5140203cebc0edae9964b002d33a1b02be462d1
+    size: 12675026

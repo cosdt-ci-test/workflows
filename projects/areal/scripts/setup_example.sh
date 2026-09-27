@@ -14,10 +14,17 @@ fi
 
 PROFILE="$1"
 
-SUPPORTED_PROFILES="areal-vlm-grpo areal-vlm-mt-grpo"
+SUPPORTED_PROFILES="areal-vlm-grpo areal-vlm-mt-grpo areal-math-grpo areal-math-sft areal-math-aime areal-math-boba"
+AIME_PREP=0
+BOBA_PREP=0
 case "$PROFILE" in
   areal-vlm-grpo) MODEL_ID="Qwen/Qwen2.5-VL-3B-Instruct" ;;
   areal-vlm-mt-grpo) MODEL_ID="Qwen/Qwen3-VL-2B-Instruct" ;;
+  # gsm8k_rl.py and gsm8k_eval.py share the same model.
+  areal-math-grpo) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct" ;;
+  areal-math-sft) MODEL_ID="Qwen/Qwen3-1.7B" ;;
+  areal-math-aime) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; AIME_PREP=1 ;;
+  areal-math-boba) MODEL_ID="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"; BOBA_PREP=1 ;;
   *)
     echo "unknown profile: ${PROFILE} (supported: ${SUPPORTED_PROFILES})" >&2
     exit 1
@@ -71,3 +78,87 @@ with open(os.environ["GITHUB_ENV"], "a") as fh:
     fh.write(f"AREAL_MODEL_PATH={dest}\n")
 print(f"Downloaded model to {dest}", flush=True)
 PY
+
+# -------------------------------------------------------
+# 4. AIME dataset + derived config (areal-math-aime).
+# -------------------------------------------------------
+# areal/dataset/aime.py loads <path>/aime_train.parquet and
+# <path>/aime_test.parquet from a LOCAL directory (upstream ships no aime
+# config; the loader takes no HF repo id). Convert the public MathArena
+# parquets (same flow as examples/distillation/mopd/README.md), then derive
+# the GRPO config from gsm8k_grpo_npu.yaml: point the datasets at the local
+# dir and set rollout.agent to null (aime_rl.py runs the standard
+# RLVRWorkflow, not an agent workflow). The generated config is exposed to
+# overlay args via AREAL_AIME_CONFIG.
+if [[ "$AIME_PREP" == 1 ]]; then
+python3 <<'PY'
+import os
+
+import pandas as pd
+import yaml
+from huggingface_hub import hf_hub_download
+
+workspace = os.environ["GITHUB_WORKSPACE"]
+target_root = os.environ["TARGET_ROOT"]
+aime_dir = os.path.join(workspace, "areal_data", "aime")
+os.makedirs(aime_dir, exist_ok=True)
+
+# hf_hub_download honors HF_ENDPOINT (mirror) set in section 3.
+for repo, dst in [
+    ("MathArena/aime_2025", "aime_train.parquet"),
+    ("MathArena/aime_2026", "aime_test.parquet"),
+]:
+    src = hf_hub_download(
+        repo_id=repo, repo_type="dataset",
+        filename="data/train-00000-of-00001.parquet",
+    )
+    df = pd.read_parquet(src).rename(columns={"problem": "question"})
+    df = df[["question", "answer"]]
+    df.to_parquet(os.path.join(aime_dir, dst))
+    print(f"prepared {dst}: {len(df)} rows", flush=True)
+
+base = os.path.join(target_root, "examples", "math", "gsm8k_grpo_npu.yaml")
+with open(base, encoding="utf-8") as fh:
+    cfg = yaml.safe_load(fh)
+cfg["experiment_name"] = "aime-grpo"
+cfg["train_dataset"]["path"] = aime_dir
+cfg["valid_dataset"]["path"] = aime_dir
+cfg["rollout"]["agent"] = None
+config_path = os.path.join(aime_dir, "aime_grpo_npu.yaml")
+with open(config_path, "w", encoding="utf-8") as fh:
+    yaml.safe_dump(cfg, fh, sort_keys=False, allow_unicode=True)
+
+with open(os.environ["GITHUB_ENV"], "a") as fh:
+    fh.write(f"AREAL_AIME_CONFIG={config_path}\n")
+print(f"generated {config_path}", flush=True)
+PY
+fi
+
+# -------------------------------------------------------
+# 5. BoBa dataset (areal-math-boba).
+# -------------------------------------------------------
+# boba_grpo.py loads train_dataset.path as a LOCAL jsonl file
+# (load_dataset("json", data_files=path)); the upstream yaml ships the HF
+# repo id, which would fail with FileNotFoundError. Pre-download the public
+# AReaL-boba-106k.jsonl and expose its local path via AREAL_BOBA_DATA.
+if [[ "$BOBA_PREP" == 1 ]]; then
+python3 <<'PY'
+import os
+import shutil
+
+from huggingface_hub import hf_hub_download
+
+src = hf_hub_download(
+    repo_id="inclusionAI/AReaL-boba-Data", repo_type="dataset",
+    filename="AReaL-boba-106k.jsonl",
+)
+dst = os.path.join(
+    os.environ["GITHUB_WORKSPACE"], "areal_data", "boba", "AReaL-boba-106k.jsonl"
+)
+os.makedirs(os.path.dirname(dst), exist_ok=True)
+shutil.copyfile(src, dst)
+with open(os.environ["GITHUB_ENV"], "a") as fh:
+    fh.write(f"AREAL_BOBA_DATA={dst}\n")
+print(f"downloaded boba dataset to {dst}", flush=True)
+PY
+fi

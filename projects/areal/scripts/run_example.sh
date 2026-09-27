@@ -45,5 +45,8 @@ if ((${#EXTRA_ARGS[@]})); then
 fi
 
 cd "$TARGET_ROOT"
-export PYTHONPATH="$(dirname "$LAUNCH_PATH")${PYTHONPATH:+:$PYTHONPATH}"
+# Repo root first so dotted module paths used by workflow kwargs resolve
+# (e.g. boba_grpo.py's reward_fn "examples.math.boba_grpo.boba_reward_fn");
+# the example dir covers sibling modules imported by the script itself.
+export PYTHONPATH="$TARGET_ROOT:$(dirname "$LAUNCH_PATH")${PYTHONPATH:+:$PYTHONPATH}"
 "$PYTHON" "$LAUNCH_PATH" "${EXTRA_ARGS[@]}"

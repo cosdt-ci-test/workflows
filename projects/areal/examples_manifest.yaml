@@ -60,8 +60,8 @@ supported:
       - +actor.fsdp.offload_params=true
       - +actor.weight_update_mode=disk
       - actor.path=${AREAL_MODEL_PATH}
-      - actor.mb_spec.max_tokens_per_mb=256
-      - ref.mb_spec.max_tokens_per_mb=256
+      - actor.mb_spec.max_tokens_per_mb=1024
+      - ref.mb_spec.max_tokens_per_mb=1024
       - vllm.gpu_memory_utilization=0.3
       - gconfig.max_new_tokens=64
       - gconfig.n_samples=1
@@ -74,53 +74,177 @@ supported:
       - +train_dataset.setup_timeout=600
       - +valid_dataset.setup_timeout=600
       - +total_train_steps=1
-    timeout_minutes: 240
-  # Qwen3-VL-2B-Instruct Geometry3K 多轮 tool-calling GRPO（双卡；1 卡 OOM，
-  # 2026-09-27 起双卡测试）。offload + disk + 关 mean 归约与上面 geometry3k
-  # 那条同理保留。env_factory 是字符串点路径（可 JSON 序列化），不同于
-  # virl39k 的函数对象 bug。
-  - path: examples/multi_turn_vlm/geometry3k_grpo_mt.py
-    profile: areal-vlm-mt-grpo
+    timeout_minutes: 60
+  # 跑成功，先注释
+  # # Qwen3-VL-2B-Instruct Geometry3K 多轮 tool-calling GRPO（双卡；1 卡 OOM，
+  # # 2026-09-27 起双卡测试）。offload + disk + 关 mean 归约与上面 geometry3k
+  # # 那条同理保留。env_factory 是字符串点路径（可 JSON 序列化），不同于
+  # # virl39k 的函数对象 bug。
+  # - path: examples/multi_turn_vlm/geometry3k_grpo_mt.py
+  #   profile: areal-vlm-mt-grpo
+  #   runner: linux-aarch64-a2-2
+  #   npu_devices: '0,1'
+  #   image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
+  #   overlay_args:
+  #     - --config examples/multi_turn_vlm/qwen3_vl_2b_geometry3k_grpo_mt.yaml
+  #     - scheduler.type=local
+  #     - cluster.n_gpus_per_node=2
+  #     - rollout.backend=vllm:d1p1t2
+  #     - actor.backend=fsdp:d2p1t1
+  #     # 双卡首测仍保留，理由同 geometry3k 那条（optimizer-state OOM + 共卡
+  #     # xccl 建不起 HCCL 组）。max_tokens_per_mb 不要低于 1024：它同时是
+  #     # workflow 的 max_tokens_per_traj，一张 448x448 图的视觉 token 就可能超过它。
+  #     # reward_norm/adv_norm 批级归约走 float64，HCCL 不支持 double allreduce，
+  #     # 故关掉 mean 归约（std_level 本就是 null）。
+  #     - +actor.fsdp.offload_params=true
+  #     - +actor.weight_update_mode=disk
+  #     - actor.reward_norm.mean_level=null
+  #     - actor.adv_norm.mean_level=null
+  #     - actor.path=${AREAL_MODEL_PATH}
+  #     - actor.mb_spec.max_tokens_per_mb=1024
+  #     - ref.mb_spec.max_tokens_per_mb=1024
+  #     - vllm.gpu_memory_utilization=0.3
+  #     - gconfig.n_samples=1
+  #     - gconfig.max_new_tokens=64
+  #     - max_turns=2
+  #     # Online dataset: keep the YAML default path (hiyouga/geometry3k); AReaL
+  #     # downloads it through HF_ENDPOINT (hf-mirror.com). Raise the
+  #     # data-service setup timeout for the cold first-time download.
+  #     - train_dataset.batch_size=2
+  #     - valid_dataset.batch_size=2
+  #     - +train_dataset.setup_timeout=600
+  #     - +valid_dataset.setup_timeout=600
+  #     - +total_train_steps=1
+  #   timeout_minutes: 60
+  # GSM8K GRPO（Qwen2.5-1.5B-Instruct，上游 NPU 专用配置 gsm8k_grpo_npu.yaml）。
+  # math 系 yaml 的 scheduler.type 均为 null，单控制器模式直接 NotImplementedError，
+  # 必须叠加 scheduler.type=local。MathAgent 走 rollout.agent.mode=inline 的本地
+  # vLLM proxy（areal/experimental/openai/proxy），无外部 API 依赖。offload/disk
+  # 理由同 VLM 条目（actor 与 rollout 共卡 + xccl 建不起 HCCL 组）。
+  - path: examples/math/gsm8k_rl.py
+    profile: areal-math-grpo
     runner: linux-aarch64-a2-2
     npu_devices: '0,1'
     image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
     overlay_args:
-      - --config examples/multi_turn_vlm/qwen3_vl_2b_geometry3k_grpo_mt.yaml
+      - --config examples/math/gsm8k_grpo_npu.yaml
       - scheduler.type=local
       - cluster.n_gpus_per_node=2
       - rollout.backend=vllm:d1p1t2
       - actor.backend=fsdp:d2p1t1
-      # 双卡首测仍保留，理由同 geometry3k 那条（optimizer-state OOM + 共卡
-      # xccl 建不起 HCCL 组）。max_tokens_per_mb 不要低于 1024：它同时是
-      # workflow 的 max_tokens_per_traj，一张 448x448 图的视觉 token 就可能超过它。
-      # reward_norm/adv_norm 批级归约走 float64，HCCL 不支持 double allreduce，
-      # 故关掉 mean 归约（std_level 本就是 null）。
       - +actor.fsdp.offload_params=true
       - +actor.weight_update_mode=disk
-      - actor.reward_norm.mean_level=null
-      - actor.adv_norm.mean_level=null
       - actor.path=${AREAL_MODEL_PATH}
-      - actor.mb_spec.max_tokens_per_mb=1024
-      - ref.mb_spec.max_tokens_per_mb=1024
       - vllm.gpu_memory_utilization=0.3
-      - gconfig.n_samples=1
       - gconfig.max_new_tokens=64
-      - max_turns=2
-      # Online dataset: keep the YAML default path (hiyouga/geometry3k); AReaL
-      # downloads it through HF_ENDPOINT (hf-mirror.com). Raise the
-      # data-service setup timeout for the cold first-time download.
+      - gconfig.n_samples=1
       - train_dataset.batch_size=2
       - valid_dataset.batch_size=2
+      # openai/gsm8k 首次冷下载（HF_ENDPOINT=hf-mirror），与 geometry3k 同模式
       - +train_dataset.setup_timeout=600
       - +valid_dataset.setup_timeout=600
       - +total_train_steps=1
-    timeout_minutes: 240
+    timeout_minutes: 60
+  # GSM8K SFT（Qwen3-1.7B）：纯 FSDP 训练、无 rollout/vLLM，不需要 offload。
+  - path: examples/math/gsm8k_sft.py
+    profile: areal-math-sft
+    runner: linux-aarch64-a2-2
+    npu_devices: '0,1'
+    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
+    overlay_args:
+      - --config examples/math/gsm8k_sft.yaml
+      - scheduler.type=local
+      - cluster.n_gpus_per_node=2
+      - actor.backend=fsdp:d2p1t1
+      - actor.path=${AREAL_MODEL_PATH}
+      - train_dataset.batch_size=4
+      - valid_dataset.batch_size=4
+      - +train_dataset.setup_timeout=600
+      - +valid_dataset.setup_timeout=600
+      - +total_train_steps=1
+    timeout_minutes: 60
+  # GSM8K 纯评测：只起 vLLM 跑 RLVRWorkflow + gsm8k_reward_fn，无训练进程，
+  # 不加 offload；会跑全量 test split（1319 题，无 step 截断）。与 gsm8k_rl
+  # 共用 areal-math-grpo profile（同一模型）。RemoteSGLangEngine 是懒导入，
+  # 镜像无 sglang 也能 import，运行走 vllm 分支。
+  - path: examples/math/gsm8k_eval.py
+    profile: areal-math-grpo
+    runner: linux-aarch64-a2-2
+    npu_devices: '0,1'
+    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
+    overlay_args:
+      - --config examples/math/gsm8k_grpo_npu.yaml
+      - scheduler.type=local
+      - cluster.n_gpus_per_node=2
+      - rollout.backend=vllm:d1p1t2
+      - actor.path=${AREAL_MODEL_PATH}
+      - gconfig.max_new_tokens=64
+      - gconfig.n_samples=1
+      - valid_dataset.batch_size=32
+    timeout_minutes: 60
+  # AIME RL（RLVRWorkflow + aime_reward_fn，Qwen2.5-1.5B-Instruct）：上游没有
+  # aime 配置，setup 从 gsm8k_grpo_npu.yaml 派生（数据路径指向本地 parquet、
+  # rollout.agent 置 null——RLVRWorkflow 不是 agent workflow），经
+  # AREAL_AIME_CONFIG 传入。AIME 题面长，放宽 max_length / max_tokens。
+  # aime 数据加载器只认本地 <dir>/aime_{train,test}.parquet（MathArena 公开
+  # 数据转换，mopd README 的流程）。
+  - path: examples/math/aime_rl.py
+    profile: areal-math-aime
+    runner: linux-aarch64-a2-2
+    npu_devices: '0,1'
+    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
+    overlay_args:
+      - --config ${AREAL_AIME_CONFIG}
+      - scheduler.type=local
+      - cluster.n_gpus_per_node=2
+      - rollout.backend=vllm:d1p1t2
+      - actor.backend=fsdp:d2p1t1
+      - +actor.fsdp.offload_params=true
+      - +actor.weight_update_mode=disk
+      - actor.path=${AREAL_MODEL_PATH}
+      - vllm.gpu_memory_utilization=0.3
+      - gconfig.max_tokens=4096
+      - gconfig.max_new_tokens=512
+      - gconfig.n_samples=1
+      - train_dataset.max_length=4096
+      - train_dataset.batch_size=2
+      - valid_dataset.batch_size=2
+      - +total_train_steps=1
+    timeout_minutes: 60
+  # BoBa GRPO（DeepSeek-R1-Distill-Qwen-1.5B，RLVRWorkflow + math_verify 奖励）。
+  # 脚本把 train_dataset.path 当本地 jsonl 文件加载（load_dataset("json",
+  # data_files=path)），上游 yaml 里写的是 HF repo id，直接跑会
+  # FileNotFoundError——setup 预下载公开的 AReaL-boba-106k.jsonl 并导出
+  # AREAL_BOBA_DATA。reward_fn 是 examples.math.boba_grpo 点路径，需要目标仓
+  # 根在 sys.path（run_example.sh 已加）。ppo_n_minibatches 压到 1 匹配
+  # batch_size=2；关掉 yaml 默认开启的 rollout tracing / perf tracer。
+  - path: examples/math/boba_grpo.py
+    profile: areal-math-boba
+    runner: linux-aarch64-a2-2
+    npu_devices: '0,1'
+    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
+    overlay_args:
+      - --config examples/math/boba_grpo.yaml
+      - scheduler.type=local
+      - cluster.n_gpus_per_node=2
+      - rollout.backend=vllm:d1p1t2
+      - actor.backend=fsdp:d2p1t1
+      - +actor.fsdp.offload_params=true
+      - +actor.weight_update_mode=disk
+      - actor.path=${AREAL_MODEL_PATH}
+      - vllm.gpu_memory_utilization=0.3
+      - gconfig.max_new_tokens=64
+      - gconfig.n_samples=1
+      - actor.ppo_n_minibatches=1
+      - actor.mb_spec.max_tokens_per_mb=1024
+      - ref.mb_spec.max_tokens_per_mb=1024
+      - rollout.enable_rollout_tracing=false
+      - perf_tracer.enabled=false
+      - train_dataset.path=${AREAL_BOBA_DATA}
+      - train_dataset.batch_size=2
+      - +total_train_steps=1
+    timeout_minutes: 60
 unsupported:
-  - examples/math/gsm8k_rl.py
-  - examples/math/gsm8k_sft.py
-  - examples/math/gsm8k_eval.py
-  - examples/math/aime_rl.py
-  - examples/math/boba_grpo.py
   - examples/countdown/train.py
   - examples/camel/train.py
   - examples/code/train.py

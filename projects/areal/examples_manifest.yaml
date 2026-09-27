@@ -144,7 +144,7 @@ supported:
       - +train_dataset.setup_timeout=600
       - +valid_dataset.setup_timeout=600
       - +total_train_steps=1
-    timeout_minutes: 60
+    timeout_minutes: 20
   # # GSM8K SFT（Qwen3-1.7B）：纯 FSDP 训练、无 rollout/vLLM，不需要 offload。
   # - path: examples/math/gsm8k_sft.py
   #   profile: areal-math-sft
@@ -164,35 +164,35 @@ supported:
   #     - +total_train_steps=1
   #   timeout_minutes: 60
   #
-  # AIME RL（RLVRWorkflow + aime_reward_fn，Qwen2.5-1.5B-Instruct）：上游没有
-  # aime 配置，setup 从 gsm8k_grpo_npu.yaml 派生（数据路径指向本地 parquet、
-  # rollout.agent 置 null——RLVRWorkflow 不是 agent workflow），经
-  # AREAL_AIME_CONFIG 传入。AIME 题面长，放宽 max_length / max_tokens。
-  # aime 数据加载器只认本地 <dir>/aime_{train,test}.parquet（MathArena 公开
-  # 数据转换，mopd README 的流程）。
-  - path: examples/math/aime_rl.py
-    profile: areal-math-aime
-    runner: linux-aarch64-a2-2
-    npu_devices: '0,1'
-    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
-    overlay_args:
-      - --config ${AREAL_AIME_CONFIG}
-      - scheduler.type=local
-      - cluster.n_gpus_per_node=2
-      - rollout.backend=vllm:d1p1t2
-      - actor.backend=fsdp:d2p1t1
-      - +actor.fsdp.offload_params=true
-      - ++actor.weight_update_mode=disk
-      - actor.path=${AREAL_MODEL_PATH}
-      - vllm.gpu_memory_utilization=0.3
-      - gconfig.max_tokens=4096
-      - gconfig.max_new_tokens=512
-      - gconfig.n_samples=1
-      - train_dataset.max_length=4096
-      - train_dataset.batch_size=2
-      - valid_dataset.batch_size=2
-      - +total_train_steps=1
-    timeout_minutes: 60
+  # # AIME RL（RLVRWorkflow + aime_reward_fn，Qwen2.5-1.5B-Instruct）：上游没有
+  # # aime 配置，setup 从 gsm8k_grpo_npu.yaml 派生（数据路径指向本地 parquet、
+  # # rollout.agent 置 null——RLVRWorkflow 不是 agent workflow），经
+  # # AREAL_AIME_CONFIG 传入。AIME 题面长，放宽 max_length / max_tokens。
+  # # aime 数据加载器只认本地 <dir>/aime_{train,test}.parquet（MathArena 公开
+  # # 数据转换，mopd README 的流程）。
+  # - path: examples/math/aime_rl.py
+  #   profile: areal-math-aime
+  #   runner: linux-aarch64-a2-2
+  #   npu_devices: '0,1'
+  #   image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
+  #   overlay_args:
+  #     - --config ${AREAL_AIME_CONFIG}
+  #     - scheduler.type=local
+  #     - cluster.n_gpus_per_node=2
+  #     - rollout.backend=vllm:d1p1t2
+  #     - actor.backend=fsdp:d2p1t1
+  #     - +actor.fsdp.offload_params=true
+  #     - ++actor.weight_update_mode=disk
+  #     - actor.path=${AREAL_MODEL_PATH}
+  #     - vllm.gpu_memory_utilization=0.3
+  #     - gconfig.max_tokens=4096
+  #     - gconfig.max_new_tokens=512
+  #     - gconfig.n_samples=1
+  #     - train_dataset.max_length=4096
+  #     - train_dataset.batch_size=2
+  #     - valid_dataset.batch_size=2
+  #     - +total_train_steps=1
+  #   timeout_minutes: 60
   # BoBa GRPO（DeepSeek-R1-Distill-Qwen-1.5B，RLVRWorkflow + math_verify 奖励）。
   # 脚本把 train_dataset.path 当本地 jsonl 文件加载（load_dataset("json",
   # data_files=path)），上游 yaml 里写的是 HF repo id，直接跑会
@@ -225,7 +225,7 @@ supported:
       - train_dataset.path=${AREAL_BOBA_DATA}
       - train_dataset.batch_size=2
       - +total_train_steps=1
-      - TASK_QUEUE_ENABLE=1
+      - ++actor.scheduling_spec[0].env_vars.TASK_QUEUE_ENABLE=1
     timeout_minutes: 60
 unsupported:
   # UPSTREAM_BUG：gsm8k_eval.py 绕过 PPOTrainer 自行初始化 scheduler/engine，

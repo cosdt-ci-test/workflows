@@ -52,7 +52,7 @@ supported:
     overlay_args:
       - --config examples/vlm_npu/qwen2_5_vl_3b_geometry3k_grpo.yaml
       - cluster.n_gpus_per_node=2
-      - rollout.backend=vllm:d2p1t1
+      - rollout.backend=vllm:d1p1t2
       - actor.backend=fsdp:d2p1t1
       # 双卡首测仍保留（1 卡时代为解 OOM 与同卡 HCCL 组问题所加）：
       # offload 缓解 3B 全参 GRPO 与 vLLM 共卡的内存压力；d2p1t1 下 actor 与
@@ -60,10 +60,10 @@ supported:
       - +actor.fsdp.offload_params=true
       - +actor.weight_update_mode=disk
       - actor.path=${AREAL_MODEL_PATH}
-      - actor.mb_spec.max_tokens_per_mb=512
-      - ref.mb_spec.max_tokens_per_mb=512
-      - vllm.gpu_memory_utilization=0.2
-      - gconfig.max_new_tokens=128
+      - actor.mb_spec.max_tokens_per_mb=256
+      - ref.mb_spec.max_tokens_per_mb=256
+      - vllm.gpu_memory_utilization=0.3
+      - gconfig.max_new_tokens=64
       - gconfig.n_samples=1
       # Online dataset: keep train_dataset.path / valid_dataset.path at the
       # YAML default (hiyouga/geometry3k) so AReaL downloads it through
@@ -88,7 +88,7 @@ supported:
       - --config examples/multi_turn_vlm/qwen3_vl_2b_geometry3k_grpo_mt.yaml
       - scheduler.type=local
       - cluster.n_gpus_per_node=2
-      - rollout.backend=vllm:d2p1t1
+      - rollout.backend=vllm:d1p1t2
       - actor.backend=fsdp:d2p1t1
       # 双卡首测仍保留，理由同 geometry3k 那条（optimizer-state OOM + 共卡
       # xccl 建不起 HCCL 组）。max_tokens_per_mb 不要低于 1024：它同时是
@@ -102,7 +102,7 @@ supported:
       - actor.path=${AREAL_MODEL_PATH}
       - actor.mb_spec.max_tokens_per_mb=1024
       - ref.mb_spec.max_tokens_per_mb=1024
-      - vllm.gpu_memory_utilization=0.2
+      - vllm.gpu_memory_utilization=0.3
       - gconfig.n_samples=1
       - gconfig.max_new_tokens=64
       - max_turns=2

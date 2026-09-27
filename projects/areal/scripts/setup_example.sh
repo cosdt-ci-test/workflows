@@ -50,6 +50,7 @@ uv pip install --no-deps -e "$TARGET_ROOT" --system
 echo "PYTHONPATH=/areal-workspace/MindSpeed:/areal-workspace/Megatron-Bridge/src:${PYTHONPATH:-}" >> "$GITHUB_ENV"
 echo "HCCL_IF_BASE_PORT=63000" >> "$GITHUB_ENV"
 echo "HCCL_NPU_SOCKET_PORT_RANGE=62100-62350" >> "$GITHUB_ENV"
+export TASK_QUEUE_ENABLE=1
 echo "TASK_QUEUE_ENABLE=1" >> "$GITHUB_ENV"
 echo "OMP_NUM_THREADS=1" >> "$GITHUB_ENV"
 echo "WANDB_MODE=disabled" >> "$GITHUB_ENV"

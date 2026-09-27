@@ -164,25 +164,6 @@ supported:
   #     - +total_train_steps=1
   #   timeout_minutes: 60
   #
-  # GSM8K 纯评测：只起 vLLM 跑 RLVRWorkflow + gsm8k_reward_fn，无训练进程，
-  # 不加 offload；会跑全量 test split（1319 题，无 step 截断）。与 gsm8k_rl
-  # 共用 areal-math-grpo profile（同一模型）。RemoteSGLangEngine 是懒导入，
-  # 镜像无 sglang 也能 import，运行走 vllm 分支。
-  - path: examples/math/gsm8k_eval.py
-    profile: areal-math-grpo
-    runner: linux-aarch64-a2-2
-    npu_devices: '0,1'
-    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
-    overlay_args:
-      - --config examples/math/gsm8k_grpo_npu.yaml
-      - scheduler.type=local
-      - cluster.n_gpus_per_node=2
-      - rollout.backend=vllm:d1p1t2
-      - actor.path=${AREAL_MODEL_PATH}
-      - gconfig.max_new_tokens=64
-      - gconfig.n_samples=1
-      - valid_dataset.batch_size=32
-    timeout_minutes: 60
   # AIME RL（RLVRWorkflow + aime_reward_fn，Qwen2.5-1.5B-Instruct）：上游没有
   # aime 配置，setup 从 gsm8k_grpo_npu.yaml 派生（数据路径指向本地 parquet、
   # rollout.agent 置 null——RLVRWorkflow 不是 agent workflow），经
@@ -244,8 +225,15 @@ supported:
       - train_dataset.path=${AREAL_BOBA_DATA}
       - train_dataset.batch_size=2
       - +total_train_steps=1
+      - TASK_QUEUE_ENABLE=1
     timeout_minutes: 60
 unsupported:
+  # UPSTREAM_BUG：gsm8k_eval.py 绕过 PPOTrainer 自行初始化 scheduler/engine，
+  # 但未初始化 DataController；get_custom_dataset 返回的 RDataset 在
+  # create_dataloader → len() 时抛 "RDataset is not connected to a
+  # DataController"。属上游源码缺陷，overlay 无法绕过。
+  # gsm8k_rl.py 已覆盖同一模型/引擎/workflow 的训练与验证路径，评估增量有限。
+  - examples/math/gsm8k_eval.py
   - examples/countdown/train.py
   - examples/camel/train.py
   - examples/code/train.py

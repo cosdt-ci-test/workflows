@@ -65,7 +65,7 @@ slime 上游 `THUDM/slime` 发布 release（当前 v0.3.2）但没有任何昇�
 |---|---|---|---|
 | `examples/fully_async/run-qwen2.5-0.5B-fully_async.sh` | a2-4 | fork NPU nightly `tests/tests_npu/nightly_CI/test_qwen2.5_0.5B_fully_async_short_npu.py`（昇腾已验证） | actor 1 + rollout 3、TP/PP/CP/EP 全 1、`--num-rollout 2`、response 1024（nightly 为 8192）、数据换仓内 16 行 fixture；显式关闭两类 dropout 并沿用 temperature 0.8 对齐训练/推理策略 |
 | `examples/on_policy_distillation/run-qwen3-8B-opd.sh` | a2-8 | fork NPU ST `tests/tests_npu/st/test_qwen2.5_0.5B_opd_sglang_npu.py` | 同型号 Qwen2.5-0.5B student/teacher，Ray 中 actor 4 + rollout 3、独立 teacher 1 卡；2 个 rollout、fixture 16 行、response 1024。#13 已通过。 |
-| `examples/retool/retool_qwen3_4b_rl.sh` | a2-4 | fork 自带 ReTool `.sh`（暂无 NPU 回归先例） | ModelScope Qwen3-4B-Instruct-2507、四卡 colocate/TP2、两次 rollout、8 行本地工具调用数学 fixture；自定义生成、工具 sandbox 和奖励路径待远程验证。 |
+| `examples/retool/retool_qwen3_4b_rl.sh` | a2-8 | fork 自带 ReTool `.sh`（暂无 NPU 回归先例） | ModelScope Qwen3-4B-Instruct-2507、训练 4 卡 + 推理 4 卡隔离、推理 TP2、两次 rollout、8 行本地工具调用数学 fixture；待远程验证。 |
 
 执行不直接跑上游 `.sh`（硬编码 `/root` 绝对路径、无 `"$@"` 透传），由
 manifest `overlay_args` 承载 CI 训练配方；`run_example.sh` 映射引擎无法透传的
@@ -83,7 +83,8 @@ teacher。训练参数留在 manifest。环境仍是现有华为 CANN 镜像 + s
 `quick_install.sh`/NPU Dockerfile 安装的 NPU 栈，不拉取新的国外容器镜像。
 
 ReTool 的上游 `.sh` 包含 CUDA 检测、Ray 清理、四卡 colocate/TP2 配置与固定模型、
-数据和 W&B。项目 runner 保留四卡布局及自定义生成/奖励函数；setup 补齐
+数据和 W&B。#16 在四卡共享布局下出现推理 health-check 超时和训练 actor 初始化断言；
+项目 runner 改用八卡中训练/推理各四卡隔离，仍保留 TP2 和自定义生成/奖励函数。setup 补齐
 `jinja2`、`psutil`，从 ModelScope 下载模型并用 fork 工具转为 `_torch_dist`。
 `tool_sandbox.py` 会在容器内执行模型生成的 Python 代码，因此仅使用本地 fixture
 与最小权限 workflow；这条尚无 fork NPU 端到端先例，需以远程训练日志验收。

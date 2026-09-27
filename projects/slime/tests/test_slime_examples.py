@@ -30,7 +30,7 @@ EXPECTED_SUPPORTED = {
     },
     "examples/retool/retool_qwen3_4b_rl.sh": {
         "profile": "slime_retool",
-        "runner": "linux-aarch64-a2-4",
+        "runner": "linux-aarch64-a2-8",
         "image": (
             "swr.cn-south-1.myhuaweicloud.com/ascendhub/"
             "cann:9.1.0-910b-ubuntu22.04-py3.12"
@@ -43,7 +43,7 @@ EXPECTED_SUPPORTED = {
 ENTRY_DEVICE_REQUIREMENTS = {
     "examples/fully_async/run-qwen2.5-0.5B-fully_async.sh": 4,
     "examples/on_policy_distillation/run-qwen3-8B-opd.sh": 8,
-    "examples/retool/retool_qwen3_4b_rl.sh": 4,
+    "examples/retool/retool_qwen3_4b_rl.sh": 8,
 }
 
 # Engine-call metadata that the engine cannot pass through; each
@@ -215,7 +215,7 @@ def test_run_example_exports_npu_contract() -> None:
         assert needle in run_script, f"run_example.sh missing: {needle}"
 
 
-def test_retool_ray_uses_declared_four_card_visibility() -> None:
+def test_retool_ray_uses_declared_eight_card_visibility() -> None:
     run_script = (PROJECT_ROOT / "scripts" / "run_example.sh").read_text(
         encoding="utf-8")
     assert 'export SLIME_RETOOL_DEVICES="$ASCEND_RT_VISIBLE_DEVICES"' in run_script
@@ -264,9 +264,9 @@ RECIPE_OVERLAY_REQUIRED = {
         "--custom-generate-function-path generate_with_retool.generate",
         "--custom-rm-path generate_with_retool.reward_func",
         "--reward-key score",
-        "--colocate",
         "--actor-num-gpus-per-node 4",
-        "--num-gpus-per-node 4",
+        "--rollout-num-gpus 4",
+        "--num-gpus-per-node 8",
         "--tensor-model-parallel-size 2",
         "--rollout-num-gpus-per-engine 2",
         "--num-rollout 2",
@@ -286,6 +286,17 @@ def test_manifest_overlay_carries_full_recipe() -> None:
         missing = [token for token in required if token not in overlay]
         assert not missing, (
             f"{entry['path']}: overlay_args missing recipe tokens: {missing}")
+
+    retool = next(entry for entry in manifest["supported"]
+                  if entry["path"] == "examples/retool/retool_qwen3_4b_rl.sh")
+    assert "--colocate" not in retool["overlay_args"]
+
+
+def test_sgl_kernel_download_retries_transfer_errors() -> None:
+    setup = (PROJECT_ROOT / "scripts" / "setup_example.sh").read_text(
+        encoding="utf-8")
+    assert "--retry-all-errors" in setup
+    assert "--retry 5" in setup
 
 
 def test_run_example_maps_engine_call_metadata() -> None:

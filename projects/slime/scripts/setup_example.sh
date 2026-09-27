@@ -137,7 +137,10 @@ install_sglang_source() {
 # ----- step 3: prebuilt NPU kernel wheels (torch_memory_saver / sgl_kernel_npu / deep_ep) -----
 install_sgl_kernel_npu() {
   local bundle="$DEPS_ROOT/sgl-kernel-npu.zip"
-  curl -L --fail --retry 3 --retry-delay 5 --connect-timeout 30 -o "$bundle" "$SGL_KERNEL_NPU_URL"
+  # GitHub release CDN sometimes closes an idle TLS stream (curl 56).
+  # Retry that class of transfer error too, and discard partial bundles.
+  curl -L --fail --retry 5 --retry-all-errors --retry-delay 10 \
+    --connect-timeout 30 --max-time 300 -o "$bundle" "$SGL_KERNEL_NPU_URL"
   # The CANN image does not ship unzip; use the stdlib zipfile module
   # (also gives us explicit overwrite semantics).
   python - "$bundle" "$DEPS_ROOT/sgl-kernel-npu" <<'PY'
@@ -349,7 +352,7 @@ setup_slime_opd() {
 }
 
 setup_slime_retool() {
-  check_npu_devices 4
+  check_npu_devices 8
   # The fork's ReTool modules import these at module load; its launcher
   # assumes they are preinstalled in the upstream container image.
   python -m pip install -q "modelscope==1.37.0" jinja2 psutil

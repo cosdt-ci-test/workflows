@@ -80,10 +80,10 @@ supported:
       - "--attention-backend flash"
       - --ci-test
 
-  # retool_qwen3_4b_rl.sh：工具调用强化学习；可复刻 CUDA 启动器，用四卡 NPU 和短 rollout 验证。
+  # retool_qwen3_4b_rl.sh：工具调用强化学习；八卡隔离训练与推理，短 rollout 验证。
   - path: examples/retool/retool_qwen3_4b_rl.sh
     profile: slime_retool
-    runner: linux-aarch64-a2-4
+    runner: linux-aarch64-a2-8
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     timeout_minutes: 300
     overlay_args:
@@ -105,9 +105,9 @@ supported:
       - "--rollout-temperature 0.8"
       - "--attention-dropout 0.0"
       - "--hidden-dropout 0.0"
-      - --colocate
       - "--actor-num-gpus-per-node 4"
-      - "--num-gpus-per-node 4"
+      - "--rollout-num-gpus 4"
+      - "--num-gpus-per-node 8"
       - "--tensor-model-parallel-size 2"
       - "--rollout-num-gpus-per-engine 2"
       - "--sglang-device npu"

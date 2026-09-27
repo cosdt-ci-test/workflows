@@ -162,11 +162,12 @@ case "$entry_key" in
     TRAIN_SCRIPT=train.py
     ;;
   examples/retool/retool_qwen3_4b_rl.sh)
-    # The upstream .sh hardcodes CUDA/path/sweep settings; keep its
-    # four-card colocate + TP2 ReTool recipe through fork execute_train.
-    require_visible_devices 4 '0,1,2,3'
+    # The upstream CUDA script colocates train and rollout on four cards.
+    # On NPU run #16 the TP2 servers became unhealthy while the train
+    # actor was initializing. Reserve four cards for each side instead.
+    require_visible_devices 8 '0,1,2,3,4,5,6,7'
     export SLIME_RETOOL_DEVICES="$ASCEND_RT_VISIBLE_DEVICES"
-    NUM_GPUS=4
+    NUM_GPUS=8
     MODEL_TYPE=qwen3-4B-Instruct-2507
     TRAIN_SCRIPT=train.py
     export PYTHONPATH="$SLIME_FORK_ROOT/examples/retool:$PYTHONPATH"

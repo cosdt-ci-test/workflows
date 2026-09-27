@@ -697,7 +697,7 @@ projects:
     support_level: 基础支持
     upstream_repo: areal-project/AReaL
     phase: A
-    runner: linux-aarch64-a2-8
+    runner: linux-aarch64-a2-2
     dir: projects/areal
     workflows:
       examples: .github/workflows/areal-examples.yml

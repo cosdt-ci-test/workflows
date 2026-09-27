@@ -43,20 +43,20 @@ scan:
 # ghcr.io/hwvanici/areal_npu:v1.0.5-a2（CANN 9.0.1 / torch 2.10 / torch_npu
 # 2.10 / vLLM-Ascend / Megatron-Core / MindSpeed / Megatron-Bridge）。
 supported:
-  # Qwen2.5-VL-3B Geometry3K GRPO（单卡；2026-09-24 实测跑通）
+  # Qwen2.5-VL-3B Geometry3K GRPO（双卡；1 卡 OOM，2026-09-27 起双卡测试）
   - path: examples/vlm/geometry3k_grpo.py
     profile: areal-vlm-grpo
-    runner: linux-aarch64-a2-1
-    npu_devices: '0'
+    runner: linux-aarch64-a2-2
+    npu_devices: '0,1'
     image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
     overlay_args:
       - --config examples/vlm_npu/qwen2_5_vl_3b_geometry3k_grpo.yaml
-      - cluster.n_gpus_per_node=1
-      - rollout.backend=vllm:d1p1t1
-      - actor.backend=fsdp:d1p1t1
-      # 单卡 NPU 必加：3B 全参 GRPO 与同卡 vLLM 共存，不 offload 会在
-      # optimizer.step() 建 Adam state 时 OOM；默认 xccl 权重同步在 actor 与
-      # rollout worker 同占物理 device 0 时建不起 HCCL 组（EI0015），改 disk。
+      - cluster.n_gpus_per_node=2
+      - rollout.backend=vllm:d2p1t1
+      - actor.backend=fsdp:d2p1t1
+      # 双卡首测仍保留（1 卡时代为解 OOM 与同卡 HCCL 组问题所加）：
+      # offload 缓解 3B 全参 GRPO 与 vLLM 共卡的内存压力；d2p1t1 下 actor 与
+      # rollout worker 仍共占物理卡，xccl 建不起 HCCL 组（EI0015），用 disk。
       - +actor.fsdp.offload_params=true
       - +actor.weight_update_mode=disk
       - actor.path=${AREAL_MODEL_PATH}
@@ -75,23 +75,24 @@ supported:
       - +valid_dataset.setup_timeout=600
       - +total_train_steps=1
     timeout_minutes: 240
-  # Qwen3-VL-2B-Instruct Geometry3K 多轮 tool-calling GRPO（单卡；2026-09-24 实测跑通）。
-  # offload + disk + 关 mean 归约与上面 geometry3k 那条同理必加。
-  # env_factory 是字符串点路径（可 JSON 序列化），不同于 virl39k 的函数对象 bug。
+  # Qwen3-VL-2B-Instruct Geometry3K 多轮 tool-calling GRPO（双卡；1 卡 OOM，
+  # 2026-09-27 起双卡测试）。offload + disk + 关 mean 归约与上面 geometry3k
+  # 那条同理保留。env_factory 是字符串点路径（可 JSON 序列化），不同于
+  # virl39k 的函数对象 bug。
   - path: examples/multi_turn_vlm/geometry3k_grpo_mt.py
     profile: areal-vlm-mt-grpo
-    runner: linux-aarch64-a2-1
-    npu_devices: '0'
+    runner: linux-aarch64-a2-2
+    npu_devices: '0,1'
     image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
     overlay_args:
       - --config examples/multi_turn_vlm/qwen3_vl_2b_geometry3k_grpo_mt.yaml
       - scheduler.type=local
-      - cluster.n_gpus_per_node=1
-      - rollout.backend=vllm:d1p1t1
-      - actor.backend=fsdp:d1p1t1
-      # 单卡 NPU 必加，理由同 geometry3k 那条（optimizer-state OOM + 单卡 xccl
-      # 建不起 HCCL 组）。max_tokens_per_mb 不要低于 1024：它同时是 workflow
-      # 的 max_tokens_per_traj，一张 448x448 图的视觉 token 就可能超过它。
+      - cluster.n_gpus_per_node=2
+      - rollout.backend=vllm:d2p1t1
+      - actor.backend=fsdp:d2p1t1
+      # 双卡首测仍保留，理由同 geometry3k 那条（optimizer-state OOM + 共卡
+      # xccl 建不起 HCCL 组）。max_tokens_per_mb 不要低于 1024：它同时是
+      # workflow 的 max_tokens_per_traj，一张 448x448 图的视觉 token 就可能超过它。
       # reward_norm/adv_norm 批级归约走 float64，HCCL 不支持 double allreduce，
       # 故关掉 mean 归约（std_level 本就是 null）。
       - +actor.fsdp.offload_params=true

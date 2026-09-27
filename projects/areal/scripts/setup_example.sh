@@ -56,6 +56,7 @@ echo "OMP_NUM_THREADS=1" >> "$GITHUB_ENV"
 echo "WANDB_MODE=disabled" >> "$GITHUB_ENV"
 echo "PYTORCH_NPU_ALLOC_CONF=expandable_segments:True" >> "$GITHUB_ENV"
 echo "USE_OPTIMIZED_MODEL=0" >> "$GITHUB_ENV"
+echo "AREAL_ALLOW_DEFAULT_ADMIN_KEY=1" >> "$GITHUB_ENV"
 
 # -------------------------------------------------------
 # 3. Pre-download Model & Dataset (using image's native tools)
@@ -124,7 +125,7 @@ with open(base, encoding="utf-8") as fh:
 cfg["experiment_name"] = "aime-grpo"
 cfg["train_dataset"]["path"] = aime_dir
 cfg["valid_dataset"]["path"] = aime_dir
-cfg["rollout"]["agent"] = None
+# cfg["rollout"]["agent"] = None
 config_path = os.path.join(aime_dir, "aime_grpo_npu.yaml")
 with open(config_path, "w", encoding="utf-8") as fh:
     yaml.safe_dump(cfg, fh, sort_keys=False, allow_unicode=True)

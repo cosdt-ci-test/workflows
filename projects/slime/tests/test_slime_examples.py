@@ -271,6 +271,8 @@ RECIPE_OVERLAY_REQUIRED = {
         "--rollout-num-gpus-per-engine 2",
         "--num-rollout 2",
         "--sglang-device npu",
+        "--sglang-mem-fraction-static 0.4",
+        "--sglang-cuda-graph-max-bs 4",
         "--ci-test",
     ],
 }

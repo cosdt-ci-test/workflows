@@ -43,39 +43,39 @@ scan:
 # ghcr.io/hwvanici/areal_npu:v1.0.5-a2（CANN 9.0.1 / torch 2.10 / torch_npu
 # 2.10 / vLLM-Ascend / Megatron-Core / MindSpeed / Megatron-Bridge）。
 supported:
-  # Qwen2.5-VL-3B Geometry3K GRPO（双卡；1 卡 OOM，2026-09-27 起双卡测试）
-  - path: examples/vlm/geometry3k_grpo.py
-    profile: areal-vlm-grpo
-    runner: linux-aarch64-a2-2
-    npu_devices: '0,1'
-    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
-    overlay_args:
-      - --config examples/vlm_npu/qwen2_5_vl_3b_geometry3k_grpo.yaml
-      - cluster.n_gpus_per_node=2
-      - rollout.backend=vllm:d1p1t2
-      - actor.backend=fsdp:d2p1t1
-      # 双卡首测仍保留（1 卡时代为解 OOM 与同卡 HCCL 组问题所加）：
-      # offload 缓解 3B 全参 GRPO 与 vLLM 共卡的内存压力；d2p1t1 下 actor 与
-      # rollout worker 仍共占物理卡，xccl 建不起 HCCL 组（EI0015），用 disk。
-      - +actor.fsdp.offload_params=true
-      - +actor.weight_update_mode=disk
-      - actor.path=${AREAL_MODEL_PATH}
-      - actor.mb_spec.max_tokens_per_mb=1024
-      - ref.mb_spec.max_tokens_per_mb=1024
-      - vllm.gpu_memory_utilization=0.3
-      - gconfig.max_new_tokens=64
-      - gconfig.n_samples=1
-      # Online dataset: keep train_dataset.path / valid_dataset.path at the
-      # YAML default (hiyouga/geometry3k) so AReaL downloads it through
-      # HF_ENDPOINT (hf-mirror.com). Raise the data-service setup timeout
-      # for the cold first-time download.
-      - train_dataset.batch_size=2
-      - valid_dataset.batch_size=2
-      - +train_dataset.setup_timeout=600
-      - +valid_dataset.setup_timeout=600
-      - +total_train_steps=1
-    timeout_minutes: 60
-  # 跑成功，先注释
+  # # Qwen2.5-VL-3B Geometry3K GRPO（双卡；1 卡 OOM，2026-09-27 起双卡测试）
+  # - path: examples/vlm/geometry3k_grpo.py
+  #   profile: areal-vlm-grpo
+  #   runner: linux-aarch64-a2-2
+  #   npu_devices: '0,1'
+  #   image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
+  #   overlay_args:
+  #     - --config examples/vlm_npu/qwen2_5_vl_3b_geometry3k_grpo.yaml
+  #     - cluster.n_gpus_per_node=2
+  #     - rollout.backend=vllm:d1p1t2
+  #     - actor.backend=fsdp:d2p1t1
+  #     # 双卡首测仍保留（1 卡时代为解 OOM 与同卡 HCCL 组问题所加）：
+  #     # offload 缓解 3B 全参 GRPO 与 vLLM 共卡的内存压力；d2p1t1 下 actor 与
+  #     # rollout worker 仍共占物理卡，xccl 建不起 HCCL 组（EI0015），用 disk。
+  #     - +actor.fsdp.offload_params=true
+  #     - +actor.weight_update_mode=disk
+  #     - actor.path=${AREAL_MODEL_PATH}
+  #     - actor.mb_spec.max_tokens_per_mb=1024
+  #     - ref.mb_spec.max_tokens_per_mb=1024
+  #     - vllm.gpu_memory_utilization=0.3
+  #     - gconfig.max_new_tokens=64
+  #     - gconfig.n_samples=1
+  #     # Online dataset: keep train_dataset.path / valid_dataset.path at the
+  #     # YAML default (hiyouga/geometry3k) so AReaL downloads it through
+  #     # HF_ENDPOINT (hf-mirror.com). Raise the data-service setup timeout
+  #     # for the cold first-time download.
+  #     - train_dataset.batch_size=2
+  #     - valid_dataset.batch_size=2
+  #     - +train_dataset.setup_timeout=600
+  #     - +valid_dataset.setup_timeout=600
+  #     - +total_train_steps=1
+  #   timeout_minutes: 60
+  #
   # # Qwen3-VL-2B-Instruct Geometry3K 多轮 tool-calling GRPO（双卡；1 卡 OOM，
   # # 2026-09-27 起双卡测试）。offload + disk + 关 mean 归约与上面 geometry3k
   # # 那条同理保留。env_factory 是字符串点路径（可 JSON 序列化），不同于
@@ -133,7 +133,7 @@ supported:
       - rollout.backend=vllm:d1p1t2
       - actor.backend=fsdp:d2p1t1
       - +actor.fsdp.offload_params=true
-      - +actor.weight_update_mode=disk
+      - ++actor.weight_update_mode=disk
       - actor.path=${AREAL_MODEL_PATH}
       - vllm.gpu_memory_utilization=0.3
       - gconfig.max_new_tokens=64
@@ -145,24 +145,25 @@ supported:
       - +valid_dataset.setup_timeout=600
       - +total_train_steps=1
     timeout_minutes: 60
-  # GSM8K SFT（Qwen3-1.7B）：纯 FSDP 训练、无 rollout/vLLM，不需要 offload。
-  - path: examples/math/gsm8k_sft.py
-    profile: areal-math-sft
-    runner: linux-aarch64-a2-2
-    npu_devices: '0,1'
-    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
-    overlay_args:
-      - --config examples/math/gsm8k_sft.yaml
-      - scheduler.type=local
-      - cluster.n_gpus_per_node=2
-      - actor.backend=fsdp:d2p1t1
-      - actor.path=${AREAL_MODEL_PATH}
-      - train_dataset.batch_size=4
-      - valid_dataset.batch_size=4
-      - +train_dataset.setup_timeout=600
-      - +valid_dataset.setup_timeout=600
-      - +total_train_steps=1
-    timeout_minutes: 60
+  # # GSM8K SFT（Qwen3-1.7B）：纯 FSDP 训练、无 rollout/vLLM，不需要 offload。
+  # - path: examples/math/gsm8k_sft.py
+  #   profile: areal-math-sft
+  #   runner: linux-aarch64-a2-2
+  #   npu_devices: '0,1'
+  #   image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
+  #   overlay_args:
+  #     - --config examples/math/gsm8k_sft.yaml
+  #     - scheduler.type=local
+  #     - cluster.n_gpus_per_node=2
+  #     - actor.backend=fsdp:d2p1t1
+  #     - actor.path=${AREAL_MODEL_PATH}
+  #     - train_dataset.batch_size=4
+  #     - valid_dataset.batch_size=4
+  #     - +train_dataset.setup_timeout=600
+  #     - +valid_dataset.setup_timeout=600
+  #     - +total_train_steps=1
+  #   timeout_minutes: 60
+  #
   # GSM8K 纯评测：只起 vLLM 跑 RLVRWorkflow + gsm8k_reward_fn，无训练进程，
   # 不加 offload；会跑全量 test split（1319 题，无 step 截断）。与 gsm8k_rl
   # 共用 areal-math-grpo profile（同一模型）。RemoteSGLangEngine 是懒导入，
@@ -200,7 +201,7 @@ supported:
       - rollout.backend=vllm:d1p1t2
       - actor.backend=fsdp:d2p1t1
       - +actor.fsdp.offload_params=true
-      - +actor.weight_update_mode=disk
+      - ++actor.weight_update_mode=disk
       - actor.path=${AREAL_MODEL_PATH}
       - vllm.gpu_memory_utilization=0.3
       - gconfig.max_tokens=4096
@@ -230,7 +231,7 @@ supported:
       - rollout.backend=vllm:d1p1t2
       - actor.backend=fsdp:d2p1t1
       - +actor.fsdp.offload_params=true
-      - +actor.weight_update_mode=disk
+      - ++actor.weight_update_mode=disk
       - actor.path=${AREAL_MODEL_PATH}
       - vllm.gpu_memory_utilization=0.3
       - gconfig.max_new_tokens=64

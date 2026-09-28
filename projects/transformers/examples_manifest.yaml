@@ -388,7 +388,10 @@ supported:
       - --model_name_or_path ${TINYVIT_PATH}
       # run_mim*.py still falls back to config.encoder_stride when the flag is
       # unset, and ViTConfig has no such field either — pass it explicitly.
-      - --encoder_stride 1
+      # ViTForMaskedImageModeling.forward additionally requires
+      # encoder_stride == patch_size (2 for the tiny ViT) whenever
+      # bool_masked_pos is provided.
+      - --encoder_stride 2
       # Same Trainer/set_transform interplay as run_mae.py above.
       - --remove_unused_columns False
       # tiny ViT image_size is 30; the default mask_patch_size (32) fails the
@@ -413,9 +416,9 @@ supported:
       # Same AutoModelForMaskedImageModeling breakage as run_mim.py: switch to
       # tiny ViT because transformers main dropped ViTMAE from that mapping.
       - --model_name_or_path ${TINYVIT_PATH}
-      # Same upstream breakage as run_mim.py: config.encoder_stride no longer
-      # exists in transformers main, so pass the flag explicitly.
-      - --encoder_stride 1
+      # Same as run_mim.py: pass encoder_stride explicitly; forward requires
+      # it to equal the tiny ViT patch_size (2) when bool_masked_pos is set.
+      - --encoder_stride 2
       # tiny ViT image_size is 30; the default mask_patch_size (32) fails the
       # MaskGenerator divisibility check.
       - --mask_patch_size 30
@@ -458,7 +461,9 @@ supported:
       - --audio_column_name audio
       - --label_column_name label
       - --max_length_seconds 1
-      - --max_train_samples 4
+      # The audiofolder train fixture holds 2 wav files; a larger
+      # max_train_samples makes .select(range(n)) raise IndexError.
+      - --max_train_samples 2
       - --do_train
       - --max_steps 1
       - --per_device_train_batch_size 1

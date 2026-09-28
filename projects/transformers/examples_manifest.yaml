@@ -421,8 +421,11 @@ supported:
       - --mask_patch_size 30
       - --dataset_name imagefolder
       - --train_dir ${CI_OUTPUT_DIR}/imgcls/train/**
-      - --validation_dir ${CI_OUTPUT_DIR}/imgcls/val/**
-      - --train_val_split 0
+      # Upstream maps --validation_dir to the data_files key "val" but later
+      # indexes ds["validation"] unconditionally — so a validation split must
+      # come from train_val_split (>0) instead, carved out of the 3-image
+      # train fixture (ceil(3*0.3)=1 eval sample, 2 train samples).
+      - --train_val_split 0.3
       - --max_train_steps 1
       - --per_device_train_batch_size 1
       - --output_dir ${CI_OUTPUT_DIR}

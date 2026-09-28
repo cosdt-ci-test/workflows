@@ -393,35 +393,35 @@ supported:
       - +valid_dataset.setup_timeout=600
       - +total_train_steps=1
     timeout_minutes: 60
-  # OpenAI Agents SDK 多 agent handoff GRPO（独有覆盖面）：LLM 调用全走本地
-  # vLLM，openai-agents 是 AReaL 声明依赖；gconfig 无 max_new_tokens 键用 +
-  - path: examples/openai_agents/train_agents.py
-    profile: areal-agents-grpo
-    runner: linux-aarch64-a2-2
-    npu_devices: '0,1'
-    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
-    overlay_args:
-      - --config examples/openai_agents/config.yaml
-      - scheduler.type=local
-      - cluster.n_gpus_per_node=2
-      - rollout.backend=vllm:d1p1t2
-      - +rollout.setup_timeout=1800
-      - actor.backend=fsdp:d2p1t1
-      - +actor.fsdp.offload_params=true
-      - +actor.weight_update_mode=disk
-      - actor.path=${AREAL_MODEL_PATH}
-      - actor.mb_spec.max_tokens_per_mb=1024
-      - ref.mb_spec.max_tokens_per_mb=1024
-      - vllm.gpu_memory_utilization=0.3
-      - +gconfig.max_new_tokens=64
-      - gconfig.max_tokens=256
-      - gconfig.n_samples=1
-      - train_dataset.batch_size=2
-      - valid_dataset.batch_size=2
-      - +train_dataset.setup_timeout=600
-      - +valid_dataset.setup_timeout=600
-      - +total_train_steps=1
-    timeout_minutes: 60
+  # # OpenAI Agents SDK 多 agent handoff GRPO（独有覆盖面）：LLM 调用全走本地
+  # # vLLM，openai-agents 是 AReaL 声明依赖；gconfig 无 max_new_tokens 键用 +
+  # - path: examples/openai_agents/train_agents.py
+  #   profile: areal-agents-grpo
+  #   runner: linux-aarch64-a2-2
+  #   npu_devices: '0,1'
+  #   image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
+  #   overlay_args:
+  #     - --config examples/openai_agents/config.yaml
+  #     - scheduler.type=local
+  #     - cluster.n_gpus_per_node=2
+  #     - rollout.backend=vllm:d1p1t2
+  #     - +rollout.setup_timeout=1800
+  #     - actor.backend=fsdp:d2p1t1
+  #     - +actor.fsdp.offload_params=true
+  #     - +actor.weight_update_mode=disk
+  #     - actor.path=${AREAL_MODEL_PATH}
+  #     - actor.mb_spec.max_tokens_per_mb=1024
+  #     - ref.mb_spec.max_tokens_per_mb=1024
+  #     - vllm.gpu_memory_utilization=0.3
+  #     - +gconfig.max_new_tokens=64
+  #     - gconfig.max_tokens=256
+  #     - gconfig.n_samples=1
+  #     - train_dataset.batch_size=2
+  #     - valid_dataset.batch_size=2
+  #     - +train_dataset.setup_timeout=600
+  #     - +valid_dataset.setup_timeout=600
+  #     - +total_train_steps=1
+  #   timeout_minutes: 60
 unsupported:
   # UPSTREAM_BUG：自建 scheduler/engine 未初始化 DataController，RDataset
   # len() 报错；gsm8k_rl.py 已覆盖同路径

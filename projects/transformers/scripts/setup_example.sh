@@ -31,8 +31,13 @@ case "$PROFILE" in
     # falling back to anything else; without it every audio batch fetch dies.
     DEPS=(accelerate datasets evaluate librosa pillow scikit-learn soundfile)
     ;;
+  speech)
+    # jiwer backs the WER/CER metrics of the speech-recognition examples;
+    # librosa backs datasets 3.6.0 Audio decode (same reason as vision).
+    DEPS=(accelerate datasets evaluate jiwer librosa soundfile)
+    ;;
   *)
-    echo "unknown profile: $PROFILE (supported: generation glue small-training lm seq2seq vision)" >&2
+    echo "unknown profile: $PROFILE (supported: generation glue small-training lm seq2seq vision speech)" >&2
     exit 1
     ;;
 esac
@@ -140,7 +145,8 @@ for pair in \
   "TINYVIT_PATH:hf-internal-testing/tiny-random-ViTModel" \
   "TINYMAE_PATH:hf-internal-testing/tiny-random-ViTMAEModel" \
   "TINYCLIP_PATH:hf-internal-testing/tiny-random-CLIPModel" \
-  "TINYWAV2VEC2_PATH:hf-internal-testing/tiny-random-Wav2Vec2Model"
+  "TINYWAV2VEC2_PATH:hf-internal-testing/tiny-random-Wav2Vec2Model" \
+  "TINYWHISPER_PATH:hf-internal-testing/tiny-random-WhisperForConditionalGeneration"
 do
   env_name="${pair%%:*}"
   repo_id="${pair#*:}"
@@ -261,4 +267,36 @@ for split, names in (("train", ("a.wav", "b.wav")), ("validation", ("c.wav",))):
             fh.setsampwidth(2)
             fh.setframerate(16000)
             fh.writeframes(b"\x00\x00" * 16000)
+PY
+
+# Batch-3 (speech recognition) data preparation: an audiofolder tree with a
+# metadata.csv per split, so the builder derives the "audio" column from the
+# wav files plus a "text" column from the metadata — the layout the CTC and
+# seq2seq scripts consume through --audio_column_name/--text_column_name.
+# Single-char transcripts keep the generated CTC vocab tiny; the scripts
+# always load an eval split, so both train and validation dirs are emitted.
+python - "$CI_OUTPUT_DIR" <<'PY'
+import csv
+import os
+import sys
+import wave
+
+out = sys.argv[1]
+asr_root = os.path.join(out, "asr_data")
+for split, names in (("train", ("b1.wav", "b2.wav")), ("validation", ("b3.wav",))):
+    split_dir = os.path.join(asr_root, split)
+    os.makedirs(split_dir, exist_ok=True)
+    rows = []
+    for i, name in enumerate(names):
+        path = os.path.join(split_dir, name)
+        with wave.open(path, "wb") as fh:
+            fh.setnchannels(1)
+            fh.setsampwidth(2)
+            fh.setframerate(16000)
+            fh.writeframes(b"\x00\x00" * 16000)
+        rows.append({"file_name": name, "text": "a" if i == 0 else "b"})
+    with open(os.path.join(split_dir, "metadata.csv"), "w", encoding="utf-8", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=["file_name", "text"])
+        writer.writeheader()
+        writer.writerows(rows)
 PY

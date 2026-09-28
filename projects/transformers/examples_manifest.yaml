@@ -407,6 +407,66 @@ supported:
       - --per_device_train_batch_size 1
       - --output_dir ${CI_OUTPUT_DIR}
     timeout_minutes: 60
+  # 批次 3：语音识别。asr_data 为 audiofolder + metadata.csv 布局（audio/text
+  # 两列）；CTC 两条共用 tiny-random-Wav2Vec2，seq2seq 用 tiny-random-Whisper
+  # （hf-mirror 通道下载）。
+  - path: examples/pytorch/speech-recognition/run_speech_recognition_ctc.py
+    profile: speech
+    runner: linux-aarch64-a2-2
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --model_name_or_path ${TINYWAV2VEC2_PATH}
+      - --dataset_name ${CI_OUTPUT_DIR}/asr_data
+      - --audio_column_name audio
+      - --text_column_name text
+      # asr_data train/validation hold 2/1 wav files; larger values make
+      # .select(range(n)) raise IndexError.
+      - --max_train_samples 2
+      - --max_eval_samples 1
+      - --do_train
+      - --max_steps 1
+      - --per_device_train_batch_size 1
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 60
+  - path: examples/pytorch/speech-recognition/run_speech_recognition_ctc_adapter.py
+    profile: speech
+    runner: linux-aarch64-a2-2
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --model_name_or_path ${TINYWAV2VEC2_PATH}
+      - --dataset_name ${CI_OUTPUT_DIR}/asr_data
+      - --audio_column_name audio
+      - --text_column_name text
+      # Adds adapter attention layers and freezes everything else, so the
+      # smoke run trains only the freshly initialized adapter weights.
+      - --adapter_attn_dim 8
+      - --max_train_samples 2
+      - --max_eval_samples 1
+      - --do_train
+      - --max_steps 1
+      - --per_device_train_batch_size 1
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 60
+  - path: examples/pytorch/speech-recognition/run_speech_recognition_seq2seq.py
+    profile: speech
+    runner: linux-aarch64-a2-2
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --model_name_or_path ${TINYWHISPER_PATH}
+      - --dataset_name ${CI_OUTPUT_DIR}/asr_data
+      - --audio_column_name audio
+      - --text_column_name text
+      - --max_duration_in_seconds 2
+      - --max_train_samples 2
+      - --max_eval_samples 1
+      - --do_train
+      - --max_steps 1
+      - --per_device_train_batch_size 1
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 60
   # run_mim_no_trainer.py：与 run_clm/mlm_no_trainer 同因——脚本 L636 引用
   #   DistributedType.TPU（accelerate 1.x 全线缺失），数据与训练前处理均已跑通，
   #   属上游脚本 bug，等上游修复

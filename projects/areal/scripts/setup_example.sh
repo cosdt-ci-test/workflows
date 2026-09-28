@@ -14,10 +14,11 @@ fi
 
 PROFILE="$1"
 
-SUPPORTED_PROFILES="areal-vlm-grpo areal-vlm-mt-grpo areal-math-grpo areal-math-sft areal-math-aime areal-math-boba areal-countdown-grpo"
+SUPPORTED_PROFILES="areal-vlm-grpo areal-vlm-mt-grpo areal-math-grpo areal-math-sft areal-math-aime areal-math-boba areal-countdown-grpo areal-align"
 AIME_PREP=0
 BOBA_PREP=0
 COUNTDOWN_PREP=0
+HHRLHF_PREP=0
 case "$PROFILE" in
   areal-vlm-grpo) MODEL_ID="Qwen/Qwen2.5-VL-3B-Instruct" ;;
   areal-vlm-mt-grpo) MODEL_ID="Qwen/Qwen3-VL-2B-Instruct" ;;
@@ -27,6 +28,8 @@ case "$PROFILE" in
   areal-math-aime) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; AIME_PREP=1 ;;
   areal-math-boba) MODEL_ID="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"; BOBA_PREP=1 ;;
   areal-countdown-grpo) MODEL_ID="Qwen/Qwen2.5-3B-Instruct"; COUNTDOWN_PREP=1 ;;
+  # hhrlhf_dpo.py and hhrlhf_rw.py share model + dataset.
+  areal-align) MODEL_ID="Qwen/Qwen2.5-7B"; HHRLHF_PREP=1 ;;
   *)
     echo "unknown profile: ${PROFILE} (supported: ${SUPPORTED_PROFILES})" >&2
     exit 1
@@ -180,4 +183,35 @@ if [[ "$COUNTDOWN_PREP" == 1 ]]; then
   mkdir -p "$TARGET_ROOT/data/countdown/qwen"
   (cd "$TARGET_ROOT" && python3 examples/countdown/countdown.py \
     --num_samples 32 --eval_size 8 --tokenizer_path "$MODEL_DIR")
+fi
+
+# -------------------------------------------------------
+# 7. HH-RLHF dataset (areal-align: hhrlhf_dpo.py / hhrlhf_rw.py).
+# -------------------------------------------------------
+# Anthropic/hh-rlhf is public (NOT gated), but its jsonl.gz files live in
+# per-subset subdirectories (harmless-base/, helpful-base/, ...), so the
+# upstream loader's load_dataset(path, split=...) without a config name
+# fails with a multi-config error. Work around it boba-style: download the
+# harmless-base subset online (via HF_ENDPOINT mirror) into a flat local
+# dir; load_dataset(<dir>, split="train"/"test") then infers splits from
+# the file names. Exposed to overlay args via AREAL_HHRLHF_DATA.
+if [[ "$HHRLHF_PREP" == 1 ]]; then
+python3 <<'PY'
+import os
+import shutil
+
+from huggingface_hub import hf_hub_download
+
+dst_dir = os.path.join(os.environ["GITHUB_WORKSPACE"], "areal_data", "hhrlhf")
+os.makedirs(dst_dir, exist_ok=True)
+for filename in ("train.jsonl.gz", "test.jsonl.gz"):
+    src = hf_hub_download(
+        repo_id="Anthropic/hh-rlhf", repo_type="dataset",
+        filename=f"harmless-base/{filename}",
+    )
+    shutil.copyfile(src, os.path.join(dst_dir, filename))
+with open(os.environ["GITHUB_ENV"], "a") as fh:
+    fh.write(f"AREAL_HHRLHF_DATA={dst_dir}\n")
+print(f"prepared hh-rlhf harmless-base at {dst_dir}", flush=True)
+PY
 fi

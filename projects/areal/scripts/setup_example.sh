@@ -14,17 +14,21 @@ fi
 
 PROFILE="$1"
 
-SUPPORTED_PROFILES="areal-vlm-grpo areal-vlm-mt-grpo areal-vlm-sft areal-tir-grpo areal-scaffold-grpo areal-agents-grpo areal-math-grpo areal-math-sft areal-math-aime areal-math-boba areal-countdown-grpo areal-align"
+SUPPORTED_PROFILES="areal-vlm-grpo areal-vlm-mt-grpo areal-vlm-sft areal-clevr-sft areal-tir-grpo areal-scaffold-grpo areal-agents-grpo areal-math-grpo areal-math-sft areal-math-aime areal-math-boba areal-countdown-grpo areal-align"
 AIME_PREP=0
 BOBA_PREP=0
 COUNTDOWN_PREP=0
 HHRLHF_PREP=0
 TORL_PREP=0
 SCAFFOLD_PREP=0
+CLEVR_SUBSET_PREP=0
 case "$PROFILE" in
   areal-vlm-grpo) MODEL_ID="Qwen/Qwen2.5-VL-3B-Instruct" ;;
   areal-vlm-mt-grpo) MODEL_ID="Qwen/Qwen3-VL-2B-Instruct" ;;
   areal-vlm-sft) MODEL_ID="Qwen/Qwen3-VL-2B-Instruct" ;;
+  # clevr_count_70k_sft.py: see section 10 (local subset; the full 70k train
+  # split blows the data worker when the SFT loader materializes pixel_values).
+  areal-clevr-sft) MODEL_ID="Qwen/Qwen2.5-VL-3B-Instruct"; CLEVR_SUBSET_PREP=1 ;;
   # tir/train_tir.py: see section 8 (fixture staging; the loader's own
   # GitHub download is unreachable from the CI job containers).
   areal-tir-grpo) MODEL_ID="Qwen/Qwen2.5-Math-1.5B"; TORL_PREP=1 ;;
@@ -316,4 +320,34 @@ if [[ "$SCAFFOLD_PREP" == 1 ]]; then
   [[ -d "$MODEL_DIR" ]] || { echo "model dir missing: $MODEL_DIR" >&2; exit 2; }
   ln -sfn "$MODEL_DIR" "$TARGET_ROOT/default"
   echo "linked $TARGET_ROOT/default -> $MODEL_DIR (scaffolding model alias)"
+fi
+
+# -------------------------------------------------------
+# 10. CLEVR subset (areal-clevr-sft).
+# -------------------------------------------------------
+# The clevr SFT loader materializes per-sample pixel_values across the whole
+# split (clevr_count_70k.py:104-127), unlike the RL loader which only keeps
+# JPEG bytes, so the 70k train split blows the data worker (host OOM / tens
+# of GB of arrow cache). The example hardcodes split="train" and
+# get_custom_dataset ignores train_dataset.split when the script passes a
+# non-None split (dataset/__init__.py:322,328), and the loader takes no extra
+# kwargs - so subset via path instead: train_dataset.path points at a dir
+# whose name contains "clevr_count_70k" (dispatch substring) holding
+# train.parquet (load_dataset infers the split from the file name). The
+# absolute slice train[:200] downloads only the first shard (~0.5GB of the
+# 10.4GB), and the parquet keeps the HF feature metadata so images stay PIL.
+if [[ "$CLEVR_SUBSET_PREP" == 1 ]]; then
+python3 <<'PY'
+import os
+
+from datasets import load_dataset
+
+dst = os.path.join(os.environ["GITHUB_WORKSPACE"], "areal_data", "clevr_count_70k")
+os.makedirs(dst, exist_ok=True)
+ds = load_dataset("BUAADreamer/clevr_count_70k", split="train[:200]")
+ds.to_parquet(os.path.join(dst, "train.parquet"))
+with open(os.environ["GITHUB_ENV"], "a") as fh:
+    fh.write(f"AREAL_CLEVR_SUBSET_DIR={dst}\n")
+print(f"prepared clevr subset ({len(ds)} rows) at {dst}", flush=True)
+PY
 fi

@@ -282,7 +282,7 @@ supported:
       - +train_dataset.setup_timeout=600
       - +valid_dataset.setup_timeout=600
       - +total_train_steps=1
-    timeout_minutes: 60
+    timeout_minutes: 120
   # HH-RLHF Reward Modeling（与 hhrlhf_dpo.py 共用 areal-align profile；
   # RWTrainer，同样无 rollout，风险点与上面 DPO 条目相同）。
   - path: examples/alignment/hhrlhf_rw.py
@@ -297,7 +297,6 @@ supported:
       - +actor.fsdp.offload_params=true
       - actor.path=${AREAL_MODEL_PATH}
       - actor.mb_spec.max_tokens_per_mb=1024
-      - ref.mb_spec.max_tokens_per_mb=1024
       - train_dataset.path=${AREAL_HHRLHF_DATA}
       - valid_dataset.path=${AREAL_HHRLHF_DATA}
       - train_dataset.batch_size=2
@@ -305,22 +304,80 @@ supported:
       - +train_dataset.setup_timeout=600
       - +valid_dataset.setup_timeout=600
       - +total_train_steps=1
-    timeout_minutes: 30
-  # GSM8K 多轮自我纠错 GRPO（Qwen2.5-1.5B-Instruct，复用 areal-math-grpo
-  # profile：同模型同数据集，setup 零增量）。MultiturnRLVRWorkflow：本地
-  # vLLM 生成 + math_verify 本地打分，答错注入 feedback 重试 max_turns 轮，
-  # 无外部 API。yaml 特征与 math 系一致：scheduler.type=null 必须补 local；
-  # yaml 未写 weight_update_mode，用单个 + 新增 disk；norm 组合
-  # （reward=group、adv=batch）同 geometry3k 实测可过。脚本的
-  # from examples.multi_turn_math.config import 依赖仓根在 sys.path
-  # （run_example.sh 已置）。
-  - path: examples/multi_turn_math/gsm8k_rl_mt.py
-    profile: areal-math-grpo
+    timeout_minutes: 60
+  # # GSM8K 多轮自我纠错 GRPO（Qwen2.5-1.5B-Instruct，复用 areal-math-grpo
+  # # profile：同模型同数据集，setup 零增量）。MultiturnRLVRWorkflow：本地
+  # # vLLM 生成 + math_verify 本地打分，答错注入 feedback 重试 max_turns 轮，
+  # # 无外部 API。yaml 特征与 math 系一致：scheduler.type=null 必须补 local；
+  # # yaml 未写 weight_update_mode，用单个 + 新增 disk；norm 组合
+  # # （reward=group、adv=batch）同 geometry3k 实测可过。脚本的
+  # # from examples.multi_turn_math.config import 依赖仓根在 sys.path
+  # # （run_example.sh 已置）。
+  # - path: examples/multi_turn_math/gsm8k_rl_mt.py
+  #   profile: areal-math-grpo
+  #   runner: linux-aarch64-a2-2
+  #   npu_devices: '0,1'
+  #   image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
+  #   overlay_args:
+  #     - --config examples/multi_turn_math/gsm8k_grpo_mt.yaml
+  #     - scheduler.type=local
+  #     - cluster.n_gpus_per_node=2
+  #     - rollout.backend=vllm:d1p1t2
+  #     - actor.backend=fsdp:d2p1t1
+  #     - +actor.fsdp.offload_params=true
+  #     - +actor.weight_update_mode=disk
+  #     - actor.path=${AREAL_MODEL_PATH}
+  #     - actor.mb_spec.max_tokens_per_mb=1024
+  #     - vllm.gpu_memory_utilization=0.3
+  #     - gconfig.max_new_tokens=64
+  #     - gconfig.n_samples=1
+  #     - train_dataset.batch_size=2
+  #     - valid_dataset.batch_size=2
+  #     - +train_dataset.setup_timeout=600
+  #     - +valid_dataset.setup_timeout=600
+  #     - +total_train_steps=1
+  #   timeout_minutes: 30
+  # Geometry3K VLM SFT（Qwen3-VL-2B-Instruct，2026-09-28 实测跑通）。原配置
+  # qwen3_6_27b_geometry3k_sft.yaml 是 27B/megatron:d2p2t4 的 16 卡形态跑不动；
+  # 换 2B + fsdp 2 卡，看护对象是 example 脚本（VLM SFT 管线：vision SFT
+  # loader + chat_template_kwargs），补上纯文本 gsm8k_sft 之外的 SFT 面。
+  # SFT 无 rollout/ref：不涉及 weight_update_mode 与批级归约；该 yaml 的
+  # train_dataset.scheduling_spec 为 null，数据在主进程加载，无需
+  # setup_timeout；valid_dataset.split 默认 validation（geometry3k 有
+  # train/validation/test 三 split）。
+  - path: examples/vlm/geometry3k_sft.py
+    profile: areal-vlm-sft
     runner: linux-aarch64-a2-2
     npu_devices: '0,1'
     image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
     overlay_args:
-      - --config examples/multi_turn_math/gsm8k_grpo_mt.yaml
+      - --config examples/vlm_npu/qwen3_6_27b_geometry3k_sft.yaml
+      - scheduler.type=local
+      - cluster.n_gpus_per_node=2
+      - actor.backend=fsdp:d2p1t1
+      - +actor.fsdp.offload_params=true
+      - actor.path=${AREAL_MODEL_PATH}
+      - actor.mb_spec.max_tokens_per_mb=1024
+      - train_dataset.batch_size=2
+      - valid_dataset.batch_size=2
+      - +total_train_steps=1
+    timeout_minutes: 60
+  # CLEVR 计数 GRPO（Qwen2.5-VL-3B-Instruct，复用 areal-vlm-grpo profile）。
+  # 与 geometry3k grpo 完全同构：同模型/workflow（VisionRLVRWorkflow）/本地
+  # 奖励（提取 [N] 比对）、norm group/batch、yaml 无 weight_update_mode 键
+  # （单 +）。重数据条目：BUAADreamer/clevr_count_70k 在线下载 10.4GB，
+  # loader 的 .map() 在 dist 未初始化时单进程逐张 CenterCrop+JPEG 重编码
+  # 7 万图（35-60 分钟起步，上游 FIXME 自认 processor 极慢），故 train 侧
+  # setup_timeout 放宽到 3600、整体 timeout 240；valid 仅 200 条。yaml 未设
+  # max_length，跳过逐样本 processor filter（否则更慢）。磁盘注意：HF cache
+  # 落盘约 30GB。
+  - path: examples/vlm/clevr_count_70k_grpo.py
+    profile: areal-vlm-grpo
+    runner: linux-aarch64-a2-2
+    npu_devices: '0,1'
+    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
+    overlay_args:
+      - --config examples/vlm/clevr_count_70k_grpo.yaml
       - scheduler.type=local
       - cluster.n_gpus_per_node=2
       - rollout.backend=vllm:d1p1t2
@@ -329,15 +386,49 @@ supported:
       - +actor.weight_update_mode=disk
       - actor.path=${AREAL_MODEL_PATH}
       - actor.mb_spec.max_tokens_per_mb=1024
+      - ref.mb_spec.max_tokens_per_mb=1024
       - vllm.gpu_memory_utilization=0.3
       - gconfig.max_new_tokens=64
+      - gconfig.n_samples=1
+      - train_dataset.batch_size=2
+      - valid_dataset.batch_size=2
+      - +train_dataset.setup_timeout=3600
+      - +valid_dataset.setup_timeout=600
+      - +total_train_steps=1
+    timeout_minutes: 180
+  # TIR 工具集成推理 GRPO（Qwen2.5-Math-1.5B）：TIRWorkflow 在轨迹内流式生成
+  # + 工具标记暂停/续写，默认本地工具（python 子进程 + calculator，
+  # tool_timeout=30；Daytona 只是可选后端，默认不用、无需凭据）。独有覆盖面：
+  # 带内工具调用与本地代码执行，其他条目均未覆盖。数据自取：torl_data
+  # loader 内置从 GitHub（GAIR-NLP/ToRL）下载 train/test.parquet（共 ~1275
+  # 行）到 /tmp/areal/torl_data/，runner 可达 GitHub，无需 fixture；
+  # setup_timeout 仅兜底下载。scheduler.type=local 已在 yaml；norm
+  # group/batch 同已验证组合；yaml 无 weight_update_mode 键（单 +）。tir 段
+  # 保持默认（max_turns=2、enable_tools=python;calculator）。
+  - path: examples/tir/train_tir.py
+    profile: areal-tir-grpo
+    runner: linux-aarch64-a2-2
+    npu_devices: '0,1'
+    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
+    overlay_args:
+      - --config examples/tir/tir_math_config.yaml
+      - cluster.n_gpus_per_node=2
+      - rollout.backend=vllm:d1p1t2
+      - actor.backend=fsdp:d2p1t1
+      - +actor.fsdp.offload_params=true
+      - +actor.weight_update_mode=disk
+      - actor.path=${AREAL_MODEL_PATH}
+      - actor.mb_spec.max_tokens_per_mb=1024
+      - ref.mb_spec.max_tokens_per_mb=1024
+      - vllm.gpu_memory_utilization=0.3
+      - gconfig.max_new_tokens=128
       - gconfig.n_samples=1
       - train_dataset.batch_size=2
       - valid_dataset.batch_size=2
       - +train_dataset.setup_timeout=600
       - +valid_dataset.setup_timeout=600
       - +total_train_steps=1
-    timeout_minutes: 30
+    timeout_minutes: 60
 unsupported:
   # UPSTREAM_BUG：gsm8k_eval.py 绕过 PPOTrainer 自行初始化 scheduler/engine，
   # 但未初始化 DataController；get_custom_dataset 返回的 RDataset 在
@@ -364,8 +455,10 @@ unsupported:
   # 已看护 geometry3k_grpo_mt.py 的 8 行启动器（export USE_OPTIMIZED_MODEL=0
   # + 同 config 转发 "$@"），零增量覆盖；setup 已统一导出该变量。
   - examples/multi_turn_vlm/run_geometry3k_grpo_mt_npu.sh
-  - examples/vlm/geometry3k_sft.py
-  - examples/vlm/clevr_count_70k_grpo.py
+  # clevr SFT：SFT loader 对 7 万样本逐条跑完整 VLM processor（上游 FIXME
+  # 点名的极慢路径，areal/dataset/clevr_count_70k.py:137），单进程小时级
+  # 起步，CI 不可行；模型为旧代 Qwen2-VL-7B，且与 geometry3k_sft.py 的
+  # VLM SFT 路径零增量重复。
   - examples/vlm/clevr_count_70k_sft.py
   # UPSTREAM_BUG：workflow_kwargs 里 reward_fn=virl39k_reward_fn 传的是函数对象
   # （geometry3k_grpo.py 传的是字符串路径），local scheduler RPC JSON 序列化失败：
@@ -378,9 +471,21 @@ unsupported:
   # agent_service：不需要 NPU，本地跑需要 CLAUDE/ANTHROPIC API key + 交互式 stdin（无 TTY）；
   # run_agent_service.py 是常驻服务 demo，没有 pass/fail 终点。
   - examples/agent_service/run_agent_service.py
+  # tau2：NPU 路径（config_30b_moe_airline_npu.yaml）是多节点形态——30B-A3B
+  # + vllm:d1t16 推理 + megatron 专家并行 + ray 多节点（README_NPU 按 4 节点
+  # 写），且 workflow 结构上依赖带外 user simulator：要在独立节点手动起
+  # Qwen3-30B-A3B 的 vLLM 服务并把 user_llm_base_url 指过去；tau2-bench 还得
+  # 装特定 fork 分支（dhh1995/tau2-bench @ dhh/async-and-custom-completion），
+  # 数据 tau2/train 本地准备。小模型 config 走实验性 archon 引擎且同样要
+  # user simulator。单机 2 卡 CI 无法复现。
   - examples/tau2/train.py
+  # terminal_bench：task 环境通过 docker compose 起容器，要求把宿主
+  # docker.sock / docker CLI / compose、buildx 插件挂进运行时容器——本 CI
+  # 引擎设计上零挂载（examples-guard-engine.md §3.1），硬阻断；另有
+  # sglang[srt_npu] 源码安装（vLLM 配置也依赖 SGLang tool parsing）、
+  # camel_ai/terminal_bench 依赖树、tiktoken 从 openaipublic 下载、数据集从
+  # 第三方仓 terminal-bench-seta clone 并摆位等一串环境要求。
   - examples/terminal_bench/train.py
-  - examples/tir/train_tir.py
   - examples/scaffolding/gsm8k_rlvr_scaffolding.py
   - examples/scaffolding/search_scaffolding.py
   - examples/search_agent/tongyi_deepresearch/train.py

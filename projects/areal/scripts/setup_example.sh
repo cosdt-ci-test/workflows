@@ -14,7 +14,7 @@ fi
 
 PROFILE="$1"
 
-SUPPORTED_PROFILES="areal-vlm-grpo areal-vlm-mt-grpo areal-math-grpo areal-math-sft areal-math-aime areal-math-boba areal-countdown-grpo areal-align"
+SUPPORTED_PROFILES="areal-vlm-grpo areal-vlm-mt-grpo areal-vlm-sft areal-tir-grpo areal-math-grpo areal-math-sft areal-math-aime areal-math-boba areal-countdown-grpo areal-align"
 AIME_PREP=0
 BOBA_PREP=0
 COUNTDOWN_PREP=0
@@ -22,6 +22,10 @@ HHRLHF_PREP=0
 case "$PROFILE" in
   areal-vlm-grpo) MODEL_ID="Qwen/Qwen2.5-VL-3B-Instruct" ;;
   areal-vlm-mt-grpo) MODEL_ID="Qwen/Qwen3-VL-2B-Instruct" ;;
+  areal-vlm-sft) MODEL_ID="Qwen/Qwen3-VL-2B-Instruct" ;;
+  # tir/train_tir.py: the torl_data loader self-downloads its small parquets
+  # from GitHub (GAIR-NLP/ToRL) at load time, so no dataset prep here.
+  areal-tir-grpo) MODEL_ID="Qwen/Qwen2.5-Math-1.5B" ;;
   # gsm8k_rl.py and gsm8k_eval.py share the same model.
   areal-math-grpo) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct" ;;
   areal-math-sft) MODEL_ID="Qwen/Qwen3-1.7B" ;;

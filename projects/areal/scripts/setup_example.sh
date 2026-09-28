@@ -89,13 +89,46 @@ export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
 echo "HF_ENDPOINT=${HF_ENDPOINT}" >> "$GITHUB_ENV"
 export AREAL_MODEL_ID="$MODEL_ID"
 
+# hf-mirror can be flaky (transient outages, per-machine reachability - same
+# class of problem as the unreachable github.com in section 8). Retry the Hub
+# download, then fall back to ModelScope, which hosts every profile model
+# under the same repo id (Qwen org, deepseek-ai). modelscope is pinned to
+# 1.37.0 like every other project in this repo (>=1.38 splits the hub code
+# into modelscope-hub).
 python3 <<'PY'
 import os
-from huggingface_hub import snapshot_download
+import subprocess
+import sys
+import time
 
 model_id = os.environ["AREAL_MODEL_ID"]
 dest = os.path.join(os.environ["GITHUB_WORKSPACE"], "areal_models", model_id.split("/")[-1])
-snapshot_download(model_id, local_dir=dest)
+
+print(f"downloading {model_id} via HF_ENDPOINT={os.environ.get('HF_ENDPOINT', '<unset>')}", flush=True)
+
+from huggingface_hub import snapshot_download
+
+last_err = None
+for attempt in range(3):
+    try:
+        snapshot_download(model_id, local_dir=dest)
+        break
+    except Exception as e:
+        last_err = e
+        print(f"HF download attempt {attempt + 1}/3 failed: {type(e).__name__}: {e}", flush=True)
+        time.sleep(10)
+else:
+    print(f"Hub download exhausted ({last_err}); falling back to ModelScope", flush=True)
+    try:
+        from modelscope import snapshot_download as ms_download
+    except ImportError:
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "-q", "modelscope==1.37.0"],
+            check=True,
+        )
+        from modelscope import snapshot_download as ms_download
+    ms_download(model_id, local_dir=dest)
+
 with open(os.environ["GITHUB_ENV"], "a") as fh:
     fh.write(f"AREAL_MODEL_PATH={dest}\n")
 print(f"Downloaded model to {dest}", flush=True)

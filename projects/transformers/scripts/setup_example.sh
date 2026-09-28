@@ -56,7 +56,14 @@ fi
 # safe for the NPU torch stack because transformers does not depend on torch_npu
 # and its torch requirement is already satisfied by the image build.
 python -m pip install -e "$TARGET_ROOT"
-python -m pip install "${DEPS[@]}"
+# Pin datasets to a single 4.x release. The rebuilt 9.1.0 image no longer
+# preinstalls datasets, so an unpinned resolve pulls 5.x: 5.0 forces
+# torchcodec for Audio-feature encoding (breaking run_audio_classification)
+# and, in one observed small-training resolve, sent pip into a pathological
+# backtracking storm down to the ancient datasets 0.0.9 sdist (run_swag).
+# 4.4.2 keeps the soundfile audio encoder and the `**` glob data-files
+# semantics the manifest paths were written against.
+python -m pip install "${DEPS[@]}" "datasets==4.4.2"
 # torchvision is only needed by the vision profile. Its wheel pins an exact
 # torch== requirement that would upgrade (and break) the image's NPU
 # torch/torch_npu stack, so install it without deps; the examples only use

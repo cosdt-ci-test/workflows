@@ -360,6 +360,10 @@ supported:
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
       - --model_name_or_path ${TINYMAE_PATH}
+      # The script reads the image column inside a set_transform callback, but
+      # Trainer's default remove_unused_columns=True strips the "image" column
+      # (not part of ViTMAEModel.forward) before the batch is fetched.
+      - --remove_unused_columns False
       - --dataset_name imagefolder
       - --train_dir ${CI_OUTPUT_DIR}/imgcls/train/**
       - --validation_dir ${CI_OUTPUT_DIR}/imgcls/val/**
@@ -376,11 +380,16 @@ supported:
     npu_devices: '0'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - --model_name_or_path ${TINYMAE_PATH}
-      # transformers main removed ViTMAEConfig.encoder_stride but run_mim*.py
-      # still falls back to config.encoder_stride when the flag is unset, so
-      # pass it explicitly (any value; unused by the 5.x decoder_pred).
+      # transformers main removed ViTMAE from the AutoModelForMaskedImageModeling
+      # mapping, so the MIM examples can no longer load ViTMAE checkpoints. Use
+      # the tiny ViT model instead (ViTConfig is still in the mapping); the
+      # scripts take mask_ratio from the CLI and encoder_stride below.
+      - --model_name_or_path ${TINYVIT_PATH}
+      # run_mim*.py still falls back to config.encoder_stride when the flag is
+      # unset, and ViTConfig has no such field either — pass it explicitly.
       - --encoder_stride 1
+      # Same Trainer/set_transform interplay as run_mae.py above.
+      - --remove_unused_columns False
       - --dataset_name imagefolder
       - --train_dir ${CI_OUTPUT_DIR}/imgcls/train/**
       - --validation_dir ${CI_OUTPUT_DIR}/imgcls/val/**
@@ -397,7 +406,9 @@ supported:
     npu_devices: '0'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - --model_name_or_path ${TINYMAE_PATH}
+      # Same AutoModelForMaskedImageModeling breakage as run_mim.py: switch to
+      # tiny ViT because transformers main dropped ViTMAE from that mapping.
+      - --model_name_or_path ${TINYVIT_PATH}
       # Same upstream breakage as run_mim.py: config.encoder_stride no longer
       # exists in transformers main, so pass the flag explicitly.
       - --encoder_stride 1

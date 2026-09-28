@@ -19,13 +19,14 @@ AIME_PREP=0
 BOBA_PREP=0
 COUNTDOWN_PREP=0
 HHRLHF_PREP=0
+TORL_PREP=0
 case "$PROFILE" in
   areal-vlm-grpo) MODEL_ID="Qwen/Qwen2.5-VL-3B-Instruct" ;;
   areal-vlm-mt-grpo) MODEL_ID="Qwen/Qwen3-VL-2B-Instruct" ;;
   areal-vlm-sft) MODEL_ID="Qwen/Qwen3-VL-2B-Instruct" ;;
-  # tir/train_tir.py: the torl_data loader self-downloads its small parquets
-  # from GitHub (GAIR-NLP/ToRL) at load time, so no dataset prep here.
-  areal-tir-grpo) MODEL_ID="Qwen/Qwen2.5-Math-1.5B" ;;
+  # tir/train_tir.py: see section 8 (fixture staging; the loader's own
+  # GitHub download is unreachable from the CI job containers).
+  areal-tir-grpo) MODEL_ID="Qwen/Qwen2.5-Math-1.5B"; TORL_PREP=1 ;;
   # gsm8k_rlvr_scaffolding.py: pure RLVR, dataset is online gsm8k, no prep.
   areal-scaffold-grpo) MODEL_ID="Qwen/Qwen2.5-3B-Instruct" ;;
   areal-agents-grpo) MODEL_ID="Qwen/Qwen2-1.5B-Instruct" ;;
@@ -224,4 +225,33 @@ with open(os.environ["GITHUB_ENV"], "a") as fh:
     fh.write(f"AREAL_HHRLHF_DATA={dst_dir}\n")
 print(f"prepared hh-rlhf harmless-base at {dst_dir}", flush=True)
 PY
+fi
+
+# -------------------------------------------------------
+# 8. ToRL dataset (areal-tir-grpo): fixture staging.
+# -------------------------------------------------------
+# The torl_data loader downloads its parquets from github.com at load time
+# (areal/dataset/torl_data.py), but the CI job containers cannot reach
+# github.com (mainland network, no proxy; the runner agent pulls code on the
+# host side). No HF/ModelScope mirror of ToRL exists (ModelScope 404;
+# upstream ships GitHub only), so the two tiny parquets are vendored as
+# fixtures - the documented last resort. prepare_torl_data() skips its
+# download once /tmp/areal/torl_data/_SUCCESS exists, so staging the files
+# plus the flag here makes the loader fully offline. The data service worker
+# runs in the same container, so /tmp is shared with the run step.
+# Fixture pin (GAIR-NLP/ToRL @ main): train.parquet blob 57bd7d5d (6035244
+# bytes), test.parquet blob e8ca20fd (51798 bytes).
+if [[ "$TORL_PREP" == 1 ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  TORL_FIXTURE="$SCRIPT_DIR/../fixtures"
+  for f in train.parquet test.parquet; do
+    [[ -s "$TORL_FIXTURE/$f" ]] || {
+      echo "missing fixture: $TORL_FIXTURE/$f (see section 8 comment for source)" >&2
+      exit 2
+    }
+  done
+  mkdir -p /tmp/areal/torl_data
+  cp "$TORL_FIXTURE/train.parquet" "$TORL_FIXTURE/test.parquet" /tmp/areal/torl_data/
+  : > /tmp/areal/torl_data/_SUCCESS
+  echo "staged torl fixtures at /tmp/areal/torl_data (loader download skipped)"
 fi

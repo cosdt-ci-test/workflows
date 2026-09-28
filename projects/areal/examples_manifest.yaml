@@ -50,6 +50,9 @@ scan:
 # - norm：reward=group + adv=batch 实测可过；reward/adv 为 batch 级的需加
 #   mean_level=null（HCCL 不支持 float64 allreduce）。
 # - setup_timeout=600 兜底数据集在线冷下载（HF_ENDPOINT=hf-mirror.com）。
+# - rollout.setup_timeout 默认仅 300s，vLLM-Ascend 多模态 server 预热（mm
+#   processor warmup + tokenizer 深拷贝）在慢机上会超，RL 条目统一
+#   +rollout.setup_timeout=1800 兜底。
 supported:
   # Qwen2.5-VL-3B Geometry3K GRPO（双卡，2026-09-27 实测跑通）
   # - path: examples/vlm/geometry3k_grpo.py
@@ -229,7 +232,10 @@ supported:
   #     - +total_train_steps=1
   #   timeout_minutes: 30
   # HH-RLHF DPO（7B）：离线无 rollout；hh-rlhf 按子集分目录，setup 预下载
-  # harmless-base 到本地目录（AREAL_HHRLHF_DATA）
+  # harmless-base 到本地目录（AREAL_HHRLHF_DATA）。a2-2 实测是 32GB 卡：
+  # fully_shard 初始化前整模型驻留 GPU（~28.4GiB）会撑爆 32GB，必须
+  # memory_efficient_load（CPU 上初始化再切分）；稳态 offload 后 GPU 仅需
+  # ref 分片 ~7GB/卡 + 激活，2×32GB 够用。
   - path: examples/alignment/hhrlhf_dpo.py
     profile: areal-align
     runner: linux-aarch64-a2-2
@@ -240,6 +246,8 @@ supported:
       - cluster.n_gpus_per_node=2
       - actor.backend=fsdp:d2p1t1
       - +actor.fsdp.offload_params=true
+      - +actor.fsdp.memory_efficient_load=true
+      - +ref.fsdp.memory_efficient_load=true
       - actor.path=${AREAL_MODEL_PATH}
       - actor.mb_spec.max_tokens_per_mb=1024
       - ref.mb_spec.max_tokens_per_mb=1024
@@ -251,27 +259,6 @@ supported:
       - +valid_dataset.setup_timeout=600
       - +total_train_steps=1
     timeout_minutes: 120
-  # HH-RLHF RW：同上条，共用 areal-align profile
-  - path: examples/alignment/hhrlhf_rw.py
-    profile: areal-align
-    runner: linux-aarch64-a2-2
-    npu_devices: '0,1'
-    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
-    overlay_args:
-      - --config examples/alignment/hhrlhf_rw.yaml
-      - cluster.n_gpus_per_node=2
-      - actor.backend=fsdp:d2p1t1
-      - +actor.fsdp.offload_params=true
-      - actor.path=${AREAL_MODEL_PATH}
-      - actor.mb_spec.max_tokens_per_mb=1024
-      - train_dataset.path=${AREAL_HHRLHF_DATA}
-      - valid_dataset.path=${AREAL_HHRLHF_DATA}
-      - train_dataset.batch_size=2
-      - valid_dataset.batch_size=2
-      - +train_dataset.setup_timeout=600
-      - +valid_dataset.setup_timeout=600
-      - +total_train_steps=1
-    timeout_minutes: 60
   # GSM8K 多轮自我纠错 GRPO（实测跑通）：复用 areal-math-grpo profile
   # - path: examples/multi_turn_math/gsm8k_rl_mt.py
   #   profile: areal-math-grpo
@@ -330,6 +317,7 @@ supported:
       - scheduler.type=local
       - cluster.n_gpus_per_node=2
       - rollout.backend=vllm:d1p1t2
+      - +rollout.setup_timeout=1800
       - actor.backend=fsdp:d2p1t1
       - +actor.fsdp.offload_params=true
       - +actor.weight_update_mode=disk
@@ -346,7 +334,9 @@ supported:
       - +total_train_steps=1
     timeout_minutes: 180
   # TIR 工具集成推理 GRPO（独有覆盖面：带内工具调用 + 本地 python/calculator，
-  # Daytona 只是可选后端）；torl_data loader 自带 GitHub 下载，无需数据准备
+  # Daytona 只是可选后端）；torl 数据只有 GitHub 一个来源且 job 容器不可达
+  # （ModelScope 404、无 HF 镜像），6MB parquet 以 fixture 入库，setup 预放
+  # /tmp/areal/torl_data/ 并建 _SUCCESS 跳过 loader 自带下载
   - path: examples/tir/train_tir.py
     profile: areal-tir-grpo
     runner: linux-aarch64-a2-2
@@ -356,6 +346,7 @@ supported:
       - --config examples/tir/tir_math_config.yaml
       - cluster.n_gpus_per_node=2
       - rollout.backend=vllm:d1p1t2
+      - +rollout.setup_timeout=1800
       - actor.backend=fsdp:d2p1t1
       - +actor.fsdp.offload_params=true
       - +actor.weight_update_mode=disk
@@ -386,7 +377,9 @@ supported:
       - +scheduler.type=local
       - cluster.n_gpus_per_node=2
       - +rollout.backend=vllm:d1p1t2
+      - +rollout.setup_timeout=1800
       - +actor.backend=fsdp:d2p1t1
+      - +ref.backend=fsdp:d2p1t1
       - +actor.fsdp.offload_params=true
       - ~actor.behav_imp_weight_cap
       - actor.path=${AREAL_MODEL_PATH}
@@ -413,6 +406,7 @@ supported:
       - scheduler.type=local
       - cluster.n_gpus_per_node=2
       - rollout.backend=vllm:d1p1t2
+      - +rollout.setup_timeout=1800
       - actor.backend=fsdp:d2p1t1
       - +actor.fsdp.offload_params=true
       - +actor.weight_update_mode=disk
@@ -435,6 +429,10 @@ unsupported:
   - examples/math/gsm8k_eval.py
   # UPSTREAM_BUG：配置类 AgentRLConfig 定义在入口脚本，跨进程反序列化失败
   - examples/camel/train.py
+  # UPSTREAM_BUG：rw_engine.py:52/68 在 train_batch 打包前读 data["cu_seqlens"]，
+  # 此时 batch 是 padding 格式（只有 attention_mask），必然 KeyError；DPO 无此
+  # 问题（其 _dpo_loss_weight 作为 loss_weight_fn 传入 train_batch，打包后才调用）
+  - examples/alignment/hhrlhf_rw.py
   # CodeAgent 硬依赖 OPENAI + DAYTONA 外部凭据；且仓内无 config yaml
   - examples/code/train.py
   # mopd：actor.path 是未发布 checkpoint 占位符；leetcode 域走 CodeAgent

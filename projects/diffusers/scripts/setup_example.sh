@@ -17,9 +17,9 @@ PROFILE="$1"
 
 # Validate the profile before installing anything (contract: unknown
 # profile must exit non-zero before any install).
-SUPPORTED_PROFILES="diffusers-sdxl diffusers-sd15 diffusers-dreambooth diffusers-instruct-pix2pix diffusers-kandinsky diffusers-research diffusers-research-plain diffusers-t2i-adapter diffusers-text-to-image diffusers-textual-inversion diffusers-unconditional diffusers-vqgan diffusers-sdxl-online diffusers-flux diffusers-sana diffusers-lumina2 diffusers-z-image diffusers-qwen-image diffusers-amused diffusers-cogvideo diffusers-cogvideo-i2v diffusers-lcm diffusers-lcm-sdxl diffusers-controlnet diffusers-controlnet-sdxl diffusers-llada2 diffusers-gligen diffusers-controlnet-wds"
+SUPPORTED_PROFILES="diffusers-sdxl diffusers-sd15 diffusers-dreambooth diffusers-instruct-pix2pix diffusers-kandinsky diffusers-research diffusers-research-plain diffusers-t2i-adapter diffusers-text-to-image diffusers-textual-inversion diffusers-unconditional diffusers-vqgan diffusers-sdxl-online diffusers-flux diffusers-sana diffusers-lumina2 diffusers-z-image diffusers-qwen-image diffusers-amused diffusers-cogvideo diffusers-cogvideo-i2v diffusers-lcm diffusers-lcm-sdxl diffusers-controlnet diffusers-controlnet-sdxl diffusers-llada2 diffusers-gligen"
 case "$PROFILE" in
-  diffusers-sdxl|diffusers-sd15|diffusers-dreambooth|diffusers-instruct-pix2pix|diffusers-kandinsky|diffusers-research|diffusers-research-plain|diffusers-t2i-adapter|diffusers-text-to-image|diffusers-textual-inversion|diffusers-unconditional|diffusers-vqgan|diffusers-sdxl-online|diffusers-flux|diffusers-sana|diffusers-lumina2|diffusers-z-image|diffusers-qwen-image|diffusers-amused|diffusers-cogvideo|diffusers-cogvideo-i2v|diffusers-lcm|diffusers-lcm-sdxl|diffusers-controlnet|diffusers-controlnet-sdxl|diffusers-llada2|diffusers-gligen|diffusers-controlnet-wds) ;;
+  diffusers-sdxl|diffusers-sd15|diffusers-dreambooth|diffusers-instruct-pix2pix|diffusers-kandinsky|diffusers-research|diffusers-research-plain|diffusers-t2i-adapter|diffusers-text-to-image|diffusers-textual-inversion|diffusers-unconditional|diffusers-vqgan|diffusers-sdxl-online|diffusers-flux|diffusers-sana|diffusers-lumina2|diffusers-z-image|diffusers-qwen-image|diffusers-amused|diffusers-cogvideo|diffusers-cogvideo-i2v|diffusers-lcm|diffusers-lcm-sdxl|diffusers-controlnet|diffusers-controlnet-sdxl|diffusers-llada2|diffusers-gligen) ;;
   *)
     echo "unknown profile: ${PROFILE} (supported: ${SUPPORTED_PROFILES})" >&2
     exit 1
@@ -496,58 +496,6 @@ setup_diffusers_vqgan() {
 # download small. Base only.
 setup_diffusers_sdxl_online() {
   install_example_stack
-}
-
-# diffusers-controlnet-wds: research_projects/controlnet webdataset ControlNet
-# training. Base stack + webdataset/braceexpand + opencv-python-headless: the
-# example does `import cv2` at module level for the canny transform and the
-# base stack ships no cv2 (headless avoids the GUI/libGL deps). The upstream
-# example wants shard URLs that are not publicly reachable, so synthesize a
-# tiny local webdataset tar: each sample carries .jpg (image) + .txt (caption)
-# + .json, and the json holds original_width/original_height >= 512 plus
-# pwatermark because both WebdatasetFilter and get_orig_size read those fields.
-#
-# webdataset is pinned to 0.2.86: the example vendors its own
-# group_by_keys_nothrow (based on the 0.2.x tar iterators) and expects
-# tar_file_expander to yield {"fname", "data"} dicts only. Newer webdataset
-# (>=0.2.96, incl. 1.0.x) appends an empty-dict EOF marker after every shard;
-# the vendored group_by_keys_nothrow does `filesample["fname"]` on it and dies
-# with KeyError: 'fname' (hit only through the shuffle buffer, which pulls past
-# the last sample). 0.2.86 is the newest 0.2.x without the EOF marker.
-setup_diffusers_controlnet_wds() {
-  install_example_stack
-  python -m pip install "webdataset==0.2.86" braceexpand opencv-python-headless
-  python3 - <<'PY'
-import io
-import json
-import os
-import tarfile
-
-from PIL import Image
-
-root = os.path.join(os.environ["GITHUB_WORKSPACE"], "areal_data", "controlnet_wds")
-os.makedirs(root, exist_ok=True)
-
-buf = io.BytesIO()
-Image.new("RGB", (512, 512), (130, 140, 150)).save(buf, format="JPEG")
-jpg = buf.getvalue()
-txt = b"a gray square"
-meta = json.dumps(
-    {"original_width": 512, "original_height": 512, "pwatermark": 0.0}
-).encode()
-
-tar_path = os.path.join(root, "shard-000.tar")
-with tarfile.open(tar_path, "w") as tf:
-    for i in range(8):
-        for suffix, payload in (("jpg", jpg), ("txt", txt), ("json", meta)):
-            info = tarfile.TarInfo(f"s{i:04d}.{suffix}")
-            info.size = len(payload)
-            tf.addfile(info, io.BytesIO(payload))
-
-with open(os.environ["GITHUB_ENV"], "a") as fh:
-    fh.write(f"WDS_TRAIN_SHARD={tar_path}\n")
-print(f"prepared controlnet webdataset shard at {tar_path}", flush=True)
-PY
 }
 
 # diffusers-gligen: research_projects/gligen text-box training. Base stack only:

@@ -67,7 +67,7 @@ pip install --no-build-isolation "https://github.com/openai/CLIP/archive/d50d76d
 
 ### 生成图片
 
-下面的代码通过 ModelScope 下载 `sd-turbo` 模型，注入 NPU autocast 补丁，启动 stable-diffusion-webui API，并完成一次文生图推理。
+下面的代码通过 ModelScope 下载 `sd-turbo` 模型，以全精度模式启动 stable-diffusion-webui API，并完成一次文生图推理。
 
 ```python #test-setup
 import os
@@ -83,16 +83,6 @@ model_dir = Path(snapshot_download("AI-ModelScope/sd-turbo"))
 checkpoint = (model_dir / "sd_turbo.safetensors").resolve()
 assert checkpoint.is_file()
 
-# stable-diffusion-webui 的 autocast 判断默认未包含 NPU，需要补充 NPU 分支。
-devices = repo / "modules" / "devices.py"
-text = devices.read_text(encoding="utf-8")
-old = "if has_xpu() or has_mps() or cuda_no_autocast():"
-new = (
-    "if npu_specific.has_npu or has_xpu() or has_mps() or cuda_no_autocast():"
-)
-assert old in text
-devices.write_text(text.replace(old, new), encoding="utf-8")
-
 env = os.environ.copy()
 env["STABLE_DIFFUSION_REPO"] = "https://github.com/w-e-w/stablediffusion.git"
 (repo / "db").mkdir(exist_ok=True)
@@ -102,6 +92,7 @@ command = [
     "launch.py",
     "--nowebui",
     "--skip-torch-cuda-test",
+    "--no-half",
     "--ckpt",
     str(checkpoint),
     "--port",

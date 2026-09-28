@@ -227,36 +227,36 @@ supported:
   #     - +total_train_steps=1
   #     - ++actor.scheduling_spec.0.env_vars.TASK_QUEUE_ENABLE=1
   #   timeout_minutes: 30
-  # Countdown 数字游戏 GRPO（Qwen2.5-3B-Instruct；自定义 CountDownWorkflow：
-  # 本地 agenerate + 本地 compute_score 奖励，无外部 API）。数据非下载、非
-  # fixture：setup 按 areal-countdown-grpo profile 在 TARGET_ROOT 下现场跑
-  # examples/countdown/countdown.py（--num_samples 32 --eval_size 8，
-  # tokenizer 用预下载模型）生成 data/countdown/qwen/*.jsonl，正好对上
-  # train_config.yaml 默认的 train_dataset.path。norm 组合与 geometry3k 相同
-  # （reward=group、adv=batch），无 kDouble 问题；offload/disk 理由同其他
-  # 条目（共卡内存压力 + colocate 下 xccl 建不起 HCCL 组）。
-  - path: examples/countdown/train.py
-    profile: areal-countdown-grpo
-    runner: linux-aarch64-a2-2
-    npu_devices: '0,1'
-    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
-    overlay_args:
-      - --config examples/countdown/train_config.yaml
-      - scheduler.type=local
-      - cluster.n_gpus_per_node=2
-      - rollout.backend=vllm:d1p1t2
-      - actor.backend=fsdp:d2p1t1
-      - +actor.fsdp.offload_params=true
-      - +actor.weight_update_mode=disk
-      - actor.path=${AREAL_MODEL_PATH}
-      - actor.mb_spec.max_tokens_per_mb=1024
-      - ref.mb_spec.max_tokens_per_mb=1024
-      - vllm.gpu_memory_utilization=0.3
-      - gconfig.max_new_tokens=64
-      - gconfig.n_samples=1
-      - train_dataset.batch_size=2
-      - +total_train_steps=1
-    timeout_minutes: 30
+  # # Countdown 数字游戏 GRPO（Qwen2.5-3B-Instruct；自定义 CountDownWorkflow：
+  # # 本地 agenerate + 本地 compute_score 奖励，无外部 API）。数据非下载、非
+  # # fixture：setup 按 areal-countdown-grpo profile 在 TARGET_ROOT 下现场跑
+  # # examples/countdown/countdown.py（--num_samples 32 --eval_size 8，
+  # # tokenizer 用预下载模型）生成 data/countdown/qwen/*.jsonl，正好对上
+  # # train_config.yaml 默认的 train_dataset.path。norm 组合与 geometry3k 相同
+  # # （reward=group、adv=batch），无 kDouble 问题；offload/disk 理由同其他
+  # # 条目（共卡内存压力 + colocate 下 xccl 建不起 HCCL 组）。
+  # - path: examples/countdown/train.py
+  #   profile: areal-countdown-grpo
+  #   runner: linux-aarch64-a2-2
+  #   npu_devices: '0,1'
+  #   image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
+  #   overlay_args:
+  #     - --config examples/countdown/train_config.yaml
+  #     - scheduler.type=local
+  #     - cluster.n_gpus_per_node=2
+  #     - rollout.backend=vllm:d1p1t2
+  #     - actor.backend=fsdp:d2p1t1
+  #     - +actor.fsdp.offload_params=true
+  #     - +actor.weight_update_mode=disk
+  #     - actor.path=${AREAL_MODEL_PATH}
+  #     - actor.mb_spec.max_tokens_per_mb=1024
+  #     - ref.mb_spec.max_tokens_per_mb=1024
+  #     - vllm.gpu_memory_utilization=0.3
+  #     - gconfig.max_new_tokens=64
+  #     - gconfig.n_samples=1
+  #     - train_dataset.batch_size=2
+  #     - +total_train_steps=1
+  #   timeout_minutes: 30
   # HH-RLHF DPO（Qwen2.5-7B，离线 DPOTrainer + ref 引擎，无 rollout/vLLM：
   # 不需要 weight_update_mode，也不踩批级归约 kDouble）。数据集公开非
   # gated，但 jsonl.gz 按子集分目录，loader 不带
@@ -282,7 +282,7 @@ supported:
       - +train_dataset.setup_timeout=600
       - +valid_dataset.setup_timeout=600
       - +total_train_steps=1
-    timeout_minutes: 30
+    timeout_minutes: 60
   # HH-RLHF Reward Modeling（与 hhrlhf_dpo.py 共用 areal-align profile；
   # RWTrainer，同样无 rollout，风险点与上面 DPO 条目相同）。
   - path: examples/alignment/hhrlhf_rw.py
@@ -306,6 +306,38 @@ supported:
       - +valid_dataset.setup_timeout=600
       - +total_train_steps=1
     timeout_minutes: 30
+  # GSM8K 多轮自我纠错 GRPO（Qwen2.5-1.5B-Instruct，复用 areal-math-grpo
+  # profile：同模型同数据集，setup 零增量）。MultiturnRLVRWorkflow：本地
+  # vLLM 生成 + math_verify 本地打分，答错注入 feedback 重试 max_turns 轮，
+  # 无外部 API。yaml 特征与 math 系一致：scheduler.type=null 必须补 local；
+  # yaml 未写 weight_update_mode，用单个 + 新增 disk；norm 组合
+  # （reward=group、adv=batch）同 geometry3k 实测可过。脚本的
+  # from examples.multi_turn_math.config import 依赖仓根在 sys.path
+  # （run_example.sh 已置）。
+  - path: examples/multi_turn_math/gsm8k_rl_mt.py
+    profile: areal-math-grpo
+    runner: linux-aarch64-a2-2
+    npu_devices: '0,1'
+    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
+    overlay_args:
+      - --config examples/multi_turn_math/gsm8k_grpo_mt.yaml
+      - scheduler.type=local
+      - cluster.n_gpus_per_node=2
+      - rollout.backend=vllm:d1p1t2
+      - actor.backend=fsdp:d2p1t1
+      - +actor.fsdp.offload_params=true
+      - +actor.weight_update_mode=disk
+      - actor.path=${AREAL_MODEL_PATH}
+      - actor.mb_spec.max_tokens_per_mb=1024
+      - vllm.gpu_memory_utilization=0.3
+      - gconfig.max_new_tokens=64
+      - gconfig.n_samples=1
+      - train_dataset.batch_size=2
+      - valid_dataset.batch_size=2
+      - +train_dataset.setup_timeout=600
+      - +valid_dataset.setup_timeout=600
+      - +total_train_steps=1
+    timeout_minutes: 30
 unsupported:
   # UPSTREAM_BUG：gsm8k_eval.py 绕过 PPOTrainer 自行初始化 scheduler/engine，
   # 但未初始化 DataController；get_custom_dataset 返回的 RDataset 在
@@ -313,17 +345,24 @@ unsupported:
   # DataController"。属上游源码缺陷，overlay 无法绕过。
   # gsm8k_rl.py 已覆盖同一模型/引擎/workflow 的训练与验证路径，评估增量有限。
   - examples/math/gsm8k_eval.py
-  # camel：workflow 本身无外部 API（ArealOpenAI 包的是本地 vLLM 引擎，
-  # math_verify 奖励本地，gsm8k 在线下载）；但硬依赖 pyproject 未声明的
-  # camel-ai 包，镜像未装、aarch64 依赖树待验证——本地装通后再迁 supported。
+  # 该示例在 AReaL 的 RPC 分布式架构下无法运行，根因是配置类 AgentRLConfig 定义
+  # 在入口脚本 train.py 中，跨进程反序列化必然失败。
   - examples/camel/train.py
   # code：CodeAgent 硬依赖外部凭据——OPENAI_API_KEY / OPENAI_BASE_URL（外部
   # OpenAI 兼容 LLM）+ DAYTONA_API_KEY（Daytona 云沙箱，缺失直接 raise，
   # areal/workflow/openai/code_agent.py:27,53,184）；且 examples/code/ 下没有
   # config yaml，example 本身不完整。CI 无凭据，不适配看护。
   - examples/code/train.py
+  # mopd 蒸馏：三重阻断——(1) actor.path=/path/to/aime/checkpoint 是占位符，
+  # 指向上游先行训练且未发布的 checkpoint，CI 无法获取（数据路径同为
+  # /path/to 占位）；(2) leetcode 域路由到 CodeAgent → OPENAI + DAYTONA
+  # 外部凭据硬依赖（同 examples/code）；(3) 16 卡形态（vllm:d4t2 +
+  # fsdp:d2c4 即 CP4、mindspeed CP/MoE 专属开关、max_new_tokens=12800、
+  # n_samples=16），压到 2 卡 smoke 会面目全非。待上游发布可复现的
+  # teacher checkpoint 后再评估。
   - examples/distillation/mopd/mopd_rl.py
-  - examples/multi_turn_math/gsm8k_rl_mt.py
+  # 已看护 geometry3k_grpo_mt.py 的 8 行启动器（export USE_OPTIMIZED_MODEL=0
+  # + 同 config 转发 "$@"），零增量覆盖；setup 已统一导出该变量。
   - examples/multi_turn_vlm/run_geometry3k_grpo_mt_npu.sh
   - examples/vlm/geometry3k_sft.py
   - examples/vlm/clevr_count_70k_grpo.py

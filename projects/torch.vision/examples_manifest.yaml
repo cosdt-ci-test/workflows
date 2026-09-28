@@ -19,12 +19,25 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     timeout_minutes: 120
+  # TVTensor FAQ 演示 Image/BoundingBoxes 的零拷贝包装与算术；合成张量在 NPU 上运行，仓内图片只供辅助说明。
+  - path: gallery/transforms/plot_tv_tensors.py
+    profile: vision_gallery_npu
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    timeout_minutes: 120
   # ResNet18 ImageFolder 分类训练；本地五类微型图片、单卡 NPU、1 epoch 与 batch 2，避开 CUDA AMP/分布式路径。
   - path: references/classification/train.py
     profile: vision_classification_npu
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args: [--model, resnet18, --device, 'npu:0', --epochs, '1', --batch-size, '2', --workers, '0', --train-crop-size, '64', --val-crop-size, '64', --val-resize-size, '72']
+    timeout_minutes: 120
+  # VOC 语义分割训练/评估；本地三张带掩码图片、轻量 LR-ASPP/MobileNet、单卡 1 epoch，保留真实 NPU 前后向与混淆矩阵路径。
+  - path: references/segmentation/train.py
+    profile: vision_segmentation_npu
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args: [--dataset, voc, --model, lraspp_mobilenet_v3_large, --device, 'npu:0', --epochs, '1', --batch-size, '1', --workers, '0']
     timeout_minutes: 120
 
 unsupported:
@@ -40,13 +53,11 @@ unsupported:
   - gallery/transforms/plot_transforms_e2e.py  # 小 COCO 数据上的 Mask R-CNN 分割演示；需 pycocotools 且模型用 torchvision.ops NMS/RoIAlign，NPU 适配待验证。
   - gallery/transforms/plot_transforms_getting_started.py  # v2 图像变换入门与仓内图片绘图；默认走 CPU/PIL，尚无可断言的 NPU 计算结果。
   - gallery/transforms/plot_transforms_illustrations.py  # 多种 v2 变换的图示；依赖仓内图片和 CPU/PIL/matplotlib，适合文档而非首轮 NPU 冒烟。
-  - gallery/transforms/plot_tv_tensors.py  # TVTensor 图片/框/掩码语义教程；含图片展示和 CPU 构造，需选定 NPU 张量输出再单独验证。
   - references/classification/train_quantization.py  # 分类 QAT/PTQ 配方；使用 qnnpack/fbgemm 并转换 CPU 量化模型，不等于昇腾 NPU 量化训练。
   - references/depth/stereo/cascade_evaluation.py  # 双目深度级联评测；引用 v0.29.0 已移除的 torchvision.prototype 深度模型，入口在构造阶段即失效。
   - references/depth/stereo/train.py  # 双目深度训练；依赖已移除的 torchvision.prototype.models.depth.stereo，非缩数据即可接入。
   - references/detection/train.py  # COCO 检测训练；Faster R-CNN 等依赖 torchvision.ops.nms/RoIAlign，官方 C++ 扩展未提供 NPU 内核。
   - references/optical_flow/train.py  # RAFT 光流训练；可传 NPU 设备，但须制备 FlyingChairs 等严格双帧/光流标注，分布式路径还硬编码 CUDA/NCCL。
-  - references/segmentation/train.py  # COCO/VOC 语义分割训练；可传 NPU 设备，待制备分割掩码 fixture 并实测评估中的 NPU bincount。
   - references/similarity/test.py  # FakeData 上测试 PKSampler 的 CPU 单测；没有 NPU 模型前后向，不应算作 NPU example。
   - references/similarity/train.py  # FashionMNIST triplet-loss 相似度训练；设备固定为 cuda:0 或 CPU且无 --device，原样执行不能覆盖 NPU。
   - references/video_classification/train.py  # 视频分类训练；可传 NPU 设备，但需 Kinetics 格式可解码短视频/标注和视频解码依赖，暂未造 fixture。

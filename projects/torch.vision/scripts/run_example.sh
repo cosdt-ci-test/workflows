@@ -8,7 +8,9 @@ entry="${1:-}"
 case "$entry" in
   gallery/transforms/plot_custom_transforms.py|\
   gallery/transforms/plot_custom_tv_tensors.py|\
-  references/classification/train.py) ;;
+  gallery/transforms/plot_tv_tensors.py|\
+  references/classification/train.py|\
+  references/segmentation/train.py) ;;
   *) echo "unsupported TorchVision example entry: ${entry:-<missing>}" >&2; exit 2 ;;
 esac
 
@@ -45,13 +47,23 @@ if entry.startswith("gallery/"):
         raise SystemExit("gallery entry does not take CLI overlay arguments")
     torch.set_default_device("npu:0")
     sys.argv = [str(script)]
-else:
+elif entry == "references/classification/train.py":
     data_root = os.environ.get("VISION_DATA_ROOT")
     if not data_root or not Path(data_root, "train").is_dir() or not Path(data_root, "val").is_dir():
         raise SystemExit("five-class ImageFolder fixture missing")
     if "--device" not in overlay or "npu:0" not in overlay:
         raise SystemExit("classification entry requires --device npu:0")
     output = Path(os.environ["CI_OUTPUT_DIR"]) / "classification"
+    output.mkdir(parents=True, exist_ok=True)
+    sys.argv = [str(script), *overlay, "--data-path", data_root, "--output-dir", str(output)]
+else:
+    data_root = os.environ.get("VISION_SEG_DATA_ROOT")
+    voc_root = Path(data_root or "") / "VOCdevkit" / "VOC2012"
+    if not data_root or not (voc_root / "ImageSets" / "Segmentation" / "train.txt").is_file():
+        raise SystemExit("three-image VOC segmentation fixture missing")
+    if "--dataset" not in overlay or "voc" not in overlay or "--device" not in overlay or "npu:0" not in overlay:
+        raise SystemExit("segmentation entry requires --dataset voc --device npu:0")
+    output = Path(os.environ["CI_OUTPUT_DIR"]) / "segmentation"
     output.mkdir(parents=True, exist_ok=True)
     sys.argv = [str(script), *overlay, "--data-path", data_root, "--output-dir", str(output)]
 
@@ -74,11 +86,14 @@ elif entry.endswith("plot_custom_tv_tensors.py"):
     require_npu("my_dp")
     require_npu("wrapped")
     require_npu("wrapped_dog")
+elif entry.endswith("plot_tv_tensors.py"):
+    # The tutorial's first Image is a zero-copy wrapper around this tensor.
+    require_npu("tensor")
 else:
     if not (output / "model_0.pth").is_file():
-        raise SystemExit("classification entry did not finish an epoch and save a checkpoint")
+        raise SystemExit(f"{entry}: did not finish an epoch and save a checkpoint")
     if torch.npu.max_memory_allocated() <= 0:
-        raise SystemExit("classification entry did not allocate NPU memory")
+        raise SystemExit(f"{entry}: did not allocate NPU memory")
 
 torch.npu.synchronize()
 print(f"NPU example passed: {entry}")

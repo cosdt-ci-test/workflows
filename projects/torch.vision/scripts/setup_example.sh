@@ -4,7 +4,7 @@ set -euo pipefail
 
 profile="${1:-}"
 case "$profile" in
-  vision_gallery_npu|vision_classification_npu) ;;
+  vision_gallery_npu|vision_classification_npu|vision_segmentation_npu) ;;
   *) echo "unknown TorchVision example profile: ${profile:-<missing>}" >&2; exit 2 ;;
 esac
 
@@ -72,5 +72,34 @@ print(f"five-class ImageFolder fixture: {root}")
 PY
   if [[ -n "${GITHUB_ENV:-}" ]]; then
     printf 'VISION_DATA_ROOT=%s\n' "$VISION_DATA_ROOT" >> "$GITHUB_ENV"
+  fi
+fi
+
+if [[ "$profile" == vision_segmentation_npu ]]; then
+  : "${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is required}"
+  export VISION_SEG_DATA_ROOT="$GITHUB_WORKSPACE/vision-segmentation-fixture"
+  python - <<'PY'
+import os
+from pathlib import Path
+from PIL import Image, ImageDraw
+
+root = Path(os.environ["VISION_SEG_DATA_ROOT"]) / "VOCdevkit" / "VOC2012"
+images = root / "JPEGImages"
+masks = root / "SegmentationClass"
+splits = root / "ImageSets" / "Segmentation"
+for folder in (images, masks, splits):
+    folder.mkdir(parents=True, exist_ok=True)
+
+for split, names in (("train", ("ci_train_0", "ci_train_1")), ("val", ("ci_val_0",))):
+    (splits / f"{split}.txt").write_text("\n".join(names) + "\n", encoding="utf-8")
+    for idx, name in enumerate(names):
+        Image.new("RGB", (80, 80), (40 + idx * 50, 90, 130)).save(images / f"{name}.jpg")
+        mask = Image.new("L", (80, 80), 0)
+        ImageDraw.Draw(mask).rectangle((16, 16, 63, 63), fill=idx + 1)
+        mask.save(masks / f"{name}.png")
+print(f"generated three-image VOC segmentation fixture at {root}")
+PY
+  if [[ -n "${GITHUB_ENV:-}" ]]; then
+    printf 'VISION_SEG_DATA_ROOT=%s\n' "$VISION_SEG_DATA_ROOT" >> "$GITHUB_ENV"
   fi
 fi

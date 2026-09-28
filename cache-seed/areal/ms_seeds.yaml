@@ -12,21 +12,11 @@
 #   areal-agents-grpo                       : Qwen2-1.5B-Instruct
 #   areal-math-sft                          : Qwen3-1.7B
 #   areal-math-boba                         : DeepSeek-R1-Distill-Qwen-1.5B
-#
-# 全部是 Qwen / deepseek 官方同名镜像（1.5B~3B，魔塔上均验证存在）。
-#
-# 2026-09-28 首次 dispatch：下面 6 条已成功 plant 进共享卷（[done]，见
-# run 的 "Seed shared cache (ModelScope plants)" 日志）；Qwen2.5-1.5B-Instruct
-# 因 ms_seed.py 的 fetch_sha 查 hf-mirror API 连接超时（timeout=30、无重试）
-# 而没成，整步判红。现只留这一条重跑补种——已 plant 的 6 条暂时注释，避免重跑
-# 时再对它们各发一次 HF sha 查询（hf-mirror 抖动时同样会红）。补种成功后把这 6
-# 条取消注释（幂等，届时会走 [skip]）。
 version: 1
 seeds:
   - ms_id: Qwen/Qwen2.5-1.5B-Instruct
     hf_id: Qwen/Qwen2.5-1.5B-Instruct
     kind: model
-  # 已 plant（2026-09-28），补种后恢复：
   # - ms_id: Qwen/Qwen2.5-VL-3B-Instruct
   #   hf_id: Qwen/Qwen2.5-VL-3B-Instruct
   #   kind: model

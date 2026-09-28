@@ -96,88 +96,87 @@ echo "AREAL_ALLOW_DEFAULT_ADMIN_KEY=1" >> "$GITHUB_ENV"
 # -------------------------------------------------------
 # 3. Pre-download Model & Dataset (using image's native tools)
 # -------------------------------------------------------
-# Model and dataset are both fetched online (no local fixtures). Export the
-# Hub mirror through GITHUB_ENV so the run-example step inherits it too: AReaL
-# downloads the dataset at train time via `load_dataset` inside the data
-# service, not here.
+# No local fixtures. The dataset is fetched online at train time
+# (`load_dataset`, inside the data service); the model is resolved from the
+# shared runner cache below. Export the Hub mirror through GITHUB_ENV so the
+# run-example step inherits it too.
 export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
 echo "HF_ENDPOINT=${HF_ENDPOINT}" >> "$GITHUB_ENV"
 export AREAL_MODEL_ID="$MODEL_ID"
 
-# ModelScope first: it is an in-country CDN (much faster and steadier than
-# hf-mirror from CN runners) and mirrors every profile model under the same
-# repo id (Qwen org, deepseek-ai). modelscope is pinned to 1.37.0 like every
-# other project in this repo (>=1.38 splits the hub code into modelscope-hub).
-# hf-mirror stays as the fallback: it can be flaky (transient outages,
-# per-machine reachability - same class of problem as the unreachable
-# github.com in section 8). NOTE: both paths still write into the per-run
-# workspace, so this only makes each download faster, not one-time; wire
-# cache-seed to stop re-downloading altogether.
+# The model comes from the shared runner cache. The pool keeps a persistent
+# volume at ~/.cache/huggingface (see cache-seed/README.md and
+# docs/examples-guard-engine.md), and cache-seed/areal/ms_seeds.yaml plants
+# every profile model into it from ModelScope (HF hub-cache layout,
+# refs/main = real HF sha). setup only resolves the snapshot path from
+# refs/main, so a warm pool is zero-network, zero-download - same pattern as
+# peft/torchtune.
+#
+# Cold-cache self-heal (sequence: cache-seed not dispatched yet, or a model
+# added since): pull once with huggingface_hub - no local_dir, so it lands in
+# the shared hub-cache layout and every later run is a hit. If HF/hf-mirror is
+# down too, fall back to ModelScope into the per-run workspace, which is only a
+# last resort: it is discarded with the workspace, so the durable fix is
+# dispatching the cache-seed workflow (projects=areal).
 python3 <<'PY'
 import os
 import subprocess
 import sys
-import time
 
 model_id = os.environ["AREAL_MODEL_ID"]
-dest = os.path.join(os.environ["GITHUB_WORKSPACE"], "areal_models", model_id.split("/")[-1])
-
-DOWNLOAD_ATTEMPTS = 3
-
-
-def attempt_download(label, download):
-    last_err = None
-    for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
-        try:
-            download()
-            print(f"{label} download succeeded", flush=True)
-            return None
-        except Exception as e:
-            last_err = e
-            print(
-                f"{label} download attempt {attempt}/{DOWNLOAD_ATTEMPTS} failed: "
-                f"{type(e).__name__}: {e}",
-                flush=True,
-            )
-            time.sleep(10)
-    return last_err
+hf_home = os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
+repo_dir = os.path.join(hf_home, "hub", "models--" + model_id.replace("/", "--"))
+workspace_dir = os.path.join(
+    os.environ["GITHUB_WORKSPACE"], "areal_models", model_id.split("/")[-1]
+)
 
 
-def modelscope_download():
-    try:
-        from modelscope import snapshot_download
-    except ImportError:
-        subprocess.run(
-            [sys.executable, "-m", "pip", "install", "-q", "modelscope==1.37.0"],
-            check=True,
-        )
-        from modelscope import snapshot_download
-    snapshot_download(model_id, local_dir=dest)
+def cached_snapshot():
+    refs = os.path.join(repo_dir, "refs", "main")
+    if not os.path.isfile(refs):
+        return None
+    with open(refs) as fh:
+        sha = fh.read().strip()
+    snap = os.path.join(repo_dir, "snapshots", sha)
+    if os.path.isdir(snap) and os.listdir(snap):
+        return snap
+    return None
 
 
-def hf_download():
-    from huggingface_hub import snapshot_download
-
-    snapshot_download(model_id, local_dir=dest)
-
-
-print(f"downloading {model_id} from ModelScope", flush=True)
-ms_err = attempt_download("ModelScope", modelscope_download)
-if ms_err is not None:
+snapshot = cached_snapshot()
+if snapshot is not None:
+    print(f"{model_id}: shared-cache hit -> {snapshot}", flush=True)
+else:
     print(
-        f"ModelScope exhausted ({ms_err}); falling back to HF via "
-        f"{os.environ.get('HF_ENDPOINT', '<unset>')}",
+        f"{model_id}: not in the shared cache ({repo_dir}); filling it via HF",
         flush=True,
     )
-    hf_err = attempt_download("HF", hf_download)
-    if hf_err is not None:
-        raise SystemExit(
-            f"model download failed on both ModelScope and HF: ms={ms_err}; hf={hf_err}"
-        )
+    try:
+        from huggingface_hub import snapshot_download
+
+        snapshot = snapshot_download(model_id)
+        print(f"filled shared cache: {snapshot}", flush=True)
+    except Exception as e:
+        print(f"HF fill failed ({type(e).__name__}: {e}); trying ModelScope", flush=True)
+        snapshot = None
+
+    if snapshot is None:
+        try:
+            from modelscope import snapshot_download as ms_snapshot
+        except ImportError:
+            subprocess.run(
+                [sys.executable, "-m", "pip", "install", "-q", "modelscope==1.37.0"],
+                check=True,
+            )
+            from modelscope import snapshot_download as ms_snapshot
+        os.makedirs(workspace_dir, exist_ok=True)
+        ms_snapshot(model_id, local_dir=workspace_dir)
+        snapshot = workspace_dir
+        print(f"downloaded to ephemeral {snapshot}", flush=True)
 
 with open(os.environ["GITHUB_ENV"], "a") as fh:
-    fh.write(f"AREAL_MODEL_PATH={dest}\n")
-print(f"Downloaded model to {dest}", flush=True)
+    fh.write(f"AREAL_MODEL_PATH={snapshot}\n")
+print(f"AREAL_MODEL_PATH={snapshot}", flush=True)
 PY
 
 # -------------------------------------------------------

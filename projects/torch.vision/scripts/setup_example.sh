@@ -76,6 +76,12 @@ PY
 fi
 
 if [[ "$profile" == vision_segmentation_npu ]]; then
+  # train.py imports coco_utils at module load even for --dataset voc;
+  # coco_utils imports pycocotools unconditionally. Keep this optional
+  # reference-script dependency scoped to the segmentation profile.
+  uv pip install --system pycocotools
+  python -c 'from pycocotools import mask; print("pycocotools mask import OK")'
+
   : "${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is required}"
   export VISION_SEG_DATA_ROOT="$GITHUB_WORKSPACE/vision-segmentation-fixture"
   python - <<'PY'

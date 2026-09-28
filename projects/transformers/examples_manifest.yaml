@@ -479,19 +479,22 @@ supported:
       - --per_device_train_batch_size 1
       - --output_dir ${CI_OUTPUT_DIR}
     timeout_minutes: 60
-  - path: examples/pytorch/language-modeling/run_plm.py
-    profile: small-training
-    runner: linux-aarch64-a2-2
-    npu_devices: '0'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --model_name_or_path ${TINYXLNET_PATH}
-      - --train_file ${CI_OUTPUT_DIR}/train.txt
-      - --do_train
-      - --max_steps 1
-      - --per_device_train_batch_size 1
-      - --output_dir ${CI_OUTPUT_DIR}
-    timeout_minutes: 60
+  # run_plm.py：上游 main 在 Trainer(...) 调用中把 processing_class 误写成
+  #   processing_classtokenizer，报 "unexpected keyword argument"（上游批量改名失误，
+  #   NPU 侧 pin/TINYXLNET/tokenizer 链路均已验证通畅）
+  # - path: examples/pytorch/language-modeling/run_plm.py
+  #   profile: small-training
+  #   runner: linux-aarch64-a2-2
+  #   npu_devices: '0'
+  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+  #   overlay_args:
+  #     - --model_name_or_path ${TINYXLNET_PATH}
+  #     - --train_file ${CI_OUTPUT_DIR}/train.txt
+  #     - --do_train
+  #     - --max_steps 1
+  #     - --per_device_train_batch_size 1
+  #     - --output_dir ${CI_OUTPUT_DIR}
+  #   timeout_minutes: 60
 unsupported:
   # --- 多卡并行：TP/DP/CP 组合需 torchrun 4~8 卡，单卡 NPU 不适用 ---
   - examples/3D_parallel.py
@@ -556,10 +559,13 @@ unsupported:
   # run_fim.py：vocab 扩容分支对 Embedding 模块直接调用 .mean(dim=0)，
   #   报 "'Embedding' object has no attribute 'mean'"（原意应为对 weight 张量取均值）
   # run_fim_no_trainer.py：from huggingface_hub import Repository，该类已从新版 huggingface_hub 移除，报 ImportError
+  # run_plm.py：Trainer(...) 调用中 processing_class 被误写为 processing_classtokenizer，
+  #   报 "unexpected keyword argument"（上游批量改名失误）
   # run_clm_no_trainer.py / run_mlm_no_trainer.py 已恢复执行：setup_example.sh
   #   将 accelerate 钉在 <1.15，规避 DistributedType.TPU 枚举移除问题
   - examples/pytorch/language-modeling/run_fim.py
   - examples/pytorch/language-modeling/run_fim_no_trainer.py
+  - examples/pytorch/language-modeling/run_plm.py
   # --- 数据/模型可用性受限（脚本硬编码 Hub 数据集，Runner 无法访问 Hub，无本地文件入口）---
   # object-detection / instance-segmentation / semantic-segmentation 共 6 条：
   #   main 分支脚本仅支持 load_dataset(<hub_id>)，无 --train_file/--train_dir 参数，

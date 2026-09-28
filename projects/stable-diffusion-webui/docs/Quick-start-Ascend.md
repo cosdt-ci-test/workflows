@@ -34,40 +34,67 @@ echo "${UPSTREAM_REF}"
 克隆上游仓库并切换到最新 release：
 
 ```shell #test id="clone-repo" load="upstream_ref>>ref"
+set -e
 git clone --branch "<ref>" --depth 1 https://github.com/AUTOMATIC1111/stable-diffusion-webui.git
-cd stable-diffusion-webui
-echo "Release $(git describe --tags --exact-match HEAD)"
+release=$(git -C stable-diffusion-webui describe --tags --exact-match HEAD)
+echo "stable-diffusion-webui $release"
 ```
 
-`<ref>` 为上游最新 release 标签（例如 `v1.10.1`）。
+```{note}
+`<ref>` 表示上游最新的 release 标签
+```
 
-输出结果如下，其中 `xxx` 表示实际的 release 标签：
+输出结果如下：
 
 ```shell #test-result id="clone-repo" fuzzy='xxx'
-Release xxx
+stable-diffusion-webui xxx
+```
+
+```{note}
+`xxx` 表示安装的版本。
 ```
 
 ## 运行示例
 
 ### 安装依赖
 
-安装 opencv 运行所需的系统库、上游依赖，以及与 CANN 匹配的 PyTorch 软件栈。CLIP 从 GitHub 源码安装，ModelScope 用于下载模型：
+安装 opencv 运行所需的系统库、上游依赖，以及与 CANN 匹配的 PyTorch 软件栈，并打印关键依赖版本。CLIP 从 GitHub 源码安装，ModelScope 用于下载模型：
 
-```shell #test-setup
+```shell #test id="install-deps"
+set -e
 apt-get update -qq
 apt-get install -y -qq --no-install-recommends libgl1 libglib2.0-0
-cd stable-diffusion-webui
 pip install torch==2.9.0 torchvision==0.24.0 torch_npu==2.9.0.post6
-pip install -r requirements_versions.txt
-pip install -r requirements.txt
-pip install -r requirements_npu.txt
+pip install -r stable-diffusion-webui/requirements_versions.txt
+pip install -r stable-diffusion-webui/requirements.txt
+pip install -r stable-diffusion-webui/requirements_npu.txt
 pip install modelscope wheel
 pip install --no-build-isolation "https://github.com/openai/CLIP/archive/d50d76daa670286dd6cacf3bcd80b5e4823fc8e1.zip"
+for package in torch torchvision torch-npu transformers gradio modelscope; do
+    version=$(pip show "$package" | sed -n 's/^Version: //p')
+    echo "$package==${version%%+*}"
+done
+```
+
+输出结果如下：
+
+```shell #test-result id="install-deps" fuzzy='...' fuzzy='xxx'
+...
+torch==2.9.0
+torchvision==0.24.0
+torch-npu==2.9.0.post6
+transformers==xxx
+gradio==xxx
+modelscope==xxx
+```
+
+```{note}
+`...` 表示省略的安装日志，`xxx` 表示依赖的版本。
 ```
 
 ### 生成图片
 
-下面的代码通过 ModelScope 下载 `sd-turbo` 模型，以全精度模式启动 stable-diffusion-webui API，并完成一次文生图推理。
+下面的代码通过 ModelScope 下载 `sd-turbo` 模型，启动 stable-diffusion-webui API，并完成一次文生图推理。用 Python 运行以下代码：
 
 ```python #test-setup
 import os
@@ -83,6 +110,16 @@ model_dir = Path(snapshot_download("AI-ModelScope/sd-turbo"))
 checkpoint = (model_dir / "sd_turbo.safetensors").resolve()
 assert checkpoint.is_file()
 
+model_path = repo / "models" / "Stable-diffusion"
+model_path.mkdir(parents=True, exist_ok=True)
+local_checkpoint = model_path / checkpoint.name
+local_checkpoint.symlink_to(checkpoint)
+config = (
+    repo / "repositories" / "stable-diffusion-stability-ai"
+    / "configs" / "stable-diffusion" / "v2-inference.yaml"
+)
+local_checkpoint.with_suffix(".yaml").symlink_to(config)
+
 env = os.environ.copy()
 env["STABLE_DIFFUSION_REPO"] = "https://github.com/w-e-w/stablediffusion.git"
 (repo / "db").mkdir(exist_ok=True)
@@ -94,7 +131,7 @@ command = [
     "--skip-torch-cuda-test",
     "--no-half",
     "--ckpt",
-    str(checkpoint),
+    str(local_checkpoint),
     "--port",
     "7861",
 ]
@@ -107,7 +144,7 @@ subprocess.Popen(
 )
 ```
 
-服务启动需要几分钟。确认服务启动完成后，发起一次文生图请求，并将返回的图片保存到本地：
+服务启动需要几分钟。确认服务启动完成后，发起文生图请求并将返回的图片保存到本地，用 Python 运行以下代码：
 
 ```python #test id="txt2img"
 import base64
@@ -150,4 +187,7 @@ print(f"图片保存路径：{output}")
 图片保存路径：/tmp/sd-turbo-out.png
 ```
 
-更多用法请参考 [stable-diffusion-webui wiki](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki)。
+## 外部链接
+
+- 官方仓库：[AUTOMATIC1111/stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui)
+- 官方文档：[stable-diffusion-webui wiki](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki)

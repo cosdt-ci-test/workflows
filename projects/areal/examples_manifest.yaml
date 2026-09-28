@@ -207,35 +207,36 @@ supported:
   #     - +total_train_steps=1
   #     - ++actor.scheduling_spec.0.env_vars.TASK_QUEUE_ENABLE=1
   #   timeout_minutes: 30
-  # Countdown GRPO（实测跑通）：数据由 setup 现场生成（countdown.py
-  # --num_samples 32 --eval_size 8），对上 yaml 默认 train_dataset.path
-  # - path: examples/countdown/train.py
-  #   profile: areal-countdown-grpo
-  #   runner: linux-aarch64-a2-2
-  #   npu_devices: '0,1'
-  #   image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
-  #   overlay_args:
-  #     - --config examples/countdown/train_config.yaml
-  #     - scheduler.type=local
-  #     - cluster.n_gpus_per_node=2
-  #     - rollout.backend=vllm:d1p1t2
-  #     - actor.backend=fsdp:d2p1t1
-  #     - +actor.fsdp.offload_params=true
-  #     - +actor.weight_update_mode=disk
-  #     - actor.path=${AREAL_MODEL_PATH}
-  #     - actor.mb_spec.max_tokens_per_mb=1024
-  #     - ref.mb_spec.max_tokens_per_mb=1024
-  #     - vllm.gpu_memory_utilization=0.3
-  #     - gconfig.max_new_tokens=64
-  #     - gconfig.n_samples=1
-  #     - train_dataset.batch_size=2
-  #     - +total_train_steps=1
-  #   timeout_minutes: 30
-  # HH-RLHF DPO（7B）：离线无 rollout；hh-rlhf 按子集分目录，setup 预下载
-  # harmless-base 到本地目录（AREAL_HHRLHF_DATA）。a2-2 实测是 32GB 卡：
-  # fully_shard 初始化前整模型驻留 GPU（~28.4GiB）会撑爆 32GB，必须
-  # memory_efficient_load（CPU 上初始化再切分）；稳态 offload 后 GPU 仅需
-  # ref 分片 ~7GB/卡 + 激活，2×32GB 够用。
+  # Countdown GRPO：数据由 setup 现场生成（countdown.py --num_samples 32
+  # --eval_size 8），对上 yaml 默认 train_dataset.path；3B 版已跑通，换
+  # 1.5B-Instruct 轻量化重验
+  - path: examples/countdown/train.py
+    profile: areal-countdown-grpo
+    runner: linux-aarch64-a2-2
+    npu_devices: '0,1'
+    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
+    overlay_args:
+      - --config examples/countdown/train_config.yaml
+      - scheduler.type=local
+      - cluster.n_gpus_per_node=2
+      - rollout.backend=vllm:d1p1t2
+      - +rollout.setup_timeout=1800
+      - actor.backend=fsdp:d2p1t1
+      - +actor.fsdp.offload_params=true
+      - +actor.weight_update_mode=disk
+      - actor.path=${AREAL_MODEL_PATH}
+      - actor.mb_spec.max_tokens_per_mb=1024
+      - ref.mb_spec.max_tokens_per_mb=1024
+      - vllm.gpu_memory_utilization=0.3
+      - gconfig.max_new_tokens=64
+      - gconfig.n_samples=1
+      - train_dataset.batch_size=2
+      - +total_train_steps=1
+    timeout_minutes: 30
+  # HH-RLHF DPO：离线无 rollout；hh-rlhf 按子集分目录，setup 预下载
+  # harmless-base（AREAL_HHRLHF_DATA）。换 Qwen2.5-1.5B（上游 yaml 为 7B，
+  # DPO 管线模型无关；7B 在 32GB 卡初始化 OOM、每腿多下 15GB），配方对齐
+  # gsm8k_rl（offload、无需 memory_efficient_load）
   - path: examples/alignment/hhrlhf_dpo.py
     profile: areal-align
     runner: linux-aarch64-a2-2
@@ -246,8 +247,6 @@ supported:
       - cluster.n_gpus_per_node=2
       - actor.backend=fsdp:d2p1t1
       - +actor.fsdp.offload_params=true
-      - +actor.fsdp.memory_efficient_load=true
-      - +ref.fsdp.memory_efficient_load=true
       - actor.path=${AREAL_MODEL_PATH}
       - actor.mb_spec.max_tokens_per_mb=1024
       - ref.mb_spec.max_tokens_per_mb=1024
@@ -258,7 +257,7 @@ supported:
       - +train_dataset.setup_timeout=600
       - +valid_dataset.setup_timeout=600
       - +total_train_steps=1
-    timeout_minutes: 120
+    timeout_minutes: 60
   # GSM8K 多轮自我纠错 GRPO（实测跑通）：复用 areal-math-grpo profile
   # - path: examples/multi_turn_math/gsm8k_rl_mt.py
   #   profile: areal-math-grpo
@@ -304,71 +303,72 @@ supported:
   #     - valid_dataset.batch_size=2
   #     - +total_train_steps=1
   #   timeout_minutes: 60
-  # CLEVR 计数 GRPO：与 geometry3k 同构，复用 areal-vlm-grpo profile。重数据
-  # 条目：10.4GB 下载 + 7 万图单进程预处理（上游 FIXME 极慢），故
-  # setup_timeout 3600 / timeout 180，HF cache ~30GB
-  - path: examples/vlm/clevr_count_70k_grpo.py
-    profile: areal-vlm-grpo
-    runner: linux-aarch64-a2-2
-    npu_devices: '0,1'
-    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
-    overlay_args:
-      - --config examples/vlm/clevr_count_70k_grpo.yaml
-      - scheduler.type=local
-      - cluster.n_gpus_per_node=2
-      - rollout.backend=vllm:d1p1t2
-      - +rollout.setup_timeout=1800
-      - actor.backend=fsdp:d2p1t1
-      - +actor.fsdp.offload_params=true
-      - +actor.weight_update_mode=disk
-      - actor.path=${AREAL_MODEL_PATH}
-      - actor.mb_spec.max_tokens_per_mb=1024
-      - ref.mb_spec.max_tokens_per_mb=1024
-      - vllm.gpu_memory_utilization=0.3
-      - gconfig.max_new_tokens=64
-      - gconfig.n_samples=1
-      - train_dataset.batch_size=2
-      - valid_dataset.batch_size=2
-      - +train_dataset.setup_timeout=3600
-      - +valid_dataset.setup_timeout=600
-      - +total_train_steps=1
-    timeout_minutes: 180
-  # TIR 工具集成推理 GRPO（独有覆盖面：带内工具调用 + 本地 python/calculator，
-  # Daytona 只是可选后端）；torl 数据只有 GitHub 一个来源且 job 容器不可达
-  # （ModelScope 404、无 HF 镜像），6MB parquet 以 fixture 入库，setup 预放
-  # /tmp/areal/torl_data/ 并建 _SUCCESS 跳过 loader 自带下载
-  - path: examples/tir/train_tir.py
-    profile: areal-tir-grpo
-    runner: linux-aarch64-a2-2
-    npu_devices: '0,1'
-    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
-    overlay_args:
-      - --config examples/tir/tir_math_config.yaml
-      - cluster.n_gpus_per_node=2
-      - rollout.backend=vllm:d1p1t2
-      - +rollout.setup_timeout=1800
-      - actor.backend=fsdp:d2p1t1
-      - +actor.fsdp.offload_params=true
-      - +actor.weight_update_mode=disk
-      - actor.path=${AREAL_MODEL_PATH}
-      - actor.mb_spec.max_tokens_per_mb=1024
-      - ref.mb_spec.max_tokens_per_mb=1024
-      - vllm.gpu_memory_utilization=0.3
-      - gconfig.max_new_tokens=128
-      - gconfig.n_samples=1
-      - train_dataset.batch_size=2
-      - valid_dataset.batch_size=2
-      - +train_dataset.setup_timeout=600
-      - +valid_dataset.setup_timeout=600
-      - +total_train_steps=1
-      - vllm.max_model_len=4096
-    timeout_minutes: 60
-  # Scaffolding 框架 RLVR（独有覆盖面）：旧版 SPMD yaml 按 docstring 迁移
-  # （+scheduler/+backend）；behav_imp_weight_cap 是已删除 legacy 键，必须
-  # ~ 删掉否则 to_structured_cfg 报错；相对导入需 python -m 启动
-  # （run_example.sh 已处理）；yaml 已写 weight_update_mode: disk
+  # # CLEVR 计数 GRPO：与 geometry3k 同构，复用 areal-vlm-grpo profile。重数据
+  # # 条目：10.4GB 下载 + 7 万图单进程预处理（上游 FIXME 极慢），故
+  # # setup_timeout 3600 / timeout 180，HF cache ~30GB
+  # - path: examples/vlm/clevr_count_70k_grpo.py
+  #   profile: areal-vlm-grpo
+  #   runner: linux-aarch64-a2-2
+  #   npu_devices: '0,1'
+  #   image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
+  #   overlay_args:
+  #     - --config examples/vlm/clevr_count_70k_grpo.yaml
+  #     - scheduler.type=local
+  #     - cluster.n_gpus_per_node=2
+  #     - rollout.backend=vllm:d1p1t2
+  #     - +rollout.setup_timeout=1800
+  #     - actor.backend=fsdp:d2p1t1
+  #     - +actor.fsdp.offload_params=true
+  #     - +actor.weight_update_mode=disk
+  #     - actor.path=${AREAL_MODEL_PATH}
+  #     - actor.mb_spec.max_tokens_per_mb=1024
+  #     - ref.mb_spec.max_tokens_per_mb=1024
+  #     - vllm.gpu_memory_utilization=0.3
+  #     - gconfig.max_new_tokens=64
+  #     - gconfig.n_samples=1
+  #     - train_dataset.batch_size=2
+  #     - valid_dataset.batch_size=2
+  #     - +train_dataset.setup_timeout=3600
+  #     - +valid_dataset.setup_timeout=600
+  #     - +total_train_steps=1
+  #   timeout_minutes: 180
+  # # TIR 工具集成推理 GRPO（独有覆盖面：带内工具调用 + 本地 python/calculator，
+  # # Daytona 只是可选后端）；torl 数据只有 GitHub 一个来源且 job 容器不可达
+  # # （ModelScope 404、无 HF 镜像），6MB parquet 以 fixture 入库，setup 预放
+  # # /tmp/areal/torl_data/ 并建 _SUCCESS 跳过 loader 自带下载
+  # - path: examples/tir/train_tir.py
+  #   profile: areal-tir-grpo
+  #   runner: linux-aarch64-a2-2
+  #   npu_devices: '0,1'
+  #   image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
+  #   overlay_args:
+  #     - --config examples/tir/tir_math_config.yaml
+  #     - cluster.n_gpus_per_node=2
+  #     - rollout.backend=vllm:d1p1t2
+  #     - +rollout.setup_timeout=1800
+  #     - actor.backend=fsdp:d2p1t1
+  #     - +actor.fsdp.offload_params=true
+  #     - +actor.weight_update_mode=disk
+  #     - actor.path=${AREAL_MODEL_PATH}
+  #     - actor.mb_spec.max_tokens_per_mb=1024
+  #     - ref.mb_spec.max_tokens_per_mb=1024
+  #     - vllm.gpu_memory_utilization=0.3
+  #     - gconfig.max_new_tokens=128
+  #     - gconfig.n_samples=1
+  #     - train_dataset.batch_size=2
+  #     - valid_dataset.batch_size=2
+  #     - +train_dataset.setup_timeout=600
+  #     - +valid_dataset.setup_timeout=600
+  #     - +total_train_steps=1
+  #     - vllm.max_model_len=4096
+  #   timeout_minutes: 60
+  # Scaffolding 框架 RLVR（独有覆盖面，Qwen2.5-1.5B 复用 areal-math-grpo
+  # profile）：旧版 SPMD yaml 按 docstring 迁移（+scheduler/+backend）；
+  # behav_imp_weight_cap 是已删除 legacy 键，必须 ~ 删掉否则
+  # to_structured_cfg 报错；相对导入需 python -m 启动（run_example.sh 已
+  # 处理）；yaml 已写 weight_update_mode: disk
   - path: examples/scaffolding/gsm8k_rlvr_scaffolding.py
-    profile: areal-scaffold-grpo
+    profile: areal-math-grpo
     runner: linux-aarch64-a2-2
     npu_devices: '0,1'
     image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2

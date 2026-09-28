@@ -14,7 +14,7 @@ fi
 
 PROFILE="$1"
 
-SUPPORTED_PROFILES="areal-vlm-grpo areal-vlm-mt-grpo areal-vlm-sft areal-tir-grpo areal-scaffold-grpo areal-agents-grpo areal-math-grpo areal-math-sft areal-math-aime areal-math-boba areal-countdown-grpo areal-align"
+SUPPORTED_PROFILES="areal-vlm-grpo areal-vlm-mt-grpo areal-vlm-sft areal-tir-grpo areal-agents-grpo areal-math-grpo areal-math-sft areal-math-aime areal-math-boba areal-countdown-grpo areal-align"
 AIME_PREP=0
 BOBA_PREP=0
 COUNTDOWN_PREP=0
@@ -27,17 +27,17 @@ case "$PROFILE" in
   # tir/train_tir.py: see section 8 (fixture staging; the loader's own
   # GitHub download is unreachable from the CI job containers).
   areal-tir-grpo) MODEL_ID="Qwen/Qwen2.5-Math-1.5B"; TORL_PREP=1 ;;
-  # gsm8k_rlvr_scaffolding.py: pure RLVR, dataset is online gsm8k, no prep.
-  areal-scaffold-grpo) MODEL_ID="Qwen/Qwen2.5-3B-Instruct" ;;
+  # gsm8k_rlvr_scaffolding.py reuses areal-math-grpo (same 1.5B model, no prep).
   areal-agents-grpo) MODEL_ID="Qwen/Qwen2-1.5B-Instruct" ;;
   # gsm8k_rl.py and gsm8k_eval.py share the same model.
   areal-math-grpo) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct" ;;
   areal-math-sft) MODEL_ID="Qwen/Qwen3-1.7B" ;;
   areal-math-aime) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; AIME_PREP=1 ;;
   areal-math-boba) MODEL_ID="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"; BOBA_PREP=1 ;;
-  areal-countdown-grpo) MODEL_ID="Qwen/Qwen2.5-3B-Instruct"; COUNTDOWN_PREP=1 ;;
-  # hhrlhf_dpo.py and hhrlhf_rw.py share model + dataset.
-  areal-align) MODEL_ID="Qwen/Qwen2.5-7B"; HHRLHF_PREP=1 ;;
+  areal-countdown-grpo) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; COUNTDOWN_PREP=1 ;;
+  # hhrlhf_dpo.py: DPO pipeline is model-agnostic; upstream yaml's 7B swapped
+  # for 1.5B (7B fp32 init OOMs the 32GB cards in the pool, 15GB per run).
+  areal-align) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; HHRLHF_PREP=1 ;;
   *)
     echo "unknown profile: ${PROFILE} (supported: ${SUPPORTED_PROFILES})" >&2
     exit 1
@@ -63,6 +63,14 @@ uv pip install --no-deps -e "$TARGET_ROOT" --system
 echo "PYTHONPATH=/areal-workspace/MindSpeed:/areal-workspace/Megatron-Bridge/src:${PYTHONPATH:-}" >> "$GITHUB_ENV"
 echo "HCCL_IF_BASE_PORT=63000" >> "$GITHUB_ENV"
 echo "HCCL_NPU_SOCKET_PORT_RANGE=62100-62350" >> "$GITHUB_ENV"
+# Rank-0 weight broadcast (memory_efficient_load) makes rank 1 wait inside
+# the HCCL collective while rank 0 slowly CPU-loads the full weights (~4min
+# for 7B on CI disk); the default connect/exec timeouts (~2min) kill the
+# link first (EI0006 "Getting socket times out"). Same values as the proven
+# gsm8k_grpo_npu.yaml scheduling_spec env suite.
+echo "HCCL_CONNECT_TIMEOUT=7200" >> "$GITHUB_ENV"
+echo "HCCL_EXEC_TIMEOUT=14400" >> "$GITHUB_ENV"
+echo "ACL_DEVICE_SYNC_TIMEOUT=14400" >> "$GITHUB_ENV"
 echo "TASK_QUEUE_ENABLE=1" >> "$GITHUB_ENV"
 echo "OMP_NUM_THREADS=1" >> "$GITHUB_ENV"
 echo "WANDB_MODE=disabled" >> "$GITHUB_ENV"
@@ -137,7 +145,6 @@ with open(base, encoding="utf-8") as fh:
 cfg["experiment_name"] = "aime-grpo"
 cfg["train_dataset"]["path"] = aime_dir
 cfg["valid_dataset"]["path"] = aime_dir
-# cfg["rollout"]["agent"] = None
 config_path = os.path.join(aime_dir, "aime_grpo_npu.yaml")
 with open(config_path, "w", encoding="utf-8") as fh:
     yaml.safe_dump(cfg, fh, sort_keys=False, allow_unicode=True)

@@ -432,38 +432,24 @@ supported:
   #     - +valid_dataset.setup_timeout=600
   #     - +total_train_steps=1
   #   timeout_minutes: 60
-  # CLEVR 计数 SFT。数据：SFT loader 会把每样本 pixel_values 物化进数据集，
-  # 7 万 train 会撑爆数据 worker；脚本硬编码 split="train" 且 loader 不收额外
-  # kwargs，无法用 split/dataset_kwargs 缩量 —— setup 第 10 步用 HF 切片
-  # train[:200]（只下第 0 分片 ~0.5GB）生成本地子集目录（名含 clevr_count_70k
-  # 命中分发），train_dataset.path 指过去。
-  # 加载路径：数据服务在此条目卡死过（注册成功、首次 fetch 60s 超时后 router
-  # 报 no healthy workers；worker 是 fork 进程、日志在 data-*.log 不在主日志，
-  # 疑似 SFT 样本的 multi_modal_input 嵌套张量传输不支持）。改为两个数据集都
-  # 在主进程加载（scheduling_spec=null，geometry3k_sft 同款已验证路径），绕开
-  # 数据服务与那 60s 硬编码超时（controller.py:599）。代价：两次 map 变单进程。
-  # 模型换 Qwen2.5-VL-3B（上游为旧代 Qwen2-VL-7B）。
-  - path: examples/vlm/clevr_count_70k_sft.py
-    profile: areal-clevr-sft
-    runner: linux-aarch64-a2-2
-    npu_devices: '0,1'
-    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
-    overlay_args:
-      - --config examples/vlm/clevr_count_70k_sft.yaml
-      - +scheduler.type=local
-      - cluster.n_gpus_per_node=2
-      - actor.backend=fsdp:d2p1t1
-      - +actor.fsdp.offload_params=true
-      - actor.path=${AREAL_MODEL_PATH}
-      - actor.mb_spec.max_tokens_per_mb=1024
-      - train_dataset.path=${AREAL_CLEVR_SUBSET_DIR}
-      - train_dataset.batch_size=2
-      - valid_dataset.batch_size=2
-      - +train_dataset.scheduling_spec=null
-      - +valid_dataset.scheduling_spec=null
-      - +total_train_steps=1
-    timeout_minutes: 60
 unsupported:
+  # UPSTREAM_BUG：clevr SFT loader 读错 processor 键名、且不判空。
+  # transformers 5.x 起 Qwen-VL 处理器把该字段放在 mm_token_type_ids（Qwen2-VL /
+  # Qwen2.5-VL 的 processor model_input_names 都含 mm_token_type_ids，默认
+  # return_mm_token_type_ids=True）；token_type_ids 是旧版键名。而
+  # areal/dataset/clevr_count_70k.py:110 写的是
+  #   example["mm_token_type_ids"] = processed_input.get("token_type_ids", None)
+  # → 恒取到 None → areal/utils/data.py:173 collate_samples_to_list 里
+  # torch.tensor(None) 报 "Could not infer dtype of NoneType"（dataloader worker 内）。
+  # 同仓 areal/dataset/geometry3k.py:148-150 的写法是对的（判 "mm_token_type_ids"
+  # in processed_input + 读 mm_token_type_ids）。AReaL 自己钉
+  # transformers>=5.0.0,<=5.3.0（pyproject.toml:52），即在它自己的栈上必崩，看护侧
+  # 没有对应开关可绕（也不能为单条 profile 降 transformers<5）。上游修法一行（照
+  # geometry3k）：
+  #   if "mm_token_type_ids" in processed_input:
+  #       example["mm_token_type_ids"] = processed_input["mm_token_type_ids"].squeeze(0)
+  # 修好后回迁：profile areal-clevr-sft 与 setup 第 10 步（CLEVR 子集）保留未删。
+  - examples/vlm/clevr_count_70k_sft.py
   # UPSTREAM_BUG：配置类 AgentRLConfig 定义在入口脚本，跨进程反序列化失败
   - examples/camel/train.py
   # UPSTREAM_BUG：rw_engine.py:52/68 在 train_batch 打包前读 data["cu_seqlens"]，

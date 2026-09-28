@@ -204,7 +204,11 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             and getattr(cmd, "id", None) == "txt2img"
         ):
             self._wait_for_api()
-            super()._run_one(cmd, results, env, cwd, timeout, idx)
+            try:
+                super()._run_one(cmd, results, env, cwd, timeout, idx)
+            except Exception:
+                self._log_webui_tail()
+                raise
             self._verify_generated_png()
             return
         return super()._run_one(cmd, results, env, cwd, timeout, idx)

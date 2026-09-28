@@ -80,6 +80,15 @@ echo "ACL_DEVICE_SYNC_TIMEOUT=14400" >> "$GITHUB_ENV"
 echo "TASK_QUEUE_ENABLE=1" >> "$GITHUB_ENV"
 echo "OMP_NUM_THREADS=1" >> "$GITHUB_ENV"
 echo "WANDB_MODE=disabled" >> "$GITHUB_ENV"
+# swanlab resolves the run mode from SWANLAB_MODE only: SwanLabRun.__init__
+# does `self.__mode = get_mode()` (swanlab/env.py), which reads that env and
+# defaults to "cloud"; the mode= kwarg AReaL passes to swanlab.init() is not
+# threaded into the run. AReaL calls swanlab.init() unconditionally
+# (areal/utils/stats_logger.py:91) with the config default mode="disabled", so
+# without this env the run resolves to cloud -> FileUploadManager(mode="cloud")
+# -> get_client() -> ValueError "client object is not initialized". Every
+# trainer builds StatsLogger, so this applies to all profiles.
+echo "SWANLAB_MODE=disabled" >> "$GITHUB_ENV"
 echo "PYTORCH_NPU_ALLOC_CONF=expandable_segments:True" >> "$GITHUB_ENV"
 echo "USE_OPTIMIZED_MODEL=0" >> "$GITHUB_ENV"
 echo "AREAL_ALLOW_DEFAULT_ADMIN_KEY=1" >> "$GITHUB_ENV"

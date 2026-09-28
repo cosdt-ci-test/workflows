@@ -14,12 +14,13 @@ fi
 
 PROFILE="$1"
 
-SUPPORTED_PROFILES="areal-vlm-grpo areal-vlm-mt-grpo areal-vlm-sft areal-tir-grpo areal-agents-grpo areal-math-grpo areal-math-sft areal-math-aime areal-math-boba areal-countdown-grpo areal-align"
+SUPPORTED_PROFILES="areal-vlm-grpo areal-vlm-mt-grpo areal-vlm-sft areal-tir-grpo areal-scaffold-grpo areal-agents-grpo areal-math-grpo areal-math-sft areal-math-aime areal-math-boba areal-countdown-grpo areal-align"
 AIME_PREP=0
 BOBA_PREP=0
 COUNTDOWN_PREP=0
 HHRLHF_PREP=0
 TORL_PREP=0
+SCAFFOLD_PREP=0
 case "$PROFILE" in
   areal-vlm-grpo) MODEL_ID="Qwen/Qwen2.5-VL-3B-Instruct" ;;
   areal-vlm-mt-grpo) MODEL_ID="Qwen/Qwen3-VL-2B-Instruct" ;;
@@ -27,7 +28,8 @@ case "$PROFILE" in
   # tir/train_tir.py: see section 8 (fixture staging; the loader's own
   # GitHub download is unreachable from the CI job containers).
   areal-tir-grpo) MODEL_ID="Qwen/Qwen2.5-Math-1.5B"; TORL_PREP=1 ;;
-  # gsm8k_rlvr_scaffolding.py reuses areal-math-grpo (same 1.5B model, no prep).
+  # gsm8k_rlvr_scaffolding.py: 1.5B model + section 9 (model alias symlink).
+  areal-scaffold-grpo) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; SCAFFOLD_PREP=1 ;;
   areal-agents-grpo) MODEL_ID="Qwen/Qwen2-1.5B-Instruct" ;;
   # gsm8k_rl.py and gsm8k_eval.py share the same model.
   areal-math-grpo) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct" ;;
@@ -294,4 +296,24 @@ if [[ "$TORL_PREP" == 1 ]]; then
   cp "$TORL_FIXTURE/train.parquet" "$TORL_FIXTURE/test.parquet" /tmp/areal/torl_data/
   : > /tmp/areal/torl_data/_SUCCESS
   echo "staged torl fixtures at /tmp/areal/torl_data (loader download skipped)"
+fi
+
+# -------------------------------------------------------
+# 9. Scaffolding model alias (areal-scaffold-grpo).
+# -------------------------------------------------------
+# examples/scaffolding hardcodes model="default" in its OpenAI-compatible
+# worker (workflow.py:102, a TRT-LLM convention), while AReaL's vLLM server
+# serves under the model path - requests 404 and every rollout comes back
+# empty, which then trips the "total loss weight must be positive" assert.
+# vLLMConfig has no served_model_name passthrough (strict dataclass, unknown
+# keys are rejected at the structured merge), so serve the model under the
+# literal name "default" instead: vLLM uses the raw --model string as the
+# served model name, so a relative "default" path resolving to the model dir
+# makes the name match. The server subprocess inherits the run CWD
+# (TARGET_ROOT), hence the symlink location.
+if [[ "$SCAFFOLD_PREP" == 1 ]]; then
+  MODEL_DIR="$GITHUB_WORKSPACE/areal_models/${MODEL_ID##*/}"
+  [[ -d "$MODEL_DIR" ]] || { echo "model dir missing: $MODEL_DIR" >&2; exit 2; }
+  ln -sfn "$MODEL_DIR" "$TARGET_ROOT/default"
+  echo "linked $TARGET_ROOT/default -> $MODEL_DIR (scaffolding model alias)"
 fi

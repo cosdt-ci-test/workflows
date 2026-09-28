@@ -14,7 +14,7 @@ fi
 
 PROFILE="$1"
 
-SUPPORTED_PROFILES="areal-vlm-grpo areal-vlm-mt-grpo areal-vlm-sft areal-tir-grpo areal-math-grpo areal-math-sft areal-math-aime areal-math-boba areal-countdown-grpo areal-align"
+SUPPORTED_PROFILES="areal-vlm-grpo areal-vlm-mt-grpo areal-vlm-sft areal-tir-grpo areal-scaffold-grpo areal-agents-grpo areal-math-grpo areal-math-sft areal-math-aime areal-math-boba areal-countdown-grpo areal-align"
 AIME_PREP=0
 BOBA_PREP=0
 COUNTDOWN_PREP=0
@@ -26,6 +26,9 @@ case "$PROFILE" in
   # tir/train_tir.py: the torl_data loader self-downloads its small parquets
   # from GitHub (GAIR-NLP/ToRL) at load time, so no dataset prep here.
   areal-tir-grpo) MODEL_ID="Qwen/Qwen2.5-Math-1.5B" ;;
+  # gsm8k_rlvr_scaffolding.py: pure RLVR, dataset is online gsm8k, no prep.
+  areal-scaffold-grpo) MODEL_ID="Qwen/Qwen2.5-3B-Instruct" ;;
+  areal-agents-grpo) MODEL_ID="Qwen/Qwen2-1.5B-Instruct" ;;
   # gsm8k_rl.py and gsm8k_eval.py share the same model.
   areal-math-grpo) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct" ;;
   areal-math-sft) MODEL_ID="Qwen/Qwen3-1.7B" ;;
@@ -199,6 +202,9 @@ fi
 # harmless-base subset online (via HF_ENDPOINT mirror) into a flat local
 # dir; load_dataset(<dir>, split="train"/"test") then infers splits from
 # the file names. Exposed to overlay args via AREAL_HHRLHF_DATA.
+# NOTE: the dir is deliberately named "hh-rlhf" — areal's dataset dispatch
+# matches the literal substring "hh-rlhf" in the path; a dir named
+# "hhrlhf" falls through to the load_from_disk fallback and errors out.
 if [[ "$HHRLHF_PREP" == 1 ]]; then
 python3 <<'PY'
 import os
@@ -206,7 +212,7 @@ import shutil
 
 from huggingface_hub import hf_hub_download
 
-dst_dir = os.path.join(os.environ["GITHUB_WORKSPACE"], "areal_data", "hhrlhf")
+dst_dir = os.path.join(os.environ["GITHUB_WORKSPACE"], "areal_data", "hh-rlhf")
 os.makedirs(dst_dir, exist_ok=True)
 for filename in ("train.jsonl.gz", "test.jsonl.gz"):
     src = hf_hub_download(

@@ -17,9 +17,9 @@ PROFILE="$1"
 
 # Validate the profile before installing anything (contract: unknown
 # profile must exit non-zero before any install).
-SUPPORTED_PROFILES="diffusers-sdxl diffusers-sd15 diffusers-dreambooth diffusers-instruct-pix2pix diffusers-kandinsky diffusers-research diffusers-research-plain diffusers-t2i-adapter diffusers-text-to-image diffusers-textual-inversion diffusers-unconditional diffusers-vqgan diffusers-sdxl-online diffusers-flux diffusers-sana diffusers-lumina2 diffusers-z-image diffusers-qwen-image diffusers-amused diffusers-cogvideo diffusers-cogvideo-i2v diffusers-lcm diffusers-lcm-sdxl diffusers-controlnet diffusers-controlnet-sdxl diffusers-llada2"
+SUPPORTED_PROFILES="diffusers-sdxl diffusers-sd15 diffusers-dreambooth diffusers-instruct-pix2pix diffusers-kandinsky diffusers-research diffusers-research-plain diffusers-t2i-adapter diffusers-text-to-image diffusers-textual-inversion diffusers-unconditional diffusers-vqgan diffusers-sdxl-online diffusers-flux diffusers-sana diffusers-lumina2 diffusers-z-image diffusers-qwen-image diffusers-amused diffusers-cogvideo diffusers-cogvideo-i2v diffusers-lcm diffusers-lcm-sdxl diffusers-controlnet diffusers-controlnet-sdxl diffusers-llada2 diffusers-gligen"
 case "$PROFILE" in
-  diffusers-sdxl|diffusers-sd15|diffusers-dreambooth|diffusers-instruct-pix2pix|diffusers-kandinsky|diffusers-research|diffusers-research-plain|diffusers-t2i-adapter|diffusers-text-to-image|diffusers-textual-inversion|diffusers-unconditional|diffusers-vqgan|diffusers-sdxl-online|diffusers-flux|diffusers-sana|diffusers-lumina2|diffusers-z-image|diffusers-qwen-image|diffusers-amused|diffusers-cogvideo|diffusers-cogvideo-i2v|diffusers-lcm|diffusers-lcm-sdxl|diffusers-controlnet|diffusers-controlnet-sdxl|diffusers-llada2) ;;
+  diffusers-sdxl|diffusers-sd15|diffusers-dreambooth|diffusers-instruct-pix2pix|diffusers-kandinsky|diffusers-research|diffusers-research-plain|diffusers-t2i-adapter|diffusers-text-to-image|diffusers-textual-inversion|diffusers-unconditional|diffusers-vqgan|diffusers-sdxl-online|diffusers-flux|diffusers-sana|diffusers-lumina2|diffusers-z-image|diffusers-qwen-image|diffusers-amused|diffusers-cogvideo|diffusers-cogvideo-i2v|diffusers-lcm|diffusers-lcm-sdxl|diffusers-controlnet|diffusers-controlnet-sdxl|diffusers-llada2|diffusers-gligen) ;;
   *)
     echo "unknown profile: ${PROFILE} (supported: ${SUPPORTED_PROFILES})" >&2
     exit 1
@@ -496,6 +496,54 @@ setup_diffusers_vqgan() {
 # download small. Base only.
 setup_diffusers_sdxl_online() {
   install_example_stack
+}
+
+# diffusers-gligen: research_projects/gligen text-box training. Base stack only:
+# dataset.py needs just torch/PIL/torchvision, and make_datasets.py's
+# GroundingDINO + BLIP2 + CLIP pipeline is not used. The model
+# (masterful/gligen-1-4-generation-text-box) is fetched online via hf-mirror by
+# the example itself, so only the dataset is synthesized here: a COCO-style
+# torch.load .pth (list of {file_path, captions, annos}) plus the image dir it
+# references. Each anno is {bbox: xyxy pixels, text_embeddings_before_projection:
+# 768-d}; that embedding is a constant conditioning input (never optimized), so
+# zeros are fine. A 512x512 image makes --resolution 512 a no-op.
+setup_diffusers_gligen() {
+  install_example_stack
+  python3 - <<'PY'
+import os
+
+import torch
+from PIL import Image
+
+root = os.path.join(os.environ["GITHUB_WORKSPACE"], "areal_data", "gligen")
+image_dir = os.path.join(root, "images")
+os.makedirs(image_dir, exist_ok=True)
+
+samples = []
+for i in range(4):
+    file_name = f"sample{i}.png"
+    Image.new("RGB", (512, 512), (110 + i * 20, 130, 150)).save(os.path.join(image_dir, file_name))
+    samples.append(
+        {
+            "file_path": file_name,
+            "captions": ["a gray square on a plain background"],
+            "annos": [
+                {
+                    "bbox": [100.0, 100.0, 400.0, 400.0],
+                    "text_embeddings_before_projection": torch.zeros(768),
+                }
+            ],
+        }
+    )
+
+data_path = os.path.join(root, "gligen_train.pth")
+torch.save(samples, data_path)
+
+with open(os.environ["GITHUB_ENV"], "a") as fh:
+    fh.write(f"GLIGEN_DATA_PTH={data_path}\n")
+    fh.write(f"GLIGEN_IMAGE_DIR={image_dir}\n")
+print(f"prepared gligen dataset at {data_path} (images in {image_dir})", flush=True)
+PY
 }
 
 # diffusers-flux: full-model / large-model examples that need DeepSpeed ZeRO-3

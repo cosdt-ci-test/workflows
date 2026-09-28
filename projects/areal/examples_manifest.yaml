@@ -207,32 +207,31 @@ supported:
   #     - +total_train_steps=1
   #     - ++actor.scheduling_spec.0.env_vars.TASK_QUEUE_ENABLE=1
   #   timeout_minutes: 30
-  # Countdown GRPO：数据由 setup 现场生成（countdown.py --num_samples 32
-  # --eval_size 8），对上 yaml 默认 train_dataset.path；3B 版已跑通，换
-  # 1.5B-Instruct 轻量化重验
-  - path: examples/countdown/train.py
-    profile: areal-countdown-grpo
-    runner: linux-aarch64-a2-2
-    npu_devices: '0,1'
-    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
-    overlay_args:
-      - --config examples/countdown/train_config.yaml
-      - scheduler.type=local
-      - cluster.n_gpus_per_node=2
-      - rollout.backend=vllm:d1p1t2
-      - +rollout.setup_timeout=1800
-      - actor.backend=fsdp:d2p1t1
-      - +actor.fsdp.offload_params=true
-      - +actor.weight_update_mode=disk
-      - actor.path=${AREAL_MODEL_PATH}
-      - actor.mb_spec.max_tokens_per_mb=1024
-      - ref.mb_spec.max_tokens_per_mb=1024
-      - vllm.gpu_memory_utilization=0.3
-      - gconfig.max_new_tokens=64
-      - gconfig.n_samples=1
-      - train_dataset.batch_size=2
-      - +total_train_steps=1
-    timeout_minutes: 30
+  # # Countdown GRPO：数据由 setup 现场生成（countdown.py --num_samples 32
+  # # --eval_size 8），对上 yaml 默认 train_dataset.path
+  # - path: examples/countdown/train.py
+  #   profile: areal-countdown-grpo
+  #   runner: linux-aarch64-a2-2
+  #   npu_devices: '0,1'
+  #   image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
+  #   overlay_args:
+  #     - --config examples/countdown/train_config.yaml
+  #     - scheduler.type=local
+  #     - cluster.n_gpus_per_node=2
+  #     - rollout.backend=vllm:d1p1t2
+  #     - +rollout.setup_timeout=1800
+  #     - actor.backend=fsdp:d2p1t1
+  #     - +actor.fsdp.offload_params=true
+  #     - +actor.weight_update_mode=disk
+  #     - actor.path=${AREAL_MODEL_PATH}
+  #     - actor.mb_spec.max_tokens_per_mb=1024
+  #     - ref.mb_spec.max_tokens_per_mb=1024
+  #     - vllm.gpu_memory_utilization=0.3
+  #     - gconfig.max_new_tokens=64
+  #     - gconfig.n_samples=1
+  #     - train_dataset.batch_size=2
+  #     - +total_train_steps=1
+  #   timeout_minutes: 30
   # HH-RLHF DPO：离线无 rollout；hh-rlhf 按子集分目录，setup 预下载
   # harmless-base（AREAL_HHRLHF_DATA）。换 Qwen2.5-1.5B（上游 yaml 为 7B，
   # DPO 管线模型无关；7B 在 32GB 卡初始化 OOM、每腿多下 15GB），配方对齐

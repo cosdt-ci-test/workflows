@@ -506,9 +506,17 @@ setup_diffusers_sdxl_online() {
 # tiny local webdataset tar: each sample carries .jpg (image) + .txt (caption)
 # + .json, and the json holds original_width/original_height >= 512 plus
 # pwatermark because both WebdatasetFilter and get_orig_size read those fields.
+#
+# webdataset is pinned to 0.2.86: the example vendors its own
+# group_by_keys_nothrow (based on the 0.2.x tar iterators) and expects
+# tar_file_expander to yield {"fname", "data"} dicts only. Newer webdataset
+# (>=0.2.96, incl. 1.0.x) appends an empty-dict EOF marker after every shard;
+# the vendored group_by_keys_nothrow does `filesample["fname"]` on it and dies
+# with KeyError: 'fname' (hit only through the shuffle buffer, which pulls past
+# the last sample). 0.2.86 is the newest 0.2.x without the EOF marker.
 setup_diffusers_controlnet_wds() {
   install_example_stack
-  python -m pip install webdataset braceexpand opencv-python-headless
+  python -m pip install "webdataset==0.2.86" braceexpand opencv-python-headless
   python3 - <<'PY'
 import io
 import json

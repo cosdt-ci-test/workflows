@@ -21,9 +21,9 @@
 | Torch-NPU | 2.7.1.post4 |
 | torchvision | 0.22.1，由 FLA 的 NPU extra 安装 |
 | Triton-Ascend | 3.2.1 |
-| Transformers | 使用 4.x：将 FLA 的 `>=4.45.0` 要求与本示例的 `<5` 兼容约束共同解析 |
+| Transformers | 使用 4.x，实测版本为 4.57.6；安装时将 FLA 的 `>=4.45.0` 要求与本示例的 `<5` 兼容约束共同解析 |
 
-这张表表示版本配套，不是完整示例的通过认证。当前已完成一次 NPU 上的 20 步训练，但使用 Transformers 5.17.0 时模型保存失败；本示例因此限定为 4.x。checkpoint 重载和带缓存生成仍待修复后的完整验证。已有 Quick Start 的通过记录仅覆盖其自身的前向与反向流程。
+默认示例已在上述配套和 Transformers 4.57.6 上[完成 NPU 端到端验证](https://github.com/cosdt-ci-test/workflows/actions/runs/36403948431)：20 步训练、模型保存、重载一致性检查和 32-token 生成均通过。该结果限于本示例配置；换用其他语料、模型尺寸或软件版本时，需要重新验证。FLA v0.5.2 与 Transformers 5.17.0 的模型保存接口不兼容，因此本示例使用 4.x 约束。
 
 先进入存放本示例的 workflows 仓库根目录，以下命令均从该目录执行。按默认安装路径加载 CANN，并确认设备可见：
 

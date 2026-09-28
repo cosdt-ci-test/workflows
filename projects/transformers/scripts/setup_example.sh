@@ -27,7 +27,9 @@ case "$PROFILE" in
     DEPS=(accelerate datasets evaluate sacrebleu rouge-score nltk sentencepiece tiktoken)
     ;;
   vision)
-    DEPS=(accelerate datasets evaluate pillow scikit-learn soundfile)
+    # librosa: datasets 3.6.0 Audio decode_example imports librosa before
+    # falling back to anything else; without it every audio batch fetch dies.
+    DEPS=(accelerate datasets evaluate librosa pillow scikit-learn soundfile)
     ;;
   *)
     echo "unknown profile: $PROFILE (supported: generation glue small-training lm seq2seq vision)" >&2

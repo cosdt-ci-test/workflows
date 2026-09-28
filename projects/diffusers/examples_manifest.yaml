@@ -44,6 +44,12 @@ scan:
     - examples/inference/inpainting.py                 # 废弃 shim（无 __main__）
     - examples/model_search/pipeline_easy.py           # 库模块（无 main），调 civitai API
     - examples/server-async/test.py                    # HTTP 客户端，需 serverasync.py 常驻
+    # examples/community/：110 个 .py 里 105 个无 if __name__ == "__main__"，是
+    # 上游 custom_pipeline 模块（由 DiffusionPipeline.from_pretrained(...,
+    # custom_pipeline=...) 加载），不是可独立执行的 example -> 整目录按"非
+    # example 配套物"排除（`python file.py` 只定义类然后退出 0，空跑判绿）。
+    # 其余 5 个有入口但 CI 跑不了的脚本单独登记在 unsupported。
+    - examples/community/
 
 supported:
   # ===== 已在昇腾单卡容器（CANN 9.1.0 / torch 2.9.0 / torch_npu 2.9.0.post2，
@@ -735,128 +741,41 @@ supported:
       - --max_train_steps 1
     timeout_minutes: 120
 
+  # GLIGEN text-box 训练（SD1.5+GLIGEN；accelerate 原生走 NPU）。数据不必跑
+  # make_datasets.py 的 RAM+GroundingDINO+BLIP2+CLIP：dataset.py 只是
+  # torch.load 一个 list of {file_path, captions, annos[{caption, bbox,
+  # text_embeddings_before_projection[768]}]} + 图片目录，setup 合成极简 fixture
+  # 即可（灰底 512² 图 + 1 个框 + 零向量 embedding——embedding 是常量条件、不进
+  # 梯度）。模型 masterful/gligen-1-4-generation-text-box 在线拉（hf-mirror）。
+  - path: examples/research_projects/gligen/train_gligen_text.py
+    profile: diffusers-gligen
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --data_path ${GLIGEN_DATA_PTH}
+      - --image_path ${GLIGEN_IMAGE_DIR}
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --resolution 512
+      - --train_batch_size 1
+      - --gradient_accumulation_steps 1
+      - --max_train_steps 1
+      - --checkpointing_steps 1
+      - --mixed_precision no
+    timeout_minutes: 90
+
 # ===== unsupported（其余全部；后续逐例验证跑通后迁入 supported） =====
 unsupported:
   # CUDA硬编码 text_encoding_pipeline.to("cuda")
   - examples/cogview4-control/train_control_cogview4.py
-  # community/ 全部不适合看护：
-  #  - 105/110 无 if __name__ == "__main__"：是 custom_pipeline 模块（上游用
-  #    DiffusionPipeline.from_pretrained(..., custom_pipeline=...) 加载），
-  #    `python file.py` 只定义类然后退出 0 —— 空跑判绿、零看护价值；
-  #  - 其余 5 个有 main 的也都不能 CLI 跑：tiled_upscaling / dps_pipeline 硬编码
-  #    .to("cuda")；run_onnx_controlnet / run_tensorrt_controlnet 用 ONNX/TensorRT；
-  #    cogvideox_ddim_inversion 要 CogVideoX-5B + 本地视频。
-  # 要看护必须为每条 pipeline 单独写 driver（加载+跑 1 次推理），上游没提供，ROI 低。
-  - examples/community/adaptive_mask_inpainting.py
-  - examples/community/bit_diffusion.py
-  - examples/community/checkpoint_merger.py
-  - examples/community/clip_guided_images_mixing_stable_diffusion.py
-  - examples/community/clip_guided_stable_diffusion.py
-  - examples/community/clip_guided_stable_diffusion_img2img.py
+  # community/ 有入口的 5 条（其余 105 个无 __main__ 的 custom_pipeline 模块
+  # 已在 scan.exclude 里整目录排除）。要看护得为每条 pipeline 单独写 driver
+  # （加载+跑 1 次推理），上游没提供，ROI 低。
+  - examples/community/tiled_upscaling.py            # CUDA_DEP：硬编码 .to("cuda")
+  - examples/community/dps_pipeline.py               # CUDA_DEP：硬编码 .to("cuda")
+  - examples/community/run_onnx_controlnet.py        # OTHER_BACKEND：ONNX Runtime
+  - examples/community/run_tensorrt_controlnet.py    # OTHER_BACKEND：TensorRT
+  # CUDA_DEP：--device 的 choices 只有 cuda/cpu
   - examples/community/cogvideox_ddim_inversion.py
-  - examples/community/composable_stable_diffusion.py
-  - examples/community/ddim_noise_comparative_analysis.py
-  - examples/community/dps_pipeline.py
-  - examples/community/edict_pipeline.py
-  - examples/community/fresco_v2v.py
-  - examples/community/gluegen.py
-  - examples/community/hd_painter.py
-  - examples/community/iadb.py
-  - examples/community/imagic_stable_diffusion.py
-  - examples/community/img2img_inpainting.py
-  - examples/community/instaflow_one_step.py
-  - examples/community/interpolate_stable_diffusion.py
-  - examples/community/ip_adapter_face_id.py
-  - examples/community/kohya_hires_fix.py
-  - examples/community/latent_consistency_img2img.py
-  - examples/community/latent_consistency_interpolate.py
-  - examples/community/latent_consistency_txt2img.py
-  - examples/community/llm_grounded_diffusion.py
-  - examples/community/lpw_stable_diffusion.py
-  - examples/community/lpw_stable_diffusion_onnx.py
-  - examples/community/lpw_stable_diffusion_xl.py
-  - examples/community/magic_mix.py
-  - examples/community/marigold_depth_estimation.py
-  - examples/community/masked_stable_diffusion_img2img.py
-  - examples/community/masked_stable_diffusion_xl_img2img.py
-  - examples/community/matryoshka.py
-  - examples/community/mixture_canvas.py
-  - examples/community/mixture_tiling.py
-  - examples/community/mixture_tiling_sdxl.py
-  - examples/community/mod_controlnet_tile_sr_sdxl.py
-  - examples/community/multilingual_stable_diffusion.py
-  - examples/community/one_step_unet.py
-  - examples/community/pipeline_animatediff_controlnet.py
-  - examples/community/pipeline_animatediff_img2video.py
-  - examples/community/pipeline_animatediff_ipex.py
-  - examples/community/pipeline_controlnet_xl_kolors.py
-  - examples/community/pipeline_controlnet_xl_kolors_img2img.py
-  - examples/community/pipeline_controlnet_xl_kolors_inpaint.py
-  - examples/community/pipeline_demofusion_sdxl.py
-  - examples/community/pipeline_fabric.py
-  - examples/community/pipeline_faithdiff_stable_diffusion_xl.py
-  - examples/community/pipeline_flux_differential_img2img.py
-  - examples/community/pipeline_flux_kontext_multiple_images.py
-  - examples/community/pipeline_flux_rf_inversion.py
-  - examples/community/pipeline_flux_semantic_guidance.py
-  - examples/community/pipeline_flux_with_cfg.py
-  - examples/community/pipeline_hunyuandit_differential_img2img.py
-  - examples/community/pipeline_kolors_differential_img2img.py
-  - examples/community/pipeline_kolors_inpainting.py
-  - examples/community/pipeline_null_text_inversion.py
-  - examples/community/pipeline_prompt2prompt.py
-  - examples/community/pipeline_sdxl_style_aligned.py
-  - examples/community/pipeline_stable_diffusion_3_differential_img2img.py
-  - examples/community/pipeline_stable_diffusion_3_instruct_pix2pix.py
-  - examples/community/pipeline_stable_diffusion_boxdiff.py
-  - examples/community/pipeline_stable_diffusion_pag.py
-  - examples/community/pipeline_stable_diffusion_upscale_ldm3d.py
-  - examples/community/pipeline_stable_diffusion_xl_attentive_eraser.py
-  - examples/community/pipeline_stable_diffusion_xl_controlnet_adapter.py
-  - examples/community/pipeline_stable_diffusion_xl_controlnet_adapter_inpaint.py
-  - examples/community/pipeline_stable_diffusion_xl_differential_img2img.py
-  - examples/community/pipeline_stable_diffusion_xl_instandid_img2img.py
-  - examples/community/pipeline_stable_diffusion_xl_instantid.py
-  - examples/community/pipeline_stable_diffusion_xl_ipex.py
-  - examples/community/pipeline_stable_diffusion_xl_t5.py
-  - examples/community/pipeline_stg_cogvideox.py
-  - examples/community/pipeline_stg_hunyuan_video.py
-  - examples/community/pipeline_stg_ltx.py
-  - examples/community/pipeline_stg_ltx_image2video.py
-  - examples/community/pipeline_stg_mochi.py
-  - examples/community/pipeline_stg_wan.py
-  - examples/community/pipeline_z_image_differential_img2img.py
-  - examples/community/pipeline_zero1to3.py
-  - examples/community/pipline_flux_fill_controlnet_Inpaint.py
-  - examples/community/regional_prompting_stable_diffusion.py
-  - examples/community/rerender_a_video.py
-  - examples/community/run_onnx_controlnet.py
-  - examples/community/run_tensorrt_controlnet.py
-  - examples/community/scheduling_ufogen.py
-  - examples/community/sd_text2img_k_diffusion.py
-  - examples/community/sde_drag.py
-  - examples/community/seed_resize_stable_diffusion.py
-  - examples/community/speech_to_image_diffusion.py
-  - examples/community/stable_diffusion_comparison.py
-  - examples/community/stable_diffusion_controlnet_img2img.py
-  - examples/community/stable_diffusion_controlnet_inpaint.py
-  - examples/community/stable_diffusion_controlnet_inpaint_img2img.py
-  - examples/community/stable_diffusion_controlnet_reference.py
-  - examples/community/stable_diffusion_ipex.py
-  - examples/community/stable_diffusion_mega.py
-  - examples/community/stable_diffusion_reference.py
-  - examples/community/stable_diffusion_repaint.py
-  - examples/community/stable_diffusion_tensorrt_img2img.py
-  - examples/community/stable_diffusion_tensorrt_inpaint.py
-  - examples/community/stable_diffusion_tensorrt_txt2img.py
-  - examples/community/stable_diffusion_xl_controlnet_reference.py
-  - examples/community/stable_diffusion_xl_reference.py
-  - examples/community/stable_unclip.py
-  - examples/community/text_inpainting.py
-  - examples/community/tiled_upscaling.py
-  - examples/community/unclip_image_interpolation.py
-  - examples/community/unclip_text_interpolation.py
-  - examples/community/wildcard_stable_diffusion.py
   # diffusers >= 0.40 需要 transformers >= 5.0
   # Flax：transformers 5.x 已移除 FlaxCLIPTextModel（diffusers >=0.40 也移除了 Flax）
   - examples/controlnet/train_controlnet_flax.py
@@ -918,9 +837,6 @@ unsupported:
   # GATED_MODEL + CUDA_DEP：FLUX.1-dev Gated + bitsandbytes
   - examples/research_projects/flux_lora_quantization/compute_embeddings.py
   - examples/research_projects/flux_lora_quantization/train_dreambooth_lora_flux_miniature.py
-  # DATA_UNREACHABLE：需自定义 gligen 数据集
-  # 自己生成 grounding 标注（make_datasets.py 跑 RAM+GroundingDINO+BLIP2+CLIP），不是现成数据集
-  - examples/research_projects/gligen/train_gligen_text.py
   # OTHER_BACKEND：intel_extension_for_pytorch / neural_compressor
   - examples/research_projects/intel_opts/inference_bf16.py
   - examples/research_projects/intel_opts/textual_inversion/textual_inversion_bf16.py

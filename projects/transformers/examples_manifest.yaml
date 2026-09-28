@@ -559,13 +559,10 @@ unsupported:
   # run_fim.py：vocab 扩容分支对 Embedding 模块直接调用 .mean(dim=0)，
   #   报 "'Embedding' object has no attribute 'mean'"（原意应为对 weight 张量取均值）
   # run_fim_no_trainer.py：from huggingface_hub import Repository，该类已从新版 huggingface_hub 移除，报 ImportError
-  # run_plm.py：Trainer(...) 调用中 processing_class 被误写为 processing_classtokenizer，
-  #   报 "unexpected keyword argument"（上游批量改名失误）
   # run_clm_no_trainer.py / run_mlm_no_trainer.py 已恢复执行：setup_example.sh
   #   将 accelerate 钉在 <1.15，规避 DistributedType.TPU 枚举移除问题
   - examples/pytorch/language-modeling/run_fim.py
   - examples/pytorch/language-modeling/run_fim_no_trainer.py
-  - examples/pytorch/language-modeling/run_plm.py
   # --- 数据/模型可用性受限（脚本硬编码 Hub 数据集，Runner 无法访问 Hub，无本地文件入口）---
   # object-detection / instance-segmentation / semantic-segmentation 共 6 条：
   #   main 分支脚本仅支持 load_dataset(<hub_id>)，无 --train_file/--train_dir 参数，
@@ -582,8 +579,9 @@ unsupported:
   - examples/pytorch/speech-recognition/run_speech_recognition_ctc_adapter.py
   - examples/pytorch/speech-recognition/run_speech_recognition_seq2seq.py
   # --- 数据/模型可用性受限：依赖 Hub 数据集或缺失 tiny 模型 ---
-  # run_plm.py：需要 XLNetLMHeadModel；tiny xlnet 现可经 setup_example.sh 的
-  # hf-mirror.com 通道下载（TINYXLNET_PATH），如需放开可复用该通道
+  # run_plm.py：Trainer(...) 调用中 processing_class 被误写为 processing_classtokenizer，
+  #   报 "unexpected keyword argument"（上游批量改名失误）。模型侧无碍：tiny xlnet 可经
+  #   setup_example.sh 的 hf-mirror.com 通道（TINYXLNET_PATH）下载，NPU 侧链路已验证通畅
   - examples/pytorch/language-modeling/run_plm.py
   # run_xnli.py：硬编码从 Hub 下载 xnli 数据集，无本地文件入口
   - examples/pytorch/text-classification/run_xnli.py

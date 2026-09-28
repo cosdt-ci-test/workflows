@@ -407,32 +407,25 @@ supported:
       - --per_device_train_batch_size 1
       - --output_dir ${CI_OUTPUT_DIR}
     timeout_minutes: 60
-  - path: examples/pytorch/image-pretraining/run_mim_no_trainer.py
-    profile: vision
-    runner: linux-aarch64-a2-2
-    npu_devices: '0'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      # Same AutoModelForMaskedImageModeling breakage as run_mim.py: switch to
-      # tiny ViT because transformers main dropped ViTMAE from that mapping.
-      - --model_name_or_path ${TINYVIT_PATH}
-      # Same as run_mim.py: pass encoder_stride explicitly; forward requires
-      # it to equal the tiny ViT patch_size (2) when bool_masked_pos is set.
-      - --encoder_stride 2
-      # tiny ViT image_size is 30; the default mask_patch_size (32) fails the
-      # MaskGenerator divisibility check.
-      - --mask_patch_size 30
-      - --dataset_name imagefolder
-      - --train_dir ${CI_OUTPUT_DIR}/imgcls/train/**
-      # Upstream maps --validation_dir to the data_files key "val" but later
-      # indexes ds["validation"] unconditionally — so a validation split must
-      # come from train_val_split (>0) instead, carved out of the 3-image
-      # train fixture (ceil(3*0.3)=1 eval sample, 2 train samples).
-      - --train_val_split 0.3
-      - --max_train_steps 1
-      - --per_device_train_batch_size 1
-      - --output_dir ${CI_OUTPUT_DIR}
-    timeout_minutes: 60
+  # run_mim_no_trainer.py：与 run_clm/mlm_no_trainer 同因——脚本 L636 引用
+  #   DistributedType.TPU（accelerate 1.x 全线缺失），数据与训练前处理均已跑通，
+  #   属上游脚本 bug，等上游修复
+  # - path: examples/pytorch/image-pretraining/run_mim_no_trainer.py
+  #   profile: vision
+  #   runner: linux-aarch64-a2-2
+  #   npu_devices: '0'
+  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+  #   overlay_args:
+  #     - --model_name_or_path ${TINYVIT_PATH}
+  #     - --encoder_stride 2
+  #     - --mask_patch_size 30
+  #     - --dataset_name imagefolder
+  #     - --train_dir ${CI_OUTPUT_DIR}/imgcls/train/**
+  #     - --train_val_split 0.3
+  #     - --max_train_steps 1
+  #     - --per_device_train_batch_size 1
+  #     - --output_dir ${CI_OUTPUT_DIR}
+  #   timeout_minutes: 60
 #  - path: examples/pytorch/contrastive-image-text/run_clip.py
 #    profile: vision
 #    runner: linux-aarch64-a2-2
@@ -575,12 +568,14 @@ unsupported:
   # run_fim.py：vocab 扩容分支对 Embedding 模块直接调用 .mean(dim=0)，
   #   报 "'Embedding' object has no attribute 'mean'"（原意应为对 weight 张量取均值）
   # run_fim_no_trainer.py：from huggingface_hub import Repository，该类已从新版 huggingface_hub 移除，报 ImportError
-  # run_clm_no_trainer.py / run_mlm_no_trainer.py：引用 DistributedType.TPU，该枚举在
-  #   accelerate 1.x 全线缺失（1.0/1.9/1.10 已验证），报 AttributeError，等上游修复
+  # run_clm_no_trainer.py / run_mlm_no_trainer.py / run_mim_no_trainer.py：引用
+  #   DistributedType.TPU，该枚举在 accelerate 1.x 全线缺失（1.0/1.9/1.10 已验证），
+  #   报 AttributeError，等上游修复
   - examples/pytorch/language-modeling/run_fim.py
   - examples/pytorch/language-modeling/run_fim_no_trainer.py
   - examples/pytorch/language-modeling/run_clm_no_trainer.py
   - examples/pytorch/language-modeling/run_mlm_no_trainer.py
+  - examples/pytorch/image-pretraining/run_mim_no_trainer.py
   # --- 数据/模型可用性受限（脚本硬编码 Hub 数据集，Runner 无法访问 Hub，无本地文件入口）---
   # object-detection / instance-segmentation / semantic-segmentation 共 6 条：
   #   main 分支脚本仅支持 load_dataset(<hub_id>)，无 --train_file/--train_dir 参数，

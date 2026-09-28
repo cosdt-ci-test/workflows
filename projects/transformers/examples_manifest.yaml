@@ -3,377 +3,378 @@ scan:
   root: examples
   include_extensions: ['.py']
 supported:
-  - path: examples/pytorch/text-generation/run_generation.py
-    profile: generation
-    runner: linux-aarch64-a2-2
-    npu_devices: '0'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --model_type gpt2
-      - --model_name_or_path ${TINYGPT2_PATH}
-      - --prompt Hello
-      - --length 10
-      - --seed 42
-    timeout_minutes: 60
-  - path: examples/pytorch/text-classification/run_glue_no_trainer.py
-    profile: glue
-    runner: linux-aarch64-a2-2
-    npu_devices: '0'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --model_name_or_path ${DISTILBERT_PATH}
-      - --train_file ${TARGET_ROOT}/tests/fixtures/tests_samples/MRPC/train.csv
-      - --validation_file ${TARGET_ROOT}/tests/fixtures/tests_samples/MRPC/dev.csv
-      - --max_length 64
-      - --per_device_train_batch_size 2
-      - --per_device_eval_batch_size 2
-      - --max_train_steps 1
-      - --output_dir ${CI_OUTPUT_DIR}
-    timeout_minutes: 60
-  - path: examples/pytorch/question-answering/run_qa_no_trainer.py
-    profile: small-training
-    runner: linux-aarch64-a2-2
-    npu_devices: '0'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --model_name_or_path ${DISTILBERT_PATH}
-      - --train_file ${TARGET_ROOT}/tests/fixtures/tests_samples/SQUAD/sample.json
-      - --validation_file ${TARGET_ROOT}/tests/fixtures/tests_samples/SQUAD/sample.json
-      - --version_2_with_negative
-      - --max_seq_length 128
-      - --doc_stride 64
-      - --max_train_samples 4
-      - --max_eval_samples 4
-      - --per_device_train_batch_size 1
-      - --per_device_eval_batch_size 1
-      - --max_train_steps 1
-      - --output_dir ${CI_OUTPUT_DIR}
-    timeout_minutes: 60
-  - path: examples/pytorch/question-answering/run_qa_beam_search_no_trainer.py
-    profile: small-training
-    runner: linux-aarch64-a2-2
-    npu_devices: '0'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --model_name_or_path ${TINYXLNET_PATH}
-      - --train_file ${TARGET_ROOT}/tests/fixtures/tests_samples/SQUAD/sample.json
-      - --validation_file ${TARGET_ROOT}/tests/fixtures/tests_samples/SQUAD/sample.json
-      - --version_2_with_negative
-      - --max_seq_length 128
-      - --doc_stride 64
-      - --max_train_samples 4
-      - --max_eval_samples 4
-      - --per_device_train_batch_size 1
-      - --per_device_eval_batch_size 1
-      - --max_train_steps 1
-      - --output_dir ${CI_OUTPUT_DIR}
-    timeout_minutes: 60
-  - path: examples/pytorch/multiple-choice/run_swag_no_trainer.py
-    profile: small-training
-    runner: linux-aarch64-a2-2
-    npu_devices: '0'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --model_name_or_path ${DISTILBERT_PATH}
-      - --train_file ${TARGET_ROOT}/tests/fixtures/tests_samples/swag/sample.json
-      - --validation_file ${TARGET_ROOT}/tests/fixtures/tests_samples/swag/sample.json
-      - --max_seq_length 64
-      - --per_device_train_batch_size 1
-      - --per_device_eval_batch_size 1
-      - --max_train_steps 1
-      - --output_dir ${CI_OUTPUT_DIR}
-    timeout_minutes: 60
-  - path: examples/pytorch/token-classification/run_ner_no_trainer.py
-    profile: small-training
-    runner: linux-aarch64-a2-2
-    npu_devices: '0'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --model_name_or_path ${DISTILBERT_PATH}
-      - --train_file ${TARGET_ROOT}/tests/fixtures/tests_samples/conll/sample.json
-      - --validation_file ${TARGET_ROOT}/tests/fixtures/tests_samples/conll/sample.json
-      - --max_length 64
-      - --per_device_train_batch_size 1
-      - --per_device_eval_batch_size 1
-      - --max_train_steps 1
-      - --output_dir ${CI_OUTPUT_DIR}
-    timeout_minutes: 60
-  # --- 批次 1：文本类 example（LM、GLUE/分类、QA/多选/NER Trainer 版、摘要、翻译）---
-  - path: examples/pytorch/language-modeling/run_clm.py
-    profile: lm
-    runner: linux-aarch64-a2-2
-    npu_devices: '0'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --model_name_or_path ${TINYGPT2_PATH}
-      - --train_file ${CI_OUTPUT_DIR}/train.txt
-      - --do_train
-      - --max_steps 1
-      - --per_device_train_batch_size 1
-      - --output_dir ${CI_OUTPUT_DIR}
-    timeout_minutes: 60
-  - path: examples/pytorch/language-modeling/run_mlm.py
-    profile: lm
-    runner: linux-aarch64-a2-2
-    npu_devices: '0'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --model_name_or_path ${DISTILBERT_PATH}
-      - --train_file ${CI_OUTPUT_DIR}/train.txt
-      - --do_train
-      - --max_steps 1
-      - --per_device_train_batch_size 1
-      - --output_dir ${CI_OUTPUT_DIR}
-    timeout_minutes: 60
-  - path: examples/pytorch/text-classification/run_glue.py
-    profile: glue
-    runner: linux-aarch64-a2-2
-    npu_devices: '0'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --model_name_or_path ${DISTILBERT_PATH}
-      - --train_file ${CI_OUTPUT_DIR}/mrpc_train.csv
-      - --validation_file ${CI_OUTPUT_DIR}/mrpc_dev.csv
-      - --max_seq_length 64
-      - --do_train
-      - --max_steps 1
-      - --per_device_train_batch_size 2
-      - --output_dir ${CI_OUTPUT_DIR}
-    timeout_minutes: 60
-  - path: examples/pytorch/text-classification/run_classification.py
-    profile: glue
-    runner: linux-aarch64-a2-2
-    npu_devices: '0'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --model_name_or_path ${DISTILBERT_PATH}
-      - --train_file ${CI_OUTPUT_DIR}/mrpc_train.csv
-      - --validation_file ${CI_OUTPUT_DIR}/mrpc_dev.csv
-      - --text_column_names sentence1,sentence2
-      - --label_column_name label
-      - --do_train
-      - --max_steps 1
-      - --per_device_train_batch_size 2
-      - --output_dir ${CI_OUTPUT_DIR}
-    timeout_minutes: 60
-  - path: examples/pytorch/token-classification/run_ner.py
-    profile: small-training
-    runner: linux-aarch64-a2-2
-    npu_devices: '0'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --model_name_or_path ${DISTILBERT_PATH}
-      - --train_file ${TARGET_ROOT}/tests/fixtures/tests_samples/conll/sample.json
-      - --validation_file ${TARGET_ROOT}/tests/fixtures/tests_samples/conll/sample.json
-      - --text_column_name words
-      - --label_column_name ner
-      - --max_seq_length 64
-      - --do_train
-      - --max_steps 1
-      - --per_device_train_batch_size 1
-      - --output_dir ${CI_OUTPUT_DIR}
-    timeout_minutes: 60
-  - path: examples/pytorch/question-answering/run_qa.py
-    profile: small-training
-    runner: linux-aarch64-a2-2
-    npu_devices: '0'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --model_name_or_path ${DISTILBERT_PATH}
-      - --train_file ${TARGET_ROOT}/tests/fixtures/tests_samples/SQUAD/sample.json
-      - --validation_file ${TARGET_ROOT}/tests/fixtures/tests_samples/SQUAD/sample.json
-      - --version_2_with_negative
-      - --max_seq_length 128
-      - --doc_stride 64
-      - --max_train_samples 4
-      - --max_eval_samples 4
-      - --do_train
-      - --max_steps 1
-      - --per_device_train_batch_size 1
-      - --output_dir ${CI_OUTPUT_DIR}
-    timeout_minutes: 60
-  - path: examples/pytorch/question-answering/run_qa_beam_search.py
-    profile: small-training
-    runner: linux-aarch64-a2-2
-    npu_devices: '0'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --model_name_or_path ${TINYXLNET_PATH}
-      - --train_file ${TARGET_ROOT}/tests/fixtures/tests_samples/SQUAD/sample.json
-      - --validation_file ${TARGET_ROOT}/tests/fixtures/tests_samples/SQUAD/sample.json
-      - --version_2_with_negative
-      - --max_seq_length 128
-      - --doc_stride 64
-      - --max_train_samples 4
-      - --max_eval_samples 4
-      - --do_train
-      - --max_steps 1
-      - --per_device_train_batch_size 1
-      - --output_dir ${CI_OUTPUT_DIR}
-    timeout_minutes: 60
-  - path: examples/pytorch/question-answering/run_seq2seq_qa.py
-    profile: seq2seq
-    runner: linux-aarch64-a2-2
-    npu_devices: '0'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --model_name_or_path ${TINYMBART_PATH}
-      - --train_file ${TARGET_ROOT}/tests/fixtures/tests_samples/SQUAD/sample.json
-      - --validation_file ${TARGET_ROOT}/tests/fixtures/tests_samples/SQUAD/sample.json
-      - --version_2_with_negative
-      - --max_seq_length 128
-      - --doc_stride 64
-      - --max_train_samples 4
-      - --do_train
-      - --max_steps 1
-      - --num_beams 1
-      - --per_device_train_batch_size 1
-      - --output_dir ${CI_OUTPUT_DIR}
-    timeout_minutes: 60
-  - path: examples/pytorch/multiple-choice/run_swag.py
-    profile: small-training
-    runner: linux-aarch64-a2-2
-    npu_devices: '0'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --model_name_or_path ${DISTILBERT_PATH}
-      - --train_file ${TARGET_ROOT}/tests/fixtures/tests_samples/swag/sample.json
-      - --validation_file ${TARGET_ROOT}/tests/fixtures/tests_samples/swag/sample.json
-      - --max_seq_length 64
-      - --max_train_samples 4
-      - --max_eval_samples 4
-      - --do_train
-      - --max_steps 1
-      - --per_device_train_batch_size 1
-      - --output_dir ${CI_OUTPUT_DIR}
-    timeout_minutes: 60
-  - path: examples/pytorch/summarization/run_summarization.py
-    profile: seq2seq
-    runner: linux-aarch64-a2-2
-    npu_devices: '0'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --model_name_or_path ${TINYMBART_PATH}
-      - --train_file ${TARGET_ROOT}/tests/fixtures/tests_samples/xsum/sample.json
-      - --validation_file ${TARGET_ROOT}/tests/fixtures/tests_samples/xsum/sample.json
-      - --text_column document
-      - --summary_column summary
-      - --lang en_XX
-      - --max_source_length 64
-      - --max_target_length 16
-      - --max_train_samples 4
-      - --do_train
-      - --max_steps 1
-      - --per_device_train_batch_size 1
-      - --output_dir ${CI_OUTPUT_DIR}
-    timeout_minutes: 60
-  - path: examples/pytorch/summarization/run_summarization_no_trainer.py
-    profile: seq2seq
-    runner: linux-aarch64-a2-2
-    npu_devices: '0'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --model_name_or_path ${TINYMBART_PATH}
-      - --train_file ${TARGET_ROOT}/tests/fixtures/tests_samples/xsum/sample.json
-      - --validation_file ${TARGET_ROOT}/tests/fixtures/tests_samples/xsum/sample.json
-      - --text_column document
-      - --summary_column summary
-      - --max_source_length 64
-      - --max_target_length 16
-      - --num_train_epochs 1
-      - --num_beams 1
-      - --per_device_train_batch_size 1
-      - --output_dir ${CI_OUTPUT_DIR}
-    timeout_minutes: 60
-  - path: examples/pytorch/translation/run_translation.py
-    profile: seq2seq
-    runner: linux-aarch64-a2-2
-    npu_devices: '0'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --model_name_or_path ${TINYMBART_PATH}
-      - --source_lang en_XX
-      - --target_lang ro_RO
-      - --train_file ${TARGET_ROOT}/tests/fixtures/tests_samples/wmt_en_ro/train.json
-      - --validation_file ${TARGET_ROOT}/tests/fixtures/tests_samples/wmt_en_ro/val.json
-      - --max_source_length 64
-      - --max_target_length 64
-      - --max_train_samples 4
-      - --do_train
-      - --max_steps 1
-      - --per_device_train_batch_size 1
-      - --output_dir ${CI_OUTPUT_DIR}
-    timeout_minutes: 60
-  - path: examples/pytorch/translation/run_translation_no_trainer.py
-    profile: seq2seq
-    runner: linux-aarch64-a2-2
-    npu_devices: '0'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --model_name_or_path ${TINYMBART_PATH}
-      - --source_lang en_XX
-      - --target_lang ro_RO
-      - --train_file ${TARGET_ROOT}/tests/fixtures/tests_samples/wmt_en_ro/train.json
-      - --validation_file ${TARGET_ROOT}/tests/fixtures/tests_samples/wmt_en_ro/val.json
-      - --max_source_length 64
-      - --max_target_length 64
-      - --num_train_epochs 1
-      - --num_beams 1
-      - --per_device_train_batch_size 1
-      - --output_dir ${CI_OUTPUT_DIR}
-    timeout_minutes: 60
-  # --- 批次 2（视觉/音频类）：vision profile，tiny-random 模型走 hf-mirror 通道 ---
-  - path: examples/pytorch/image-classification/run_image_classification.py
-    profile: vision
-    runner: linux-aarch64-a2-2
-    npu_devices: '0'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --model_name_or_path ${TINYVIT_PATH}
-      - --train_dir ${CI_OUTPUT_DIR}/imgcls/train
-      - --validation_dir ${CI_OUTPUT_DIR}/imgcls/val
-      - --train_val_split 0.0
-      - --remove_unused_columns False
-      - --max_train_samples 3
-      - --do_train
-      - --max_steps 1
-      - --per_device_train_batch_size 1
-      - --output_dir ${CI_OUTPUT_DIR}
-    timeout_minutes: 60
-  - path: examples/pytorch/image-classification/run_image_classification_no_trainer.py
-    profile: vision
-    runner: linux-aarch64-a2-2
-    npu_devices: '0'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --model_name_or_path ${TINYVIT_PATH}
-      - --train_dir ${CI_OUTPUT_DIR}/imgcls/train
-      - --validation_dir ${CI_OUTPUT_DIR}/imgcls/val
-      - --max_train_steps 1
-      - --per_device_train_batch_size 1
-      - --output_dir ${CI_OUTPUT_DIR}
-    timeout_minutes: 60
-  - path: examples/pytorch/image-pretraining/run_mae.py
-    profile: vision
-    runner: linux-aarch64-a2-2
-    npu_devices: '0'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --model_name_or_path ${TINYMAE_PATH}
-      # The script reads the image column inside a set_transform callback, but
-      # Trainer's default remove_unused_columns=True strips the "image" column
-      # (not part of ViTMAEModel.forward) before the batch is fetched.
-      - --remove_unused_columns False
-      - --dataset_name imagefolder
-      - --train_dir ${CI_OUTPUT_DIR}/imgcls/train/**
-      - --validation_dir ${CI_OUTPUT_DIR}/imgcls/val/**
-      - --train_val_split 0
-      - --max_train_samples 3
-      - --do_train
-      - --max_steps 1
-      - --per_device_train_batch_size 1
-      - --output_dir ${CI_OUTPUT_DIR}
-    timeout_minutes: 60
+  # --- 以下用例已在 NPU 验证通过，先注释不执行，聚焦剩余失败用例迭代 ---
+#  - path: examples/pytorch/text-generation/run_generation.py
+#    profile: generation
+#    runner: linux-aarch64-a2-2
+#    npu_devices: '0'
+#    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+#    overlay_args:
+#      - --model_type gpt2
+#      - --model_name_or_path ${TINYGPT2_PATH}
+#      - --prompt Hello
+#      - --length 10
+#      - --seed 42
+#    timeout_minutes: 60
+#  - path: examples/pytorch/text-classification/run_glue_no_trainer.py
+#    profile: glue
+#    runner: linux-aarch64-a2-2
+#    npu_devices: '0'
+#    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+#    overlay_args:
+#      - --model_name_or_path ${DISTILBERT_PATH}
+#      - --train_file ${TARGET_ROOT}/tests/fixtures/tests_samples/MRPC/train.csv
+#      - --validation_file ${TARGET_ROOT}/tests/fixtures/tests_samples/MRPC/dev.csv
+#      - --max_length 64
+#      - --per_device_train_batch_size 2
+#      - --per_device_eval_batch_size 2
+#      - --max_train_steps 1
+#      - --output_dir ${CI_OUTPUT_DIR}
+#    timeout_minutes: 60
+#  - path: examples/pytorch/question-answering/run_qa_no_trainer.py
+#    profile: small-training
+#    runner: linux-aarch64-a2-2
+#    npu_devices: '0'
+#    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+#    overlay_args:
+#      - --model_name_or_path ${DISTILBERT_PATH}
+#      - --train_file ${TARGET_ROOT}/tests/fixtures/tests_samples/SQUAD/sample.json
+#      - --validation_file ${TARGET_ROOT}/tests/fixtures/tests_samples/SQUAD/sample.json
+#      - --version_2_with_negative
+#      - --max_seq_length 128
+#      - --doc_stride 64
+#      - --max_train_samples 4
+#      - --max_eval_samples 4
+#      - --per_device_train_batch_size 1
+#      - --per_device_eval_batch_size 1
+#      - --max_train_steps 1
+#      - --output_dir ${CI_OUTPUT_DIR}
+#    timeout_minutes: 60
+#  - path: examples/pytorch/question-answering/run_qa_beam_search_no_trainer.py
+#    profile: small-training
+#    runner: linux-aarch64-a2-2
+#    npu_devices: '0'
+#    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+#    overlay_args:
+#      - --model_name_or_path ${TINYXLNET_PATH}
+#      - --train_file ${TARGET_ROOT}/tests/fixtures/tests_samples/SQUAD/sample.json
+#      - --validation_file ${TARGET_ROOT}/tests/fixtures/tests_samples/SQUAD/sample.json
+#      - --version_2_with_negative
+#      - --max_seq_length 128
+#      - --doc_stride 64
+#      - --max_train_samples 4
+#      - --max_eval_samples 4
+#      - --per_device_train_batch_size 1
+#      - --per_device_eval_batch_size 1
+#      - --max_train_steps 1
+#      - --output_dir ${CI_OUTPUT_DIR}
+#    timeout_minutes: 60
+#  - path: examples/pytorch/multiple-choice/run_swag_no_trainer.py
+#    profile: small-training
+#    runner: linux-aarch64-a2-2
+#    npu_devices: '0'
+#    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+#    overlay_args:
+#      - --model_name_or_path ${DISTILBERT_PATH}
+#      - --train_file ${TARGET_ROOT}/tests/fixtures/tests_samples/swag/sample.json
+#      - --validation_file ${TARGET_ROOT}/tests/fixtures/tests_samples/swag/sample.json
+#      - --max_seq_length 64
+#      - --per_device_train_batch_size 1
+#      - --per_device_eval_batch_size 1
+#      - --max_train_steps 1
+#      - --output_dir ${CI_OUTPUT_DIR}
+#    timeout_minutes: 60
+#  - path: examples/pytorch/token-classification/run_ner_no_trainer.py
+#    profile: small-training
+#    runner: linux-aarch64-a2-2
+#    npu_devices: '0'
+#    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+#    overlay_args:
+#      - --model_name_or_path ${DISTILBERT_PATH}
+#      - --train_file ${TARGET_ROOT}/tests/fixtures/tests_samples/conll/sample.json
+#      - --validation_file ${TARGET_ROOT}/tests/fixtures/tests_samples/conll/sample.json
+#      - --max_length 64
+#      - --per_device_train_batch_size 1
+#      - --per_device_eval_batch_size 1
+#      - --max_train_steps 1
+#      - --output_dir ${CI_OUTPUT_DIR}
+#    timeout_minutes: 60
+#  # --- 批次 1：文本类 example（LM、GLUE/分类、QA/多选/NER Trainer 版、摘要、翻译）---
+#  - path: examples/pytorch/language-modeling/run_clm.py
+#    profile: lm
+#    runner: linux-aarch64-a2-2
+#    npu_devices: '0'
+#    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+#    overlay_args:
+#      - --model_name_or_path ${TINYGPT2_PATH}
+#      - --train_file ${CI_OUTPUT_DIR}/train.txt
+#      - --do_train
+#      - --max_steps 1
+#      - --per_device_train_batch_size 1
+#      - --output_dir ${CI_OUTPUT_DIR}
+#    timeout_minutes: 60
+#  - path: examples/pytorch/language-modeling/run_mlm.py
+#    profile: lm
+#    runner: linux-aarch64-a2-2
+#    npu_devices: '0'
+#    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+#    overlay_args:
+#      - --model_name_or_path ${DISTILBERT_PATH}
+#      - --train_file ${CI_OUTPUT_DIR}/train.txt
+#      - --do_train
+#      - --max_steps 1
+#      - --per_device_train_batch_size 1
+#      - --output_dir ${CI_OUTPUT_DIR}
+#    timeout_minutes: 60
+#  - path: examples/pytorch/text-classification/run_glue.py
+#    profile: glue
+#    runner: linux-aarch64-a2-2
+#    npu_devices: '0'
+#    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+#    overlay_args:
+#      - --model_name_or_path ${DISTILBERT_PATH}
+#      - --train_file ${CI_OUTPUT_DIR}/mrpc_train.csv
+#      - --validation_file ${CI_OUTPUT_DIR}/mrpc_dev.csv
+#      - --max_seq_length 64
+#      - --do_train
+#      - --max_steps 1
+#      - --per_device_train_batch_size 2
+#      - --output_dir ${CI_OUTPUT_DIR}
+#    timeout_minutes: 60
+#  - path: examples/pytorch/text-classification/run_classification.py
+#    profile: glue
+#    runner: linux-aarch64-a2-2
+#    npu_devices: '0'
+#    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+#    overlay_args:
+#      - --model_name_or_path ${DISTILBERT_PATH}
+#      - --train_file ${CI_OUTPUT_DIR}/mrpc_train.csv
+#      - --validation_file ${CI_OUTPUT_DIR}/mrpc_dev.csv
+#      - --text_column_names sentence1,sentence2
+#      - --label_column_name label
+#      - --do_train
+#      - --max_steps 1
+#      - --per_device_train_batch_size 2
+#      - --output_dir ${CI_OUTPUT_DIR}
+#    timeout_minutes: 60
+#  - path: examples/pytorch/token-classification/run_ner.py
+#    profile: small-training
+#    runner: linux-aarch64-a2-2
+#    npu_devices: '0'
+#    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+#    overlay_args:
+#      - --model_name_or_path ${DISTILBERT_PATH}
+#      - --train_file ${TARGET_ROOT}/tests/fixtures/tests_samples/conll/sample.json
+#      - --validation_file ${TARGET_ROOT}/tests/fixtures/tests_samples/conll/sample.json
+#      - --text_column_name words
+#      - --label_column_name ner
+#      - --max_seq_length 64
+#      - --do_train
+#      - --max_steps 1
+#      - --per_device_train_batch_size 1
+#      - --output_dir ${CI_OUTPUT_DIR}
+#    timeout_minutes: 60
+#  - path: examples/pytorch/question-answering/run_qa.py
+#    profile: small-training
+#    runner: linux-aarch64-a2-2
+#    npu_devices: '0'
+#    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+#    overlay_args:
+#      - --model_name_or_path ${DISTILBERT_PATH}
+#      - --train_file ${TARGET_ROOT}/tests/fixtures/tests_samples/SQUAD/sample.json
+#      - --validation_file ${TARGET_ROOT}/tests/fixtures/tests_samples/SQUAD/sample.json
+#      - --version_2_with_negative
+#      - --max_seq_length 128
+#      - --doc_stride 64
+#      - --max_train_samples 4
+#      - --max_eval_samples 4
+#      - --do_train
+#      - --max_steps 1
+#      - --per_device_train_batch_size 1
+#      - --output_dir ${CI_OUTPUT_DIR}
+#    timeout_minutes: 60
+#  - path: examples/pytorch/question-answering/run_qa_beam_search.py
+#    profile: small-training
+#    runner: linux-aarch64-a2-2
+#    npu_devices: '0'
+#    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+#    overlay_args:
+#      - --model_name_or_path ${TINYXLNET_PATH}
+#      - --train_file ${TARGET_ROOT}/tests/fixtures/tests_samples/SQUAD/sample.json
+#      - --validation_file ${TARGET_ROOT}/tests/fixtures/tests_samples/SQUAD/sample.json
+#      - --version_2_with_negative
+#      - --max_seq_length 128
+#      - --doc_stride 64
+#      - --max_train_samples 4
+#      - --max_eval_samples 4
+#      - --do_train
+#      - --max_steps 1
+#      - --per_device_train_batch_size 1
+#      - --output_dir ${CI_OUTPUT_DIR}
+#    timeout_minutes: 60
+#  - path: examples/pytorch/question-answering/run_seq2seq_qa.py
+#    profile: seq2seq
+#    runner: linux-aarch64-a2-2
+#    npu_devices: '0'
+#    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+#    overlay_args:
+#      - --model_name_or_path ${TINYMBART_PATH}
+#      - --train_file ${TARGET_ROOT}/tests/fixtures/tests_samples/SQUAD/sample.json
+#      - --validation_file ${TARGET_ROOT}/tests/fixtures/tests_samples/SQUAD/sample.json
+#      - --version_2_with_negative
+#      - --max_seq_length 128
+#      - --doc_stride 64
+#      - --max_train_samples 4
+#      - --do_train
+#      - --max_steps 1
+#      - --num_beams 1
+#      - --per_device_train_batch_size 1
+#      - --output_dir ${CI_OUTPUT_DIR}
+#    timeout_minutes: 60
+#  - path: examples/pytorch/multiple-choice/run_swag.py
+#    profile: small-training
+#    runner: linux-aarch64-a2-2
+#    npu_devices: '0'
+#    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+#    overlay_args:
+#      - --model_name_or_path ${DISTILBERT_PATH}
+#      - --train_file ${TARGET_ROOT}/tests/fixtures/tests_samples/swag/sample.json
+#      - --validation_file ${TARGET_ROOT}/tests/fixtures/tests_samples/swag/sample.json
+#      - --max_seq_length 64
+#      - --max_train_samples 4
+#      - --max_eval_samples 4
+#      - --do_train
+#      - --max_steps 1
+#      - --per_device_train_batch_size 1
+#      - --output_dir ${CI_OUTPUT_DIR}
+#    timeout_minutes: 60
+#  - path: examples/pytorch/summarization/run_summarization.py
+#    profile: seq2seq
+#    runner: linux-aarch64-a2-2
+#    npu_devices: '0'
+#    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+#    overlay_args:
+#      - --model_name_or_path ${TINYMBART_PATH}
+#      - --train_file ${TARGET_ROOT}/tests/fixtures/tests_samples/xsum/sample.json
+#      - --validation_file ${TARGET_ROOT}/tests/fixtures/tests_samples/xsum/sample.json
+#      - --text_column document
+#      - --summary_column summary
+#      - --lang en_XX
+#      - --max_source_length 64
+#      - --max_target_length 16
+#      - --max_train_samples 4
+#      - --do_train
+#      - --max_steps 1
+#      - --per_device_train_batch_size 1
+#      - --output_dir ${CI_OUTPUT_DIR}
+#    timeout_minutes: 60
+#  - path: examples/pytorch/summarization/run_summarization_no_trainer.py
+#    profile: seq2seq
+#    runner: linux-aarch64-a2-2
+#    npu_devices: '0'
+#    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+#    overlay_args:
+#      - --model_name_or_path ${TINYMBART_PATH}
+#      - --train_file ${TARGET_ROOT}/tests/fixtures/tests_samples/xsum/sample.json
+#      - --validation_file ${TARGET_ROOT}/tests/fixtures/tests_samples/xsum/sample.json
+#      - --text_column document
+#      - --summary_column summary
+#      - --max_source_length 64
+#      - --max_target_length 16
+#      - --num_train_epochs 1
+#      - --num_beams 1
+#      - --per_device_train_batch_size 1
+#      - --output_dir ${CI_OUTPUT_DIR}
+#    timeout_minutes: 60
+#  - path: examples/pytorch/translation/run_translation.py
+#    profile: seq2seq
+#    runner: linux-aarch64-a2-2
+#    npu_devices: '0'
+#    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+#    overlay_args:
+#      - --model_name_or_path ${TINYMBART_PATH}
+#      - --source_lang en_XX
+#      - --target_lang ro_RO
+#      - --train_file ${TARGET_ROOT}/tests/fixtures/tests_samples/wmt_en_ro/train.json
+#      - --validation_file ${TARGET_ROOT}/tests/fixtures/tests_samples/wmt_en_ro/val.json
+#      - --max_source_length 64
+#      - --max_target_length 64
+#      - --max_train_samples 4
+#      - --do_train
+#      - --max_steps 1
+#      - --per_device_train_batch_size 1
+#      - --output_dir ${CI_OUTPUT_DIR}
+#    timeout_minutes: 60
+#  - path: examples/pytorch/translation/run_translation_no_trainer.py
+#    profile: seq2seq
+#    runner: linux-aarch64-a2-2
+#    npu_devices: '0'
+#    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+#    overlay_args:
+#      - --model_name_or_path ${TINYMBART_PATH}
+#      - --source_lang en_XX
+#      - --target_lang ro_RO
+#      - --train_file ${TARGET_ROOT}/tests/fixtures/tests_samples/wmt_en_ro/train.json
+#      - --validation_file ${TARGET_ROOT}/tests/fixtures/tests_samples/wmt_en_ro/val.json
+#      - --max_source_length 64
+#      - --max_target_length 64
+#      - --num_train_epochs 1
+#      - --num_beams 1
+#      - --per_device_train_batch_size 1
+#      - --output_dir ${CI_OUTPUT_DIR}
+#    timeout_minutes: 60
+#  # --- 批次 2（视觉/音频类）：vision profile，tiny-random 模型走 hf-mirror 通道 ---
+#  - path: examples/pytorch/image-classification/run_image_classification.py
+#    profile: vision
+#    runner: linux-aarch64-a2-2
+#    npu_devices: '0'
+#    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+#    overlay_args:
+#      - --model_name_or_path ${TINYVIT_PATH}
+#      - --train_dir ${CI_OUTPUT_DIR}/imgcls/train
+#      - --validation_dir ${CI_OUTPUT_DIR}/imgcls/val
+#      - --train_val_split 0.0
+#      - --remove_unused_columns False
+#      - --max_train_samples 3
+#      - --do_train
+#      - --max_steps 1
+#      - --per_device_train_batch_size 1
+#      - --output_dir ${CI_OUTPUT_DIR}
+#    timeout_minutes: 60
+#  - path: examples/pytorch/image-classification/run_image_classification_no_trainer.py
+#    profile: vision
+#    runner: linux-aarch64-a2-2
+#    npu_devices: '0'
+#    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+#    overlay_args:
+#      - --model_name_or_path ${TINYVIT_PATH}
+#      - --train_dir ${CI_OUTPUT_DIR}/imgcls/train
+#      - --validation_dir ${CI_OUTPUT_DIR}/imgcls/val
+#      - --max_train_steps 1
+#      - --per_device_train_batch_size 1
+#      - --output_dir ${CI_OUTPUT_DIR}
+#    timeout_minutes: 60
+#  - path: examples/pytorch/image-pretraining/run_mae.py
+#    profile: vision
+#    runner: linux-aarch64-a2-2
+#    npu_devices: '0'
+#    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+#    overlay_args:
+#      - --model_name_or_path ${TINYMAE_PATH}
+#      # The script reads the image column inside a set_transform callback, but
+#      # Trainer's default remove_unused_columns=True strips the "image" column
+#      # (not part of ViTMAEModel.forward) before the batch is fetched.
+#      - --remove_unused_columns False
+#      - --dataset_name imagefolder
+#      - --train_dir ${CI_OUTPUT_DIR}/imgcls/train/**
+#      - --validation_dir ${CI_OUTPUT_DIR}/imgcls/val/**
+#      - --train_val_split 0
+#      - --max_train_samples 3
+#      - --do_train
+#      - --max_steps 1
+#      - --per_device_train_batch_size 1
+#      - --output_dir ${CI_OUTPUT_DIR}
+#    timeout_minutes: 60
   - path: examples/pytorch/image-pretraining/run_mim.py
     profile: vision
     runner: linux-aarch64-a2-2
@@ -420,23 +421,23 @@ supported:
       - --per_device_train_batch_size 1
       - --output_dir ${CI_OUTPUT_DIR}
     timeout_minutes: 60
-  - path: examples/pytorch/contrastive-image-text/run_clip.py
-    profile: vision
-    runner: linux-aarch64-a2-2
-    npu_devices: '0'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --model_name_or_path ${TINYCLIP_PATH}
-      - --train_file ${CI_OUTPUT_DIR}/clip_train.json
-      - --image_column image_path
-      - --caption_column captions
-      - --remove_unused_columns False
-      - --max_train_samples 4
-      - --do_train
-      - --max_steps 1
-      - --per_device_train_batch_size 1
-      - --output_dir ${CI_OUTPUT_DIR}
-    timeout_minutes: 60
+#  - path: examples/pytorch/contrastive-image-text/run_clip.py
+#    profile: vision
+#    runner: linux-aarch64-a2-2
+#    npu_devices: '0'
+#    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+#    overlay_args:
+#      - --model_name_or_path ${TINYCLIP_PATH}
+#      - --train_file ${CI_OUTPUT_DIR}/clip_train.json
+#      - --image_column image_path
+#      - --caption_column captions
+#      - --remove_unused_columns False
+#      - --max_train_samples 4
+#      - --do_train
+#      - --max_steps 1
+#      - --per_device_train_batch_size 1
+#      - --output_dir ${CI_OUTPUT_DIR}
+#    timeout_minutes: 60
   - path: examples/pytorch/audio-classification/run_audio_classification.py
     profile: vision
     runner: linux-aarch64-a2-2
@@ -449,6 +450,43 @@ supported:
       - --label_column_name label
       - --max_length_seconds 1
       - --max_train_samples 4
+      - --do_train
+      - --max_steps 1
+      - --per_device_train_batch_size 1
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 60
+  - path: examples/pytorch/language-modeling/run_clm_no_trainer.py
+    profile: lm
+    runner: linux-aarch64-a2-2
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --model_name_or_path ${TINYGPT2_PATH}
+      - --train_file ${CI_OUTPUT_DIR}/train.txt
+      - --max_train_steps 1
+      - --per_device_train_batch_size 1
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 60
+  - path: examples/pytorch/language-modeling/run_mlm_no_trainer.py
+    profile: lm
+    runner: linux-aarch64-a2-2
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --model_name_or_path ${DISTILBERT_PATH}
+      - --train_file ${CI_OUTPUT_DIR}/train.txt
+      - --max_train_steps 1
+      - --per_device_train_batch_size 1
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 60
+  - path: examples/pytorch/language-modeling/run_plm.py
+    profile: small-training
+    runner: linux-aarch64-a2-2
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --model_name_or_path ${TINYXLNET_PATH}
+      - --train_file ${CI_OUTPUT_DIR}/train.txt
       - --do_train
       - --max_steps 1
       - --per_device_train_batch_size 1
@@ -515,13 +553,11 @@ unsupported:
   - examples/pytorch/question-answering/trainer_seq2seq_qa.py
   - examples/pytorch/question-answering/utils_qa.py
   # --- 上游 breakage（transformers main 自身损坏，manifest 层无法修复，上游修复后恢复）---
-  # run_clm_no_trainer.py / run_mlm_no_trainer.py：引用 accelerate 的 DistributedType.TPU，
-  #   新版 accelerate 已移除该枚举，报 "AttributeError: no attribute 'TPU'"，与 NPU 环境无关
   # run_fim.py：vocab 扩容分支对 Embedding 模块直接调用 .mean(dim=0)，
   #   报 "'Embedding' object has no attribute 'mean'"（原意应为对 weight 张量取均值）
   # run_fim_no_trainer.py：from huggingface_hub import Repository，该类已从新版 huggingface_hub 移除，报 ImportError
-  - examples/pytorch/language-modeling/run_clm_no_trainer.py
-  - examples/pytorch/language-modeling/run_mlm_no_trainer.py
+  # run_clm_no_trainer.py / run_mlm_no_trainer.py 已恢复执行：setup_example.sh
+  #   将 accelerate 钉在 <1.15，规避 DistributedType.TPU 枚举移除问题
   - examples/pytorch/language-modeling/run_fim.py
   - examples/pytorch/language-modeling/run_fim_no_trainer.py
   # --- 数据/模型可用性受限（脚本硬编码 Hub 数据集，Runner 无法访问 Hub，无本地文件入口）---

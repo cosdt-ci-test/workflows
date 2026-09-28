@@ -63,7 +63,10 @@ python -m pip install -e "$TARGET_ROOT"
 # backtracking storm down to the ancient datasets 0.0.9 sdist (run_swag).
 # 4.4.2 keeps the soundfile audio encoder and the `**` glob data-files
 # semantics the manifest paths were written against.
-python -m pip install "${DEPS[@]}" "datasets==4.4.2"
+# accelerate is pinned below 1.15 for the same reason: 1.15 removed
+# DistributedType.TPU, which run_clm_no_trainer.py / run_mlm_no_trainer.py
+# still reference, so they fail with AttributeError before any training step.
+python -m pip install "${DEPS[@]}" "datasets==4.4.2" "accelerate<1.15"
 # torchvision is only needed by the vision profile. Its wheel pins an exact
 # torch== requirement that would upgrade (and break) the image's NPU
 # torch/torch_npu stack, so install it without deps; the examples only use

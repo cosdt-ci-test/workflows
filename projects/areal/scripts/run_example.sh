@@ -51,18 +51,39 @@ cd "$TARGET_ROOT"
 export PYTHONPATH="$TARGET_ROOT:$(dirname "$LAUNCH_PATH")${PYTHONPATH:+:$PYTHONPATH}"
 # examples/scaffolding/*.py use package-relative imports (from ._compat
 # import ...), so they must run as modules, not as plain scripts.
+#
+# Forked runtime logs (data-worker / data-router / data-gateway under
+# <fileroot>/logs/) are NOT part of this job's stdout, so a crash there is
+# otherwise invisible; dump them when the example fails.
+dump_forked_logs() {
+  local root="${AREAL_LOG_ROOT:-/tmp/areal/experiments/logs}"
+  [[ -d "$root" ]] || return 0
+  local f
+  while IFS= read -r f; do
+    echo "===== $f (tail -n 200) ====="
+    tail -n 200 "$f" || true
+  done < <(find "$root" -type f -name 'data-*.log' 2>/dev/null)
+}
+
+run_rc=0
 case "$EXAMPLE_REL" in
   examples/scaffolding/*.py)
     MODULE="${EXAMPLE_REL%.py}"
     MODULE="${MODULE//\//.}"
-    "$PYTHON" -m "$MODULE" "${EXTRA_ARGS[@]}"
+    "$PYTHON" -m "$MODULE" "${EXTRA_ARGS[@]}" || run_rc=$?
     ;;
   *.sh)
     # Shell examples dispatch with bash (generic guard contract: .sh -> bash,
     # .py -> python).
-    bash "$LAUNCH_PATH" "${EXTRA_ARGS[@]}"
+    bash "$LAUNCH_PATH" "${EXTRA_ARGS[@]}" || run_rc=$?
     ;;
   *)
-    "$PYTHON" "$LAUNCH_PATH" "${EXTRA_ARGS[@]}"
+    "$PYTHON" "$LAUNCH_PATH" "${EXTRA_ARGS[@]}" || run_rc=$?
     ;;
 esac
+
+if ((run_rc != 0)); then
+  echo "example exited rc=$run_rc; dumping forked runtime logs"
+  dump_forked_logs
+fi
+exit "$run_rc"

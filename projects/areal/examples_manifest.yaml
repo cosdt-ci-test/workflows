@@ -432,13 +432,17 @@ supported:
   #     - +valid_dataset.setup_timeout=600
   #     - +total_train_steps=1
   #   timeout_minutes: 60
-  # CLEVR 计数 SFT：SFT loader 会把每样本 pixel_values 物化进数据集，7 万 train
-  # 会撑爆数据 worker（宿主 OOM/几十 GB arrow 缓存）。脚本硬编码 split="train"
-  # 且 get_custom_dataset 忽略配置 split、loader 不收额外 kwargs —— 无法用
-  # split/dataset_kwargs 缩量，改走 path：setup 第 10 步用 HF 切片
+  # CLEVR 计数 SFT。数据：SFT loader 会把每样本 pixel_values 物化进数据集，
+  # 7 万 train 会撑爆数据 worker；脚本硬编码 split="train" 且 loader 不收额外
+  # kwargs，无法用 split/dataset_kwargs 缩量 —— setup 第 10 步用 HF 切片
   # train[:200]（只下第 0 分片 ~0.5GB）生成本地子集目录（名含 clevr_count_70k
-  # 命中分发，内放 train.parquet），train_dataset.path 指过去。valid 保持在线
-  # （test split 仅 200 行 ~56MB）。模型换 Qwen2.5-VL-3B（上游为旧代 Qwen2-VL-7B）。
+  # 命中分发），train_dataset.path 指过去。
+  # 加载路径：数据服务在此条目卡死过（注册成功、首次 fetch 60s 超时后 router
+  # 报 no healthy workers；worker 是 fork 进程、日志在 data-*.log 不在主日志，
+  # 疑似 SFT 样本的 multi_modal_input 嵌套张量传输不支持）。改为两个数据集都
+  # 在主进程加载（scheduling_spec=null，geometry3k_sft 同款已验证路径），绕开
+  # 数据服务与那 60s 硬编码超时（controller.py:599）。代价：两次 map 变单进程。
+  # 模型换 Qwen2.5-VL-3B（上游为旧代 Qwen2-VL-7B）。
   - path: examples/vlm/clevr_count_70k_sft.py
     profile: areal-clevr-sft
     runner: linux-aarch64-a2-2
@@ -455,8 +459,8 @@ supported:
       - train_dataset.path=${AREAL_CLEVR_SUBSET_DIR}
       - train_dataset.batch_size=2
       - valid_dataset.batch_size=2
-      - +train_dataset.setup_timeout=1800
-      - +valid_dataset.setup_timeout=600
+      - +train_dataset.scheduling_spec=null
+      - +valid_dataset.scheduling_spec=null
       - +total_train_steps=1
     timeout_minutes: 60
 unsupported:

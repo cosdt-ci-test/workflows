@@ -779,7 +779,13 @@ supported:
       - --pretrained_model_name_or_path stabilityai/stable-diffusion-xl-base-1.0
       - --train_shards_path_or_url ${WDS_TRAIN_SHARD}
       - --eval_shards_path_or_url ${WDS_TRAIN_SHARD}
-      - --max_train_samples 8
+      # Text2ImageDataset hardcodes shuffle_buffer_size=1000 (:1192) and sets
+      # the epoch length to num_worker_batches = ceil(max_train_samples /
+      # (global_batch_size * num_workers)) (:256), with num_workers defaulting
+      # to 1. With 8 the shuffle buffer can never fill -> the first train batch
+      # never arrives (silent hang, not even the "Steps:" bar). 1024 > 1000;
+      # --max_train_steps 1 still stops after one step.
+      - --max_train_samples 1024
       - --control_type canny
       - --resolution 64
       - --train_batch_size 1

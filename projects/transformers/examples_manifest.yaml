@@ -457,6 +457,10 @@ supported:
       # The audiofolder train fixture holds 2 wav files; a larger
       # max_train_samples makes .select(range(n)) raise IndexError.
       - --max_train_samples 2
+      # Same Trainer/set_transform interplay as run_mae.py: without this the
+      # Trainer strips the audio/label columns (not in the model forward
+      # signature) and train_transforms dies with KeyError: 'audio'.
+      - --remove_unused_columns False
       - --do_train
       - --max_steps 1
       - --per_device_train_batch_size 1

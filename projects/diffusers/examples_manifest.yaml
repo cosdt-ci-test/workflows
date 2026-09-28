@@ -788,7 +788,6 @@ supported:
       - --set_grads_to_none
       - --mixed_precision bf16
       - --max_train_steps 1
-      - --checkpointing_steps 1
       - --output_dir ${CI_OUTPUT_DIR}
     timeout_minutes: 120
 

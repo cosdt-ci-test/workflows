@@ -14,9 +14,10 @@ fi
 
 PROFILE="$1"
 
-SUPPORTED_PROFILES="areal-vlm-grpo areal-vlm-mt-grpo areal-math-grpo areal-math-sft areal-math-aime areal-math-boba"
+SUPPORTED_PROFILES="areal-vlm-grpo areal-vlm-mt-grpo areal-math-grpo areal-math-sft areal-math-aime areal-math-boba areal-countdown-grpo"
 AIME_PREP=0
 BOBA_PREP=0
+COUNTDOWN_PREP=0
 case "$PROFILE" in
   areal-vlm-grpo) MODEL_ID="Qwen/Qwen2.5-VL-3B-Instruct" ;;
   areal-vlm-mt-grpo) MODEL_ID="Qwen/Qwen3-VL-2B-Instruct" ;;
@@ -25,6 +26,7 @@ case "$PROFILE" in
   areal-math-sft) MODEL_ID="Qwen/Qwen3-1.7B" ;;
   areal-math-aime) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; AIME_PREP=1 ;;
   areal-math-boba) MODEL_ID="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"; BOBA_PREP=1 ;;
+  areal-countdown-grpo) MODEL_ID="Qwen/Qwen2.5-3B-Instruct"; COUNTDOWN_PREP=1 ;;
   *)
     echo "unknown profile: ${PROFILE} (supported: ${SUPPORTED_PROFILES})" >&2
     exit 1
@@ -162,4 +164,20 @@ with open(os.environ["GITHUB_ENV"], "a") as fh:
     fh.write(f"AREAL_BOBA_DATA={dst}\n")
 print(f"downloaded boba dataset to {dst}", flush=True)
 PY
+fi
+
+# -------------------------------------------------------
+# 6. Countdown dataset (areal-countdown-grpo).
+# -------------------------------------------------------
+# countdown.py writes ./data/countdown/qwen/*.jsonl relative to CWD; run it
+# from TARGET_ROOT so the generated files land where train_config.yaml's
+# default train_dataset.path=data/countdown/qwen/train_e.jsonl expects them
+# (run_example.sh also cds to TARGET_ROOT). The default generation size is
+# 500k samples; 32/8 is plenty for the 1-step smoke. The tokenizer comes
+# from the model predownloaded in section 3, so generation is offline.
+if [[ "$COUNTDOWN_PREP" == 1 ]]; then
+  MODEL_DIR="$GITHUB_WORKSPACE/areal_models/${MODEL_ID##*/}"
+  mkdir -p "$TARGET_ROOT/data/countdown/qwen"
+  (cd "$TARGET_ROOT" && python3 examples/countdown/countdown.py \
+    --num_samples 32 --eval_size 8 --tokenizer_path "$MODEL_DIR")
 fi

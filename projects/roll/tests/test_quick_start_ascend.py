@@ -1,34 +1,4 @@
-"""Quick-start-Ascend documentation test (MarkdownDocTestBase contract).
-
-Document under test: projects/roll/docs/Quick-start-Ascend.md.
-The doc is the executable test case: CI replays every labeled block in order,
-so anything a user must do lives in the doc, and anything only CI needs lives
-in prepare_environment below.
-
-Doc flow mirrored here (install discipline only, doc content untouched):
-  1. Install the matched torch 2.10 / torch-npu 2.10 stack.
-  2. Install the official pre-built vLLM 0.23.0, vLLM-Ascend
-     0.23.0rc1, and triton-ascend 3.2.1 packages, then re-pin the
-     torch stack so generic vLLM metadata cannot move it to CUDA torch.
-  3. pip install -r ROLL/requirements_common.txt
-     -> ray[default,cgraph]==2.48.0, peft==0.12.0, trl==0.9.6,
-        datasets==3.1.0, hydra-core, omegaconf, math-verify==0.9.0,
-        latex2sympy2==1.5.4, latex2sympy2_extended==1.10.1 ...
-     pinned jointly with antlr4-python3-runtime==4.9.3 by hydra/omegaconf;
-     math-verify 0.9.0 accepts latex2sympy2_extended 1.10.1 (its 1.11 pin
-     predates ROLL's pin), so the resolver stays green without overrides.
-  4. pip install reasoning-gym==0.1.23 (pure python).
-  5. pip install --no-deps gem-llm==0.0.4
-     -> the doc does this on purpose: gem-llm pulls
-        math-verify[antlr4_13_2] == antlr4 4.13.2, which conflicts with
-        omegaconf/hydra's antlr4==4.9.* pin. gem only needs the runtime
-        package for roll.pipeline.agentic.env registration.
-
-Env vars (injected by .github/workflows/roll-quick-start.yml):
-  NPU_READY=true          gate, the class is skipped otherwise
-  MONITORED_DOC_URL       engine monitor input (not used by the test,
-                          the doc is read from the local checkout)
-"""
+"""Guard projects/roll/docs/Quick-start-Ascend.md on an NPU runner."""
 
 from __future__ import annotations
 
@@ -38,7 +8,7 @@ import sys
 import unittest
 from pathlib import Path
 
-from workflows.markdown_doc_test_base import MarkdownDocTestBase, TestCommand
+from workflows.markdown_doc_test_base import MarkdownDocTestBase
 from workflows.model_cache import (
     ensure_safetensors,
     purge_modelscope_corrupt,
@@ -71,12 +41,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     )
 
     def _verify_tensorboard_events(self) -> None:
-        """CI-side guard: the doc only reports success and the metrics path.
-
-        A missing or empty event file means the run produced no metrics; the
-        doc used to assert that inline, which reads like a test script rather
-        than usage. Keeping the check here preserves the coverage.
-        """
+        """Require a nonempty TensorBoard event file after training."""
         events = list(self._TENSORBOARD_DIR.glob('*/events.out.tfevents.*'))
         if not events:
             raise AssertionError(
@@ -94,16 +59,6 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             f'({len(events)} file(s), first={events[0].stat().st_size}B): '
             f'{self._TENSORBOARD_DIR}'
         )
-
-    def _run_one(self, cmd, results, env, cwd, timeout, idx):
-        if (
-            isinstance(cmd, TestCommand)
-            and getattr(cmd, 'id', None) == 'verify-output'
-        ):
-            super()._run_one(cmd, results, env, cwd, timeout, idx)
-            self._verify_tensorboard_events()
-            return
-        return super()._run_one(cmd, results, env, cwd, timeout, idx)
 
     def pre_process(self) -> str:
         doc_path = (
@@ -160,6 +115,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     )
     def test_runs_doc(self) -> None:
         self.run_template()
+        self._verify_tensorboard_events()
 
 
 if __name__ == '__main__':

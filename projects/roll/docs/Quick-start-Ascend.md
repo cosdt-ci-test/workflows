@@ -32,7 +32,9 @@ echo "ROLL $(git describe --tags --exact-match HEAD)"
 pip install -e .
 ```
 
-`<ref>` 为最新正式 release tag。
+:::{note}
+`<ref>` 为最新正式 release 的 tag，例如 `v0.3.0`。
+:::
 
 输出结果如下：
 
@@ -40,18 +42,44 @@ pip install -e .
 ROLL xxx
 ```
 
-其中 `xxx` 为实际安装到的 release 版本号，如 `v0.3.0`。
+:::{note}
+输出中的 `xxx` 为实际安装到的 release 版本号，如 `v0.3.0`。
+:::
 
 ## 运行示例：FrozenLake agentic 强化学习
 
 FrozenLake 是 ROLL 官方快速入门的示例：Qwen2.5-0.5B-Instruct 作为策略模型，在 4×4 冰面网格中逐轮输出移动方向，绕开冰洞到达终点，环境按结果返回奖励。
 
-**安装 vLLM 与 triton。** 安装 vLLM 与 vLLM-Ascend，配套版本的 torch、torch_npu、torchvision、torchaudio 会作为依赖自动装上；安装 triton-ascend，其配套的社区 triton 同样由依赖自动带入。
+**安装 vLLM 与 triton。**
 
 ```shell #test-setup id="install-npu-runtime"
 pip install --index-url https://repo.huaweicloud.com/repository/pypi/simple vllm==0.23.0
 pip install --index-url https://repo.huaweicloud.com/repository/pypi/simple --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi vllm-ascend==0.23.0
 pip install --index-url https://repo.huaweicloud.com/repository/pypi/simple --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi triton-ascend==3.2.2
+```
+
+核对安装的 vLLM 与 triton 版本，下面代码用python执行：
+
+```python #test id="verify-vllm-triton"
+from importlib.metadata import version
+
+expected = {
+    "vllm": "0.23.0",
+    "vllm-ascend": "0.23.0",
+    "triton-ascend": "3.2.2",
+}
+for package, required in expected.items():
+    actual = version(package)
+    assert actual == required, f"{package}: expected {required}, got {actual}"
+    print(f"{package} {actual}")
+```
+
+输出结果如下：
+
+```shell #test-result id="verify-vllm-triton"
+vllm 0.23.0
+vllm-ascend 0.23.0
+triton-ascend 3.2.2
 ```
 
 **安装示例依赖。** 按昇腾镜像的依赖清单安装 agentic 示例所需组件：
@@ -67,13 +95,40 @@ pip install "transformers==4.57.6" "tensorboard==2.20.0" "antlr4-python3-runtime
 rm requirements_npu.txt
 ```
 
-**写入示例配置。** 配置基于官方 agentic demo，修改参数完成 NPU 适配。
+核对示例依赖的版本，下面代码用python执行：
+
+```python #test id="verify-example-deps"
+from importlib.metadata import version
+
+expected = {
+    "gem-llm": "0.0.4",
+    "numpy": "1.26.4",
+    "transformers": "4.57.6",
+    "tensorboard": "2.20.0",
+    "antlr4-python3-runtime": "4.9.3",
+}
+for package, required in expected.items():
+    actual = version(package)
+    assert actual == required, f"{package}: expected {required}, got {actual}"
+    print(f"{package} {actual}")
+```
+
+输出结果如下：
+
+```shell #test-result id="verify-example-deps"
+gem-llm 0.0.4
+numpy 1.26.4
+transformers 4.57.6
+tensorboard 2.20.0
+antlr4-python3-runtime 4.9.3
+```
+
+**写入示例配置。** 配置基于官方 agentic demo，修改参数完成 NPU 适配。在 `ROLL` 的上一级目录用 Python 执行下面的代码：
 
 ```python #test id="write-config"
 from pathlib import Path
 
 config = """
-# 环境定义沿用官方 examples/config/traj_envs.yaml，NPU 上训练仅支持 FSDP2。
 defaults:
   - ../config/traj_envs@_here_
 
@@ -218,21 +273,10 @@ cd ROLL
 python examples/start_agentic_pipeline.py --config_path agentic_frozen_lake_npu --config_name quick_start_npu
 ```
 
-**查看训练产物。** 训练指标写入 output/tensorboard：
+**查看训练产物。** 训练完成后，TensorBoard 指标保存在以下目录：
 
-```python #test id="verify-output"
-from pathlib import Path
-
-tensorboard_dir = Path("ROLL/output/tensorboard/roll-quick-start-npu")
-print("训练产物已生成")
-print(f"训练指标路径：{tensorboard_dir}")
-```
-
-输出结果如下：
-
-```shell #test-result id="verify-output"
-训练产物已生成
-训练指标路径：ROLL/output/tensorboard/roll-quick-start-npu
+```text
+ROLL/output/tensorboard/roll-quick-start-npu
 ```
 
 ## 更多用法

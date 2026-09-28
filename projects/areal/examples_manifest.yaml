@@ -74,7 +74,7 @@ supported:
   #     - +train_dataset.setup_timeout=600
   #     - +valid_dataset.setup_timeout=600
   #     - +total_train_steps=1
-  #   timeout_minutes: 60
+  #   timeout_minutes: 30
   #
   # # Qwen3-VL-2B-Instruct Geometry3K 多轮 tool-calling GRPO（双卡；1 卡 OOM，
   # # 2026-09-27 起双卡测试）。offload + disk + 关 mean 归约与上面 geometry3k
@@ -115,7 +115,7 @@ supported:
   #     - +train_dataset.setup_timeout=600
   #     - +valid_dataset.setup_timeout=600
   #     - +total_train_steps=1
-  #   timeout_minutes: 60
+  #   timeout_minutes: 30
   # # GSM8K GRPO（Qwen2.5-1.5B-Instruct，上游 NPU 专用配置 gsm8k_grpo_npu.yaml）。
   # # math 系 yaml 的 scheduler.type 均为 null，单控制器模式直接 NotImplementedError，
   # # 必须叠加 scheduler.type=local。MathAgent 走 rollout.agent.mode=inline 的本地
@@ -162,7 +162,7 @@ supported:
   #     - +train_dataset.setup_timeout=600
   #     - +valid_dataset.setup_timeout=600
   #     - +total_train_steps=1
-  #   timeout_minutes: 60
+  #   timeout_minutes: 30
   #
   # # AIME RL（RLVRWorkflow + aime_reward_fn，Qwen2.5-1.5B-Instruct）：上游没有
   # # aime 配置，setup 从 gsm8k_grpo_npu.yaml 派生（数据路径指向本地 parquet、
@@ -192,7 +192,7 @@ supported:
   #     - train_dataset.batch_size=2
   #     - valid_dataset.batch_size=2
   #     - +total_train_steps=1
-  #   timeout_minutes: 60
+  #   timeout_minutes: 30
   # # BoBa GRPO（DeepSeek-R1-Distill-Qwen-1.5B，RLVRWorkflow + math_verify 奖励）。
   # # 脚本把 train_dataset.path 当本地 jsonl 文件加载（load_dataset("json",
   # # data_files=path)），上游 yaml 里写的是 HF repo id，直接跑会
@@ -226,7 +226,7 @@ supported:
   #     - train_dataset.batch_size=2
   #     - +total_train_steps=1
   #     - ++actor.scheduling_spec.0.env_vars.TASK_QUEUE_ENABLE=1
-  #   timeout_minutes: 60
+  #   timeout_minutes: 30
   # Countdown 数字游戏 GRPO（Qwen2.5-3B-Instruct；自定义 CountDownWorkflow：
   # 本地 agenerate + 本地 compute_score 奖励，无外部 API）。数据非下载、非
   # fixture：setup 按 areal-countdown-grpo profile 在 TARGET_ROOT 下现场跑
@@ -256,7 +256,56 @@ supported:
       - gconfig.n_samples=1
       - train_dataset.batch_size=2
       - +total_train_steps=1
-    timeout_minutes: 60
+    timeout_minutes: 30
+  # HH-RLHF DPO（Qwen2.5-7B，离线 DPOTrainer + ref 引擎，无 rollout/vLLM：
+  # 不需要 weight_update_mode，也不踩批级归约 kDouble）。数据集公开非
+  # gated，但 jsonl.gz 按子集分目录，loader 不带
+  # config 名会报多 config 错——setup 预下载 harmless-base 子集到本地目录
+  # （AREAL_HHRLHF_DATA）绕过。7B 全参 2 卡必须 CPU offload。
+  - path: examples/alignment/hhrlhf_dpo.py
+    profile: areal-align
+    runner: linux-aarch64-a2-2
+    npu_devices: '0,1'
+    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
+    overlay_args:
+      - --config examples/alignment/hhrlhf_dpo.yaml
+      - cluster.n_gpus_per_node=2
+      - actor.backend=fsdp:d2p1t1
+      - +actor.fsdp.offload_params=true
+      - actor.path=${AREAL_MODEL_PATH}
+      - actor.mb_spec.max_tokens_per_mb=1024
+      - ref.mb_spec.max_tokens_per_mb=1024
+      - train_dataset.path=${AREAL_HHRLHF_DATA}
+      - valid_dataset.path=${AREAL_HHRLHF_DATA}
+      - train_dataset.batch_size=2
+      - valid_dataset.batch_size=2
+      - +train_dataset.setup_timeout=600
+      - +valid_dataset.setup_timeout=600
+      - +total_train_steps=1
+    timeout_minutes: 30
+  # HH-RLHF Reward Modeling（与 hhrlhf_dpo.py 共用 areal-align profile；
+  # RWTrainer，同样无 rollout，风险点与上面 DPO 条目相同）。
+  - path: examples/alignment/hhrlhf_rw.py
+    profile: areal-align
+    runner: linux-aarch64-a2-2
+    npu_devices: '0,1'
+    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
+    overlay_args:
+      - --config examples/alignment/hhrlhf_rw.yaml
+      - cluster.n_gpus_per_node=2
+      - actor.backend=fsdp:d2p1t1
+      - +actor.fsdp.offload_params=true
+      - actor.path=${AREAL_MODEL_PATH}
+      - actor.mb_spec.max_tokens_per_mb=1024
+      - ref.mb_spec.max_tokens_per_mb=1024
+      - train_dataset.path=${AREAL_HHRLHF_DATA}
+      - valid_dataset.path=${AREAL_HHRLHF_DATA}
+      - train_dataset.batch_size=2
+      - valid_dataset.batch_size=2
+      - +train_dataset.setup_timeout=600
+      - +valid_dataset.setup_timeout=600
+      - +total_train_steps=1
+    timeout_minutes: 30
 unsupported:
   # UPSTREAM_BUG：gsm8k_eval.py 绕过 PPOTrainer 自行初始化 scheduler/engine，
   # 但未初始化 DataController；get_custom_dataset 返回的 RDataset 在
@@ -273,11 +322,6 @@ unsupported:
   # areal/workflow/openai/code_agent.py:27,53,184）；且 examples/code/ 下没有
   # config yaml，example 本身不完整。CI 无凭据，不适配看护。
   - examples/code/train.py
-  # alignment：需要 NPU + Anthropic/hh-rlhf（私有 gated dataset）；默认 8 卡
-  # actor.backend=fsdp:d8p1t1 → 单卡放不下 7B。可改为 fsdp:d1p1t1 + path=gsm8k，但
-  # DPO trainer 是否支持 NPU FSDP 路径需验证。
-  - examples/alignment/hhrlhf_dpo.py
-  - examples/alignment/hhrlhf_rw.py
   - examples/distillation/mopd/mopd_rl.py
   - examples/multi_turn_math/gsm8k_rl_mt.py
   - examples/multi_turn_vlm/run_geometry3k_grpo_mt_npu.sh

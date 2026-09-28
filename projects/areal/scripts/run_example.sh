@@ -49,4 +49,15 @@ cd "$TARGET_ROOT"
 # (e.g. boba_grpo.py's reward_fn "examples.math.boba_grpo.boba_reward_fn");
 # the example dir covers sibling modules imported by the script itself.
 export PYTHONPATH="$TARGET_ROOT:$(dirname "$LAUNCH_PATH")${PYTHONPATH:+:$PYTHONPATH}"
-"$PYTHON" "$LAUNCH_PATH" "${EXTRA_ARGS[@]}"
+# examples/scaffolding/*.py use package-relative imports (from ._compat
+# import ...), so they must run as modules, not as plain scripts.
+case "$EXAMPLE_REL" in
+  examples/scaffolding/*.py)
+    MODULE="${EXAMPLE_REL%.py}"
+    MODULE="${MODULE//\//.}"
+    "$PYTHON" -m "$MODULE" "${EXTRA_ARGS[@]}"
+    ;;
+  *)
+    "$PYTHON" "$LAUNCH_PATH" "${EXTRA_ARGS[@]}"
+    ;;
+esac

@@ -377,7 +377,8 @@ jobs:
             echo "Monitor fired: reason=$reason ref=$ref"
 
             [ -n "$ref" ] || { echo "ERROR: monitor fired (reason=$reason) with empty ref - no upstream ref to test"; exit 1; }
-            SHA=$(curl -fsSL "$GH_API/repos/${{ env.UPSTREAM_REPO }}/commits/$ref" \
+            SHA=$(curl -fsSL --retry 3 --retry-all-errors --retry-delay 2 --max-time 30 \
+              "$GH_API/repos/${{ env.UPSTREAM_REPO }}/commits/$ref" \
               | jq -r '.sha // empty')
             [ -z "$SHA" ] && { echo "failed to resolve $ref"; exit 1; }
             echo "sha=$SHA" >> "$GITHUB_OUTPUT"

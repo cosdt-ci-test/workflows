@@ -763,6 +763,35 @@ supported:
       - --mixed_precision no
     timeout_minutes: 90
 
+  # ControlNet SDXL webdataset 训练（research_projects 版）。--train/eval_shards
+  # _path_or_url 明确支持本地路径（:704），上游无可下 shard；setup 合成极小
+  # webdataset tar（每样本 .jpg + .txt caption + .json，json 带
+  # original_width/height>=512 与 pwatermark——WebdatasetFilter/get_orig_size
+  # 要读）。--control_type canny（默认）避开 depth 分支训练循环里的
+  # autocast("cuda")；不传 --validation_prompt 跳过验证路径的 cuda（empty_cache
+  # 在 torch_npu 下是 no-op）。无 --variant；冻结的 unet/vae/TE 会降到 bf16
+  # 上卡（:1131），SDXL ControlNet 全量训单卡 32GB 靠 bf16+grad-ckpt+res64 压。
+  - path: examples/research_projects/controlnet/train_controlnet_webdataset.py
+    profile: diffusers-controlnet-wds
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --pretrained_model_name_or_path stabilityai/stable-diffusion-xl-base-1.0
+      - --train_shards_path_or_url ${WDS_TRAIN_SHARD}
+      - --eval_shards_path_or_url ${WDS_TRAIN_SHARD}
+      - --max_train_samples 8
+      - --control_type canny
+      - --resolution 64
+      - --train_batch_size 1
+      - --gradient_accumulation_steps 1
+      - --gradient_checkpointing
+      - --set_grads_to_none
+      - --mixed_precision bf16
+      - --max_train_steps 1
+      - --checkpointing_steps 1
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 120
+
 # ===== unsupported（其余全部；后续逐例验证跑通后迁入 supported） =====
 unsupported:
   # CUDA硬编码 text_encoding_pipeline.to("cuda")
@@ -828,8 +857,6 @@ unsupported:
   - examples/research_projects/colossalai/train_dreambooth_colossalai.py
   # CUDA_DEP：硬编码 .to("cuda")
   - examples/research_projects/control_lora/control_lora.py
-  # DATA_UNREACHABLE：数据集准备成本较高
-  - examples/research_projects/controlnet/train_controlnet_webdataset.py
   # DATA_UNREACHABLE：get_dataset() 数据集写死键名，原数据集设置为私有无法下载
   - examples/research_projects/diffusion_orpo/train_diffusion_orpo_sdxl_lora_wds.py
   # dreambooth_inpaint_lora：需降级 diffusers（用已废弃的 LoRA processor 构造 API）

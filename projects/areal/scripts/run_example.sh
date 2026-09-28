@@ -57,6 +57,11 @@ case "$EXAMPLE_REL" in
     MODULE="${MODULE//\//.}"
     "$PYTHON" -m "$MODULE" "${EXTRA_ARGS[@]}"
     ;;
+  *.sh)
+    # Shell examples dispatch with bash (generic guard contract: .sh -> bash,
+    # .py -> python).
+    bash "$LAUNCH_PATH" "${EXTRA_ARGS[@]}"
+    ;;
   *)
     "$PYTHON" "$LAUNCH_PATH" "${EXTRA_ARGS[@]}"
     ;;

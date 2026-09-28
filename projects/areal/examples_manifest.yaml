@@ -232,31 +232,6 @@ supported:
   #     - train_dataset.batch_size=2
   #     - +total_train_steps=1
   #   timeout_minutes: 30
-  # HH-RLHF DPO：离线无 rollout；hh-rlhf 按子集分目录，setup 预下载
-  # harmless-base（AREAL_HHRLHF_DATA）。换 Qwen2.5-1.5B（上游 yaml 为 7B，
-  # DPO 管线模型无关；7B 在 32GB 卡初始化 OOM、每腿多下 15GB），配方对齐
-  # gsm8k_rl（offload、无需 memory_efficient_load）
-  - path: examples/alignment/hhrlhf_dpo.py
-    profile: areal-align
-    runner: linux-aarch64-a2-2
-    npu_devices: '0,1'
-    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
-    overlay_args:
-      - --config examples/alignment/hhrlhf_dpo.yaml
-      - cluster.n_gpus_per_node=2
-      - actor.backend=fsdp:d2p1t1
-      - +actor.fsdp.offload_params=true
-      - actor.path=${AREAL_MODEL_PATH}
-      - actor.mb_spec.max_tokens_per_mb=1024
-      - ref.mb_spec.max_tokens_per_mb=1024
-      - train_dataset.path=${AREAL_HHRLHF_DATA}
-      - valid_dataset.path=${AREAL_HHRLHF_DATA}
-      - train_dataset.batch_size=2
-      - valid_dataset.batch_size=2
-      - +train_dataset.setup_timeout=600
-      - +valid_dataset.setup_timeout=600
-      - +total_train_steps=1
-    timeout_minutes: 60
   # GSM8K 多轮自我纠错 GRPO（实测跑通）：复用 areal-math-grpo profile
   # - path: examples/multi_turn_math/gsm8k_rl_mt.py
   #   profile: areal-math-grpo
@@ -361,38 +336,38 @@ supported:
   #     - +total_train_steps=1
   #     - vllm.max_model_len=4096
   #   timeout_minutes: 60
-  # Scaffolding 框架 RLVR（独有覆盖面，Qwen2.5-1.5B 复用 areal-math-grpo
-  # profile）：旧版 SPMD yaml 按 docstring 迁移（+scheduler/+backend）；
-  # behav_imp_weight_cap 是已删除 legacy 键，必须 ~ 删掉否则
-  # to_structured_cfg 报错；相对导入需 python -m 启动（run_example.sh 已
-  # 处理）；yaml 已写 weight_update_mode: disk
-  - path: examples/scaffolding/gsm8k_rlvr_scaffolding.py
-    profile: areal-math-grpo
-    runner: linux-aarch64-a2-2
-    npu_devices: '0,1'
-    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
-    overlay_args:
-      - --config examples/scaffolding/gsm8k_rlvr_scaffolding.yaml
-      - +scheduler.type=local
-      - cluster.n_gpus_per_node=2
-      - +rollout.backend=vllm:d1p1t2
-      - +rollout.setup_timeout=1800
-      - +actor.backend=fsdp:d2p1t1
-      - +ref.backend=fsdp:d2p1t1
-      - +actor.fsdp.offload_params=true
-      - ~actor.behav_imp_weight_cap
-      - actor.path=${AREAL_MODEL_PATH}
-      - actor.mb_spec.max_tokens_per_mb=1024
-      - ref.mb_spec.max_tokens_per_mb=1024
-      - vllm.gpu_memory_utilization=0.3
-      - gconfig.max_new_tokens=64
-      - gconfig.n_samples=1
-      - train_dataset.batch_size=2
-      - valid_dataset.batch_size=2
-      - +train_dataset.setup_timeout=600
-      - +valid_dataset.setup_timeout=600
-      - +total_train_steps=1
-    timeout_minutes: 60
+  # # Scaffolding 框架 RLVR（独有覆盖面，Qwen2.5-1.5B 复用 areal-math-grpo
+  # # profile）：旧版 SPMD yaml 按 docstring 迁移（+scheduler/+backend）；
+  # # behav_imp_weight_cap 是已删除 legacy 键，必须 ~ 删掉否则
+  # # to_structured_cfg 报错；相对导入需 python -m 启动（run_example.sh 已
+  # # 处理）；yaml 已写 weight_update_mode: disk
+  # - path: examples/scaffolding/gsm8k_rlvr_scaffolding.py
+  #   profile: areal-math-grpo
+  #   runner: linux-aarch64-a2-2
+  #   npu_devices: '0,1'
+  #   image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
+  #   overlay_args:
+  #     - --config examples/scaffolding/gsm8k_rlvr_scaffolding.yaml
+  #     - +scheduler.type=local
+  #     - cluster.n_gpus_per_node=2
+  #     - +rollout.backend=vllm:d1p1t2
+  #     - +rollout.setup_timeout=1800
+  #     - +actor.backend=fsdp:d2p1t1
+  #     - +ref.backend=fsdp:d2p1t1
+  #     - +actor.fsdp.offload_params=true
+  #     - ~actor.behav_imp_weight_cap
+  #     - actor.path=${AREAL_MODEL_PATH}
+  #     - actor.mb_spec.max_tokens_per_mb=1024
+  #     - ref.mb_spec.max_tokens_per_mb=1024
+  #     - vllm.gpu_memory_utilization=0.3
+  #     - gconfig.max_new_tokens=64
+  #     - gconfig.n_samples=1
+  #     - train_dataset.batch_size=2
+  #     - valid_dataset.batch_size=2
+  #     - +train_dataset.setup_timeout=600
+  #     - +valid_dataset.setup_timeout=600
+  #     - +total_train_steps=1
+  #   timeout_minutes: 60
   # # OpenAI Agents SDK 多 agent handoff GRPO（独有覆盖面）：LLM 调用全走本地
   # # vLLM，openai-agents 是 AReaL 声明依赖；gconfig 无 max_new_tokens 键用 +
   # - path: examples/openai_agents/train_agents.py
@@ -422,6 +397,60 @@ supported:
   #     - +valid_dataset.setup_timeout=600
   #     - +total_train_steps=1
   #   timeout_minutes: 60
+  # geometry3k_grpo_mt.py 的官方 NPU 启动器（export USE_OPTIMIZED_MODEL=0 +
+  # 同 config 转发 "$@"）——可跑，补一条实测；run_example.sh 按扩展名分发
+  # .sh → bash。launcher 自带 scheduler.type=local，其余参数经 "$@" 透传，
+  # 配方同已验证的 mt 条目。
+  - path: examples/multi_turn_vlm/run_geometry3k_grpo_mt_npu.sh
+    profile: areal-vlm-mt-grpo
+    runner: linux-aarch64-a2-2
+    npu_devices: '0,1'
+    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
+    overlay_args:
+      - cluster.n_gpus_per_node=2
+      - rollout.backend=vllm:d1p1t2
+      - +rollout.setup_timeout=1800
+      - actor.backend=fsdp:d2p1t1
+      - +actor.fsdp.offload_params=true
+      - +actor.weight_update_mode=disk
+      - actor.reward_norm.mean_level=null
+      - actor.adv_norm.mean_level=null
+      - actor.path=${AREAL_MODEL_PATH}
+      - actor.mb_spec.max_tokens_per_mb=1024
+      - ref.mb_spec.max_tokens_per_mb=1024
+      - vllm.gpu_memory_utilization=0.3
+      - gconfig.n_samples=1
+      - gconfig.max_new_tokens=64
+      - max_turns=2
+      - train_dataset.batch_size=2
+      - valid_dataset.batch_size=2
+      - +train_dataset.setup_timeout=600
+      - +valid_dataset.setup_timeout=600
+      - +total_train_steps=1
+    timeout_minutes: 60
+  # CLEVR 计数 SFT：与 clevr grpo 同数据；SFT 特有成本是 loader 第二次 map
+  # （逐条完整 VLM processor，上游 FIXME 病态慢，单进程），数据走默认 data
+  # service → setup_timeout=7200 兜底、timeout 300 实测定量。换 Qwen2.5-VL-3B
+  # （上游为旧代 Qwen2-VL-7B，复用 areal-vlm-grpo profile）。
+  - path: examples/vlm/clevr_count_70k_sft.py
+    profile: areal-vlm-grpo
+    runner: linux-aarch64-a2-2
+    npu_devices: '0,1'
+    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
+    overlay_args:
+      - --config examples/vlm/clevr_count_70k_sft.yaml
+      - +scheduler.type=local
+      - cluster.n_gpus_per_node=2
+      - actor.backend=fsdp:d2p1t1
+      - +actor.fsdp.offload_params=true
+      - actor.path=${AREAL_MODEL_PATH}
+      - actor.mb_spec.max_tokens_per_mb=1024
+      - train_dataset.batch_size=2
+      - valid_dataset.batch_size=2
+      - +train_dataset.setup_timeout=7200
+      - +valid_dataset.setup_timeout=600
+      - +total_train_steps=1
+    timeout_minutes: 300
 unsupported:
   # UPSTREAM_BUG：自建 scheduler/engine 未初始化 DataController，RDataset
   # len() 报错；gsm8k_rl.py 已覆盖同路径
@@ -429,19 +458,19 @@ unsupported:
   # UPSTREAM_BUG：配置类 AgentRLConfig 定义在入口脚本，跨进程反序列化失败
   - examples/camel/train.py
   # UPSTREAM_BUG：rw_engine.py:52/68 在 train_batch 打包前读 data["cu_seqlens"]，
-  # 此时 batch 是 padding 格式（只有 attention_mask），必然 KeyError；DPO 无此
-  # 问题（其 _dpo_loss_weight 作为 loss_weight_fn 传入 train_batch，打包后才调用）
+  # 此时 batch 是 padding 格式（只有 attention_mask），必然 KeyError
   - examples/alignment/hhrlhf_rw.py
+  # UPSTREAM_BUG：dpo_pair_logratios 的序列聚合硬编码 fp64（functional.py:698，
+  # 为长对精度设计），Ascend 不支持 fp64 计算，index_add_ 直接 dtype 不匹配；
+  # FSDP/Megatron 共用此 loss，换后端绕不过。修法：按设备选累积精度（NPU 用
+  # fp32）。数据准备配方保留在 setup 第 7 步（areal-align profile），上游修复
+  # 后可直接迁回。
+  - examples/alignment/hhrlhf_dpo.py
   # CodeAgent 硬依赖 OPENAI + DAYTONA 外部凭据；且仓内无 config yaml
   - examples/code/train.py
   # mopd：actor.path 是未发布 checkpoint 占位符；leetcode 域走 CodeAgent
   # 外部凭据；16 卡 CP4 形态压不小
   - examples/distillation/mopd/mopd_rl.py
-  # 已看护 geometry3k_grpo_mt.py 的 8 行启动器，零增量
-  - examples/multi_turn_vlm/run_geometry3k_grpo_mt_npu.sh
-  # 7 万样本逐条跑 VLM processor（上游 FIXME 极慢路径），小时级起步；
-  # 与 geometry3k_sft.py 零增量
-  - examples/vlm/clevr_count_70k_sft.py
   # UPSTREAM_BUG：reward_fn 传函数对象，RPC JSON 序列化失败（应传点路径）
   - examples/vlm_npu/virl39k_grpo.py
   # math_agent 调外部 LLM，需 API key

@@ -35,6 +35,7 @@ projects:
     dir: projects/flash-linear-attention
     workflows:
       quick_start: .github/workflows/flash-linear-attention-quick-start.yml
+      examples: .github/workflows/flash-linear-attention-examples.yml
   - name: llama.cpp
     category: 推理加速
     support_level: 基础支持

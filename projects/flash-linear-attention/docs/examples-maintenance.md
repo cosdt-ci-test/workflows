@@ -35,6 +35,8 @@
 
 运行环境使用单卡 `linux-aarch64-a2-1`、SWR `cann:9.0.0-910b-ubuntu22.04-py3.11`，超时 120 分钟。`setup_example.sh` 安装目标 checkout 的 `.[npu]`，不重复固定包版本。新 release 更换 CANN 配套时，需要同步审查镜像、示例和用户文档。
 
+安装脚本在所有 pip 安装之前显式设置与 Quick Start 相同的集群缓存主索引及 `PIP_TRUSTED_HOST`，避免退回直连 PyPI。公共模板提供的华为云额外索引和安装 FLA 时的 Triton-Ascend 索引保持不变；日志会打印本次主索引。这是 NPU runner 内的网络配置，用户本地安装不使用该集群地址。
+
 工作流合入默认分支后，每六小时的第 45 分钟检查最新 release 和本项目文件变化；失败后重试，成功且无变化时跳过。状态缓存为 `examples-monitor-state-flash-linear-attention_*`，与 Quick Start 分离。它不持续跟随上游 main 的每次提交。
 
 在 GitHub Actions 中选择 **flash-linear-attention-examples → Run workflow**。`target_ref` 留空会选择最新 release，查询失败时公共模板回退到 main；也可以填写 tag、分支或 SHA。显式复现基线：

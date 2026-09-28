@@ -29,6 +29,11 @@ for name in ("npu",):
     print(f"Upstream [{name}] requirements: {extras[name]}")
 PY
 
+# Match Quick Start's in-cluster pip cache for every install, including build dependencies.
+export PIP_INDEX_URL="http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple"
+export PIP_TRUSTED_HOST="cache-service.nginx-pypi-cache.svc.cluster.local"
+echo "pip index: $PIP_INDEX_URL"
+
 # Matches upstream Ascend installation; target extras own the dependency versions.
 python -m pip install -U pip setuptools wheel
 python -m pip install pybind11 cmake attrs sympy pyyaml scipy decorator einops

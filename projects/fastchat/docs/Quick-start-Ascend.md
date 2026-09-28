@@ -16,7 +16,7 @@ Atlas 900 A2 单卡（Ascend NPU），并按需完成物理机或容器内的设
 - 可用的 CANN（参考[快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html)）
 - 根据 CANN 版本安装匹配的 `torch_npu`（参考 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch)）
 
-本文档测试环境使用 Python 3.12、CANN 9.1.0 和 `torch_npu` 2.9.0.post2。
+本文档测试环境使用 Python 3.12、CANN 9.1.0、`torch` 2.9.0 和 `torch_npu` 2.9.0.post2。
 
 ## 加载 CANN 环境
 

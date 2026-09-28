@@ -56,17 +56,16 @@ fi
 # safe for the NPU torch stack because transformers does not depend on torch_npu
 # and its torch requirement is already satisfied by the image build.
 python -m pip install -e "$TARGET_ROOT"
-# Pin datasets to a single 4.x release. The rebuilt 9.1.0 image no longer
-# preinstalls datasets, so an unpinned resolve pulls 5.x: 5.0 forces
-# torchcodec for Audio-feature encoding (breaking run_audio_classification)
-# and, in one observed small-training resolve, sent pip into a pathological
-# backtracking storm down to the ancient datasets 0.0.9 sdist (run_swag).
-# 4.4.2 keeps the soundfile audio encoder and the `**` glob data-files
-# semantics the manifest paths were written against.
-# accelerate is pinned below 1.15 for the same reason: 1.15 removed
-# DistributedType.TPU, which run_clm_no_trainer.py / run_mlm_no_trainer.py
-# still reference, so they fail with AttributeError before any training step.
-python -m pip install "${DEPS[@]}" "datasets==4.4.2" "accelerate<1.15"
+# Pin datasets to a single release. The rebuilt 9.1.0 image no longer
+# preinstalls datasets, so an unpinned resolve pulls 5.x, and the whole 4.x
+# line requires torchcodec for Audio-feature encode AND decode (verified in
+# the 4.2/4.3/4.4 wheels), which needs system FFmpeg we don't ship. 3.6.0 is
+# the last release whose Audio encode/decode runs on soundfile; it keeps the
+# `**` glob data-files semantics the manifest paths were written against and
+# accepts the hub 1.x / pyarrow 25 stack transformers main installs. Pinning
+# to a single version also removes the pathological pip backtracking surface
+# that once walked an unpinned resolve down to the datasets 0.0.9 sdist.
+python -m pip install "${DEPS[@]}" "datasets==3.6.0"
 # torchvision is only needed by the vision profile. Its wheel pins an exact
 # torch== requirement that would upgrade (and break) the image's NPU
 # torch/torch_npu stack, so install it without deps; the examples only use

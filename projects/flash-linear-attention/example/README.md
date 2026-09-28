@@ -21,9 +21,9 @@
 | Torch-NPU | 2.7.1.post4 |
 | torchvision | 0.22.1，由 FLA 的 NPU extra 安装 |
 | Triton-Ascend | 3.2.1 |
-| Transformers | 由 FLA 依赖解析；v0.5.2 声明 `>=4.45.0`，具体安装版本记录在运行结果中 |
+| Transformers | 使用 4.x：将 FLA 的 `>=4.45.0` 要求与本示例的 `<5` 兼容约束共同解析 |
 
-这张表表示底层版本配套，不是完整示例的通过认证。当前新示例尚待 NPU 端到端验证，尤其是语言模型训练、checkpoint 重载和带缓存的文本生成。已有 Quick Start 的通过记录仅覆盖其自身的前向与反向流程。
+这张表表示版本配套，不是完整示例的通过认证。当前已完成一次 NPU 上的 20 步训练，但使用 Transformers 5.17.0 时模型保存失败；本示例因此限定为 4.x。checkpoint 重载和带缓存生成仍待修复后的完整验证。已有 Quick Start 的通过记录仅覆盖其自身的前向与反向流程。
 
 先进入存放本示例的 workflows 仓库根目录，以下命令均从该目录执行。按默认安装路径加载 CANN，并确认设备可见：
 
@@ -43,10 +43,13 @@ source .venv-fla/bin/activate
 python -m pip install -U pip setuptools wheel
 python -m pip install pybind11 cmake attrs sympy pyyaml scipy decorator einops
 python -m pip install -e './fla-v0.5.2[npu]' \
+  --constraint projects/flash-linear-attention/constraints-npu.txt \
   --extra-index-url https://triton-ascend.osinfra.cn/pypi/simple
 ```
 
 `[npu]` 会安装该版本声明的 Torch、Torch-NPU 和 Triton-Ascend，不需要手工分别挑选版本。换用其他 FLA release 时，请重新核对其依赖和 CANN 配套；不要直接把这些命令中的某个组件升级到最新版。
+
+请保留上面的 `--constraint` 参数。它让 Transformers 在 4.x 范围内选择符合要求的版本，避免 FLA v0.5.2 的模型保存接口与 5.x 不兼容；并没有固定某个 4.x 补丁版本。
 
 安装后检查 NPU 后端和实际包版本：
 

@@ -7,6 +7,7 @@ if [[ "${1:-}" != "npu" ]]; then
 fi
 
 TARGET_ROOT="${TARGET_ROOT:?TARGET_ROOT is required}"
+PROJECT_ROOT="${PROJECT_ROOT:?PROJECT_ROOT is required}"
 export PATH="/usr/local/sbin:$PATH"
 export PYTHONNOUSERSITE=1
 # CANN's environment script can reference unset shell variables.
@@ -38,5 +39,6 @@ echo "pip index: $PIP_INDEX_URL"
 python -m pip install -U pip setuptools wheel
 python -m pip install pybind11 cmake attrs sympy pyyaml scipy decorator einops
 python -m pip install -e '.[npu]' \
+  --constraint "$PROJECT_ROOT/constraints-npu.txt" \
   --extra-index-url https://triton-ascend.osinfra.cn/pypi/simple
 python -m pip freeze

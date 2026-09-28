@@ -17,8 +17,8 @@
 | --- | --- |
 | Gated Delta Rule、卷积、归一化、激活 | v0.5.2 存在 Ascend backend 实现，且相关模块/算子进入上游 A2 CI；不代表全部 shape 和 dtype 均已验证 |
 | 本仓 Quick Start 的 GatedDeltaNet 前后向 | [运行 33314431867](https://github.com/cosdt-ci-test/workflows/actions/runs/33314431867) 已通过；只证明该文档覆盖的路径 |
-| 两层完整语言模型、BF16 AdamW 更新 | 新示例待 NPU 实测；新增了模型级 MLP、损失、优化器等组合路径 |
-| checkpoint 保存和重新加载 | 待新示例实测，必须确认重载后预测一致 |
+| 两层完整语言模型、BF16 AdamW 更新 | [运行 36401573747](https://github.com/cosdt-ci-test/workflows/actions/runs/36401573747) 完成 20 步 NPU 训练；后续保存失败，完整结果校验尚未执行 |
+| checkpoint 保存和重新加载 | 上述运行在 Transformers 5.17.0 的 `save_pretrained` 失败；改用 4.x 兼容约束后须重新验证 |
 | `generate(use_cache=True)` | 待新示例实测；与 Quick Start 的无缓存前后向不同，还涉及 recurrent 路径、卷积状态、缓存和 Transformers 版本兼容 |
 
 不能仅凭 `torch.npu.is_available()` 或 `IS_NPU=True` 把上述路径都标记为通过。首轮实机运行应保留具体 FLA commit、包版本、训练日志、重载结果和生成结果。
@@ -33,7 +33,9 @@
 
 `.github/workflows/flash-linear-attention-examples.yml` 调用公共 `examples-template.yml`。manifest 的 `source: project` 指向本仓 `example/train_text.py`，被测 FLA 则从目标上游 checkout 安装。项目代码、语料和参数更新都可以触发新的看护运行。
 
-运行环境使用单卡 `linux-aarch64-a2-1`、SWR `cann:9.0.0-910b-ubuntu22.04-py3.11`，超时 120 分钟。`setup_example.sh` 安装目标 checkout 的 `.[npu]`，不重复固定包版本。新 release 更换 CANN 配套时，需要同步审查镜像、示例和用户文档。
+运行环境使用单卡 `linux-aarch64-a2-1`、SWR `cann:9.0.0-910b-ubuntu22.04-py3.11`，超时 120 分钟。`setup_example.sh` 安装目标 checkout 的 `.[npu]`，保留上游声明的 NPU 配套；同时使用项目的 `constraints-npu.txt` 限定 Transformers API 兼容范围。新 release 更换 CANN 配套或 Transformers API 要求时，需要同步审查镜像、约束、示例和用户文档。
+
+FLA v0.5.2 的 `GatedDeltaNetForCausalLM._tied_weights_keys` 是列表，而 Transformers 5.17.0 的 [`_get_tied_weight_keys`](https://github.com/huggingface/transformers/blob/v5.17.0/src/transformers/modeling_utils.py) 调用其 `.keys()`，使 `save_pretrained` 报错。Transformers [4.57.6 的实现](https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/modeling_utils.py) 接受列表。约束采用 `transformers<5`，与目标 FLA 的要求共同解析，不改写上游类属性、不跳过保存，也不锁定一个补丁版本。上游迁移元数据并验证保存、重载和生成后，再调整这一约束；如果未来上游明确要求 5.x，依赖冲突应触发人工复核，不能静默忽略。
 
 安装脚本在所有 pip 安装之前显式设置与 Quick Start 相同的集群缓存主索引及 `PIP_TRUSTED_HOST`，避免退回直连 PyPI。公共模板提供的华为云额外索引和安装 FLA 时的 Triton-Ascend 索引保持不变；日志会打印本次主索引。这是 NPU runner 内的网络配置，用户本地安装不使用该集群地址。
 

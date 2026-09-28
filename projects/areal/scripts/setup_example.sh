@@ -104,12 +104,15 @@ export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
 echo "HF_ENDPOINT=${HF_ENDPOINT}" >> "$GITHUB_ENV"
 export AREAL_MODEL_ID="$MODEL_ID"
 
-# hf-mirror can be flaky (transient outages, per-machine reachability - same
-# class of problem as the unreachable github.com in section 8). Retry the Hub
-# download, then fall back to ModelScope, which hosts every profile model
-# under the same repo id (Qwen org, deepseek-ai). modelscope is pinned to
-# 1.37.0 like every other project in this repo (>=1.38 splits the hub code
-# into modelscope-hub).
+# ModelScope first: it is an in-country CDN (much faster and steadier than
+# hf-mirror from CN runners) and mirrors every profile model under the same
+# repo id (Qwen org, deepseek-ai). modelscope is pinned to 1.37.0 like every
+# other project in this repo (>=1.38 splits the hub code into modelscope-hub).
+# hf-mirror stays as the fallback: it can be flaky (transient outages,
+# per-machine reachability - same class of problem as the unreachable
+# github.com in section 8). NOTE: both paths still write into the per-run
+# workspace, so this only makes each download faster, not one-time; wire
+# cache-seed to stop re-downloading altogether.
 python3 <<'PY'
 import os
 import subprocess
@@ -119,30 +122,58 @@ import time
 model_id = os.environ["AREAL_MODEL_ID"]
 dest = os.path.join(os.environ["GITHUB_WORKSPACE"], "areal_models", model_id.split("/")[-1])
 
-print(f"downloading {model_id} via HF_ENDPOINT={os.environ.get('HF_ENDPOINT', '<unset>')}", flush=True)
+DOWNLOAD_ATTEMPTS = 3
 
-from huggingface_hub import snapshot_download
 
-last_err = None
-for attempt in range(3):
+def attempt_download(label, download):
+    last_err = None
+    for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+        try:
+            download()
+            print(f"{label} download succeeded", flush=True)
+            return None
+        except Exception as e:
+            last_err = e
+            print(
+                f"{label} download attempt {attempt}/{DOWNLOAD_ATTEMPTS} failed: "
+                f"{type(e).__name__}: {e}",
+                flush=True,
+            )
+            time.sleep(10)
+    return last_err
+
+
+def modelscope_download():
     try:
-        snapshot_download(model_id, local_dir=dest)
-        break
-    except Exception as e:
-        last_err = e
-        print(f"HF download attempt {attempt + 1}/3 failed: {type(e).__name__}: {e}", flush=True)
-        time.sleep(10)
-else:
-    print(f"Hub download exhausted ({last_err}); falling back to ModelScope", flush=True)
-    try:
-        from modelscope import snapshot_download as ms_download
+        from modelscope import snapshot_download
     except ImportError:
         subprocess.run(
             [sys.executable, "-m", "pip", "install", "-q", "modelscope==1.37.0"],
             check=True,
         )
-        from modelscope import snapshot_download as ms_download
-    ms_download(model_id, local_dir=dest)
+        from modelscope import snapshot_download
+    snapshot_download(model_id, local_dir=dest)
+
+
+def hf_download():
+    from huggingface_hub import snapshot_download
+
+    snapshot_download(model_id, local_dir=dest)
+
+
+print(f"downloading {model_id} from ModelScope", flush=True)
+ms_err = attempt_download("ModelScope", modelscope_download)
+if ms_err is not None:
+    print(
+        f"ModelScope exhausted ({ms_err}); falling back to HF via "
+        f"{os.environ.get('HF_ENDPOINT', '<unset>')}",
+        flush=True,
+    )
+    hf_err = attempt_download("HF", hf_download)
+    if hf_err is not None:
+        raise SystemExit(
+            f"model download failed on both ModelScope and HF: ms={ms_err}; hf={hf_err}"
+        )
 
 with open(os.environ["GITHUB_ENV"], "a") as fh:
     fh.write(f"AREAL_MODEL_PATH={dest}\n")

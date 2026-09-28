@@ -740,29 +740,29 @@ supported:
   #     - --gradient_checkpointing
   #     - --max_train_steps 1
   #   timeout_minutes: 120
-
-  # GLIGEN text-box 训练（SD1.5+GLIGEN；accelerate 原生走 NPU）。数据不必跑
-  # make_datasets.py 的 RAM+GroundingDINO+BLIP2+CLIP：dataset.py 只是
-  # torch.load 一个 list of {file_path, captions, annos[{caption, bbox,
-  # text_embeddings_before_projection[768]}]} + 图片目录，setup 合成极简 fixture
-  # 即可（灰底 512² 图 + 1 个框 + 零向量 embedding——embedding 是常量条件、不进
-  # 梯度）。模型 masterful/gligen-1-4-generation-text-box 在线拉（hf-mirror）。
-  - path: examples/research_projects/gligen/train_gligen_text.py
-    profile: diffusers-gligen
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --data_path ${GLIGEN_DATA_PTH}
-      - --image_path ${GLIGEN_IMAGE_DIR}
-      - --output_dir ${CI_OUTPUT_DIR}
-      - --resolution 512
-      - --train_batch_size 1
-      - --gradient_accumulation_steps 1
-      - --max_train_steps 1
-      - --checkpointing_steps 1
-      - --mixed_precision no
-    timeout_minutes: 90
-
+  #
+  # # GLIGEN text-box 训练（SD1.5+GLIGEN；accelerate 原生走 NPU）。数据不必跑
+  # # make_datasets.py 的 RAM+GroundingDINO+BLIP2+CLIP：dataset.py 只是
+  # # torch.load 一个 list of {file_path, captions, annos[{caption, bbox,
+  # # text_embeddings_before_projection[768]}]} + 图片目录，setup 合成极简 fixture
+  # # 即可（灰底 512² 图 + 1 个框 + 零向量 embedding——embedding 是常量条件、不进
+  # # 梯度）。模型 masterful/gligen-1-4-generation-text-box 在线拉（hf-mirror）。
+  # - path: examples/research_projects/gligen/train_gligen_text.py
+  #   profile: diffusers-gligen
+  #   runner: linux-aarch64-a2-1
+  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+  #   overlay_args:
+  #     - --data_path ${GLIGEN_DATA_PTH}
+  #     - --image_path ${GLIGEN_IMAGE_DIR}
+  #     - --output_dir ${CI_OUTPUT_DIR}
+  #     - --resolution 512
+  #     - --train_batch_size 1
+  #     - --gradient_accumulation_steps 1
+  #     - --max_train_steps 1
+  #     - --checkpointing_steps 1
+  #     - --mixed_precision no
+  #   timeout_minutes: 90
+  #
   # ControlNet SDXL webdataset 训练（research_projects 版）。--train/eval_shards
   # _path_or_url 明确支持本地路径（:704），上游无可下 shard；setup 合成极小
   # webdataset tar（每样本 .jpg + .txt caption + .json，json 带

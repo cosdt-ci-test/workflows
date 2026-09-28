@@ -499,15 +499,16 @@ setup_diffusers_sdxl_online() {
 }
 
 # diffusers-controlnet-wds: research_projects/controlnet webdataset ControlNet
-# training. Base stack + webdataset/braceexpand (cv2 already ships with the
-# base stack for the canny transform). The upstream example wants shard URLs
-# that are not publicly reachable, so synthesize a tiny local webdataset tar:
-# each sample carries .jpg (image) + .txt (caption) + .json, and the json
-# holds original_width/original_height >= 512 plus pwatermark because both
-# WebdatasetFilter and get_orig_size read those fields.
+# training. Base stack + webdataset/braceexpand + opencv-python-headless: the
+# example does `import cv2` at module level for the canny transform and the
+# base stack ships no cv2 (headless avoids the GUI/libGL deps). The upstream
+# example wants shard URLs that are not publicly reachable, so synthesize a
+# tiny local webdataset tar: each sample carries .jpg (image) + .txt (caption)
+# + .json, and the json holds original_width/original_height >= 512 plus
+# pwatermark because both WebdatasetFilter and get_orig_size read those fields.
 setup_diffusers_controlnet_wds() {
   install_example_stack
-  python -m pip install webdataset braceexpand
+  python -m pip install webdataset braceexpand opencv-python-headless
   python3 - <<'PY'
 import io
 import json

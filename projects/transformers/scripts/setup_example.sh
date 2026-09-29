@@ -171,10 +171,22 @@ import json
 import os
 import sys
 
+# train_batch_size is divided unconditionally by n_gpu during resume
+# validation, and logging/save steps are compared against the run args;
+# fill them in so the comparison is a silent no-op. Overwrite any state
+# planted by an earlier setup run (persistent HF cache).
 state_path = os.path.join(sys.argv[1], "trainer_state.json")
-if not os.path.exists(state_path):
-    with open(state_path, "w", encoding="utf-8") as fh:
-        json.dump({"global_step": 0}, fh)
+with open(state_path, "w", encoding="utf-8") as fh:
+    json.dump(
+        {
+            "global_step": 0,
+            "train_batch_size": 1,
+            "logging_steps": 500,
+            "save_steps": 500,
+            "eval_steps": 500,
+        },
+        fh,
+    )
 PY
     fi
   else

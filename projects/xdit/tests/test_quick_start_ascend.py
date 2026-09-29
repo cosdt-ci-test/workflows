@@ -41,6 +41,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     """SD3 medium smoke on 1 card + 2-card Ulysses parallel (NPU/hccl)."""
 
     DEFAULT_COMMAND_TIMEOUT = 1800
+    _COLD_MODEL_TIMEOUT = 5400
     USER_AGENT = 'cosdt-ci-test/quick-start'
     ERROR_MARKERS = (
         *MarkdownDocTestBase.ERROR_MARKERS,
@@ -89,7 +90,11 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
     def _run_one(self, cmd, results, env, cwd, timeout, idx):
         if isinstance(cmd, TestCommand) and cmd.id in self._GENERATED_PNGS:
-            super()._run_one(cmd, results, env, cwd, timeout, idx)
+            # The first inference downloads the SD3 model on a cold cache.
+            command_timeout = (
+                self._COLD_MODEL_TIMEOUT if cmd.id == 'xdit-sd3-smoke' else timeout
+            )
+            super()._run_one(cmd, results, env, cwd, command_timeout, idx)
             self._verify_generated_png(self._GENERATED_PNGS[cmd.id])
             return
         return super()._run_one(cmd, results, env, cwd, timeout, idx)

@@ -39,4 +39,4 @@ jobs:
       project: areal
       upstream_repo: areal-project/AReaL
       target_ref: ${{ inputs.target_ref }}
-      max_parallel: 1
+      max_parallel: 4

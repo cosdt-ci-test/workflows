@@ -55,7 +55,9 @@ python -c "from importlib.metadata import version; print('xDiT version:', versio
 xDiT version: xxx
 ```
 
+:::{note}
 其中 `xxx` 是安装的 xDiT（`xfuser`）版本号。
+:::
 
 ## 运行示例：文生图
 
@@ -155,8 +157,11 @@ inference time: xxx sec
 image saved to results/sd3_npu2_ulysses2.png
 ```
 
+:::{note}
 其中 `xxx` 为实际推理耗时，单位为秒。
+:::
 
-## 更多用法
+## 外部链接
 
-更多模型与多卡并行（PipeFusion / CFG 并行 / Ring 等）见 [xDiT examples](https://github.com/xdit-project/xDiT/tree/main/examples)。
+- [官方仓库](https://github.com/xdit-project/xDiT)
+- [官方快速开始文档](https://github.com/xdit-project/xDiT#QuickStart)

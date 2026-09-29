@@ -118,7 +118,13 @@ export AREAL_MODEL_ID="$MODEL_ID"
 # down too, fall back to ModelScope into the per-run workspace, which is only a
 # last resort: it is discarded with the workspace, so the durable fix is
 # dispatching the cache-seed workflow (projects=areal).
-python3 <<'PY'
+#
+# The resolved path is ALSO captured into the AREAL_MODEL_PATH shell variable
+# (tee keeps the diagnostics streaming into the job log): later sections of
+# this script - countdown's tokenizer (section 6) and the scaffolding model
+# alias (section 9) - consume it and must not guess the pre-cache workspace
+# layout, which no longer exists in the shared-cache flow.
+AREAL_MODEL_PATH=$(python3 <<'PY' | tee /dev/stderr | sed -n 's/^AREAL_MODEL_PATH=//p' | tail -n 1
 import os
 import subprocess
 import sys
@@ -178,6 +184,11 @@ with open(os.environ["GITHUB_ENV"], "a") as fh:
     fh.write(f"AREAL_MODEL_PATH={snapshot}\n")
 print(f"AREAL_MODEL_PATH={snapshot}", flush=True)
 PY
+)
+[[ -n "${AREAL_MODEL_PATH}" ]] || {
+  echo "model resolution printed no AREAL_MODEL_PATH line" >&2
+  exit 2
+}
 
 # -------------------------------------------------------
 # 4. AIME dataset + derived config (areal-math-aime).
@@ -272,7 +283,7 @@ fi
 # 500k samples; 32/8 is plenty for the 1-step smoke. The tokenizer comes
 # from the model predownloaded in section 3, so generation is offline.
 if [[ "$COUNTDOWN_PREP" == 1 ]]; then
-  MODEL_DIR="$GITHUB_WORKSPACE/areal_models/${MODEL_ID##*/}"
+  MODEL_DIR="$AREAL_MODEL_PATH"
   mkdir -p "$TARGET_ROOT/data/countdown/qwen"
   (cd "$TARGET_ROOT" && python3 examples/countdown/countdown.py \
     --num_samples 32 --eval_size 8 --tokenizer_path "$MODEL_DIR")
@@ -355,7 +366,7 @@ fi
 # makes the name match. The server subprocess inherits the run CWD
 # (TARGET_ROOT), hence the symlink location.
 if [[ "$SCAFFOLD_PREP" == 1 ]]; then
-  MODEL_DIR="$GITHUB_WORKSPACE/areal_models/${MODEL_ID##*/}"
+  MODEL_DIR="$AREAL_MODEL_PATH"
   [[ -d "$MODEL_DIR" ]] || { echo "model dir missing: $MODEL_DIR" >&2; exit 2; }
   ln -sfn "$MODEL_DIR" "$TARGET_ROOT/default"
   echo "linked $TARGET_ROOT/default -> $MODEL_DIR (scaffolding model alias)"

@@ -12,26 +12,29 @@
 #   areal-agents-grpo                       : Qwen2-1.5B-Instruct
 #   areal-math-sft                          : Qwen3-1.7B
 #   areal-math-boba                         : DeepSeek-R1-Distill-Qwen-1.5B
+# 2026-09-28：7 条全部确认已在共享卷（6 条由 seed plant；Qwen2.5-1.5B-Instruct
+# 由池内某次标准 HF 下载写入、seed 复核 refs/main 与真实 sha 一致后 [skip]）。
+# 重跑全部幂等（[skip]）。
 version: 1
 seeds:
   - ms_id: Qwen/Qwen2.5-1.5B-Instruct
     hf_id: Qwen/Qwen2.5-1.5B-Instruct
     kind: model
-  # - ms_id: Qwen/Qwen2.5-VL-3B-Instruct
-  #   hf_id: Qwen/Qwen2.5-VL-3B-Instruct
-  #   kind: model
-  # - ms_id: Qwen/Qwen3-1.7B
-  #   hf_id: Qwen/Qwen3-1.7B
-  #   kind: model
-  # - ms_id: Qwen/Qwen3-VL-2B-Instruct
-  #   hf_id: Qwen/Qwen3-VL-2B-Instruct
-  #   kind: model
-  # - ms_id: Qwen/Qwen2.5-Math-1.5B
-  #   hf_id: Qwen/Qwen2.5-Math-1.5B
-  #   kind: model
-  # - ms_id: Qwen/Qwen2-1.5B-Instruct
-  #   hf_id: Qwen/Qwen2-1.5B-Instruct
-  #   kind: model
-  # - ms_id: deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
-  #   hf_id: deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
-  #   kind: model
+  - ms_id: Qwen/Qwen2.5-VL-3B-Instruct
+    hf_id: Qwen/Qwen2.5-VL-3B-Instruct
+    kind: model
+  - ms_id: Qwen/Qwen3-1.7B
+    hf_id: Qwen/Qwen3-1.7B
+    kind: model
+  - ms_id: Qwen/Qwen3-VL-2B-Instruct
+    hf_id: Qwen/Qwen3-VL-2B-Instruct
+    kind: model
+  - ms_id: Qwen/Qwen2.5-Math-1.5B
+    hf_id: Qwen/Qwen2.5-Math-1.5B
+    kind: model
+  - ms_id: Qwen/Qwen2-1.5B-Instruct
+    hf_id: Qwen/Qwen2-1.5B-Instruct
+    kind: model
+  - ms_id: deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
+    hf_id: deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
+    kind: model

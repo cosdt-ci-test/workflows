@@ -79,7 +79,7 @@ supported:
       - +train_dataset.setup_timeout=600
       - +valid_dataset.setup_timeout=600
       - +total_train_steps=1
-    timeout_minutes: 30
+    timeout_minutes: 60
   
   # Qwen3-VL-2B 多轮 tool-calling GRPO（双卡，实测跑通）。max_tokens_per_mb
   # 同时是 workflow 的 max_tokens_per_traj，勿低于 1024（图片视觉 token 会超）。
@@ -110,7 +110,7 @@ supported:
       - +train_dataset.setup_timeout=600
       - +valid_dataset.setup_timeout=600
       - +total_train_steps=1
-    timeout_minutes: 30
+    timeout_minutes: 60
   # GSM8K GRPO（上游 NPU 专用配置 gsm8k_grpo_npu.yaml，实测跑通）
   - path: examples/math/gsm8k_rl.py
     profile: areal-math-grpo
@@ -134,7 +134,7 @@ supported:
       - +train_dataset.setup_timeout=600
       - +valid_dataset.setup_timeout=600
       - +total_train_steps=1
-    timeout_minutes: 30
+    timeout_minutes: 60
   # GSM8K SFT（实测跑通）：纯 FSDP 无 rollout，不需 offload/disk
   - path: examples/math/gsm8k_sft.py
     profile: areal-math-sft
@@ -152,7 +152,7 @@ supported:
       - +train_dataset.setup_timeout=600
       - +valid_dataset.setup_timeout=600
       - +total_train_steps=1
-    timeout_minutes: 30
+    timeout_minutes: 60
   # AIME RL（实测跑通）：上游无 aime 配置，setup 从 gsm8k_grpo_npu.yaml
   # 派生（MathArena 数据转本地 parquet，经 AREAL_AIME_CONFIG 传入）
   - path: examples/math/aime_rl.py
@@ -177,7 +177,7 @@ supported:
       - train_dataset.batch_size=2
       - valid_dataset.batch_size=2
       - +total_train_steps=1
-    timeout_minutes: 30
+    timeout_minutes: 60
   # BoBa GRPO（实测跑通）：脚本按本地 jsonl 加载，setup 预下载
   # AReaL-boba-106k.jsonl（AREAL_BOBA_DATA）
   - path: examples/math/boba_grpo.py
@@ -206,7 +206,7 @@ supported:
       - train_dataset.batch_size=2
       - +total_train_steps=1
       - ++actor.scheduling_spec.0.env_vars.TASK_QUEUE_ENABLE=1
-    timeout_minutes: 30
+    timeout_minutes: 60
   # Countdown GRPO：数据由 setup 现场生成（countdown.py --num_samples 32
   # --eval_size 8），对上 yaml 默认 train_dataset.path
   - path: examples/countdown/train.py
@@ -231,7 +231,7 @@ supported:
       - gconfig.n_samples=1
       - train_dataset.batch_size=2
       - +total_train_steps=1
-    timeout_minutes: 30
+    timeout_minutes: 60
   # GSM8K 多轮自我纠错 GRPO（实测跑通）：复用 areal-math-grpo profile
   - path: examples/multi_turn_math/gsm8k_rl_mt.py
     profile: areal-math-grpo
@@ -256,7 +256,7 @@ supported:
       - +train_dataset.setup_timeout=600
       - +valid_dataset.setup_timeout=600
       - +total_train_steps=1
-    timeout_minutes: 30
+    timeout_minutes: 60
   # Geometry3K VLM SFT（2026-09-28 实测跑通）：原配置 27B/megatron 16 卡，
   # 换 2B + fsdp 看 VLM SFT 管线；yaml scheduling_spec 为 null，数据主进程
   # 加载，无需 setup_timeout

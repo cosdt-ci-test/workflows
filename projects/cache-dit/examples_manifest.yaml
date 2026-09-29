@@ -19,6 +19,7 @@ supported:
       - --model-path /root/.cache/modelscope/FLUX.1-dev
       - --attn _native_npu
       - --cache
+      - --cpu-offload
       - --warmup 1
       - --repeat 1
       - --steps 8

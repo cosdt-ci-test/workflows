@@ -424,6 +424,12 @@ supported:
       # .select(range(n)) raise IndexError.
       - --max_train_samples 2
       - --max_eval_samples 1
+      # Upstream create_vocabulary_from_data builds the vocab with
+      # functools.reduce over the split Datasets; with a single split
+      # reduce returns the Dataset itself and sorted(dataset) iterates row
+      # dicts -> "unhashable type: 'dict'". do_eval loads the second split
+      # and sidesteps the bug.
+      - --do_eval
       - --do_train
       - --max_steps 1
       - --per_device_train_batch_size 1
@@ -448,29 +454,34 @@ supported:
       - --target_language en
       - --max_train_samples 2
       - --max_eval_samples 1
+      # Same single-split reduce bug as run_speech_recognition_ctc.py.
+      - --do_eval
       - --do_train
       - --max_steps 1
       - --per_device_train_batch_size 1
       - --output_dir ${CI_OUTPUT_DIR}
     timeout_minutes: 60
-  - path: examples/pytorch/speech-recognition/run_speech_recognition_seq2seq.py
-    profile: speech
-    runner: linux-aarch64-a2-2
-    npu_devices: '0'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --model_name_or_path ${TINYWHISPER_PATH}
-      - --dataset_name ${CI_OUTPUT_DIR}/asr_data
-      - --audio_column_name audio
-      - --text_column_name text
-      - --max_duration_in_seconds 2
-      - --max_train_samples 2
-      - --max_eval_samples 1
-      - --do_train
-      - --max_steps 1
-      - --per_device_train_batch_size 1
-      - --output_dir ${CI_OUTPUT_DIR}
-    timeout_minutes: 60
+  # run_speech_recognition_seq2seq.py：上游 breakage——脚本 L404 无条件调用
+  #   model.freeze_feature_encoder()，而 transformers main 的 Whisper 建模类已不提供
+  #   该方法（wav2vec2/hubert 家族仍有），AttributeError。等上游修复后按下方注释恢复
+  # - path: examples/pytorch/speech-recognition/run_speech_recognition_seq2seq.py
+  #   profile: speech
+  #   runner: linux-aarch64-a2-2
+  #   npu_devices: '0'
+  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+  #   overlay_args:
+  #     - --model_name_or_path ${TINYWHISPER_PATH}
+  #     - --dataset_name ${CI_OUTPUT_DIR}/asr_data
+  #     - --audio_column_name audio
+  #     - --text_column_name text
+  #     - --max_duration_in_seconds 2
+  #     - --max_train_samples 2
+  #     - --max_eval_samples 1
+  #     - --do_train
+  #     - --max_steps 1
+  #     - --per_device_train_batch_size 1
+  #     - --output_dir ${CI_OUTPUT_DIR}
+  #   timeout_minutes: 60
   # run_mim_no_trainer.py：与 run_clm/mlm_no_trainer 同因——脚本 L636 引用
   #   DistributedType.TPU（accelerate 1.x 全线缺失），数据与训练前处理均已跑通，
   #   属上游脚本 bug，等上游修复
@@ -654,10 +665,14 @@ unsupported:
   - examples/pytorch/object-detection/run_object_detection_no_trainer.py
   - examples/pytorch/semantic-segmentation/run_semantic_segmentation.py
   - examples/pytorch/semantic-segmentation/run_semantic_segmentation_no_trainer.py
-  # --- 批次 3（语音类）：待补 speech profile（torchaudio/librosa）与音频 fixture ---
+  # --- 批次 3（语音类）：speech profile 与 asr_data fixture 已建，仅剩两条 ---
+  # run_wav2vec2_pretraining_no_trainer.py：数据为 librispeech 预处理产物格式
+  #   （预处理特征 + TSV 清单），本地 fixture 成本高，后续评估
   - examples/pytorch/speech-pretraining/run_wav2vec2_pretraining_no_trainer.py
-  - examples/pytorch/speech-recognition/run_speech_recognition_ctc.py
-  - examples/pytorch/speech-recognition/run_speech_recognition_ctc_adapter.py
+  # run_speech_recognition_seq2seq.py：上游 breakage——脚本 L404 无条件调用
+  #   model.freeze_feature_encoder()，transformers main 的 Whisper 建模类已不提供
+  #   该方法（wav2vec2/hubert 家族仍在）。数据链路已验证：tiny-random-Whisper
+  #   （TINYWHISPER_PATH）+ asr_data 加载正常，死在模型冻结一步
   - examples/pytorch/speech-recognition/run_speech_recognition_seq2seq.py
   # --- 数据/模型可用性受限：依赖 Hub 数据集或缺失 tiny 模型 ---
   # run_plm.py：Trainer(...) 调用中 processing_class 被误写为 processing_classtokenizer，

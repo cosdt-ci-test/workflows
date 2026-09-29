@@ -79,11 +79,41 @@ ensure_model() {
   python -c "from modelscope import snapshot_download; snapshot_download('Qwen/Qwen2-7B-Instruct', local_dir='$model_dir')"
 }
 
-# Default profile: ensure the example model (xllm is pre-installed in the
-# official release image, no source build needed).
+ensure_vlm_model() {
+  local model_dir="/root/.cache/modelscope/Qwen2.5-VL-7B-Instruct"
+  if [ -d "$model_dir" ] && [ -n "$(ls -A "$model_dir" 2>/dev/null)" ]; then
+    echo "model already cached at $model_dir; skipping download"
+    return
+  fi
+  echo "downloading Qwen2.5-VL-7B-Instruct via modelscope to $model_dir"
+  python -m pip install -q modelscope 2>/dev/null || true
+  python -c "from modelscope import snapshot_download; snapshot_download('Qwen/Qwen2.5-VL-7B-Instruct', local_dir='$model_dir')"
+}
+
+ensure_vlm_images() {
+  # generate_vlm.py reads ./images/3.jpg and ./images/4.jpg relative to the
+  # run cwd (/tmp); upstream ships no images, so synthesize tiny JPEGs.
+  python -m pip install -q pillow 2>/dev/null || true
+  python - <<'PY'
+import os
+from PIL import Image
+os.makedirs('/tmp/images', exist_ok=True)
+for name, color in (('3.jpg', (196, 74, 60)), ('4.jpg', (58, 96, 180))):
+    path = os.path.join('/tmp/images', name)
+    if os.path.exists(path):
+        continue
+    Image.new('RGB', (256, 256), color).save(path, 'JPEG')
+print('vlm fixture images ready at /tmp/images')
+PY
+}
+
+# Default profile: ensure the example models and fixtures (xllm is
+# pre-installed in the official release image, no source build needed).
 setup_default() {
-  echo "profile=default: ensuring example model"
+  echo "profile=default: ensuring example models and fixtures"
   ensure_model
+  ensure_vlm_model
+  ensure_vlm_images
 }
 
 if ! declare -F "setup_${PROFILE}" >/dev/null 2>&1; then

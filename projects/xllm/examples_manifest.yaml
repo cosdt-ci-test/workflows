@@ -28,6 +28,7 @@ supported:
     image: swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/xllm-ai/xllm-ai:xllm-0.10.0-release-hb-rc2-arm
     overlay_args:
       - --model /root/.cache/modelscope/Qwen2-7B-Instruct
+      - --runner pooling
       - --max_tokens_per_batch 10
     timeout_minutes: 90
   - path: examples/generate_vlm.py
@@ -36,8 +37,9 @@ supported:
     npu_devices: '0'
     image: swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/xllm-ai/xllm-ai:xllm-0.10.0-release-hb-rc2-arm
     overlay_args:
-      - --model /root/.cache/modelscope/Qwen2-7B-Instruct
-      - --max_tokens_per_batch 10
+      - --model /root/.cache/modelscope/Qwen2.5-VL-7B-Instruct
+      - --max_seqs_per_batch 4
+      - --enable_shm
     timeout_minutes: 90
   - path: examples/sample.py
     profile: default

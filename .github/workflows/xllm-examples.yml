@@ -234,35 +234,35 @@ jobs:
           if-no-files-found: ignore
           path: manifest_check_result.json
 
-  # Build xllm ONCE, then run all supported examples sequentially in a single
-  # container on one NPU. Each example is isolated with `timeout` and a failure
-  # does not abort the remaining examples (continue-on-error semantics). One
-  # result JSON is written per example and uploaded for downstream validation.
+  # One container per supported example; scheduling fields (runner,
+  # npu_devices, image, timeout, profile) come from each manifest entry.
+  # A failure is isolated to its own matrix leg, so one broken example
+  # cannot mask the others.
   run-examples:
-    name: run-examples (single container)
+    name: ${{ matrix.example.name }}
     needs: [monitor, manifest-check]
     if: needs.manifest-check.outputs.has_supported == 'true'
-    runs-on: linux-aarch64-a2-1
-    timeout-minutes: 90
+    runs-on: ${{ matrix.example.runner }}
+    timeout-minutes: ${{ matrix.example.timeout_minutes }}
     defaults:
       run:
         shell: bash
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        example: ${{ fromJSON(needs.manifest-check.outputs.supported_matrix) }}
     env:
-      ASCEND_RT_VISIBLE_DEVICES: '0'
+      ASCEND_RT_VISIBLE_DEVICES: ${{ matrix.example.npu_devices }}
       PROJECT_ROOT: ${{ github.workspace }}/workflows/projects/xllm
       TARGET_ROOT: ${{ github.workspace }}/target
       FIXTURE_DIR: ${{ github.workspace }}/workflows/projects/xllm/fixtures
       PIP_EXTRA_INDEX_URL: https://repo.huaweicloud.com/ascend/repos/pypi
       PIP_TIMEOUT: "120"
-      SUPPORTED_MATRIX: ${{ needs.manifest-check.outputs.supported_matrix }}
-      TRIGGER: ${{ needs.monitor.outputs.trigger }}
-      TARGET_REPO: ${{ needs.monitor.outputs.target_repo }}
-      TARGET_REF: ${{ needs.monitor.outputs.target_ref }}
-      IMAGE: swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/xllm-ai/xllm-ai:xllm-0.10.0-release-hb-rc2-arm
     container:
-      image: swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/xllm-ai/xllm-ai:xllm-0.10.0-release-hb-rc2-arm
+      image: ${{ matrix.example.image }}
       options: >-
-        --shm-size=64g
+        --shm-size=64g ${{ matrix.example.device_options }}
         --device=/dev/davinci_manager --device=/dev/devmm_svm --device=/dev/hisi_hdc
         --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
         --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
@@ -292,98 +292,80 @@ jobs:
       - name: Verify xllm import
         run: python -c "import xllm; print('xllm import ok:', xllm.__file__)"
 
-      # Run every supported example sequentially; isolate each with `timeout`
-      # and keep going on failure. Writes one result JSON per example.
-      - name: Run all examples (continue on failure)
+      # Idempotent: models land in the NFS-backed cache mount, so repeat
+      # runs skip the download. profile=vlm pulls the VL model and
+      # synthesizes the image fixtures for generate_vlm.py.
+      - name: Prepare environment (models and fixtures)
+        run: bash "$PROJECT_ROOT/scripts/setup_example.sh" "${{ matrix.example.profile }}"
+
+      - name: Run example
+        env:
+          EXAMPLE_PATH: ${{ matrix.example.path }}
+          OVERLAY_ARGS: ${{ toJSON(matrix.example.overlay_args) }}
         run: |
-          set -uo pipefail
-          source /usr/local/Ascend/ascend-toolkit/set_env.sh
-          mkdir -p "$GITHUB_WORKSPACE/output/results"
-          python3 - "$PROJECT_ROOT" "$TARGET_ROOT" "$GITHUB_WORKSPACE" <<'PY'
-          import json, os, subprocess, sys
-          project_root, target_root, workspace = sys.argv[1], sys.argv[2], sys.argv[3]
-          matrix = json.loads(os.environ['SUPPORTED_MATRIX'])
-          cann = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
-          out_dir = os.path.join(workspace, 'output', 'results')
-          os.makedirs(out_dir, exist_ok=True)
-          per_example_timeout = int(os.environ.get('EXAMPLE_TIMEOUT', '1800'))
-          any_failed = False
-          for i, ex in enumerate(matrix):
-              path = ex['path']
-              print(f'=== example {i}: {path} ===', flush=True)
-              env = dict(os.environ)
-              env['EXAMPLE_PATH'] = path
-              env['EXEC'] = ex.get('exec', '')
-              env['OVERLAY_ARGS'] = json.dumps(ex.get('overlay_args', []))
-              env['ASCEND_RT_VISIBLE_DEVICES'] = ex.get('npu_devices', '0')
-              env['CI_OUTPUT_DIR'] = os.path.join(workspace, 'output')
-              env['FIXTURE_DIR'] = os.environ['FIXTURE_DIR']
-              env['TARGET_ROOT'] = target_root
-              cmd = f'source {cann} && bash "{project_root}/scripts/run_example.sh" "{path}"'
-              try:
-                  rc = subprocess.run(
-                      ['bash', '-c', cmd], env=env, cwd=target_root,
-                      timeout=per_example_timeout).returncode
-              except subprocess.TimeoutExpired:
-                  rc = 124
-              status = 'success' if rc == 0 else 'failure'
-              any_failed = any_failed or (rc != 0)
-              result = {
-                  'trigger': os.environ['TRIGGER'],
-                  'target_repo': os.environ['TARGET_REPO'],
-                  'target_ref': os.environ['TARGET_REF'],
-                  'path': path,
-                  'image': os.environ['IMAGE'],
-                  'job_status': status,
-              }
-              with open(os.path.join(out_dir, f'{i}.json'), 'w', encoding='utf-8') as f:
-                  json.dump(result, f, ensure_ascii=False, indent=2)
-              print(f'example {path} -> {status} (rc={rc})', flush=True)
-          sys.exit(1 if any_failed else 0)
-          PY
+          set -o pipefail
+          mkdir -p "$GITHUB_WORKSPACE/output"
+          CI_OUTPUT_DIR="$GITHUB_WORKSPACE/output" \
+            bash "$PROJECT_ROOT/scripts/run_example.sh" "$EXAMPLE_PATH" \
+            2>&1 | tee "$GITHUB_WORKSPACE/output/example.log"
 
-      # Upload per-example results regardless of individual pass/fail.
-      - name: Upload per-example results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: xllm-examples-results-${{ github.run_id }}
-          if-no-files-found: error
-          path: ${{ github.workspace }}/output/results
-
+  # Publish one result.json per example. The job conclusion is read from
+  # the GitHub Jobs API (EXPECTED_JOB_NAME = matrix.example.name), so the
+  # self-hosted runner only runs the example; publishing stays on
+  # GitHub-hosted infrastructure.
   validate-results:
-    name: publish-result
+    name: publish-result (${{ matrix.example.name }})
     needs: [monitor, manifest-check, run-examples]
     if: always() && needs.manifest-check.outputs.has_supported == 'true'
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        example: ${{ fromJSON(needs.manifest-check.outputs.supported_matrix) }}
     steps:
       - name: Checkout workflows
         uses: actions/checkout@v4
         with:
           path: workflows
 
+      - name: Write result JSON
+        env:
+          TARGET_REPO: ${{ needs.monitor.outputs.target_repo }}
+          TARGET_REF: ${{ needs.monitor.outputs.target_ref }}
+          TRIGGER: ${{ needs.monitor.outputs.trigger }}
+          EXAMPLE_PATH: ${{ matrix.example.path }}
+          IMAGE: ${{ matrix.example.image }}
+          EXPECTED_JOB_NAME: ${{ matrix.example.name }}
+          GH_TOKEN: ${{ github.token }}
+        run: python3 workflows/scripts/write_example_result.py --output output/result.json
+
+      - name: Validate result.json
+        run: |
+          python3 -m pip install -q "check-jsonschema==0.38.0"
+          check-jsonschema --schemafile workflows/schemas/result.schema.json \
+            output/result.json
+
+      - name: Upload result JSON
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xllm-examples-${{ github.run_id }}-${{ strategy.job-index }}
+          if-no-files-found: error
+          path: output/result.json
+
+  # Keep the historic per-run aggregated artifact name for external
+  # collectors: merge every per-leg result into xllm-examples-<run_id>.
+  aggregate-results:
+    needs: [monitor, manifest-check, validate-results]
+    if: always() && needs.manifest-check.outputs.has_supported == 'true'
+    runs-on: ubuntu-latest
+    steps:
       - name: Download per-example results
         uses: actions/download-artifact@v4
         with:
-          name: xllm-examples-results-${{ github.run_id }}
+          pattern: xllm-examples-${{ github.run_id }}-*
           path: results
-
-      - name: Validate and republish each result
-        run: |
-          set -euo pipefail
-          python3 -m pip install -q "check-jsonschema==0.38.0"
-          shopt -s nullglob
-          count=0
-          for f in results/*.json; do
-            echo "validating $f"
-            check-jsonschema --schemafile workflows/schemas/result.schema.json "$f"
-            count=$((count+1))
-          done
-          echo "validated $count result file(s)"
-          # Re-publish under the historic per-run artifact name so any external
-          # collector keyed on xllm-examples-<run_id> still finds them.
-          mkdir -p "$GITHUB_WORKSPACE/output"
-          cp -r results "$GITHUB_WORKSPACE/output/xllm-examples-${{ github.run_id }}"
+          merge-multiple: true
 
       - name: Upload aggregated results
         if: always()
@@ -391,7 +373,7 @@ jobs:
         with:
           name: xllm-examples-${{ github.run_id }}
           if-no-files-found: error
-          path: ${{ github.workspace }}/output/xllm-examples-${{ github.run_id }}
+          path: results
 
   record-outcome:
     needs: [monitor, manifest-check, run-examples]

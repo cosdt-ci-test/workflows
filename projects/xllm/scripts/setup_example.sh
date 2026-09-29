@@ -107,11 +107,16 @@ print('vlm fixture images ready at /tmp/images')
 PY
 }
 
-# Default profile: ensure the example models and fixtures (xllm is
-# pre-installed in the official release image, no source build needed).
+# Default profile: ensure the LLM example model (xllm is pre-installed in
+# the official release image, no source build needed).
 setup_default() {
-  echo "profile=default: ensuring example models and fixtures"
+  echo "profile=default: ensuring example model"
   ensure_model
+}
+
+# VLM profile: vision model + image fixtures for generate_vlm.py.
+setup_vlm() {
+  echo "profile=vlm: ensuring VLM model and image fixtures"
   ensure_vlm_model
   ensure_vlm_images
 }

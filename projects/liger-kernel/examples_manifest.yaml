@@ -44,10 +44,21 @@ supported:
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args: ['--model_name_or_path ${LIGER_MODEL_PATH}', '--data_path ${LIGER_FIXTURE_JSON}', '--max_steps 1', '--model_max_length 256', '--per_device_train_batch_size 2', '--eval_strategy no', '--save_strategy no', '--report_to none', '--logging_steps 1', '--include_num_input_tokens_seen', '--medusa_num_heads 2', '--medusa_return True', '--lazy_preprocess False', '--use_liger True', '--output_dir ${CI_OUTPUT_DIR}/medusa']
     timeout_minutes: 180
+  # 单卡 Qwen2-VL 图文 SFT：monkey_patch Qwen2-VL 的多模态 RoPE、RMSNorm、SwiGLU
+  # 与 fused_linear_cross_entropy（这 4 族的 _ascend 实现 v0.8.3 都有），走 trl
+  # SFTTrainer。7 个 CustomArguments 字段都是真 CLI 参数，可把模型/数据/步数整体
+  # 覆盖；上游 the_cauldron 在 ModelScope 有镜像但 168 GB，故数据换 setup 现生成的
+  # 4 行本地 fixture（schema 逐字段复刻 ai2d，含 config card）。额外依赖 torchvision：
+  # AutoProcessor 走 torchvision 图像后端，纯文本栈里没有（0.24.0 配 torch 2.9.0）。
+  - path: examples/huggingface/training_multimodal.py
+    profile: liger_multimodal
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args: ['--model_name ${LIGER_VL_MODEL_PATH}', '--dataset ${LIGER_VL_DATASET_PATH}', '--dataset_subset ai2d', '--dataset_split train', '--max_seq_length 256', '--dataset_text_field texts', '--max_steps 1', '--per_device_train_batch_size 1', '--bf16', '--eval_strategy no', '--save_strategy no', '--report_to none', '--logging_steps 1', '--include_num_input_tokens_seen', '--use_liger True', '--output_dir ${CI_OUTPUT_DIR}/multimodal']
+    timeout_minutes: 240
 
 unsupported:
-  - examples/alignment/run_orpo.py  # ORPO 对齐示例：无 argparse，max_steps/batch 全硬编码在源码里无法从 CI 压缩，且模型写死 gated 的 meta-llama/Llama-3.2-1B-Instruct，需改源码才能接入。
-  - examples/huggingface/training_multimodal.py  # Qwen2-VL 多模态 SFT：需 Qwen2-VL 权重与 the_cauldron 图文数据，且 SFTTrainer 的 tokenizer/collate 路径在 trl 新版已改签名，暂缓。
+  - examples/alignment/run_orpo.py  # ORPO 对齐示例：单卡硬阻塞——LigerORPOTrainer 的损失调用无条件走 _FSDPForwardRedirection()，该 helper 在 src/liger_kernel/transformers/fsdp.py:40 直接 assert 模型是 FullyShardedDataParallel，未包装模型第一步就 AssertionError，而改走 accelerate+FSDP 需多卡 HCCL；叠加脚本无 argparse（max_steps=100/batch=32/1B 模型全硬编码）与 gated 的 meta-llama 模型。
   - examples/huggingface/callback.py  # training.py 吞吐/显存回调，被其 import，非独立入口。
   - examples/huggingface/launch_on_modal.py  # Modal 云平台启动器，非 NPU 本地入口。
   - examples/huggingface/run_benchmarks.sh  # 多模型多 batch 的吞吐基准 sweep 脚本，非单次可验证 example。

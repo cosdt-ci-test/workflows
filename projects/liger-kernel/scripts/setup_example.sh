@@ -198,6 +198,78 @@ setup_liger_medusa() {
   printf 'LIGER_FIXTURE_JSON=%s\n' "$TARGET_ROOT/fixtures/ci_sharegpt_8.json" >> "$GITHUB_ENV"
 }
 
+# ----- profile: liger_multimodal (examples/huggingface/training_multimodal.py) -----
+# Qwen2-VL SFT on image-text data: monkey-patches Qwen2-VL with Liger's
+# multimodal RoPE + RMSNorm + SwiGLU + FLCE, trained through trl SFTTrainer.
+# The upstream script wants the_cauldron (168 GB on ModelScope), so the CI
+# fixture is a 4-row local directory reproducing the ai2d schema exactly
+# (images: Sequence(Image()), texts: a one-element list holding a dict) plus
+# a dataset card declaring the config name - without the card
+# load_dataset(dir, "ai2d") raises "BuilderConfig 'ai2d' not found".
+setup_liger_multimodal() {
+  python -m pip install "transformers==4.57.1" "trl==0.12.1" \
+    "datasets>=3.0.0" "accelerate>=0.34" "sentencepiece" "pillow"
+  # AutoProcessor for Qwen2-VL pulls in the torchvision image backend, which
+  # the plain text stack does not carry. 0.24.0 matches torch 2.9.0.
+  python -m pip install "torchvision==0.24.0"
+  python -c "import transformers, trl, torchvision; print('transformers', transformers.__version__, 'trl', trl.__version__, 'torchvision', torchvision.__version__)"
+  ms_download_models "LIGER_VL_MODEL_PATH=Qwen/Qwen2-VL-2B-Instruct"
+  python - <<'PY'
+import os
+from pathlib import Path
+
+from datasets import Dataset
+from datasets import Features
+from datasets import Image as ImageFeature
+from datasets import Sequence
+from datasets import Value
+from PIL import Image
+
+root = Path(os.environ["TARGET_ROOT"]) / "fixtures" / "cauldron_ai2d"
+config = root / "ai2d"
+config.mkdir(parents=True, exist_ok=True)
+
+colors = [(220, 60, 60), (60, 200, 90), (70, 120, 230), (230, 200, 60)]
+rows = []
+for index, color in enumerate(colors):
+    image = Image.new("RGB", (112, 112), color)
+    rows.append({
+        "images": [image],
+        "texts": [{
+            "user": f"Describe image {index}.",
+            "assistant": f"This is a solid colour image {index}.",
+            "source": "ci",
+        }],
+    })
+
+# the_cauldron declares texts as a dict schema; a Sequence-of-dict fails to
+# encode ("'list' object has no attribute 'get'"), so the field is declared
+# as the one-element list schema the loader actually produces.
+features = Features({
+    "images": Sequence(ImageFeature()),
+    "texts": [{"user": Value("string"), "assistant": Value("string"), "source": Value("string")}],
+})
+Dataset.from_list(rows, features=features).to_parquet(str(config / "train.parquet"))
+
+(root / "README.md").write_text(
+    "---\n"
+    "configs:\n"
+    "  - config_name: ai2d\n"
+    "    data_files:\n"
+    "      - split: train\n"
+    "        path: ai2d/train.parquet\n"
+    "---\n\n"
+    "# Liger-Kernel CI image-text fixture\n\n"
+    "Four synthetic 112x112 solid-colour images paired with a one-turn\n"
+    "user/assistant exchange, shaped like HuggingFaceM4/the_cauldron ai2d\n"
+    "so the upstream multimodal example runs unchanged offline.\n",
+    encoding="utf-8",
+)
+print(f"image-text fixture ready: {root} ({len(rows)} rows)")
+PY
+  printf 'LIGER_VL_DATASET_PATH=%s\n' "$TARGET_ROOT/fixtures/cauldron_ai2d" >> "$GITHUB_ENV"
+}
+
 supported_profiles() {
   declare -F | awk '/^declare -f setup_/ { sub(/^declare -f setup_/, ""); print }' | paste -sd' ' -
 }

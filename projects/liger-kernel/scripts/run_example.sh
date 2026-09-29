@@ -21,7 +21,7 @@ EXAMPLE_REL="$1"
 EXAMPLES_ROOT="${EXAMPLES_ROOT:-$TARGET_ROOT}"
 
 case "$EXAMPLE_REL" in
-  examples/huggingface/training.py|examples/medusa/train.py) ;;
+  examples/huggingface/training.py|examples/medusa/train.py|examples/huggingface/training_multimodal.py) ;;
   *)
     echo "unsupported Liger-Kernel example entry: $EXAMPLE_REL" >&2
     exit 2
@@ -123,6 +123,7 @@ out = Path(os.environ["CI_OUTPUT_DIR"])
 prefix = {
     "examples/huggingface/training.py": "hf_trainer",
     "examples/medusa/train.py": "medusa",
+    "examples/huggingface/training_multimodal.py": "multimodal",
 }[entry]
 matches = sorted(p for p in out.glob(f"{prefix}*") if p.is_dir())
 if not matches:

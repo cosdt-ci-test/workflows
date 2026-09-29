@@ -183,6 +183,22 @@ setup_liger_hf_trainer() {
   printf 'LIGER_DATASET_PATH=%s\n' "$TARGET_ROOT/fixtures/ci_alpaca_8" >> "$GITHUB_ENV"
 }
 
+# ----- profile: liger_hf_fsdp (examples/huggingface/run_qwen.sh) -----
+# Use the same model and fixture as the single-card SFT job. The run script
+# reproduces the upstream launcher's FSDP recipe on two NPU devices.
+setup_liger_hf_fsdp() {
+  setup_liger_hf_trainer
+  python - <<'PY'
+import torch
+import torch_npu
+
+count = torch.npu.device_count()
+if count < 2:
+    raise SystemExit(f"run_qwen.sh FSDP requires 2 NPU devices, found {count}")
+print(f"FSDP runner has {count} NPU devices")
+PY
+}
+
 # ----- profile: liger_medusa (examples/medusa/train.py) -----
 # Medusa multi-head retraining on a frozen backbone; trains the heads with
 # Liger's fused_linear_cross_entropy. Needs scikit-learn (train_test_split)

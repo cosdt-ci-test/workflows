@@ -26,22 +26,28 @@ PyPI triton，幂等判断用 `pip show triton-ascend`。
 
 ## supported 清单
 
-三条都在单卡 `linux-aarch64-a2-1` 上跑。前两条已通过手动 workflow 验收（run #3，
-commit d4961fed）：v0.8.3 上跑完真实训练步，日志含逐步 loss 与 NPU 显存分配
-（hf 例峰值 4594 MB 已分配、4824 MB reserved），以 `NPU example passed` 收尾，
-result.json 均为 success。第三条按同一套配方新增，待下一轮手动 workflow 验证。
+已有三条单卡任务在手动 workflow #5（commit `33c39b2`）全部通过，包含实际训练步骤和
+三个成功的 `result.json`；被测版本为 v0.8.3。新增一条两卡 FSDP 任务，待下一轮手动
+workflow 验证。
 
 | example | 作用 | 压规模方式 |
 |---|---|---|
 | `examples/huggingface/training.py` | `AutoLigerKernelForCausalLM` 一行 monkey-patch 应用 Liger 内核，trl `SFTTrainer` 做 SFT | `--max_steps 3`、batch 2、seq 256，不开 FSDP |
+| `examples/huggingface/run_qwen.sh` | 上述 SFT 的两卡 FSDP 配方，验证 torchrun、HCCL 和 full shard | 复刻上游 launcher；改用 ModelScope 0.5B、2 卡、2 步、每卡 batch 1、本地 8 行数据 |
 | `examples/medusa/train.py` | 冻结 backbone、注入 medusa 多头，用 `fused_linear_cross_entropy` 训练多 token 预测头 | `--max_steps 1`、`--medusa_num_heads 2`、`--medusa_return True` |
 | `examples/huggingface/training_multimodal.py` | Qwen2-VL 图文 SFT，monkey-patch 多模态 RoPE / RMSNorm / SwiGLU / FLCE | `--max_steps 1`、batch 1、seq 256，数据换 4 行本地 fixture |
 
-三条都不改源码。前两条模型走 ModelScope 的 `Qwen/Qwen2.5-0.5B-Instruct`；多模态那条
+四条都不改源码。文本训练与 Medusa 模型走 ModelScope 的 `Qwen/Qwen2.5-0.5B-Instruct`；多模态那条
 走 ModelScope 的 `Qwen/Qwen2-VL-2B-Instruct`。设备由 liger 的 `infer_device()` 与
 accelerate 自动落到 NPU。前两条带 upstream 自带的 `EfficiencyCallback`，其
 `on_init_end` 强制要求 `--include_num_input_tokens_seen` 与 `--logging_steps 1`，
 overlay 必须带这两个。
+
+`run_qwen.sh` 原脚本固定 `torchrun` 四进程、Qwen2-7B、每卡 batch 48，而且不透传额外
+参数。项目 runner 按该脚本启动 `training.py`，用 manifest 覆盖模型、数据和规模，并保持
+`--fsdp "full_shard auto_wrap"` 与上游 `config/fsdp_config.json`。这是同一 Python
+example 的另一种分布式启动配方，不算新增的独立训练程序。两卡任务要求
+`linux-aarch64-a2-2`，任务启动前检查 NPU 数量，`torchrun --standalone` 分配独立端口。
 
 fixture 全部由 setup 现生成，不往仓库塞二进制：
 
@@ -72,7 +78,7 @@ fixture 全部由 setup 现生成，不往仓库塞二进制：
 ## unsupported
 
 `examples/alignment/run_orpo.py`、`examples/lightning/training.py`、
-`examples/megatron/*` 及 `run_*.sh` 启动器家族入 unsupported，逐条在 manifest 里
+`examples/megatron/*` 及其余 `run_*.sh` 启动器入 unsupported，逐条在 manifest 里
 写明原因。两个值得记下的硬阻塞：
 
 - ORPO：`LigerORPOTrainer` 的损失调用无条件走 `_FSDPForwardRedirection()`，该 helper
@@ -80,7 +86,10 @@ fixture 全部由 setup 现生成，不往仓库塞二进制：
   单卡未包装模型第一步就 AssertionError，而走 accelerate + FSDP 需要多卡 HCCL。
   叠加脚本无 argparse（`max_steps=100`/batch 32/1B 模型全硬编码）与 gated 模型。
 - Lightning：`pl.Trainer(accelerator=infer_device())` 传 `"npu"`，而 Lightning 只注册
-  cpu/cuda/mps/xla，且 `torch.optim.AdamW(fused=True)` 在 NPU 无 `_fused_adamw_` 实现。
+  cpu/cuda/mps/xla，且 `torch.optim.AdamW(fused=True)` 在 NPU 无 `_fused_adamw_` 实现；
+  源码还把 MMLU 拆出固定 4096 行验证集，不能用很小的 CI fixture。
+- Megatron 两条虽只需两进程，源码仍固定 `torch.cuda.set_device`、`.cuda()` 和 NCCL；
+  增加 runner 卡数无法改变设备后端。
 
 ## 已知边界
 
@@ -89,4 +98,3 @@ medusa 例的 `max_steps` 必须保持 1：其 callback 的 MFU 分支 `_get_gpu
 步数为 2，故 1 步安全；这是上游代码问题。
 
 artifact 由公共引擎命名为 `liger-kernel-examples-<run_id>-<job_index>`。
-

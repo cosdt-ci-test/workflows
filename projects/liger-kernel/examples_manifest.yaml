@@ -13,7 +13,7 @@ version: 1
 # project's setup_example.sh follows.
 #
 # supported lists entries whose upstream source, read statically, can run
-# unchanged on a single Ascend NPU with CI-sized CLI overrides. Unsupported
+# unchanged on Ascend NPU with CI-sized CLI overrides. Unsupported
 # entries each carry a one-line Chinese reason.
 scan:
   root: examples
@@ -44,6 +44,14 @@ supported:
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args: ['--model_name_or_path ${LIGER_MODEL_PATH}', '--data_path ${LIGER_FIXTURE_JSON}', '--max_steps 1', '--model_max_length 256', '--per_device_train_batch_size 2', '--eval_strategy no', '--save_strategy no', '--report_to none', '--logging_steps 1', '--include_num_input_tokens_seen', '--medusa_num_heads 2', '--medusa_return True', '--lazy_preprocess False', '--use_liger True', '--output_dir ${CI_OUTPUT_DIR}/medusa']
     timeout_minutes: 180
+  # 两卡 Qwen SFT/FSDP 配方：run_qwen.sh 原用 4 卡 Qwen2-7B 和 batch 48 启动同一 training.py；
+  # CI 复刻 torchrun + full_shard auto_wrap，改为 2 卡、ModelScope 0.5B、2 步和本地数据，验证 HCCL/FSDP 路径。
+  - path: examples/huggingface/run_qwen.sh
+    profile: liger_hf_fsdp
+    runner: linux-aarch64-a2-2
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args: ['--model_name ${LIGER_MODEL_PATH}', '--dataset ${LIGER_DATASET_PATH}', '--max_steps 2', '--per_device_train_batch_size 1', '--max_seq_length 256', '--bf16', '--eval_strategy no', '--save_strategy no', '--report_to none', '--logging_steps 1', '--include_num_input_tokens_seen', '--use_liger True', '--fsdp full_shard auto_wrap', '--fsdp_config config/fsdp_config.json', '--output_dir ${CI_OUTPUT_DIR}/hf_fsdp']
+    timeout_minutes: 180
   # 单卡 Qwen2-VL 图文 SFT：monkey_patch Qwen2-VL 的多模态 RoPE、RMSNorm、SwiGLU
   # 与 fused_linear_cross_entropy（这 4 族的 _ascend 实现 v0.8.3 都有），走 trl
   # SFTTrainer。7 个 CustomArguments 字段都是真 CLI 参数，可把模型/数据/步数整体
@@ -64,7 +72,6 @@ unsupported:
   - examples/huggingface/run_benchmarks.sh  # 多模型多 batch 的吞吐基准 sweep 脚本，非单次可验证 example。
   - examples/huggingface/run_gemma.sh  # gemma-7b-it 4 卡 FSDP 启动器，属 run_*.sh 家族的大模型变体，非独立 example。
   - examples/huggingface/run_llama.sh  # Meta-Llama-3-8B 4 卡 FSDP 启动器，模型 gated 且非独立 example。
-  - examples/huggingface/run_qwen.sh  # Qwen2-7B 4 卡 FSDP 启动器，非独立 example 入口。
   - examples/huggingface/run_qwen2_vl.sh  # Qwen2-VL-7B 4 卡 FSDP 启动器，非独立 example 入口。
   - examples/lightning/training.py  # Lightning Trainer 示例：pl.Trainer(accelerator=infer_device()) 传 "npu"，而 Lightning 只注册 cpu/cuda/mps/xla，且 torch.optim.AdamW(fused=True) 在 NPU 无 _fused_adamw_ 实现，不改源码无法运行。
   - examples/medusa/medusa_util.py  # medusa heads 注入与 forward 改写工具，被 train.py import，非独立入口。

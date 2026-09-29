@@ -598,7 +598,23 @@ supported:
   #     - --output_dir ${CI_OUTPUT_DIR}
   #   timeout_minutes: 60
 unsupported:
-  # --- 多卡并行：TP/DP/CP 组合需 torchrun 4~8 卡，单卡 NPU 不适用 ---
+  # --- 多卡并行：8 卡 runner（linux-aarch64-a2-8）也解不了，阻塞点是脚本
+  # 对 CUDA/NCCL 的硬编码与 Hub 依赖，不是卡数 ---
+  # 3D_parallel.py / 3d_parallel_checks.py：
+  #   dist.init_process_group("nccl") + DeviceMesh(device_type="cuda") +
+  #   torch.cuda.set_device 全部硬编码 CUDA/NCCL（NPU 需 hccl + npu 设备）；
+  #   模型 SmolLM2-1.7B 与数据集 roneneldan/TinyStories 均写死从 Hub 拉取
+  #   （Runner 无法访问 HF，无本地文件入口）；wandb.init 无条件调用（需
+  #   联网上报）；num_train_steps=10000 写死无 CLI 开关，超出 smoke 预算。
+  # context_parallel.py：
+  #   init_device_mesh("cuda") / device="cuda" / device_map 全部硬编码，
+  #   NPU 环境无 CUDA 后端必炸；repo_id 硬编码
+  #   Qwen/Qwen2.5-Coder-0.5B-Instruct 无 CLI 覆盖入口（HF 被墙）；
+  #   SDPBackend.FLASH_ATTENTION 为 CUDA 专属 backend。
+  # distributed_training.py：
+  #   模块顶层无条件读取 OMPI_COMM_WORLD_* 环境变量（torchrun 启动直接
+  #   KeyError），只能用 mpirun（OpenMPI）启动，Runner 未提供；backend
+  #   限定 nccl/gloo，nccl 分支再用 cuda:{LOCAL_RANK} 设备，NPU 不适用。
   - examples/3D_parallel.py
   - examples/pytorch/3d_parallel_checks.py
   - examples/pytorch/context_parallel.py

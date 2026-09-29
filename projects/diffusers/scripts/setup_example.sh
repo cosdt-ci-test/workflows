@@ -411,10 +411,17 @@ setup_diffusers_sd15() {
 }
 
 # diffusers-dreambooth: SD1.5 dreambooth / dreambooth-LoRA training examples.
-# The model is pulled online (hf-mirror) by the example; the dataset is the
-# fixture image (fixtures/DOG.jpg), so no download here.
+# The dataset is the fixture image (fixtures/DOG.jpg). The model comes from
+# ModelScope as a LOCAL dir (SD15_MODEL_PATH): both scripts build the full
+# DiffusionPipeline from --pretrained_model_name_or_path at the end of
+# training, and a repo id there always calls the Hub API (model_info,
+# pipeline_utils.py:1649) for the file list - hf-mirror's /api endpoint is
+# flaky from the runner pool (same class as the cache-seed fetch_sha
+# timeouts) while the file CDN (/resolve/) is fine, so the run trained fine
+# and then died on the final save. A local path skips the network entirely.
 setup_diffusers_dreambooth() {
   install_example_stack
+  download_assets sd15
 }
 
 # diffusers-instruct-pix2pix: SD1.5 InstructPix2Pix. The dataset

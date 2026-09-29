@@ -28,6 +28,10 @@ pip3 install einops sentencepiece accelerate
 # Install diffusers for parallel support
 pip3 install -U diffusers  # 要求 >= 0.36.0（PyPI latest，避免走 github 代理）
 
+# modelscope pinned to 1.37.0 (hub split started at 1.38; same rationale
+# as projects/diffusers/scripts/setup_example.sh)
+python3 -m pip install -q "modelscope==1.37.0"
+
 # Set NPU environment variables
 export ASCEND_RT_VISIBLE_DEVICES="${NPU_DEVICES:-0}"
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
@@ -36,5 +40,24 @@ export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 if [ -f /usr/local/Ascend/ascend-toolkit/set_env.sh ]; then
     source /usr/local/Ascend/ascend-toolkit/set_env.sh
 fi
+
+# ensure_flux_model: download FLUX.1-dev (diffusers layout) via ModelScope
+# mirror so the generate.py example never touches HF gated endpoints.
+ensure_flux_model() {
+  local model_dir="/root/.cache/modelscope/FLUX.1-dev"
+  if [ -d "$model_dir" ] && [ -n "$(ls -A "$model_dir" 2>/dev/null)" ]; then
+    echo "model already cached at $model_dir; skipping download"
+    return
+  fi
+  echo "downloading FLUX.1-dev via modelscope to $model_dir"
+  python3 -c "from modelscope import snapshot_download; snapshot_download('AI-ModelScope/FLUX.1-dev', local_dir='$model_dir')"
+}
+
+setup_flux() {
+  echo "profile=flux: ensuring FLUX.1-dev model"
+  ensure_flux_model
+}
+
+setup_flux
 
 echo "Environment setup complete for profile: $PROFILE"

@@ -4,48 +4,39 @@ scan:
   include_extensions: ['.py']
   unit: files
 supported:
-  - path: examples/api/run_cache_refresh_flux.py
+  # examples/generate.py: thin wrapper over cache_dit.generate.entrypoint()
+  # (unified CLI, README "python3 -m cache_dit.generate"). Positional name
+  # "flux" selects the FLUX.1-dev example; --model-path points at the
+  # ModelScope mirror downloaded by setup_example.sh; --attn _native_npu is
+  # the NPU attention backend; --cache exercises cache-dit's DBCache path.
+  - path: examples/generate.py
     profile: flux
     runner: linux-aarch64-a2-1
     npu_devices: '0'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - --model flux
+      - flux
+      - --model-path /root/.cache/modelscope/FLUX.1-dev
       - --attn _native_npu
-    timeout_minutes: 60
-  - path: examples/api/run_cache_refresh_wan_2.2.py
-    profile: wan2.2
-    runner: linux-aarch64-a2-1
-    npu_devices: '0'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --model wan2.2
-      - --attn _native_npu
-    timeout_minutes: 60
-  - path: examples/api/run_steps_mask.py
-    profile: flux
-    runner: linux-aarch64-a2-1
-    npu_devices: '0'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --attn _native_npu
-      - --steps-mask
-    timeout_minutes: 60
-  - path: examples/api/run_transformer_only.py
-    profile: flux
-    runner: linux-aarch64-a2-1
-    npu_devices: '0'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --attn _native_npu
-      - --transformer-only
-    timeout_minutes: 60
+      - --cache
+      - --warmup 1
+      - --repeat 1
+      - --steps 8
+    timeout_minutes: 120
 unsupported:
-  - examples/ray/*
-  - examples/ptq/*
-  - examples/data/**
-  - examples/configs/**
-  - examples/assets/**
-  - examples/.gitignore
-  - examples/README.md
-  - examples/assets/**
+  # --- examples/api/*：上游坏脚本，manifest 层无法规避 ---
+  # PR #752（feat: add cache-dit-generate cli tool）删除了 examples/utils.py，
+  # 但未同步更新 examples/api/ 下的脚本；4 个脚本开头的
+  # `from utils import get_args, strify, MemoryTracker` 在干净 checkout 下
+  # 直接 ImportError（utils.py 仅存于 tests/api/utils.py，不在 examples 的
+  # sys.path 上）。上游修复后移回。
+  - examples/api/run_cache_refresh_flux.py
+  - examples/api/run_cache_refresh_wan_2.2.py
+  - examples/api/run_steps_mask.py
+  - examples/api/run_transformer_only.py
+  # --- examples/ptq/flux2_svdq_ptq.py：依赖 svdq CUDA kernel 扩展
+  #（cache_dit.kernels.svdq_extension_is_available），NPU 环境不可用。
+  - examples/ptq/flux2_svdq_ptq.py
+  # --- examples/ray/ray_wrapper_example.py：Ray 多进程分布式 wrapper
+  #（FLUX.2-klein-base-9B），单卡 NPU runner 不适用。
+  - examples/ray/ray_wrapper_example.py

@@ -270,7 +270,7 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - --pretrained_model_name_or_path stable-diffusion-v1-5/stable-diffusion-v1-5   # 在线 hf-mirror（SD1.4 在 HF 是 gated，改用 SD1.5）
+      - --pretrained_model_name_or_path ${SD15_MODEL_PATH}   # ModelScope 本地目录：结尾 DiffusionPipeline.from_pretrained 用 repo id 会调 model_info（pipeline_utils.py:1649），hf-mirror /api 抖动会超时；本地路径不走网络
       - --instance_data_dir ${FIXTURE_DIR}/images
       - --output_dir ${CI_OUTPUT_DIR}
       - --instance_prompt "a photo of sks dog"
@@ -286,7 +286,7 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - --pretrained_model_name_or_path stable-diffusion-v1-5/stable-diffusion-v1-5   # 在线 hf-mirror（SD1.4 在 HF 是 gated，改用 SD1.5）
+      - --pretrained_model_name_or_path ${SD15_MODEL_PATH}   # ModelScope 本地目录：同 train_dreambooth.py（:828/:1379/:1427 三处 DiffusionPipeline.from_pretrained 都会调 model_info）
       - --instance_data_dir ${FIXTURE_DIR}/images
       - --output_dir ${CI_OUTPUT_DIR}
       - --instance_prompt "a photo of sks dog"

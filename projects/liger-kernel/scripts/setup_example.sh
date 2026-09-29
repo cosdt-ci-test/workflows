@@ -6,10 +6,11 @@
 # shared engine resolved - so the guarded kernel source and the examples
 # are always the same release.
 #
-# Stack: the CANN 9.1.0 image already ships torch 2.9.0 + torch_npu 2.9.0;
-# liger's own setup.py and Huawei's Ascend-CI recipe pin exactly that pair
-# plus triton-ascend 3.2.2 (the Ascend Triton fork is what the _ascend
-# backend compiles against). Never let pip resolve a PyPI torch over it.
+# Stack: liger's own setup.py and Huawei's Ascend-CI recipe pin
+# torch 2.9.0 + torch_npu 2.9.0 plus triton-ascend 3.2.2 (the Ascend Triton
+# fork is what the _ascend backend compiles against). The CANN base image
+# does not ship a torch build, so the pair is installed explicitly and then
+# verified; never let pip resolve a plain PyPI torch over torch_npu's match.
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
@@ -46,15 +47,15 @@ except urllib.error.HTTPError:
 }
 
 verify_torch_stack() {
-  # The image's torch/torch_npu pair is the only one torch_npu kernels are
-  # built against; a reinstall would break the compiled op library.
+  # torch_npu's compiled op library is bound to one exact torch build; this
+  # is the pair liger and Huawei's Ascend CI both declare.
   python - <<'PY'
 import torch
 import torch_npu
 
 print("torch", torch.__version__, "torch_npu", torch_npu.__version__)
 if not torch.__version__.startswith("2.9.0"):
-    raise SystemExit(f"expected the CANN 9.1 image torch 2.9.0, got {torch.__version__}")
+    raise SystemExit(f"expected torch 2.9.0, got {torch.__version__}")
 if not torch_npu.__version__.startswith("2.9.0"):
     raise SystemExit(f"expected torch_npu 2.9.0, got {torch_npu.__version__}")
 if not torch.npu.is_available() or torch.npu.device_count() < 1:
@@ -63,23 +64,55 @@ print("NPU devices:", torch.npu.device_count())
 PY
 }
 
+ensure_torch_stack() {
+  # The CANN base image may ship no PyTorch at all, so probe for a matching
+  # pair and install the two pinned wheels from the cluster pip cache plus
+  # the Ascend index when it is missing. Same shape as the tensordict setup,
+  # which hit this on its own first run.
+  if python - <<'PY'
+try:
+    import torch
+    import torch_npu
+except Exception as exc:
+    print(f"torch stack probe failed: {exc}")
+    raise SystemExit(1)
+print(f"found torch={torch.__version__} torch_npu={torch_npu.__version__}")
+raise SystemExit(
+    0 if torch.__version__.startswith("2.9.0")
+    and torch_npu.__version__.startswith("2.9.0") else 1
+)
+PY
+  then
+    echo "reusing compatible torch/torch_npu stack"
+  else
+    echo "installing torch==2.9.0 torch_npu==2.9.0.post2"
+    python -m pip install \
+      --index-url "$PIP_INDEX_URL" \
+      --extra-index-url "$ASCEND_PIP_INDEX" \
+      torch==2.9.0 torch_npu==2.9.0.post2
+  fi
+  verify_torch_stack
+}
+
 ensure_triton_ascend() {
-  # The _ascend backend lowers kernels through the Ascend Triton fork; the
-  # CUDA triton wheel must not shadow it. Not on default PyPI.
-  if python -c "import triton; print('triton', triton.__version__)" 2>/dev/null \
-      && python -c "import triton_ascend" 2>/dev/null; then
-    echo "triton-ascend already present"
+  # The _ascend backend lowers kernels through the Ascend Triton fork, which
+  # installs the "triton" package itself (there is no triton_ascend module);
+  # a PyPI triton wheel would shadow it. Not on default PyPI.
+  if python -m pip show triton-ascend >/dev/null 2>&1; then
+    echo "triton-ascend already present: $(python -m pip show triton-ascend | awk '/^Version:/ {print $2}')"
     return
   fi
-  python -m pip uninstall -y triton 2>/dev/null || true
+  python -m pip uninstall -y triton triton-ascend 2>/dev/null || true
   python -m pip install "triton-ascend==3.2.2" \
     --extra-index-url "$TRITON_ASCEND_INDEX" \
     --trusted-host triton-ascend.osinfra.cn --no-cache-dir
+  python -c "import triton; print('triton', triton.__version__)"
 }
 
 install_liger_from_checkout() {
-  # --no-deps: the container already carries torch/torch_npu, and liger's
-  # runtime deps are installed explicitly per profile below.
+  # --no-deps: torch/torch_npu come from ensure_torch_stack and liger's
+  # runtime deps are installed explicitly per profile below, so the source
+  # install cannot pull a plain PyPI torch over the torch_npu build.
   python -m pip install --no-deps -e "$TARGET_ROOT"
   python - <<'PY'
 import os
@@ -181,7 +214,7 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 
 select_pip_index
 python -m pip install -U pip setuptools wheel
-verify_torch_stack
+ensure_torch_stack
 ensure_triton_ascend
 install_liger_from_checkout
 

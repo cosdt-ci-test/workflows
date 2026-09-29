@@ -15,10 +15,14 @@ v0.8.3 已原生带 Ascend NPU 后端：内核实现位于
 `torch_npu==2.9.0` / `triton-ascend==3.2.2` / `CANN==9.1.0`，并挂了华为官方
 Ascend-CI 的 `liger_kernel.yml` 徽章——本项目 setup 即复刻该配方。
 
-镜像用 `swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/cann:9.1.0-910b-ubuntu22.04-py3.12`
-（Ascend-CI 同款，内含 torch 2.9.0 + torch_npu 2.9.0）。`triton-ascend` 只发布在
-`https://triton-ascend.osinfra.cn/pypi/simple`，不在默认 PyPI，setup 显式加
-`--extra-index-url` 安装；CUDA 版 triton 必须先卸载，否则 `_ascend` 后端会被遮蔽。
+镜像用 `swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12`，
+与本仓 tensordict、trl 等项目同款。CANN 基础镜像可能完全不带 PyTorch（tensordict
+本项目的 run #1 就是这么失败的），所以 setup 先探测可复用的 torch/torch_npu 对，
+缺失时从集群 pip 缓存 + Ascend 源装 `torch==2.9.0` 与 `torch_npu==2.9.0.post2`，
+再断言二者版本与 NPU 可用性。`triton-ascend` 只发布在
+`https://triton-ascend.osinfra.cn/pypi/simple`，不在默认 PyPI：它的 wheel 名是
+`triton_ascend-*`，但装出来的 import 名仍是 `triton`（Ascend 版替换 PyPI 同名包），
+所以安装前先卸载 PyPI triton，幂等判断用 `pip show triton-ascend`。
 
 ## supported 清单
 

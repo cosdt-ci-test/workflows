@@ -158,6 +158,25 @@ print(snapshot_download(sys.argv[1], endpoint="https://hf-mirror.com"))
 PY
   ); then
     echo "$env_name=$local_dir" >> "$GITHUB_ENV"
+    # run_speech_recognition_ctc*.py treat any local --model_name_or_path as
+    # a Trainer checkpoint to resume from ("if os.path.isdir(...):
+    # checkpoint = model_args.model_name_or_path"), and transformers main
+    # then demands trainer_state.json inside that directory. The tiny
+    # snapshots are plain model dirs, so plant a minimal state
+    # (global_step 0 = train from scratch) to make the resume path a
+    # no-op; extra files in the snapshot are harmless to other consumers.
+    if [[ "$repo_id" == "hf-internal-testing/tiny-random-Wav2Vec2Model" ]]; then
+      python - "$local_dir" <<'PY'
+import json
+import os
+import sys
+
+state_path = os.path.join(sys.argv[1], "trainer_state.json")
+if not os.path.exists(state_path):
+    with open(state_path, "w", encoding="utf-8") as fh:
+        json.dump({"global_step": 0}, fh)
+PY
+    fi
   else
     echo "warning: $repo_id download via hf-mirror.com failed; related vision examples will fail" >&2
   fi

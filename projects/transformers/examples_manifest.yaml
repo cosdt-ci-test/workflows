@@ -436,6 +436,12 @@ supported:
       - --do_train
       - --max_steps 1
       - --per_device_train_batch_size 1
+      # The scripts resume from the model dir (see the trainer_state.json
+      # note in setup_example.sh); transformers main's checkpoint save then
+      # requires stateful_callbacks entries our planted state lacks
+      # (KeyError: TrainerControl). Disable checkpoint saving; the scripts'
+      # final trainer.save_model() does not go through that path.
+      - --save_strategy no
       - --output_dir ${CI_OUTPUT_DIR}
     timeout_minutes: 60
   - path: examples/pytorch/speech-recognition/run_speech_recognition_ctc_adapter.py
@@ -465,6 +471,8 @@ supported:
       - --do_train
       - --max_steps 1
       - --per_device_train_batch_size 1
+      # Same checkpoint-save KeyError as run_speech_recognition_ctc.py.
+      - --save_strategy no
       - --output_dir ${CI_OUTPUT_DIR}
     timeout_minutes: 60
   # run_speech_recognition_seq2seq.py：上游 breakage——脚本 L404 无条件调用

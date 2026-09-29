@@ -122,9 +122,12 @@ import liger_kernel
 
 loaded = Path(liger_kernel.__file__).resolve()
 target = Path(os.environ["TARGET_ROOT"]).resolve()
-print("liger_kernel", liger_kernel.__version__, "source", loaded)
+# liger_kernel exposes no __version__ attribute (the version lives in
+# pyproject.toml); identity of the loaded tree is the check that matters.
+print("liger_kernel source", loaded)
 if not loaded.is_relative_to(target):
     raise SystemExit(f"liger_kernel is not loaded from the tested checkout: {loaded}")
+print("liger_kernel resolves to the tested release checkout")
 PY
 }
 

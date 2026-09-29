@@ -270,13 +270,18 @@ for split, names in (("train", ("a.wav", "b.wav")), ("validation", ("c.wav",))):
 PY
 
 # Batch-3 (speech recognition) data preparation: an audiofolder tree with a
-# metadata.csv per split, so the builder derives the "audio" column from the
+# metadata.jsonl per split, so the builder derives the "audio" column from the
 # wav files plus a "text" column from the metadata — the layout the CTC and
 # seq2seq scripts consume through --audio_column_name/--text_column_name.
+# jsonl over csv: pandas>=3 + pyarrow 25 make pa.Table.from_pandas emit
+# large_string, but datasets 3.6.0's folder builder only accepts a metadata
+# column equal to Value("string"), so every csv metadata file is rejected with
+# "`file_name` or `*_file_name` must be present..."; the jsonl path reads via
+# pyarrow's native json reader, which yields plain string.
 # Single-char transcripts keep the generated CTC vocab tiny; the scripts
 # always load an eval split, so both train and validation dirs are emitted.
 python - "$CI_OUTPUT_DIR" <<'PY'
-import csv
+import json
 import os
 import sys
 import wave
@@ -286,6 +291,11 @@ asr_root = os.path.join(out, "asr_data")
 for split, names in (("train", ("b1.wav", "b2.wav")), ("validation", ("b3.wav",))):
     split_dir = os.path.join(asr_root, split)
     os.makedirs(split_dir, exist_ok=True)
+    # A leftover metadata.csv from an earlier run would clash with the jsonl
+    # ("metadata files with different extensions" is fatal).
+    stale = os.path.join(split_dir, "metadata.csv")
+    if os.path.exists(stale):
+        os.remove(stale)
     rows = []
     for i, name in enumerate(names):
         path = os.path.join(split_dir, name)
@@ -295,8 +305,7 @@ for split, names in (("train", ("b1.wav", "b2.wav")), ("validation", ("b3.wav",)
             fh.setframerate(16000)
             fh.writeframes(b"\x00\x00" * 16000)
         rows.append({"file_name": name, "text": "a" if i == 0 else "b"})
-    with open(os.path.join(split_dir, "metadata.csv"), "w", encoding="utf-8", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=["file_name", "text"])
-        writer.writeheader()
-        writer.writerows(rows)
+    with open(os.path.join(split_dir, "metadata.jsonl"), "w", encoding="utf-8") as fh:
+        for row in rows:
+            fh.write(json.dumps(row) + "\n")
 PY

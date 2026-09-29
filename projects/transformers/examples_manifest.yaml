@@ -424,6 +424,9 @@ supported:
       # .select(range(n)) raise IndexError.
       - --max_train_samples 2
       - --max_eval_samples 1
+      # Script default eval_split_name is "test"; our fixture splits are
+      # train/validation.
+      - --eval_split_name validation
       # Upstream create_vocabulary_from_data builds the vocab with
       # functools.reduce over the split Datasets; with a single split
       # reduce returns the Dataset itself and sorted(dataset) iterates row
@@ -454,6 +457,9 @@ supported:
       - --target_language en
       - --max_train_samples 2
       - --max_eval_samples 1
+      # Script default eval_split_name is "test"; our fixture splits are
+      # train/validation.
+      - --eval_split_name validation
       # Same single-split reduce bug as run_speech_recognition_ctc.py.
       - --do_eval
       - --do_train

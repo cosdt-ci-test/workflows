@@ -442,6 +442,10 @@ supported:
       # Adds adapter attention layers and freezes everything else, so the
       # smoke run trains only the freshly initialized adapter weights.
       - --adapter_attn_dim 8
+      # Required arg (argparse exits 2 without it); labels the language
+      # adapter token + saved adapter file. "en" is not in the generated
+      # CTC vocab (single chars a/b), so no --overwrite_lang_vocab needed.
+      - --target_language en
       - --max_train_samples 2
       - --max_eval_samples 1
       - --do_train

@@ -42,7 +42,7 @@ scan:
 
 # NPU 支持在 ascend-v1.0.5 分支（非 main），需专用镜像
 # ghcr.io/hwvanici/areal_npu:v1.0.5-a2。
-#
+# 国内源：ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
 # 通用配方：
 # - 双卡 colocate：rollout vllm:d1p1t2 + actor fsdp:d2p1t1；offload 解
 #   optimizer-state OOM，disk 权重同步解共卡 xccl 建不起 HCCL 组（EI0015）。

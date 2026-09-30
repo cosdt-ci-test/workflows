@@ -95,41 +95,23 @@ def matrix_entries(supported: list[dict]) -> list[dict]:
                 not isinstance(exec_path, str) or not exec_path.strip()):
             errors.append(f'{path}: exec must be a non-empty string')
             continue
-        name = item.get('name')
-        if name is not None and (
-                not isinstance(name, str) or not name.strip()):
-            errors.append(f'{path}: name must be a non-empty string')
-            continue
         entry = dict(item)
         entry['device_options'] = options
         entry['overlay_args'] = overlay_args
         if exec_path is not None:
             entry['exec'] = exec_path.strip()
-        # Display name for the run-example job label: a manifest can set an
-        # explicit `name` to disambiguate multiple matrix entries that share
-        # one script path (e.g. CLI examples launched with different overlay
-        # args); otherwise fall back to the full relative path with the
-        # extension stripped (examples/sft/run_peft.sh -> examples/sft/
-        # run_peft; a bare foo.py -> foo). Names must be unique across the
-        # supported entries because the result-publisher matches jobs by
-        # this label. Keep in sync with check_supported_entries.py.
-        entry['name'] = (name.strip() if isinstance(name, str)
-                         else str(PurePosixPath(path).with_suffix('')))
+        # Display name for the run-example job label: full relative path
+        # with the extension stripped (examples/sft/run_peft.sh ->
+        # examples/sft/run_peft; a bare foo.py -> foo). Uniform and
+        # unique - same-named scripts in different directories get
+        # distinct labels. Keep in sync with check_supported_entries.py.
+        entry['name'] = str(PurePosixPath(path).with_suffix(''))
         entries.append(entry)
     if errors:
         for message in errors:
             print(message, file=sys.stderr)
         print('fix the supported entries before this '
               'pipeline can schedule examples', file=sys.stderr)
-        raise SystemExit(1)
-    names = [entry['name'] for entry in entries]
-    duplicates = sorted(
-        {name for name in names if names.count(name) > 1})
-    if duplicates:
-        print('duplicate supported entry names: ' + ', '.join(duplicates),
-              file=sys.stderr)
-        print('set a unique `name` on each supported entry sharing a path, '
-              'then retry', file=sys.stderr)
         raise SystemExit(1)
     return entries
 

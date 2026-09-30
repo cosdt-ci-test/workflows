@@ -6,23 +6,6 @@
 # parallelism. The guard loop (release-only monitor / manifest-check /
 # run-example matrix / validate-results / save-monitor-state) lives in
 # the engine. See docs/examples-guard-engine.md for the design.
-#
-# Migration notes (from the legacy standalone workflow):
-# - No container options: the self-hosted NPU runner
-#   (linux-aarch64-a2-1) auto-passes /dev/davinci* via the cluster
-#   device-plugin (same convention as torchtune / tensordict / areal),
-#   and xllm's official release image carries the Ascend userspace it
-#   needs. The legacy --device/--volume driver mounts and
-#   --shm-size=64g were dropped with it (the examples are
-#   single-process inference scripts, no multi-worker dataloaders).
-# - No modelscope cache bind-mount: the example model
-#   (Qwen/Qwen2-7B-Instruct) is planted by the cache-seed workflow
-#   (cache-seed/xllm/ms_seeds.yaml) into the shared runner cache;
-#   setup_example.sh resolves it and exports XLLM_MODEL_PATH, which
-#   the manifest overlay_args reference as --model ${XLLM_MODEL_PATH}.
-# - No submodules on the target checkout: they are C++ build deps
-#   (third_party/*); xllm itself is pre-installed in the release
-#   image, so the examples only need the Python scripts.
 
 name: xllm-examples
 

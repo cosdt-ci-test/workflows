@@ -18,11 +18,11 @@ concurrency:
   cancel-in-progress: false
 
 on:
-  # Bring-up phase after the engine migration: keep the schedule
-  # disabled until a few manual rounds are green (the legacy pipeline
-  # ran daily at '30 3 * * *'). Re-enable:
-  # schedule:
-  #   - cron: '30 3 * * *'
+  # Daily cadence preserved from the legacy pipeline. The first
+  # engine-driven cycle cold-starts (new monitor-state cache key
+  # family, equivalent to lost state) and simply runs once.
+  schedule:
+    - cron: '30 3 * * *'
   workflow_dispatch:
     inputs:
       target_ref:

@@ -24,68 +24,6 @@ supported:
       - --repeat 1
       - --steps 8
     timeout_minutes: 120
-  # Distributed variants (README "Distributed Inference"): same unified
-  # CLI via torchrun -m cache_dit.generate, one sharding/parallel mode per
-  # entry. 4 ranks on the 4-card runner (npu_devices 0-3); HCCL carries
-  # the collectives (NpuPlatform.full_dist_backend = npu:hccl). Distinct
-  # name per entry (job labels) and distinct --master_port per entry
-  # (runner pool may co-schedule two jobs on one machine).
-  #
-  # Model: Z-Image-Turbo, NOT FLUX.1-dev. Sequence parallelism (ulysses/
-  # ring/usp) does NOT shard weights - every rank holds the full pipeline,
-  # and FLUX.1-dev (~28.9GB bf16) OOMs on 32GB 910B4 (29.49GB usable;
-  # run 36657738934: all 4 ranks OOM at pipe.to(device)). Z-Image-Turbo
-  # (~19GB bf16 total) fits. --cpu-offload under torchrun is untested
-  # upstream, so shrink the model instead. --cache stays out: this batch
-  # validates pure parallelism; hybrid comes after it's green.
-  - path: examples/generate.py
-    name: zimage-ulysses-4p
-    profile: zimage
-    runner: linux-aarch64-a2-4
-    npu_devices: '0,1,2,3'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    exec: torchrun --nproc_per_node=4 --master_port=29501 -m cache_dit.generate
-    overlay_args:
-      - zimage_turbo
-      - --model-path /root/.cache/modelscope/Z-Image-Turbo
-      - --attn _native_npu
-      - --parallel ulysses
-      - --warmup 1
-      - --repeat 1
-      - --steps 8
-    timeout_minutes: 150
-  - path: examples/generate.py
-    name: zimage-ring-4p
-    profile: zimage
-    runner: linux-aarch64-a2-4
-    npu_devices: '0,1,2,3'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    exec: torchrun --nproc_per_node=4 --master_port=29502 -m cache_dit.generate
-    overlay_args:
-      - zimage_turbo
-      - --model-path /root/.cache/modelscope/Z-Image-Turbo
-      - --attn _native_npu
-      - --parallel ring
-      - --warmup 1
-      - --repeat 1
-      - --steps 8
-    timeout_minutes: 150
-  - path: examples/generate.py
-    name: zimage-usp-4p
-    profile: zimage
-    runner: linux-aarch64-a2-4
-    npu_devices: '0,1,2,3'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    exec: torchrun --nproc_per_node=4 --master_port=29503 -m cache_dit.generate
-    overlay_args:
-      - zimage_turbo
-      - --model-path /root/.cache/modelscope/Z-Image-Turbo
-      - --attn _native_npu
-      - --parallel usp
-      - --warmup 1
-      - --repeat 1
-      - --steps 8
-    timeout_minutes: 150
 unsupported:
   # --- examples/api/*：上游坏脚本，manifest 层无法规避 ---
   # PR #752（feat: add cache-dit-generate cli tool）删除了 examples/utils.py，
@@ -97,6 +35,25 @@ unsupported:
   - examples/api/run_cache_refresh_wan_2.2.py
   - examples/api/run_steps_mask.py
   - examples/api/run_transformer_only.py
+  # --- examples/generate.py 分布式变体（torchrun 4 卡，ulysses/ring/usp，
+  # README "Distributed Inference"）：两条模型路线在 NPU 上均不可行，
+  # 上游适配后移回：
+  # 1) FLUX.1-dev：序列并行不分片权重，每个 rank 须装载完整 pipeline，
+  #    ~28.9GB bf16 超出 32GB 910B4 单卡可用显存（29.49GB；run
+  #    36657738934：4 rank 全部在 pipe.to(device) OOM）。加卡无效
+  #    （8 卡同样 OOM，权重不随卡数分摊）；--cpu-offload 在 torchrun
+  #    多进程下上游未验证。
+  # 2) Z-Image-Turbo（~19GB，显存适配，run 36660209993 已完成加载并
+  #    进入 warmup）：diffusers Z-Image 的 RoPE 频率表为 complex64
+  #    （torch.polar 预计算，按位置 id 索引），torch_npu 的 aclnnIndex
+  #    无 DT_COMPLEX64 kernel，warmup 第一步即崩（EZ1001, error
+  #    161002）；attention processor 的复数乘法同样存在缺口。上游官方
+  #    NPU 适配：https://github.com/huggingface/diffusers/pull/12979
+  #    （draft 未合入；cache-dit docs/supported_matrix/ASCEND_NPU.md
+  #    亦注明需合入该 PR 后方可支持 Z-Image-Turbo）。PR 合入后按原
+  #    配置恢复条目（torchrun -m cache_dit.generate + zimage_turbo）
+  #    即可，无需本地补丁。
+  - examples/generate.py
   # --- examples/ptq/flux2_svdq_ptq.py：依赖 svdq CUDA kernel 扩展
   #（cache_dit.kernels.svdq_extension_is_available），NPU 环境不可用。
   - examples/ptq/flux2_svdq_ptq.py

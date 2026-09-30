@@ -9,7 +9,7 @@ PROFILE="$1"
 TARGET_ROOT="${TARGET_ROOT:-/workspace/cache-dit}"
 
 # Print supported profiles and exit if profile not recognized
-supported_profiles="flux wan2.2 zimage"
+supported_profiles="flux wan2.2"
 
 if echo "$supported_profiles" | grep -qw "$PROFILE"; then
     echo "Profile '$PROFILE' is supported"
@@ -78,33 +78,13 @@ ensure_flux_model() {
   python3 -c "from modelscope import snapshot_download; snapshot_download('AI-ModelScope/FLUX.1-dev', local_dir='$model_dir')"
 }
 
-# ensure_zimage_model: Z-Image-Turbo (6B DiT + Qwen3-4B encoder, ~19GB
-# bf16 total) fits a single 32GB 910B4 HBM, unlike FLUX.1-dev (~29GB
-# pipeline) which OOMs under sequence parallelism (ulysses/ring/usp do
-# NOT shard weights; every rank holds the full pipeline).
-ensure_zimage_model() {
-  local model_dir="/root/.cache/modelscope/Z-Image-Turbo"
-  if [ -d "$model_dir" ] && [ -n "$(ls -A "$model_dir" 2>/dev/null)" ]; then
-    echo "model already cached at $model_dir; skipping download"
-    return
-  fi
-  echo "downloading Z-Image-Turbo via modelscope to $model_dir"
-  python3 -c "from modelscope import snapshot_download; snapshot_download('Tongyi-MAI/Z-Image-Turbo', local_dir='$model_dir')"
-}
-
 setup_flux() {
   echo "profile=flux: ensuring FLUX.1-dev model"
   ensure_flux_model
 }
 
-setup_zimage() {
-  echo "profile=zimage: ensuring Z-Image-Turbo model"
-  ensure_zimage_model
-}
-
 case "$PROFILE" in
   flux|wan2.2) setup_flux ;;
-  zimage)      setup_zimage ;;
 esac
 
 echo "Environment setup complete for profile: $PROFILE"

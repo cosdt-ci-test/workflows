@@ -386,6 +386,10 @@ jobs:
         env:
           PROFILE: ${{ matrix.example.profile }}
           EXAMPLE_PATH: ${{ matrix.example.path }}
+          # EXEC forwarded so setups that build per-target (whisper.cpp
+          # builds the cmake target named by exec) can see it; empty for
+          # entries without an exec field (existing setups ignore it).
+          EXEC: ${{ matrix.example.exec }}
         run: bash "$PROJECT_ROOT/scripts/setup_example.sh" "$PROFILE"
 
       - name: Run example

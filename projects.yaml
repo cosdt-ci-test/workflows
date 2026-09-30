@@ -35,6 +35,7 @@ projects:
     dir: projects/flash-linear-attention
     workflows:
       quick_start: .github/workflows/flash-linear-attention-quick-start.yml
+      examples: .github/workflows/flash-linear-attention-examples.yml
   - name: llama.cpp
     category: 推理加速
     support_level: 基础支持
@@ -345,6 +346,7 @@ projects:
     runner: linux-aarch64-a2-1
     dir: projects/tensordict
     workflows:
+      examples: .github/workflows/tensordict-examples.yml
       quick_start: .github/workflows/tensordict-quick-start.yml
   # Ascend/vision ships annotated git tags only (no GitHub Releases
   # published), so /releases/latest 404s and /releases returns []. The
@@ -690,3 +692,27 @@ projects:
     workflows:
       quick_start: .github/workflows/tgi-quick-start.yml
       examples: .github/workflows/roll-examples.yml
+  # AReaL: RL 训练框架。NPU 支持在 ascend-v1.0.5 分支（非 main），需要专用镜像
+  # ghcr.io/hwvanici/areal_npu:v1.0.5-a2；examples 走共享引擎 examples-template.yml。
+  - name: areal
+    category: 训练加速
+    support_level: 基础支持
+    upstream_repo: areal-project/AReaL
+    phase: A
+    runner: linux-aarch64-a2-2
+    dir: projects/areal
+    workflows:
+      examples: .github/workflows/areal-examples.yml
+  # Liger-Kernel 内置 Triton 算子（RMSNorm/RoPE/SwiGLU/FusedLinearCrossEntropy）。
+  # v0.8.3 已原生带 Ascend 后端（ops/backends/_ascend）与 infer_device()/hccl 抽象，
+  # NPU 栈 pin（torch 2.9.0 + torch_npu 2.9.0 + triton-ascend 3.2.2 + CANN 9.1.0）
+  # 与华为官方 Ascend-CI liger_kernel.yml 一致；examples 走共享引擎 examples-template.yml。
+  - name: liger-kernel
+    category: 训练加速
+    support_level: 基础支持
+    upstream_repo: linkedin/Liger-Kernel
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/liger-kernel
+    workflows:
+      examples: .github/workflows/liger-kernel-examples.yml

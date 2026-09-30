@@ -17,9 +17,9 @@ PROFILE="$1"
 
 # Validate the profile before installing anything (contract: unknown
 # profile must exit non-zero before any install).
-SUPPORTED_PROFILES="diffusers-sdxl diffusers-sd15 diffusers-dreambooth diffusers-instruct-pix2pix diffusers-kandinsky diffusers-research diffusers-research-plain diffusers-t2i-adapter diffusers-text-to-image diffusers-textual-inversion diffusers-unconditional diffusers-vqgan diffusers-sdxl-online diffusers-flux diffusers-amused diffusers-cogvideo diffusers-cogvideo-i2v diffusers-lcm diffusers-lcm-sdxl diffusers-controlnet diffusers-controlnet-sdxl diffusers-llada2"
+SUPPORTED_PROFILES="diffusers-sdxl diffusers-sd15 diffusers-dreambooth diffusers-instruct-pix2pix diffusers-kandinsky diffusers-research diffusers-research-plain diffusers-t2i-adapter diffusers-text-to-image diffusers-textual-inversion diffusers-unconditional diffusers-vqgan diffusers-sdxl-online diffusers-flux diffusers-sana diffusers-lumina2 diffusers-z-image diffusers-qwen-image diffusers-amused diffusers-cogvideo diffusers-cogvideo-i2v diffusers-lcm diffusers-lcm-sdxl diffusers-controlnet diffusers-controlnet-sdxl diffusers-llada2 diffusers-gligen"
 case "$PROFILE" in
-  diffusers-sdxl|diffusers-sd15|diffusers-dreambooth|diffusers-instruct-pix2pix|diffusers-kandinsky|diffusers-research|diffusers-research-plain|diffusers-t2i-adapter|diffusers-text-to-image|diffusers-textual-inversion|diffusers-unconditional|diffusers-vqgan|diffusers-sdxl-online|diffusers-flux|diffusers-amused|diffusers-cogvideo|diffusers-cogvideo-i2v|diffusers-lcm|diffusers-lcm-sdxl|diffusers-controlnet|diffusers-controlnet-sdxl|diffusers-llada2) ;;
+  diffusers-sdxl|diffusers-sd15|diffusers-dreambooth|diffusers-instruct-pix2pix|diffusers-kandinsky|diffusers-research|diffusers-research-plain|diffusers-t2i-adapter|diffusers-text-to-image|diffusers-textual-inversion|diffusers-unconditional|diffusers-vqgan|diffusers-sdxl-online|diffusers-flux|diffusers-sana|diffusers-lumina2|diffusers-z-image|diffusers-qwen-image|diffusers-amused|diffusers-cogvideo|diffusers-cogvideo-i2v|diffusers-lcm|diffusers-lcm-sdxl|diffusers-controlnet|diffusers-controlnet-sdxl|diffusers-llada2|diffusers-gligen) ;;
   *)
     echo "unknown profile: ${PROFILE} (supported: ${SUPPORTED_PROFILES})" >&2
     exit 1
@@ -123,7 +123,7 @@ install_example_stack() {
 }
 
 # download_assets <what>: comma-separated tokens from
-# {sdxl, sdxl-vae, sd15, 3d-icon, cogvideo}. Each token exports a path to
+# {sdxl, sdxl-vae, sd15, 3d-icon, cogvideo, ip-adapter, sana-sprint}. Each token exports a path to
 # GITHUB_ENV under the name overlay_args reference:
 #   sdxl      -> SDXL_BASE_PATH    (AI-ModelScope/stable-diffusion-xl-base-1.0)
 #   sdxl-vae  -> SDXL_VAE_PATH     (AI-ModelScope/sdxl-vae-fp16-fix)
@@ -328,6 +328,44 @@ if "3d-icon" in WANT:
         failures.append(f"linoyts/3d_icon: {type(exc).__name__}: {exc}")
         print(f"FAIL linoyts/3d_icon: {exc}", flush=True)
 
+# ip-adapter: CLIP image encoders for the IP-Adapter tutorials. The tutorials
+# call CLIPVisionModelWithProjection.from_pretrained(<path>) with no subfolder,
+# but the upstream repo keeps the encoders under models/image_encoder (SD1.5)
+# and sdxl_models/image_encoder (SDXL); point --image_encoder_path at the local
+# subdirs. ModelScope (AI-ModelScope/IP-Adapter) carries the same shas as
+# h94/IP-Adapter, avoiding the Xet-backed hf-mirror download of the weights.
+if "ip-adapter" in WANT:
+    try:
+        local = Path(
+            snapshot_download(
+                "AI-ModelScope/IP-Adapter",
+                cache_dir=str(MODEL_CACHE),
+                allow_file_pattern=["models/image_encoder/*", "sdxl_models/image_encoder/*"],
+            )
+        )
+        export("IP_ADAPTER_IMAGE_ENCODER_PATH", str(local / "models" / "image_encoder"))
+        export("IP_ADAPTER_SDXL_IMAGE_ENCODER_PATH", str(local / "sdxl_models" / "image_encoder"))
+    except Exception as exc:  # noqa: BLE001
+        failures.append(f"AI-ModelScope/IP-Adapter: {type(exc).__name__}: {exc}")
+        print(f"FAIL AI-ModelScope/IP-Adapter: {exc}", flush=True)
+
+# sana-sprint: the SANA-Sprint teacher model for research_projects/sana. The
+# script reads <path>/transformer/diffusion_pytorch_model.safetensors directly
+# (load_file, not from_pretrained), so --pretrained_model_name_or_path must be
+# a LOCAL directory; pre-download it here.
+if "sana-sprint" in WANT:
+    try:
+        dest = WORKSPACE / "sana_sprint_teacher"
+        dest.mkdir(parents=True, exist_ok=True)
+        hf_snapshot(
+            "Efficient-Large-Model/SANA_Sprint_1.6B_1024px_teacher_diffusers",
+            local_dir=str(dest),
+        )
+        export("SANA_SPRINT_TEACHER_PATH", str(dest))
+    except Exception as exc:  # noqa: BLE001
+        failures.append(f"SANA_Sprint_1.6B: {type(exc).__name__}: {exc}")
+        print(f"FAIL SANA_Sprint_1.6B: {exc}", flush=True)
+
 if exports:
     with open(ENV_FILE, "a", encoding="utf-8") as handle:
         for key, value in exports.items():
@@ -373,10 +411,17 @@ setup_diffusers_sd15() {
 }
 
 # diffusers-dreambooth: SD1.5 dreambooth / dreambooth-LoRA training examples.
-# The model is pulled online (hf-mirror) by the example; the dataset is the
-# fixture image (fixtures/DOG.jpg), so no download here.
+# The dataset is the fixture image (fixtures/DOG.jpg). The model comes from
+# ModelScope as a LOCAL dir (SD15_MODEL_PATH): both scripts build the full
+# DiffusionPipeline from --pretrained_model_name_or_path at the end of
+# training, and a repo id there always calls the Hub API (model_info,
+# pipeline_utils.py:1649) for the file list - hf-mirror's /api endpoint is
+# flaky from the runner pool (same class as the cache-seed fetch_sha
+# timeouts) while the file CDN (/resolve/) is fine, so the run trained fine
+# and then died on the final save. A local path skips the network entirely.
 setup_diffusers_dreambooth() {
   install_example_stack
+  download_assets sd15
 }
 
 # diffusers-instruct-pix2pix: SD1.5 InstructPix2Pix. The dataset
@@ -405,6 +450,14 @@ setup_diffusers_research() {
 # wuerstchen-prior / sd-vae-ft-mse). Base only.
 setup_diffusers_research_plain() {
   install_example_stack
+  # autoencoderkl needs lpips (perceptual loss) + taming_transformers;
+  # the ip_adapter tutorials import the `ip_adapter` PyPI package, whose
+  # requirements.txt (not install_requires) pulls einops + safetensors, so
+  # pip does not fetch them — install them explicitly.
+  python -m pip install lpips taming_transformers ip_adapter einops safetensors
+  # The IP-Adapter tutorials take the CLIP image encoder as a local path; the
+  # repo keeps it under models/image_encoder + sdxl_models/image_encoder.
+  download_assets ip-adapter
 }
 
 # diffusers-t2i-adapter: T2I-Adapter SDXL. The tiny SDXL / tiny adapter models
@@ -414,10 +467,12 @@ setup_diffusers_t2i_adapter() {
 }
 
 # diffusers-text-to-image: text_to_image SD1.5 / SDXL (full + LoRA) examples.
-# Tiny SD models and the dummy_image_text_data dataset are fetched via
-# hf-mirror at run time. Base only.
+# Models/dataset fetched via hf-mirror at run time. deepspeed is required by
+# the accelerate-deepspeed launcher used by the full SDXL fine-tune (ZeRO-3).
 setup_diffusers_text_to_image() {
   install_example_stack
+  download_assets sd15
+  python -m pip install "deepspeed>=0.18.2"
 }
 
 # diffusers-textual-inversion: textual_inversion SD1.5 / SDXL examples. Tiny
@@ -425,6 +480,7 @@ setup_diffusers_text_to_image() {
 # image (fixtures/DOG.jpg). Base only.
 setup_diffusers_textual_inversion() {
   install_example_stack
+  download_assets sd15
 }
 
 # diffusers-unconditional: unconditional_image_generation (DDPM 64px). The
@@ -449,13 +505,61 @@ setup_diffusers_sdxl_online() {
   install_example_stack
 }
 
-# diffusers-flux: FLUX.1-dev ControlNet training, run on a2-8 with DeepSpeed
-# ZeRO-3 (launcher: accelerate-deepspeed). deepspeed ships its own NPU
-# accelerator and auto-detects torch_npu. Model (gated) + dataset are fetched
-# online by the example.
+# diffusers-gligen: research_projects/gligen text-box training. Base stack only:
+# dataset.py needs just torch/PIL/torchvision, and make_datasets.py's
+# GroundingDINO + BLIP2 + CLIP pipeline is not used. The model
+# (masterful/gligen-1-4-generation-text-box) is fetched online via hf-mirror by
+# the example itself, so only the dataset is synthesized here: a COCO-style
+# torch.load .pth (list of {file_path, captions, annos}) plus the image dir it
+# references. Each anno is {bbox: xyxy pixels, text_embeddings_before_projection:
+# 768-d}; that embedding is a constant conditioning input (never optimized), so
+# zeros are fine. A 512x512 image makes --resolution 512 a no-op.
+setup_diffusers_gligen() {
+  install_example_stack
+  python3 - <<'PY'
+import os
+
+import torch
+from PIL import Image
+
+root = os.path.join(os.environ["GITHUB_WORKSPACE"], "areal_data", "gligen")
+image_dir = os.path.join(root, "images")
+os.makedirs(image_dir, exist_ok=True)
+
+samples = []
+for i in range(4):
+    file_name = f"sample{i}.png"
+    Image.new("RGB", (512, 512), (110 + i * 20, 130, 150)).save(os.path.join(image_dir, file_name))
+    samples.append(
+        {
+            "file_path": file_name,
+            "captions": ["a gray square on a plain background"],
+            "annos": [
+                {
+                    "bbox": [100.0, 100.0, 400.0, 400.0],
+                    "text_embeddings_before_projection": torch.zeros(768),
+                }
+            ],
+        }
+    )
+
+data_path = os.path.join(root, "gligen_train.pth")
+torch.save(samples, data_path)
+
+with open(os.environ["GITHUB_ENV"], "a") as fh:
+    fh.write(f"GLIGEN_DATA_PTH={data_path}\n")
+    fh.write(f"GLIGEN_IMAGE_DIR={image_dir}\n")
+print(f"prepared gligen dataset at {data_path} (images in {image_dir})", flush=True)
+PY
+}
+
+# diffusers-flux: full-model / large-model examples that need DeepSpeed ZeRO-3
+# sharding (launcher: accelerate-deepspeed) on multi-card runners. deepspeed
+# ships its own NPU accelerator and auto-detects torch_npu; webdataset +
+# braceexpand serve the LCM wds example.
 setup_diffusers_flux() {
   install_example_stack
-  python -m pip install "deepspeed>=0.18.2"
+  python -m pip install "deepspeed>=0.18.2" webdataset braceexpand
 }
 
 # diffusers-amused: Amused-256 finetuning. ModelScope has neither
@@ -523,6 +627,36 @@ setup_diffusers_cogvideo_i2v() {
   install_example_stack
   python -m pip install decord2 imageio imageio-ffmpeg
   download_assets cogvideo-dataset
+}
+
+# diffusers-sana: research_projects/sana (SANA-Sprint) + Sana LoRA DreamBooth.
+# The sprint script reads <path>/transformer/diffusion_pytorch_model.safetensors
+# with load_file(), so its --pretrained_model_name_or_path must be a local dir;
+# pre-download the teacher model here.
+setup_diffusers_sana() {
+  install_example_stack
+  download_assets sana-sprint
+}
+
+# diffusers-lumina2: Lumina2 LoRA DreamBooth (2-card ZeRO-3). deepspeed is
+# required by the accelerate-deepspeed launcher.
+setup_diffusers_lumina2() {
+  install_example_stack
+  python -m pip install "deepspeed>=0.18.2"
+}
+
+# diffusers-z-image: Z-Image LoRA DreamBooth (2-card ZeRO-3). deepspeed is
+# required by the accelerate-deepspeed launcher.
+setup_diffusers_z_image() {
+  install_example_stack
+  python -m pip install "deepspeed>=0.18.2"
+}
+
+# diffusers-qwen-image: Qwen-Image LoRA DreamBooth (4-card ZeRO-3). deepspeed
+# is required by the accelerate-deepspeed launcher.
+setup_diffusers_qwen_image() {
+  install_example_stack
+  python -m pip install "deepspeed>=0.18.2"
 }
 
 # diffusers-llada2: LLaDA2 block-refinement training smoke. Base stack is

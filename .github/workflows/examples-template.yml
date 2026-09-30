@@ -403,7 +403,7 @@ jobs:
       - name: Validate result.json
         run: |
           set -euo pipefail
-          python3 -m pip install -q check-jsonschema
+          python3 -m pip install -q "check-jsonschema==0.38.0"
           check-jsonschema --schemafile workflows/schemas/result.schema.json \
             output/result.json
 

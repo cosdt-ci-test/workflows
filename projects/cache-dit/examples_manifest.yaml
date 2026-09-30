@@ -6,9 +6,11 @@ scan:
 supported:
   # examples/generate.py: thin wrapper over cache_dit.generate.entrypoint()
   # (unified CLI, README "python3 -m cache_dit.generate"). Positional name
-  # "flux" selects the FLUX.1-dev example; --model-path points at the
-  # ModelScope mirror downloaded by setup_example.sh; --attn _native_npu is
-  # the NPU attention backend; --cache exercises cache-dit's DBCache path.
+  # "flux" selects the FLUX.1-dev example; --model-path resolves from the
+  # shared runner cache (cache-seed/cache-dit/ms_seeds.yaml plant,
+  # FLUX_MODEL_PATH GITHUB_ENV injection by setup_example.sh);
+  # --attn _native_npu is the NPU attention backend; --cache exercises
+  # cache-dit's DBCache path.
   - path: examples/generate.py
     profile: flux
     runner: linux-aarch64-a2-1
@@ -16,7 +18,7 @@ supported:
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
       - flux
-      - --model-path /root/.cache/modelscope/FLUX.1-dev
+      - --model-path ${FLUX_MODEL_PATH}
       - --attn _native_npu
       - --cache
       - --cpu-offload
@@ -50,9 +52,9 @@ unsupported:
   #    161002）；attention processor 的复数乘法同样存在缺口。上游官方
   #    NPU 适配：https://github.com/huggingface/diffusers/pull/12979
   #    （draft 未合入；cache-dit docs/supported_matrix/ASCEND_NPU.md
-  #    亦注明需合入该 PR 后方可支持 Z-Image-Turbo）。PR 合入后按原
-  #    配置恢复条目（torchrun -m cache_dit.generate + zimage_turbo）
-  #    即可，无需本地补丁。
+  #    亦注明需合入该 PR 后方可支持 Z-Image-Turbo）。PR 合入后恢复
+  #    条目并补 setup 的模型下载即可（torchrun -m cache_dit.generate +
+  #    zimage_turbo），无需本地补丁。
   - examples/generate.py
   # --- examples/ptq/flux2_svdq_ptq.py：依赖 svdq CUDA kernel 扩展
   #（cache_dit.kernels.svdq_extension_is_available），NPU 环境不可用。

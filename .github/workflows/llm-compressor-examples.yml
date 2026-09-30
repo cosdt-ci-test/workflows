@@ -216,7 +216,7 @@ jobs:
 
       - name: Validate manifest check result
         run: |
-          python3 -m pip install -q check-jsonschema
+          python3 -m pip install -q "check-jsonschema==0.38.0"
           check-jsonschema --schemafile workflows/schemas/manifest_check_result.schema.json \
             manifest_check_result.json
 
@@ -285,11 +285,13 @@ jobs:
       - name: Setup example environment
         env:
           PROFILE: ${{ matrix.example.profile }}
-        run: bash "$PROJECT_ROOT/scripts/setup_example.sh" "$PROFILE"
+          EXAMPLE_PATH: ${{ matrix.example.path }}
+        run: bash "$PROJECT_ROOT/scripts/setup_example.sh" "$PROFILE" "$EXAMPLE_PATH"
 
       - name: Run example
         env:
           EXAMPLE_PATH: ${{ matrix.example.path }}
+          OVERLAY_ARGS: ${{ toJSON(matrix.example.overlay_args) }}
         run: |
           source /usr/local/Ascend/ascend-toolkit/set_env.sh
           mkdir -p "$GITHUB_WORKSPACE/output"
@@ -364,7 +366,7 @@ jobs:
       - name: Validate result.json
         run: |
           set -euo pipefail
-          python3 -m pip install -q check-jsonschema
+          python3 -m pip install -q "check-jsonschema==0.38.0"
           check-jsonschema --schemafile workflows/schemas/result.schema.json \
             output/result.json
 

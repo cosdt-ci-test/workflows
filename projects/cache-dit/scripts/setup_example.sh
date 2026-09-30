@@ -1,15 +1,21 @@
 #!/bin/bash
 # setup_example.sh - Prepare environment for cache-dit example based on profile
-# Called from workflow YAML's setup_example.sh job
-# Positional argument: $1 is the manifest profile (e.g., flux, wan2.2)
+# Called from the examples engine's run-example job.
+# Positional argument: $1 is the manifest profile (e.g., flux).
 
 set -euo pipefail
 
-PROFILE="$1"
-TARGET_ROOT="${TARGET_ROOT:-/workspace/cache-dit}"
+if [[ $# -lt 1 ]]; then
+    echo "usage: $0 <profile>" >&2
+    exit 2
+fi
 
-# Print supported profiles and exit if profile not recognized
-supported_profiles="flux wan2.2"
+PROFILE="$1"
+
+# wan2.2 dropped: its upstream scripts moved to unsupported (broken
+# `from utils import ...` imports, see the manifest); keeping the
+# profile would silently run the flux setup for it.
+supported_profiles="flux"
 
 if echo "$supported_profiles" | grep -qw "$PROFILE"; then
     echo "Profile '$PROFILE' is supported"
@@ -18,6 +24,10 @@ else
     echo "Supported profiles: $supported_profiles"
     exit 1
 fi
+
+TARGET_ROOT="${TARGET_ROOT:?TARGET_ROOT is required}"
+GITHUB_WORKSPACE="${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is required}"
+GITHUB_ENV="${GITHUB_ENV:?GITHUB_ENV is required}"
 
 # Install cache-dit and dependencies
 echo "Installing cache-dit and dependencies..."
@@ -53,12 +63,9 @@ pip3 install einops sentencepiece accelerate
 # Install diffusers for parallel support
 pip3 install -U diffusers  # 要求 >= 0.36.0（PyPI latest，避免走 github 代理）
 
-# modelscope pinned to 1.37.0 (hub split started at 1.38; same rationale
-# as projects/diffusers/scripts/setup_example.sh)
-python3 -m pip install -q "modelscope==1.37.0"
-
-# Set NPU environment variables
-export ASCEND_RT_VISIBLE_DEVICES="${NPU_DEVICES:-0}"
+# Keep the engine-declared NPU visibility (matrix npu_devices exported
+# via GITHUB_ENV); default to 0 only when running outside the engine.
+export ASCEND_RT_VISIBLE_DEVICES="${ASCEND_RT_VISIBLE_DEVICES:-0}"
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 
 # Source CANN environment if available
@@ -66,25 +73,93 @@ if [ -f /usr/local/Ascend/ascend-toolkit/set_env.sh ]; then
     source /usr/local/Ascend/ascend-toolkit/set_env.sh
 fi
 
-# ensure_flux_model: download FLUX.1-dev (diffusers layout) via ModelScope
-# mirror so the generate.py example never touches HF gated endpoints.
-ensure_flux_model() {
-  local model_dir="/root/.cache/modelscope/FLUX.1-dev"
-  if [ -d "$model_dir" ] && [ -n "$(ls -A "$model_dir" 2>/dev/null)" ]; then
-    echo "model already cached at $model_dir; skipping download"
-    return
-  fi
-  echo "downloading FLUX.1-dev via modelscope to $model_dir"
-  python3 -c "from modelscope import snapshot_download; snapshot_download('AI-ModelScope/FLUX.1-dev', local_dir='$model_dir')"
+# Resolve one example model into $2 (shell var + GITHUB_ENV) from the
+# shared runner cache. The cache-seed workflow plants the asset from
+# ModelScope into the HF hub-cache layout (refs/main = real HF sha,
+# real files - see cache-seed/cache-dit/ms_seeds.yaml); the warm path
+# is zero-network. Cold-cache self-heal (seed not dispatched yet):
+# huggingface_hub first, then ModelScope into the per-run workspace -
+# for gated repos like FLUX.1-dev the HF fill cannot succeed (no
+# token), so the durable fix is dispatching the cache-seed workflow
+# (projects=cache-dit). Same helper as projects/xllm.
+resolve_model() {
+  local hf_id="$1" var="$2"
+  export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
+  local resolved
+  resolved=$(python3 - "$hf_id" <<'PY' | tee /dev/stderr | sed -n "s/^RESOLVED=//p" | tail -n 1
+import os
+import subprocess
+import sys
+
+model_id = sys.argv[1]
+hf_home = os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
+repo_dir = os.path.join(hf_home, "hub", "models--" + model_id.replace("/", "--"))
+workspace_dir = os.path.join(
+    os.environ["GITHUB_WORKSPACE"], "cache_dit_models", model_id.split("/")[-1]
+)
+
+
+def cached_snapshot():
+    refs = os.path.join(repo_dir, "refs", "main")
+    if not os.path.isfile(refs):
+        return None
+    with open(refs) as fh:
+        sha = fh.read().strip()
+    snap = os.path.join(repo_dir, "snapshots", sha)
+    if os.path.isdir(snap) and os.listdir(snap):
+        return snap
+    return None
+
+
+snapshot = cached_snapshot()
+if snapshot is not None:
+    print(f"{model_id}: shared-cache hit -> {snapshot}", flush=True)
+else:
+    print(f"{model_id}: not in the shared cache ({repo_dir}); filling it via HF",
+          flush=True)
+    try:
+        from huggingface_hub import snapshot_download
+
+        snapshot = snapshot_download(model_id)
+        print(f"filled shared cache: {snapshot}", flush=True)
+    except Exception as e:
+        print(f"HF fill failed ({type(e).__name__}: {e}); trying ModelScope",
+              flush=True)
+        snapshot = None
+
+    if snapshot is None:
+        try:
+            from modelscope import snapshot_download as ms_snapshot
+        except ImportError:
+            subprocess.run(
+                [sys.executable, "-m", "pip", "install", "-q",
+                 "modelscope==1.37.0"],
+                check=True,
+            )
+            from modelscope import snapshot_download as ms_snapshot
+        os.makedirs(workspace_dir, exist_ok=True)
+        ms_snapshot(model_id, local_dir=workspace_dir)
+        snapshot = workspace_dir
+        print(f"downloaded to ephemeral {snapshot}", flush=True)
+
+print(f"RESOLVED={snapshot}", flush=True)
+PY
+)
+  [[ -n "$resolved" ]] || { echo "resolve_model($hf_id) printed no path" >&2; exit 2; }
+  # Shell var for same-script consumers; GITHUB_ENV for the run-example
+  # step's overlay_args expansion (${FLUX_MODEL_PATH} in the manifest).
+  export "$var"="$resolved"
+  echo "$var=$resolved" >> "$GITHUB_ENV"
 }
 
 setup_flux() {
-  echo "profile=flux: ensuring FLUX.1-dev model"
-  ensure_flux_model
+  echo "profile=flux: resolving FLUX.1-dev model"
+  # HF id is the gated black-forest-labs repo; the shared cache is
+  # planted from the AI-ModelScope mirror by cache-seed (diffusers
+  # layout, same as the legacy in-setup modelscope download).
+  resolve_model black-forest-labs/FLUX.1-dev FLUX_MODEL_PATH
 }
 
-case "$PROFILE" in
-  flux|wan2.2) setup_flux ;;
-esac
+setup_flux
 
 echo "Environment setup complete for profile: $PROFILE"

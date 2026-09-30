@@ -18,9 +18,7 @@ concurrency:
   cancel-in-progress: false
 
 on:
-  # Bring-up phase: keep the schedule disabled until a few manual
-  # rounds are green (same policy as diffusers-examples.yml).
-  # Re-enable:
+  # Temporarily disabled to save NPU runner time. Re-enable when ready:
   # schedule:
   #   - cron: '30 */6 * * *'
   workflow_dispatch:
@@ -42,7 +40,8 @@ jobs:
     uses: ./.github/workflows/examples-template.yml
     with:
       # Namespaces cache keys (examples-monitor-state-cache-dit_*),
-      # artifact names and the scheduling paths under projects/cache-dit.
+      # artifact names and the scheduling paths under
+      # projects/cache-dit.
       project: cache-dit
       upstream_repo: vipshop/cache-dit
       target_ref: ${{ inputs.target_ref }}

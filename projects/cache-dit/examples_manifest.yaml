@@ -26,22 +26,28 @@ supported:
     timeout_minutes: 120
   # Distributed variants (README "Distributed Inference"): same unified
   # CLI via torchrun -m cache_dit.generate, one sharding/parallel mode per
-  # entry. 4 ranks on the 8-card runner (npu_devices 0-3); HCCL carries
+  # entry. 4 ranks on the 4-card runner (npu_devices 0-3); HCCL carries
   # the collectives (NpuPlatform.full_dist_backend = npu:hccl). Distinct
   # name per entry (job labels) and distinct --master_port per entry
-  # (runner pool may co-schedule two jobs on one machine). --cpu-offload
-  # is dropped: sharded weights fit 4x32GB HBM and offload conflicts with
-  # distributed loading.
+  # (runner pool may co-schedule two jobs on one machine).
+  #
+  # Model: Z-Image-Turbo, NOT FLUX.1-dev. Sequence parallelism (ulysses/
+  # ring/usp) does NOT shard weights - every rank holds the full pipeline,
+  # and FLUX.1-dev (~28.9GB bf16) OOMs on 32GB 910B4 (29.49GB usable;
+  # run 36657738934: all 4 ranks OOM at pipe.to(device)). Z-Image-Turbo
+  # (~19GB bf16 total) fits. --cpu-offload under torchrun is untested
+  # upstream, so shrink the model instead. --cache stays out: this batch
+  # validates pure parallelism; hybrid comes after it's green.
   - path: examples/generate.py
-    name: flux-ulysses-4p
-    profile: flux
+    name: zimage-ulysses-4p
+    profile: zimage
     runner: linux-aarch64-a2-4
     npu_devices: '0,1,2,3'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     exec: torchrun --nproc_per_node=4 --master_port=29501 -m cache_dit.generate
     overlay_args:
-      - flux
-      - --model-path /root/.cache/modelscope/FLUX.1-dev
+      - zimage_turbo
+      - --model-path /root/.cache/modelscope/Z-Image-Turbo
       - --attn _native_npu
       - --parallel ulysses
       - --warmup 1
@@ -49,15 +55,15 @@ supported:
       - --steps 8
     timeout_minutes: 150
   - path: examples/generate.py
-    name: flux-ring-4p
-    profile: flux
+    name: zimage-ring-4p
+    profile: zimage
     runner: linux-aarch64-a2-4
     npu_devices: '0,1,2,3'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     exec: torchrun --nproc_per_node=4 --master_port=29502 -m cache_dit.generate
     overlay_args:
-      - flux
-      - --model-path /root/.cache/modelscope/FLUX.1-dev
+      - zimage_turbo
+      - --model-path /root/.cache/modelscope/Z-Image-Turbo
       - --attn _native_npu
       - --parallel ring
       - --warmup 1
@@ -65,15 +71,15 @@ supported:
       - --steps 8
     timeout_minutes: 150
   - path: examples/generate.py
-    name: flux-usp-4p
-    profile: flux
+    name: zimage-usp-4p
+    profile: zimage
     runner: linux-aarch64-a2-4
     npu_devices: '0,1,2,3'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     exec: torchrun --nproc_per_node=4 --master_port=29503 -m cache_dit.generate
     overlay_args:
-      - flux
-      - --model-path /root/.cache/modelscope/FLUX.1-dev
+      - zimage_turbo
+      - --model-path /root/.cache/modelscope/Z-Image-Turbo
       - --attn _native_npu
       - --parallel usp
       - --warmup 1

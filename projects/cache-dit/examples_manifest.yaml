@@ -35,7 +35,7 @@ supported:
   - path: examples/generate.py
     name: flux-ulysses-4p
     profile: flux
-    runner: linux-aarch64-a2-8
+    runner: linux-aarch64-a2-4
     npu_devices: '0,1,2,3'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     exec: torchrun --nproc_per_node=4 --master_port=29501 -m cache_dit.generate
@@ -51,7 +51,7 @@ supported:
   - path: examples/generate.py
     name: flux-ring-4p
     profile: flux
-    runner: linux-aarch64-a2-8
+    runner: linux-aarch64-a2-4
     npu_devices: '0,1,2,3'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     exec: torchrun --nproc_per_node=4 --master_port=29502 -m cache_dit.generate
@@ -67,7 +67,7 @@ supported:
   - path: examples/generate.py
     name: flux-usp-4p
     profile: flux
-    runner: linux-aarch64-a2-8
+    runner: linux-aarch64-a2-4
     npu_devices: '0,1,2,3'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     exec: torchrun --nproc_per_node=4 --master_port=29503 -m cache_dit.generate
@@ -94,6 +94,9 @@ unsupported:
   # --- examples/ptq/flux2_svdq_ptq.py：依赖 svdq CUDA kernel 扩展
   #（cache_dit.kernels.svdq_extension_is_available），NPU 环境不可用。
   - examples/ptq/flux2_svdq_ptq.py
-  # --- examples/ray/ray_wrapper_example.py：Ray 多进程分布式 wrapper
-  #（FLUX.2-klein-base-9B），单卡 NPU runner 不适用。
+  # --- examples/ray/ray_wrapper_example.py：脚本 CUDA 硬编码，NPU 不可用
+  #（与 runner 卡数无关）：--use-init-fn 的 worker init_fn、主进程 pipeline、
+  # transformer 转移共 3 处 .to("cuda")；Ray GPU actor 生态面向 CUDA；
+  # --quantize(float8/torchao)、--use-compile 亦为 CUDA-only。上游适配
+  # NPU 后再评估。
   - examples/ray/ray_wrapper_example.py

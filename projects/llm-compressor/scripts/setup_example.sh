@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
 # Prepare the CI environment for one supported llm-compressor example.
 # $1 is the manifest profile. $2 is the example path relative to the
-# target repo. Unknown profiles fail before any install.
+# target repo (the engine passes it as the EXAMPLE_PATH env instead;
+# either form works). Unknown profiles fail before any install.
 set -euo pipefail
 
 export PYTHONNOUSERSITE=1
 
-if [[ $# -lt 2 ]]; then
-  echo "usage: $0 <profile> <example-relpath>" >&2
+if [[ $# -lt 1 ]] || [[ $# -gt 2 ]]; then
+  echo "usage: $0 <profile> [example-relpath]" >&2
   exit 2
 fi
 
 PROFILE="$1"
-EXAMPLE_REL="$2"
+EXAMPLE_REL="${2:-${EXAMPLE_PATH:?EXAMPLE_PATH env or \$2 is required}}"
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 ASCEND_PIP_INDEX=https://repo.huaweicloud.com/ascend/repos/pypi

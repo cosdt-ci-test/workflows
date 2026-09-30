@@ -6,9 +6,11 @@ scan:
 supported:
   # examples/generate.py: thin wrapper over cache_dit.generate.entrypoint()
   # (unified CLI, README "python3 -m cache_dit.generate"). Positional name
-  # "flux" selects the FLUX.1-dev example; --model-path points at the
-  # ModelScope mirror downloaded by setup_example.sh; --attn _native_npu is
-  # the NPU attention backend; --cache exercises cache-dit's DBCache path.
+  # "flux" selects the FLUX.1-dev example; --model-path resolves from the
+  # shared runner cache (cache-seed/cache-dit/ms_seeds.yaml plant,
+  # FLUX_MODEL_PATH GITHUB_ENV injection by setup_example.sh);
+  # --attn _native_npu is the NPU attention backend; --cache exercises
+  # cache-dit's DBCache path.
   - path: examples/generate.py
     profile: flux
     runner: linux-aarch64-a2-1
@@ -16,7 +18,7 @@ supported:
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
       - flux
-      - --model-path /root/.cache/modelscope/FLUX.1-dev
+      - --model-path ${FLUX_MODEL_PATH}
       - --attn _native_npu
       - --cache
       - --cpu-offload

@@ -17,23 +17,29 @@
 | --- | --- |
 | Gated Delta Rule、卷积、归一化、激活 | v0.5.2 存在 Ascend backend 实现，且相关模块/算子进入上游 A2 CI；不代表全部 shape 和 dtype 均已验证 |
 | 本仓 Quick Start 的 GatedDeltaNet 前后向 | [运行 33314431867](https://github.com/cosdt-ci-test/workflows/actions/runs/33314431867) 已通过；只证明该文档覆盖的路径 |
-| 两层完整语言模型、BF16 AdamW 更新 | 新示例待 NPU 实测；新增了模型级 MLP、损失、优化器等组合路径 |
-| checkpoint 保存和重新加载 | 待新示例实测，必须确认重载后预测一致 |
-| `generate(use_cache=True)` | 待新示例实测；与 Quick Start 的无缓存前后向不同，还涉及 recurrent 路径、卷积状态、缓存和 Transformers 版本兼容 |
+| 两层完整语言模型、BF16 AdamW 更新 | [运行 36403948431](https://github.com/cosdt-ci-test/workflows/actions/runs/36403948431) 完成 20 步 NPU 训练及完整结果校验 |
+| checkpoint 保存和重新加载 | 上述运行在 Transformers 4.57.6 上通过，`checkpoint_roundtrip_ok=true` |
+| `generate(use_cache=True)` | 上述运行生成 32 个新 token，设备为 NPU；验证了缓存生成调用路径，未独立比较有缓存与无缓存的数值等价性 |
 
 不能仅凭 `torch.npu.is_available()` 或 `IS_NPU=True` 把上述路径都标记为通过。首轮实机运行应保留具体 FLA commit、包版本、训练日志、重载结果和生成结果。
+
+2026-09-28 的成功运行使用工作流代码 `6acf52c`、FLA v0.5.2（`9c8e42e762fce087c27b673af4922795d9edb85e`）。同一训练片段的 loss 从 3.84375 降至 0.494140625，`weights_changed=true`，保存/重载检查与生成检查全部通过。实际 Transformers 为 4.57.6；Torch-NPU 为 2.7.1.post4，安装的 Triton-Ascend 包为 3.2.1。报告中的 `torch.__version__=2.7.1+cpu` 和 `triton.__version__=3.2.0` 是模块版本字符串；实际运行设备及 FLA 后端均为 `npu`。
 
 示例中的配置含义：
 
 - `fuse_swiglu=False`：在 v0.5.2 的 [`GatedMLP`](https://github.com/fla-org/flash-linear-attention/blob/v0.5.2/fla/modules/mlp.py) 中，仍执行 `fla.modules.activations.swiglu`，再调用输出投影；不是纯 PyTorch SwiGLU。FLA 的 [Ascend modules backend](https://github.com/fla-org/flash-linear-attention/blob/v0.5.2/fla/modules/backends/triton_ascend/__init__.py) 注册了对应的前后向实现。
-- `fuse_cross_entropy=False` 和 `fuse_linear_cross_entropy=False`：语言模型使用 `torch.nn.CrossEntropyLoss`，其 NPU 执行由 Torch-NPU/CANN 提供，仍需要实测。
+- `fuse_cross_entropy=False` 和 `fuse_linear_cross_entropy=False`：语言模型使用 `torch.nn.CrossEntropyLoss`，其 NPU 执行由 Torch-NPU/CANN 提供，已在上述默认示例运行中验证。
 - Transformers 提供模型接口和生成调度；PyTorch/Torch-NPU 负责普通张量运算，FLA/Triton-Ascend 负责相应的自定义算子。改用纯 PyTorch 组织模型也不能省略底层配套和具体路径验证。
 
 ## 工作流和版本策略
 
 `.github/workflows/flash-linear-attention-examples.yml` 调用公共 `examples-template.yml`。manifest 的 `source: project` 指向本仓 `example/train_text.py`，被测 FLA 则从目标上游 checkout 安装。项目代码、语料和参数更新都可以触发新的看护运行。
 
-运行环境使用单卡 `linux-aarch64-a2-1`、SWR `cann:9.0.0-910b-ubuntu22.04-py3.11`，超时 120 分钟。`setup_example.sh` 安装目标 checkout 的 `.[npu]`，不重复固定包版本。新 release 更换 CANN 配套时，需要同步审查镜像、示例和用户文档。
+运行环境使用单卡 `linux-aarch64-a2-1`、SWR `cann:9.0.0-910b-ubuntu22.04-py3.11`，超时 120 分钟。`setup_example.sh` 安装目标 checkout 的 `.[npu]`，保留上游声明的 NPU 配套；同时使用项目的 `constraints-npu.txt` 限定 Transformers API 兼容范围。新 release 更换 CANN 配套或 Transformers API 要求时，需要同步审查镜像、约束、示例和用户文档。
+
+FLA v0.5.2 的 `GatedDeltaNetForCausalLM._tied_weights_keys` 是列表，而 Transformers 5.17.0 的 [`_get_tied_weight_keys`](https://github.com/huggingface/transformers/blob/v5.17.0/src/transformers/modeling_utils.py) 调用其 `.keys()`，使 `save_pretrained` 报错。Transformers [4.57.6 的实现](https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/modeling_utils.py) 接受列表。约束采用 `transformers<5`，与目标 FLA 的要求共同解析，不改写上游类属性、不跳过保存，也不锁定一个补丁版本。上游迁移元数据并验证保存、重载和生成后，再调整这一约束；如果未来上游明确要求 5.x，依赖冲突应触发人工复核，不能静默忽略。
+
+安装脚本在所有 pip 安装之前显式设置与 Quick Start 相同的集群缓存主索引及 `PIP_TRUSTED_HOST`，避免退回直连 PyPI。公共模板提供的华为云额外索引和安装 FLA 时的 Triton-Ascend 索引保持不变；日志会打印本次主索引。这是 NPU runner 内的网络配置，用户本地安装不使用该集群地址。
 
 工作流合入默认分支后，每六小时的第 45 分钟检查最新 release 和本项目文件变化；失败后重试，成功且无变化时跳过。状态缓存为 `examples-monitor-state-flash-linear-attention_*`，与 Quick Start 分离。它不持续跟随上游 main 的每次提交。
 
@@ -73,4 +79,4 @@ actionlint .github/workflows/flash-linear-attention-examples.yml
 shellcheck projects/flash-linear-attention/scripts/*.sh
 ```
 
-这些测试覆盖数据处理、CLI 转发、配置和结果校验，未执行 NPU 模型。Quick Start 的端到端测试在未设置 `NPU_READY=true` 时跳过。本地检查通过后仍需真实 NPU 首跑。
+这些本地测试覆盖数据处理、CLI 转发、配置和结果校验，不执行 NPU 模型。Quick Start 的端到端测试在未设置 `NPU_READY=true` 时跳过。上面的成功记录来自单独的真实 NPU 工作流；后续改变配套或示例行为后仍需重新实测。

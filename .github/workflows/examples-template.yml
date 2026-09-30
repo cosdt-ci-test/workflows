@@ -398,6 +398,10 @@ jobs:
           EXAMPLE_SOURCE: ${{ matrix.example.source || 'upstream' }}
           EXEC: ${{ matrix.example.exec }}
           LAUNCHER: ${{ matrix.example.launcher || '' }}
+          # PROFILE forwarded so run scripts that dispatch substantial
+          # per-profile flow on it (mooncake's transfer-engine guard)
+          # see it; path-derived scripts ignore it.
+          PROFILE: ${{ matrix.example.profile }}
           OVERLAY_ARGS: ${{ toJSON(matrix.example.overlay_args) }}
         run: |
           df -h /dev/shm

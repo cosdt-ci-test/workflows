@@ -85,6 +85,7 @@ jobs:
           UPSTREAM_REPO: ${{ inputs.upstream_repo }}
           PROJECT: ${{ inputs.project }}
           WORKFLOW_REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ inputs.default_branch }}
         run: |
           set -euo pipefail
           # Single source of .monitor state for both signals below.
@@ -106,11 +107,42 @@ jobs:
           fi
           rm -f "$RESP_FILE"
           if [ "$HTTP_CODE" = "404" ]; then
-            echo "no release published for $UPSTREAM_REPO - nothing to guard"
-            {
-              echo "## examples guard: $UPSTREAM_REPO"
-              echo "No release published - nothing to guard, no result."
-            } >> "$GITHUB_STEP_SUMMARY"
+            # Release-less upstream (e.g. microsoft/onnxruntime-inference-
+            # examples): fall back to the default-branch HEAD sha so the
+            # schedule signal has something to diff, and target_ref is never
+            # empty downstream (result.schema.json target_ref minLength:1;
+            # save-monitor-state's TARGET_REF :? guard). Same tier as
+            # quick-start-template's /commits/HEAD fallback. Refs of both
+            # kinds land in the same last_release_tag state slot; the
+            # release_outcome retry bookkeeping is shared.
+            HEAD_RESP=$(mktemp)
+            HEAD_CODE=$(curl -sSL --retry 3 -o "$HEAD_RESP" -w '%{http_code}' \
+              "https://api.github.com/repos/$UPSTREAM_REPO/commits/$DEFAULT_BRANCH" || true)
+            HEAD_SHA=""
+            if [ "$HEAD_CODE" = "200" ]; then
+              HEAD_SHA=$(jq -r '.sha // empty' "$HEAD_RESP")
+            fi
+            rm -f "$HEAD_RESP"
+            if [ -n "$HEAD_SHA" ]; then
+              TAG="$HEAD_SHA"
+              if [ "${last_release_tag:-}" != "$TAG" ]; then
+                NEED="true"
+                REASON="head"
+                echo "release signal 404 (no releases); HEAD fallback FIRED: ${last_release_tag:-<none>} -> $HEAD_SHA"
+              elif [ "${release_outcome:-}" = "failure" ]; then
+                NEED="true"
+                REASON="head-retry"
+                echo "HEAD fallback RETRY (previous outcome failure, sha $HEAD_SHA unchanged)"
+              else
+                echo "HEAD fallback unchanged ($HEAD_SHA), previous outcome: ${release_outcome:-none}"
+              fi
+            else
+              echo "no release published and HEAD lookup failed (HTTP $HEAD_CODE) - nothing to guard"
+              {
+                echo "## examples guard: $UPSTREAM_REPO"
+                echo "No release published - nothing to guard, no result."
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
           elif [ -z "$TAG" ]; then
             echo "release signal unknown (HTTP $HTTP_CODE) - not triggering, state untouched"
           else

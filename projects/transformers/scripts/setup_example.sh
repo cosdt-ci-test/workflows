@@ -44,6 +44,14 @@ esac
 
 : "${TARGET_ROOT:?TARGET_ROOT is required}"
 : "${GITHUB_ENV:?GITHUB_ENV is required}"
+# Redirect the two caches the legacy workflow provided via container
+# bind-mounts (/data/ci-cache/modelscope, /data/ci-cache/pip) onto the
+# shared persistent runner cache the pool mounts at ~/.cache/huggingface
+# (docs/examples-guard-engine.md). The HF snapshot downloads below
+# already land there by default (HF_HOME).
+SHARED_CACHE_ROOT="${HF_HOME:-${HOME}/.cache/huggingface}"
+export MODELSCOPE_CACHE="${MODELSCOPE_CACHE:-${SHARED_CACHE_ROOT}/modelscope}"
+export PIP_CACHE_DIR="${PIP_CACHE_DIR:-${SHARED_CACHE_ROOT}/pip}"
 export PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple"
 export PIP_TRUSTED_HOST="repo.huaweicloud.com"
 source /usr/local/Ascend/ascend-toolkit/set_env.sh

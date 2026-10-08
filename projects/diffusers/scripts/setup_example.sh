@@ -463,11 +463,16 @@ setup_diffusers_research_plain() {
   # processors (pure torch), so rewrite that single import in the installed
   # copy. Idempotent: a no-op if a fixed ip_adapter release ever lands.
   python3 - <<'PY'
+import importlib.util
 from pathlib import Path
 
-import ip_adapter
-
-target = Path(ip_adapter.__file__).parent / "ip_adapter.py"
+# NB: never `import ip_adapter` here - importing the package executes the very
+# module-level import we are about to patch (chicken-and-egg, cost one CI
+# round). find_spec locates the installed copy without executing anything.
+spec = importlib.util.find_spec("ip_adapter")
+if spec is None or spec.origin is None:
+    raise SystemExit("ip_adapter is not installed; cannot patch")
+target = Path(spec.origin).parent / "ip_adapter.py"
 text = target.read_text()
 old = "from diffusers.pipelines.controlnet import MultiControlNetModel"
 new = "from diffusers.models.controlnets.multicontrolnet import MultiControlNetModel"

@@ -1,4 +1,16 @@
-# Liger-Kernel examples 看护
+# Liger-Kernel 看护
+
+Quick Start 文档位于 [`docs/Quick-start-Ascend.md`](docs/Quick-start-Ascend.md)，
+薄触发器为 `.github/workflows/liger-kernel-quick-start.yml`。它从 PyPI 安装最新版
+`liger-kernel`，验证其版本与公共引擎解析的 release 一致，再按 Liger Kernel
+Getting Started 的三种方式，在单卡 Ascend NPU 上分别通过自动 Patch、指定模型
+Patch 和自行组合算子完成三步训练，输出设备与训练损失。前两节共用从
+ModelScope 下载的 Qwen3-0.6B，第三节参考昇腾开源文档中心的 RMSNorm 与融合
+线性交叉熵示例。
+文档随触发提交通过 Contents API 读取；版本与运行结果由引擎写入
+`result.json`。当前只开放手动触发，首次 NPU 验收通过后再启用定时任务。
+
+## Examples 看护
 
 本项目复用公共 `examples-template.yml`；薄触发器为
 `.github/workflows/liger-kernel-examples.yml`，被测仓库是 `linkedin/Liger-Kernel`。

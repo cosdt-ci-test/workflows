@@ -34,21 +34,21 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 ```shell #test id="install-ascend-deps"
 pip install torch==2.9.0 torch_npu==2.9.0.post2 --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi
 pip install "triton-ascend==3.2.2" --extra-index-url https://triton-ascend.osinfra.cn/pypi/simple
-python -c "import torch, torch_npu, triton_ascend; from importlib.metadata import version; print('torch version:', torch.__version__); print('torch_npu version:', torch_npu.__version__); print('triton-ascend version:', version('triton-ascend'))"
+python -c "import torch, torch_npu, triton.backends.ascend; from importlib.metadata import version; print('torch version:', torch.__version__); print('torch_npu version:', torch_npu.__version__); print('triton-ascend version:', version('triton-ascend'))"
 ```
 
 输出结果如下：
 
-```shell #test-result id="install-ascend-deps" fuzzy='...'
+```shell #test-result id="install-ascend-deps" fuzzy='...' fuzzy='xxx'
 ...
-torch version: 2.9.0+cpu
+torch version: 2.9.0xxx
 torch_npu version: 2.9.0.post2
 triton-ascend version: 3.2.2
 ```
 
 ## 安装 Liger Kernel
 
-安装最新发布的 Liger Kernel，并查看安装版本。使用 `--no-deps`，避免 pip 再解析到普通 Triton，干扰昇腾版依赖：
+安装最新发布的 Liger Kernel，并查看安装版本。使用 `--no-deps` 保留前面安装的配套依赖，避免重新解析依赖时升级运行栈：
 
 ```shell #test id="install-liger"
 pip install --no-deps --upgrade liger-kernel

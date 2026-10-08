@@ -38,5 +38,5 @@ jobs:
     with:
       project: areal
       upstream_repo: areal-project/AReaL
-      target_ref: ${{ inputs.target_ref }}
+      target_ref: ${{ inputs.target_ref || 'ascend-v1.0.5' }}
       max_parallel: 4

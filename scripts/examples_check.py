@@ -531,20 +531,13 @@ def run(args: argparse.Namespace) -> int:
     thin = load_thin_workflows(workflows_dir)
     if not thin:
         raise FatalError(f'no workflow under {workflows_dir} calls the engine')
-    selected: list[str] | None = None
-    if args.project:
-        wanted = [name.strip() for name in args.project.split(',') if name.strip()]
-        unknown = sorted(set(wanted) - set(thin))
-        if unknown:
-            raise FatalError(f'unknown project(s): {unknown}')
-        selected = wanted
     token = args.token or os.environ.get('GH_TOKEN') or None
 
     manifest_projects = {p.parent.name for p in
                          projects_root.glob('*/examples_manifest.yaml')}
     not_in_scope = sorted(manifest_projects - set(thin))
 
-    names = selected or sorted(thin)
+    names = sorted(thin)
     projects: list[dict] = []
     for index, name in enumerate(names):
         if index and token:
@@ -590,8 +583,6 @@ def main(argv: list[str] | None = None) -> None:
                         help='Directory holding projects/<name>/examples_manifest.yaml')
     parser.add_argument('--output', default='result.json',
                         help='Path of the aggregate result.json')
-    parser.add_argument('--project', default='',
-                        help='Comma-separated subset of projects (empty = all)')
     parser.add_argument('--token', default='',
                         help='GitHub token (defaults to $GH_TOKEN)')
     args = parser.parse_args(argv)

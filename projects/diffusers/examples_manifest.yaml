@@ -4,52 +4,11 @@ scan:
   # .yaml is not scanned: the files under examples/ are deepspeed/accelerate
   # run configs, not launchable examples. .md/.txt/.json are non-examples.
   include_extensions: ['.py', '.sh']
-  # files-only 模型（docs/examples-guard-engine.md §2.7）。exclude 项为目录
-  # 路径（递归剪枝）或 glob（`**` 跨目录，匹配相对 target root 的路径），
-  # 排除"不是 example 的配套物"：上游自测、helper 模块、入口背后的实现文件。
-  # 扫描工具的 exclude 支持随发现 workflow 的 PR 落地；examples 引擎不扫描，
-  # 本段当前只是声明。
-  exclude:
-    - '**/test_*'                    # 上游自测（test_dreambooth*.py 等）
-    - '**/conftest.py'
-    - '**/__init__.py'
-    - '**/utils.py'                  # 单文件 helper
-    - '**/utils/**'                  # helper 模块目录
-    - '**/profiling_utils.py'
-    - '**/discriminator.py'          # train_vqgan.py 的判别器实现
-    - examples/research_projects/anytext/ocr_recog/**        # anytext 的 OCR 实现
-    - examples/research_projects/promptdiffusion/pipeline_prompt_diffusion.py
-    - examples/research_projects/promptdiffusion/promptdiffusioncontrolnet.py
-    - examples/research_projects/pixart/pipeline_pixart_alpha_controlnet.py
-    - examples/research_projects/gligen/dataset.py
-    - examples/research_projects/gligen/make_datasets.py
-    - examples/research_projects/rdm/retriever.py
-    - examples/research_projects/wuerstchen/text_to_image/modeling_efficient_net_encoder.py
-    # helper 模块 / 数据处理 / 被其它脚本调用（NOT_EXAMPLE，不单独 guard）
-    - examples/research_projects/anytext/anytext.py
-    - examples/research_projects/anytext/anytext_controlnet.py
-    - examples/research_projects/lpl/lpl_loss.py
-    - examples/research_projects/multi_token_textual_inversion/multi_token_clip.py
-    - examples/research_projects/pixart/controlnet_pixart_alpha.py
-    - examples/research_projects/promptdiffusion/convert_original_promptdiffusion_to_diffusers.py
-    - examples/research_projects/rdm/pipeline_rdm.py
-    - examples/server-async/Pipelines.py
-    - examples/cosmos/create_prompts_for_gr1_dataset.py
-    - examples/cosmos/download_and_preprocess_datasets.sh
-    - examples/cosmos3/cosmos_parallel.py
-    - examples/dreambooth/convert_to_imagefolder.py   # 纯转换脚本（image+txt -> metadata.jsonl），非 example
-    # 非可执行 example：外部服务 / 废弃 shim / 库模块 / HTTP 客户端
-    - examples/custom_diffusion/retrieve.py            # clip_retrieval 查外部 knn.laion.ai
-    - examples/inference/image_to_image.py             # 废弃 shim（无 __main__）
-    - examples/inference/inpainting.py                 # 废弃 shim（无 __main__）
-    - examples/model_search/pipeline_easy.py           # 库模块（无 main），调 civitai API
-    - examples/server-async/test.py                    # HTTP 客户端，需 serverasync.py 常驻
-    # examples/community/：110 个 .py 里 105 个无 if __name__ == "__main__"，是
-    # 上游 custom_pipeline 模块（由 DiffusionPipeline.from_pretrained(...,
-    # custom_pipeline=...) 加载），不是可独立执行的 example -> 整目录按"非
-    # example 配套物"排除（`python file.py` 只定义类然后退出 0，空跑判绿）。
-    # 其余 5 个有入口但 CI 跑不了的脚本单独登记在 unsupported。
-    - examples/community/
+  # files-only 模型（docs/examples-guard-engine.md §2.7）。2026-10-08 起
+  # 对齐收口：原 scan.exclude 的 33 条规则全部迁入
+  # unsupported 段（上游自测 / helper / pipeline 模块 / community 整目录等，
+  # 带分组注释与理由），scan 只保留 root + include_extensions 两个键。
+  # unsupported 覆盖全部 308 个扫描文件：supported(40) + unsupported(268)。
 
 supported:
   # ===== 已在昇腾单卡容器（CANN 9.1.0 / torch 2.9.0 / torch_npu 2.9.0.post2，
@@ -862,7 +821,7 @@ unsupported:
   # DATA_UNREACHABLE：需自定义人脸数据集：用 insightface 提取人脸 normed_embedding
   - examples/research_projects/ip_adapter/tutorial_train_faceid.py
   # lora：用已废弃的 LoRAAttnProcessor(hidden_size=..., cross_attention_dim=...)
-  # 构造 API；当前 diffusers 的 LoRAAttnProcessor.__init__() 不收参数（改走 peft）
+  # 构造 API；当前 diffusers 的 LoRAAttnProcessor.__init__() 不收参数
   - examples/research_projects/lora/train_text_to_image_lora.py
   - examples/research_projects/lpl/train_sdxl_lpl.py
   - examples/research_projects/multi_subject_dreambooth/train_multi_subject_dreambooth.py
@@ -948,3 +907,203 @@ unsupported:
   # Image 特征、被 datasets 自动解码成 PIL → TypeError: a bytes-like object is
   # required, not 'JpegImageFile'。需改脚本或自造二进制 image 列的 parquet。
   - examples/research_projects/sana/train_sana_sprint_diffusers.py
+
+  # =====================================================================
+  # ===== 2026-10-08 收口：以下各组自 scan.exclude 迁入，
+  # ===== scan 段自此只保留 root + include_extensions。
+  # =====================================================================
+
+  # 上游自测与 pytest 基础设施（test_*.py / conftest.py），非可守卫 example。
+  - examples/advanced_diffusion_training/test_dreambooth_lora_flux_advanced.py
+  - examples/conftest.py
+  - examples/consistency_distillation/test_lcm_lora.py
+  - examples/controlnet/test_controlnet.py
+  - examples/custom_diffusion/test_custom_diffusion.py
+  - examples/dreambooth/test_dreambooth.py
+  - examples/dreambooth/test_dreambooth_flux.py
+  - examples/dreambooth/test_dreambooth_lora.py
+  - examples/dreambooth/test_dreambooth_lora_edm.py
+  - examples/dreambooth/test_dreambooth_lora_flux.py
+  - examples/dreambooth/test_dreambooth_lora_flux_kontext.py
+  - examples/dreambooth/test_dreambooth_lora_flux2.py
+  - examples/dreambooth/test_dreambooth_lora_flux2_klein.py
+  - examples/dreambooth/test_dreambooth_lora_hidream.py
+  - examples/dreambooth/test_dreambooth_lora_lumina2.py
+  - examples/dreambooth/test_dreambooth_lora_qwenimage.py
+  - examples/dreambooth/test_dreambooth_lora_qwenimage21.py
+  - examples/dreambooth/test_dreambooth_lora_qwenimage21_img2img.py
+  - examples/dreambooth/test_dreambooth_lora_sana.py
+  - examples/dreambooth/test_dreambooth_lora_sd3.py
+  - examples/dreambooth/test_dreambooth_sd3.py
+  - examples/instruct_pix2pix/test_instruct_pix2pix.py
+  - examples/t2i_adapter/test_t2i_adapter.py
+  - examples/test_examples_utils.py
+  - examples/text_to_image/test_text_to_image.py
+  - examples/text_to_image/test_text_to_image_lora.py
+  - examples/textual_inversion/test_textual_inversion.py
+  - examples/textual_inversion/test_textual_inversion_sdxl.py
+  - examples/unconditional_image_generation/test_unconditional.py
+  - examples/vqgan/test_vqgan.py
+  # 包标识文件（__init__.py）。
+  - examples/research_projects/wuerstchen/text_to_image/__init__.py
+  - examples/server-async/utils/__init__.py
+  # helper / 实现模块：被同目录 example import 或调用，非入口（utils、
+  # profiling_utils、train_vqgan 的判别器、anytext OCR 实现、
+  # promptdiffusion/pixart/rdm 的 pipeline 模块、gligen 的数据处理、
+  # lpl 的 loss、multi_token 的 clip 封装、wuerstchen 的 encoder、
+  # server-async 的 Pipelines/utils、cosmos3 的并行启动器）。
+  - examples/cosmos3/cosmos_parallel.py
+  - examples/profiling/profiling_utils.py
+  - examples/research_projects/anytext/anytext.py
+  - examples/research_projects/anytext/anytext_controlnet.py
+  - examples/research_projects/anytext/ocr_recog/common.py
+  - examples/research_projects/anytext/ocr_recog/RecCTCHead.py
+  - examples/research_projects/anytext/ocr_recog/RecModel.py
+  - examples/research_projects/anytext/ocr_recog/RecMv1_enhance.py
+  - examples/research_projects/anytext/ocr_recog/RecSVTR.py
+  - examples/research_projects/anytext/ocr_recog/RNN.py
+  - examples/research_projects/gligen/dataset.py
+  - examples/research_projects/gligen/make_datasets.py
+  - examples/research_projects/lpl/lpl_loss.py
+  - examples/research_projects/multi_token_textual_inversion/multi_token_clip.py
+  - examples/research_projects/pixart/controlnet_pixart_alpha.py
+  - examples/research_projects/pixart/pipeline_pixart_alpha_controlnet.py
+  - examples/research_projects/promptdiffusion/pipeline_prompt_diffusion.py
+  - examples/research_projects/promptdiffusion/promptdiffusioncontrolnet.py
+  - examples/research_projects/rdm/pipeline_rdm.py
+  - examples/research_projects/rdm/retriever.py
+  - examples/research_projects/wuerstchen/text_to_image/modeling_efficient_net_encoder.py
+  - examples/server-async/Pipelines.py
+  - examples/server-async/utils/requestscopedpipeline.py
+  - examples/server-async/utils/scheduler.py
+  - examples/server-async/utils/utils.py
+  - examples/server-async/utils/wrappers.py
+  - examples/vqgan/discriminator.py
+  # 转换 / 数据预处理 / README 式启动脚本：纯配套工具，非训练入口
+  # （sana_sprint 的 .sh 是 README 式下载+启动指南，其 .py 见上方 DATA_FORMAT）。
+  - examples/cosmos/create_prompts_for_gr1_dataset.py
+  - examples/cosmos/download_and_preprocess_datasets.sh
+  - examples/dreambooth/convert_to_imagefolder.py
+  - examples/research_projects/promptdiffusion/convert_original_promptdiffusion_to_diffusers.py
+  - examples/research_projects/sana/train_sana_sprint_diffusers.sh
+  # 外部服务 / 废弃 shim / 库模块 / HTTP 客户端：不可独立执行
+  # （retrieve 需 knn.laion.ai；inference 两条是无 __main__ 的废弃 shim；
+  # pipeline_easy 是查 civitai API 的库模块；server-async/test.py 需常驻服务）。
+  - examples/custom_diffusion/retrieve.py
+  - examples/inference/image_to_image.py
+  - examples/inference/inpainting.py
+  - examples/model_search/pipeline_easy.py
+  - examples/server-async/test.py
+  # community/ 其余 105 个无 __main__ 的 custom_pipeline 模块：只能经
+  # DiffusionPipeline.from_pretrained(custom_pipeline=...) 加载；
+  # 有入口的 5 条见上方 CUDA_DEP / OTHER_BACKEND 组。
+  - examples/community/adaptive_mask_inpainting.py
+  - examples/community/bit_diffusion.py
+  - examples/community/checkpoint_merger.py
+  - examples/community/clip_guided_images_mixing_stable_diffusion.py
+  - examples/community/clip_guided_stable_diffusion.py
+  - examples/community/clip_guided_stable_diffusion_img2img.py
+  - examples/community/composable_stable_diffusion.py
+  - examples/community/ddim_noise_comparative_analysis.py
+  - examples/community/edict_pipeline.py
+  - examples/community/fresco_v2v.py
+  - examples/community/gluegen.py
+  - examples/community/hd_painter.py
+  - examples/community/iadb.py
+  - examples/community/imagic_stable_diffusion.py
+  - examples/community/img2img_inpainting.py
+  - examples/community/instaflow_one_step.py
+  - examples/community/interpolate_stable_diffusion.py
+  - examples/community/ip_adapter_face_id.py
+  - examples/community/kohya_hires_fix.py
+  - examples/community/latent_consistency_img2img.py
+  - examples/community/latent_consistency_interpolate.py
+  - examples/community/latent_consistency_txt2img.py
+  - examples/community/llm_grounded_diffusion.py
+  - examples/community/lpw_stable_diffusion.py
+  - examples/community/lpw_stable_diffusion_onnx.py
+  - examples/community/lpw_stable_diffusion_xl.py
+  - examples/community/magic_mix.py
+  - examples/community/marigold_depth_estimation.py
+  - examples/community/masked_stable_diffusion_img2img.py
+  - examples/community/masked_stable_diffusion_xl_img2img.py
+  - examples/community/matryoshka.py
+  - examples/community/mixture_canvas.py
+  - examples/community/mixture_tiling.py
+  - examples/community/mixture_tiling_sdxl.py
+  - examples/community/mod_controlnet_tile_sr_sdxl.py
+  - examples/community/multilingual_stable_diffusion.py
+  - examples/community/one_step_unet.py
+  - examples/community/pipeline_animatediff_controlnet.py
+  - examples/community/pipeline_animatediff_img2video.py
+  - examples/community/pipeline_animatediff_ipex.py
+  - examples/community/pipeline_controlnet_xl_kolors.py
+  - examples/community/pipeline_controlnet_xl_kolors_img2img.py
+  - examples/community/pipeline_controlnet_xl_kolors_inpaint.py
+  - examples/community/pipeline_demofusion_sdxl.py
+  - examples/community/pipeline_fabric.py
+  - examples/community/pipeline_faithdiff_stable_diffusion_xl.py
+  - examples/community/pipeline_flux_differential_img2img.py
+  - examples/community/pipeline_flux_kontext_multiple_images.py
+  - examples/community/pipeline_flux_rf_inversion.py
+  - examples/community/pipeline_flux_semantic_guidance.py
+  - examples/community/pipeline_flux_with_cfg.py
+  - examples/community/pipeline_hunyuandit_differential_img2img.py
+  - examples/community/pipeline_kolors_differential_img2img.py
+  - examples/community/pipeline_kolors_inpainting.py
+  - examples/community/pipeline_null_text_inversion.py
+  - examples/community/pipeline_prompt2prompt.py
+  - examples/community/pipeline_sdxl_style_aligned.py
+  - examples/community/pipeline_stable_diffusion_3_differential_img2img.py
+  - examples/community/pipeline_stable_diffusion_3_instruct_pix2pix.py
+  - examples/community/pipeline_stable_diffusion_boxdiff.py
+  - examples/community/pipeline_stable_diffusion_pag.py
+  - examples/community/pipeline_stable_diffusion_upscale_ldm3d.py
+  - examples/community/pipeline_stable_diffusion_xl_attentive_eraser.py
+  - examples/community/pipeline_stable_diffusion_xl_controlnet_adapter.py
+  - examples/community/pipeline_stable_diffusion_xl_controlnet_adapter_inpaint.py
+  - examples/community/pipeline_stable_diffusion_xl_differential_img2img.py
+  - examples/community/pipeline_stable_diffusion_xl_instandid_img2img.py
+  - examples/community/pipeline_stable_diffusion_xl_instantid.py
+  - examples/community/pipeline_stable_diffusion_xl_ipex.py
+  - examples/community/pipeline_stable_diffusion_xl_t5.py
+  - examples/community/pipeline_stg_cogvideox.py
+  - examples/community/pipeline_stg_hunyuan_video.py
+  - examples/community/pipeline_stg_ltx.py
+  - examples/community/pipeline_stg_ltx_image2video.py
+  - examples/community/pipeline_stg_mochi.py
+  - examples/community/pipeline_stg_wan.py
+  - examples/community/pipeline_z_image_differential_img2img.py
+  - examples/community/pipeline_zero1to3.py
+  - examples/community/pipline_flux_fill_controlnet_Inpaint.py
+  - examples/community/regional_prompting_stable_diffusion.py
+  - examples/community/rerender_a_video.py
+  - examples/community/scheduling_ufogen.py
+  - examples/community/sd_text2img_k_diffusion.py
+  - examples/community/sde_drag.py
+  - examples/community/seed_resize_stable_diffusion.py
+  - examples/community/speech_to_image_diffusion.py
+  - examples/community/stable_diffusion_comparison.py
+  - examples/community/stable_diffusion_controlnet_img2img.py
+  - examples/community/stable_diffusion_controlnet_inpaint.py
+  - examples/community/stable_diffusion_controlnet_inpaint_img2img.py
+  - examples/community/stable_diffusion_controlnet_reference.py
+  - examples/community/stable_diffusion_ipex.py
+  - examples/community/stable_diffusion_mega.py
+  - examples/community/stable_diffusion_reference.py
+  - examples/community/stable_diffusion_repaint.py
+  - examples/community/stable_diffusion_tensorrt_img2img.py
+  - examples/community/stable_diffusion_tensorrt_inpaint.py
+  - examples/community/stable_diffusion_tensorrt_txt2img.py
+  - examples/community/stable_diffusion_xl_controlnet_reference.py
+  - examples/community/stable_diffusion_xl_reference.py
+  - examples/community/stable_unclip.py
+  - examples/community/text_inpainting.py
+  - examples/community/unclip_image_interpolation.py
+  - examples/community/unclip_text_interpolation.py
+  - examples/community/wildcard_stable_diffusion.py
+  # Qwen-Image 2.1 新增变体（上游 0.41 新增）：同
+  # train_dreambooth_lora_qwen_image（上方 OOM 组）的 20B 级模型，
+  # 单卡 CI 不可行。
+  - examples/dreambooth/train_dreambooth_lora_qwenimage21.py
+  - examples/dreambooth/train_dreambooth_lora_qwenimage21_img2img.py

@@ -2,43 +2,12 @@ version: 1
 scan:
   root: examples
   include_extensions: ['.py', '.sh']
-  exclude:
-    - '**/test_*'
-    - '**/conftest.py'
-    - '**/__init__.py'
-    - '**/config.py'                  # 配置模块，非可执行 example
-    - '**/configs.py'
-    - '**/prompts.py'
-    - '**/utils.py'
-    - '**/reward_score.py'            # countdown 的奖励实现，被 train.py 调用
-    - 'examples/scaffolding/core/**'  # scaffolding 的库实现
-    - 'examples/scaffolding/fake_tools.py'
-    - 'examples/scaffolding/real_tools.py'
-    - 'examples/scaffolding/task.py'
-    - 'examples/scaffolding/worker.py'
-    - 'examples/scaffolding/workflow.py'
-    - 'examples/scaffolding/controllers.py'
-    - 'examples/scaffolding/search_reward.py'
-    - 'examples/search_agent/tongyi_deepresearch/react_agent.py'
-    - 'examples/search_agent/tongyi_deepresearch/tool_search.py'
-    - 'examples/search_agent/tongyi_deepresearch/tool_visit.py'
-    - 'examples/terminal_bench/agent/**'
-    - 'examples/terminal_bench/workflow/**'
-    - 'examples/terminal_bench/agent_rl_config.py'
-    - 'examples/tir/tools/**'
-    - 'examples/tir/tool_manager.py'
-    - 'examples/tir/tir_workflow.py'
-    - 'examples/tau2/agent.py'
-    - 'examples/tau2/utils.py'
-    - 'examples/openclaw/_fmt.py'
-    - 'examples/openclaw/demo_lifecycle.py'
-    - 'examples/openclaw/set_reward.py'
-    - 'examples/openclaw/start_session.py'
-    - 'examples/agent_service/agent.py'
-    - 'examples/multi_turn_vlm/geo3k_env.py'
-    - 'examples/docs/debug/cmp_rollout.py'
-    - 'examples/sandbox_daytona/reward_example.py'
-    - 'examples/math/gsm8k_eval.py'
+  # files-only 模型（docs/examples-guard-engine.md §2.7）。2026-10-08 起与
+  # diffusers 对齐收口：原 scan.exclude 的 36 条规则全部迁入
+  # unsupported 段（上游自测 / scaffolding / tir / terminal_bench / search_agent
+  # 等实现模块，带分组注释与理由），scan 只保留 root + include_extensions 两个键。
+  # 对账口径：ascend-v1.0.5 树 101 个 .py/.sh = supported(13) + unsupported(88)。
+  # 注意 main 线（v2.1.0=114、当前 main=131）与本分支树不同，勿混用口径。
 
 # NPU 支持在 ascend-v1.0.5 分支（非 main），需专用镜像
 # ghcr.io/hwvanici/areal_npu:v1.0.5-a2。
@@ -401,37 +370,6 @@ supported:
       - +valid_dataset.setup_timeout=600
       - +total_train_steps=1
     timeout_minutes: 60
-  # geometry3k_grpo_mt.py 的官方 NPU 启动器（export USE_OPTIMIZED_MODEL=0 +
-  # 同 config 转发 "$@"）——可跑，补一条实测；run_example.sh 按扩展名分发
-  # .sh → bash。launcher 自带 scheduler.type=local，其余参数经 "$@" 透传，
-  # 配方同已验证的 mt 条目。
-  - path: examples/multi_turn_vlm/run_geometry3k_grpo_mt_npu.sh
-    profile: areal-vlm-mt-grpo
-    runner: linux-aarch64-a2-2
-    npu_devices: '0,1'
-    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
-    overlay_args:
-      - cluster.n_gpus_per_node=2
-      - rollout.backend=vllm:d1p1t2
-      - +rollout.setup_timeout=1800
-      - actor.backend=fsdp:d2p1t1
-      - +actor.fsdp.offload_params=true
-      - +actor.weight_update_mode=disk
-      - actor.reward_norm.mean_level=null
-      - actor.adv_norm.mean_level=null
-      - actor.path=${AREAL_MODEL_PATH}
-      - actor.mb_spec.max_tokens_per_mb=1024
-      - ref.mb_spec.max_tokens_per_mb=1024
-      - vllm.gpu_memory_utilization=0.3
-      - gconfig.n_samples=1
-      - gconfig.max_new_tokens=64
-      - max_turns=2
-      - train_dataset.batch_size=2
-      - valid_dataset.batch_size=2
-      - +train_dataset.setup_timeout=600
-      - +valid_dataset.setup_timeout=600
-      - +total_train_steps=1
-    timeout_minutes: 60
 unsupported:
   # UPSTREAM_BUG：clevr SFT loader 读错 processor 键名、且不判空。
   # transformers 5.x 起 Qwen-VL 处理器把该字段放在 mm_token_type_ids（Qwen2-VL /
@@ -487,3 +425,104 @@ unsupported:
   - examples/experimental/inference_service/human_in_the_loop_demo.py
   # fork tau2-bench + 外部 user simulator 端点（同 examples/tau2）
   - examples/experimental/inference_service/tau2_rollout.py
+
+  # geometry3k_grpo_mt 的官方 NPU 启动器（export USE_OPTIMIZED_MODEL=0 + 同
+  # config 转发 "$@"）：.py 本体已单独看护，.sh 只是包装层，无独立看护
+  # 价值（2026-10-08 自 supported 移入）。
+  - examples/multi_turn_vlm/run_geometry3k_grpo_mt_npu.sh
+
+  # =====================================================================
+  # ===== 2026-10-08 收口：以下各组自 scan.exclude 迁入，
+  # ===== scan 段自此只保留 root + include_extensions。
+  # =====================================================================
+
+  # 上游自测（scaffolding/tests、tir/tests）与 pytest 基础设施。
+  - examples/scaffolding/tests/test_controllers.py
+  - examples/scaffolding/tests/test_scaffolding_llm_integration.py
+  - examples/scaffolding/tests/test_self_contained.py
+  - examples/scaffolding/tests/test_worker.py
+  - examples/tir/tests/conftest.py
+  - examples/tir/tests/test_aexecute_default.py
+  - examples/tir/tests/test_daytona_python_tool.py
+  - examples/tir/tests/test_optional_dep.py
+  - examples/tir/tests/test_tir.py
+  - examples/tir/tests/test_tir_workflow_async.py
+  - examples/tir/tests/test_tool_manager_async.py
+  - examples/tir/tests/test_tool_registry_lazy.py
+  # 包标识文件（__init__.py）。
+  - examples/scaffolding/__init__.py
+  - examples/scaffolding/core/__init__.py
+  - examples/scaffolding/tests/__init__.py
+  - examples/terminal_bench/__init__.py
+  - examples/terminal_bench/agent/__init__.py
+  - examples/terminal_bench/workflow/__init__.py
+  - examples/tir/tools/__init__.py
+  # scaffolding 框架实现：core/ 库实现 + 外围模块（fake/real_tools、task、
+  # worker、workflow、controllers、search_reward）+ _compat（TensorRT-LLM
+  # vendored 原语 re-export）+ search_agent_controller。run_example.sh 以
+  # python -m 跑 examples/scaffolding/*.py 时 import 它们，非独立入口。
+  - examples/scaffolding/_compat.py
+  - examples/scaffolding/controllers.py
+  - examples/scaffolding/core/controller.py
+  - examples/scaffolding/core/math_utils.py
+  - examples/scaffolding/core/result.py
+  - examples/scaffolding/core/scaffolding_llm.py
+  - examples/scaffolding/core/task.py
+  - examples/scaffolding/core/task_collection.py
+  - examples/scaffolding/core/worker.py
+  - examples/scaffolding/fake_tools.py
+  - examples/scaffolding/real_tools.py
+  - examples/scaffolding/search_agent_controller.py
+  - examples/scaffolding/search_reward.py
+  - examples/scaffolding/task.py
+  - examples/scaffolding/worker.py
+  - examples/scaffolding/workflow.py
+  # tir 工具链实现（tool_manager / tir_workflow / tools/ / prompts），
+  # 被 train_tir.py 调用。
+  - examples/tir/prompts.py
+  - examples/tir/tir_workflow.py
+  - examples/tir/tool_manager.py
+  - examples/tir/tools/base.py
+  - examples/tir/tools/calculator_tool.py
+  - examples/tir/tools/daytona_python_tool.py
+  - examples/tir/tools/python_tool.py
+  # terminal_bench 实现（agent / workflow / agent_rl_config / prompts），
+  # 被 train.py 调用。
+  - examples/terminal_bench/agent/camel_terminal_agent.py
+  - examples/terminal_bench/agent/chat_agent_trace.py
+  - examples/terminal_bench/agent/prompts.py
+  - examples/terminal_bench/agent_rl_config.py
+  - examples/terminal_bench/workflow/camel_rlvr_workflow.py
+  - examples/terminal_bench/workflow/pre_build_tasks_utils.py
+  # search_agent/tongyi_deepresearch 实现（react_agent / tool_search /
+  # tool_visit / prompt / config），被 train_deepresearch.py 调用。
+  - examples/search_agent/tongyi_deepresearch/config.py
+  - examples/search_agent/tongyi_deepresearch/prompt.py
+  - examples/search_agent/tongyi_deepresearch/react_agent.py
+  - examples/search_agent/tongyi_deepresearch/tool_search.py
+  - examples/search_agent/tongyi_deepresearch/tool_visit.py
+  # 单文件 config / utils / reward helper（各 example 的配置与工具模块）。
+  - examples/agent_workflow/configs.py
+  - examples/countdown/reward_score.py
+  - examples/multi_turn_math/config.py
+  - examples/multi_turn_vlm/config.py
+  - examples/openai_agents/config.py
+  - examples/tau2/utils.py
+  # 其它被调用的实现 / 环境 / 演示（agent_service 的 agent、multi_turn_vlm
+  # 的 geo3k_env、openclaw 生命周期演示、sandbox_daytona 奖励示例、
+  # tau2 的 agent、docs/debug 调试脚本）。
+  - examples/agent_service/agent.py
+  - examples/docs/debug/cmp_rollout.py
+  - examples/multi_turn_vlm/geo3k_env.py
+  - examples/openclaw/_fmt.py
+  - examples/openclaw/demo_lifecycle.py
+  - examples/openclaw/set_reward.py
+  - examples/openclaw/start_session.py
+  - examples/sandbox_daytona/reward_example.py
+  - examples/tau2/agent.py
+  # 特殊两条：countdown.py 是数据生成 CLI（CI setup 第 6 节将其作为工具
+  # 运行，被守卫的入口是同目录 train.py）；gsm8k_eval.py 是 gsm8k_rl_mt
+  # 的评估器（被调用非入口，且自建 scheduler 未初始化 DataController——
+  # 上游 bug 清单 #2）。
+  - examples/countdown/countdown.py
+  - examples/math/gsm8k_eval.py

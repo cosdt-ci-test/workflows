@@ -30,7 +30,10 @@ Ascend-CI 的 `liger_kernel.yml` 徽章——本项目 setup 即复刻该配方�
 镜像用 `swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/cann:9.1.0-910b-ubuntu22.04-py3.12`
 （Ascend-CI 同款，内含 torch 2.9.0 + torch_npu 2.9.0）。`triton-ascend` 只发布在
 `https://triton-ascend.osinfra.cn/pypi/simple`，不在默认 PyPI，setup 显式加
-`--extra-index-url` 安装；CUDA 版 triton 必须先卸载，否则 `_ascend` 后端会被遮蔽。
+`--extra-index-url` 安装。Triton-Ascend 3.2.2 在 ARM 平台依赖 `triton==3.5.0`，
+两者应一起保留；Python 导入路径为 `triton.backends.ascend`，安装版本使用
+`importlib.metadata.version('triton-ascend')` 查询。Quick Start 夹具在依赖安装后
+检查 Ascend 后端是否注册、NPU 是否可用。
 
 ## supported 清单
 

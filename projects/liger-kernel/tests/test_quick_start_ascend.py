@@ -45,6 +45,25 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
     def _run_one(self, cmd, results, env, cwd, timeout, idx):
         super()._run_one(cmd, results, env, cwd, timeout, idx)
+        if isinstance(cmd, TestCommand) and cmd.id == 'install-ascend-deps':
+            # Importing the backend alone does not establish that an NPU is usable.
+            probe_code = (
+                'import torch, torch_npu; '
+                'from triton.backends import backends; '
+                "assert 'ascend' in backends, 'Ascend Triton backend not registered'; "
+                "assert torch.npu.is_available(), 'NPU unavailable'; "
+                "assert torch.npu.device_count() > 0, 'No visible NPU'"
+            )
+            probe = subprocess.run(
+                [sys.executable, '-c', probe_code],
+                capture_output=True, text=True, env=env, cwd=cwd, timeout=120,
+            )
+            if probe.returncode:
+                raise AssertionError(
+                    f'Ascend runtime check failed: {probe_code}\n'
+                    f'stdout:\n{probe.stdout}\nstderr:\n{probe.stderr}'
+                )
+            self.log('Ascend Triton backend registered and NPU available')
         if isinstance(cmd, TestCommand) and cmd.id == 'install-liger':
             upstream_ref = env.get('UPSTREAM_REF')
             if not upstream_ref:
@@ -93,11 +112,8 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 check=True,
             )
 
-        # The Ascend Triton fork must own the triton import before the doc installs it.
-        subprocess.run(
-            [sys.executable, '-m', 'pip', 'uninstall', '-y', 'triton'],
-            check=True, capture_output=True,
-        )
+        # Triton-Ascend 3.2.2 requires triton 3.5.0 on this aarch64 runner.
+        # Keep that dependency; the document imports the Ascend backend explicitly.
         ensure_safetensors()
         purge_modelscope_corrupt(resolve_modelscope_cache())
         os.chdir(work_dir)

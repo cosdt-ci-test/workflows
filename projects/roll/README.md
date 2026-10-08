@@ -52,6 +52,14 @@ release-only 监控、matrix 调度、结果校验与状态写回，本仓不修
 
 ## 已知边界
 
+- v0.4.0 的配置兼容：三份 CI 配置显式设置 `transfer_backend.backend_name: null`，
+  使用本地 DataProto 传输。该 release 默认启用 TransferQueue（16 个存储单元），
+  单卡 runner 的空闲 CPU 不足；即使 CPU 足够，`protocol.py` 也明确禁止 NPU 使用 RemoteBatch。
+  RLVR 的 `tag_included` 必须匹配 fixture 的 `tag: math_rule`，不能使用 `source: ci_math`；
+  v0.4.0 的 `update_dataset_domain` 不再对未匹配 tag 回退到 `math_rule`。
+  以上修复对应 [roll-examples #90](https://github.com/cosdt-ci-test/workflows/actions/runs/37701575713)，
+  完整 NPU pipeline 仍需下一次 Actions 验证。
+
 - 首次实现只覆盖单节点 A2。A3 / Ascend 950、多机、SGLang、Megatron、外部沙箱、
   WebShop、SWE、视频/音频/VLM、私有 OSS/CPFS 数据集均不在 supported 范围。
 - 公共引擎只校验并调度已声明的 supported 条目，不负责自动发现上游新增 example。

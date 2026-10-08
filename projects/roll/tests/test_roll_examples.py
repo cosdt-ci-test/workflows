@@ -239,6 +239,40 @@ class RollProjectTests(unittest.TestCase):
             encoding='utf-8')
         self.assertIn('unset PYTORCH_NPU_ALLOC_CONF', text)
 
+    def test_npu_configs_disable_remote_batch_transfer(self) -> None:
+        # v0.4.0 enables TransferQueue by default, while DataProto rejects
+        # RemoteBatch on NPU. A null backend name selects DummyClient and
+        # makes DataProto.to_remote return the original local batch.
+        for name in ('ci_agentic_rollout', 'ci_agentic_train', 'ci_rlvr'):
+            with self.subTest(config=name):
+                cfg = yaml.safe_load(
+                    (PROJECT / 'configs' / f'{name}.yaml').read_text(
+                        encoding='utf-8'))
+                self.assertIn('transfer_backend', cfg)
+                self.assertIn('backend_name', cfg['transfer_backend'])
+                self.assertIsNone(cfg['transfer_backend']['backend_name'])
+
+    def test_rlvr_fixture_tags_are_routed_to_configured_domains(self) -> None:
+        cfg = yaml.safe_load(
+            (PROJECT / 'configs/ci_rlvr.yaml').read_text(encoding='utf-8'))
+        tag_to_domain = {}
+        for domain, reward in cfg['rewards'].items():
+            for tag in reward['tag_included']:
+                self.assertNotIn(tag, tag_to_domain, 'ambiguous reward tag')
+                tag_to_domain[tag] = domain
+        rows = [json.loads(line) for line in
+                (PROJECT / 'fixtures/ci_math_8.jsonl').read_text(
+                    encoding='utf-8').splitlines() if line.strip()]
+        domain_counts = dict.fromkeys(
+            cfg['actor_train']['data_args']['domain_interleave_probs'], 0)
+        for row in rows:
+            self.assertIn(row['tag'], tag_to_domain, row['id'])
+            domain = tag_to_domain[row['tag']]
+            self.assertIn(domain, domain_counts, row['id'])
+            domain_counts[domain] += 1
+        for domain, count in domain_counts.items():
+            self.assertGreater(count, 0, f'domain dataset {domain} has no data')
+
     def test_setup_injects_device_lists_per_profile(self) -> None:
         text = (PROJECT / 'scripts/setup_example.sh').read_text(
             encoding='utf-8')

@@ -553,11 +553,6 @@ unsupported: []
             self.assertEqual(raylike['status'], 'skipped')
             self.assertEqual(data['not_in_scope'], ['dormant'])
 
-    def test_report_only_keeps_exit_zero(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            self._setup(Path(tmp))
-            self.assertEqual(self._run_main(Path(tmp), '--report-only'), 0)
-
     def test_project_subset_and_unknown_name(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             self._setup(Path(tmp))

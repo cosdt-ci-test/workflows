@@ -7,9 +7,6 @@
 # falling back to the workflow's default_branch; split-mode examples repos
 # always follow their default branch.
 #
-# Bring-up phase: run with --report-only first (workflow_dispatch input) and
-# enable the red exit once the first-round backlog is triaged.
-
 name: examples-check
 
 on:
@@ -22,11 +19,6 @@ on:
         required: false
         default: ''
         type: string
-      report_only:
-        description: 只报告不判红
-        required: false
-        default: false
-        type: boolean
 
 permissions:
   contents: read
@@ -50,8 +42,7 @@ jobs:
             --workflows-dir .github/workflows \
             --projects-root projects \
             --output result.json \
-            ${{ inputs.project && format('--project {0}', inputs.project) || '' }} \
-            ${{ inputs.report_only && '--report-only' || '' }}
+            ${{ inputs.project && format('--project {0}', inputs.project) || '' }}
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}

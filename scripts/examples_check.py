@@ -17,8 +17,8 @@ path skeleton, replay the manifest's scan section, and reconcile:
 
 Statuses: success / failed / error (config | fetch-failed |
 scan-root-missing) / skipped (no scan root declared). Exit code: 0 when
-every project is success/skipped, 1 when any failed/error (unless
---report-only), 2 on fatal usage/registry problems.
+every project is success/skipped, 1 when any failed/error, 2 on fatal
+usage/registry problems.
 
 Requires PyYAML; curl and git for the fetch layer.
 """
@@ -577,8 +577,7 @@ def run(args: argparse.Namespace) -> int:
     emit_annotations(result)
     write_step_summary(summary_text)
 
-    has_findings = bool(result['summary']['failed'] or result['summary']['error'])
-    if has_findings and not args.report_only:
+    if result['summary']['failed'] or result['summary']['error']:
         return 1
     return 0
 
@@ -593,8 +592,6 @@ def main(argv: list[str] | None = None) -> None:
                         help='Path of the aggregate result.json')
     parser.add_argument('--project', default='',
                         help='Comma-separated subset of projects (empty = all)')
-    parser.add_argument('--report-only', action='store_true',
-                        help='Report findings without failing the exit code')
     parser.add_argument('--token', default='',
                         help='GitHub token (defaults to $GH_TOKEN)')
     args = parser.parse_args(argv)

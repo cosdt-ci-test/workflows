@@ -455,6 +455,28 @@ setup_diffusers_research_plain() {
   # requirements.txt (not install_requires) pulls einops + safetensors, so
   # pip does not fetch them — install them explicitly.
   python -m pip install lpips taming_transformers ip_adapter einops safetensors
+  # ip_adapter 0.1.0 (the ONLY PyPI release) does `from
+  # diffusers.pipelines.controlnet import MultiControlNetModel` at module
+  # level; that re-export shim was dropped in diffusers 0.41 while the class
+  # still lives at diffusers.models.controlnets.multicontrolnet. The
+  # tutorials only use ImageProjModel / Resampler / the vendored attention
+  # processors (pure torch), so rewrite that single import in the installed
+  # copy. Idempotent: a no-op if a fixed ip_adapter release ever lands.
+  python3 - <<'PY'
+from pathlib import Path
+
+import ip_adapter
+
+target = Path(ip_adapter.__file__).parent / "ip_adapter.py"
+text = target.read_text()
+old = "from diffusers.pipelines.controlnet import MultiControlNetModel"
+new = "from diffusers.models.controlnets.multicontrolnet import MultiControlNetModel"
+if old in text:
+    target.write_text(text.replace(old, new))
+    print(f"patched {target}", flush=True)
+else:
+    print(f"no patch needed: {target}", flush=True)
+PY
   # The IP-Adapter tutorials take the CLIP image encoder as a local path; the
   # repo keeps it under models/image_encoder + sdxl_models/image_encoder.
   download_assets ip-adapter

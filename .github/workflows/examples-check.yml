@@ -13,12 +13,6 @@ on:
   schedule:
     - cron: '20 1 * * *'
   workflow_dispatch:
-    inputs:
-      project:
-        description: 只检查这些项目（逗号分隔，空 = 全部）
-        required: false
-        default: ''
-        type: string
 
 permissions:
   contents: read
@@ -41,8 +35,7 @@ jobs:
           python3 scripts/examples_check.py \
             --workflows-dir .github/workflows \
             --projects-root projects \
-            --output result.json \
-            ${{ inputs.project && format('--project {0}', inputs.project) || '' }}
+            --output result.json
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}

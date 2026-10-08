@@ -508,7 +508,7 @@ supported: []
 unsupported: []
 """)
 
-    def _run_main(self, tmp: Path, *extra: str) -> int:
+    def _run_main(self, tmp: Path) -> int:
         paths_by_repo = {
             'org/demo': ['examples/a.py', 'examples/b.py', 'examples/new.py'],
             'org/raylike': ['python/x.py'],
@@ -526,7 +526,7 @@ unsupported: []
                 ec.main([
                     '--workflows-dir', str(tmp / '.github' / 'workflows'),
                     '--projects-root', str(tmp / 'projects'),
-                    '--output', str(tmp / 'result.json'), *extra])
+                    '--output', str(tmp / 'result.json')])
             return 0
         except SystemExit as exc:
             return int(exc.code or 0)
@@ -553,14 +553,6 @@ unsupported: []
             self.assertEqual(raylike['status'], 'skipped')
             self.assertEqual(data['not_in_scope'], ['dormant'])
 
-    def test_project_subset_and_unknown_name(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            self._setup(Path(tmp))
-            self.assertEqual(self._run_main(Path(tmp), '--project', 'raylike'), 0)
-            data = json.loads((Path(tmp) / 'result.json').read_text())
-            self.assertEqual([e['project'] for e in data['projects']],
-                             ['raylike'])
-            self.assertEqual(self._run_main(Path(tmp), '--project', 'nope'), 2)
 
 
 if __name__ == '__main__':

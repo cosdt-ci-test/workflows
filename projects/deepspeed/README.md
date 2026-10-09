@@ -16,7 +16,7 @@
 
 [examples_manifest.yaml](examples_manifest.yaml) 的 `scan.root` 为 DeepSpeedExamples 仓根，`include_extensions` 为 `.sh` / `.py`。`files-only` 扫描模型的对账单位是入口文件；被 import 的库、模型定义、测试等"不是 example 的配套物"全部登记在 `unsupported` 段（带说明性注释），扫描引擎不再有独立的 exclude 字段。
 
-当前 supported 共 15 条，按 example 的最小有效拓扑使用 1/2/4/8 卡 runner，统一用 CANN 9.1.0 镜像。原有 10 条沿用已验证的配方；新增 5 条已配置接入，完整 NPU 路径等待 Actions 验收。模型走 ModelScope（`ms_download_models` 下载后经 `GITHUB_ENV` 传本地路径），数据集优先使用仓内 fixture，并用 `overlay_args` 压到 CI 规模：
+当前 supported 共 15 条，按 example 的最小有效拓扑使用 1/2/4/8 卡 runner，统一用 CANN 9.1.0 镜像。Run #27 中 14 条通过，包括新增 PR-MoE、动态 batch/LR、ZenFlow 和 Wanda；HF AutoTP 在调度器初始化时失败，预热参数已修正，完整训练与保存路径等待复验。模型走 ModelScope（`ms_download_models` 下载后经 `GITHUB_ENV` 传本地路径），数据集优先使用仓内 fixture，并用 `overlay_args` 压到 CI 规模：
 
 | path（相对 examples 仓） | profile | 看护点 | 模型 / 数据 | 压规模 |
 |---|---|---|---|---|
@@ -30,7 +30,7 @@
 | `training/offload_states/offload_states.py` | deepspeed / 1 卡 | ZeRO offload_states | 随机合成数据 | 小规模 |
 | `training/cifar/run_ds_moe.sh` | ds_cifar / 2 卡 | CIFAR10 MoE expert parallel（EP=2） | ModelScope 预置并校验的 CIFAR-10 | 1 epoch |
 | `training/autotp_equivalence`（exec: `train.py`） | ds_autotp_equivalence / 4 卡 | AutoTP=1/3/4 loss 等价性 | Qwen3-0.6B（ModelScope）+ 随机 token | 每组 5 步 |
-| `training/tensor_parallel/hf_integration/train.py` | ds_hf_autotp / 8 卡 | HF Trainer AutoTP=8，含最终 TP 权重保存 | opt-125m（ModelScope）+ 16 行 Alpaca fixture | 3 步，序列 128，batch 1 |
+| `training/tensor_parallel/hf_integration/train.py` | ds_hf_autotp / 8 卡 | HF Trainer AutoTP=8，含最终 TP 权重保存 | opt-125m（ModelScope）+ 16 行 Alpaca fixture | 总共 3 步（含 2 步预热），序列 128，batch 1 |
 | `training/cifar/run_ds_prmoe.sh` | ds_cifar / 2 卡 | 残差 PR-MoE，EP=2、experts=2/4 | 与普通 CIFAR/MoE 相同 | 1 epoch |
 | `training/data_efficiency/variable_batch_size_and_lr/variable_batch_size_and_lr_example.py` | ds_variable_batch / 1 卡 | 动态序列打包、batch 与 LR 缩放 | 内置小模型和 1000 条合成序列 | 上游原生 2 epoch，pipeline=0 |
 | `training/DeepSpeed-ZenFlow/benchmark/zf_benchmark.py` | ds_zenflow / 2 卡 | ZenFlow CPU optimizer offload 单配置 smoke | 256 维、2 层模型和合成数据 | iteration=3 × update_interval=2，共 6 次循环 |
@@ -54,7 +54,9 @@ Run #22 中 10 条已有 9 条通过；两卡 MoE 已完成两个 rank 的 HCCL 
 
 HF setup 用上游慢速 tokenizer 和 SupervisedDataset 单进程生成共享数据缓存，并检查 fixture 在序列长度 128 下仍保留训练 label，八个 rank 只读该缓存；RAC setup 检查本地 prompt 可以组成完整的 4×32 token 校准窗口。新增依赖安装锁定镜像 torch/torch_npu 和被测源码 DeepSpeed，并检查 accelerator 为可用 NPU；ZenFlow 在 setup 编译/加载 CPU Adam 扩展，提前暴露工具链问题。动态 batch 没有 step/epoch 裁剪参数，保留完整的原生小规模运行，不用超时终止冒充成功。15/15 验收前保持 schedule 关闭。
 
-远程验收要求 15 个训练/推理 job 及对应 publish-result 成功。其中新增条目应完成 HF AutoTP=8 的 3 步与最终模型保存、PR-MoE 的残差专家 2/4 训练测试、动态 batch/LR 的两个 epoch、ZenFlow 的 6 次循环及更新统计，以及 Wanda NPU 校准 forward 与剪枝报告保存。尚未验证的真实风险包括 OPT 的八路 TP 切分/权重汇聚、动态 attention mask 算子、ZenFlow CPU optimizer ABI 和 Wanda NPU 算子；失败应依据真实日志定位，不通过改写上游源码兜底。
+Run #27 使用 DeepSpeed `v0.19.7`、transformers `4.57.6` 和 accelerate `1.15.0`。HF AutoTP 的上游 config 使用 `WarmupDecayLR`，`warmup_num_steps: auto` 由 HF 的 `--warmup_steps` 填充；原 CI overlay 设为 0，被 DeepSpeed 的正整数校验拒绝。现在设为 2，与调度器内部最小有效预热长度一致；总训练仍为 3 步，TP=8、模型、数据和上游 config 模板不变。后续 `ERR99999` 是此次 Python 异常后的伴随日志，不据此判定为 NPU 算子不兼容。
+
+远程验收要求 15 个训练/推理 job 及对应 publish-result 成功。其中新增条目应完成 HF AutoTP=8 的 3 步与最终模型保存、PR-MoE 的残差专家 2/4 训练测试、动态 batch/LR 的两个 epoch、ZenFlow 的 6 次循环及更新统计，以及 Wanda NPU 校准 forward 与剪枝报告保存。#27 的 15 个 publish-result 均成功，但只代表结果发布完成，不代表失败的 HF 训练已通过。HF 的完整 forward/backward 和 TP 权重汇聚仍待复验；失败应依据真实日志定位，不通过改写上游源码兜底。
 
 ## 触发
 

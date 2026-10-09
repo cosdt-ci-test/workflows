@@ -139,6 +139,18 @@ class DeepSpeedExamplesContractTests(unittest.TestCase):
         self.assertEqual(prune["--scope"], "all")
         self.assertEqual(int(prune["--nsamples"]) * int(prune["--seqlen"]), 128)
 
+    def test_hf_autotp_warmup_is_valid_for_deepspeed_scheduler(self) -> None:
+        entry = self.by_path["training/tensor_parallel/hf_integration/train.py"]
+        tokens = shlex.split(" ".join(entry["overlay_args"]))
+        warmup = int(tokens[tokens.index("--warmup_steps") + 1])
+        steps = int(tokens[tokens.index("--max_steps") + 1])
+        # Run #27: HF fills the template's auto warmup from TrainingArguments;
+        # DS WarmupDecayLR rejects zero and clamps a positive value to >=2.
+        self.assertEqual(warmup, 2)
+        self.assertEqual(steps, 3)
+        self.assertGreaterEqual(warmup, 2)
+        self.assertLess(warmup, steps)
+
     def test_ci_fixture_schemas(self) -> None:
         fixtures = PROJECT / "fixtures"
         alpaca = json.loads((fixtures / "ci_alpaca_16.json").read_text(encoding="utf-8"))

@@ -151,7 +151,7 @@ supported:
       - '--log_every 1'
     timeout_minutes: 180
 
-  # HF Trainer AutoTP；八卡 TP=8、本地 OPT-125M 与 Alpaca fixture，3 步 CI 配方待实跑。
+  # HF Trainer AutoTP；八卡 TP=8、本地模型和 fixture，3 步含 2 步预热，待复验。
   - path: training/tensor_parallel/hf_integration/train.py
     profile: ds_hf_autotp
     runner: linux-aarch64-a2-8
@@ -165,7 +165,7 @@ supported:
       - '--per_device_train_batch_size 1'
       - '--gradient_accumulation_steps 1'
       - '--learning_rate 2e-5'
-      - '--warmup_steps 0'
+      - '--warmup_steps 2'
       - '--logging_steps 1'
       - '--eval_strategy no'
       - '--save_strategy no'
@@ -176,7 +176,7 @@ supported:
       - '--dataloader_pin_memory False'
       - '--dataloader_num_workers 0'
     timeout_minutes: 120
-  # CIFAR PR-MoE；两卡 EP=2、残差专家 2/4，复用现有数据和 eager MoE，待实跑。
+  # CIFAR PR-MoE；两卡 EP=2、残差专家 2/4，eager MoE 已通过 #27。
   - path: training/cifar/run_ds_prmoe.sh
     profile: ds_cifar
     runner: linux-aarch64-a2-2
@@ -187,7 +187,7 @@ supported:
       - '--dtype bf16'
       - '--stage 0'
     timeout_minutes: 120
-  # 动态 batch/LR；单卡 accelerator 路径、内置 1000 条合成序列及 2 epoch，待实跑。
+  # 动态 batch/LR；单卡合成序列打包及 2 epoch，已通过 #27。
   - path: training/data_efficiency/variable_batch_size_and_lr/variable_batch_size_and_lr_example.py
     profile: ds_variable_batch
     runner: linux-aarch64-a2-1
@@ -195,7 +195,7 @@ supported:
     overlay_args:
       - '--pipeline-num-stages 0'
     timeout_minutes: 60
-  # ZenFlow offload；两卡合成数据、256 维/2 层单配置，6 次迭代覆盖更新统计，待实跑。
+  # ZenFlow offload；两卡 256 维/2 层合成数据，6 次迭代已通过 #27。
   - path: training/DeepSpeed-ZenFlow/benchmark/zf_benchmark.py
     profile: ds_zenflow
     runner: linux-aarch64-a2-2
@@ -210,7 +210,7 @@ supported:
       - '--update_intervals 2'
       - '--overlap_steps 0'
     timeout_minutes: 90
-  # Wanda 校准剪枝；显式 NPU、本地 OPT-125M 与 JSONL，4×32 token/首三分之一线性层，待实跑。
+  # Wanda 校准剪枝；NPU 本地 OPT-125M/JSONL，4×32 token 校准已通过 #27。
   - path: compression/reasoning_aware_compression/prune.py
     profile: ds_rac_prune
     runner: linux-aarch64-a2-1

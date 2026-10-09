@@ -60,8 +60,10 @@ HF setup 用上游慢速 tokenizer 和 SupervisedDataset 单进程生成共享�
 
 `deepspeed-examples.yml` 是薄触发器：
 
-- `workflow_dispatch`：手动运行只接受可选 `target_ref`（`deepspeedai/DeepSpeed` 的分支/tag/SHA，留空由引擎解析为上游默认），不经过 monitor 门。`upstream_repo` / `examples_repo` 固定在 workflow 内，不再支持旧版 `target_repo` 覆盖。
+- `workflow_dispatch`：手动运行只接受可选 `target_ref`（`deepspeedai/DeepSpeed` 的分支/tag/SHA），不经过 monitor 门。留空时优先选择最新 release；release 查询失败或无 release 时，使用薄触发器显式传入的 `default_branch: master`。要测试最新源码可填 `master`，不能填该仓不存在的 `main`。`upstream_repo` / `examples_repo` 固定在 workflow 内，不再支持旧版 `target_repo` 覆盖。
 - `schedule`：当前以注释保留、暂不启用。启用后由公共引擎对主仓 `deepspeedai/DeepSpeed` 做 release-only 监控（latest release tag 变化时触发，上次失败时下一周期以 `release-retry` 重试）；examples 仓无 release，始终跟随 `master`。
+
+Run #26 的 latest-release 查询返回 HTTP 403，旧触发器未声明 `default_branch`，引擎回退到 `main`，导致 `manifest-check` 的主仓 checkout 失败；15 个 example 均未启动。这次修复只补齐项目默认分支，不改公共引擎或 example 配方，也不把查询失败当成 example/NPU 兼容问题。
 
 ## 模型缓存边界
 

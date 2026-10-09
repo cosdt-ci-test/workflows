@@ -45,6 +45,21 @@ class DeepSpeedExamplesContractTests(unittest.TestCase):
              "linux-aarch64-a2-4", "linux-aarch64-a2-8"],
         )
 
+    def test_thin_trigger_sets_deepspeed_fallback_branch(self) -> None:
+        workflow = yaml.safe_load((REPO / ".github" / "workflows" /
+                                   "deepspeed-examples.yml").read_text(encoding="utf-8"))
+        self.assertEqual(set(workflow["jobs"]), {"deepspeed-examples"})
+        job = workflow["jobs"]["deepspeed-examples"]
+        self.assertEqual(job["uses"], "./.github/workflows/examples-template.yml")
+        self.assertEqual(job["with"], {
+            "project": "deepspeed",
+            "upstream_repo": "deepspeedai/DeepSpeed",
+            "examples_repo": "deepspeedai/DeepSpeedExamples",
+            "default_branch": "master",
+            "target_ref": "${{ inputs.target_ref }}",
+            "max_parallel": 4,
+        })
+
     def test_multicard_entries_match_their_launch_recipes(self) -> None:
         moe = self.by_path["training/cifar/run_ds_moe.sh"]
         self.assertEqual(moe["runner"], "linux-aarch64-a2-2")

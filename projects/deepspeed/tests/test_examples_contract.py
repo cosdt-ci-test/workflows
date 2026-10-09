@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import shlex
 import unittest
 from pathlib import Path, PurePosixPath
 
@@ -27,11 +29,12 @@ class DeepSpeedExamplesContractTests(unittest.TestCase):
         cls.run_script = RUN_SCRIPT.read_text(encoding="utf-8")
         cls.setup_script = SETUP_SCRIPT.read_text(encoding="utf-8")
 
-    def test_first_phase_has_ten_unique_matrix_entries(self) -> None:
-        self.assertEqual(len(self.supported), 10)
-        names = [PurePosixPath(entry["path"]).stem
+    def test_guard_has_fifteen_unique_matrix_entries(self) -> None:
+        self.assertEqual(len(self.supported), 15)
+        names = [str(PurePosixPath(entry["path"]).with_suffix(""))
                  for entry in self.supported]
         self.assertEqual(len(names), len(set(names)), names)
+        self.assertFalse(set(self.by_path) & self.unsupported)
 
     def test_all_runner_sizes_are_registered(self) -> None:
         labels = yaml.safe_load(ACTIONLINT.read_text(encoding="utf-8"))[
@@ -47,13 +50,13 @@ class DeepSpeedExamplesContractTests(unittest.TestCase):
         self.assertEqual(moe["runner"], "linux-aarch64-a2-2")
         self.assertEqual(moe["profile"], "ds_cifar")
         moe_launcher = self.run_script.split("run_cifar_moe()", 1)[1].split(
-            "run_autotp_equivalence()", 1
+            "run_cifar_prmoe()", 1
         )[0]
         self.assertIn("TORCH_COMPILE_DISABLE=1", moe_launcher)
         self.assertIn("--num_gpus 2", moe_launcher)
         self.assertIn("--ep-world-size 2", moe_launcher)
         self.assertIn("--num-experts 2", moe_launcher)
-        self.assertEqual(self.run_script.count("TORCH_COMPILE_DISABLE=1"), 1)
+        self.assertEqual(self.run_script.count("TORCH_COMPILE_DISABLE=1"), 2)
         self.assertNotIn("export TORCH_COMPILE_DISABLE=1", self.run_script)
 
         autotp = self.by_path["training/autotp_equivalence"]
@@ -70,7 +73,70 @@ class DeepSpeedExamplesContractTests(unittest.TestCase):
         self.assertNotIn("training/cifar/run_ds_moe.sh", self.unsupported)
         self.assertNotIn(
             "training/autotp_equivalence/train.py", self.unsupported)
-        self.assertIn("training/cifar/run_ds_prmoe.sh", self.unsupported)
+        promoted = {
+            "training/cifar/run_ds_prmoe.sh",
+            "training/tensor_parallel/hf_integration/train.py",
+            "training/data_efficiency/variable_batch_size_and_lr/variable_batch_size_and_lr_example.py",
+            "training/DeepSpeed-ZenFlow/benchmark/zf_benchmark.py",
+            "compression/reasoning_aware_compression/prune.py",
+        }
+        self.assertTrue(promoted <= set(self.by_path))
+        self.assertFalse(promoted & self.unsupported)
+        self.assertIn("training/bf16_master_weight/train.py", self.unsupported)
+        self.assertIn("training/pipeline_parallelism/train.py", self.unsupported)
+
+    def test_new_recipes_preserve_features_and_bound_work(self) -> None:
+        def args(path: str) -> dict[str, str]:
+            tokens = shlex.split(" ".join(self.by_path[path]["overlay_args"]))
+            return {token: tokens[i + 1] if i + 1 < len(tokens) and
+                    not tokens[i + 1].startswith("--") else ""
+                    for i, token in enumerate(tokens) if token.startswith("--")}
+
+        hf_path = "training/tensor_parallel/hf_integration/train.py"
+        hf = args(hf_path)
+        self.assertEqual(self.by_path[hf_path]["runner"], "linux-aarch64-a2-8")
+        self.assertEqual(hf["--model_name_or_path"], "${OPT_125M_PATH}")
+        self.assertEqual(hf["--data_path"], "${ALPACA_CI_PATH}")
+        self.assertEqual(hf["--max_steps"], "3")
+        self.assertEqual(hf["--tf32"], "False")
+
+        prmoe = self.by_path["training/cifar/run_ds_prmoe.sh"]
+        self.assertEqual(prmoe["runner"], "linux-aarch64-a2-2")
+        self.assertEqual(prmoe["profile"], "ds_cifar")
+
+        zen_path = "training/DeepSpeed-ZenFlow/benchmark/zf_benchmark.py"
+        zen = args(zen_path)
+        self.assertEqual(self.by_path[zen_path]["runner"], "linux-aarch64-a2-2")
+        update_interval = int(zen["--update_intervals"])
+        iterations = int(zen["--iteration"]) * update_interval
+        # Both post-warmup timing buckets must be nonempty in upstream code.
+        measured = range(update_interval, iterations)
+        self.assertTrue(any((i + 1) % update_interval == 0 for i in measured))
+        self.assertTrue(any((i + 1) % update_interval != 0 for i in measured))
+
+        prune_path = "compression/reasoning_aware_compression/prune.py"
+        prune = args(prune_path)
+        self.assertEqual(prune["--device"], "npu")
+        self.assertEqual(prune["--pruning-method"], "wanda")
+        self.assertEqual(prune["--calibration"], "prompt")
+        self.assertEqual(prune["--dataset"], "${RAC_CI_PATH}")
+        # OPT fc1/fc2 names do not match upstream's scope=mlp filter.
+        self.assertEqual(prune["--scope"], "all")
+        self.assertEqual(int(prune["--nsamples"]) * int(prune["--seqlen"]), 128)
+
+    def test_ci_fixture_schemas(self) -> None:
+        fixtures = PROJECT / "fixtures"
+        alpaca = json.loads((fixtures / "ci_alpaca_16.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(alpaca), 16)
+        for row in alpaca:
+            self.assertEqual(set(row), {"instruction", "input", "output"})
+            self.assertTrue(row["instruction"])
+            self.assertTrue(row["output"])
+        calibration = [json.loads(line) for line in
+                       (fixtures / "ci_rac_8.jsonl").read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(len(calibration), 8)
+        self.assertTrue(all(isinstance(row["prompt"], str) and row["prompt"]
+                            for row in calibration))
 
     def test_ds_chat_keeps_launcher_semantics(self) -> None:
         chat_entries = [

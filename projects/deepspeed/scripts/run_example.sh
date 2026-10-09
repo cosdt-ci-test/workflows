@@ -121,6 +121,24 @@ master_port_for() {
   printf '%s\n' "$((20000 + run_id % 20000 + offset))"
 }
 
+require_overlay_path() {
+  local flag="$1"
+  local kind="$2"
+  local index value=''
+  for ((index = 0; index < ${#EXTRA_ARGS[@]}; index++)); do
+    if [[ "${EXTRA_ARGS[index]}" == "$flag" ]]; then
+      value="${EXTRA_ARGS[index + 1]:-}"
+      break
+    fi
+  done
+  if [[ -z "$value" ]] ||
+     { [[ "$kind" == directory ]] && [[ ! -d "$value" ]]; } ||
+     { [[ "$kind" == file ]] && [[ ! -f "$value" ]]; }; then
+    echo "missing local $kind for $entry_key: $flag=${value:-<unset>}" >&2
+    exit 1
+  fi
+}
+
 run_cifar_moe() {
   require_visible_devices 2 '0,1'
   local devices
@@ -143,6 +161,113 @@ run_cifar_moe() {
     --noisy-gate-policy RSample \
     --moe-param-group \
     "${EXTRA_ARGS[@]}"
+}
+
+run_cifar_prmoe() {
+  require_visible_devices 2 '0,1'
+  local devices
+  devices="$(first_visible_devices 2)"
+  echo "reproducing upstream run_ds_prmoe.sh on devices $devices: EP=2, experts=2/4, residual MoE"
+  echo "disabling optional torch.compile for DeepSpeed MoE helpers; eager PR-MoE/EP execution is preserved"
+  TORCH_COMPILE_DISABLE=1 \
+  ASCEND_RT_VISIBLE_DEVICES="$devices" \
+  deepspeed \
+    --master_port "$(master_port_for 3)" \
+    --num_nodes 1 \
+    --num_gpus 2 \
+    "$EXAMPLES_ROOT/training/cifar/cifar10_deepspeed.py" \
+    --deepspeed \
+    --moe \
+    --ep-world-size 2 \
+    --num-experts 2 4 \
+    --top-k 1 \
+    --mlp-type residual \
+    --noisy-gate-policy RSample \
+    --moe-param-group \
+    "${EXTRA_ARGS[@]}"
+}
+
+run_hf_autotp() {
+  require_visible_devices 8 '0,1,2,3,4,5,6,7'
+  require_overlay_path --model_name_or_path directory
+  require_overlay_path --data_path file
+  local devices config_path
+  devices="$(first_visible_devices 8)"
+  config_path="$CI_OUTPUT_DIR/hf-autotp-config.json"
+  "$PYTHON" - "$EXAMPLES_ROOT/training/tensor_parallel/hf_integration/configs/ds_config_temp.json" "$config_path" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+template = Path(sys.argv[1]).read_text()
+config = json.loads(template.replace('${zero_stage}', '0').replace('${autotp_size}', '8'))
+if config['zero_optimization']['stage'] != 0 or config['tensor_parallel']['autotp_size'] != 8:
+    raise SystemExit('HF AutoTP CI requires ZeRO=0 and AutoTP=8')
+Path(sys.argv[2]).write_text(json.dumps(config, indent=2) + '\n')
+PY
+  # The upstream example caches tokenized data in its working directory and
+  # unconditionally saves the final model. Keep all generated files in CI output.
+  if [[ ! -s "$CI_OUTPUT_DIR/hf-autotp-work/dataset_dict.pkl" ]]; then
+    echo "HF AutoTP shared tokenization cache missing; run ds_hf_autotp setup first" >&2
+    exit 1
+  fi
+  mkdir -p "$CI_OUTPUT_DIR/hf-autotp-work"
+  cd "$CI_OUTPUT_DIR/hf-autotp-work"
+  echo "running HF Trainer AutoTP=8 on devices $devices with config $config_path"
+  ASCEND_RT_VISIBLE_DEVICES="$devices" WANDB_MODE=disabled deepspeed \
+    --master_port "$(master_port_for 28)" \
+    --num_gpus 8 \
+    --no_local_rank \
+    "$LAUNCH_PATH" \
+    --deepspeed "$config_path" \
+    "${EXTRA_ARGS[@]}"
+}
+
+run_variable_batch() {
+  require_visible_devices 1 '0'
+  local devices
+  devices="$(first_visible_devices 1)"
+  mkdir -p "$CI_OUTPUT_DIR/variable-batch-work"
+  cd "$CI_OUTPUT_DIR/variable-batch-work"
+  echo "running upstream dynamic sequence packing and LR scaling on device $devices"
+  ASCEND_RT_VISIBLE_DEVICES="$devices" deepspeed \
+    --master_port "$(master_port_for 31)" \
+    --num_gpus 1 \
+    --no_local_rank \
+    "$LAUNCH_PATH" "${EXTRA_ARGS[@]}"
+}
+
+run_zenflow() {
+  require_visible_devices 2 '0,1'
+  local devices
+  devices="$(first_visible_devices 2)"
+  mkdir -p "$CI_OUTPUT_DIR/zenflow-work"
+  cd "$CI_OUTPUT_DIR/zenflow-work"
+  echo "running two-rank ZenFlow optimizer-offload smoke on devices $devices"
+  ASCEND_RT_VISIBLE_DEVICES="$devices" deepspeed \
+    --master_port "$(master_port_for 42)" \
+    --num_gpus 2 \
+    "$LAUNCH_PATH" "${EXTRA_ARGS[@]}"
+}
+
+run_rac_prune() {
+  require_visible_devices 1 '0'
+  require_overlay_path --model directory
+  require_overlay_path --dataset file
+  local devices
+  devices="$(first_visible_devices 1)"
+  echo "running upstream calibration-based pruning on NPU $devices"
+  # Import the vendor backend normally before executing the unchanged entry.
+  # runpy needs the sibling rac package on sys.path, as ordinary python does.
+  ASCEND_RT_VISIBLE_DEVICES="$devices" "$PYTHON" -c '
+import os
+import runpy
+import sys
+import torch_npu
+sys.argv = sys.argv[1:]
+sys.path.insert(0, os.path.dirname(sys.argv[0]))
+runpy.run_path(sys.argv[0], run_name="__main__")
+' "$LAUNCH_PATH" "${EXTRA_ARGS[@]}"
 }
 
 run_autotp_equivalence() {
@@ -177,6 +302,26 @@ run_autotp_equivalence() {
 case "$entry_key" in
   training/cifar/run_ds_moe.sh)
     run_cifar_moe
+    exit 0
+    ;;
+  training/cifar/run_ds_prmoe.sh)
+    run_cifar_prmoe
+    exit 0
+    ;;
+  training/tensor_parallel/hf_integration/train.py)
+    run_hf_autotp
+    exit 0
+    ;;
+  training/data_efficiency/variable_batch_size_and_lr/variable_batch_size_and_lr_example.py)
+    run_variable_batch
+    exit 0
+    ;;
+  training/DeepSpeed-ZenFlow/benchmark/zf_benchmark.py)
+    run_zenflow
+    exit 0
+    ;;
+  compression/reasoning_aware_compression/prune.py)
+    run_rac_prune
     exit 0
     ;;
   training/autotp_equivalence/train.py)

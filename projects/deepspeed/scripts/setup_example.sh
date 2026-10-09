@@ -87,6 +87,25 @@ for pair in sys.argv[1:]:
     with open(os.environ["GITHUB_ENV"], "a") as fh:
         fh.write(f"{env_name}={local}\n")
 PY
+  # GITHUB_ENV is applied in the next step; expose only requested model names
+  # in this setup process so fixture checks can use the downloaded tokenizer.
+  local pair env_name local_path
+  for pair in "$@"; do
+    env_name="${pair%%=*}"
+    [[ "$env_name" =~ ^[A-Z_][A-Z0-9_]*$ ]] || {
+      echo "invalid model environment name: $env_name" >&2
+      return 1
+    }
+    local_path="$(awk -v key="$env_name" '
+      index($0, key "=") == 1 { value = substr($0, length(key) + 2) }
+      END { print value }
+    ' "$GITHUB_ENV")"
+    [[ -d "$local_path" ]] || {
+      echo "downloaded model directory missing for $env_name: $local_path" >&2
+      return 1
+    }
+    export "$env_name=$local_path"
+  done
 }
 
 # Redirect the renamed wikitext dataset at interpreter startup without editing
@@ -153,7 +172,10 @@ setup_deepspeed() {
     python -m pip install "tokenizers>=0.22.0,<0.23" "transformers<5" datasets \
       fire loguru "sh==1.14.2" tqdm pytz tensorboard \
       "torchvision==0.24.0" "pillow>=7.1.0" matplotlib
-  install_hello_dataset_shim
+  # CIFAR profiles reuse these packages but never load wikitext.
+  if [[ "$PROFILE" == deepspeed ]]; then
+    install_hello_dataset_shim
+  fi
 }
 
 # Pre-stage CIFAR-10 from a pinned ModelScope dataset revision. Both the
@@ -272,20 +294,206 @@ setup_ds_autotp_equivalence() {
   ms_download_models "QWEN3_06B_PATH=Qwen/Qwen3-0.6B"
 }
 
-verify_installed_runtime() {
+# Install only each example's non-runtime requirements. Constraints also stop
+# transitive dependencies from replacing the image NPU stack or source DS.
+install_example_dependencies() {
+  local constraint_dir="$GITHUB_WORKSPACE/.ci/deepspeed-dependencies"
+  local constraint_file="$constraint_dir/protected-stack.txt"
+  mkdir -p "$constraint_dir"
+  python - "$constraint_file" <<'PY'
+from importlib.metadata import version
+from pathlib import Path
+import sys
+
+protected = ("torch", "torch-npu", "deepspeed")
+constraints = "".join(f"{name}=={version(name)}\n" for name in protected)
+Path(sys.argv[1]).write_text(constraints)
+print("preserving installed runtime dependencies:\n" + constraints)
+PY
+  python -m pip install --constraint "$constraint_file" "$@"
+}
+
+# New examples accept explicit fixture paths, so stage their data outside the
+# examples checkout instead of changing any upstream source or dataset loader.
+plant_ci_fixture() {
+  local fixture="$1"
+  local env_name="$2"
+  local ci_dir="$GITHUB_WORKSPACE/.ci/deepspeed-fixtures"
+  mkdir -p "$ci_dir"
+  cp "$FIXTURE_DIR/$fixture" "$ci_dir/$fixture"
+  export "$env_name=$ci_dir/$fixture"
+  echo "$env_name=$ci_dir/$fixture" >> "$GITHUB_ENV"
+  echo "staged $fixture -> $ci_dir/$fixture ($env_name)"
+}
+
+setup_ds_hf_autotp() {
+  install_deepspeed_source
+  # train.py imports Trainer directly; the extra evaluation/OpenAI packages in
+  # the upstream requirements belong to utils.py, which this entry never imports.
+  install_example_dependencies "transformers>=4.51.0,<5" "accelerate>=1.10.1,<2" \
+    sentencepiece psutil numpy safetensors
+  ms_download_models "OPT_125M_PATH=facebook/opt-125m"
+  plant_ci_fixture ci_alpaca_16.json ALPACA_CI_PATH
+  python - <<'PY'
+import accelerate
+import importlib.util
+import os
+from pathlib import Path
+import psutil
+import sys
+import sentencepiece
+import torch_npu
+import transformers
+from transformers import AutoTokenizer, Trainer
+
+entry = Path(os.environ["EXAMPLES_ROOT"]) / "training/tensor_parallel/hf_integration/train.py"
+spec = importlib.util.spec_from_file_location("ds_ci_hf_autotp", entry)
+upstream = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = upstream
+spec.loader.exec_module(upstream)
+tokenizer = AutoTokenizer.from_pretrained(os.environ["OPT_125M_PATH"],
+                                         model_max_length=128, padding_side="right", use_fast=False)
+special_tokens = {}
+for kind in ("pad", "eos", "bos", "unk"):
+    if getattr(tokenizer, f"{kind}_token") is None:
+        special_tokens[f"{kind}_token"] = getattr(upstream, f"DEFAULT_{kind.upper()}_TOKEN")
+tokenizer.add_special_tokens(special_tokens)
+# SupervisedDataset writes a fixed dataset_dict.pkl in cwd. Precompute it once
+# before eight ranks start, in the output directory used by the project runner.
+# The engine supplies CI_OUTPUT_DIR only to run, whose default is workspace/output.
+output_root = Path(os.environ.get("CI_OUTPUT_DIR", str(Path(os.environ["GITHUB_WORKSPACE"]) / "output")))
+work_dir = output_root / "hf-autotp-work"
+work_dir.mkdir(parents=True, exist_ok=True)
+cache = work_dir / "dataset_dict.pkl"
+# A runner may retain output from a previous job. This file is our generated
+# tokenization cache; rebuild it from this run's fixture before workers read it.
+cache.unlink(missing_ok=True)
+previous_cwd = Path.cwd()
+try:
+    os.chdir(work_dir)
+    dataset = upstream.SupervisedDataset(os.environ["ALPACA_CI_PATH"], tokenizer)
+finally:
+    os.chdir(previous_cwd)
+counts = [(labels != upstream.IGNORE_INDEX).sum().item() for labels in dataset.labels]
+if len(dataset) != 16 or any(count == 0 for count in counts):
+    raise SystemExit(f"HF AutoTP fixture lost training labels at length 128: {counts}")
+if not cache.is_file() or cache.stat().st_size == 0:
+    raise SystemExit(f"HF AutoTP pre-tokenized cache missing: {cache}")
+print("HF AutoTP shared pre-tokenized cache:", cache)
+print("HF AutoTP non-masked target tokens per fixture row:", counts)
+
+print("HF AutoTP dependencies:", "transformers", transformers.__version__,
+      "accelerate", accelerate.__version__, "psutil", psutil.__version__)
+PY
+}
+
+setup_ds_variable_batch() {
+  install_deepspeed_source
+  # DeepSpeed's DataAnalyzer/data-sampling path uses these packages. The
+  # example itself constructs its small model and synthetic dataset locally.
+  install_example_dependencies numpy pandas
+  python - <<'PY'
+import numpy
+import pandas
+import torch_npu
+from deepspeed.runtime.data_pipeline.data_sampling.variable_batch_size_and_lr import (
+    get_dataloader_and_lr_scheduler_for_variable_batch_size_deepspeed,
+)
+
+print("dynamic batch dependencies:", "numpy", numpy.__version__,
+      "pandas", pandas.__version__)
+PY
+}
+
+setup_ds_zenflow() {
+  install_deepspeed_source
+  # benchmark/requirements.txt without its torch/deepspeed entries. CPU Adam
+  # is imported here; its actual NPU/offload execution is checked by the run.
+  install_example_dependencies "datasets>=2.14.1" "transformers>=4.37.2,<5" \
+    "numpy>=1.21.0" tabulate pandas ninja
+  echo "installing C++ build tools for upstream ZenFlow CPU Adam"
+  apt-get install -y build-essential
+  python - <<'PY'
+import datasets
+import numpy
+import pandas
+import tabulate
+import torch_npu
+import transformers
+from deepspeed.ops.adam import DeepSpeedCPUAdam
+from deepspeed.ops.op_builder import CPUAdamBuilder
+
+builder = CPUAdamBuilder()
+print("checking ZenFlow CPU Adam extension:", type(builder).__name__)
+builder.load(verbose=True)
+print("ZenFlow CPU Adam extension loaded successfully")
+
+print("ZenFlow dependencies:", "datasets", datasets.__version__,
+      "transformers", transformers.__version__, "numpy", numpy.__version__,
+      "pandas", pandas.__version__, "tabulate", tabulate.__version__)
+PY
+}
+
+setup_ds_rac_prune() {
+  install_deepspeed_source
+  # Local prompt JSONL takes the standard-library branch of the calibration
+  # loader. No datasets, vLLM, evaluation backend or runtime patch is needed.
+  install_example_dependencies "transformers>=4.45.0,<5" "accelerate>=0.30" \
+    sentencepiece safetensors
+  ms_download_models "OPT_125M_PATH=facebook/opt-125m"
+  plant_ci_fixture ci_rac_8.jsonl RAC_CI_PATH
   python - <<'PY'
 import os
 from pathlib import Path
+import sys
+
+import accelerate
+import torch_npu
+import transformers
+
+sys.path.insert(0, str(Path(os.environ["EXAMPLES_ROOT"]) /
+                       "compression/reasoning_aware_compression"))
+from rac import build_calibration_samples, sequential_prune
+from rac.wanda import Wanda
+from transformers import AutoTokenizer
+
+tokenizer = AutoTokenizer.from_pretrained(os.environ["OPT_125M_PATH"])
+samples = build_calibration_samples(
+    "prompt", tokenizer, nsamples=4, seqlen=32, seed=0,
+    dataset_name=os.environ["RAC_CI_PATH"], prompt_column="prompt",
+    use_chat_template=False,
+)
+if len(samples) != 4 or any(sample.numel() != 32 for sample in samples):
+    raise SystemExit("RAC fixture cannot fill the required 4 x 32 token windows")
+print("RAC calibration fixture:", len(samples), "windows x", samples[0].numel(), "tokens")
+
+print("Wanda pruning dependencies:", "transformers", transformers.__version__,
+      "accelerate", accelerate.__version__)
+PY
+}
+
+verify_installed_runtime() {
+  python - "$PROFILE" <<'PY'
+import os
+from pathlib import Path
+import sys
 
 import deepspeed
 import torch
 import torch_npu
+from deepspeed.accelerator import get_accelerator
 
 source_root = Path(os.environ["TARGET_ROOT"]).resolve()
 deepspeed_file = Path(deepspeed.__file__).resolve()
 print("runtime torch:", torch.__version__)
 print("runtime torch_npu:", torch_npu.__version__)
 print("runtime deepspeed:", deepspeed.__version__, deepspeed_file)
+if sys.argv[1] in {"ds_cifar", "ds_hf_autotp", "ds_variable_batch", "ds_zenflow", "ds_rac_prune"}:
+    accelerator = get_accelerator()._name
+    available = torch.npu.is_available()
+    print("runtime accelerator:", accelerator, "NPU available:", available)
+    if accelerator != "npu" or not available:
+        raise SystemExit(f"new DeepSpeed NPU example requires available npu accelerator, got {accelerator}")
 try:
     deepspeed_file.relative_to(source_root)
 except ValueError as exc:

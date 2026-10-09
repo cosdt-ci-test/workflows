@@ -16,7 +16,7 @@
 
 [examples_manifest.yaml](examples_manifest.yaml) 的 `scan.root` 为 DeepSpeedExamples 仓根，`include_extensions` 为 `.sh` / `.py`。`files-only` 扫描模型的对账单位是入口文件；被 import 的库、模型定义、测试等"不是 example 的配套物"全部登记在 `unsupported` 段（带说明性注释），扫描引擎不再有独立的 exclude 字段。
 
-第一阶段 supported 共 10 条，按 example 的最小有效拓扑使用 1/2/4 卡 runner，统一用 CANN 9.1.0 镜像。模型走 ModelScope（`ms_download_models` 下载后经 `GITHUB_ENV` 传本地路径），数据集优先使用仓内 fixture，并用 `overlay_args` 压到 CI 规模：
+当前 supported 共 15 条，按 example 的最小有效拓扑使用 1/2/4/8 卡 runner，统一用 CANN 9.1.0 镜像。原有 10 条沿用已验证的配方；新增 5 条已配置接入，完整 NPU 路径等待 Actions 验收。模型走 ModelScope（`ms_download_models` 下载后经 `GITHUB_ENV` 传本地路径），数据集优先使用仓内 fixture，并用 `overlay_args` 压到 CI 规模：
 
 | path（相对 examples 仓） | profile | 看护点 | 模型 / 数据 | 压规模 |
 |---|---|---|---|---|
@@ -30,22 +30,31 @@
 | `training/offload_states/offload_states.py` | deepspeed / 1 卡 | ZeRO offload_states | 随机合成数据 | 小规模 |
 | `training/cifar/run_ds_moe.sh` | ds_cifar / 2 卡 | CIFAR10 MoE expert parallel（EP=2） | ModelScope 预置并校验的 CIFAR-10 | 1 epoch |
 | `training/autotp_equivalence`（exec: `train.py`） | ds_autotp_equivalence / 4 卡 | AutoTP=1/3/4 loss 等价性 | Qwen3-0.6B（ModelScope）+ 随机 token | 每组 5 步 |
+| `training/tensor_parallel/hf_integration/train.py` | ds_hf_autotp / 8 卡 | HF Trainer AutoTP=8，含最终 TP 权重保存 | opt-125m（ModelScope）+ 16 行 Alpaca fixture | 3 步，序列 128，batch 1 |
+| `training/cifar/run_ds_prmoe.sh` | ds_cifar / 2 卡 | 残差 PR-MoE，EP=2、experts=2/4 | 与普通 CIFAR/MoE 相同 | 1 epoch |
+| `training/data_efficiency/variable_batch_size_and_lr/variable_batch_size_and_lr_example.py` | ds_variable_batch / 1 卡 | 动态序列打包、batch 与 LR 缩放 | 内置小模型和 1000 条合成序列 | 上游原生 2 epoch，pipeline=0 |
+| `training/DeepSpeed-ZenFlow/benchmark/zf_benchmark.py` | ds_zenflow / 2 卡 | ZenFlow CPU optimizer offload 单配置 smoke | 256 维、2 层模型和合成数据 | iteration=3 × update_interval=2，共 6 次循环 |
+| `compression/reasoning_aware_compression/prune.py` | ds_rac_prune / 1 卡 | Wanda 校准剪枝，显式使用 NPU | opt-125m（ModelScope）+ 8 行 prompt JSONL | 4×32 token，首三分之一 block 的线性层 |
 
 **启动方式的选择**：`cifar10_deepspeed.py` 的 main() 无条件读 launcher 注入的 `LOCAL_RANK` 并调 `init_distributed()`，因此普通 CIFAR 经支持 `$@` 的上游 `run_ds.sh` 启动。CIFAR MoE 的上游脚本不透传 `$@`，项目 runner 按原配方复刻两卡 launcher、EP=2 和 MoE 参数，再追加 CI overlay。DS-Chat 官方 training_scripts 硬编码 1.3B～66B 模型且不透传任意参数，项目 runner 等价执行 `deepspeed --num_gpus 1 main.py <overlay_args>`。AutoTP equivalence 同样复刻上游 `run_gpu.sh` 的 1/3/4 卡三次启动与 loss 比较，但显式传入 ModelScope 本地模型。offload_states 与 `--hf_baseline` inference 不依赖 launcher，直接运行 `.py`。
 
-多卡条目启动前会检查 `ASCEND_RT_VISIBLE_DEVICES`：MoE 至少需要 2 卡，AutoTP equivalence 至少需要 4 卡；runner 未注入时分别使用 `0,1` 和 `0,1,2,3`。这个变量只过滤子进程可见的物理 NPU 并把它们重新映射为进程内的逻辑设备，不负责创建 worker；实际 rank 数仍由 `deepspeed --num_gpus` 决定。AutoTP 三次子运行使用独立 master port，避免进程组端口复用。
+多卡条目启动前会检查 `ASCEND_RT_VISIBLE_DEVICES`：MoE、PR-MoE 和 ZenFlow 至少需要 2 卡，AutoTP equivalence 至少需要 4 卡，HF AutoTP 需要 8 卡；runner 未注入时按所需卡数选择从 0 开始的设备列表。这个变量只过滤子进程可见的物理 NPU 并把它们重新映射为进程内的逻辑设备，不负责创建 worker；实际 rank 数仍由 `deepspeed --num_gpus` 决定。各配方使用不同 master port，AutoTP 三次子运行也各自分配端口。
 
 bf16_master_weight 与 pipeline_parallelism 曾进 supported，CI 实测其源码硬绑 CUDA（`torch.cuda.set_device` / `autocast(device_type="cuda")` / `--backend nccl`），装包无法解决，已移回 unsupported（需 patch，次轮候选）。
 
 DeepSpeed-Chat 的 `--data_path local/jsonfile` 从 `applications/DeepSpeed-Chat/data/{train,eval}.json` 读取（JSON Lines，字段 `prompt`/`chosen`/`rejected`）；`scripts/setup_example.sh` 在对应 profile 下把 [fixtures/](fixtures/) 里的 8 行 fixture 拷到该目录。上游 `setup.py` 的 `find_packages(include=['dschat'])` 无法安装缺少根 `__init__.py` 的 namespace package，因此 setup 不依赖其空 editable wheel，而是把 `applications/DeepSpeed-Chat` 源码根目录写入 `PYTHONPATH` 并立即执行 `import dschat` 验证。上游 [issue #813](https://github.com/deepspeedai/DeepSpeedExamples/issues/813) 也记录了 DeepSpeed-Chat 在切换执行/缓存上下文后发生模块解析错误，但不是本次完全相同的报错。模型经 `ms_download_models` 从 ModelScope 下载到本地，路径写入 `GITHUB_ENV`（`OPT_125M_PATH` / `QWEN3_06B_PATH`），overlay_args 引用本地目录。setup 按上游 requirements/setup.py 显式安装依赖，但不会从 PyPI 覆盖镜像的 `torch + torch_npu` 或 `$TARGET_ROOT` 中的 DeepSpeed 源码；安装后会校验 `deepspeed.__file__` 位于目标源码树。
 
-CIFAR 单卡和两卡 MoE 共用 `ds_cifar` profile。setup 从固定 revision 的 ModelScope 镜像下载 CIFAR-10 zip，先校验 SHA-256，再解压到上游脚本使用的 `training/cifar/data`，最后调用 torchvision 自带的官方逐文件 MD5 清单复核。这样保留 example 的 `download=True` 原始逻辑，但完整数据已存在时不会访问 CI 中超时的 Toronto 源；其余 `deepspeed` profile 不承担这次约 170 MB 的下载。
+CIFAR 单卡、两卡 MoE 和 PR-MoE 共用 `ds_cifar` profile。setup 从固定 revision 的 ModelScope 镜像下载 CIFAR-10 zip，先校验 SHA-256，再解压到上游脚本使用的 `training/cifar/data`，最后调用 torchvision 自带的官方逐文件 MD5 清单复核。这样保留 example 的 `download=True` 原始逻辑，但完整数据已存在时不会访问 CI 中超时的 Toronto 源；其余 `deepspeed` profile 不承担这次约 170 MB 的下载。
 
 Run #22 中 10 条已有 9 条通过；两卡 MoE 已完成两个 rank 的 HCCL 初始化并创建 EP=2 group，首次 forward 才在 DeepSpeed `sharded_moe._capacity()` 触发 `torch.compile`，随后因镜像没有 Triton 后端而报 `ModuleNotFoundError: triton`。这是 DeepSpeed 0.19.7 将 MoE helper 从 TorchScript 改为 `torch.compile` 后产生的可选编译路径（[issue #7835](https://github.com/deepspeedai/DeepSpeed/issues/7835)、[PR #7840](https://github.com/deepspeedai/DeepSpeed/pull/7840)）；后续 [PR #7875](https://github.com/deepspeedai/DeepSpeed/pull/7875) 的 fallback 无法捕获 `torch.compile` 在首次调用时才发生的懒编译失败。项目 runner 因此仅对 CIFAR MoE 命令设置 `TORCH_COMPILE_DISABLE=1`，让该 helper 走 eager；两卡 launcher、HCCL、MoE 和 EP=2 训练语义均保留，也不要求为一个未由 example 声明的可选优化安装版本敏感的 Triton-Ascend。
 
-其余约 240 条列入 unsupported：同一逻辑 example 的 `.sh` 启动包装已并入对应 `.py` 条目，每一条都带一行内联中文注释，注明具体不支持原因（多机多卡 mpi/NCCL、需 ImageNet/大模型、绑 CUDA 算子、NVMe 硬件、性能基准、compression 需 patch、依赖远程 HF 数据集等）；原 `scan.exclude` 中的 16 个配套目录也在此登记，见 manifest。清单与磁盘的差异只打印路径，不使 job 失败；例外：`supported` 条目的 path 已不在磁盘上时 manifest-check 立即判红。
+其余约 235 条列入 unsupported：同一逻辑 example 的 `.sh` 启动包装已并入对应 `.py` 条目；每条上方保留一行中文注释，仅说明用途和当前未接入原因。原 `scan.exclude` 中的 16 个配套目录也在此登记，见 manifest。清单与磁盘的差异只打印路径，不使 job 失败；例外：`supported` 条目的 path 已不在磁盘上时 manifest-check 立即判红。
 
-第二阶段以第一阶段 10/10 远程全绿为门槛；届时再评估加入 `linux-aarch64-a2-8` 的 HF AutoTP=8 和两卡 ZenFlow 单配置 smoke，未验收前不进入 supported，也不启用 schedule。
+新增配方通过 CLI、launcher、依赖版本和 fixture 接入，不修改上游 Python/启动脚本，也不为新增条目安装 API monkey patch。HF、动态 batch 和 ZenFlow 的运行缓存/报告写入本次 CI 输出目录；HF config 根据上游模板在输出目录生成。RAC 只通过正常 `import torch_npu` 注册设备后运行原入口，使用校准 forward 的 Wanda 路径，避免仅在 CPU 上完成 magnitude 剪枝却误判 NPU 通过。OPT 的前馈层名为 fc1/fc2，不匹配上游 `scope=mlp` 的命名筛选，因此这里使用 `scope=all`。PR-MoE 与普通 MoE 均局部禁用可选的 `torch.compile`。
+
+HF setup 用上游慢速 tokenizer 和 SupervisedDataset 单进程生成共享数据缓存，并检查 fixture 在序列长度 128 下仍保留训练 label，八个 rank 只读该缓存；RAC setup 检查本地 prompt 可以组成完整的 4×32 token 校准窗口。新增依赖安装锁定镜像 torch/torch_npu 和被测源码 DeepSpeed，并检查 accelerator 为可用 NPU；ZenFlow 在 setup 编译/加载 CPU Adam 扩展，提前暴露工具链问题。动态 batch 没有 step/epoch 裁剪参数，保留完整的原生小规模运行，不用超时终止冒充成功。15/15 验收前保持 schedule 关闭。
+
+远程验收要求 15 个训练/推理 job 及对应 publish-result 成功。其中新增条目应完成 HF AutoTP=8 的 3 步与最终模型保存、PR-MoE 的残差专家 2/4 训练测试、动态 batch/LR 的两个 epoch、ZenFlow 的 6 次循环及更新统计，以及 Wanda NPU 校准 forward 与剪枝报告保存。尚未验证的真实风险包括 OPT 的八路 TP 切分/权重汇聚、动态 attention mask 算子、ZenFlow CPU optimizer ABI 和 Wanda NPU 算子；失败应依据真实日志定位，不通过改写上游源码兜底。
 
 ## 触发
 

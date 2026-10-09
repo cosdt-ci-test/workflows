@@ -29,8 +29,8 @@ class DeepSpeedExamplesContractTests(unittest.TestCase):
         cls.run_script = RUN_SCRIPT.read_text(encoding="utf-8")
         cls.setup_script = SETUP_SCRIPT.read_text(encoding="utf-8")
 
-    def test_guard_has_fifteen_unique_matrix_entries(self) -> None:
-        self.assertEqual(len(self.supported), 15)
+    def test_guard_has_nineteen_unique_matrix_entries(self) -> None:
+        self.assertEqual(len(self.supported), 19)
         names = [str(PurePosixPath(entry["path"]).with_suffix(""))
                  for entry in self.supported]
         self.assertEqual(len(names), len(set(names)), names)
@@ -94,6 +94,10 @@ class DeepSpeedExamplesContractTests(unittest.TestCase):
             "training/data_efficiency/variable_batch_size_and_lr/variable_batch_size_and_lr_example.py",
             "training/DeepSpeed-ZenFlow/benchmark/zf_benchmark.py",
             "compression/reasoning_aware_compression/prune.py",
+            "applications/DeepSpeed-Chat/training/step1_supervised_finetuning/prompt_eval.py",
+            "applications/DeepSpeed-Chat/training/step2_reward_model_finetuning/rw_eval.py",
+            "training/tensor_parallel/hf_integration/train_bench_length.py",
+            "training/DeepSpeed-SuperOffload/finetune_zero3.py",
         }
         self.assertTrue(promoted <= set(self.by_path))
         self.assertFalse(promoted & self.unsupported)
@@ -175,7 +179,54 @@ class DeepSpeedExamplesContractTests(unittest.TestCase):
         # needs a trained checkpoint. Only the redundant chat.py wrapper is removed.
         self.assertIn("applications/DeepSpeed-Chat/inference/chatbot.py", self.unsupported)
         self.assertIn("applications/DeepSpeed-Chat/training/step1_supervised_finetuning/prompt_eval.py",
-                      self.unsupported)
+                      self.by_path)
+
+    def test_first_stage_eval_and_offload_recipes(self) -> None:
+        def options(path: str) -> dict[str, str]:
+            tokens = shlex.split(" ".join(self.by_path[path]["overlay_args"]))
+            return dict(zip(tokens[::2], tokens[1::2]))
+
+        prompt_path = "applications/DeepSpeed-Chat/training/step1_supervised_finetuning/prompt_eval.py"
+        prompt = options(prompt_path)
+        self.assertEqual(self.by_path[prompt_path]["runner"], "linux-aarch64-a2-1")
+        self.assertEqual(prompt["--model_name_or_path_baseline"], "${OPT_125M_PATH}")
+        self.assertEqual(prompt["--model_name_or_path_finetune"],
+                         "${CI_OUTPUT_DIR}/prompt-eval-sft")
+        self.assertEqual(prompt["--max_new_tokens"], "8")
+
+        reward_path = "applications/DeepSpeed-Chat/training/step2_reward_model_finetuning/rw_eval.py"
+        self.assertEqual(self.by_path[reward_path]["profile"], "ds_chat_reward_eval")
+        self.assertEqual(options(reward_path)["--model_name_or_path"], "${OPT_125M_PATH}")
+        self.assertEqual(self.by_path[reward_path]["runner"], "linux-aarch64-a2-1")
+
+        bench_path = "training/tensor_parallel/hf_integration/train_bench_length.py"
+        bench = options(bench_path)
+        self.assertEqual(self.by_path[bench_path]["runner"], "linux-aarch64-a2-8")
+        self.assertEqual(bench["--model_name_or_path"], "${OPT_125M_PATH}")
+        self.assertEqual(bench["--data_path"], "${ALPACA_CI_PATH}")
+        self.assertEqual((bench["--model_max_length"], bench["--max_steps"],
+                          bench["--warmup_steps"]), ("128", "3", "2"))
+
+        offload_path = "training/DeepSpeed-SuperOffload/finetune_zero3.py"
+        offload = options(offload_path)
+        self.assertEqual(self.by_path[offload_path]["runner"], "linux-aarch64-a2-2")
+        self.assertEqual(offload["--model_name"], "${OPT_125M_PATH}")
+        self.assertEqual(offload["--dataset_name"], "${ALPACA_DATASET_DIR}")
+        self.assertEqual((offload["--bench_steps"], offload["--warmup_steps"]), ("3", "1"))
+        self.assertEqual(offload["--attn_implementation"], "eager")
+        # Source create_optimizer() fixes the actual CPU Adam lr to 0.001;
+        # args.lr only labels logs. Keep CLI/documentation honest, not a fake override.
+        self.assertEqual(offload["--lr"], "0.001")
+        self.assertNotIn("--save_checkpoint", offload)
+
+    def test_first_stage_profiles_are_available(self) -> None:
+        profiles = {"ds_chat_prompt_eval", "ds_chat_reward_eval",
+                    "ds_hf_bench_length", "ds_superoffload"}
+        for profile in profiles:
+            self.assertIn(f"setup_{profile}()", self.setup_script)
+        self.assertIn('"openai==0.28.1"', self.setup_script)
+        self.assertIn("ALPACA_DATASET_DIR", self.setup_script)
+        self.assertIn("dataset_dict128.pkl", self.setup_script)
 
     def test_ci_fixture_schemas(self) -> None:
         fixtures = PROJECT / "fixtures"

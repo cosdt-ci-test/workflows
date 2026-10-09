@@ -280,6 +280,47 @@ setup_ds_chat_rw()   { setup_ds_chat ci_rw_8.json; }
 setup_ds_chat_dpo()  { setup_ds_chat ci_dpo_8.json; }
 setup_ds_chat_rlhf() { setup_ds_chat ci_rlhf_8.json; }
 
+# Evaluation entries use the same upstream Chat baseline with protected runtime
+# dependencies. Leave the already-validated training profiles unchanged.
+setup_ds_chat_eval_dependencies() {
+  install_deepspeed_source
+  install_example_dependencies "transformers>=4.31.0,<5,!=4.33.2" \
+    "datasets>=2.8.0" "accelerate>=0.15.0" "sentencepiece>=0.1.97" \
+    "protobuf==3.20.3" tensorboard
+  install_chat_source_path
+  ms_download_models "OPT_125M_PATH=facebook/opt-125m"
+  python - <<'PY'
+import importlib.util
+import os
+from pathlib import Path
+import torch_npu
+from transformers import AutoTokenizer
+
+root = Path(os.environ["EXAMPLES_ROOT"]) / "applications/DeepSpeed-Chat/training"
+for step, filename in (
+    ("step1_supervised_finetuning", "prompt_eval.py"),
+    ("step2_reward_model_finetuning", "rw_eval.py"),
+):
+    spec = importlib.util.spec_from_file_location(f"ds_ci_{filename[:-3]}", root / step / filename)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+tokenizer = AutoTokenizer.from_pretrained(os.environ["OPT_125M_PATH"])
+print("Chat evaluation local tokenizer:", type(tokenizer).__name__)
+PY
+}
+
+setup_ds_chat_prompt_eval() {
+  setup_ds_chat_eval_dependencies
+  # The runner trains a genuine small SFT checkpoint before prompt comparison.
+  plant_chat_fixture ci_sft_8.json
+}
+
+setup_ds_chat_reward_eval() {
+  setup_ds_chat_eval_dependencies
+  # rw_eval's default create_critic_model() constructs a fresh value head; this
+  # entry is an honest reward-forward smoke, not trained checkpoint restoration.
+}
+
 setup_ds_infer() {
   install_deepspeed_source
   python -m pip install "transformers<5" accelerate
@@ -387,6 +428,131 @@ print("HF AutoTP dependencies:", "transformers", transformers.__version__,
 PY
 }
 
+setup_ds_hf_bench_length() {
+  install_deepspeed_source
+  # The sibling utils.py imports the legacy OpenAIObject API at module import.
+  # This dependency enables ordinary imports only; this recipe makes no API call.
+  install_example_dependencies "transformers>=4.51.0,<5" "accelerate>=1.10.1,<2" \
+    "openai==0.28.1" sentencepiece psutil numpy safetensors
+  ms_download_models "OPT_125M_PATH=facebook/opt-125m"
+  plant_ci_fixture ci_alpaca_16.json ALPACA_CI_PATH
+  python - <<'PY'
+import accelerate
+import importlib.util
+import os
+from pathlib import Path
+import sys
+
+import numpy
+import openai
+from openai import openai_object
+import torch_npu
+import transformers
+from transformers import AutoTokenizer
+
+entry = Path(os.environ["EXAMPLES_ROOT"]) / "training/tensor_parallel/hf_integration/train_bench_length.py"
+sys.path.insert(0, str(entry.parent))
+spec = importlib.util.spec_from_file_location("ds_ci_hf_bench_length", entry)
+upstream = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = upstream
+spec.loader.exec_module(upstream)
+tokenizer = AutoTokenizer.from_pretrained(os.environ["OPT_125M_PATH"],
+                                         model_max_length=128, padding_side="right", use_fast=False)
+special_tokens = {}
+for kind in ("pad", "eos", "bos", "unk"):
+    if getattr(tokenizer, f"{kind}_token") is None:
+        special_tokens[f"{kind}_token"] = getattr(upstream, f"DEFAULT_{kind.upper()}_TOKEN")
+tokenizer.add_special_tokens(special_tokens)
+output_root = Path(os.environ.get("CI_OUTPUT_DIR", str(Path(os.environ["GITHUB_WORKSPACE"]) / "output")))
+work_dir = output_root / "hf-bench-length-work"
+work_dir.mkdir(parents=True, exist_ok=True)
+cache = work_dir / "dataset_dict128.pkl"
+# Our generated shared cache is rebuilt before the eight readers start.
+cache.unlink(missing_ok=True)
+previous_cwd = Path.cwd()
+try:
+    os.chdir(work_dir)
+    dataset = upstream.SupervisedDataset(os.environ["ALPACA_CI_PATH"], tokenizer)
+finally:
+    os.chdir(previous_cwd)
+counts = [(labels != upstream.IGNORE_INDEX).sum().item() for labels in dataset.labels]
+if len(dataset) != 16 or any(count == 0 for count in counts):
+    raise SystemExit(f"fixed-length HF fixture lost training labels: {counts}")
+for ids, labels in zip(dataset.input_ids, dataset.labels):
+    if ids.numel() != 128 or labels.numel() != 128:
+        raise SystemExit("HF benchmark cache does not contain fixed 128-token rows")
+    if not bool((labels[ids == tokenizer.pad_token_id] == upstream.IGNORE_INDEX).all()):
+        raise SystemExit("HF benchmark cache contains unmasked padding targets")
+if not cache.is_file() or cache.stat().st_size == 0:
+    raise SystemExit(f"fixed-length HF pre-tokenized cache missing: {cache}")
+print("HF benchmark shared pre-tokenized cache:", cache)
+print("HF benchmark non-masked target tokens:", counts)
+print("HF benchmark dependencies:", "transformers", transformers.__version__,
+      "accelerate", accelerate.__version__, "openai", openai.__version__, "numpy", numpy.__version__)
+PY
+}
+
+setup_ds_superoffload() {
+  install_deepspeed_source
+  # finetune_zero3 imports wandb unconditionally, but the runner never enables
+  # its network logging. CPU Adam is compiled up front rather than on every rank.
+  install_example_dependencies "transformers>=4.56.1,<5" "accelerate>=1.10.1,<2" \
+    "datasets>=4,<5" "numpy>=1.21.0" packaging psutil pyarrow \
+    sentencepiece safetensors wandb ninja
+  apt-get install -y build-essential
+  ms_download_models "OPT_125M_PATH=facebook/opt-125m"
+  plant_ci_fixture ci_alpaca_16.json ALPACA_CI_PATH
+  export ALPACA_DATASET_DIR="$GITHUB_WORKSPACE/.ci/deepspeed-fixtures/alpaca-parquet"
+  mkdir -p "$ALPACA_DATASET_DIR"
+  echo "ALPACA_DATASET_DIR=$ALPACA_DATASET_DIR" >> "$GITHUB_ENV"
+  python - <<'PY'
+import importlib.util
+import json
+import logging
+import os
+from pathlib import Path
+import sys
+
+import datasets
+import torch_npu
+import transformers
+import wandb
+from datasets import Dataset, load_dataset
+from deepspeed.ops.op_builder import CPUAdamBuilder
+
+rows = json.loads(Path(os.environ["ALPACA_CI_PATH"]).read_text())
+if len(rows) != 16 or any(set(row) != {"instruction", "input", "output"} for row in rows):
+    raise SystemExit("SuperOffload fixture must contain 16 Alpaca instruction/input/output rows")
+dataset_dir = Path(os.environ["ALPACA_DATASET_DIR"])
+Dataset.from_list(rows).to_parquet(str(dataset_dir / "train.parquet"))
+# The upstream entry passes a directory directly to load_dataset(), not the
+# JSON loader or load_from_disk(). Validate precisely that public loading path.
+dataset = load_dataset(str(dataset_dir))
+if len(dataset["train"]) != 16 or set(dataset["train"].column_names) != {"instruction", "input", "output"}:
+    raise SystemExit("local parquet directory did not resolve to the 16-row train split")
+entry = Path(os.environ["EXAMPLES_ROOT"]) / "training/DeepSpeed-SuperOffload/finetune_zero3.py"
+spec = importlib.util.spec_from_file_location("ds_ci_superoffload", entry)
+upstream = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = upstream
+spec.loader.exec_module(upstream)
+tokenizer = upstream.load_tokenizer(os.environ["OPT_125M_PATH"], logging.getLogger("ci-superoffload"))
+for row in dataset["train"]:
+    batch = upstream.preprocess_alpaca_example(row, tokenizer, max_length=128)
+    if len(batch["input_ids"]) != 128 or len(batch["labels"]) != 128:
+        raise SystemExit("SuperOffload fixture does not produce 128-token training rows")
+    if sum(batch["attention_mask"]) < 2 or batch["labels"] != batch["input_ids"]:
+        raise SystemExit("SuperOffload fixture lost the upstream causal language-model targets")
+builder = CPUAdamBuilder()
+print("checking SuperOffload CPU Adam extension:", type(builder).__name__)
+builder.load(verbose=True)
+print("SuperOffload CPU Adam extension loaded successfully")
+print("SuperOffload local parquet train split:", len(dataset["train"]), dataset_dir)
+print("SuperOffload upstream optimizer LR:", upstream.DEFAULT_OPTIMIZER_LR)
+print("SuperOffload dependencies:", "datasets", datasets.__version__,
+      "transformers", transformers.__version__, "wandb", wandb.__version__)
+PY
+}
+
 setup_ds_variable_batch() {
   install_deepspeed_source
   # DeepSpeed's DataAnalyzer/data-sampling path uses these packages. The
@@ -488,7 +654,8 @@ deepspeed_file = Path(deepspeed.__file__).resolve()
 print("runtime torch:", torch.__version__)
 print("runtime torch_npu:", torch_npu.__version__)
 print("runtime deepspeed:", deepspeed.__version__, deepspeed_file)
-if sys.argv[1] in {"ds_cifar", "ds_hf_autotp", "ds_variable_batch", "ds_zenflow", "ds_rac_prune"}:
+if sys.argv[1] in {"ds_cifar", "ds_hf_autotp", "ds_variable_batch", "ds_zenflow", "ds_rac_prune",
+                  "ds_chat_prompt_eval", "ds_chat_reward_eval", "ds_hf_bench_length", "ds_superoffload"}:
     accelerator = get_accelerator()._name
     available = torch.npu.is_available()
     print("runtime accelerator:", accelerator, "NPU available:", available)

@@ -223,6 +223,186 @@ PY
     "${EXTRA_ARGS[@]}"
 }
 
+overlay_value() {
+  local flag="$1" index
+  for ((index = 0; index < ${#EXTRA_ARGS[@]}; index++)); do
+    if [[ "${EXTRA_ARGS[index]}" == "$flag" ]]; then
+      printf '%s\n' "${EXTRA_ARGS[index + 1]:-}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+run_chat_prompt_eval() {
+  require_visible_devices 1 '0'
+  require_overlay_path --model_name_or_path_baseline directory
+  local devices baseline checkpoint finetune
+  devices="$(first_visible_devices 1)"
+  baseline="$(overlay_value --model_name_or_path_baseline)"
+  checkpoint="$CI_OUTPUT_DIR/prompt-eval-sft"
+  finetune="$(overlay_value --model_name_or_path_finetune)"
+  if [[ "$finetune" != "$checkpoint" ]]; then
+    echo "prompt eval requires the same-job SFT checkpoint: expected=$checkpoint actual=$finetune" >&2
+    exit 1
+  fi
+  if [[ -e "$checkpoint/config.json" ]] || [[ -e "$checkpoint/pytorch_model.bin" ]]; then
+    echo "prompt eval checkpoint already exists; refusing to reuse stale training output: $checkpoint" >&2
+    exit 1
+  fi
+  echo "training a genuine SFT checkpoint before baseline/finetuned prompt evaluation"
+  ASCEND_RT_VISIBLE_DEVICES="$devices" deepspeed \
+    --master_port "$(master_port_for 51)" --num_gpus 1 \
+    "$EXAMPLES_ROOT/applications/DeepSpeed-Chat/training/step1_supervised_finetuning/main.py" \
+    --model_name_or_path "$baseline" --data_path local/jsonfile \
+    --num_train_epochs 1 --per_device_train_batch_size 4 \
+    --per_device_eval_batch_size 4 --max_seq_len 128 \
+    --zero_stage 2 --dtype bf16 --print_loss --deepspeed \
+    --data_output_path "$CI_OUTPUT_DIR/prompt-eval-data" \
+    --output_dir "$checkpoint"
+  # save_hf_format in the unchanged SFT entry writes these exact two files.
+  if [[ ! -s "$checkpoint/config.json" ]] || [[ ! -s "$checkpoint/pytorch_model.bin" ]]; then
+    echo "SFT did not produce a loadable checkpoint for prompt eval: $checkpoint" >&2
+    exit 1
+  fi
+  echo "evaluating baseline against the newly trained SFT checkpoint on NPU $devices"
+  ASCEND_RT_VISIBLE_DEVICES="$devices" "$PYTHON" "$LAUNCH_PATH" "${EXTRA_ARGS[@]}"
+}
+
+run_chat_reward_eval() {
+  require_visible_devices 1 '0'
+  require_overlay_path --model_name_or_path directory
+  local devices
+  devices="$(first_visible_devices 1)"
+  echo "running upstream reward-head initialization/forward smoke on NPU $devices; not trained-head restoration"
+  ASCEND_RT_VISIBLE_DEVICES="$devices" "$PYTHON" "$LAUNCH_PATH" "${EXTRA_ARGS[@]}" \
+    | tee "$CI_OUTPUT_DIR/reward-eval.log"
+  "$PYTHON" - "$CI_OUTPUT_DIR/reward-eval.log" "$CI_OUTPUT_DIR/reward-eval-scores.json" <<'PY'
+import json
+import math
+import re
+import sys
+from pathlib import Path
+
+scores = []
+for line in Path(sys.argv[1]).read_text().splitlines():
+    match = re.fullmatch(r'\s*(good_ans|bad_ans) score:\s*(\S+)\s*', line)
+    if match:
+        value = float(match.group(2))
+        if not math.isfinite(value):
+            raise SystemExit('reward evaluation produced a non-finite score')
+        scores.append({'kind': match.group(1), 'score': value})
+if [score['kind'] for score in scores] != ['good_ans', 'bad_ans'] * 2:
+    raise SystemExit('reward evaluation must produce four scores for the two upstream preference pairs')
+# An initialized reward head has no quality ordering guarantee; finite forward
+# results, not good>bad, are the smoke acceptance criterion.
+Path(sys.argv[2]).write_text(json.dumps(scores, indent=2, allow_nan=False) + '\n')
+print('validated four finite reward scores (initialized-head forward smoke)')
+PY
+}
+
+run_hf_bench_length() {
+  require_visible_devices 8 '0,1,2,3,4,5,6,7'
+  require_overlay_path --model_name_or_path directory
+  require_overlay_path --data_path file
+  local devices config_path
+  devices="$(first_visible_devices 8)"
+  config_path="$CI_OUTPUT_DIR/hf-bench-length-config.json"
+  if [[ "$(overlay_value --model_max_length)" != 128 ]]; then
+    echo "HF fixed-length CI recipe requires --model_max_length 128" >&2
+    exit 1
+  fi
+  if [[ ! -s "$CI_OUTPUT_DIR/hf-bench-length-work/dataset_dict128.pkl" ]]; then
+    echo "HF fixed-length shared tokenization cache missing; run ds_hf_bench_length setup first" >&2
+    exit 1
+  fi
+  "$PYTHON" - "$EXAMPLES_ROOT/training/tensor_parallel/hf_integration/configs/ds_config_temp.json" "$config_path" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+template = Path(sys.argv[1]).read_text()
+config = json.loads(template.replace('${zero_stage}', '0').replace('${autotp_size}', '8'))
+if config['zero_optimization']['stage'] != 0 or config['tensor_parallel']['autotp_size'] != 8:
+    raise SystemExit('HF fixed-length CI requires ZeRO=0 and AutoTP=8')
+Path(sys.argv[2]).write_text(json.dumps(config, indent=2) + '\n')
+PY
+  cd "$CI_OUTPUT_DIR/hf-bench-length-work"
+  echo "running fixed-length HF Trainer AutoTP=8 on devices $devices"
+  ASCEND_RT_VISIBLE_DEVICES="$devices" WANDB_MODE=disabled deepspeed \
+    --master_port "$(master_port_for 61)" --num_gpus 8 --no_local_rank \
+    "$LAUNCH_PATH" --deepspeed "$config_path" "${EXTRA_ARGS[@]}"
+}
+
+run_superoffload() {
+  require_visible_devices 2 '0,1'
+  require_overlay_path --model_name directory
+  require_overlay_path --dataset_name directory
+  local devices config_path
+  devices="$(first_visible_devices 2)"
+  config_path="$CI_OUTPUT_DIR/superoffload-config.json"
+  "$PYTHON" - "$config_path" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+# The unchanged entry creates DeepSpeedCPUAdam itself (LR=0.001); do not
+# provide a duplicate optimizer or claim that the logging-only --lr sets it.
+config = {
+    'train_batch_size': 2,
+    'train_micro_batch_size_per_gpu': 1,
+    'gradient_accumulation_steps': 1,
+    'bf16': {'enabled': True},
+    'zero_optimization': {
+        'stage': 3,
+        'overlap_comm': False,
+        'contiguous_gradients': True,
+        'reduce_bucket_size': 65536,
+        'stage3_prefetch_bucket_size': 65536,
+        'stage3_param_persistence_threshold': 4096,
+        'offload_param': {'device': 'cpu', 'pin_memory': False},
+        'offload_optimizer': {'device': 'cpu', 'pin_memory': False},
+    },
+    'steps_per_print': 1,
+    'wall_clock_breakdown': True,
+}
+Path(sys.argv[1]).write_text(json.dumps(config, indent=2) + '\n')
+PY
+  mkdir -p "$CI_OUTPUT_DIR/superoffload-work"
+  cd "$CI_OUTPUT_DIR/superoffload-work"
+  echo "running SuperOffload entry / ZeRO-Offload smoke on devices $devices; native super_offload is not enabled"
+  ASCEND_RT_VISIBLE_DEVICES="$devices" WANDB_MODE=disabled deepspeed \
+    --master_port "$(master_port_for 71)" --num_gpus 2 \
+    "$LAUNCH_PATH" --deepspeed --deepspeed_config "$config_path" "${EXTRA_ARGS[@]}" \
+    2>&1 | tee "$CI_OUTPUT_DIR/superoffload.log"
+  "$PYTHON" - "$CI_OUTPUT_DIR/superoffload.log" "$CI_OUTPUT_DIR/superoffload-losses.json" <<'PY'
+import json
+import math
+import re
+import sys
+from pathlib import Path
+
+rank_zero_losses = {}
+for line in Path(sys.argv[1]).read_text().splitlines():
+    match = re.search(r'Step\s+(\d+)\s*\|\s*Loss:\s*(\S+)\s*\|', line)
+    if not match:
+        continue
+    step, loss = int(match.group(1)), float(match.group(2))
+    if not math.isfinite(loss):
+        raise SystemExit(f'SuperOffload entry produced a non-finite loss at step {step}')
+    # Upstream adds the timestamped handler only on rank 0. Its root logging
+    # handler can repeat messages on other ranks, so tolerate duplicates and
+    # check every reported loss, but require rank-0 evidence for all 3 steps.
+    if ' - finetune_zero3 - INFO - ' in line:
+        rank_zero_losses[step] = loss
+if sorted(rank_zero_losses) != [1, 2, 3]:
+    raise SystemExit('SuperOffload entry must report rank-0 finite losses for steps 1, 2 and 3')
+report = [{'step': step, 'loss': rank_zero_losses[step]} for step in sorted(rank_zero_losses)]
+Path(sys.argv[2]).write_text(json.dumps(report, indent=2, allow_nan=False) + '\n')
+print('validated three finite SuperOffload entry train-step losses (ZeRO-Offload smoke)')
+PY
+}
+
 run_variable_batch() {
   require_visible_devices 1 '0'
   local devices
@@ -310,6 +490,22 @@ case "$entry_key" in
     ;;
   training/tensor_parallel/hf_integration/train.py)
     run_hf_autotp
+    exit 0
+    ;;
+  applications/DeepSpeed-Chat/training/step1_supervised_finetuning/prompt_eval.py)
+    run_chat_prompt_eval
+    exit 0
+    ;;
+  applications/DeepSpeed-Chat/training/step2_reward_model_finetuning/rw_eval.py)
+    run_chat_reward_eval
+    exit 0
+    ;;
+  training/tensor_parallel/hf_integration/train_bench_length.py)
+    run_hf_bench_length
+    exit 0
+    ;;
+  training/DeepSpeed-SuperOffload/finetune_zero3.py)
+    run_superoffload
     exit 0
     ;;
   training/data_efficiency/variable_batch_size_and_lr/variable_batch_size_and_lr_example.py)

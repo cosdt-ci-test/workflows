@@ -152,7 +152,7 @@ supported:
       - '--log_every 1'
     timeout_minutes: 180
 
-  # HF Trainer AutoTP；八卡 TP=8、本地模型和 fixture，3 步含 2 步预热，待复验。
+  # HF Trainer AutoTP；八卡 TP=8、本地模型和 fixture，3 步含 2 步预热，已通过 #28。
   - path: training/tensor_parallel/hf_integration/train.py
     profile: ds_hf_autotp
     runner: linux-aarch64-a2-8
@@ -235,6 +235,69 @@ supported:
       - '--save-report'
     timeout_minutes: 90
 
+  # SFT 生成评测；单卡先训练小检查点，再对比基础/微调模型，8 token，待实跑。
+  - path: applications/DeepSpeed-Chat/training/step1_supervised_finetuning/prompt_eval.py
+    profile: ds_chat_prompt_eval
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--model_name_or_path_baseline ${OPT_125M_PATH}'
+      - '--model_name_or_path_finetune ${CI_OUTPUT_DIR}/prompt-eval-sft'
+      - '--max_new_tokens 8'
+      - '--language English'
+    timeout_minutes: 120
+  # 奖励评分 smoke；单卡本地 OPT-125M/初始化评分头，两组偏好 forward，待实跑。
+  - path: applications/DeepSpeed-Chat/training/step2_reward_model_finetuning/rw_eval.py
+    profile: ds_chat_reward_eval
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--model_name_or_path ${OPT_125M_PATH}'
+      - '--num_padding_at_beginning 1'
+    timeout_minutes: 60
+  # 固定长度 HF AutoTP；八卡 TP=8/序列 128/3 步，校验 padding 与 label masking，待实跑。
+  - path: training/tensor_parallel/hf_integration/train_bench_length.py
+    profile: ds_hf_bench_length
+    runner: linux-aarch64-a2-8
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--model_name_or_path ${OPT_125M_PATH}'
+      - '--data_path ${ALPACA_CI_PATH}'
+      - '--output_dir ${CI_OUTPUT_DIR}/hf-bench-length'
+      - '--max_steps 3'
+      - '--model_max_length 128'
+      - '--per_device_train_batch_size 1'
+      - '--gradient_accumulation_steps 1'
+      - '--learning_rate 2e-5'
+      - '--warmup_steps 2'
+      - '--logging_steps 1'
+      - '--eval_strategy no'
+      - '--save_strategy no'
+      - '--report_to none'
+      - '--bf16 True'
+      - '--tf32 False'
+      - '--gradient_checkpointing False'
+      - '--dataloader_pin_memory False'
+      - '--dataloader_num_workers 0'
+    timeout_minutes: 120
+  # SuperOffload 入口；两卡 ZeRO-Offload 模式/CPU 参数和优化器卸载，3 步，待实跑。
+  - path: training/DeepSpeed-SuperOffload/finetune_zero3.py
+    profile: ds_superoffload
+    runner: linux-aarch64-a2-2
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--model_name ${OPT_125M_PATH}'
+      - '--dataset_name ${ALPACA_DATASET_DIR}'
+      - '--lr 0.001'
+      - '--batch_size 1'
+      - '--num_train_epochs 1'
+      - '--max_length 128'
+      - '--bench_steps 3'
+      - '--warmup_steps 1'
+      - '--attn_implementation eager'
+      - '--output_dir ${CI_OUTPUT_DIR}/superoffload'
+    timeout_minutes: 120
+
 unsupported:
   # BF16 主权重训练对比；torch.cuda 和 CUDA autocast 硬绑定。
   - training/bf16_master_weight/train.py
@@ -244,10 +307,6 @@ unsupported:
   - applications/DeepSpeed-Chat/e2e_rlhf.py
   # 交互式文本聊天；pipeline 硬编码 cuda:0，需已训练模型。
   - applications/DeepSpeed-Chat/inference/chatbot.py
-  # SFT 前后生成对比；需先完成 SFT 并提供两组模型，暂未接入。
-  - applications/DeepSpeed-Chat/training/step1_supervised_finetuning/prompt_eval.py
-  # 奖励模型评分评测；需先完成 Reward Model 训练，暂未接入。
-  - applications/DeepSpeed-Chat/training/step2_reward_model_finetuning/rw_eval.py
   # 交互式视觉聊天；硬绑定 .cuda()，需 Llama-2/视觉模型检查点。
   - applications/DeepSpeed-VisualChat/chat/chat.py
   # 视觉聊天批量评测；硬绑定 .cuda()，需预训练检查点。
@@ -382,8 +441,6 @@ unsupported:
   - training/BingBertSquad/run_hf.sh
   # Domino GPT-3 预训练；缺少 Megatron 子模块，需大模型和外部语料。
   - training/DeepSpeed-Domino/pretrain_gpt.py
-  # SuperOffload ZeRO-3 微调；上游配方采用 8B–70B 模型和远程数据，未压规模。
-  - training/DeepSpeed-SuperOffload/finetune_zero3.py
   # ZenFlow Llama 微调；需受限 Llama-2-7B，含 torch.cuda 调用。
   - training/DeepSpeed-ZenFlow/finetuning/finetune_llama.py
   # MoQ GLUE 微调；依赖旧 Transformers/datasets API，待升级适配。
@@ -456,5 +513,3 @@ unsupported:
   - training/tensor_parallel/basic_example/autotp_memory_compare.py
   # 自定义 AutoTP 切分训练；设备硬绑定 CUDA，默认 Pythia-6.9B。
   - training/tensor_parallel/custom_patterns/autotp_custom_patterns.py
-  # HF AutoTP 固定长度基准；属性能测试变体，未独立看护。
-  - training/tensor_parallel/hf_integration/train_bench_length.py

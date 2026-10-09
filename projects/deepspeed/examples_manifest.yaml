@@ -1,6 +1,7 @@
 version: 1
 # 主仓 deepspeedai/DeepSpeed 提供被测源码；example 路径相对 deepspeedai/DeepSpeedExamples。
-# supported 为当前 NPU CI 看护；unsupported 包含待适配入口及库、工具、测试配套物。
+# supported 为当前 NPU CI 看护；unsupported 仅登记尚未接入的 example 入口。
+# 库、安装脚本、单元测试、数据准备及结果处理工具不作为 example 登记。
 # 扫描无 exclude；同一 example 的启动包装合并到主入口。
 scan:
   root: ''
@@ -239,16 +240,10 @@ unsupported:
   - training/bf16_master_weight/train.py
   # CIFAR/AlexNet 流水线训练；硬绑定 CUDA 设备和 NCCL。
   - training/pipeline_parallelism/train.py
-  # 多轮聊天启动包装；依赖已训练模型，非独立推理 example。
-  - applications/DeepSpeed-Chat/chat.py
   # SFT/RW/RLHF 全流程编排；上游配方依赖大模型及多 GPU/NCCL。
   - applications/DeepSpeed-Chat/e2e_rlhf.py
   # 交互式文本聊天；pipeline 硬编码 cuda:0，需已训练模型。
   - applications/DeepSpeed-Chat/inference/chatbot.py
-  # dschat 安装脚本；仅打包库及依赖，非 example。
-  - applications/DeepSpeed-Chat/setup.py
-  # RLHF 参数组合测试；需 CRITIC_CKPT_DIR 检查点及 GPU 环境。
-  - applications/DeepSpeed-Chat/tests/test_training.py
   # SFT 前后生成对比；需先完成 SFT 并提供两组模型，暂未接入。
   - applications/DeepSpeed-Chat/training/step1_supervised_finetuning/prompt_eval.py
   # 奖励模型评分评测；需先完成 Reward Model 训练，暂未接入。
@@ -257,26 +252,14 @@ unsupported:
   - applications/DeepSpeed-VisualChat/chat/chat.py
   # 视觉聊天批量评测；硬绑定 .cuda()，需预训练检查点。
   - applications/DeepSpeed-VisualChat/eval/batch_generation.py
-  # Qwen-VL 视觉权重提取；device_map 硬编码 cuda，属准备工具。
-  - applications/DeepSpeed-VisualChat/helper/extract_qwen_vl.py
   # 视觉聊天训练；硬绑定 CUDA，需 Llama-2、CLIP 和大规模图文数据。
   - applications/DeepSpeed-VisualChat/training/main.py
   # AutoSP 正确性矩阵编排；依赖多卡训练及 loss 校验，尚未适配。
   - benchmarks/autosp/correctness/correctness.sh
   # AutoSP loss 采集；硬编码 Llama-2-7B，需受限模型和多卡环境。
   - benchmarks/autosp/correctness/correctness_run.py
-  # AutoSP loss 阈值对比；依赖训练输出，属配套校验工具。
-  - benchmarks/autosp/correctness/validator.py
-  # Ulysses 序列并行注意力；被 run.py import，非独立入口。
-  - benchmarks/autosp/distributed_attention.py
-  # Ring attention 实现；依赖 flash_attn，属 run.py 的配套库。
-  - benchmarks/autosp/ring_attention.py
   # 序列并行训练；硬绑定 torch.cuda，默认 Llama-2-7B，尚未适配。
   - benchmarks/autosp/run.py
-  # SP/DP 进程组注册；属 AutoSP 配套库，非独立入口。
-  - benchmarks/autosp/sp_dp_registry.py
-  # 通信基准包标记；无可运行入口。
-  - benchmarks/communication/__init__.py
   # all_gather 吞吐基准；torch.cuda.Event 计时硬绑定 CUDA。
   - benchmarks/communication/all_gather.py
   # all_reduce 吞吐基准；torch.cuda.Event 计时硬绑定 CUDA。
@@ -285,98 +268,20 @@ unsupported:
   - benchmarks/communication/all_to_all.py
   # broadcast 吞吐基准；torch.cuda.Event 计时硬绑定 CUDA。
   - benchmarks/communication/broadcast.py
-  # 通信基准参数常量；属配套库，非独立入口。
-  - benchmarks/communication/constants.py
   # 双 rank 点对点吞吐基准；torch.cuda.Event 计时硬绑定 CUDA。
   - benchmarks/communication/pt2pt.py
   # 多算子通信基准汇总；硬绑定 CUDA 计时，非训练验证。
   - benchmarks/communication/run_all.py
-  # 通信初始化与带宽计算；属基准工具库，非独立入口。
-  - benchmarks/communication/utils.py
-  # 训练吞吐/FLOPs 绘图；仅解析日志，非训练入口。
-  - benchmarks/deepcompile/gen_chart_acc_steps.py
-  # accelerate/DeepSpeed 配置生成；属基准准备工具。
-  - benchmarks/deepcompile/generate_conf.py
-  # 编译耗时与显存绘图；仅解析日志，非训练入口。
-  - benchmarks/deepcompile/plot.py
-  # 基准绘图辅助库；无独立入口。
-  - benchmarks/deepcompile/plot_common.py
   # 大模型编译吞吐基准；需多机、CUDA 和 Llama/Mixtral 大模型。
   - benchmarks/deepcompile/run_bench_lm.py
   # BERT fill-mask 延迟基准；仅测推理性能，尚未纳入看护。
   - benchmarks/inference/bert-bench.py
-  # 推理延迟结果汇总；仅生成 CSV，非训练/推理入口。
-  - benchmarks/inference/collect_results.py
-  # 压测包导出；属配套模块，非独立入口。
-  - benchmarks/inference/deepspeedometer/src/deepspeedometer/__init__.py
-  # 压测参数与配置解析；属配套库，非独立入口。
-  - benchmarks/inference/deepspeedometer/src/deepspeedometer/arg_parsing.py
   # 推理服务并发压测；依赖外部服务或 MII/vLLM，未接入。
   - benchmarks/inference/deepspeedometer/src/deepspeedometer/benchmark_runner.py
-  # 压测客户端注册；属配套库，非独立入口。
-  - benchmarks/inference/deepspeedometer/src/deepspeedometer/clients/__init__.py
-  # AzureML REST 客户端；需服务端点和密钥，属配套库。
-  - benchmarks/inference/deepspeedometer/src/deepspeedometer/clients/azure_ml_client.py
-  # 压测客户端抽象基类；非独立入口。
-  - benchmarks/inference/deepspeedometer/src/deepspeedometer/clients/base.py
-  # 模拟固定延迟客户端；属压测配套库，非独立 example。
-  - benchmarks/inference/deepspeedometer/src/deepspeedometer/clients/dummy_client.py
-  # FastGen 压测客户端；依赖 deepspeed-mii，属配套库。
-  - benchmarks/inference/deepspeedometer/src/deepspeedometer/clients/fastgen_client.py
-  # OpenAI 兼容 API 客户端；需服务端点，属配套库。
-  - benchmarks/inference/deepspeedometer/src/deepspeedometer/clients/openai_client.py
-  # vLLM 压测客户端；依赖 vllm，属配套库。
-  - benchmarks/inference/deepspeedometer/src/deepspeedometer/clients/vllm_client.py
-  # 压测配置模型；属配套库，非独立入口。
-  - benchmarks/inference/deepspeedometer/src/deepspeedometer/config.py
-  # 压测 prompt 生成；属配套库，非独立入口。
-  - benchmarks/inference/deepspeedometer/src/deepspeedometer/prompt.py
-  # 压测响应数据类；属配套库，非独立入口。
-  - benchmarks/inference/deepspeedometer/src/deepspeedometer/response.py
-  # 压测示例文本；属常量模块，非独立入口。
-  - benchmarks/inference/deepspeedometer/src/deepspeedometer/sample_input.py
-  # 压测测试包标记；无可运行入口。
-  - benchmarks/inference/deepspeedometer/tests/__init__.py
-  # 压测 pytest fixture；属测试配套物，非 example。
-  - benchmarks/inference/deepspeedometer/tests/conftest.py
-  # 压测框架冒烟测试；属单元测试，非 example。
-  - benchmarks/inference/deepspeedometer/tests/test_benchmark.py
-  # 压测配置解析测试；属单元测试，非 example。
-  - benchmarks/inference/deepspeedometer/tests/test_config.py
-  # 压测提前停止测试；属单元测试，非 example。
-  - benchmarks/inference/deepspeedometer/tests/test_early_stop.py
-  # 压测 prompt 长度测试；属单元测试，非 example。
-  - benchmarks/inference/deepspeedometer/tests/test_prompt.py
   # GPT 延迟基准；上游扫描 CUDA kernel/graph 和大模型，未适配。
   - benchmarks/inference/gpt-bench.py
   # MII 推理吞吐压测；需 MII/vLLM/AzureML 后端及大模型。
   - benchmarks/inference/mii/run_benchmark.py
-  # MII 基准包标记；无可运行入口。
-  - benchmarks/inference/mii/src/__init__.py
-  # 多后端压测客户端；属 MII 基准配套入口，需服务端。
-  - benchmarks/inference/mii/src/client.py
-  # MII 模型与 TP 默认配置；属配套库，非独立入口。
-  - benchmarks/inference/mii/src/defaults.py
-  # SLA 有效吞吐绘图；仅处理基准结果，非 example。
-  - benchmarks/inference/mii/src/plot_effective_throughput.py
-  # token 延迟分位绘图；仅处理基准结果，非 example。
-  - benchmarks/inference/mii/src/plot_latency_percentile.py
-  # 副本扩展性能绘图；仅处理基准结果，非 example。
-  - benchmarks/inference/mii/src/plot_repl_scale.py
-  # 吞吐/延迟曲线绘图；仅处理基准结果，非 example。
-  - benchmarks/inference/mii/src/plot_th_lat.py
-  # TP 规模性能绘图；仅处理基准结果，非 example。
-  - benchmarks/inference/mii/src/plot_tp_sizes.py
-  # MII 基准结果后处理；属配套工具，非独立推理入口。
-  - benchmarks/inference/mii/src/postprocess_results.py
-  # 随机压测请求生成；属配套库，非独立入口。
-  - benchmarks/inference/mii/src/random_query_generator.py
-  # 压测示例文本；属常量模块，非独立入口。
-  - benchmarks/inference/mii/src/sample_input.py
-  # MII/vLLM 服务启停；属基准配套入口，需外部后端。
-  - benchmarks/inference/mii/src/server.py
-  # MII 压测参数与结果工具；属配套库，非独立入口。
-  - benchmarks/inference/mii/src/utils.py
   # BERT Triton 延迟基准；硬绑定 torch.cuda/NCCL 与 CUDA kernel。
   - benchmarks/inference/triton-bert-benchmark.py
   # HybridEngine rollout 性能基准；默认 OPT-6.7B，超出 CI 规模。
@@ -385,14 +290,8 @@ unsupported:
   - compression/bert/run_glue_lkd.py
   # BERT GLUE 剪枝/量化训练；硬绑定 torch.cuda.set_device。
   - compression/bert/run_glue_no_trainer.py
-  # BERT 压缩训练/评测函数；属配套库，非独立入口。
-  - compression/bert/util.py
-  # CIFAR ResNet 模型定义；属配套库，非独立入口。
-  - compression/cifar/resnet.py
   # CIFAR 通道剪枝训练；model/data.cuda() 硬绑定 CUDA。
   - compression/cifar/train.py
-  # CIFAR 压缩数据与测试工具；属配套库，非独立入口。
-  - compression/cifar/utils.py
   # GPT-2 ZeroQuant 量化；硬绑定 CUDA 设备，需适配。
   - compression/gpt2/run_clm_no_trainer.py
   # MATH-500 评测；需 lighteval/vLLM 和剪枝后检查点。
@@ -425,24 +324,14 @@ unsupported:
   - deepnvme/file_access/py_store_cpu_tensor.py
   # Python 存储 GPU 张量；NVMe IO 演示需专用存储硬件。
   - deepnvme/file_access/py_store_gpu_tensor.py
-  # DeepNVMe 文件访问工具；属配套库，非独立入口。
-  - deepnvme/file_access/utils.py
   # DeepSpeed 检查点存储基准；需 NVMe 盘及 async_io/GDS。
   - deepnvme/model_checkpoint/deepspeed_save_model.py
-  # 检查点模型构造与参数解析；属配套库，非独立入口。
-  - deepnvme/model_checkpoint/save_model_utils.py
-  # PyTorch 2.6 序列化加速副本；属补丁配套物，非 example。
-  - deepnvme/model_checkpoint/torch/serialization_fast_v2.6.0.py
-  # PyTorch 2.6 序列化原始副本；属补丁配套物，非 example。
-  - deepnvme/model_checkpoint/torch/serialization_orig_v2.6.0.py
   # safetensors 检查点存储对比；需 NVMe 盘。
   - deepnvme/model_checkpoint/torch_save_load_model.py
   # torch 检查点存储基准；需 NVMe 盘及 GDS/async_io。
   - deepnvme/model_checkpoint/torch_save_model.py
   # 张量存储基准；需 NVMe 盘及 GDS/async_io。
   - deepnvme/model_checkpoint/torch_save_tensor.py
-  # 检查点 IO 算子与保存工具；属配套库，非独立入口。
-  - deepnvme/model_checkpoint/torch_save_utils.py
   # HumanEval 代码生成评测；硬绑定 CUDA，需 MII、7B 模型及评测数据。
   - evaluation/inference/human_eval/run_human_eval.py
   # Wav2Vec2 语音识别；硬编码模型及 LibriSpeech，缺少 CI 缩规模接口。
@@ -453,28 +342,18 @@ unsupported:
   - inference/huggingface/fill-mask/test-electra.py
   # RoBERTa fill-mask 推理；硬编码四卡 TP，无 CLI 缩规模接口。
   - inference/huggingface/fill-mask/test-roberta.py
-  # Stable Diffusion 推理管道；属配套库，非独立入口。
-  - inference/huggingface/stable-diffusion/local_pipeline_stable_diffusion.py
   # Stable Diffusion 图像生成；硬绑定 CUDA/CUDA graph，模型权重较大。
   - inference/huggingface/stable-diffusion/test-stable-diffusion.py
-  # 文本生成参数解析；属配套库，非独立入口。
-  - inference/huggingface/text-generation/arguments.py
   # DeepSpeed/HF 生成对比；核心 kernel 注入路径依赖 CUDA，待适配。
   - inference/huggingface/text-generation/ds-hf-compare.py
   # GPT 文本生成；model.cuda() 和 torch.cuda.synchronize() 硬绑定 CUDA。
   - inference/huggingface/text-generation/run-generation-script/test-run-generation.py
-  # 文本生成 pipeline 工具；属配套库，非独立入口。
-  - inference/huggingface/text-generation/utils.py
   # T5 文本生成；硬编码四卡 TP/CUDA 设备，无 CLI 缩规模接口。
   - inference/huggingface/text2text-generation/test-t5.py
   # T5 翻译推理；硬编码四卡 TP/CUDA 设备，无 CLI 缩规模接口。
   - inference/huggingface/translation/test-t5-base.py
   # 大模型 ZeRO offload 推理；硬绑定 NCCL 和 torch.cuda.current_device。
   - inference/huggingface/zero_inference/run_model.py
-  # ZeRO 推理计时；属配套库，非独立入口。
-  - inference/huggingface/zero_inference/timer.py
-  # ZeRO 推理内存/量化工具；属配套库，非独立入口。
-  - inference/huggingface/zero_inference/utils.py
   # Falcon-7B 推理；需 deepspeed-mii，模型超出当前 CI 规模。
   - inference/mii/non-persistent/falcon.py
   # Llama-2-7B 推理；需 deepspeed-mii 和受限模型。
@@ -483,60 +362,32 @@ unsupported:
   - inference/mii/non-persistent/mixtral.py
   # Mistral-7B 推理；当前 CI 未提供 deepspeed-mii 环境。
   - inference/mii/non-persistent/pipeline.py
-  # MII 服务请求客户端；依赖服务端，非独立 example。
-  - inference/mii/persistent/client.py
   # MII 持久化推理服务；需 deepspeed-mii 和服务生命周期适配。
   - inference/mii/persistent/serve.py
-  # MII 服务终止工具；属配套入口，非独立 example。
-  - inference/mii/persistent/terminate.py
   # Llama-3.2-1B 吞吐基准；依赖 SGLang fork 和受限模型。
   - inference/sglang/run_llama3_1B.sh
   # Llama-3.1-70B 吞吐基准；依赖 SGLang fork，模型过大。
   - inference/sglang/run_llama3_70B.sh
   # Llama-3.1-8B 吞吐基准；依赖 SGLang fork 和受限模型。
   - inference/sglang/run_llama3_8B.sh
-  # 版权头检查；属仓库维护工具，非 example。
-  - scripts/check-license.py
-  # GLUE HDF5 数据提供器；属配套库，且缺少引用的接口模块。
-  - training/BingBertGlue/nvidia_bert_dataset_provider.py
   # BERT-base GLUE 微调；硬绑定 CUDA，数据路径固定为 /data/GlueData。
   - training/BingBertGlue/run_glue_classifier_bert_base.py
   # BERT-large GLUE 微调；硬绑定 CUDA，并含私人源码/数据路径。
   - training/BingBertGlue/run_glue_classifier_bert_large.py
-  # TF/HF 检查点转换；属准备工具，暂未独立看护。
-  - training/BingBertSquad/convert_bert_ckpt_to_deepspeed.py
-  # SQuAD v1.1 评分；需预测结果，属配套评测工具。
-  - training/BingBertSquad/evaluate-v1.1.py
-  # SQuAD F1/准确率计算；属评测库，非独立入口。
-  - training/BingBertSquad/evaluate.py
   # BERT-large SQuAD 基线训练；硬绑定 CUDA，需外部权重和数据。
   - training/BingBertSquad/nvidia_run_squad_baseline.py
   # BERT-large SQuAD DeepSpeed 训练；上游配方需多机 MPI/NCCL 及 CUDA kernel。
   - training/BingBertSquad/nvidia_run_squad_deepspeed.py
   # SQuAD HF 启动包装；目标 nvidia_run_squad_mpi.py 不在仓库内。
   - training/BingBertSquad/run_hf.sh
-  # SQuAD 参数与日志工具；属配套库，非独立入口。
-  - training/BingBertSquad/utils.py
-  # Domino GPT 模型定义；属 Megatron 配套库，非独立入口。
-  - training/DeepSpeed-Domino/domino/gpt_model.py
-  # Domino 语言模型定义；属 Megatron 配套库，非独立入口。
-  - training/DeepSpeed-Domino/domino/language_model.py
-  # Domino 训练工具；属 Megatron 配套库，非独立入口。
-  - training/DeepSpeed-Domino/domino/training.py
   # Domino GPT-3 预训练；缺少 Megatron 子模块，需大模型和外部语料。
   - training/DeepSpeed-Domino/pretrain_gpt.py
   # SuperOffload ZeRO-3 微调；上游配方采用 8B–70B 模型和远程数据，未压规模。
   - training/DeepSpeed-SuperOffload/finetune_zero3.py
-  # ZenFlow 耗时表格输出；仅处理基准日志，非独立 example。
-  - training/DeepSpeed-ZenFlow/benchmark/output_table.py
   # ZenFlow Llama 微调；需受限 Llama-2-7B，含 torch.cuda 调用。
   - training/DeepSpeed-ZenFlow/finetuning/finetune_llama.py
   # MoQ GLUE 微调；依赖旧 Transformers/datasets API，待升级适配。
   - training/MoQ/run_glue.py
-  # AutoTP loss 等价性比较；由 supported AutoTP 流程调用，非独立 example。
-  - training/autotp_equivalence/compare_loss.py
-  # AutoTP loss 比较单测；属配套测试，非 example。
-  - training/autotp_equivalence/tests/test_compare_loss.py
   # BERT-base 自动调参；硬编码 16 卡，依赖仓外 Transformers example。
   - training/autotuning/hf/bert-base/test_tune.sh
   # BERT-large 自动调参；硬编码 16 卡，依赖仓外 Transformers example。
@@ -553,114 +404,50 @@ unsupported:
   - training/autotuning/hf/gpt2-xl/test_tune.sh
   # GPT-2 自动调参；硬编码 16 卡，依赖仓外 Transformers example。
   - training/autotuning/hf/gpt2/test_tune.sh
-  # BF16 主权重显存对比汇总；仅解析训练日志，非独立 example。
-  - training/bf16_master_weight/gather_memory.py
-  # BF16 主权重 loss 绘图；仅处理训练日志，非独立 example。
-  - training/bf16_master_weight/plot_loss.py
-  # BingBERT 数据接口；属配套库，非独立入口。
-  - training/bing_bert/bert_dataset_provider.py
-  # BingBERT 语料加载；依赖内部数据，属配套库。
-  - training/bing_bert/bing_bert_dataset_provider.py
-  # BingBERT 异步数据加载；属配套库，非独立入口。
-  - training/bing_bert/data_worker.py
   # BingBERT 预训练；硬绑定 CUDA/NCCL，需多机及内部语料。
   - training/bing_bert/deepspeed_train.py
-  # NVIDIA HDF5 语料加载；属 BingBERT 配套库，非独立入口。
-  - training/bing_bert/nvidia_bert_dataset_provider.py
   # BERT-base GLUE 微调；硬绑定 CUDA，数据路径固定为 /data/GlueData。
   - training/bing_bert/run_glue_classifier_bert_base.py
   # BERT-large GLUE 微调；硬绑定 CUDA，数据路径固定为 /data/GlueData。
   - training/bing_bert/run_glue_classifier_bert_large.py
-  # BingBERT 计时工具；无独立入口。
-  - training/bing_bert/timer.py
-  # BingBERT 参数与退出控制；属配套库，非独立入口。
-  - training/bing_bert/utils.py
   # PyTorch CIFAR 教程；设备路径仅支持 CUDA/CPU，未接入 NPU。
   - training/cifar/cifar10_tutorial.py
   # GPT 数据难度分析；输出路径硬编码 /blob，需 PTB 数据，待适配。
   - training/data_efficiency/gpt_finetuning/analyze_data.py
   # GPT random-LTD 多组实验；固定 CUDA 卡号并发启动，尚未适配。
   - training/data_efficiency/gpt_finetuning/finetune/ds_finetune_gpt2_run.sh
-  # GPT 学习率调度；属配套库，非独立入口。
-  - training/data_efficiency/gpt_finetuning/learning_rates.py
   # GPT random-LTD 微调；上游启动绑定 CUDA，需 PTB 数据及 CI 配方适配。
   - training/data_efficiency/gpt_finetuning/run_clm_no_trainer.py
   # CIFAR ViT 微调；损失与数据传输硬绑定 .cuda()，待适配。
   - training/data_efficiency/vit_finetuning/main_cifar.py
   # ImageNet ViT 微调；需全量数据，启动配方绑定 NCCL 和固定数据路径。
   - training/data_efficiency/vit_finetuning/main_imagenet.py
-  # AutoEP 权重转 HF 格式；属训练后处理工具，非独立 example。
-  - training/deepspeed_finetune_demo/convert_ds_to_hf.py
-  # GSM8K 准确率评分；依赖生成结果，属配套评测工具。
-  - training/deepspeed_finetune_demo/evaluate/gsm8k/eval_gsm8k.py
   # GSM8K 答案生成；依赖 vLLM 及远程评测数据，待适配。
   - training/deepspeed_finetune_demo/evaluate/gsm8k/gen_gsm8k.py
-  # MMLU 准确率评分；依赖生成结果，属配套评测工具。
-  - training/deepspeed_finetune_demo/evaluate/mmlu/eval_mmlu.py
   # MMLU 答案生成；依赖 vLLM 及远程评测数据，待适配。
   - training/deepspeed_finetune_demo/evaluate/mmlu/gen_mmlu.py
   # LLM 微调/吞吐演示；含 torch.cuda 调用，模型数据来源待改为 CI 配方。
   - training/deepspeed_finetune_demo/finetune_llama.py
   # AutoEP 训练与多任务评测；默认 16B 模型、八卡 TP，需 vLLM/evalplus。
   - training/deepspeed_finetune_demo/run_and_evaluate.sh
-  # AutoEP 文本数据与 tokenizer 加载；属配套库，非独立入口。
-  - training/expert_parallel/data_utils.py
-  # AutoEP 初始权重读写与校验；属配套库，非独立入口。
-  - training/expert_parallel/init_weights.py
-  # AutoEP CSV 指标记录；属配套库，显存统计硬绑定 torch.cuda。
-  - training/expert_parallel/metrics.py
   # AutoEP MoE 训练；预设大型 MoE 模型，未完成 CI 压规模。
   - training/expert_parallel/train.py
-  # AutoEP/ZeRO-3 指标对比绘图；需训练输出，属配套工具。
-  - training/expert_parallel/utils/compare_metrics.py
-  # MoE 初始权重生成；供 AutoEP 训练使用，属准备工具。
-  - training/expert_parallel/utils/prepare_init_weights.py
   # DCGAN PyTorch 基线；上游启用 CUDA，需自备 CelebA 数据。
   - training/gan/gan_baseline_train.py
   # DCGAN DeepSpeed 训练；硬绑定 torch.cuda.set_device，需 CelebA 数据。
   - training/gan/gan_deepspeed_train.py
-  # DCGAN 生成器/判别器定义；属配套库，非独立入口。
-  - training/gan/gan_model.py
-  # DCGAN 参数与随机种子工具；属配套库，非独立入口。
-  - training/gan/utils.py
-  # ImageNet 数据解压；需约 138GB 原始数据，属准备工具。
-  - training/imagenet/extract_ILSVRC.sh
   # ImageNet ResNet 训练；需全量数据，上游固定私人路径，待适配。
   - training/imagenet/main.py
-  # offload 状态基准表格输出；仅处理日志，非独立 example。
-  - training/offload_states/output_table.py
   # OPSD HybridEngine decode 耗时基准；仅测性能，尚未纳入训练看护。
   - training/opsd/benchmarks/bench_decode_1p1r.py
-  # OPSD rollout 配置；属配套库，非独立入口。
-  - training/opsd/config.py
-  # OPSD prompt 数据与左填充；属配套库，非独立入口。
-  - training/opsd/data.py
-  # OPSD KL/JSD 蒸馏损失；属配套库，非独立入口。
-  - training/opsd/losses.py
   # OPSD 在线蒸馏训练；需 HybridEngine rollout 及 7B 教师模型，待适配。
   - training/opsd/main.py
-  # OPSD 教师模型与 logit 缓存；属配套库，非独立入口。
-  - training/opsd/teacher.py
   # Student AutoTP/ZeRO-3 smoke；结束日志硬调用 torch.cuda.max_memory_allocated。
   - training/opsd/test_student_autotp_zero3.py
   # Teacher AutoTP/offload smoke；结束日志硬调用 torch.cuda.max_memory_allocated。
   - training/opsd/test_teacher_autotp_zero3.py
-  # OPSD 左填充单测；属配套测试，非 example。
-  - training/opsd/tests/test_data.py
-  # OPSD 蒸馏损失单测；属配套测试，非 example。
-  - training/opsd/tests/test_losses.py
-  # OPSD 教师缓存单测；属配套测试，非 example。
-  - training/opsd/tests/test_teacher_caching.py
-  # OPSD 蒸馏训练循环；属配套库，非独立入口。
-  - training/opsd/trainer.py
-  # OPSD 响应掩码工具；属配套库，非独立入口。
-  - training/opsd/utils.py
-  # AlexNet 模型定义；属 pipeline example 配套库，非独立入口。
-  - training/pipeline_parallelism/alexnet.py
   # Stable Diffusion 多卡推理；设备与随机生成器硬绑定 CUDA。
   - training/stable_diffusion/inf_txt2img_loop.py
-  # Stable Diffusion 推理管道；属配套库，非独立入口。
-  - training/stable_diffusion/local_pipeline_stable_diffusion.py
   # Stable Diffusion 蒸馏/LoRA 训练；大模型及上传 Hub 配方尚未适配 CI。
   - training/stable_diffusion/train_sd_distil_lora.py
   # 基础 AutoTP 训练；设备硬编码 cuda，默认 Llama-3.1-8B。
@@ -671,38 +458,3 @@ unsupported:
   - training/tensor_parallel/custom_patterns/autotp_custom_patterns.py
   # HF AutoTP 固定长度基准；属性能测试变体，未独立看护。
   - training/tensor_parallel/hf_integration/train_bench_length.py
-  # HF AutoTP 数据与解码工具；属配套库，非独立入口。
-  - training/tensor_parallel/hf_integration/utils.py
-
-  # DS-Chat 训练与数据工具包；由 supported 入口 import，非独立 example。
-  - applications/DeepSpeed-Chat/dschat
-  # VisualChat 数据与模型工具；属配套库目录，非独立入口。
-  - applications/DeepSpeed-VisualChat/utils
-  # BingBERT 旧版 BERT 实现；属第三方库目录，非独立入口。
-  - training/bing_bert/pytorch_pretrained_bert
-  # BingBERT NVIDIA 实现；属第三方库目录，非独立入口。
-  - training/bing_bert/nvidia
-  # BingBERT Turing 实现；属配套库目录，非独立入口。
-  - training/bing_bert/turing
-  # GLUE NVIDIA BERT 实现；属第三方库目录，非独立入口。
-  - training/BingBertGlue/nvidia
-  # GLUE 旧版 BERT 实现；属第三方库目录，非独立入口。
-  - training/BingBertGlue/pytorch_pretrained_bert
-  # GLUE Turing 实现；属配套库目录，非独立入口。
-  - training/BingBertGlue/turing
-  # SQuAD 旧版 BERT 实现；属第三方库目录，非独立入口。
-  - training/BingBertSquad/pytorch_pretrained_bert
-  # SQuAD Turing 实现；属配套库目录，非独立入口。
-  - training/BingBertSquad/turing
-  # BERT compression Transformers 实现；属第三方库目录，非独立入口。
-  - compression/bert/huggingface_transformer
-  # RAC 剪枝算法包；属配套库目录，非独立入口。
-  - compression/reasoning_aware_compression/rac
-  # RAC 单元测试；属配套测试目录，非 example。
-  - compression/reasoning_aware_compression/tests
-  # ViT 模型定义；属配套库目录，非独立入口。
-  - training/data_efficiency/vit_finetuning/models
-  # ViT 数据与训练工具；属配套库目录，非独立入口。
-  - training/data_efficiency/vit_finetuning/utils
-  # HelloDeepSpeed 单元测试；属配套测试目录，非 example。
-  - training/HelloDeepSpeed/tests

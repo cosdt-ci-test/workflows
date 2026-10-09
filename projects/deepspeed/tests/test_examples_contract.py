@@ -151,6 +151,32 @@ class DeepSpeedExamplesContractTests(unittest.TestCase):
         self.assertGreaterEqual(warmup, 2)
         self.assertLess(warmup, steps)
 
+    def test_unsupported_omits_non_example_support_files(self) -> None:
+        non_examples = {
+            "applications/DeepSpeed-Chat/chat.py",
+            "applications/DeepSpeed-Chat/setup.py",
+            "applications/DeepSpeed-Chat/dschat",
+            "applications/DeepSpeed-Chat/tests/test_training.py",
+            "applications/DeepSpeed-VisualChat/helper/extract_qwen_vl.py",
+            "benchmarks/inference/mii/src/client.py",
+            "benchmarks/inference/mii/src/server.py",
+            "compression/reasoning_aware_compression/rac",
+            "training/autotp_equivalence/compare_loss.py",
+            "training/pipeline_parallelism/alexnet.py",
+            "training/imagenet/extract_ILSVRC.sh",
+            "training/offload_states/output_table.py",
+            "scripts/check-license.py",
+        }
+        self.assertFalse(non_examples & self.unsupported)
+        for path in self.unsupported:
+            self.assertNotIn("tests", PurePosixPath(path).parts)
+            self.assertNotIn(PurePosixPath(path).name, {"__init__.py", "setup.py"})
+        # A real inference/evaluation entry is not excluded merely because it
+        # needs a trained checkpoint. Only the redundant chat.py wrapper is removed.
+        self.assertIn("applications/DeepSpeed-Chat/inference/chatbot.py", self.unsupported)
+        self.assertIn("applications/DeepSpeed-Chat/training/step1_supervised_finetuning/prompt_eval.py",
+                      self.unsupported)
+
     def test_ci_fixture_schemas(self) -> None:
         fixtures = PROJECT / "fixtures"
         alpaca = json.loads((fixtures / "ci_alpaca_16.json").read_text(encoding="utf-8"))

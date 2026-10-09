@@ -14,7 +14,7 @@
 
 ## 清单
 
-[examples_manifest.yaml](examples_manifest.yaml) 的 `scan.root` 为 DeepSpeedExamples 仓根，`include_extensions` 为 `.sh` / `.py`。`files-only` 扫描模型的对账单位是入口文件；被 import 的库、模型定义、测试等"不是 example 的配套物"全部登记在 `unsupported` 段（带说明性注释），扫描引擎不再有独立的 exclude 字段。
+[examples_manifest.yaml](examples_manifest.yaml) 的 `scan.root` 为 DeepSpeedExamples 仓根，`include_extensions` 为 `.sh` / `.py`。`supported` 与 `unsupported` 只登记 example 入口：被 import 的库、模型定义、安装脚本、单元测试、数据准备和结果处理工具不登记，也不为它们增加 exclude 字段。公共引擎只校验已声明的 supported 条目，不要求上游每个 `.py`/`.sh` 都出现在清单中。
 
 当前 supported 共 15 条，按 example 的最小有效拓扑使用 1/2/4/8 卡 runner，统一用 CANN 9.1.0 镜像。Run #27 中 14 条通过，包括新增 PR-MoE、动态 batch/LR、ZenFlow 和 Wanda；HF AutoTP 在调度器初始化时失败，预热参数已修正，完整训练与保存路径等待复验。模型走 ModelScope（`ms_download_models` 下载后经 `GITHUB_ENV` 传本地路径），数据集优先使用仓内 fixture，并用 `overlay_args` 压到 CI 规模：
 
@@ -48,7 +48,7 @@ CIFAR 单卡、两卡 MoE 和 PR-MoE 共用 `ds_cifar` profile。setup 从固定
 
 Run #22 中 10 条已有 9 条通过；两卡 MoE 已完成两个 rank 的 HCCL 初始化并创建 EP=2 group，首次 forward 才在 DeepSpeed `sharded_moe._capacity()` 触发 `torch.compile`，随后因镜像没有 Triton 后端而报 `ModuleNotFoundError: triton`。这是 DeepSpeed 0.19.7 将 MoE helper 从 TorchScript 改为 `torch.compile` 后产生的可选编译路径（[issue #7835](https://github.com/deepspeedai/DeepSpeed/issues/7835)、[PR #7840](https://github.com/deepspeedai/DeepSpeed/pull/7840)）；后续 [PR #7875](https://github.com/deepspeedai/DeepSpeed/pull/7875) 的 fallback 无法捕获 `torch.compile` 在首次调用时才发生的懒编译失败。项目 runner 因此仅对 CIFAR MoE 命令设置 `TORCH_COMPILE_DISABLE=1`，让该 helper 走 eager；两卡 launcher、HCCL、MoE 和 EP=2 训练语义均保留，也不要求为一个未由 example 声明的可选优化安装版本敏感的 Triton-Ascend。
 
-其余约 235 条列入 unsupported：同一逻辑 example 的 `.sh` 启动包装已并入对应 `.py` 条目；每条上方保留一行中文注释，仅说明用途和当前未接入原因。原 `scan.exclude` 中的 16 个配套目录也在此登记，见 manifest。清单与磁盘的差异只打印路径，不使 job 失败；例外：`supported` 条目的 path 已不在磁盘上时 manifest-check 立即判红。
+当前 111 条尚未接入的 example 列入 unsupported：同一逻辑 example 的启动包装尽量合并到主入口；每条上方保留一行中文注释，说明用途和当前未接入原因。原有 124 条非 example 配套项（包括 `applications/DeepSpeed-Chat/chat.py` 启动包装和库/测试目录）已移出清单，不代表从上游删文件。真正执行训练、推理、评测或基准的入口仍保留，即使暂时需要已有检查点或外部服务。独立扫描可能把未登记的配套文件列为清单差异，但不影响公共引擎调度；supported 路径不存在时 manifest-check 仍会立即失败。
 
 新增配方通过 CLI、launcher、依赖版本和 fixture 接入，不修改上游 Python/启动脚本，也不为新增条目安装 API monkey patch。HF、动态 batch 和 ZenFlow 的运行缓存/报告写入本次 CI 输出目录；HF config 根据上游模板在输出目录生成。RAC 只通过正常 `import torch_npu` 注册设备后运行原入口，使用校准 forward 的 Wanda 路径，避免仅在 CPU 上完成 magnitude 剪枝却误判 NPU 通过。OPT 的前馈层名为 fc1/fc2，不匹配上游 `scope=mlp` 的命名筛选，因此这里使用 `scope=all`。PR-MoE 与普通 MoE 均局部禁用可选的 `torch.compile`。
 

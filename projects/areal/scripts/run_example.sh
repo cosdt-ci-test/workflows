@@ -140,11 +140,25 @@ case "$EXAMPLE_REL" in
     echo "agent gateway: $AGENT_GW"
 
     # 3) Mint the session key on the inference gateway (admin key is the
-    #    rollout.admin_api_key overlay value).
-    SESS_KEY=$("$PYTHON" examples/hermes/start_session.py "$GW" \
-      --admin-key sk-areal-ci | grep -oE 'sk-sess-[A-Za-z0-9_-]+' | tail -1 || true)
+    #    rollout.admin_api_key overlay value). start_session.py prints the
+    #    machine-readable "SESSION_API_KEY=..." line on STDERR (the stdout
+    #    side is ANSI-coloured prose), and it can return HTTP 429 until the
+    #    trainer grants capacity - retry briefly.
+    SESS_KEY=""
+    SESS_OUT=""
+    for attempt in $(seq 1 12); do
+      SESS_OUT=$("$PYTHON" examples/hermes/start_session.py "$GW" \
+        --admin-key sk-areal-ci 2>&1 || true)
+      SESS_KEY=$(printf '%s\n' "$SESS_OUT" \
+        | sed -n 's/^SESSION_API_KEY=//p' | tail -1)
+      [[ -n "$SESS_KEY" ]] && break
+      echo "[session attempt $attempt] $(printf '%s\n' "$SESS_OUT" \
+        | grep -E 'HTTP|Error|✘' | tail -1)"
+      sleep 5
+    done
     if [[ -z "$SESS_KEY" ]]; then
-      echo "start_session produced no sk-sess key; tails:"
+      echo "start_session produced no session key; raw output:"
+      printf '%s\n' "$SESS_OUT"
       tail -n 40 "$TRAIN_LOG"
       exit 1
     fi
@@ -152,12 +166,14 @@ case "$EXAMPLE_REL" in
 
     # 4) One piped conversation; hermes_loop exits cleanly on EOF. The
     #    inf-* flags route the agent's LLM calls through the inference
-    #    gateway under the session key (self-evolution capture).
+    #    gateway under the session key (self-evolution capture). The model
+    #    id is "default" - the name InferenceDataProxy registers the served
+    #    model under (log: "Model registered: name=default").
     if ! echo "Say hello and introduce yourself in one sentence." | \
         "$PYTHON" examples/hermes/hermes_loop.py "$AGENT_GW" \
           --admin-api-key "$HERMES_ADMIN_KEY" \
           --inf-base-url "$GW" \
-          --inf-model "${AREAL_MODEL_PATH:?AREAL_MODEL_PATH not in env}" \
+          --inf-model default \
           --session-api-key "$SESS_KEY"; then
       echo "hermes_loop failed; tails:"
       tail -n 60 "$AGENT_LOG"

@@ -122,10 +122,13 @@ python -c "import torch, torch_npu, vllm, vllm_ascend; from vllm.entrypoints.ope
 # model-agnostic - it drives whatever OpenAI-compatible endpoint the
 # rollout engine serves); the Agent Service imports
 # examples.hermes.hermes.HermesAgent from the target checkout.
+# Index: tsinghua (not aliyun) - aliyun's PEP 658 .metadata sidecar for
+# hermes-agent's python-dotenv dep 404s intermittently; tuna mirrors the
+# metadata reliably (same mirror as transformers-quick-start.yml).
 # -------------------------------------------------------
 if [[ "$HERMES_PREP" == 1 ]]; then
   uv pip install --system \
-    --index-url https://mirrors.aliyun.com/pypi/simple \
+    --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
     hermes-agent==0.19.0
 fi
 

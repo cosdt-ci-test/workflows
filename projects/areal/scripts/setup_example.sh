@@ -526,8 +526,8 @@ fi
 # -------------------------------------------------------
 # train_swe_rl.py has no in-tree config or dataset; build all pieces:
 #  a) clone the external AReaL-SWEAgent checkout (the workflow imports
-#     `aweagent.lifecycle` from econfig.agent_root) and install its local
-#     sandbox package `aenv` (persistent-bash-env - no docker involved);
+#     `aweagent.lifecycle` from econfig.agent_root) and install its
+#     requirements.txt (aenvironment sandbox SDK + openai-agents stack);
 #  b) author a minimal agent config: the shipped default
 #     (1_0_0/min-swe-agent-train-top1) uses step_limit=200 with 16K
 #     completion tokens and the swebench eval env - unusable in CI. Derive
@@ -537,8 +537,9 @@ fi
 #     eval_script; no repo clone, no network), and export
 #     AWEAGENT_ROOT / AREAL_SWE_CONFIG for the overlay.
 # The persistent-bash env starts with `cd /testbed`, so prepare /testbed as
-# an empty git repo in the job container (first-run risk: aenv must execute
-# the shell locally, not in a remote FaaS sandbox).
+# an empty git repo in the job container (first-run risk: the aenvironment
+# persistent-bash env must execute the shell locally, not in a remote FaaS
+# sandbox).
 if [[ "$SWE_PREP" == 1 ]]; then
 # AREAL_MODEL_PATH is a non-exported shell variable from section 3; export it
 # for this heredoc only so os.environ sees it (it is already in GITHUB_ENV for
@@ -554,7 +555,15 @@ workspace = os.environ["GITHUB_WORKSPACE"]
 target_root = os.environ["TARGET_ROOT"]
 aweagent_root = os.path.join(workspace, "AReaL-SWEAgent")
 
-# a) agent runtime checkout + aenv sandbox package
+# a) agent runtime checkout + its requirements. NOTE: the SDK is imported as
+# `from aenv import Environment`, but the PyPI package is `aenvironment` (the
+# package and module names differ) - installing PyPI `aenv` grabs an
+# unrelated same-named project and the import dies with
+# "cannot import name 'Environment' from 'aenv' (unknown location)". Follow
+# the upstream mechanism (train_swe_rl._install_aweagent_deps_on_ray_nodes
+# runs `uv pip install -r requirements.txt`) and install the pinned set:
+# aenvironment + openai/openai-agents/tenacity/loguru. Tuna index (aliyun's
+# PEP 658 metadata sidecars 404 intermittently).
 if not os.path.isdir(aweagent_root):
     subprocess.run(
         [
@@ -566,7 +575,8 @@ if not os.path.isdir(aweagent_root):
 subprocess.run(
     [
         "uv", "pip", "install", "--system",
-        "--index-url", "https://mirrors.aliyun.com/pypi/simple", "aenv",
+        "--index-url", "https://pypi.tuna.tsinghua.edu.cn/simple",
+        "-r", os.path.join(aweagent_root, "requirements.txt"),
     ],
     check=True,
 )

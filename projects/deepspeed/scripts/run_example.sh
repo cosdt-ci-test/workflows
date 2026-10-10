@@ -4,7 +4,6 @@
 # relative to the examples root; otherwise path itself must be launchable.
 # Overlay CLI args come from OVERLAY_ARGS (JSON array). Never git add/commit/push.
 set -euo pipefail
-PROJECT_SCRIPT_DIR="${DEEPSPEED_PROJECT_SCRIPTS:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 
 if [[ $# -lt 1 ]]; then
   echo "usage: $0 <example-relpath>" >&2
@@ -87,6 +86,10 @@ export CI_OUTPUT_DIR
 export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
 
 entry_key="${EXEC:-$EXAMPLE_REL}"
+if [[ "$entry_key" == benchmarks/opsd/benchmark_hybrid_engine_rollout.py ]]; then
+  echo 'unsupported: native NPU softmax_context interface mismatch (Run #30); upstream fix required' >&2
+  exit 2
+fi
 
 require_visible_devices() {
   local required="$1"
@@ -480,7 +483,236 @@ run_autotp_equivalence() {
     --print-every 1
 }
 
-source "$PROJECT_SCRIPT_DIR/run_expansion_examples.sh"
+validate_expansion() {
+  "$PYTHON" - "$@" <<'PY'
+"""Check upstream example outputs; no NPU execution or source interception here."""
+from __future__ import annotations
+
+import json
+import math
+from pathlib import Path
+import re
+import sys
+
+
+def positive(value):
+    return isinstance(value, (float, int)) and math.isfinite(value) and value > 0
+
+
+def validate(kind: str, text: str, output: Path | None = None) -> object:
+    if kind in {"model_tensor_offload", "activation_offload"}:
+        summaries = [json.loads(line.split("=", 1)[1]) for line in text.splitlines()
+                     if line.startswith("DRIVERRESULT=")]
+        if len(summaries) != 1:
+            raise ValueError("upstream driver must report exactly one two-arm summary")
+        report = summaries[0]
+        unpinned = "unpinned" if kind == "model_tensor_offload" else "pageable"
+        for name in (unpinned, "pinned"):
+            row = report[name]
+            pin_key = "pin_memory" if kind == "model_tensor_offload" else "use_pin_memory"
+            if (row["device"] != "npu" or row["steps"] != 3 or
+                    bool(row[pin_key]) != (name == "pinned") or
+                    row["experiment"] != kind or
+                    not all(positive(row[key]) for key in ("step_avg_s", "step_min_s"))):
+                raise ValueError(f"invalid NPU {kind} arm: {row}")
+            if kind == "model_tensor_offload" and row["zero_stage"] != 3:
+                raise ValueError("model tensor offload must exercise ZeRO-3")
+        if not positive(report["speedup"]):
+            raise ValueError("speedup must be finite/positive, not necessarily greater than 1")
+    elif kind == "h2d_d2h":
+        report = [json.loads(line.split("=", 1)[1]) for line in text.splitlines()
+                  if line.startswith("RESULT=")]
+        expected = {(arm, size) for arm in ("pageable", "torch", "native-unregistered")
+                    for size in (1,)}
+        if len(report) != len(expected) or {(r["arm"], r["size_mib"]) for r in report} != expected:
+            raise ValueError("copy benchmark must report all three 1-MiB buffer modes")
+        for row in report:
+            if row["experiment"] != kind or not all(positive(row[k]) for k in ("h2d_gbps", "d2h_gbps")):
+                raise ValueError(f"invalid copy measurement: {row}")
+            if bool(row["accelerator_is_pinned"]) != (row["arm"] != "pageable"):
+                raise ValueError(f"buffer pinning did not match the requested arm: {row}")
+    elif kind == "zenflow_finetune":
+        report = {int(step): float(loss) for step, loss in
+                  re.findall(r"Step\s+(\d+), Loss:\s*([^,\s]+)", text)}
+        if sorted(report) != list(range(1, 17)) or not all(math.isfinite(v) for v in report.values()):
+            raise ValueError("ZenFlow finetune must complete 16 finite-loss optimizer updates")
+        if "Training complete!" not in text:
+            raise ValueError("ZenFlow did not complete checkpoint/tokenizer saving")
+        if output is not None:
+            if not (output / "latest").is_file() or not list(output.rglob("*model_states.pt")):
+                raise ValueError("missing upstream DeepSpeed checkpoint")
+            if not (output / "tokenizer_config.json").is_file():
+                raise ValueError("missing saved upstream tokenizer")
+    elif kind == "opsd_student":
+        matches = re.findall(r"STUDENT_OK loss=(\S+) mem=\S+ offload=0 autotp=2 ws=2", text)
+        if len(matches) != 1 or not math.isfinite(float(matches[0])):
+            raise ValueError("student must complete finite-loss TP=2/ZeRO-3 forward/backward/step")
+        report = {"loss": float(matches[0]), "autotp": 2, "world_size": 2, "offload": False}
+    elif kind == "opsd_teacher":
+        matches = re.findall(r"TEACHER_OK shape=\(1, 12, (\d+)\) mem=\S+ offload=True autotp=2 ws=2", text)
+        if len(matches) != 1 or int(matches[0]) <= 0:
+            raise ValueError("teacher must create CPU logit cache from TP=2/ZeRO-3 offload forward")
+        report = {"cache_shape": [1, 12, int(matches[0])], "autotp": 2, "world_size": 2, "offload": True}
+    elif kind == "opsd":
+        report = []
+        for step, loss, tokens in re.findall(
+                r"\[opsd\]\[step (\d+)\] loss=(\S+).*?resp_tok=(\d+)", text):
+            row = {"step": int(step), "loss": float(loss), "response_tokens": int(tokens)}
+            if not math.isfinite(row["loss"]) or row["response_tokens"] <= 0:
+                raise ValueError(f"invalid OPSD rollout/teacher/student step: {row}")
+            report.append(row)
+        if [row["step"] for row in report] != [0, 1, 2]:
+            raise ValueError("OPSD must complete exactly three rollout/distillation steps")
+    else:
+        raise ValueError(f"unknown expansion result kind: {kind}")
+    return report
+
+
+if __name__ == "__main__":
+    kind, log, report_file, *extra = sys.argv[1:]
+    report = validate(kind, Path(log).read_text(), Path(extra[0]) if extra else None)
+    Path(report_file).write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
+    print(f"validated upstream {kind} results")
+PY
+}
+
+run_pin_memory_example() {
+  require_visible_devices 1 '0'
+  local experiment="$1" devices log
+  devices="$(first_visible_devices 1)"
+  log="$CI_OUTPUT_DIR/$experiment.log"
+  # Limits are per-process: setup's soft limit does not carry to this step.
+  local memlock_hard
+  memlock_hard="$(ulimit -Hl)"
+  ulimit -Sl "$memlock_hard"
+  # Upstream drivers own the arm subprocesses and allocate fresh rendezvous
+  # ports. Do not wrap the two-arm driver in a multi-rank launcher.
+  ASCEND_RT_VISIBLE_DEVICES="$devices" "$PYTHON" "$LAUNCH_PATH" "${EXTRA_ARGS[@]}" 2>&1 | tee "$log"
+  validate_expansion \
+    "$experiment" "$log" "$CI_OUTPUT_DIR/$experiment-results.json"
+}
+
+run_zenflow_finetune() {
+  require_visible_devices 1 '0'
+  require_overlay_path --model_name directory
+  : "${ZENFLOW_WORK_DIR:?ZENFLOW_WORK_DIR was not exported by setup}"
+  [[ -s "$ZENFLOW_WORK_DIR/tatsu-lab/alpaca/train.parquet" ]] || {
+    echo 'ZenFlow local Alpaca parquet fixture is missing' >&2; exit 1;
+  }
+  local config="$CI_OUTPUT_DIR/zenflow-finetune-config.json" devices
+  devices="$(first_visible_devices 1)"
+  "$PYTHON" - "$config" <<'PY'
+import json
+from pathlib import Path
+import sys
+config = {
+    "train_batch_size": 1, "train_micro_batch_size_per_gpu": 1,
+    "gradient_accumulation_steps": 1, "gradient_clipping": 1.0,
+    "bf16": {"enabled": True}, "zero_allow_untested_optimizer": True,
+    "zero_optimization": {"stage": 2,
+        "offload_optimizer": {"device": "cpu", "pin_memory": False},
+        "zenflow": {"topk_ratio": 0.1, "update_interval": 2,
+                    "full_warm_up_rounds": 0, "overlap_step": False}},
+    "optimizer": {"type": "AdamW", "params": {"lr": 2e-5,
+        "betas": [0.9, 0.999], "eps": 1e-8, "weight_decay": 0.01}},
+}
+Path(sys.argv[1]).write_text(json.dumps(config, indent=2) + '\n')
+PY
+  cd "$ZENFLOW_WORK_DIR"
+  # Native datasets local-directory resolution of the original fixed ID.
+  # Offline mode makes any accidental fallback to the Hub fail explicitly.
+  ASCEND_RT_VISIBLE_DEVICES="$devices" HF_DATASETS_OFFLINE=1 HF_HUB_OFFLINE=1 \
+    deepspeed --master_port "$(master_port_for 81)" --num_gpus 1 \
+    "$LAUNCH_PATH" --deepspeed --deepspeed_config "$config" "${EXTRA_ARGS[@]}" \
+    2>&1 | tee "$CI_OUTPUT_DIR/zenflow-finetune.log"
+  validate_expansion zenflow_finetune \
+    "$CI_OUTPUT_DIR/zenflow-finetune.log" "$CI_OUTPUT_DIR/zenflow-finetune-results.json" \
+    "$(overlay_value --output_dir)"
+}
+
+run_opsd() {
+  require_visible_devices 1 '0'
+  : "${QWEN25_STUDENT_PATH:?QWEN25_STUDENT_PATH was not exported by setup}"
+  : "${QWEN25_TEACHER_PATH:?QWEN25_TEACHER_PATH was not exported by setup}"
+  : "${OPSD_CI_PATH:?OPSD_CI_PATH was not exported by setup}"
+  [[ -d "$QWEN25_STUDENT_PATH" && -d "$QWEN25_TEACHER_PATH" && -s "$OPSD_CI_PATH" ]] || {
+    echo 'OPSD requires two local ModelScope models and the local prompt fixture' >&2; exit 1;
+  }
+  local config="$CI_OUTPUT_DIR/opsd-config.json" devices
+  devices="$(first_visible_devices 1)"
+  "$PYTHON" - "$config" <<'PY'
+import json
+import os
+from pathlib import Path
+import sys
+output = Path(os.environ['CI_OUTPUT_DIR'])
+ds_config = output / 'opsd-student-config.json'
+ds_config.write_text(json.dumps({
+    'train_micro_batch_size_per_gpu': 1, 'gradient_accumulation_steps': 1,
+    'bf16': {'enabled': True}, 'zero_optimization': {'stage': 0},
+    'optimizer': {'type': 'AdamW', 'params': {'lr': 1e-6}},
+    'gradient_clipping': 1.0,
+}, indent=2) + '\n')
+cfg = {
+    'student': {'model_name_or_path': os.environ['QWEN25_STUDENT_PATH'], 'dtype': 'bfloat16'},
+    'teacher': {'model_name_or_path': os.environ['QWEN25_TEACHER_PATH'], 'dtype': 'bfloat16',
+                'offload_to_cpu': True, 'autotp_size': 1},
+    'rollout': {'engine': 'hybrid_engine', 'max_prompt_length': 512,
+                'max_response_length': 8, 'temperature': 0.0, 'n_samples_per_prompt': 1},
+    'distillation': {'loss_type': 'reverse_kl', 'temperature': 1.0, 'chunk_size': 8},
+    'training': {'micro_batch_size_per_gpu': 1, 'gradient_accumulation_steps': 1,
+                 'learning_rate': 1e-6, 'num_train_epochs': 1, 'max_steps': 3,
+                 'logging_steps': 1, 'save_steps': 500, 'save_dir': str(output / 'opsd-checkpoints')},
+    'data': {'path': os.environ['OPSD_CI_PATH'], 'prompt_field': 'prompt', 'shuffle': False},
+    'deepspeed_config': str(ds_config),
+}
+Path(sys.argv[1]).write_text(json.dumps(cfg, indent=2) + '\n')
+PY
+  # Default rollout delegates to the original student module.generate(),
+  # then the original trainer does teacher-cache + streamed KL backward.
+  ASCEND_RT_VISIBLE_DEVICES="$devices" HF_HUB_OFFLINE=1 \
+    deepspeed --master_port "$(master_port_for 91)" --num_gpus 1 \
+    "$LAUNCH_PATH" --config "$config" "${EXTRA_ARGS[@]}" 2>&1 | tee "$CI_OUTPUT_DIR/opsd.log"
+  validate_expansion opsd \
+    "$CI_OUTPUT_DIR/opsd.log" "$CI_OUTPUT_DIR/opsd-results.json"
+}
+
+run_opsd_isolated() {
+  local role="$1" devices log
+  require_visible_devices 2 '0,1'
+  devices="$(first_visible_devices 2)"
+  : "${QWEN25_STUDENT_PATH:?QWEN25_STUDENT_PATH was not exported by setup}"
+  : "${QWEN25_TEACHER_PATH:?QWEN25_TEACHER_PATH was not exported by setup}"
+  [[ -d "$QWEN25_STUDENT_PATH" && -d "$QWEN25_TEACHER_PATH" ]] || {
+    echo 'isolated OPSD requires local ModelScope model paths' >&2; exit 1;
+  }
+  log="$CI_OUTPUT_DIR/opsd-$role.log"
+  # The upstream ENV knobs are the interface; no model/source alias is needed.
+  # Student's optional CPU optimizer offload is disabled because its explicitly
+  # selected torch AdamW is not the ZeRO CPUAdam recipe; TP=2 + ZeRO-3 remain.
+  # Legacy mem= output uses uninitialized CUDA stats (zero), not NPU memory.
+  ASCEND_RT_VISIBLE_DEVICES="$devices" AUTOTP=2 \
+    OFFLOAD="$([[ "$role" == teacher ]] && printf 1 || printf 0)" \
+    STUDENT_MODEL="$QWEN25_STUDENT_PATH" TEACHER_MODEL="$QWEN25_TEACHER_PATH" \
+    deepspeed --master_port "$(master_port_for "$([[ "$role" == teacher ]] && printf 93 || printf 92)")" \
+    --num_gpus 2 --no_local_rank "$LAUNCH_PATH" "${EXTRA_ARGS[@]}" 2>&1 | tee "$log"
+  validate_expansion "opsd_$role" "$log" \
+    "$CI_OUTPUT_DIR/opsd-$role-results.json"
+}
+
+run_expansion_example() {
+  case "$entry_key" in
+    benchmarks/pin_memory/model_tensor_offload/bench.py) run_pin_memory_example model_tensor_offload ;;
+    benchmarks/pin_memory/activation_offload/bench.py) run_pin_memory_example activation_offload ;;
+    benchmarks/pin_memory/h2d_d2h/bench.py) run_pin_memory_example h2d_d2h ;;
+    training/DeepSpeed-ZenFlow/finetuning/finetune_llama.py) run_zenflow_finetune ;;
+    training/opsd/main.py) run_opsd ;;
+    training/opsd/test_student_autotp_zero3.py) run_opsd_isolated student ;;
+    training/opsd/test_teacher_autotp_zero3.py) run_opsd_isolated teacher ;;
+    *) return 1 ;;
+  esac
+  # Called outside a conditional so errexit/pipefail remain active.
+}
 case "$entry_key" in
   benchmarks/pin_memory/model_tensor_offload/bench.py|benchmarks/pin_memory/activation_offload/bench.py|benchmarks/pin_memory/h2d_d2h/bench.py|training/DeepSpeed-ZenFlow/finetuning/finetune_llama.py|training/opsd/main.py|training/opsd/test_student_autotp_zero3.py|training/opsd/test_teacher_autotp_zero3.py)
     run_expansion_example
@@ -488,13 +720,317 @@ case "$entry_key" in
     ;;
 esac
 
-source "$PROJECT_SCRIPT_DIR/run_inference_examples.sh"
+is_new_inference_entry() {
+  case "$entry_key" in
+    benchmarks/inference/bert-bench.py|benchmarks/inference/gpt-bench.py|\
+    inference/huggingface/text-generation/ds-hf-compare.py|\
+    inference/huggingface/fill-mask/test-bert.py|\
+    inference/huggingface/fill-mask/test-electra.py|\
+    inference/huggingface/fill-mask/test-roberta.py|\
+    inference/huggingface/translation/test-t5-base.py|\
+    inference/huggingface/automatic-speech-recognition/test-wav2vec2.py) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+write_inference_bootstrap() {
+  local output="$1"
+  "$PYTHON" - "$output" <<'PY'
+import sys
+from pathlib import Path
+
+Path(sys.argv[1]).write_text(r'''import json
+import math
+import os
+from pathlib import Path
+import runpy
+import sys
+import torch
+import torch_npu
+from deepspeed.accelerator import get_accelerator
+
+kind = os.environ['DS_INFERENCE_KIND']
+source = os.environ['DS_INFERENCE_SOURCE']
+if get_accelerator().device_name() != 'npu' or not torch.npu.is_available():
+    raise SystemExit('inference smoke requires real NPU execution')
+get_accelerator().set_device(int(os.environ.get('LOCAL_RANK', '0')))
+sys.argv[0] = source
+sys.path.insert(0, str(Path(source).parent))
+state = runpy.run_path(source, run_name='__main__')
+
+def require(condition, message):
+    if not condition:
+        raise SystemExit(message)
+
+def finite(value):
+    return isinstance(value, (int, float)) and math.isfinite(value)
+
+if kind == 'asr':
+    model = state['model']
+    require(next(model.parameters()).device.type == 'npu', 'CTC model weights are not NPU')
+    result = state['result']
+    require(len(result) == 2 and all(isinstance(x['transcription'], str) for x in result), 'CTC did not process both synthetic waveforms')
+    score = state['wer'](result['text'], result['transcription'])
+    require(finite(score) and score >= 0, 'CTC fixture WER must be finite, not an accuracy assertion')
+    # The original maps argmax predictions; additionally reject NaN/Inf logits
+    # on one original waveform without replacing its dataset/model functions.
+    speech = state['librispeech_eval'][0]['speech']
+    values = state['processor'](speech, sampling_rate=16000, return_tensors='pt', padding='longest').input_values
+    with torch.no_grad():
+        logits = model(values.to(state['device'])).logits
+    require(logits.numel() > 0 and bool(torch.isfinite(logits).all()), 'CTC forward logits must be nonempty and finite')
+else:
+    pipe = state.get('pipe', state.get('translator'))
+    require(pipe is not None and pipe.device.type == 'npu', 'pipeline device is not NPU')
+    require(next(pipe.model.parameters()).device.type == 'npu', 'model weights are not on NPU')
+    if kind in ('bert-bench', 'gpt-bench'):
+        require(len(state['times']) == 4 and all(finite(x) and x > 0 for x in state['times']), 'missing/invalid four NPU timings')
+        require(state['mtimes'] and all(finite(x) and x >= 0 for x in state['mtimes']), 'missing/invalid DS model timings')
+        require(len(state['responses']) == 4 and all(state['responses']), 'missing benchmark predictions')
+    elif kind == 'compare':
+        require(state['match_count'] == 2 and state['mismatch_count'] == 0, 'HF/DS outputs must match for both CI prompts')
+    elif kind == 'translation':
+        require(state['translation'] and state['translation'][0].get('translation_text', '').strip(), 'empty T5 translation')
+    elif kind == 'fill-mask':
+        predictions = state['output']
+        require(predictions and all(finite(x['score']) and x['token_str'].strip() for x in predictions), 'missing/invalid fill-mask predictions')
+    else:
+        raise SystemExit(f'unknown inference assertion kind: {kind}')
+print(f'CI inference assertions passed: {kind}, device=npu')
+''', encoding='utf-8')
+PY
+}
+
+run_new_inference() {
+  local kind cards=1 alias='' offset=70
+  case "$entry_key" in
+    benchmarks/inference/bert-bench.py)
+      kind=bert-bench; require_overlay_path --model directory ;;
+    benchmarks/inference/gpt-bench.py)
+      kind=gpt-bench; offset=71; require_overlay_path --model directory ;;
+    inference/huggingface/text-generation/ds-hf-compare.py)
+      kind=compare; offset=72; require_overlay_path --model directory ;;
+    inference/huggingface/fill-mask/test-bert.py)
+      kind=fill-mask; alias=bert-large-cased; offset=73 ;;
+    inference/huggingface/fill-mask/test-electra.py)
+      kind=fill-mask; alias=google/electra-base-generator; cards=2; offset=74 ;;
+    inference/huggingface/fill-mask/test-roberta.py)
+      kind=fill-mask; alias=roberta-large; cards=2; offset=75 ;;
+    inference/huggingface/translation/test-t5-base.py)
+      kind=translation; alias=t5-base; cards=2; offset=76 ;;
+    inference/huggingface/automatic-speech-recognition/test-wav2vec2.py)
+      kind=asr; alias=facebook/wav2vec2-base-960h; offset=78 ;;
+    *) return 1 ;;
+  esac
+  require_visible_devices "$cards" "$([[ "$cards" == 2 ]] && printf '0,1' || printf '0')"
+  local devices bootstrap
+  devices="$(first_visible_devices "$cards")"
+  if [[ -n "$alias" ]]; then
+    if [[ -z "${INFERENCE_CI_WORK:-}" || ! -f "$INFERENCE_CI_WORK/$alias/config.json" ]]; then
+      echo "local inference alias missing for $entry_key: $alias" >&2
+      exit 1
+    fi
+    cd "$INFERENCE_CI_WORK"
+  else
+    mkdir -p "$CI_OUTPUT_DIR/inference-work"
+    cd "$CI_OUTPUT_DIR/inference-work"
+  fi
+  bootstrap="$CI_OUTPUT_DIR/inference-entry.py"
+  write_inference_bootstrap "$bootstrap" || exit "$?"
+  # no_local_rank works with every native entry, including those with no parser.
+  # LOCAL_RANK/WORLD_SIZE are still injected by DeepSpeed's launcher.
+  # Explicit || exit is essential: this function is called from an if-condition,
+  # which otherwise disables bash errexit throughout the function body.
+  DS_INFERENCE_KIND="$kind" DS_INFERENCE_SOURCE="$LAUNCH_PATH" \
+  ASCEND_RT_VISIBLE_DEVICES="$devices" HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
+  deepspeed --master_port "$(master_port_for "$offset")" --num_nodes 1 \
+    --num_gpus "$cards" --no_local_rank "$bootstrap" "${EXTRA_ARGS[@]}" || exit "$?"
+  return 0
+}
 if is_new_inference_entry; then
   run_new_inference
   exit 0
 fi
 
-source "$PROJECT_SCRIPT_DIR/run_training_expansion.sh"
+is_training_expansion_entry() {
+  case "$entry_key" in
+    training/deepspeed_finetune_demo/finetune_llama.py|training/stable_diffusion/train_sd_distil_lora.py|training/opsd/benchmarks/bench_decode_1p1r.py) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+run_training_expansion_executor() {
+  case "$entry_key" in
+    training/deepspeed_finetune_demo/finetune_llama.py) run_finetune_demo_ci ;;
+    training/stable_diffusion/train_sd_distil_lora.py) run_sd_distil_ci ;;
+    training/opsd/benchmarks/bench_decode_1p1r.py) run_opsd_decode_ci ;;
+    *) echo "unknown training expansion entry: $entry_key" >&2; return 1 ;;
+  esac
+}
+
+run_finetune_demo_ci() {
+  require_visible_devices 2 '0,1'
+  require_overlay_path --model_name directory
+  require_overlay_path --dataset_name directory
+  local devices config log
+  devices="$(first_visible_devices 2)"
+  config="$CI_OUTPUT_DIR/finetune-demo-config.json"
+  log="$CI_OUTPUT_DIR/finetune-demo.log"
+  "$PYTHON" - "$config" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+config = {
+    'train_batch_size': 2, 'train_micro_batch_size_per_gpu': 1,
+    'gradient_accumulation_steps': 1, 'bf16': {'enabled': True},
+    'zero_optimization': {'stage': 2},
+    'optimizer': {'type': 'AdamW', 'params': {'lr': 2e-5, 'torch_adam': True}},
+    'gradient_clipping': 1.0, 'steps_per_print': 1,
+}
+Path(sys.argv[1]).write_text(json.dumps(config, indent=2) + '\n')
+PY
+  mkdir -p "$CI_OUTPUT_DIR/finetune-demo-work"
+  cd "$CI_OUTPUT_DIR/finetune-demo-work"
+  echo "running native SmolLM2/Llama finetune recipe: two-rank DP/ZeRO-2, three updates"
+  ASCEND_RT_VISIBLE_DEVICES="$devices" WANDB_MODE=disabled deepspeed \
+    --master_port "$(master_port_for 111)" --num_gpus 2 \
+    "$LAUNCH_PATH" --deepspeed --deepspeed_config "$config" "${EXTRA_ARGS[@]}" \
+    2>&1 | tee "$log"
+  "$PYTHON" - "$log" "$CI_OUTPUT_DIR/finetune-demo-losses.json" <<'PY'
+import json
+import math
+from pathlib import Path
+import re
+import sys
+
+text = Path(sys.argv[1]).read_text()
+if not re.search(r'First batch valid shifted labels: [1-9]\d*, finite params: True, finite logits: True,.*finite loss: True', text):
+    raise SystemExit('finetune demo did not prove valid labels and finite first-batch tensors')
+losses = {}
+for match in re.finditer(r'Step\s+(\d+), Loss:\s*([^,\s]+)', text):
+    step, value = int(match[1]), float(match[2])
+    if not math.isfinite(value):
+        raise SystemExit(f'finetune demo produced nonfinite loss at step {step}')
+    losses[step] = value
+if sorted(losses) != [1, 2, 3] or 'Training complete!' not in text:
+    raise SystemExit('finetune demo must finish exactly three finite updates')
+Path(sys.argv[2]).write_text(json.dumps(losses, allow_nan=False) + '\n')
+print('validated three finite finetune demo updates')
+PY
+}
+
+run_sd_distil_ci() {
+  require_visible_devices 2 '0,1'
+  require_overlay_path --pretrained_model_name_or_path directory
+  local devices config output log
+  devices="$(first_visible_devices 2)"
+  config="$CI_OUTPUT_DIR/sd-distil-config.json"
+  log="$CI_OUTPUT_DIR/sd-distil.log"
+  output="$(overlay_value --output_dir)"
+  [[ "$output" == "$CI_OUTPUT_DIR/sd-distil" ]] || {
+    echo "SD distillation must save its fresh pipeline under CI output" >&2; return 1;
+  }
+  [[ ! -e "$output/model_index.json" ]] || {
+    echo "SD distillation refuses to reuse a stale output pipeline" >&2; return 1;
+  }
+  [[ -s "$CI_OUTPUT_DIR/sd-distil-work/poloclub/diffusiondb/train.parquet" ]] || {
+    echo "SD local eight-image dataset missing; run ds_sd_distil setup first" >&2; return 1;
+  }
+  [[ "$(overlay_value --mixed_precision)" == no ]] || {
+    echo "SD unwrapped teacher requires the FP32 CI recipe (--mixed_precision no)" >&2; return 1;
+  }
+  "$PYTHON" - "$config" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+config = {
+    'train_batch_size': 2, 'train_micro_batch_size_per_gpu': 1,
+    'gradient_accumulation_steps': 1, 'zero_optimization': {'stage': 2},
+    'fp16': {'enabled': False}, 'bf16': {'enabled': False},
+    'gradient_clipping': 1.0,
+}
+Path(sys.argv[1]).write_text(json.dumps(config, indent=2) + '\n')
+PY
+  cd "$CI_OUTPUT_DIR/sd-distil-work"
+  echo "running teacher-CFG full-UNet distillation using native local images, FP32 and two-rank DeepSpeed"
+  ASCEND_RT_VISIBLE_DEVICES="$devices" WANDB_MODE=disabled TQDM_MININTERVAL=0 \
+  accelerate launch --use_deepspeed --num_processes 2 --num_machines 1 \
+    --mixed_precision no --deepspeed_config_file "$config" \
+    --main_process_port "$(master_port_for 121)" \
+    "$LAUNCH_PATH" "${EXTRA_ARGS[@]}" 2>&1 | tee "$log"
+  "$PYTHON" - "$log" "$output" "$CI_OUTPUT_DIR/sd-distil-losses.json" <<'PY'
+import json
+import math
+from pathlib import Path
+import re
+import sys
+
+text = Path(sys.argv[1]).read_text()
+losses = {}
+# set_postfix(refresh=True) in the original entry prints the current loss
+# after each progress update. Parse CR-separated tqdm frames, not wall-clock speed.
+for frame in re.split(r'[\r\n]', text):
+    match = re.search(r'\b([123])/3\b.*?\bloss=([^,\]\s]+)', frame)
+    if match:
+        step, value = int(match[1]), float(match[2])
+        if not math.isfinite(value):
+            raise SystemExit(f'SD distillation nonfinite loss at step {step}')
+        losses[step] = value
+if sorted(losses) != [1, 2, 3]:
+    raise SystemExit('SD distillation must display three finite train-step losses')
+output = Path(sys.argv[2])
+for name in ('model_index.json', 'unet/config.json', 'unet/diffusion_pytorch_model.safetensors'):
+    file = output / name
+    if not file.is_file() or not file.stat().st_size:
+        raise SystemExit(f'SD distillation failed to save a fresh trained pipeline: {file}')
+Path(sys.argv[3]).write_text(json.dumps(losses, allow_nan=False) + '\n')
+print('validated three finite SD distillation updates and trained pipeline save')
+PY
+}
+
+run_opsd_decode_ci() {
+  require_visible_devices 1 '0'
+  require_overlay_path --model directory
+  local devices log
+  devices="$(first_visible_devices 1)"
+  log="$CI_OUTPUT_DIR/opsd-decode.log"
+  mkdir -p "$CI_OUTPUT_DIR/opsd-decode-work"
+  cd "$CI_OUTPUT_DIR/opsd-decode-work"
+  # Normal backend import and runpy preserve every original API and function.
+  ASCEND_RT_VISIBLE_DEVICES="$devices" "$PYTHON" -c '
+import os, runpy, sys
+import torch, torch_npu
+from deepspeed.accelerator import get_accelerator
+index = get_accelerator().current_device()
+assert torch.empty(1, device="cpu").to(index).device.type == "npu"
+assert torch.randint(10, 1000, (1, 2), device=index).device.type == "npu"
+sys.argv = sys.argv[1:]
+sys.path.insert(0, os.path.dirname(sys.argv[0]))
+runpy.run_path(sys.argv[0], run_name="__main__")
+' "$LAUNCH_PATH" "${EXTRA_ARGS[@]}" 2>&1 | tee "$log"
+  "$PYTHON" - "$log" "$CI_OUTPUT_DIR/opsd-decode-timings.json" <<'PY'
+import json
+import math
+from pathlib import Path
+import re
+import sys
+
+text = Path(sys.argv[1]).read_text()
+timings = {}
+for label in ('Raw decode loop', 'HybridEngine rollout'):
+    match = re.search(re.escape(label) + r':\s*([^\s]+)\s+ms', text)
+    if not match:
+        raise SystemExit(f'OPSD decode missing completed timing: {label}')
+    value = float(match[1])
+    if not math.isfinite(value) or value <= 0:
+        raise SystemExit(f'OPSD decode invalid timing: {label}={value}')
+    timings[label] = value
+Path(sys.argv[2]).write_text(json.dumps(timings, allow_nan=False) + '\n')
+print('validated raw sampling/decode and HybridEngine rollout completion; no speed threshold')
+PY
+}
 if is_training_expansion_entry; then
   run_training_expansion_executor
   exit 0

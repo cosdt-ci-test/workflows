@@ -76,14 +76,61 @@ print('DeepSpeed version:', deepspeed.__version__)
 ms_download_models() {
   # modelscope>=1.38 splits hub code into modelscope-hub; pin the last pre-split
   # release because the runner mirror may only expose an older hub for the latest wheel.
-  python -m pip install -q "modelscope==1.37.0"
+  python -m pip install -q "modelscope==1.37.0" safetensors
   TQDM_MININTERVAL="${TQDM_MININTERVAL:-15}" python - "$@" <<'PY'
-import os, sys
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+import time
 from modelscope import snapshot_download
+from safetensors import safe_open
+
+
+def validate_snapshot(local):
+    root = Path(local)
+    if not (root / 'config.json').is_file():
+        raise RuntimeError(f'model config missing: {root}')
+    shards = sorted(root.glob('*.safetensors'))
+    index = root / 'model.safetensors.index.json'
+    if index.is_file():
+        expected = set(json.loads(index.read_text())['weight_map'].values())
+        if not expected.issubset({shard.name for shard in shards}):
+            raise RuntimeError(f'model safetensors shards missing: {root}')
+    for shard in shards:
+        with safe_open(str(shard), framework='np') as weights:
+            if not list(weights.keys()):
+                raise RuntimeError(f'empty model safetensors: {shard}')
+    if not shards and not list(root.glob('pytorch_model*.bin')):
+        raise RuntimeError(f'no PyTorch model weights: {root}')
+    print(f'validated model assets: {root}, {len(shards)} safetensors shard(s)', flush=True)
+
+
 MODEL_CACHE = os.environ.get("MODELSCOPE_CACHE", os.path.expanduser("~/.cache/modelscope"))
 for pair in sys.argv[1:]:
     env_name, model_id = pair.split("=", 1)
-    local = snapshot_download(model_id, cache_dir=MODEL_CACHE)
+    cache = MODEL_CACHE
+    ignored = ['*.h5', '*.msgpack', '*.onnx', '*.ot', '*.ckpt', '*.tflite']
+    # This mirror contains safetensors; don't fetch its redundant .bin weights.
+    if model_id == 'AI-ModelScope/bert-base-cased':
+        ignored.append('*.bin')
+    for attempt in range(3):
+        try:
+            local = snapshot_download(model_id, cache_dir=cache,
+                                      ignore_file_pattern=ignored, max_workers=2)
+            validate_snapshot(local)
+            break
+        except Exception as exc:
+            print(f'ModelScope {model_id} attempt {attempt + 1}/3 failed: {exc}', flush=True)
+            if attempt == 2:
+                raise
+            # A fresh job-owned cache avoids trusting a corrupt cached shard.
+            # Keep the old files untouched; never purge the runner-wide cache.
+            retries = Path(os.environ['GITHUB_WORKSPACE']) / '.ci' / 'deepspeed-model-retries'
+            retries.mkdir(parents=True, exist_ok=True)
+            cache = tempfile.mkdtemp(prefix='snapshot-', dir=retries)
+            time.sleep(2 * (attempt + 1))
     with open(os.environ["GITHUB_ENV"], "a") as fh:
         fh.write(f"{env_name}={local}\n")
 PY
@@ -348,6 +395,9 @@ import sys
 
 protected = ("torch", "torch-npu", "deepspeed")
 constraints = "".join(f"{name}=={version(name)}\n" for name in protected)
+# Source DeepSpeed may pin NumPy 1.26.4; PyArrow 26 requires NumPy 2.
+# Protect the tested data ABI while allowing each profile's datasets version.
+constraints += 'numpy==1.26.4\npyarrow==20.0.0\npandas==2.2.3\n'
 Path(sys.argv[1]).write_text(constraints)
 print("preserving installed runtime dependencies:\n" + constraints)
 PY
@@ -837,8 +887,369 @@ PY
 }
 
 # Optional profiles use the same protected dependency and source-install helpers.
-source "$(dirname "${BASH_SOURCE[0]}")/setup_inference_examples.sh"
-source "$(dirname "${BASH_SOURCE[0]}")/setup_training_expansion.sh"
+setup_inference_dependencies() {
+  install_deepspeed_source
+  # 4.51+ resets pipeline.device to a CPU-loaded model.device when distributed
+  # is already initialized; these older recipes require the pre-change behavior.
+  install_example_dependencies 'transformers==4.44.2' 'accelerate>=0.30,<2' \
+    sentencepiece protobuf safetensors numpy
+}
+
+plant_inference_alias() {
+  local snapshot="$1" alias="$2"
+  local work="$GITHUB_WORKSPACE/.ci/deepspeed-inference/$PROFILE"
+  [[ -d "$snapshot" && "$alias" != /* && "$alias" != *'..'* ]] || {
+    echo "invalid local inference alias: $alias -> $snapshot" >&2
+    return 1
+  }
+  mkdir -p "$work/$(dirname "$alias")"
+  if [[ -e "$work/$alias" || -L "$work/$alias" ]]; then
+    [[ -L "$work/$alias" && "$(readlink "$work/$alias")" == "$snapshot" ]] || {
+      echo "refusing to replace existing inference asset: $work/$alias" >&2
+      return 1
+    }
+  else
+    ln -s "$snapshot" "$work/$alias"
+  fi
+  export INFERENCE_CI_WORK="$work"
+  printf 'INFERENCE_CI_WORK=%s\nHF_HUB_OFFLINE=1\nTRANSFORMERS_OFFLINE=1\n' "$work" >> "$GITHUB_ENV"
+}
+
+setup_ds_legacy_inference_bench() {
+  setup_inference_dependencies
+  case "${EXEC:-${EXAMPLE_PATH:-}}" in
+    benchmarks/inference/bert-bench.py) ms_download_models 'BERT_BASE_CASED_PATH=AI-ModelScope/bert-base-cased' ;;
+    benchmarks/inference/gpt-bench.py) ms_download_models 'OPT_125M_PATH=facebook/opt-125m' ;;
+    *) echo 'unknown legacy inference benchmark entry' >&2; return 1 ;;
+  esac
+}
+
+setup_ds_hf_ds_compare() {
+  setup_inference_dependencies
+  ms_download_models 'OPT_125M_PATH=facebook/opt-125m'
+}
+
+setup_ds_fill_mask_bert() {
+  setup_inference_dependencies
+  ms_download_models 'BERT_LARGE_CASED_PATH=AI-ModelScope/bert-large-cased'
+  plant_inference_alias "$BERT_LARGE_CASED_PATH" 'bert-large-cased'
+}
+
+setup_ds_fill_mask_electra() {
+  setup_inference_dependencies
+  ms_download_models 'ELECTRA_GENERATOR_PATH=google/electra-base-generator'
+  plant_inference_alias "$ELECTRA_GENERATOR_PATH" 'google/electra-base-generator'
+}
+
+setup_ds_fill_mask_roberta() {
+  setup_inference_dependencies
+  ms_download_models 'ROBERTA_LARGE_PATH=AI-ModelScope/roberta-large'
+  plant_inference_alias "$ROBERTA_LARGE_PATH" 'roberta-large'
+}
+
+setup_ds_t5_translation() {
+  setup_inference_dependencies
+  ms_download_models 'T5_BASE_PATH=AI-ModelScope/t5-base'
+  # A separate asset view bounds generation, without writing ModelScope cache
+  # or changing the upstream script. Weights/tokenizer files remain symlinks.
+  local work="$GITHUB_WORKSPACE/.ci/deepspeed-inference/$PROFILE"
+  mkdir -p "$work/t5-base"
+  python - "$T5_BASE_PATH" "$work/t5-base" <<'PY'
+import json
+import sys
+from pathlib import Path
+import torch
+from transformers import AutoConfig, AutoModelForSeq2SeqLM, GenerationConfig
+
+snapshot, view = map(Path, sys.argv[1:])
+for source in snapshot.iterdir():
+    if source.name in ('generation_config.json', 'config.json'):
+        continue
+    target = view / source.name
+    if target.is_symlink():
+        if target.resolve() != source.resolve():
+            raise SystemExit(f'unexpected T5 asset alias: {target}')
+    elif target.exists():
+        raise SystemExit(f'refusing to replace T5 asset: {target}')
+    else:
+        target.symlink_to(source, target_is_directory=source.is_dir())
+config = AutoConfig.from_pretrained(snapshot, local_files_only=True)
+if config.model_type != 't5' or config.num_heads % 2:
+    raise SystemExit('translation requires a T5 model with heads divisible by TP=2')
+with torch.device('meta'):
+    model = AutoModelForSeq2SeqLM.from_config(config)
+names = [name for name, _ in model.named_modules()]
+for suffix in ('SelfAttention.o', 'EncDecAttention.o', 'DenseReluDense.wo'):
+    if not any(name.endswith(suffix) for name in names):
+        raise SystemExit(f'T5 injection target missing: {suffix}')
+generation = GenerationConfig.from_model_config(config)
+generation.max_new_tokens = 8
+generation.do_sample = False
+# Pipeline applies legacy task_specific_params after generation_config loading.
+# Keep its translation task semantics, but supply a legal short min_length.
+generation.min_length = 0
+for name, task in (config.task_specific_params or {}).items():
+    if name.startswith('translation'):
+        task['min_length'] = 0
+        task['max_length'] = 16
+config.save_pretrained(view)
+generation.save_pretrained(view)
+print('T5 TP policy checked; local generation_config limits output to 8 new tokens')
+PY
+  export INFERENCE_CI_WORK="$work"
+  printf 'INFERENCE_CI_WORK=%s\nHF_HUB_OFFLINE=1\nTRANSFORMERS_OFFLINE=1\n' "$work" >> "$GITHUB_ENV"
+}
+
+setup_ds_asr_ctc() {
+  setup_inference_dependencies
+  # datasets 4 returns Column objects for result['text']; this original script
+  # and jiwer 3 expect ordinary lists. Keep the supported list-valued API.
+  install_example_dependencies 'datasets==3.6.0' 'jiwer>=3,<4' soundfile pyarrow
+  ms_download_models 'WAV2VEC2_PATH=AI-ModelScope/wav2vec2-base-960h'
+  plant_inference_alias "$WAV2VEC2_PATH" 'facebook/wav2vec2-base-960h'
+  # Native local-directory resolution satisfies the upstream's fixed
+  # load_dataset("librispeech_asr", "clean", split="test") call. These are
+  # synthetic waveforms, deliberately a CTC forward smoke, not LibriSpeech WER.
+  python - "$INFERENCE_CI_WORK" <<'PY'
+import json
+import math
+from pathlib import Path
+import struct
+import sys
+import wave
+from datasets import load_dataset
+import pyarrow as pa
+import pyarrow.parquet as pq
+
+work = Path(sys.argv[1])
+dataset = work / 'librispeech_asr'
+dataset.mkdir(exist_ok=True)
+rows = []
+for index in range(2):
+    audio = dataset / f'ci-wave-{index}.wav'
+    values = [int(2500 * math.sin(2 * math.pi * (220 + index * 110) * i / 16000)) for i in range(16000)]
+    with wave.open(str(audio), 'wb') as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(16000)
+        handle.writeframes(struct.pack('<' + 'h' * len(values), *values))
+    rows.append({'file': str(audio), 'text': 'HELLO WORLD'})
+pq.write_table(pa.Table.from_pylist(rows), dataset / 'test.parquet')
+(dataset / 'README.md').write_text('---\nconfigs:\n- config_name: clean\n  data_files:\n  - split: test\n    path: test.parquet\n---\nSynthetic CTC CI inputs, not LibriSpeech.\n')
+# Validate the exact original loader contract, not an alternative builder.
+import os
+os.chdir(work)
+loaded = load_dataset('librispeech_asr', 'clean', split='test')
+if len(loaded) != 2 or not all(Path(row['file']).is_file() for row in loaded):
+    raise SystemExit('native clean/test CTC fixture loader contract failed')
+if not isinstance(loaded['text'], list):
+    raise SystemExit('CTC original jiwer call requires a list-valued dataset column')
+print('prepared two synthetic 16 kHz CTC inputs; not a LibriSpeech accuracy benchmark')
+PY
+}
+setup_ds_finetune_demo() {
+  install_deepspeed_source
+  # The upstream rotary reset requires base/dim but sets max_seq_len_cached=None.
+  # Llama 4.42 uses base/dim and position_ids without a cached-length comparison;
+  # newer Llama/Qwen and older Qwen rotary implementations do not meet both rules.
+  install_example_dependencies 'transformers==4.42.4' 'accelerate>=1.0,<2' \
+    'datasets>=4,<5' safetensors sentencepiece wandb
+  ms_download_models 'SMOLLM2_135M_PATH=HuggingFaceTB/SmolLM2-135M'
+  plant_ci_fixture ci_alpaca_16.json ALPACA_CI_PATH
+  export ALPACA_FINETUNE_DIR="$GITHUB_WORKSPACE/.ci/deepspeed-fixtures/finetune-demo"
+  echo "ALPACA_FINETUNE_DIR=$ALPACA_FINETUNE_DIR" >> "$GITHUB_ENV"
+  python - <<'PY'
+import importlib.util
+import json
+import os
+from pathlib import Path
+import sys
+
+from datasets import Dataset, load_dataset
+import torch
+import torch_npu
+import transformers
+from transformers import AutoConfig, AutoTokenizer, LlamaConfig, LlamaForCausalLM
+
+if transformers.__version__ != '4.42.4':
+    raise SystemExit('finetune demo requires Transformers 4.42.4 rotary semantics')
+config = AutoConfig.from_pretrained(os.environ['SMOLLM2_135M_PATH'], local_files_only=True)
+if config.model_type != 'llama' or config.rope_scaling is not None:
+    raise SystemExit('finetune demo requires the original SmolLM2 Llama/default-RoPE config')
+entry = Path(os.environ['EXAMPLES_ROOT']) / 'training/deepspeed_finetune_demo/finetune_llama.py'
+sys.path.insert(0, str(entry.parent))
+spec = importlib.util.spec_from_file_location('ds_ci_finetune_demo', entry)
+upstream = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = upstream
+spec.loader.exec_module(upstream)
+# Execute the exact upstream reset, then a real CPU forward/backward. This
+# preflight detects deterministic dependency/API incompatibilities before NPU launch.
+with torch.device('cpu'):
+    tiny = LlamaForCausalLM(LlamaConfig(vocab_size=128, hidden_size=32,
+                                    intermediate_size=64, num_hidden_layers=2,
+                                    num_attention_heads=4, num_key_value_heads=2,
+                                    rope_scaling=None, max_position_embeddings=128))
+upstream._reset_rotary_embeddings(tiny)
+ids = torch.arange(16, device='cpu').reshape(1, 16)
+loss = tiny(input_ids=ids, labels=ids).loss
+if not torch.isfinite(loss):
+    raise SystemExit('upstream rotary-reset CPU preflight produced nonfinite loss')
+loss.backward()
+print('real upstream Llama rotary-reset CPU forward/backward:', loss.item())
+tokenizer = AutoTokenizer.from_pretrained(os.environ['SMOLLM2_135M_PATH'], local_files_only=True)
+if tokenizer.pad_token is None:
+    tokenizer.pad_token = tokenizer.eos_token
+rows = json.loads(Path(os.environ['ALPACA_CI_PATH']).read_text())
+directory = Path(os.environ['ALPACA_FINETUNE_DIR'])
+directory.mkdir(parents=True, exist_ok=True)
+Dataset.from_list(rows).to_parquet(directory / 'train.parquet')
+dataset = load_dataset(str(directory))['train']
+if len(dataset) != 16:
+    raise SystemExit('finetune demo local dataset must contain exactly 16 rows')
+for row in dataset:
+    encoded = upstream.preprocess_alpaca(row, tokenizer, max_length=128)
+    if len(encoded['input_ids']) != 128 or not any(x != -100 for x in encoded['labels'][1:]):
+        raise SystemExit('finetune demo fixture lost shifted training labels at length 128')
+print('finetune demo native local Parquet and labels:', directory, len(dataset))
+PY
+}
+
+download_sd15_ci_model() {
+  install_example_dependencies 'modelscope==1.37.0'
+  python - <<'PY'
+import os
+from pathlib import Path
+from modelscope import snapshot_download
+
+# Full Diffusers components, but not duplicate .bin/root .ckpt weights. The
+# final unchanged entry reloads the safety checker when constructing its pipeline.
+patterns = [
+    'model_index.json', 'feature_extractor/preprocessor_config.json',
+    'scheduler/scheduler_config.json', 'tokenizer/*',
+    'text_encoder/config.json', 'text_encoder/model.safetensors',
+    'unet/config.json', 'unet/diffusion_pytorch_model.safetensors',
+    'vae/config.json', 'vae/diffusion_pytorch_model.safetensors',
+    'safety_checker/config.json', 'safety_checker/model.safetensors',
+]
+path = snapshot_download('AI-ModelScope/stable-diffusion-v1-5',
+                         allow_patterns=patterns,
+                         cache_dir=os.environ.get('MODELSCOPE_CACHE', os.path.expanduser('~/.cache/modelscope')))
+required = [name for name in patterns if '*' not in name]
+required += ['tokenizer/vocab.json', 'tokenizer/merges.txt', 'tokenizer/tokenizer_config.json']
+for name in required:
+    asset = Path(path) / name
+    if not asset.is_file() or not asset.stat().st_size:
+        raise SystemExit(f'SD15 complete local Diffusers asset missing: {asset}')
+with open(os.environ['GITHUB_ENV'], 'a') as handle:
+    handle.write(f'SD15_PATH={path}\n')
+print('complete ModelScope SD15 Diffusers components:', path)
+PY
+  local model_path
+  model_path="$(awk 'index($0,"SD15_PATH=")==1 { value=substr($0,11) } END {print value}' "$GITHUB_ENV")"
+  [[ -d "$model_path" ]] || { echo "SD15 download did not expose a local directory" >&2; return 1; }
+  export SD15_PATH="$model_path"
+}
+
+setup_ds_sd_distil() {
+  install_deepspeed_source
+  # Teacher UNet is an unwrapped FP32 module. Run the entire recipe in FP32;
+  # BF16 VAE output would otherwise meet FP32 teacher convolution weights.
+  install_example_dependencies 'transformers==4.44.2' 'diffusers==0.30.3' \
+    'accelerate==1.10.1' 'datasets>=4,<5' 'pillow>=10' 'torchvision==0.24.0' \
+    safetensors sentencepiece numpy tensorboard
+  download_sd15_ci_model
+  python - <<'PY'
+import importlib.util
+import io
+import json
+import os
+from pathlib import Path
+import sys
+
+from datasets import Dataset, Features, Image as DatasetImage, Value, load_dataset
+from PIL import Image, ImageDraw
+import torch_npu
+from transformers import AutoTokenizer
+
+output = Path(os.environ.get('CI_OUTPUT_DIR', str(Path(os.environ['GITHUB_WORKSPACE']) / 'output')))
+work = output / 'sd-distil-work'
+directory = work / 'poloclub/diffusiondb'
+directory.mkdir(parents=True, exist_ok=True)
+prompts, images = [], []
+for index in range(8):
+    image = Image.new('RGB', (64, 64), (16 * index, 64, 128))
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((8 + index, 8, 48, 48), fill=(192, 32 * index, 64))
+    buffer = io.BytesIO()
+    image.save(buffer, format='PNG')
+    images.append({'bytes': buffer.getvalue(), 'path': None})
+    prompts.append(f'a colorful geometric rectangle number {index}')
+features = Features({'image': DatasetImage(), 'prompt': Value('string')})
+Dataset.from_dict({'image': images, 'prompt': prompts}, features=features).to_parquet(directory / 'train.parquet')
+(directory / 'README.md').write_text(
+    '---\nconfigs:\n- config_name: 2m_first_10k\n  data_files:\n'
+    '  - split: train\n    path: train.parquet\n---\nLocal eight-image CI fixture.\n'
+)
+previous = Path.cwd()
+try:
+    os.chdir(work)
+    # Native local-directory resolution, not a datasets.load_dataset wrapper.
+    dataset = load_dataset('poloclub/diffusiondb', '2m_first_10k')['train']
+finally:
+    os.chdir(previous)
+if len(dataset) != 8 or any(row['image'].mode != 'RGB' or row['image'].size != (64, 64)
+                           or not row['prompt'] for row in dataset):
+    raise SystemExit('SD native local dataset must decode eight RGB 64x64 images/prompts')
+entry = Path(os.environ['EXAMPLES_ROOT']) / 'training/stable_diffusion/train_sd_distil_lora.py'
+sys.path.insert(0, str(entry.parent))
+spec = importlib.util.spec_from_file_location('ds_ci_sd_distil', entry)
+upstream = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = upstream
+spec.loader.exec_module(upstream)
+# The original dataset reads the original entry's args global, as its normal
+# __main__ does. Populate it through the original parser, without changing APIs.
+upstream.args = upstream.parse_args([
+    '--pretrained_model_name_or_path', os.environ['SD15_PATH'],
+    '--default_prompt', 'a colorful geometric shape', '--train_batch_size', '1',
+    '--resolution', '64', '--max_train_steps', '3', '--mixed_precision', 'no', '--report_to', 'none',
+])
+tokenizer = AutoTokenizer.from_pretrained(os.environ['SD15_PATH'], subfolder='tokenizer', local_files_only=True)
+native = upstream.DreamBoothDataset(dataset['prompt'], dataset['image'], tokenizer, size=64, center_crop=True)
+batch = upstream.collate_fn([native[0]], with_prior_preservation=False)
+if tuple(batch['pixel_values'].shape) != (1, 3, 64, 64) or batch['input_ids'].shape[0] != 1:
+    raise SystemExit('SD original DreamBooth dataset/collator produced invalid CI tensors')
+model_index = json.loads((Path(os.environ['SD15_PATH']) / 'model_index.json').read_text())
+if model_index['_class_name'] != 'StableDiffusionPipeline':
+    raise SystemExit('SD CI requires a complete StableDiffusionPipeline snapshot')
+print('SD native fixture/collator verified:', directory.resolve(), len(native), tuple(batch['pixel_values'].shape))
+print('SD teacher CFG distillation trains full UNet, not LoRA; dtype remains FP32')
+PY
+}
+
+setup_ds_opsd_decode() {
+  install_deepspeed_source
+  install_example_dependencies 'transformers==4.57.6' 'accelerate>=1.10.1,<2' safetensors numpy
+  ms_download_models 'QWEN3_06B_PATH=Qwen/Qwen3-0.6B'
+  python - <<'PY'
+import os
+import torch
+import torch_npu
+from deepspeed.accelerator import get_accelerator
+from deepspeed.runtime.rollout.hybrid_engine_rollout import HybridEngineRollout, HybridEngineRolloutConfig
+from transformers import AutoTokenizer
+
+index = get_accelerator().current_device()
+# Torch 2.9 maps integer devices to the registered accelerator (PrivateUse1
+# first). Verify the exact tensor protocols the unchanged benchmark uses.
+tensor = torch.empty(1, device='cpu').to(index)
+random = torch.randint(10, 1000, (1, 2), device=index)
+if tensor.device.type != 'npu' or random.device.type != 'npu':
+    raise SystemExit(f'OPSD decode integer device did not select NPU: {tensor.device}, {random.device}')
+tokenizer = AutoTokenizer.from_pretrained(os.environ['QWEN3_06B_PATH'], local_files_only=True)
+print('OPSD decode integer-device preflight:', index, tensor.device, random.device, type(tokenizer).__name__)
+print('OPSD rollout APIs:', HybridEngineRollout.__name__, HybridEngineRolloutConfig.__name__)
+PY
+}
 
 supported_profiles() {
   declare -F | awk '/^declare -f setup_/ { sub(/^declare -f setup_/, ""); print }' | paste -sd' ' -

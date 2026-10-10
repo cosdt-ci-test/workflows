@@ -16,7 +16,7 @@
 
 [examples_manifest.yaml](examples_manifest.yaml) 的 `scan.root` 为 DeepSpeedExamples 仓根，`include_extensions` 为 `.sh` / `.py`。`supported` 与 `unsupported` 只登记 example 入口：被 import 的库、模型定义、安装脚本、单元测试、数据准备和结果处理工具不登记，也不为它们增加 exclude 字段。公共引擎只校验已声明的 supported 条目，不要求上游每个 `.py`/`.sh` 都出现在清单中。
 
-当前 supported 共 38 条，按 example 的有效拓扑使用 1/2/4/8 卡 runner，统一用 CANN 9.1.0 镜像。Run #29 已验证前 19 条全部成功（原有 15 条 + 第一阶段新增 4 条）；本次扩展新增 19 条（pin_memory 基准 3 条、ZenFlow 微调、OPSD 主训练/学生/教师 smoke 3 条、finetune demo、SD 蒸馏、OPSD decode 基准、推理族 9 条），全部待 Actions 验收。模型走 ModelScope（`ms_download_models` 下载后经 `GITHUB_ENV` 传本地路径），数据集优先使用仓内 fixture，并用 `overlay_args` 压到 CI 规模：
+当前 supported 共 37 条，按 example 的有效拓扑使用 1/2/4/8 卡 runner，统一用 CANN 9.1.0 镜像。Run #29 已验证前 19 条全部成功（原有 15 条 + 第一阶段新增 4 条）；当前保留扩展配方 18 条（pin_memory 基准 3 条、ZenFlow 微调、OPSD 主训练/学生/教师 smoke 3 条、finetune demo、SD 蒸馏、OPSD decode 基准、推理族 8 条）；Run #30 有 33 条通过，四条已修正配方、待重新验收，一条原生 NPU 算子不兼容已退回 unsupported。模型走 ModelScope（`ms_download_models` 下载后经 `GITHUB_ENV` 传本地路径），数据集优先使用仓内 fixture，并用 `overlay_args` 压到 CI 规模：
 
 | path（相对 examples 仓） | profile | 看护点 | 模型 / 数据 | 压规模 |
 |---|---|---|---|---|
@@ -56,7 +56,6 @@
 | `inference/huggingface/fill-mask/test-electra.py` | ds_fill_mask_electra / 2 卡 | ELECTRA 显式 injection_policy 的推理 TP=2 | google/electra-base-generator（ModelScope 同名本地目录） | 单次 forward |
 | `inference/huggingface/fill-mask/test-roberta.py` | ds_fill_mask_roberta / 2 卡 | RoBERTa 显式 injection_policy 的推理 TP=2 | roberta-large（ModelScope 同名本地目录） | 单次 forward |
 | `inference/huggingface/translation/test-t5-base.py` | ds_t5_translation / 2 卡 | T5 翻译 + 推理 TP=2（三 injection suffix 预检） | t5-base（ModelScope 本地资产视图，仅 config/generation_config 元数据限制 8 token） | 单句翻译 |
-| `benchmarks/opsd/benchmark_hybrid_engine_rollout.py` | ds_hybrid_rollout / 1 卡 | HybridEngine rollout 容器 + 原生 NPU inference ops（NPUInference builder 预检） | opt-125m（ModelScope）+ 合成 token | bf16、1 batch、4 response token、2 次迭代 |
 | `inference/huggingface/automatic-speech-recognition/test-wav2vec2.py` | ds_asr_ctc / 1 卡 | Wav2Vec2 CTC 前向 smoke（非 LibriSpeech 准确率） | wav2vec2-base-960h（ModelScope 同名本地目录）+ 2 条合成 1 秒 16 kHz 音频（原生 `load_dataset("librispeech_asr","clean",split="test")` 本地目录解析） | 2 条音频、WER 仅要求有限 |
 
 **启动方式的选择**：`cifar10_deepspeed.py` 的 main() 无条件读 launcher 注入的 `LOCAL_RANK` 并调 `init_distributed()`，因此普通 CIFAR 经支持 `$@` 的上游 `run_ds.sh` 启动。CIFAR MoE 的上游脚本不透传 `$@`，项目 runner 按原配方复刻两卡 launcher、EP=2 和 MoE 参数，再追加 CI overlay。DS-Chat 官方 training_scripts 硬编码 1.3B～66B 模型且不透传任意参数，项目 runner 等价执行 `deepspeed --num_gpus 1 main.py <overlay_args>`。AutoTP equivalence 同样复刻上游 `run_gpu.sh` 的 1/3/4 卡三次启动与 loss 比较，但显式传入 ModelScope 本地模型。offload_states 与 `--hf_baseline` inference 不依赖 launcher，直接运行 `.py`。
@@ -79,7 +78,7 @@ HF setup 用上游慢速 tokenizer 和各入口自身的 SupervisedDataset 单�
 
 Run #27 使用 DeepSpeed `v0.19.7`、transformers `4.57.6` 和 accelerate `1.15.0`。HF AutoTP 的上游 config 使用 `WarmupDecayLR`，`warmup_num_steps: auto` 由 HF 的 `--warmup_steps` 填充；原 CI overlay 设为 0，被 DeepSpeed 的正整数校验拒绝。现在设为 2，与调度器内部最小有效预热长度一致；总训练仍为 3 步，TP=8、模型、数据和上游 config 模板不变。后续 `ERR99999` 是此次 Python 异常后的伴随日志，不据此判定为 NPU 算子不兼容。
 
-Run #29 的 19 条配方及其 publish-result 已全部成功。本次远程验收改为 38 条训练/推理 job 与对应 publish-result 全部成功；结果发布成功本身不等于训练通过。新增条目失败时依据真实日志定位，不通过改写上游源码兜底。
+Run #29 的 19 条配方及其 publish-result 已全部成功。本次远程验收改为 37 条训练/推理 job 与对应 publish-result 全部成功；结果发布成功本身不等于训练通过。新增条目失败时依据真实日志定位，不通过改写上游源码兜底。
 
 ### 第一阶段新增配方的语义和验收
 
@@ -97,9 +96,9 @@ Run #29 的 19 条配方及其 publish-result 已全部成功。本次远程验�
 - **finetune demo**：两卡 DP + ZeRO-2 + BF16。模型必须用 Llama 架构的 SmolLM2-135M：上游 `_reset_rotary_embeddings` 会把 `max_seq_len_cached` 置 None，transformers 4.42.4 的 Llama rotary forward 不读该字段（Qwen2/3 的旧实现会 `int > None` TypeError，已实测复现）；profile 独立 pin `transformers==4.42.4`。setup 用真实上游 reset 函数 + tiny Llama 做 CPU forward/backward 预检。断言首 batch shifted-label/finite logits 与 3 个有限 loss、"Training complete!"。`--eval_steps 0` 避开评测路径的 `torch.cuda.empty_cache()`。
 - **SD 蒸馏**：`accelerate launch --use_deepspeed` 两卡 ZeRO-2、**FP32**（`mixed_precision no`、DS fp16/bf16 均 false；上游教师 UNet `.to(accelerator.device)` 不转 dtype，bf16 输入会与 fp32 教师权重冲突）。模型走 ModelScope `AI-ModelScope/stable-diffusion-v1-5` 的完整 Diffusers 组件 whitelist（含 safety_checker，最终 pipeline 保存需要；不下载重复 .bin/root ckpt，共约 5.5 GB）。数据为 8 幅程序生成 64×64 RGB 图 + prompt 的本地 Parquet（datasets.Image feature），经原生 `load_dataset("poloclub/diffusiondb", "2m_first_10k")` 本地目录解析读取。断言 3 个有限 step loss 与训练后 pipeline 的 model_index/unet config/权重非空。
 - **OPSD decode 基准**：单卡 runpy 直接执行原文件；`get_accelerator().current_device()` 返回的整数索引在 torch 2.9 + torch_npu 下经 PrivateUse1 解析为 NPU（runner 启动前用 `torch.empty().to(index)`/`torch.randint(device=index)` 实测断言）。raw decode+sampling 与 HybridEngine rollout 两条路径都必须完成且计时有限为正，不比较快慢。
-- **推理族 9 条**：统一独立 profile pin `transformers==4.44.2`（4.51+ 在分布式已初始化时会把 pipeline device 重置回 CPU 权重设备；4.44.2 原生支持整数 rank 解释为 npu:rank）。硬编码 HF 模型 ID 的入口（bert-large-cased、electra、roberta、t5-base、wav2vec2）用 CI 工作目录内的 ModelScope 同名本地目录满足原生解析，运行 offline，缺失别名立即失败。所有入口经普通 `runpy` bootstrap 执行原文件并断言真实 NPU：pipeline/模型权重 device=npu、fill-mask score 有限、比较脚本 2 match/0 mismatch（原脚本 mismatch 仍 exit 0，不能只看退出码）、benchmark 4 次有限计时、HybridEngine 结果 JSON 的 device/响应长度/延迟字段、CTC 两条转录与有限 WER。T5 的本地资产视图只含 config/generation_config 元数据（max_new_tokens=8），权重与 tokenizer 仍符号链接原 snapshot；setup 预检三个 injection suffix 与 heads 可被 TP=2 整除。CTC 是合成音频前向 smoke，明确不是 LibriSpeech 识别准确率。
+- **推理族 8 条**：统一独立 profile pin `transformers==4.44.2`（4.51+ 在分布式已初始化时会把 pipeline device 重置回 CPU 权重设备；4.44.2 原生支持整数 rank 解释为 npu:rank）。硬编码 HF 模型 ID 的入口（bert-large-cased、electra、roberta、t5-base、wav2vec2）用 CI 工作目录内的 ModelScope 同名本地目录满足原生解析，运行 offline，缺失别名立即失败。所有入口经普通 `runpy` bootstrap 执行原文件并断言真实 NPU：pipeline/模型权重 device=npu、fill-mask score 有限、比较脚本 2 match/0 mismatch（原脚本 mismatch 仍 exit 0，不能只看退出码）、benchmark 4 次有限计时、CTC 两条转录与有限 WER。T5 的本地资产视图只含 config/generation_config 元数据（max_new_tokens=8），权重与 tokenizer 仍符号链接原 snapshot；setup 预检三个 injection suffix 与 heads 可被 TP=2 整除。CTC 是合成音频前向 smoke，明确不是 LibriSpeech 识别准确率。
 
-第二阶段 38/38 全绿前不启用 schedule。新增条目若 argparse/import 之后出现真实 NPU 算子或显存问题，按日志单独定位；不恢复已被证伪的旧 unsupported 理由，也不修改上游源码兜底。
+当前 37/37 全绿前不启用 schedule。新增条目若 argparse/import 之后出现真实 NPU 算子或显存问题，按日志单独定位；不恢复已被证伪的旧 unsupported 理由，也不修改上游源码兜底。
 
 ## 触发
 
@@ -126,3 +125,27 @@ Run #26 的 latest-release 查询返回 HTTP 403，旧触发器未声明 `defaul
 
 - 版本错位：DeepSpeed 安装自主仓被监控的 release 版本，examples 仓跟随 `master`，二者存在小幅错位的可能；若某 release 与 examples `master` 不兼容导致失败，按结果定位后可将 manifest 的 `target_ref` 固定或向上游反馈。
 - 部分 compression 旧入口已从最新 examples master 删除，不再登记。GAN、random-LTD、ViT/ImageNet 和基础 AutoTP 等现存入口仍有必经的 CUDA 调用；多卡 runner 或替换数据不能解决设备绑定。finetune demo 已通过本地 fixture 和独立依赖配方接入，待本轮 NPU 验证。
+
+## Run #30 修复与目录结构
+
+Run #30 的 38 条配方中 33 条通过，5 条失败。GPT benchmark 现在只下载 OPT，
+不再准备无关的 BERT；ModelScope 下载排除 TensorFlow/Flax 等非 PyTorch 权重，
+并检查 safetensors 完整性。下载或验证失败最多重试三次，重试使用新的 job 专属
+缓存目录，不删除旧缓存，也不回退 Hugging Face。BERT-base 优先使用 safetensors，
+跳过重复的 .bin。模型路径只有通过验证后才写入 GITHUB_ENV。
+
+finetune demo 的 PyArrow 26 与 NumPy 1.26.4 冲突通过统一数据 ABI 约束解决：
+受保护的依赖安装使用 NumPy 1.26.4、PyArrow 20.0.0、pandas 2.2.3；各 profile
+仍保留自己的 transformers/datasets 版本要求。SD 蒸馏改用 Accelerate 支持的
+本地 TensorBoard 日志（并安装 tensorboard），不再把 Trainer 风格的 none
+传给 Accelerator(log_with=...)。
+
+HybridEngine OPT rollout 报错为 NPUInference.softmax_context_bf16 参数数量
+不匹配（定义 16 个、调用 19 个），FP16 的接口也同样未对齐。在不修改 example
+或被测 DeepSpeed 源码的约束下，该条退回 unsupported，等待上游修复；这不影响
+已通过的 Qwen OPSD rollout 路径。
+
+参照 Accelerate 的入口结构，scripts/ 仅保留 setup_example.sh 与 run_example.sh。
+原有分片脚本的安装、启动和结果校验逻辑均合入这两个入口，运行时校验没有删除。
+tests/ 仅保留 test_quick_start_ascend.py 与其必要的 __init__.py，独立 quick-start
+workflow 的调用不变。examples 静态测试文件已删除；公共引擎和其他项目未修改。

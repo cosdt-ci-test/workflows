@@ -433,22 +433,6 @@ supported:
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args: []
     timeout_minutes: 120
-  # HybridEngine rollout；OPT-125M/合成 token/2 次采样，验证原生 NPU 推理，待实跑。
-  - path: benchmarks/opsd/benchmark_hybrid_engine_rollout.py
-    profile: ds_hybrid_rollout
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - '--model "${OPT_125M_PATH}"'
-      - '--dtype bf16'
-      - '--batch-sizes 1'
-      - '--samples-per-prompt 1'
-      - '--prompt-lengths 16'
-      - '--response-lengths 4'
-      - '--warmup 1'
-      - '--iterations 2'
-      - '--output "${CI_OUTPUT_DIR}/hybrid-rollout-profile.json"'
-    timeout_minutes: 120
   # Wav2Vec2 CTC 推理；两条合成音频/本地同名模型，验证 NPU logits 而非识别准确率，待实跑。
   - path: inference/huggingface/automatic-speech-recognition/test-wav2vec2.py
     profile: ds_asr_ctc
@@ -490,7 +474,7 @@ supported:
       - '--lr_scheduler constant'
       - '--lr_warmup_steps 0'
       - '--mixed_precision no'
-      - '--report_to none'
+      - '--report_to tensorboard'
       - '--checkpointing_steps 1000'
       - '--dataloader_num_workers 0'
       - '--seed 42'
@@ -510,6 +494,8 @@ supported:
     timeout_minutes: 120
 
 unsupported:
+  # HybridEngine rollout 性能测试；#30 的 OPT 注入路径触发 NPU softmax_context_bf16 参数 16/19 不匹配，需上游修复。
+  - benchmarks/opsd/benchmark_hybrid_engine_rollout.py
   # BF16 主权重训练对比；torch.cuda 和 CUDA autocast 硬绑定。
   - training/bf16_master_weight/train.py
   # CIFAR/AlexNet 流水线训练；硬绑定 CUDA 设备和 NCCL。

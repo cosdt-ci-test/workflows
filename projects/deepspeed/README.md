@@ -134,8 +134,8 @@ Run #30 的 38 条配方中 33 条通过，5 条失败。GPT benchmark 现在只
 缓存目录，不删除旧缓存，也不回退 Hugging Face。BERT-base 优先使用 safetensors，
 跳过重复的 .bin。模型路径只有通过验证后才写入 GITHUB_ENV。
 
-finetune demo 的 PyArrow 26 与 NumPy 1.26.4 冲突通过统一数据 ABI 约束解决：
-受保护的依赖安装使用 NumPy 1.26.4、PyArrow 20.0.0、pandas 2.2.3；各 profile
+finetune demo 的 PyArrow 26 与 NumPy 1.26.4 冲突采用统一数据 ABI 约束处理，
+Run #31 再补齐 SciPy：当前使用 NumPy 1.26.4、SciPy 1.16.3、PyArrow 20.0.0、pandas 2.2.3；各 profile
 仍保留自己的 transformers/datasets 版本要求。SD 蒸馏改用 Accelerate 支持的
 本地 TensorBoard 日志（并安装 tensorboard），不再把 Trainer 风格的 none
 传给 Accelerator(log_with=...)。
@@ -149,3 +149,18 @@ HybridEngine OPT rollout 报错为 NPUInference.softmax_context_bf16 参数数�
 原有分片脚本的安装、启动和结果校验逻辑均合入这两个入口，运行时校验没有删除。
 tests/ 仅保留 test_quick_start_ascend.py 与其必要的 __init__.py，独立 quick-start
 workflow 的调用不变。examples 静态测试文件已删除；公共引擎和其他项目未修改。
+
+## Run #31 依赖回归修复
+
+37 条配方中 22 条通过、15 条失败。上一轮仅约束 NumPy/PyArrow/Pandas，
+却没有约束源码安装先拉入的 SciPy 1.18（要求 NumPy 2.x）；随后 NumPy
+被降到 1.26.4，SciPy sparse 在导入时访问不存在的 `numpy.long`。
+这同时破坏了 Transformers 的模型类导入和 CANN 编译器初始化，不是不同
+example job 之间共享 Python 安装造成的污染。
+
+`constraints-npu.txt` 现在锁定完整科学计算/数据栈，并通过 `PIP_CONSTRAINT`
+覆盖全部安装步骤，包括 DeepSpeed 源码、ModelScope 和每个 profile 的依赖。
+torch/torch_npu/DeepSpeed 的动态保护继续保留。安装 profile 前后均验证
+版本、SciPy sparse/optimize 和 Arrow/Pandas 转换，NPU 配方额外执行分配与求和
+检查，不再只检查 `is_available()`。本地验证不代表真实 NPU 训练已通过，
+37 条配方仍需下一轮 Actions 验收。

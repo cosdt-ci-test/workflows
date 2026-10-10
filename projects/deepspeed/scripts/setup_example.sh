@@ -12,6 +12,7 @@ if [[ $# -lt 1 ]]; then
 fi
 
 PROFILE="$1"
+export PIP_CONSTRAINT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/constraints-npu.txt"
 
 ASCEND_PIP_INDEX=https://repo.huaweicloud.com/ascend/repos/pypi
 FALLBACK_PIP_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
@@ -391,13 +392,13 @@ install_example_dependencies() {
   python - "$constraint_file" <<'PY'
 from importlib.metadata import version
 from pathlib import Path
+import os
 import sys
 
 protected = ("torch", "torch-npu", "deepspeed")
 constraints = "".join(f"{name}=={version(name)}\n" for name in protected)
-# Source DeepSpeed may pin NumPy 1.26.4; PyArrow 26 requires NumPy 2.
-# Protect the tested data ABI while allowing each profile's datasets version.
-constraints += 'numpy==1.26.4\npyarrow==20.0.0\npandas==2.2.3\n'
+# Reuse the global scientific stack pins; keep SciPy and NumPy paired.
+constraints += Path(os.environ['PIP_CONSTRAINT']).read_text(encoding='utf-8')
 Path(sys.argv[1]).write_text(constraints)
 print("preserving installed runtime dependencies:\n" + constraints)
 PY
@@ -850,6 +851,32 @@ print("OPSD local prompt fixture:", len(dataset), "transformers:", transformers.
 PY
 }
 
+verify_data_stack() {
+  python - <<'PY'
+import numpy as np
+import pandas as pd
+import pyarrow as pa
+import scipy
+from scipy.optimize import linear_sum_assignment
+from scipy.sparse import csr_matrix
+
+versions = {'numpy': np.__version__, 'scipy': scipy.__version__,
+            'pyarrow': pa.__version__, 'pandas': pd.__version__}
+print('scientific/data stack:', versions)
+expected = {'numpy': '1.26.4', 'scipy': '1.16.3',
+            'pyarrow': '20.0.0', 'pandas': '2.2.3'}
+if versions != expected:
+    raise SystemExit(f'incompatible scientific/data stack: {versions}; expected {expected}')
+matrix = csr_matrix(np.eye(2))
+assert matrix.sum() == 2
+rows, columns = linear_sum_assignment([[0, 1], [1, 0]])
+assert rows.tolist() == columns.tolist() == [0, 1]
+table = pa.Table.from_pandas(pd.DataFrame({'value': [1, 2]}))
+assert table.column('value').to_pylist() == [1, 2]
+print('SciPy sparse/optimize and Arrow/Pandas checks passed')
+PY
+}
+
 verify_installed_runtime() {
   python - "$PROFILE" <<'PY'
 import os
@@ -877,6 +904,11 @@ if sys.argv[1] in {"ds_cifar", "ds_hf_autotp", "ds_variable_batch", "ds_zenflow"
     print("runtime accelerator:", accelerator, "NPU available:", available)
     if accelerator != "npu" or not available:
         raise SystemExit(f"new DeepSpeed NPU example requires available npu accelerator, got {accelerator}")
+    # Availability alone does not exercise the CANN Python compiler imports.
+    probe = torch.ones(2, device=get_accelerator().device_name()).sum()
+    if probe.item() != 2:
+        raise SystemExit('NPU scientific-stack preflight produced an unexpected result')
+    print('NPU allocation/reduction preflight passed')
 try:
     deepspeed_file.relative_to(source_root)
 except ValueError as exc:
@@ -1271,6 +1303,9 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 select_pip_index
 python -m pip install -U pip setuptools wheel
 ensure_torch_stack
+python -m pip install numpy scipy pyarrow pandas
+verify_data_stack
 
 "setup_${PROFILE}"
+verify_data_stack
 verify_installed_runtime

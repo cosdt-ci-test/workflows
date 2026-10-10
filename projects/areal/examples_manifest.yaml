@@ -178,9 +178,9 @@ supported:
       - +valid_dataset.setup_timeout=600
       - +total_train_steps=1
     timeout_minutes: 60
-  CLEVR 计数 GRPO：与 geometry3k 同构，复用 areal-vlm-grpo profile。重数据
-  条目：10.4GB 下载 + 7 万图单进程预处理（上游 FIXME 极慢），故
-  setup_timeout 3600 / timeout 180，HF cache ~30GB
+  # CLEVR 计数 GRPO：与 geometry3k 同构，复用 areal-vlm-grpo profile。重数据
+  # 条目：10.4GB 下载 + 7 万图单进程预处理（上游 FIXME 极慢），故
+  # setup_timeout 3600 / timeout 180，HF cache ~30GB
   - path: examples/vlm/clevr_count_70k_grpo.py
     profile: areal-vlm-grpo
     runner: linux-aarch64-a2-2

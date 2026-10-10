@@ -55,40 +55,40 @@ supported:
   #     - +total_train_steps=1
   #     - vllm.max_model_len=8576
   #   timeout_minutes: 60
-  # # Hermes 在线 RL（唯一覆盖 online 模式 + agent service + per-session key
-  # # 链路的例子）。config.yaml 默认 CUDA 栈，NPU 全部 overlay：rollout sglang
-  # # （NPU 无 SGLang，换 config 自带的 vllm 段）、actor megatron（换 fsdp 与
-  # # 其余条目同构）、weight_update_mode xccl（NPU 共卡建不起 HCCL 组，换
-  # # disk）。**另需 _version=v1 回退**：config 的 _version:v2 会强制非 LoRA
-  # # 走 awex 权重同步（rl_trainer.py:380-399，v2 忽略 weight_update_mode），
-  # # 而 awex 的推理侧 /awex/report_parallelism 端点上游只有 SGLang 实现
-  # # （inference_service/vllm/ 无此路由），vLLM 后端必 404；回 v1 后
-  # # weight_update_mode=disk 生效（与 ascend 时代配方同路径）。
-  # # train.py 在线模式阻塞等外部会话，run_example.sh 的 hermes 分支编排完整
-  # # 生命周期：start_session → 管道驱动 hermes_loop → set_reward → refresh
-  # # 结束导出轨迹 → 1 步训练退出；agent 运行时 hermes-agent 由 setup §1c 安装。
-  # - path: examples/hermes/train.py
-  #   profile: areal-hermes-grpo
-  #   runner: linux-aarch64-a2-2
-  #   npu_devices: '0,1'
-  #   image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
-  #   overlay_args:
-  #     - --config examples/hermes/config.yaml
-  #     - rollout.backend=vllm:d1p1t2
-  #     - rollout._version=v1
-  #     - actor.backend=fsdp:d2p1t1
-  #     - actor._version=v1
-  #     - +actor.fsdp.offload_params=true
-  #     - ++actor.weight_update_mode=disk
-  #     - actor.path=${AREAL_MODEL_PATH}
-  #     - rollout.admin_api_key=sk-areal-ci
-  #     - vllm.gpu_memory_utilization=0.3
-  #     - vllm.max_model_len=8192
-  #     - gconfig.max_new_tokens=256
-  #     - +rollout.setup_timeout=1800
-  #     - total_train_steps=1
-  #     - total_train_epochs=1
-  #   timeout_minutes: 90
+  # Hermes 在线 RL（唯一覆盖 online 模式 + agent service + per-session key
+  # 链路的例子）。config.yaml 默认 CUDA 栈，NPU 全部 overlay：rollout sglang
+  # （NPU 无 SGLang，换 config 自带的 vllm 段）、actor megatron（换 fsdp 与
+  # 其余条目同构）、weight_update_mode xccl（NPU 共卡建不起 HCCL 组，换
+  # disk）。**另需 _version=v1 回退**：config 的 _version:v2 会强制非 LoRA
+  # 走 awex 权重同步（rl_trainer.py:380-399，v2 忽略 weight_update_mode），
+  # 而 awex 的推理侧 /awex/report_parallelism 端点上游只有 SGLang 实现
+  # （inference_service/vllm/ 无此路由），vLLM 后端必 404；回 v1 后
+  # weight_update_mode=disk 生效（与 ascend 时代配方同路径）。
+  # train.py 在线模式阻塞等外部会话，run_example.sh 的 hermes 分支编排完整
+  # 生命周期：start_session → 管道驱动 hermes_loop → set_reward → refresh
+  # 结束导出轨迹 → 1 步训练退出；agent 运行时 hermes-agent 由 setup §1c 安装。
+  - path: examples/hermes/train.py
+    profile: areal-hermes-grpo
+    runner: linux-aarch64-a2-2
+    npu_devices: '0,1'
+    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
+    overlay_args:
+      - --config examples/hermes/config.yaml
+      - rollout.backend=vllm:d1p1t2
+      - rollout._version=v1
+      - actor.backend=fsdp:d2p1t1
+      - actor._version=v1
+      - +actor.fsdp.offload_params=true
+      - ++actor.weight_update_mode=disk
+      - actor.path=${AREAL_MODEL_PATH}
+      - rollout.admin_api_key=sk-areal-ci
+      - vllm.gpu_memory_utilization=0.3
+      - vllm.max_model_len=8192
+      - gconfig.max_new_tokens=256
+      - +rollout.setup_timeout=1800
+      - total_train_steps=1
+      - total_train_epochs=1
+    timeout_minutes: 90
   # SWE-bench 代理模式 RL（v2 agentic RL 的另一半覆盖面：proxy 模式 subproc
   # agent + 本地 persistent-bash 沙箱，与 hermes 的 online 会话驱动互补）。
   # 树内无 config/数据集：setup §11 自建（AReaL-SWEAgent checkout + aenv +

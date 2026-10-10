@@ -102,8 +102,11 @@ case "$EXAMPLE_REL" in
 
     GW=""
     for i in $(seq 1 120); do
+      # Strict URL charset: the areal log line can carry ANSI colour bytes
+      # right after the URL, and [^[:space:]] would swallow the ESC byte;
+      # requests then dies with "Failed to parse: http://...<ESC>/...".
       GW=$(grep 'Proxy gateway available at' "$TRAIN_LOG" 2>/dev/null | tail -1 \
-        | grep -oE 'https?://[^[:space:]]+' || true)
+        | grep -oE 'https?://[A-Za-z0-9._:-]+' | tail -1 || true)
       [[ -n "$GW" ]] && break
       if ! kill -0 "$TRAINER_PID" 2>/dev/null; then
         echo "trainer exited before the gateway came up; tail of $TRAIN_LOG:"
@@ -128,9 +131,9 @@ case "$EXAMPLE_REL" in
       tail -n 120 "$AGENT_LOG"
       exit 1
     fi
-    AGENT_GW=$(grep -oE 'gateway=[^[:space:]]+' "$AGENT_LOG" | tail -1 | cut -d= -f2 || true)
+    AGENT_GW=$(grep -oE 'gateway=[A-Za-z0-9._:/-]+' "$AGENT_LOG" | tail -1 | cut -d= -f2 || true)
     if [[ -z "$AGENT_GW" ]]; then
-      AGENT_GW=$(areal agent status 2>/dev/null | grep -oE 'https?://[^[:space:]]+' | tail -1 || true)
+      AGENT_GW=$(areal agent status 2>/dev/null | grep -oE 'https?://[A-Za-z0-9._:-]+' | tail -1 || true)
     fi
     if [[ -z "$AGENT_GW" ]]; then
       echo "agent gateway not found; tail of $AGENT_LOG:"

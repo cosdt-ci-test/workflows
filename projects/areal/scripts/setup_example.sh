@@ -564,6 +564,22 @@ aweagent_root = os.path.join(workspace, "AReaL-SWEAgent")
 # runs `uv pip install -r requirements.txt`) and install the pinned set:
 # aenvironment + openai/openai-agents/tenacity/loguru. Tuna index (aliyun's
 # PEP 658 metadata sidecars 404 intermittently).
+# Those requirements can pull a NEWER starlette whose Router dropped the
+# `on_startup` kwarg; vllm 0.22.1's `APIRouter(on_startup=...)` then dies on
+# import in the SAME python env (areal_vllm_server imports
+# vllm.entrypoints.openai.api_server -> ... -> `router = APIRouter()`),
+# even though the image's bundled starlette works. Pin fastapi/starlette to
+# the image's current versions via a constraint file.
+import importlib.metadata as importlib_metadata
+
+constraint_path = os.path.join(workspace, "swe-web-constraints.txt")
+with open(constraint_path, "w", encoding="utf-8") as fh:
+    for pkg in ("fastapi", "starlette"):
+        try:
+            fh.write(f"{pkg}=={importlib_metadata.version(pkg)}\n")
+        except importlib_metadata.PackageNotFoundError:
+            pass
+
 if not os.path.isdir(aweagent_root):
     subprocess.run(
         [
@@ -576,6 +592,7 @@ subprocess.run(
     [
         "uv", "pip", "install", "--system",
         "--index-url", "https://pypi.tuna.tsinghua.edu.cn/simple",
+        "--constraint", constraint_path,
         "-r", os.path.join(aweagent_root, "requirements.txt"),
     ],
     check=True,

@@ -25,6 +25,7 @@ TORL_PREP=0
 SCAFFOLD_PREP=0
 CLEVR_SUBSET_PREP=0
 HERMES_PREP=0
+SWE_PREP=0
 case "$PROFILE" in
   areal-vlm-grpo) MODEL_ID="Qwen/Qwen2.5-VL-3B-Instruct" ;;
   areal-vlm-mt-grpo) MODEL_ID="Qwen/Qwen3-VL-2B-Instruct" ;;
@@ -47,6 +48,9 @@ case "$PROFILE" in
   # hermes/train.py: online RL; agent runtime package installed in
   # section 1c, orchestration in run_example.sh's hermes branch.
   areal-hermes-grpo) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; HERMES_PREP=1 ;;
+  # swe/train_swe_rl.py: agent runtime (external AReaL-SWEAgent + aenv),
+  # config and fixture are all built in section 11; plain foreground run.
+  areal-swe-rl) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; SWE_PREP=1 ;;
   # hhrlhf_dpo.py: DPO pipeline is model-agnostic; upstream yaml's 7B swapped
   # for 1.5B (7B fp32 init OOMs the 32GB cards in the pool, 15GB per run).
   areal-align) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; HHRLHF_PREP=1 ;;
@@ -124,6 +128,56 @@ if [[ "$HERMES_PREP" == 1 ]]; then
     --index-url https://mirrors.aliyun.com/pypi/simple \
     hermes-agent==0.19.0
 fi
+
+# -------------------------------------------------------
+# 1d. NPU portability patch: lazy MegatronEngine import.
+# areal/v2/training_service/worker/awex.py:_create_training_adapter
+# imports areal.engine.megatron_engine (and the megatron weight-update
+# adapter) unconditionally, so even FSDP-only runs load megatron.bridge ->
+# peft/lora_layers.py -> `import transformer_engine`, a CUDA-only package
+# with no Ascend wheel (same class as bitsandbytes on aarch64). Defer both
+# imports until the engine is known to be Megatron - behaviour-preserving;
+# the editable install reads the patched file live.
+# TODO(npu-upstream): drop once upstream guards the import.
+# -------------------------------------------------------
+python3 - <<'PY'
+import os
+
+path = os.path.join(
+    os.environ["TARGET_ROOT"],
+    "areal", "v2", "training_service", "worker", "awex.py",
+)
+with open(path, encoding="utf-8") as fh:
+    text = fh.read()
+
+old = '''    from areal.engine.fsdp_engine import FSDPEngine
+    from areal.engine.megatron_engine import MegatronEngine
+    from areal.v2.weight_update.awex.fsdp_adapter import AwexFSDPAdapter
+    from areal.v2.weight_update.awex.megatron_adapter import (
+        AwexMegatronAdapter,
+    )
+
+    if isinstance(engine, FSDPEngine):
+        return AwexFSDPAdapter(engine)
+'''
+new = '''    from areal.engine.fsdp_engine import FSDPEngine
+    from areal.v2.weight_update.awex.fsdp_adapter import AwexFSDPAdapter
+
+    if isinstance(engine, FSDPEngine):
+        return AwexFSDPAdapter(engine)
+
+    # NPU: defer the Megatron imports - megatron.bridge drags the CUDA-only
+    # transformer_engine, which has no Ascend wheel.
+    from areal.engine.megatron_engine import MegatronEngine
+    from areal.v2.weight_update.awex.megatron_adapter import (
+        AwexMegatronAdapter,
+    )
+'''
+assert text.count(old) == 1, "awex.py layout changed; update the NPU patch"
+with open(path, "w", encoding="utf-8") as fh:
+    fh.write(text.replace(old, new))
+print("patched awex.py: MegatronEngine import is now lazy", flush=True)
+PY
 
 # -------------------------------------------------------
 # 2. Runtime Environment setup.
@@ -461,5 +515,129 @@ ds.to_parquet(os.path.join(dst, "train.parquet"))
 with open(os.environ["GITHUB_ENV"], "a") as fh:
     fh.write(f"AREAL_CLEVR_SUBSET_DIR={dst}\n")
 print(f"prepared clevr subset ({len(ds)} rows) at {dst}", flush=True)
+PY
+fi
+
+# -------------------------------------------------------
+# 11. SWE-bench agent RL (areal-swe-rl).
+# -------------------------------------------------------
+# train_swe_rl.py has no in-tree config or dataset; build all pieces:
+#  a) clone the external AReaL-SWEAgent checkout (the workflow imports
+#     `aweagent.lifecycle` from econfig.agent_root) and install its local
+#     sandbox package `aenv` (persistent-bash-env - no docker involved);
+#  b) author a minimal agent config: the shipped default
+#     (1_0_0/min-swe-agent-train-top1) uses step_limit=200 with 16K
+#     completion tokens and the swebench eval env - unusable in CI. Derive
+#     it with tiny limits and the inline eval_script reward path;
+#  c) author the PPO config (derived from gsm8k_grpo_npu.yaml) + a
+#     self-contained fixture JSONL (instance_id / problem_statement /
+#     eval_script; no repo clone, no network), and export
+#     AWEAGENT_ROOT / AREAL_SWE_CONFIG for the overlay.
+# The persistent-bash env starts with `cd /testbed`, so prepare /testbed as
+# an empty git repo in the job container (first-run risk: aenv must execute
+# the shell locally, not in a remote FaaS sandbox).
+if [[ "$SWE_PREP" == 1 ]]; then
+python3 <<'PY'
+import json
+import os
+import subprocess
+
+import yaml
+
+workspace = os.environ["GITHUB_WORKSPACE"]
+target_root = os.environ["TARGET_ROOT"]
+aweagent_root = os.path.join(workspace, "AReaL-SWEAgent")
+
+# a) agent runtime checkout + aenv sandbox package
+if not os.path.isdir(aweagent_root):
+    subprocess.run(
+        [
+            "git", "clone", "--depth", "1",
+            "https://github.com/areal-project/AReaL-SWEAgent.git", aweagent_root,
+        ],
+        check=True,
+    )
+subprocess.run(
+    [
+        "uv", "pip", "install", "--system",
+        "--index-url", "https://mirrors.aliyun.com/pypi/simple", "aenv",
+    ],
+    check=True,
+)
+
+# b) minimal agent config derived from the shipped Qwen SWE-RL config
+src_cfg = os.path.join(
+    aweagent_root, "aweagent", "configs", "1_0_0", "min-swe-agent-train-top1.yaml"
+)
+with open(src_cfg, encoding="utf-8") as fh:
+    agent_cfg = yaml.safe_load(fh)
+agent_cfg.update(
+    max_completion_tokens=256,
+    step_limit=6,
+    no_tool_call_limit=3,
+    multiple_tools_limit=3,
+    rl_test=False,  # inline eval_script reward, not the swebench eval env
+)
+dst_cfg = os.path.join(aweagent_root, "aweagent", "configs", "ci_swe_smoke.yaml")
+with open(dst_cfg, "w", encoding="utf-8") as fh:
+    yaml.safe_dump(agent_cfg, fh, sort_keys=False, allow_unicode=True)
+
+# c) self-contained fixture + /testbed workspace + PPO config
+data_dir = os.path.join(workspace, "areal_data", "swe")
+os.makedirs(data_dir, exist_ok=True)
+fixture = os.path.join(data_dir, "ci_swe_smoke.jsonl")
+with open(fixture, "w", encoding="utf-8") as fh:
+    fh.write(
+        json.dumps(
+            {
+                "instance_id": "ci-swe-smoke-1",
+                "problem_statement": (
+                    "Create a file `hello.py` in the current working directory "
+                    "that defines a function `add(a, b)` returning the sum of a "
+                    "and b."
+                ),
+                "eval_script": (
+                    "cd /testbed && python -c \"import hello; "
+                    "assert hello.add(2, 3) == 5\""
+                ),
+            }
+        )
+        + "\n"
+    )
+
+os.makedirs("/testbed", exist_ok=True)
+subprocess.run(["git", "init", "-q", "/testbed"], check=True)
+subprocess.run(
+    ["git", "-C", "/testbed", "config", "user.email", "sweagent@test.com"], check=True
+)
+subprocess.run(
+    ["git", "-C", "/testbed", "config", "user.name", "sweagent"], check=True
+)
+
+base = os.path.join(target_root, "examples", "math", "gsm8k_grpo_npu.yaml")
+with open(base, encoding="utf-8") as fh:
+    cfg = yaml.safe_load(fh)
+cfg["experiment_name"] = "swe-rl-smoke"
+cfg["scheduler"]["type"] = "local"
+cfg["rollout"]["agent"] = None
+cfg["train_dataset"].update(path=fixture, type="rl", batch_size=1)
+cfg["valid_dataset"].update(path=fixture, type="rl", batch_size=1)
+cfg["econfig"] = {
+    "dataset_path": data_dir,
+    "agent_type": "swe",
+    "agent_config": "ci_swe_smoke",
+    "agent_root": aweagent_root,
+    "llm_model": os.environ["AREAL_MODEL_PATH"],
+    "timeout": 600,
+}
+cfg_path = os.path.join(data_dir, "swe_ppo_npu.yaml")
+with open(cfg_path, "w", encoding="utf-8") as fh:
+    yaml.safe_dump(cfg, fh, sort_keys=False, allow_unicode=True)
+
+with open(os.environ["GITHUB_ENV"], "a") as fh:
+    fh.write(f"AWEAGENT_ROOT={aweagent_root}\n")
+    fh.write(f"AREAL_SWE_CONFIG={cfg_path}\n")
+print(f"prepared AReaL-SWEAgent at {aweagent_root}", flush=True)
+print(f"generated {cfg_path} and {fixture}", flush=True)
 PY
 fi

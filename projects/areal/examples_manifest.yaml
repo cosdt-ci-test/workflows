@@ -25,37 +25,37 @@ scan:
 #   processor warmup + tokenizer 深拷贝）在慢机上会超，RL 条目统一
 #   +rollout.setup_timeout=1800 兜底。
 supported:
-  # Qwen2.5-VL-3B Geometry3K GRPO（双卡，2026-09-27 实测跑通）
-  - path: examples/vlm/geometry3k_grpo.py
-    profile: areal-vlm-grpo
-    runner: linux-aarch64-a2-2
-    npu_devices: '0,1'
-    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
-    overlay_args:
-      - --config examples/vlm_npu/qwen2_5_vl_3b_geometry3k_grpo.yaml
-      - scheduler.type=local
-      - cluster.n_gpus_per_node=2
-      - rollout.backend=vllm:d1p1t2
-      # mm server 预热（processor warmup + tokenizer 深拷贝池）在慢机上超
-      # 默认 300s 健康等待（本次 0.22.1 栈实测复现），与其余 RL 条目统一
-      # 1800s 兜底。
-      - +rollout.setup_timeout=1800
-      - actor.backend=fsdp:d2p1t1
-      - +actor.fsdp.offload_params=true
-      - +actor.weight_update_mode=disk
-      - actor.path=${AREAL_MODEL_PATH}
-      - actor.mb_spec.max_tokens_per_mb=1024
-      - ref.mb_spec.max_tokens_per_mb=1024
-      - vllm.gpu_memory_utilization=0.3
-      - gconfig.max_new_tokens=64
-      - gconfig.n_samples=1
-      - train_dataset.batch_size=2
-      - valid_dataset.batch_size=2
-      - +train_dataset.setup_timeout=600
-      - +valid_dataset.setup_timeout=600
-      - +total_train_steps=1
-      - vllm.max_model_len=8576
-    timeout_minutes: 60
+  # # Qwen2.5-VL-3B Geometry3K GRPO（双卡，2026-09-27 实测跑通）
+  # - path: examples/vlm/geometry3k_grpo.py
+  #   profile: areal-vlm-grpo
+  #   runner: linux-aarch64-a2-2
+  #   npu_devices: '0,1'
+  #   image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
+  #   overlay_args:
+  #     - --config examples/vlm_npu/qwen2_5_vl_3b_geometry3k_grpo.yaml
+  #     - scheduler.type=local
+  #     - cluster.n_gpus_per_node=2
+  #     - rollout.backend=vllm:d1p1t2
+  #     # mm server 预热（processor warmup + tokenizer 深拷贝池）在慢机上超
+  #     # 默认 300s 健康等待（本次 0.22.1 栈实测复现），与其余 RL 条目统一
+  #     # 1800s 兜底。
+  #     - +rollout.setup_timeout=1800
+  #     - actor.backend=fsdp:d2p1t1
+  #     - +actor.fsdp.offload_params=true
+  #     - +actor.weight_update_mode=disk
+  #     - actor.path=${AREAL_MODEL_PATH}
+  #     - actor.mb_spec.max_tokens_per_mb=1024
+  #     - ref.mb_spec.max_tokens_per_mb=1024
+  #     - vllm.gpu_memory_utilization=0.3
+  #     - gconfig.max_new_tokens=64
+  #     - gconfig.n_samples=1
+  #     - train_dataset.batch_size=2
+  #     - valid_dataset.batch_size=2
+  #     - +train_dataset.setup_timeout=600
+  #     - +valid_dataset.setup_timeout=600
+  #     - +total_train_steps=1
+  #     - vllm.max_model_len=8576
+  #   timeout_minutes: 60
   # Hermes 在线 RL（唯一覆盖 online 模式 + agent service + per-session key
   # 链路的例子）。config.yaml 默认 CUDA 栈，NPU 全部 overlay：rollout sglang
   # （NPU 无 SGLang，换 config 自带的 vllm 段）、actor megatron（换 fsdp 与
@@ -82,7 +82,28 @@ supported:
       - gconfig.max_new_tokens=256
       - +rollout.setup_timeout=1800
       - total_train_steps=1
-      - total_train_epochs=1
+    timeout_minutes: 90
+  # SWE-bench 代理模式 RL（v2 agentic RL 的另一半覆盖面：proxy 模式 subproc
+  # agent + 本地 persistent-bash 沙箱，与 hermes 的 online 会话驱动互补）。
+  # 树内无 config/数据集：setup §11 自建（AReaL-SWEAgent checkout + aenv +
+  # 派生 PPO config + 自包含 fixture），经 ${AREAL_SWE_CONFIG} 注入；标准
+  # 前台运行，1 步即退。
+  - path: examples/swe/train_swe_rl.py
+    profile: areal-swe-rl
+    runner: linux-aarch64-a2-2
+    npu_devices: '0,1'
+    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
+    overlay_args:
+      - --config ${AREAL_SWE_CONFIG}
+      - cluster.n_gpus_per_node=2
+      - rollout.backend=vllm:d1p1t2
+      - +rollout.setup_timeout=1800
+      - actor.backend=fsdp:d2p1t1
+      - +actor.fsdp.offload_params=true
+      - ++actor.weight_update_mode=disk
+      - actor.path=${AREAL_MODEL_PATH}
+      - +total_train_steps=1
+      - total_train_steps=1
     timeout_minutes: 90
   # # GSM8K GRPO（上游 NPU 专用配置 gsm8k_grpo_npu.yaml，实测跑通）
   # - path: examples/math/gsm8k_rl.py
@@ -489,6 +510,10 @@ unsupported:
   - examples/hermes/hermes_loop.py
   - examples/hermes/set_reward.py
   - examples/hermes/start_session.py
+  # SGLang 工具链补丁（给 SGLang 0.5.9/0.5.10 打 Bailing Hybrid 模型 radix
+  # cache 支持，改 8 个文件）：NPU 不支持 SGLang、镜像里也无 sglang 安装，
+  # 无对象可打；且是环境修补工具非训练入口，无独立 pass/fail 语义。
+  - examples/swe/apply_sgl_radix_cache_patch.py
   # profile 性能剖析三件套：CUDA 专属工具链——启动器采集 nvidia-smi.csv、
   # postprocess 按 CPU/CUDA API/GPU kernels 事件类别拆 kernel trace、
   # memory 快照走 PyTorch CUDA allocator，NPU 均无对应产物；上游 README
@@ -507,13 +532,10 @@ unsupported:
   - examples/math/gsm8k_eval.py
 
   # =====================================================================
-  # ===== 待验证（仅可执行入口）：以下 6 条尚未在 NPU 上跑通，
+  # ===== 待验证（仅可执行入口）：以下 4 条尚未在 NPU 上跑通，
   # ===== supported / unsupported 归属未判定，先统一挂 unsupported，
   # ===== 验证后逐条迁移。
   # =====================================================================
-  # swe：SWE-bench 代理模式 RL 入口 + sglang radix cache 补丁 CLI
-  - examples/swe/apply_sgl_radix_cache_patch.py
-  - examples/swe/train_swe_rl.py
   # vlm_npu：geometry3k GRPO 训练入口（内联 mathruler 奖励，与 supported
   # 的 examples/vlm/geometry3k_grpo.py 是两个文件）+ 3 个官方 NPU 启动器；
   # multinode .sh 跑的是 vlm_npu/virl39k_grpo.py（本体在上方 UPSTREAM_BUG

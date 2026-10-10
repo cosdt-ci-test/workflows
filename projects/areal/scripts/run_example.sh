@@ -101,7 +101,7 @@ case "$EXAMPLE_REL" in
     TRAINER_PID=$!
 
     GW=""
-    for _ in $(seq 1 120); do
+    for i in $(seq 1 120); do
       GW=$(grep 'Proxy gateway available at' "$TRAIN_LOG" 2>/dev/null | tail -1 \
         | grep -oE 'https?://[^[:space:]]+' || true)
       [[ -n "$GW" ]] && break
@@ -110,6 +110,7 @@ case "$EXAMPLE_REL" in
         tail -n 120 "$TRAIN_LOG"
         exit 1
       fi
+      echo "[wait $((i * 10))s] trainer: $(tail -n 1 "$TRAIN_LOG" 2>/dev/null | cut -c1-200)"
       sleep 10
     done
     if [[ -z "$GW" ]]; then

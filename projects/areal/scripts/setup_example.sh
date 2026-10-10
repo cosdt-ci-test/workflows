@@ -5,9 +5,8 @@
 # CI base image is ghcr.io/hwvanici/areal_npu, which already has the full stack:
 # CANN, torch, vLLM-Ascend, Megatron, MindSpeed, huggingface_hub etc.
 # We should NOT reinstall these; just install the target AReaL source and assets.
-# Exception (section 1b): the vllm/vllm-ascend pair is swapped 0.23.0 -> 0.22.1
-# because the image's 0.23 stack matches the ascend-v1.0.5 branch code, while
-# the guarded v2.x mainline needs the pre-0.23 vllm entrypoints layout.
+# Exception (section 1b): the vllm/vllm-ascend pair is swapped to the 0.22.1
+# line to match the guarded v2.x code's vllm layout.
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
@@ -67,32 +66,33 @@ command -v uv >/dev/null 2>&1 || pip install -q uv
 uv pip install --no-deps -e "$TARGET_ROOT" --system
 
 # -------------------------------------------------------
-# 1b. Swap the vLLM stack to the v2.x-compatible line (0.22.1).
-# The image ships vllm/vllm-ascend 0.23.0 (the ascend-v1.0.5 branch
-# stack). AReaL v2.x mainline's areal/engine/vllm_ext imports the
-# pre-0.23 vllm layout (vllm.entrypoints.openai.utils +
-# vllm.entrypoints.utils exist through 0.22.1, removed in 0.23), so
-# every rollout-backed entry dies at
+# 1b. vLLM stack: swap the image's 0.23 line for 0.22.1.
+# The image ships the ascend-v1.0.5 branch stack (vllm/vllm-ascend
+# 0.23.0). The guarded v2.x code imports the pre-0.23 vllm layout
+# (vllm.entrypoints.openai.utils / vllm.entrypoints.utils exist
+# through 0.22.1, removed in 0.23) - without this swap every
+# rollout-backed entry dies on
 #   ModuleNotFoundError: No module named 'vllm.entrypoints.openai.utils'
 #
-# Recipe follows vllm-ascend's own Dockerfile at v0.22.1rc1:
+# Recipe per vllm-ascend's own Dockerfile at v0.22.1rc1:
 #   - vllm-ascend 0.22.1rc1 PyPI wheel with --no-deps: its pins would
-#     force torch_npu 2.10.0.post2 -> 2.10.0 and re-resolve the frozen
-#     image stack;
+#     re-resolve the frozen image stack (torch_npu 2.10.0.post2 etc);
 #   - vllm 0.22.1 from SOURCE with VLLM_TARGET_DEVICE=empty (pure
 #     Python, no compiled kernels - the ascend plugin supplies the
-#     device layer). NOT the PyPI wheel: it is built against
-#     torch==2.11.0 and its resolver conflicts with the image stack
-#     (torch 2.11 wants triton 3.6, the ascend line pins 3.5); areal
-#     v2.1.0 requires torch<2.11, so torch 2.10.0 must stay untouched
-#     (--no-deps) and the build must see the system torch
-#     (--no-build-isolation);
-#   - triton-ascend is NOT reinstalled: the image already ships 3.2.2
-#     (the v0.23.0 line pin), same 3.2.x generation as this line's
-#     3.2.1.
-# Applies to ALL profiles: fsdp-only entries (gsm8k_sft) run through
-# the same setup and double as the control that the swap does not
-# disturb the vllm-free path.
+#     device layer). NEVER install vllm from PyPI here: the wheel is
+#     built against torch==2.11.0, incompatible with the image's
+#     torch 2.10.0 and areal's torch<2.11 pin. --no-deps keeps the
+#     image stack untouched, --no-build-isolation lets setup.py see
+#     the system torch;
+#   - triton-ascend stays as the image's 3.2.2 (same 3.2.x generation
+#     as this line's 3.2.1);
+#   - the source build additionally needs setuptools-rust/setuptools-scm
+#     in the system env: --no-build-isolation skips the declared
+#     build-system requires, but setup.py imports both unconditionally.
+#     The optional rust extension is skipped when cargo is absent (same
+#     as vllm-ascend's own image, which ships no rust toolchain).
+# Applies to ALL profiles: fsdp-only entries (gsm8k_sft) double as
+# the control that the swap does not disturb the vllm-free path.
 # TODO(vllm-0.23): drop this block once upstream ships a v2.x NPU
 # image or vllm-ascend catches up with mainline's target layout.
 # -------------------------------------------------------
@@ -101,6 +101,9 @@ git clone --depth 1 --branch v0.22.1 https://github.com/vllm-project/vllm.git "$
 uv pip install --system --no-deps \
   --index-url https://mirrors.aliyun.com/pypi/simple \
   vllm-ascend==0.22.1rc1
+uv pip install --system \
+  --index-url https://mirrors.aliyun.com/pypi/simple \
+  "setuptools-rust>=1.9.0" "setuptools-scm>=8.0"
 VLLM_TARGET_DEVICE=empty uv pip install --system --no-deps --no-build-isolation \
   -e "$VLLM_SRC"
 python -c "import torch, torch_npu, vllm, vllm_ascend; from vllm.entrypoints.openai.utils import validate_json_request; print(f'vllm {vllm.__version__} + vllm-ascend 0.22.1rc1 layout OK; torch {torch.__version__}, torch_npu {torch_npu.__version__}')"

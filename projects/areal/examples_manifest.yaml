@@ -2,22 +2,17 @@ version: 1
 scan:
   root: examples
   include_extensions: ['.py', '.sh']
-  # files-only 模型（docs/examples-guard-engine.md §2.7）。2026-10-08 起与
-  # diffusers 对齐收口：原 scan.exclude 的 36 条规则全部迁入
-  # unsupported 段（上游自测 / scaffolding / tir / terminal_bench / search_agent
-  # 等实现模块，带分组注释与理由），scan 只保留 root + include_extensions 两个键。
-  # 对账口径（2026-10-10 改基线，以本地 v2.1.0 树为准）：v2.1.0 树 114 个
-  # .py/.sh = supported(10) + unsupported(104)，其中 21 条为 v2.1.0 相对
-  # ascend-v1.0.5 的新增（8 条实现/工具模块已按理由归入 unsupported 分组，
-  # 13 条可执行入口在尾部标「待验证」）；ascend-v1.0.5 口径
-  # （101 = 13 + 88）中的 8 条 ascend-only 条目已删除。
+  # files-only 模式（docs/examples-guard-engine.md §2.7）：scan 只保留
+  # root + include_extensions 两个键；实现模块、上游自测等一律进
+  # unsupported 段（带分组注释与理由）。
+  # 对账口径：release 树（当前 v2.1.0）114 个 .py/.sh =
+  # supported(10) + unsupported(104)，其中尾部 13 条为可执行入口，
+  # 标「待验证」。
 
-# 2026-10-10 起看护目标从 ascend-v1.0.5 分支改为 release 线（最新 release
-# v2.1.0 = 本地对账树），workflow target_ref 不再 pin 分支、由引擎按 latest
-# release 解析。supported 10 条的配方与专用镜像
-# ghcr.io/hwvanici/areal_npu:v1.0.5-a2（国内源
-# ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2）系 ascend-v1.0.5 树上验证，
-# v2.1.0 树待重验——首跑失败属有效信号，逐条修复或降级 unsupported。
+# 看护 release 线（workflow target_ref 留空，由引擎按 latest release
+# 解析）。supported 配方用专用镜像 ghcr.io/hwvanici/areal_npu:v1.0.5-a2
+# （国内源 ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2）；镜像内的
+# vllm 栈由 setup_example.sh §1b 换装 0.22.1 线以匹配 v2.x 代码布局。
 # 通用配方：
 # - 双卡 colocate：rollout vllm:d1p1t2 + actor fsdp:d2p1t1；offload 解
 #   optimizer-state OOM，disk 权重同步解共卡 xccl 建不起 HCCL 组（EI0015）。
@@ -353,11 +348,6 @@ unsupported:
   # fork tau2-bench + 外部 user simulator 端点（同 examples/tau2）
   - examples/experimental/inference_service/tau2_rollout.py
 
-  # =====================================================================
-  # ===== 2026-10-08 收口：以下各组自 scan.exclude 迁入，
-  # ===== scan 段自此只保留 root + include_extensions。
-  # =====================================================================
-
   # 上游自测（scaffolding/tests、tir/tests）与 pytest 基础设施。
   - examples/scaffolding/tests/test_controllers.py
   - examples/scaffolding/tests/test_scaffolding_llm_integration.py
@@ -430,7 +420,6 @@ unsupported:
   - examples/multi_turn_math/config.py
   - examples/openai_agents/config.py
   - examples/tau2/utils.py
-  # —— 2026-10-10 自待验证迁入（v2.1.0 新增工具/配置模块，非入口）——
   # profile 脚本的 rank 解析 helper（被 run_qwen3_30b_a3b_sft_profile.sh 内嵌调用）
   - examples/profile/profile_rank_utils.py
   # SWE 的环境/训练配置 dataclass（train_swe_rl.py import）
@@ -448,7 +437,6 @@ unsupported:
   - examples/openclaw/start_session.py
   - examples/sandbox_daytona/reward_example.py
   - examples/tau2/agent.py
-  # —— 2026-10-10 自待验证迁入（v2.1.0 新增的被调用实现，非入口）——
   # Hermes 的 AgentRunnable 实现（Agent Service 进程内每 session 加载，
   # 需 hermes-agent 包 + 上游 LLM key，同 agent_service/agent.py 类）
   - examples/hermes/hermes.py
@@ -467,10 +455,9 @@ unsupported:
   - examples/math/gsm8k_eval.py
 
   # =====================================================================
-  # ===== 待验证（2026-10-10 对账新增，仅保留可执行入口）：以下 13 条为
-  # ===== v2.1.0 树相对 ascend-v1.0.5 的新增入口脚本，尚未在 NPU 上跑通，
+  # ===== 待验证（仅可执行入口）：以下 13 条尚未在 NPU 上跑通，
   # ===== supported / unsupported 归属未判定，先统一挂 unsupported，
-  # ===== 验证后逐条迁移（8 条实现/工具类模块已按理由迁入上方分组）。
+  # ===== 验证后逐条迁移。
   # =====================================================================
   # hermes 在线 RL 会话工具链：4 个 CLI/入口，均依赖已运行的 agent /
   # inference 网关（train.py 是 gateway 驱动的 online RL，同 openclaw 形态）

@@ -74,27 +74,35 @@ uv pip install --no-deps -e "$TARGET_ROOT" --system
 # vllm.entrypoints.utils exist through 0.22.1, removed in 0.23), so
 # every rollout-backed entry dies at
 #   ModuleNotFoundError: No module named 'vllm.entrypoints.openai.utils'
-# vllm-ascend v0.22.1rc1 pins EXACTLY the image's stack (torch==2.10.0
-# + torch-npu==2.10.0 + transformers==5.5.4), so swapping only the two
-# vllm packages keeps the rest of the frozen image untouched:
-#   - --no-deps on vllm-ascend: its pins would force torch_npu
-#     2.10.0.post2 -> 2.10.0 and re-resolve the image stack;
-#   - vllm WITH deps: its torch pin (==2.10.0) is already satisfied,
-#     the resolver only reconciles vllm-ecosystem deps;
-#   - triton-ascend==3.2.1 is that line's pinned version (ascend repo).
+#
+# Recipe follows vllm-ascend's own Dockerfile at v0.22.1rc1:
+#   - vllm-ascend 0.22.1rc1 PyPI wheel with --no-deps: its pins would
+#     force torch_npu 2.10.0.post2 -> 2.10.0 and re-resolve the frozen
+#     image stack;
+#   - vllm 0.22.1 from SOURCE with VLLM_TARGET_DEVICE=empty (pure
+#     Python, no compiled kernels - the ascend plugin supplies the
+#     device layer). NOT the PyPI wheel: it is built against
+#     torch==2.11.0 and its resolver conflicts with the image stack
+#     (torch 2.11 wants triton 3.6, the ascend line pins 3.5); areal
+#     v2.1.0 requires torch<2.11, so torch 2.10.0 must stay untouched
+#     (--no-deps) and the build must see the system torch
+#     (--no-build-isolation);
+#   - triton-ascend is NOT reinstalled: the image already ships 3.2.2
+#     (the v0.23.0 line pin), same 3.2.x generation as this line's
+#     3.2.1.
 # Applies to ALL profiles: fsdp-only entries (gsm8k_sft) run through
 # the same setup and double as the control that the swap does not
 # disturb the vllm-free path.
 # TODO(vllm-0.23): drop this block once upstream ships a v2.x NPU
 # image or vllm-ascend catches up with mainline's target layout.
 # -------------------------------------------------------
+VLLM_SRC="$GITHUB_WORKSPACE/vllm-0.22.1-src"
+git clone --depth 1 --branch v0.22.1 https://github.com/vllm-project/vllm.git "$VLLM_SRC"
 uv pip install --system --no-deps \
   --index-url https://mirrors.aliyun.com/pypi/simple \
   vllm-ascend==0.22.1rc1
-uv pip install --system \
-  --index-url https://mirrors.aliyun.com/pypi/simple \
-  --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
-  vllm==0.22.1 triton-ascend==3.2.1
+VLLM_TARGET_DEVICE=empty uv pip install --system --no-deps --no-build-isolation \
+  -e "$VLLM_SRC"
 python -c "import torch, torch_npu, vllm, vllm_ascend; from vllm.entrypoints.openai.utils import validate_json_request; print(f'vllm {vllm.__version__} + vllm-ascend 0.22.1rc1 layout OK; torch {torch.__version__}, torch_npu {torch_npu.__version__}')"
 
 # -------------------------------------------------------

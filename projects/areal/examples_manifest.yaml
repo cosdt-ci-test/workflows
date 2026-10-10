@@ -81,6 +81,7 @@ supported:
       - gconfig.max_new_tokens=256
       - +rollout.setup_timeout=1800
       - total_train_steps=1
+      - total_train_epochs=1
     timeout_minutes: 90
   # SWE-bench 代理模式 RL（v2 agentic RL 的另一半覆盖面：proxy 模式 subproc
   # agent + 本地 persistent-bash 沙箱，与 hermes 的 online 会话驱动互补）。
@@ -102,7 +103,7 @@ supported:
       - ++actor.weight_update_mode=disk
       - actor.path=${AREAL_MODEL_PATH}
       - +total_train_steps=1
-      - +total_train_steps=1
+      - +total_train_epochs=1
     timeout_minutes: 90
   # # GSM8K GRPO（上游 NPU 专用配置 gsm8k_grpo_npu.yaml，实测跑通）
   # - path: examples/math/gsm8k_rl.py

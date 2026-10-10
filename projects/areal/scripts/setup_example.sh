@@ -622,7 +622,9 @@ with open(base, encoding="utf-8") as fh:
     cfg = yaml.safe_load(fh)
 cfg["experiment_name"] = "swe-rl-smoke"
 cfg["scheduler"]["type"] = "local"
-cfg["rollout"]["agent"] = None
+# Keep the base's rollout.agent (mode: inline) - the field is a non-Optional
+# AgentConfig in the schema, and the SWE workflow is passed explicitly to
+# trainer.train(), so the built-in agent config just needs to stay valid.
 cfg["train_dataset"].update(path=fixture, type="rl", batch_size=1)
 cfg["valid_dataset"].update(path=fixture, type="rl", batch_size=1)
 cfg["econfig"] = {

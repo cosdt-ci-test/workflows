@@ -59,10 +59,14 @@ supported:
   # 链路的例子）。config.yaml 默认 CUDA 栈，NPU 全部 overlay：rollout sglang
   # （NPU 无 SGLang，换 config 自带的 vllm 段）、actor megatron（换 fsdp 与
   # 其余条目同构）、weight_update_mode xccl（NPU 共卡建不起 HCCL 组，换
-  # disk）。train.py 在线模式阻塞等外部会话，run_example.sh 的 hermes 分支
-  # 编排完整生命周期：start_session → 管道驱动 hermes_loop → set_reward →
-  # refresh 结束导出轨迹 → 1 步训练退出；agent 运行时 hermes-agent 由
-  # setup §1c 安装。
+  # disk）。**另需 _version=v1 回退**：config 的 _version:v2 会强制非 LoRA
+  # 走 awex 权重同步（rl_trainer.py:380-399，v2 忽略 weight_update_mode），
+  # 而 awex 的推理侧 /awex/report_parallelism 端点上游只有 SGLang 实现
+  # （inference_service/vllm/ 无此路由），vLLM 后端必 404；回 v1 后
+  # weight_update_mode=disk 生效（与 ascend 时代配方同路径）。
+  # train.py 在线模式阻塞等外部会话，run_example.sh 的 hermes 分支编排完整
+  # 生命周期：start_session → 管道驱动 hermes_loop → set_reward → refresh
+  # 结束导出轨迹 → 1 步训练退出；agent 运行时 hermes-agent 由 setup §1c 安装。
   - path: examples/hermes/train.py
     profile: areal-hermes-grpo
     runner: linux-aarch64-a2-2
@@ -71,7 +75,9 @@ supported:
     overlay_args:
       - --config examples/hermes/config.yaml
       - rollout.backend=vllm:d1p1t2
+      - rollout._version=v1
       - actor.backend=fsdp:d2p1t1
+      - actor._version=v1
       - +actor.fsdp.offload_params=true
       - ++actor.weight_update_mode=disk
       - actor.path=${AREAL_MODEL_PATH}
@@ -103,7 +109,7 @@ supported:
       - ++actor.weight_update_mode=disk
       - actor.path=${AREAL_MODEL_PATH}
       - +total_train_steps=1
-      - +total_train_epochs=1
+      - total_train_epochs=1
     timeout_minutes: 90
   # # GSM8K GRPO（上游 NPU 专用配置 gsm8k_grpo_npu.yaml，实测跑通）
   # - path: examples/math/gsm8k_rl.py

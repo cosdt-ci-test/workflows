@@ -5,6 +5,9 @@
 # CI base image is ghcr.io/hwvanici/areal_npu, which already has the full stack:
 # CANN, torch, vLLM-Ascend, Megatron, MindSpeed, huggingface_hub etc.
 # We should NOT reinstall these; just install the target AReaL source and assets.
+# Exception (section 1b): the vllm/vllm-ascend pair is swapped 0.23.0 -> 0.22.1
+# because the image's 0.23 stack matches the ascend-v1.0.5 branch code, while
+# the guarded v2.x mainline needs the pre-0.23 vllm entrypoints layout.
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
@@ -62,6 +65,37 @@ fi
 # -------------------------------------------------------
 command -v uv >/dev/null 2>&1 || pip install -q uv
 uv pip install --no-deps -e "$TARGET_ROOT" --system
+
+# -------------------------------------------------------
+# 1b. Swap the vLLM stack to the v2.x-compatible line (0.22.1).
+# The image ships vllm/vllm-ascend 0.23.0 (the ascend-v1.0.5 branch
+# stack). AReaL v2.x mainline's areal/engine/vllm_ext imports the
+# pre-0.23 vllm layout (vllm.entrypoints.openai.utils +
+# vllm.entrypoints.utils exist through 0.22.1, removed in 0.23), so
+# every rollout-backed entry dies at
+#   ModuleNotFoundError: No module named 'vllm.entrypoints.openai.utils'
+# vllm-ascend v0.22.1rc1 pins EXACTLY the image's stack (torch==2.10.0
+# + torch-npu==2.10.0 + transformers==5.5.4), so swapping only the two
+# vllm packages keeps the rest of the frozen image untouched:
+#   - --no-deps on vllm-ascend: its pins would force torch_npu
+#     2.10.0.post2 -> 2.10.0 and re-resolve the image stack;
+#   - vllm WITH deps: its torch pin (==2.10.0) is already satisfied,
+#     the resolver only reconciles vllm-ecosystem deps;
+#   - triton-ascend==3.2.1 is that line's pinned version (ascend repo).
+# Applies to ALL profiles: fsdp-only entries (gsm8k_sft) run through
+# the same setup and double as the control that the swap does not
+# disturb the vllm-free path.
+# TODO(vllm-0.23): drop this block once upstream ships a v2.x NPU
+# image or vllm-ascend catches up with mainline's target layout.
+# -------------------------------------------------------
+uv pip install --system --no-deps \
+  --index-url https://mirrors.aliyun.com/pypi/simple \
+  vllm-ascend==0.22.1rc1
+uv pip install --system \
+  --index-url https://mirrors.aliyun.com/pypi/simple \
+  --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
+  vllm==0.22.1 triton-ascend==3.2.1
+python -c "import torch, torch_npu, vllm, vllm_ascend; from vllm.entrypoints.openai.utils import validate_json_request; print(f'vllm {vllm.__version__} + vllm-ascend 0.22.1rc1 layout OK; torch {torch.__version__}, torch_npu {torch_npu.__version__}')"
 
 # -------------------------------------------------------
 # 2. Runtime Environment setup.

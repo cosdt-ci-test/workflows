@@ -72,6 +72,113 @@ case "$EXAMPLE_REL" in
     MODULE="${MODULE//\//.}"
     "$PYTHON" -m "$MODULE" "${EXTRA_ARGS[@]}" || run_rc=$?
     ;;
+  examples/hermes/train.py)
+    # Online RL: train.py blocks waiting for an externally-driven session
+    # lifecycle, so a plain foreground run would hang until timeout.
+    # Orchestrate one full loop instead: background trainer (starts the
+    # vLLM rollout engine + proxy gateway) -> Agent Service (HermesAgent)
+    # -> start_session (mint sk-sess key) -> one piped conversation via
+    # hermes_loop (EOF exits cleanly) -> set_reward -> start_session
+    # refresh (ends the session, exports the trajectory) -> the trainer's
+    # _OnlineAgent unblocks, trains its single step and exits.
+    HERMES_ADMIN_KEY="areal-agent-ci"
+    TRAIN_LOG="$PWD/hermes_train.log"
+    AGENT_LOG="$PWD/hermes_agent.log"
+
+    hermes_cleanup() {
+      areal agent stop >/dev/null 2>&1 || true
+      if [[ -n "${TRAINER_PID:-}" ]] && kill -0 "$TRAINER_PID" 2>/dev/null; then
+        kill "$TRAINER_PID" 2>/dev/null || true
+      fi
+    }
+    trap hermes_cleanup EXIT
+
+    # 1) Trainer in the background; its log is the source of truth for
+    #    the proxy/inference gateway address (rl_trainer logs
+    #    "Proxy gateway available at http://host:port" once online mode
+    #    is up - engine load takes minutes).
+    "$PYTHON" "$LAUNCH_PATH" "${EXTRA_ARGS[@]}" >"$TRAIN_LOG" 2>&1 &
+    TRAINER_PID=$!
+
+    GW=""
+    for _ in $(seq 1 120); do
+      GW=$(grep 'Proxy gateway available at' "$TRAIN_LOG" 2>/dev/null | tail -1 \
+        | grep -oE 'https?://[^[:space:]]+' || true)
+      [[ -n "$GW" ]] && break
+      if ! kill -0 "$TRAINER_PID" 2>/dev/null; then
+        echo "trainer exited before the gateway came up; tail of $TRAIN_LOG:"
+        tail -n 120 "$TRAIN_LOG"
+        exit 1
+      fi
+      sleep 10
+    done
+    if [[ -z "$GW" ]]; then
+      echo "proxy gateway did not come up in 20min; tail of $TRAIN_LOG:"
+      tail -n 120 "$TRAIN_LOG"
+      exit 1
+    fi
+    echo "inference gateway: $GW"
+
+    # 2) Agent Service with the Hermes agent (run blocks until the stack
+    #    is healthy, then exits leaving the service up).
+    if ! areal agent run --agent examples.hermes.hermes.HermesAgent \
+        --admin-api-key "$HERMES_ADMIN_KEY" --force >"$AGENT_LOG" 2>&1; then
+      echo "areal agent run failed; tail of $AGENT_LOG:"
+      tail -n 120 "$AGENT_LOG"
+      exit 1
+    fi
+    AGENT_GW=$(grep -oE 'gateway=[^[:space:]]+' "$AGENT_LOG" | tail -1 | cut -d= -f2 || true)
+    if [[ -z "$AGENT_GW" ]]; then
+      AGENT_GW=$(areal agent status 2>/dev/null | grep -oE 'https?://[^[:space:]]+' | tail -1 || true)
+    fi
+    if [[ -z "$AGENT_GW" ]]; then
+      echo "agent gateway not found; tail of $AGENT_LOG:"
+      tail -n 120 "$AGENT_LOG"
+      exit 1
+    fi
+    echo "agent gateway: $AGENT_GW"
+
+    # 3) Mint the session key on the inference gateway (admin key is the
+    #    rollout.admin_api_key overlay value).
+    SESS_KEY=$("$PYTHON" examples/hermes/start_session.py "$GW" \
+      --admin-key sk-areal-ci | grep -oE 'sk-sess-[A-Za-z0-9_-]+' | tail -1 || true)
+    if [[ -z "$SESS_KEY" ]]; then
+      echo "start_session produced no sk-sess key; tails:"
+      tail -n 40 "$TRAIN_LOG"
+      exit 1
+    fi
+    echo "session: $SESS_KEY"
+
+    # 4) One piped conversation; hermes_loop exits cleanly on EOF. The
+    #    inf-* flags route the agent's LLM calls through the inference
+    #    gateway under the session key (self-evolution capture).
+    if ! echo "Say hello and introduce yourself in one sentence." | \
+        "$PYTHON" examples/hermes/hermes_loop.py "$AGENT_GW" \
+          --admin-api-key "$HERMES_ADMIN_KEY" \
+          --inf-base-url "$GW" \
+          --inf-model "${AREAL_MODEL_PATH:?AREAL_MODEL_PATH not in env}" \
+          --session-api-key "$SESS_KEY"; then
+      echo "hermes_loop failed; tails:"
+      tail -n 60 "$AGENT_LOG"
+      tail -n 40 "$TRAIN_LOG"
+      exit 1
+    fi
+
+    # 5) Reward, then refresh the session: ends it and exports the
+    #    trajectory, which unblocks the trainer.
+    "$PYTHON" examples/hermes/set_reward.py "$GW" --api-key "$SESS_KEY" --reward 1.0
+    "$PYTHON" examples/hermes/start_session.py "$GW" --admin-key sk-areal-ci \
+      --api-key "$SESS_KEY" >/dev/null
+
+    # 6) Trainer trains its single step and exits.
+    if wait "$TRAINER_PID"; then
+      echo "hermes online-rl loop completed"
+    else
+      run_rc=$?
+      echo "trainer exited rc=$run_rc; tail of $TRAIN_LOG:"
+      tail -n 120 "$TRAIN_LOG"
+    fi
+    ;;
   *.sh)
     # Shell examples dispatch with bash (generic guard contract: .sh -> bash,
     # .py -> python).

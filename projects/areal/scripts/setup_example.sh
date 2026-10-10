@@ -24,6 +24,7 @@ HHRLHF_PREP=0
 TORL_PREP=0
 SCAFFOLD_PREP=0
 CLEVR_SUBSET_PREP=0
+HERMES_PREP=0
 case "$PROFILE" in
   areal-vlm-grpo) MODEL_ID="Qwen/Qwen2.5-VL-3B-Instruct" ;;
   areal-vlm-mt-grpo) MODEL_ID="Qwen/Qwen3-VL-2B-Instruct" ;;
@@ -43,6 +44,9 @@ case "$PROFILE" in
   areal-math-aime) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; AIME_PREP=1 ;;
   areal-math-boba) MODEL_ID="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"; BOBA_PREP=1 ;;
   areal-countdown-grpo) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; COUNTDOWN_PREP=1 ;;
+  # hermes/train.py: online RL; agent runtime package installed in
+  # section 1c, orchestration in run_example.sh's hermes branch.
+  areal-hermes-grpo) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; HERMES_PREP=1 ;;
   # hhrlhf_dpo.py: DPO pipeline is model-agnostic; upstream yaml's 7B swapped
   # for 1.5B (7B fp32 init OOMs the 32GB cards in the pool, 15GB per run).
   areal-align) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; HHRLHF_PREP=1 ;;
@@ -107,6 +111,19 @@ uv pip install --system \
 VLLM_TARGET_DEVICE=empty uv pip install --system --no-deps --no-build-isolation \
   -e "$VLLM_SRC"
 python -c "import torch, torch_npu, vllm, vllm_ascend; from vllm.entrypoints.openai.utils import validate_json_request; print(f'vllm {vllm.__version__} + vllm-ascend 0.22.1rc1 layout OK; torch {torch.__version__}, torch_npu {torch_npu.__version__}')"
+
+# -------------------------------------------------------
+# 1c. hermes profile: the agent runtime package. The model is the
+# standard shared-cache Qwen2.5-1.5B-Instruct (hermes-agent itself is
+# model-agnostic - it drives whatever OpenAI-compatible endpoint the
+# rollout engine serves); the Agent Service imports
+# examples.hermes.hermes.HermesAgent from the target checkout.
+# -------------------------------------------------------
+if [[ "$HERMES_PREP" == 1 ]]; then
+  uv pip install --system \
+    --index-url https://mirrors.aliyun.com/pypi/simple \
+    hermes-agent==0.19.0
+fi
 
 # -------------------------------------------------------
 # 2. Runtime Environment setup.

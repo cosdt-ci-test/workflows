@@ -25,33 +25,37 @@ scan:
 #   processor warmup + tokenizer 深拷贝）在慢机上会超，RL 条目统一
 #   +rollout.setup_timeout=1800 兜底。
 supported:
-  # # Qwen2.5-VL-3B Geometry3K GRPO（双卡，2026-09-27 实测跑通）
-  # - path: examples/vlm/geometry3k_grpo.py
-  #   profile: areal-vlm-grpo
-  #   runner: linux-aarch64-a2-2
-  #   npu_devices: '0,1'
-  #   image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
-  #   overlay_args:
-  #     - --config examples/vlm_npu/qwen2_5_vl_3b_geometry3k_grpo.yaml
-  #     - scheduler.type=local
-  #     - cluster.n_gpus_per_node=2
-  #     - rollout.backend=vllm:d1p1t2
-  #     - actor.backend=fsdp:d2p1t1
-  #     - +actor.fsdp.offload_params=true
-  #     - +actor.weight_update_mode=disk
-  #     - actor.path=${AREAL_MODEL_PATH}
-  #     - actor.mb_spec.max_tokens_per_mb=1024
-  #     - ref.mb_spec.max_tokens_per_mb=1024
-  #     - vllm.gpu_memory_utilization=0.3
-  #     - gconfig.max_new_tokens=64
-  #     - gconfig.n_samples=1
-  #     - train_dataset.batch_size=2
-  #     - valid_dataset.batch_size=2
-  #     - +train_dataset.setup_timeout=600
-  #     - +valid_dataset.setup_timeout=600
-  #     - +total_train_steps=1
-  #     - vllm.max_model_len=8576
-  #   timeout_minutes: 60
+  # Qwen2.5-VL-3B Geometry3K GRPO（双卡，2026-09-27 实测跑通）
+  - path: examples/vlm/geometry3k_grpo.py
+    profile: areal-vlm-grpo
+    runner: linux-aarch64-a2-2
+    npu_devices: '0,1'
+    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
+    overlay_args:
+      - --config examples/vlm_npu/qwen2_5_vl_3b_geometry3k_grpo.yaml
+      - scheduler.type=local
+      - cluster.n_gpus_per_node=2
+      - rollout.backend=vllm:d1p1t2
+      # mm server 预热（processor warmup + tokenizer 深拷贝池）在慢机上超
+      # 默认 300s 健康等待（本次 0.22.1 栈实测复现），与其余 RL 条目统一
+      # 1800s 兜底。
+      - +rollout.setup_timeout=1800
+      - actor.backend=fsdp:d2p1t1
+      - +actor.fsdp.offload_params=true
+      - +actor.weight_update_mode=disk
+      - actor.path=${AREAL_MODEL_PATH}
+      - actor.mb_spec.max_tokens_per_mb=1024
+      - ref.mb_spec.max_tokens_per_mb=1024
+      - vllm.gpu_memory_utilization=0.3
+      - gconfig.max_new_tokens=64
+      - gconfig.n_samples=1
+      - train_dataset.batch_size=2
+      - valid_dataset.batch_size=2
+      - +train_dataset.setup_timeout=600
+      - +valid_dataset.setup_timeout=600
+      - +total_train_steps=1
+      - vllm.max_model_len=8576
+    timeout_minutes: 60
   # Hermes 在线 RL（唯一覆盖 online 模式 + agent service + per-session key
   # 链路的例子）。config.yaml 默认 CUDA 栈，NPU 全部 overlay：rollout sglang
   # （NPU 无 SGLang，换 config 自带的 vllm 段）、actor megatron（换 fsdp 与
@@ -78,6 +82,7 @@ supported:
       - gconfig.max_new_tokens=256
       - +rollout.setup_timeout=1800
       - total_train_steps=1
+      - total_train_epochs=1
     timeout_minutes: 90
   # # GSM8K GRPO（上游 NPU 专用配置 gsm8k_grpo_npu.yaml，实测跑通）
   # - path: examples/math/gsm8k_rl.py
@@ -325,6 +330,7 @@ supported:
   #     - +valid_dataset.setup_timeout=600
   #     - +total_train_steps=1
   #   timeout_minutes: 60
+  
 unsupported:
   # UPSTREAM_BUG：clevr SFT loader 读错 processor 键名、且不判空。
   # transformers 5.x 起 Qwen-VL 处理器把该字段放在 mm_token_type_ids（Qwen2-VL /
@@ -483,6 +489,16 @@ unsupported:
   - examples/hermes/hermes_loop.py
   - examples/hermes/set_reward.py
   - examples/hermes/start_session.py
+  # profile 性能剖析三件套：CUDA 专属工具链——启动器采集 nvidia-smi.csv、
+  # postprocess 按 CPU/CUDA API/GPU kernels 事件类别拆 kernel trace、
+  # memory 快照走 PyTorch CUDA allocator，NPU 均无对应产物；上游 README
+  # 明示需 8×GPU 环境（"CUDA traces and memory snapshots cannot be
+  # produced"），配套 yaml 为 megatron 8 卡 + Qwen3-30B-A3B。
+  # train_sft_profile.py 的 SFT 本体可跑（确定性 fake 数据），可选后续：
+  # 若要 128K 长序列 NPU SFT 冒烟，可 overlay（fsdp + 小模型）单独升格。
+  - examples/profile/postprocess_profile.py
+  - examples/profile/run_qwen3_30b_a3b_sft_profile.sh
+  - examples/profile/train_sft_profile.py
   # 特殊两条：countdown.py 是数据生成 CLI（CI setup 第 6 节将其作为工具
   # 运行，被守卫的入口是同目录 train.py）；gsm8k_eval.py 是 gsm8k_rl_mt
   # 的评估器（被调用非入口，且自建 scheduler 未初始化 DataController——
@@ -491,15 +507,10 @@ unsupported:
   - examples/math/gsm8k_eval.py
 
   # =====================================================================
-  # ===== 待验证（仅可执行入口）：以下 9 条尚未在 NPU 上跑通，
+  # ===== 待验证（仅可执行入口）：以下 6 条尚未在 NPU 上跑通，
   # ===== supported / unsupported 归属未判定，先统一挂 unsupported，
   # ===== 验证后逐条迁移。
   # =====================================================================
-  # profile 性能剖析：SFT profile 入口（确定性 fake 128K 样本）+ 启动器 +
-  # 产物后处理 CLI
-  - examples/profile/postprocess_profile.py
-  - examples/profile/run_qwen3_30b_a3b_sft_profile.sh
-  - examples/profile/train_sft_profile.py
   # swe：SWE-bench 代理模式 RL 入口 + sglang radix cache 补丁 CLI
   - examples/swe/apply_sgl_radix_cache_patch.py
   - examples/swe/train_swe_rl.py

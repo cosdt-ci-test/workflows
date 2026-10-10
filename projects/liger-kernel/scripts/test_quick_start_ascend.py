@@ -10,6 +10,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
+# This entry is launched directly by the quick-start workflow.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+for _path in (_REPO_ROOT / 'src', _REPO_ROOT):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
+
 from workflows.markdown_doc_test_base import MarkdownDocTestBase, TestCommand
 from workflows.model_cache import (
     ensure_safetensors,

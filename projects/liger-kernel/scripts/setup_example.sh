@@ -19,6 +19,8 @@ if [[ $# -lt 1 ]]; then
 fi
 
 PROFILE="$1"
+# Apply to every pip invocation, including transitive ModelScope dependencies.
+export PIP_CONSTRAINT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/constraints-npu.txt"
 
 ASCEND_PIP_INDEX=https://repo.huaweicloud.com/ascend/repos/pypi
 TRITON_ASCEND_INDEX=https://triton-ascend.osinfra.cn/pypi/simple
@@ -173,7 +175,7 @@ setup_liger_hf_trainer() {
   # verifier: examples/huggingface/training.py byte-identical run on trl 0.12.1 + 4.57.1.
   python -m pip install "transformers==4.57.1" "trl==0.12.1" \
     "datasets>=3.0.0" "accelerate>=0.34" "sentencepiece" "pillow"
-  python -c "import transformers, trl; print('transformers', transformers.__version__, 'trl', trl.__version__)"
+  verify_data_stack
   stage_fixtures
   # load_dataset(path) needs a DIRECTORY containing a train split file; a
   # bare .jsonl path raises FileNotFoundError. The staging dir gives that.
@@ -209,6 +211,7 @@ setup_liger_medusa() {
   python -m pip install "transformers==4.57.1" "trl==0.12.1" \
     "datasets>=3.0.0" "accelerate>=0.34" "scikit-learn" "safetensors" "sentencepiece" "pillow"
   python -c "import transformers, sklearn, safetensors; print('transformers', transformers.__version__)"
+  verify_data_stack
   stage_fixtures
   ms_download_models "LIGER_MODEL_PATH=Qwen/Qwen2.5-0.5B-Instruct"
   printf 'LIGER_FIXTURE_JSON=%s\n' "$TARGET_ROOT/fixtures/ci_sharegpt_8.json" >> "$GITHUB_ENV"
@@ -225,6 +228,7 @@ setup_liger_medusa() {
 setup_liger_multimodal() {
   python -m pip install "transformers==4.57.1" "trl==0.12.1" \
     "datasets>=3.0.0" "accelerate>=0.34" "sentencepiece" "pillow"
+  verify_data_stack
   # AutoProcessor for Qwen2-VL pulls in the torchvision image backend, which
   # the plain text stack does not carry. 0.24.0 matches torch 2.9.0.
   python -m pip install "torchvision==0.24.0"
@@ -292,6 +296,7 @@ setup_liger_orpo() {
   # switch; the chunked fused ORPO loss and its autograd still execute.
   python -m pip install "transformers==4.57.1" "trl==0.12.1" \
     "datasets==3.6.0" "accelerate>=1.0,<2" sentencepiece pillow
+  verify_data_stack
   verify_torch_stack
   ms_download_models "LIGER_ORPO_MODEL_PATH=LLM-Research/Llama-3.2-1B-Instruct"
   python - <<'PY'
@@ -333,6 +338,28 @@ for row in data:
 with Path(os.environ['GITHUB_ENV']).open('a') as handle:
     handle.write(f'LIGER_ORPO_WORK={work}\n')
 print('ORPO local ModelScope Llama + eight preference pairs ready; fixed upstream 100 steps retained')
+PY
+}
+
+verify_data_stack() {
+  python - <<'PY'
+import tempfile
+from pathlib import Path
+
+import numpy
+import pandas
+import pyarrow
+import datasets
+from datasets import Dataset, load_dataset
+
+print('data stack:', 'numpy', numpy.__version__, 'pandas', pandas.__version__,
+      'pyarrow', pyarrow.__version__, 'datasets', datasets.__version__)
+with tempfile.TemporaryDirectory(prefix='liger-data-probe-') as work:
+    path = Path(work) / 'train.parquet'
+    Dataset.from_list([{'text': 'NPU CI dependency probe'}]).to_parquet(str(path))
+    restored = load_dataset('parquet', data_files={'train': str(path)}, split='train')
+    if restored[0]['text'] != 'NPU CI dependency probe':
+        raise SystemExit('data stack parquet round-trip failed')
 PY
 }
 

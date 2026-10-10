@@ -28,4 +28,4 @@ jobs:
       upstream_repo: linkedin/Liger-Kernel
       doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/liger-kernel/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
       doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/liger-kernel/docs/Quick-start-Ascend.md
-      test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1
+      test_command: python scripts/test_quick_start_ascend.py -v 2>&1

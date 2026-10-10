@@ -290,59 +290,6 @@ PY
   printf 'LIGER_VL_DATASET_PATH=%s\n' "$TARGET_ROOT/fixtures/cauldron_ai2d" >> "$GITHUB_ENV"
 }
 
-setup_liger_orpo() {
-  # No source patch: FSDP is required by the upstream ORPO trainer. Its
-  # optional torch.compile optimization is disabled by the stock torch ENV
-  # switch; the chunked fused ORPO loss and its autograd still execute.
-  python -m pip install "transformers==4.57.1" "trl==0.12.1" \
-    "datasets==3.6.0" "accelerate>=1.0,<2" sentencepiece pillow
-  verify_data_stack
-  verify_torch_stack
-  ms_download_models "LIGER_ORPO_MODEL_PATH=LLM-Research/Llama-3.2-1B-Instruct"
-  python - <<'PY'
-import json
-import os
-from pathlib import Path
-
-from datasets import Dataset, load_dataset
-from transformers import AutoConfig, AutoTokenizer
-
-env_lines = Path(os.environ['GITHUB_ENV']).read_text().splitlines()
-snapshot = Path(next(line.split('=', 1)[1] for line in reversed(env_lines)
-                     if line.startswith('LIGER_ORPO_MODEL_PATH=')))
-# CI_OUTPUT_DIR belongs to the engine's run step, not setup. Stage assets
-# beside the other fixtures and forward the absolute path via GITHUB_ENV.
-work = Path(os.environ['TARGET_ROOT']) / 'fixtures' / 'orpo-work'
-alias = work / 'meta-llama/Llama-3.2-1B-Instruct'
-alias.parent.mkdir(parents=True, exist_ok=True)
-if alias.exists() or alias.is_symlink():
-    if not alias.is_symlink() or alias.resolve() != snapshot.resolve():
-        raise SystemExit(f'refusing to replace existing ORPO asset: {alias}')
-else:
-    alias.symlink_to(snapshot, target_is_directory=True)
-cfg = AutoConfig.from_pretrained(alias, local_files_only=True)
-if cfg.model_type != 'llama':
-    raise SystemExit('ORPO requires the original Llama architecture')
-tokenizer = AutoTokenizer.from_pretrained(alias, local_files_only=True)
-rows = [{'prompt': f'State the number {i} in a short sentence.',
-         'chosen': f'The number is {i}.', 'rejected': 'I cannot answer.'} for i in range(8)]
-dataset_dir = work / 'trl-lib/tldr-preference'
-dataset_dir.mkdir(parents=True, exist_ok=True)
-Dataset.from_list(rows).to_parquet(str(dataset_dir / 'train.parquet'))
-os.chdir(work)
-os.environ['HF_DATASETS_OFFLINE'] = '1'
-data = load_dataset('trl-lib/tldr-preference', split='train')
-if len(data) != 8 or set(data.column_names) != {'prompt', 'chosen', 'rejected'}:
-    raise SystemExit('ORPO exact native local loader did not return the eight preferences')
-for row in data:
-    if any(not tokenizer(row[field])['input_ids'] for field in ('prompt', 'chosen', 'rejected')):
-        raise SystemExit('ORPO fixture contains an empty token sequence')
-with Path(os.environ['GITHUB_ENV']).open('a') as handle:
-    handle.write(f'LIGER_ORPO_WORK={work}\n')
-print('ORPO local ModelScope Llama + eight preference pairs ready; fixed upstream 100 steps retained')
-PY
-}
-
 verify_data_stack() {
   python - <<'PY'
 import tempfile

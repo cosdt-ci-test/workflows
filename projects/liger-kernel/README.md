@@ -27,8 +27,8 @@ PyPI triton，幂等判断用 `pip show triton-ascend`。
 ## supported 清单
 
 已有三条单卡任务在手动 workflow #5（commit `33c39b2`）全部通过，包含实际训练步骤和
-三个成功的 `result.json`；被测版本为 v0.8.3。当前共五条任务，两卡 Qwen FSDP 与
-ORPO 仍待修复依赖冲突后的手动 workflow 验证。
+三个成功的 `result.json`；被测版本为 v0.8.3。Run #9 已验证四条 SFT/Medusa 配方全部通过，包括两卡 Qwen FSDP。
+ORPO 的实际 NPU 损失求导失败，现退回 unsupported；当前 supported 共四条。
 
 | example | 作用 | 压规模方式 |
 |---|---|---|
@@ -36,9 +36,8 @@ ORPO 仍待修复依赖冲突后的手动 workflow 验证。
 | `examples/huggingface/run_qwen.sh` | 上述 SFT 的两卡 FSDP 配方，验证 torchrun、HCCL 和 full shard | 复刻上游 launcher；改用 ModelScope 0.5B、2 卡、2 步、每卡 batch 1、本地 8 行数据 |
 | `examples/medusa/train.py` | 冻结 backbone、注入 medusa 多头，用 `fused_linear_cross_entropy` 训练多 token 预测头 | `--max_steps 1`、`--medusa_num_heads 2`、`--medusa_return True` |
 | `examples/huggingface/training_multimodal.py` | Qwen2-VL 图文 SFT，monkey-patch 多模态 RoPE / RMSNorm / SwiGLU / FLCE | `--max_steps 1`、batch 1、seq 256，数据换 4 行本地 fixture |
-| `examples/alignment/run_orpo.py` | 两卡 FSDP ORPO 偏好对齐，验证 fused ORPO loss | ModelScope Llama-3.2-1B、本地 8 对偏好数据，保留上游固定 100 步 |
 
-五条都不改源码。文本训练与 Medusa 模型走 ModelScope 的 `Qwen/Qwen2.5-0.5B-Instruct`；多模态那条
+四条都不改源码。文本训练与 Medusa 模型走 ModelScope 的 `Qwen/Qwen2.5-0.5B-Instruct`；多模态那条
 走 ModelScope 的 `Qwen/Qwen2-VL-2B-Instruct`。设备由 liger 的 `infer_device()` 与
 accelerate 自动落到 NPU。前两条带 upstream 自带的 `EfficiencyCallback`，其
 `on_init_end` 强制要求 `--include_num_input_tokens_seen` 与 `--logging_steps 1`，
@@ -74,7 +73,7 @@ pandas 2.2.3 和 datasets 3.6.0；每个 profile 在准备数据前验证导入�
 Run #8 的单卡 SFT、Medusa 和图文 SFT 已通过。两卡 Qwen FSDP 在参数解析时
 失败，现已给 `--fsdp "full_shard auto_wrap"` 保留单个字符串参数；ORPO 在 setup
 阶段误用了仅 run 阶段存在的 `CI_OUTPUT_DIR`，现改在 `$TARGET_ROOT/fixtures/orpo-work`
-准备离线资产，并通过 `GITHUB_ENV` 传给 runner。两条两卡配方仍待下一轮实跑。
+准备离线资产，并通过 `GITHUB_ENV` 传给 runner。后续 Run #9 的 Qwen FSDP 已通过；ORPO 进入训练后出现的真实兼容错误见下文。
 
 `transformers==4.57.1` + `trl==0.12.1`。这个窗口被 example 源码钉死：
 
@@ -89,14 +88,16 @@ Run #8 的单卡 SFT、Medusa 和图文 SFT 已通过。两卡 Qwen FSDP 在参�
 
 ## unsupported
 
-2026-10-10 全量复核更新：最新 release 为 `v0.8.4`，新增两卡 FSDP ORPO 配方，
-当前 supported 为 **5 条**。ORPO 用上游 FSDP 配置、ModelScope 原架构模型和原生
-本地偏好数据加载，保留固定100步；仅关闭可选 loss 编译优化，不改示例源码。
-此条仍待 Actions 验证。当前 unsupported 仅保留 Lightning 和两条 Megatron；
-库、回调与重复启动包装移出清单，具体功能和接入限制记录在 manifest 注释中。
+当前 supported 为 **4 条**，均已在 Run #9 通过。unsupported 保留 ORPO、
+Lightning 和两条 Megatron，具体功能与限制在 manifest 中以中文注释记录。
 
-`examples/lightning/training.py` 和两条 `examples/megatron/*.py` 留在 unsupported，
-具体阻碍如下：
+- ORPO：Run #9 已完成本地资产准备和两卡 FSDP 初始化，但首次训练步在
+  `fused_linear_preference.py` 的 `torch.func.grad_and_value` 内调用
+  `orpo_loss.py` 的 `F.logsigmoid` 时，两 rank 均报
+  `NotImplementedError: Cannot access storage of TensorWrapper`。
+  关闭可选 torch.compile 后，该原生求导路径仍失败；不是模型下载、CLI 或卡数问题。
+  在不替换损失、不 monkey-patch torch.func、不修改上游源码的边界下，暂不调度。
+  恢复前需先在 NPU 上验证同一 logsigmoid 求导路径，再验证两卡完整训练。
 - Lightning：`pl.Trainer(accelerator=infer_device())` 传 `"npu"`，而 Lightning 只注册
   cpu/cuda/mps/xla，且 `torch.optim.AdamW(fused=True)` 在 NPU 无 `_fused_adamw_` 实现；
   源码还把 MMLU 拆出固定 4096 行验证集，不能用很小的 CI fixture。
@@ -115,6 +116,7 @@ artifact 由公共引擎命名为 `liger-kernel-examples-<run_id>-<job_index>`�
 
 与 Accelerate examples 一样，入口集中在 `scripts/setup_example.sh` 和
 `scripts/run_example.sh`，依赖约束在 `constraints-npu.txt`，本地数据在 `fixtures/`。
-ORPO 两卡启动与结果校验已合入 `run_example.sh`，不再单独维护 `run_orpo.sh`。
+ORPO 已依据 Run #9 的真实兼容错误退回 unsupported，并删除不再调度的
+setup/launcher 配方；不再单独维护 `run_orpo.sh`。
 项目不再保留 `tests/` 目录；独立 quick-start workflow 使用
 `scripts/test_quick_start_ascend.py` 执行文档验证，不影响 examples 启动契约。

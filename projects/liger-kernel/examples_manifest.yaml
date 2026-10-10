@@ -65,15 +65,9 @@ supported:
     overlay_args: ['--model_name ${LIGER_VL_MODEL_PATH}', '--dataset ${LIGER_VL_DATASET_PATH}', '--dataset_subset ai2d', '--dataset_split train', '--max_seq_length 256', '--dataset_text_field texts', '--max_steps 1', '--per_device_train_batch_size 1', '--bf16', '--eval_strategy no', '--save_strategy no', '--report_to none', '--logging_steps 1', '--include_num_input_tokens_seen', '--use_liger True', '--output_dir ${CI_OUTPUT_DIR}/multimodal']
     timeout_minutes: 240
 
-  # ORPO 偏好对齐；两卡 FSDP/本地 Llama 与 8 对数据，保留原生 100 步，待实跑。
-  - path: examples/alignment/run_orpo.py
-    profile: liger_orpo
-    runner: linux-aarch64-a2-2
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args: []
-    timeout_minutes: 240
-
 unsupported:
+  # ORPO 偏好对齐；#9 两卡 FSDP 首步在 grad_and_value/logsigmoid 报 TensorWrapper 无 storage，当前 NPU 栈需上游修复。
+  - examples/alignment/run_orpo.py
   # Lightning SFT；尝试本地 MMLU/小模型后，Trainer 无 NPU 注册且 fused AdamW 无切换参数。
   - examples/lightning/training.py
   # Megatron 内核替换；两卡规模可满足，但必经 cuda.set_device/.cuda 和 NCCL。

@@ -4,6 +4,7 @@
 # relative to the examples root; otherwise path itself must be launchable.
 # Overlay CLI args come from OVERLAY_ARGS (JSON array). Never git add/commit/push.
 set -euo pipefail
+PROJECT_SCRIPT_DIR="${DEEPSPEED_PROJECT_SCRIPTS:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 
 if [[ $# -lt 1 ]]; then
   echo "usage: $0 <example-relpath>" >&2
@@ -478,6 +479,26 @@ run_autotp_equivalence() {
     "$metrics_dir/autotp1.jsonl" "$metrics_dir/autotp4.jsonl" \
     --print-every 1
 }
+
+source "$PROJECT_SCRIPT_DIR/run_expansion_examples.sh"
+case "$entry_key" in
+  benchmarks/pin_memory/model_tensor_offload/bench.py|benchmarks/pin_memory/activation_offload/bench.py|benchmarks/pin_memory/h2d_d2h/bench.py|training/DeepSpeed-ZenFlow/finetuning/finetune_llama.py|training/opsd/main.py|training/opsd/test_student_autotp_zero3.py|training/opsd/test_teacher_autotp_zero3.py)
+    run_expansion_example
+    exit 0
+    ;;
+esac
+
+source "$PROJECT_SCRIPT_DIR/run_inference_examples.sh"
+if is_new_inference_entry; then
+  run_new_inference
+  exit 0
+fi
+
+source "$PROJECT_SCRIPT_DIR/run_training_expansion.sh"
+if is_training_expansion_entry; then
+  run_training_expansion_executor
+  exit 0
+fi
 
 case "$entry_key" in
   training/cifar/run_ds_moe.sh)

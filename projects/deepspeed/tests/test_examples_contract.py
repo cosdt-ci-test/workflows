@@ -29,12 +29,40 @@ class DeepSpeedExamplesContractTests(unittest.TestCase):
         cls.run_script = RUN_SCRIPT.read_text(encoding="utf-8")
         cls.setup_script = SETUP_SCRIPT.read_text(encoding="utf-8")
 
-    def test_guard_has_nineteen_unique_matrix_entries(self) -> None:
-        self.assertEqual(len(self.supported), 19)
+    def test_guard_has_thirty_eight_unique_matrix_entries(self) -> None:
+        self.assertEqual(len(self.supported), 38)
         names = [str(PurePosixPath(entry["path"]).with_suffix(""))
                  for entry in self.supported]
         self.assertEqual(len(names), len(set(names)), names)
         self.assertFalse(set(self.by_path) & self.unsupported)
+
+    def test_new_expansion_paths_have_profiles_and_do_not_overlap(self) -> None:
+        scripts = "\n".join(path.read_text(encoding="utf-8")
+                            for path in (PROJECT / "scripts").glob("*.sh"))
+        for entry in self.supported:
+            self.assertIn(f"setup_{entry['profile']}()", scripts)
+        promoted = {
+            "training/opsd/main.py", "training/opsd/test_student_autotp_zero3.py",
+            "training/opsd/test_teacher_autotp_zero3.py",
+            "training/deepspeed_finetune_demo/finetune_llama.py",
+            "training/DeepSpeed-ZenFlow/finetuning/finetune_llama.py",
+            "training/stable_diffusion/train_sd_distil_lora.py",
+            "inference/huggingface/automatic-speech-recognition/test-wav2vec2.py",
+            "inference/huggingface/translation/test-t5-base.py",
+        }
+        self.assertTrue(promoted <= set(self.by_path))
+        self.assertFalse(promoted & self.unsupported)
+        for dead in ("compression/bert/run_glue_lkd.py", "compression/cifar/train.py",
+                     "compression/gpt2/run_clm_no_trainer.py", "training/MoQ/run_glue.py"):
+            self.assertNotIn(dead, self.unsupported)
+
+    def test_all_unsupported_comments_precede_entries(self) -> None:
+        text = MANIFEST.read_text(encoding="utf-8").split("unsupported:", 1)[1]
+        lines = text.splitlines()
+        for index, line in enumerate(lines):
+            if line.startswith("  - "):
+                self.assertTrue(index > 0 and lines[index - 1].startswith("  # "), line)
+                self.assertNotIn(" # ", line)
 
     def test_all_runner_sizes_are_registered(self) -> None:
         labels = yaml.safe_load(ACTIONLINT.read_text(encoding="utf-8"))[

@@ -142,6 +142,7 @@ if command == 'deepspeed' and any(arg.endswith('/DeepSpeed-SuperOffload/finetune
                 MOCK_REWARD_SCORES=reward_scores,
                 MOCK_SUPEROFFLOAD_LOSSES=superoffload_losses,
                 COMMAND_RECORD=str(record), GITHUB_RUN_ID="1234",
+                DEEPSPEED_PROJECT_SCRIPTS=str(PROJECT / "scripts"),
             )
             if devices is not None:
                 env["ASCEND_RT_VISIBLE_DEVICES"] = devices

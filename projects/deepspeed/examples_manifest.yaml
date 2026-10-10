@@ -298,13 +298,222 @@ supported:
       - '--output_dir ${CI_OUTPUT_DIR}/superoffload'
     timeout_minutes: 120
 
+  # 模型张量卸载对比；单卡 ZeRO-3/native mlock，合成小模型/两臂各 3 步，待实跑.
+  - path: benchmarks/pin_memory/model_tensor_offload/bench.py
+    profile: ds_pin_memory
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--hidden 4'
+      - '--layers 2'
+      - '--batch 1'
+      - '--seq 16'
+      - '--steps 3'
+      - '--warmup 1'
+      - '--zero-stage 3'
+    timeout_minutes: 120
+  # 激活卸载对比；单卡 NPU checkpoint/native pin，两臂各 3 步，待实跑。
+  - path: benchmarks/pin_memory/activation_offload/bench.py
+    profile: ds_pin_memory
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--hidden 64'
+      - '--layers 2'
+      - '--batch 1'
+      - '--seq 32'
+      - '--steps 3'
+      - '--warmup 1'
+    timeout_minutes: 120
+  # 主机/NPU 双向拷贝；三种 1MiB 缓冲区各 3 次，不冒充 CUDA host registration，待实跑。
+  - path: benchmarks/pin_memory/h2d_d2h/bench.py
+    profile: ds_pin_memory
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--sizes-mib 1'
+      - '--warmup 1'
+      - '--iters 3'
+      - '--skip-native-register'
+    timeout_minutes: 120
+  # ZenFlow LLM 微调；OPT-125M/16 行本地 Alpaca，单卡 CPU optimizer offload 与保存，待实跑。
+  - path: training/DeepSpeed-ZenFlow/finetuning/finetune_llama.py
+    profile: ds_zenflow_finetune
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--model_name "${OPT_125M_PATH}"'
+      - '--lr 0.00002'
+      - '--batch_size 1'
+      - '--num_train_epochs 1'
+      - '--output_dir "${CI_OUTPUT_DIR}/zenflow-finetune-checkpoint"'
+    timeout_minutes: 120
+  # OPSD 在线蒸馏；小模型/3 步 rollout、教师 CPU 缓存与 streamed KL，待实跑。
+  - path: training/opsd/main.py
+    profile: ds_opsd
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args: []
+    timeout_minutes: 120
+  # Student TP/ZeRO-3 smoke；两卡小模型 forward/backward/step，关闭可选 CPU optimizer offload，待实跑。
+  - path: training/opsd/test_student_autotp_zero3.py
+    profile: ds_opsd
+    runner: linux-aarch64-a2-2
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args: []
+    timeout_minutes: 120
+  # Teacher TP/ZeRO-3 smoke；两卡小模型参数 CPU offload 与 logit cache，待实跑。
+  - path: training/opsd/test_teacher_autotp_zero3.py
+    profile: ds_opsd
+    runner: linux-aarch64-a2-2
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args: []
+    timeout_minutes: 120
+  # BERT 推理计时；本地模型/4 次 DS engine forward 与 NPU 同步，待实跑。
+  - path: benchmarks/inference/bert-bench.py
+    profile: ds_legacy_inference_bench
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--model "${BERT_BASE_CASED_PATH}"'
+      - '--deepspeed'
+      - '--dtype fp32'
+      - '--trials 4'
+    timeout_minutes: 120
+  # GPT 推理计时；OPT-125M/4 次×8 token，DS engine 与 NPU 同步，待实跑。
+  - path: benchmarks/inference/gpt-bench.py
+    profile: ds_legacy_inference_bench
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--model "${OPT_125M_PATH}"'
+      - '--deepspeed'
+      - '--dtype fp32'
+      - '--max-tokens 8'
+      - '--trials 4'
+    timeout_minutes: 120
+  # HF/DS 生成一致性；OPT-125M/2 个 prompt，强制断言零 mismatch，待实跑。
+  - path: inference/huggingface/text-generation/ds-hf-compare.py
+    profile: ds_hf_ds_compare
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--model "${OPT_125M_PATH}"'
+      - '--dtype float32'
+      - '--num_inputs 2'
+      - '--min_length 12'
+      - '--max_length 16'
+      - '--print_outputs'
+    timeout_minutes: 120
+  # BERT-large 填词；本地同名 ModelScope 权重，单卡短序列 DS 推理，待实跑。
+  - path: inference/huggingface/fill-mask/test-bert.py
+    profile: ds_fill_mask_bert
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args: []
+    timeout_minutes: 120
+  # ELECTRA 填词；本地 generator 权重，两卡 TP=2 的显式切分策略，待实跑。
+  - path: inference/huggingface/fill-mask/test-electra.py
+    profile: ds_fill_mask_electra
+    runner: linux-aarch64-a2-2
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args: []
+    timeout_minutes: 120
+  # RoBERTa-large 填词；本地权重与两卡 TP=2，验证 NPU 结果，待实跑。
+  - path: inference/huggingface/fill-mask/test-roberta.py
+    profile: ds_fill_mask_roberta
+    runner: linux-aarch64-a2-2
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args: []
+    timeout_minutes: 120
+  # T5 翻译；本地权重与两卡 TP=2，模型生成配置限制 8 token，待实跑。
+  - path: inference/huggingface/translation/test-t5-base.py
+    profile: ds_t5_translation
+    runner: linux-aarch64-a2-2
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args: []
+    timeout_minutes: 120
+  # HybridEngine rollout；OPT-125M/合成 token/2 次采样，验证原生 NPU 推理，待实跑。
+  - path: benchmarks/opsd/benchmark_hybrid_engine_rollout.py
+    profile: ds_hybrid_rollout
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--model "${OPT_125M_PATH}"'
+      - '--dtype bf16'
+      - '--batch-sizes 1'
+      - '--samples-per-prompt 1'
+      - '--prompt-lengths 16'
+      - '--response-lengths 4'
+      - '--warmup 1'
+      - '--iterations 2'
+      - '--output "${CI_OUTPUT_DIR}/hybrid-rollout-profile.json"'
+    timeout_minutes: 120
+  # Wav2Vec2 CTC 推理；两条合成音频/本地同名模型，验证 NPU logits 而非识别准确率，待实跑。
+  - path: inference/huggingface/automatic-speech-recognition/test-wav2vec2.py
+    profile: ds_asr_ctc
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args: []
+    timeout_minutes: 120
+
+  # LLM 微调；SmolLM2-135M/匹配 rotary 的依赖，两卡 ZeRO-2/3 步，待实跑。
+  - path: training/deepspeed_finetune_demo/finetune_llama.py
+    profile: ds_finetune_demo
+    runner: linux-aarch64-a2-2
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--model_name "${SMOLLM2_135M_PATH}"'
+      - '--dataset_name "${ALPACA_FINETUNE_DIR}"'
+      - '--batch_size 2'
+      - '--num_train_epochs 1'
+      - '--max_length 128'
+      - '--max_steps 3'
+      - '--eval_steps 0'
+      - '--checkpoint_steps 0'
+      - '--output_dir "${CI_OUTPUT_DIR}/finetune-demo"'
+    timeout_minutes: 120
+  # SD 教师 CFG 蒸馏；本地 SD1.5/8 幅图，两卡 ZeRO-2 FP32/3 步全 UNet 训练，待实跑。
+  - path: training/stable_diffusion/train_sd_distil_lora.py
+    profile: ds_sd_distil
+    runner: linux-aarch64-a2-2
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--pretrained_model_name_or_path "${SD15_PATH}"'
+      - '--default_prompt "a colorful geometric shape"'
+      - '--resolution 64'
+      - '--center_crop'
+      - '--train_batch_size 1'
+      - '--gradient_accumulation_steps 1'
+      - '--max_train_steps 3'
+      - '--learning_rate 0.000005'
+      - '--lr_scheduler constant'
+      - '--lr_warmup_steps 0'
+      - '--mixed_precision no'
+      - '--report_to none'
+      - '--checkpointing_steps 1000'
+      - '--dataloader_num_workers 0'
+      - '--seed 42'
+      - '--output_dir "${CI_OUTPUT_DIR}/sd-distil"'
+    timeout_minutes: 180
+  # OPSD decode 对比；小模型/16 prompt token，原生 raw 与 HybridEngine 各 2 次，待实跑。
+  - path: training/opsd/benchmarks/bench_decode_1p1r.py
+    profile: ds_opsd_decode
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--model "${QWEN3_06B_PATH}"'
+      - '--prompt-len 16'
+      - '--max-new-tokens 4'
+      - '--num-warmup 1'
+      - '--num-iters 2'
+    timeout_minutes: 120
+
 unsupported:
   # BF16 主权重训练对比；torch.cuda 和 CUDA autocast 硬绑定。
   - training/bf16_master_weight/train.py
   # CIFAR/AlexNet 流水线训练；硬绑定 CUDA 设备和 NCCL。
   - training/pipeline_parallelism/train.py
-  # SFT/RW/RLHF 全流程编排；上游配方依赖大模型及多 GPU/NCCL。
-  - applications/DeepSpeed-Chat/e2e_rlhf.py
   # 交互式文本聊天；pipeline 硬编码 cuda:0，需已训练模型。
   - applications/DeepSpeed-Chat/inference/chatbot.py
   # 交互式视觉聊天；硬绑定 .cuda()，需 Llama-2/视觉模型检查点。
@@ -313,11 +522,11 @@ unsupported:
   - applications/DeepSpeed-VisualChat/eval/batch_generation.py
   # 视觉聊天训练；硬绑定 CUDA，需 Llama-2、CLIP 和大规模图文数据。
   - applications/DeepSpeed-VisualChat/training/main.py
-  # AutoSP 正确性矩阵编排；依赖多卡训练及 loss 校验，尚未适配。
+  # AutoSP 正确性编排；子训练必经 ring_attention/flash_attn CUDA 扩展。
   - benchmarks/autosp/correctness/correctness.sh
-  # AutoSP loss 采集；硬编码 Llama-2-7B，需受限模型和多卡环境。
+  # AutoSP loss 对比；调用依赖 CUDA flash_attn 的 run.py，换小模型仍受阻。
   - benchmarks/autosp/correctness/correctness_run.py
-  # 序列并行训练；硬绑定 torch.cuda，默认 Llama-2-7B，尚未适配。
+  # 序列并行训练；必经 import ring_attention/flash_attn，eager 参数也不能绕过 CUDA 扩展。
   - benchmarks/autosp/run.py
   # all_gather 吞吐基准；torch.cuda.Event 计时硬绑定 CUDA。
   - benchmarks/communication/all_gather.py
@@ -331,86 +540,56 @@ unsupported:
   - benchmarks/communication/pt2pt.py
   # 多算子通信基准汇总；硬绑定 CUDA 计时，非训练验证。
   - benchmarks/communication/run_all.py
-  # 大模型编译吞吐基准；需多机、CUDA 和 Llama/Mixtral 大模型。
+  # DeepCompile 训练；可选 backend，但 DS compile passes 与 NPU 后端组合待验证，关闭编译会丢失核心功能。
   - benchmarks/deepcompile/run_bench_lm.py
-  # BERT fill-mask 延迟基准；仅测推理性能，尚未纳入看护。
-  - benchmarks/inference/bert-bench.py
   # 推理服务并发压测；依赖外部服务或 MII/vLLM，未接入。
   - benchmarks/inference/deepspeedometer/src/deepspeedometer/benchmark_runner.py
-  # GPT 延迟基准；上游扫描 CUDA kernel/graph 和大模型，未适配。
-  - benchmarks/inference/gpt-bench.py
   # MII 推理吞吐压测；需 MII/vLLM/AzureML 后端及大模型。
   - benchmarks/inference/mii/run_benchmark.py
   # BERT Triton 延迟基准；硬绑定 torch.cuda/NCCL 与 CUDA kernel。
   - benchmarks/inference/triton-bert-benchmark.py
-  # HybridEngine rollout 性能基准；默认 OPT-6.7B，超出 CI 规模。
-  - benchmarks/opsd/benchmark_hybrid_engine_rollout.py
-  # BERT GLUE 蒸馏压缩；硬绑定 torch.cuda.set_device。
-  - compression/bert/run_glue_lkd.py
-  # BERT GLUE 剪枝/量化训练；硬绑定 torch.cuda.set_device。
-  - compression/bert/run_glue_no_trainer.py
-  # CIFAR 通道剪枝训练；model/data.cuda() 硬绑定 CUDA。
-  - compression/cifar/train.py
-  # GPT-2 ZeroQuant 量化；硬绑定 CUDA 设备，需适配。
-  - compression/gpt2/run_clm_no_trainer.py
-  # MATH-500 评测；需 lighteval/vLLM 和剪枝后检查点。
+  # MATH-500 评测；可缩模型和 token，但固定 lighteval vLLM 后端需独立兼容的 Ascend serving 栈。
   - compression/reasoning_aware_compression/bash_script/eval_math500.sh
-  # 推理轨迹采样；默认大规模长文本生成，需裁剪数据和后端适配。
+  # 推理轨迹采样；本地模型/小数据可行，但 HF 仅 CUDA/CPU，ZeRO 后端必经 cuda 张量设备。
   - compression/reasoning_aware_compression/collect_traces.py
-  # NVMe 读取带宽扫描包装；需 NVMe 盘及编译 IO 算子。
-  - deepnvme/ds_io/ds_io_read_sweep.sh
-  # NVMe 读写带宽扫描；需 NVMe 盘和 GDS/async_io 支持。
+  # IO 参数扫描；合并读写包装，原入口固定 1GiB 与并发矩阵，没有 CI 缩规模参数。
   - deepnvme/ds_io/ds_io_sweep.sh
-  # NVMe 写入带宽扫描包装；需 NVMe 盘及编译 IO 算子。
-  - deepnvme/ds_io/ds_io_write_sweep.sh
-  # async_io 加载 CPU 张量；需 NVMe 盘和编译 async_io。
+  # async_io 读取 CPU 张量；临时文件可行，但仅 CPU IO，不验证 NPU。
   - deepnvme/file_access/aio_load_cpu_tensor.py
-  # async_io 加载 GPU 张量；需 NVMe 盘和编译 async_io。
+  # async_io 读取设备张量；可准备小文件，但结果硬调用 .cuda()。
   - deepnvme/file_access/aio_load_gpu_tensor.py
-  # async_io 存储 CPU 张量；需 NVMe 盘和编译 async_io。
+  # async_io 写入 CPU 张量；临时文件可行，但仅 CPU IO，不验证 NPU。
   - deepnvme/file_access/aio_store_cpu_tensor.py
-  # async_io 存储 GPU 张量；需 NVMe 盘和编译 async_io。
+  # async_io 写入设备张量；可准备小文件，但源张量硬编码 device='cuda'。
   - deepnvme/file_access/aio_store_gpu_tensor.py
-  # GDS 加载 GPU 张量；需 NVMe 盘及 GPUDirect Storage。
+  # GDS 读取设备张量；缓冲区硬编码 CUDA，且依赖 CUDA GPUDirect Storage。
   - deepnvme/file_access/gds_load_gpu_tensor.py
-  # GDS 存储 GPU 张量；需 NVMe 盘及 GPUDirect Storage。
+  # GDS 写入设备张量；缓冲区硬编码 CUDA，且依赖 CUDA GPUDirect Storage。
   - deepnvme/file_access/gds_store_gpu_tensor.py
-  # Python 加载 CPU 张量；NVMe IO 演示需专用存储硬件。
+  # Python 读取 CPU 张量；临时文件可行，但仅 CPU IO，不验证 NPU。
   - deepnvme/file_access/py_load_cpu_tensor.py
-  # Python 加载 GPU 张量；NVMe IO 演示需专用存储硬件。
+  # Python 读取设备张量；可准备小文件，但结果硬调用 .cuda()。
   - deepnvme/file_access/py_load_gpu_tensor.py
-  # Python 存储 CPU 张量；NVMe IO 演示需专用存储硬件。
+  # Python 写入 CPU 张量；临时文件可行，但仅 CPU IO，不验证 NPU。
   - deepnvme/file_access/py_store_cpu_tensor.py
-  # Python 存储 GPU 张量；NVMe IO 演示需专用存储硬件。
+  # Python 写入设备张量；可准备小文件，但源张量硬编码 device='cuda'。
   - deepnvme/file_access/py_store_gpu_tensor.py
-  # DeepSpeed 检查点存储基准；需 NVMe 盘及 async_io/GDS。
+  # DeepSpeed 检查点 IO；必经 NCCL、pdb 断点与 CUDA GDS，换小文件不能绕过。
   - deepnvme/model_checkpoint/deepspeed_save_model.py
-  # safetensors 检查点存储对比；需 NVMe 盘。
+  # 模型保存恢复校验；输入、模型及恢复张量硬编码 CUDA。
   - deepnvme/model_checkpoint/torch_save_load_model.py
-  # torch 检查点存储基准；需 NVMe 盘及 GDS/async_io。
+  # 模型检查点 IO；设备模式强制 CUDA GDS，关闭 gpu 后仅测 CPU。
   - deepnvme/model_checkpoint/torch_save_model.py
-  # 张量存储基准；需 NVMe 盘及 GDS/async_io。
+  # 张量检查点 IO；设备模式强制 CUDA GDS，关闭 gpu 后仅测 CPU。
   - deepnvme/model_checkpoint/torch_save_tensor.py
   # HumanEval 代码生成评测；硬绑定 CUDA，需 MII、7B 模型及评测数据。
   - evaluation/inference/human_eval/run_human_eval.py
-  # Wav2Vec2 语音识别；硬编码模型及 LibriSpeech，缺少 CI 缩规模接口。
-  - inference/huggingface/automatic-speech-recognition/test-wav2vec2.py
-  # BERT fill-mask 推理；默认四卡并含 CUDA graph/Triton 路径，待适配。
-  - inference/huggingface/fill-mask/test-bert.py
-  # ELECTRA fill-mask 推理；硬编码四卡 TP，无 CLI 缩规模接口。
-  - inference/huggingface/fill-mask/test-electra.py
-  # RoBERTa fill-mask 推理；硬编码四卡 TP，无 CLI 缩规模接口。
-  - inference/huggingface/fill-mask/test-roberta.py
   # Stable Diffusion 图像生成；硬绑定 CUDA/CUDA graph，模型权重较大。
   - inference/huggingface/stable-diffusion/test-stable-diffusion.py
-  # DeepSpeed/HF 生成对比；核心 kernel 注入路径依赖 CUDA，待适配。
-  - inference/huggingface/text-generation/ds-hf-compare.py
   # GPT 文本生成；model.cuda() 和 torch.cuda.synchronize() 硬绑定 CUDA。
   - inference/huggingface/text-generation/run-generation-script/test-run-generation.py
   # T5 文本生成；硬编码四卡 TP/CUDA 设备，无 CLI 缩规模接口。
   - inference/huggingface/text2text-generation/test-t5.py
-  # T5 翻译推理；硬编码四卡 TP/CUDA 设备，无 CLI 缩规模接口。
-  - inference/huggingface/translation/test-t5-base.py
   # 大模型 ZeRO offload 推理；硬绑定 NCCL 和 torch.cuda.current_device。
   - inference/huggingface/zero_inference/run_model.py
   # Falcon-7B 推理；需 deepspeed-mii，模型超出当前 CI 规模。
@@ -423,11 +602,11 @@ unsupported:
   - inference/mii/non-persistent/pipeline.py
   # MII 持久化推理服务；需 deepspeed-mii 和服务生命周期适配。
   - inference/mii/persistent/serve.py
-  # Llama-3.2-1B 吞吐基准；依赖 SGLang fork 和受限模型。
+  # SGLang ZeRO 推理基准；需 tjruwase/sglang zero-inference 分支，配方含 CUDA GDS 卸载。
   - inference/sglang/run_llama3_1B.sh
-  # Llama-3.1-70B 吞吐基准；依赖 SGLang fork，模型过大。
+  # SGLang ZeRO 推理基准；需专用 zero-inference 分支与 CUDA GDS，换小模型不能解决后端约束。
   - inference/sglang/run_llama3_70B.sh
-  # Llama-3.1-8B 吞吐基准；依赖 SGLang fork 和受限模型。
+  # SGLang ZeRO 推理基准；需专用 zero-inference 分支，CPU/NVMe/GDS 对比尚无 NPU 配方。
   - inference/sglang/run_llama3_8B.sh
   # BERT-base GLUE 微调；硬绑定 CUDA，数据路径固定为 /data/GlueData。
   - training/BingBertGlue/run_glue_classifier_bert_base.py
@@ -441,10 +620,6 @@ unsupported:
   - training/BingBertSquad/run_hf.sh
   # Domino GPT-3 预训练；缺少 Megatron 子模块，需大模型和外部语料。
   - training/DeepSpeed-Domino/pretrain_gpt.py
-  # ZenFlow Llama 微调；需受限 Llama-2-7B，含 torch.cuda 调用。
-  - training/DeepSpeed-ZenFlow/finetuning/finetune_llama.py
-  # MoQ GLUE 微调；依赖旧 Transformers/datasets API，待升级适配。
-  - training/MoQ/run_glue.py
   # BERT-base 自动调参；硬编码 16 卡，依赖仓外 Transformers example。
   - training/autotuning/hf/bert-base/test_tune.sh
   # BERT-large 自动调参；硬编码 16 卡，依赖仓外 Transformers example。
@@ -469,47 +644,35 @@ unsupported:
   - training/bing_bert/run_glue_classifier_bert_large.py
   # PyTorch CIFAR 教程；设备路径仅支持 CUDA/CPU，未接入 NPU。
   - training/cifar/cifar10_tutorial.py
-  # GPT 数据难度分析；输出路径硬编码 /blob，需 PTB 数据，待适配。
-  - training/data_efficiency/gpt_finetuning/analyze_data.py
-  # GPT random-LTD 多组实验；固定 CUDA 卡号并发启动，尚未适配。
-  - training/data_efficiency/gpt_finetuning/finetune/ds_finetune_gpt2_run.sh
-  # GPT random-LTD 微调；上游启动绑定 CUDA，需 PTB 数据及 CI 配方适配。
+  # GPT random-LTD 微调；本地数据可行，但必经 torch.device('cuda')/cuda.set_device。
   - training/data_efficiency/gpt_finetuning/run_clm_no_trainer.py
   # CIFAR ViT 微调；损失与数据传输硬绑定 .cuda()，待适配。
   - training/data_efficiency/vit_finetuning/main_cifar.py
-  # ImageNet ViT 微调；需全量数据，启动配方绑定 NCCL 和固定数据路径。
+  # ImageNet ViT 微调；本地小数据可行，但 criterion.cuda 和设备设置必经绑定。
   - training/data_efficiency/vit_finetuning/main_imagenet.py
   # GSM8K 答案生成；依赖 vLLM 及远程评测数据，待适配。
   - training/deepspeed_finetune_demo/evaluate/gsm8k/gen_gsm8k.py
   # MMLU 答案生成；依赖 vLLM 及远程评测数据，待适配。
   - training/deepspeed_finetune_demo/evaluate/mmlu/gen_mmlu.py
-  # LLM 微调/吞吐演示；含 torch.cuda 调用，模型数据来源待改为 CI 配方。
-  - training/deepspeed_finetune_demo/finetune_llama.py
   # AutoEP 训练与多任务评测；默认 16B 模型、八卡 TP，需 vLLM/evalplus。
   - training/deepspeed_finetune_demo/run_and_evaluate.sh
-  # AutoEP MoE 训练；预设大型 MoE 模型，未完成 CI 压规模。
+  # AutoEP MoE 训练；可缩层数和步数，但 metrics.reduce_max 必经 torch.cuda.current_device。
   - training/expert_parallel/train.py
-  # DCGAN PyTorch 基线；上游启用 CUDA，需自备 CelebA 数据。
+  # DCGAN 基线；可用 fake 数据，但设备仅 CUDA/CPU 且无条件 cuda.synchronize，无法原生 NPU。
   - training/gan/gan_baseline_train.py
   # DCGAN DeepSpeed 训练；硬绑定 torch.cuda.set_device，需 CelebA 数据。
   - training/gan/gan_deepspeed_train.py
-  # ImageNet ResNet 训练；需全量数据，上游固定私人路径，待适配。
+  # ResNet 分类；本地 ImageFolder 可行，但 cuda.set_device/losses.cuda 无切换参数。
   - training/imagenet/main.py
-  # OPSD HybridEngine decode 耗时基准；仅测性能，尚未纳入训练看护。
-  - training/opsd/benchmarks/bench_decode_1p1r.py
-  # OPSD 在线蒸馏训练；需 HybridEngine rollout 及 7B 教师模型，待适配。
-  - training/opsd/main.py
-  # Student AutoTP/ZeRO-3 smoke；结束日志硬调用 torch.cuda.max_memory_allocated。
-  - training/opsd/test_student_autotp_zero3.py
-  # Teacher AutoTP/offload smoke；结束日志硬调用 torch.cuda.max_memory_allocated。
-  - training/opsd/test_teacher_autotp_zero3.py
   # Stable Diffusion 多卡推理；设备与随机生成器硬绑定 CUDA。
   - training/stable_diffusion/inf_txt2img_loop.py
-  # Stable Diffusion 蒸馏/LoRA 训练；大模型及上传 Hub 配方尚未适配 CI。
-  - training/stable_diffusion/train_sd_distil_lora.py
   # 基础 AutoTP 训练；设备硬编码 cuda，默认 Llama-3.1-8B。
   - training/tensor_parallel/basic_example/autotp_example.py
   # AutoTP 显存对比；硬绑定 torch.cuda，默认 Llama-3.1-8B。
   - training/tensor_parallel/basic_example/autotp_memory_compare.py
   # 自定义 AutoTP 切分训练；设备硬绑定 CUDA，默认 Pythia-6.9B。
   - training/tensor_parallel/custom_patterns/autotp_custom_patterns.py
+  # DeepCompile 激活卸载；编译为核心功能且原配方 compile=True，暂无兼容的 NPU Inductor 配方。
+  - benchmarks/pin_memory/deepcompile_activation/bench.py
+  # CPU 页锁定对比；native/torch pin 可运行，但不执行 NPU 拷贝或计算。
+  - benchmarks/pin_memory/cpu_pin/bench.py

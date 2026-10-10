@@ -345,6 +345,7 @@ projects:
     runner: linux-aarch64-a2-1
     dir: projects/tensordict
     workflows:
+      examples: .github/workflows/tensordict-examples.yml
       quick_start: .github/workflows/tensordict-quick-start.yml
   # Ascend/vision ships annotated git tags only (no GitHub Releases
   # published), so /releases/latest 404s and /releases returns []. The
@@ -359,6 +360,7 @@ projects:
     runner: linux-aarch64-a2-1
     dir: projects/torch.vision
     workflows:
+      examples: .github/workflows/torch.vision-examples.yml
       quick_start: .github/workflows/torch.vision-quick-start.yml
   # OpenCV quickstart exercises the Huawei CANN backend (BUILD_HUAWEI_NPU=ON)
   # via a from-source build against the ascend-toolkit shipped in the
@@ -672,6 +674,7 @@ projects:
     runner: linux-aarch64-a2-1
     dir: projects/roll
     workflows:
+      examples: .github/workflows/roll-examples.yml
       quick_start: .github/workflows/roll-quick-start.yml
   # TGI quickstart guards a full source build (Rust launcher/router +
   # Python server) and a real /generate inference on a 2-card 910B
@@ -689,4 +692,12 @@ projects:
     dir: projects/tgi
     workflows:
       quick_start: .github/workflows/tgi-quick-start.yml
-      examples: .github/workflows/roll-examples.yml
+  - name: liger-kernel
+    category: 训练加速
+    support_level: 基础支持
+    upstream_repo: linkedin/Liger-Kernel
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/liger-kernel
+    workflows:
+      examples: .github/workflows/liger-kernel-examples.yml

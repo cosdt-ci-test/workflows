@@ -638,6 +638,168 @@ print("Wanda pruning dependencies:", "transformers", transformers.__version__,
 PY
 }
 
+setup_ds_pin_memory() {
+  install_deepspeed_source
+  install_example_dependencies numpy ninja
+  apt-get install -y build-essential
+  # Adjust the shell so its Python/compiler subprocesses inherit the allowed
+  # limit. The later run step independently makes the same bounded adjustment.
+  local memlock_hard
+  memlock_hard="$(ulimit -Hl)"
+  ulimit -Sl "$memlock_hard"
+  echo "pin-memory shell memlock soft/hard KiB: $(ulimit -Sl)/$memlock_hard"
+  python - <<'PY'
+import os
+import resource
+
+import torch
+import torch_npu
+from deepspeed.accelerator import get_accelerator
+from deepspeed.ops.op_builder import CPUAdamBuilder, PinMemoryBuilder
+from deepspeed.utils.pin_memory import get_native_pinned_memory
+
+# Never increase the container's hard limit or require extra privileges.
+soft, hard = resource.getrlimit(resource.RLIMIT_MEMLOCK)
+print("pin-memory RLIMIT_MEMLOCK soft/hard bytes:", soft, hard)
+required = 4 * 1024 * 1024
+if soft != resource.RLIM_INFINITY and soft < required:
+    raise SystemExit(f"small native pin-memory CI recipes need at least {required} locked bytes; container limit is {soft}")
+for builder in (CPUAdamBuilder(), PinMemoryBuilder()):
+    print("preloading pin-memory benchmark extension:", type(builder).__name__)
+    builder.load(verbose=True)
+os.environ["DS_PIN_MEMORY_BACKEND"] = "native"
+os.environ["DS_PIN_MEMORY_REGISTER_DEVICE"] = "0"
+manager = get_native_pinned_memory()
+raw = torch.arange(1024 * 1024 // 4, dtype=torch.float32)
+locked = manager.pin(raw)
+try:
+    if not manager.is_pinned(locked) or not torch.equal(locked, raw):
+        raise SystemExit("native page-locked allocation failed the pin/content preflight")
+    accelerator = get_accelerator()
+    device = locked.to(accelerator.current_device_name())
+    accelerator.synchronize()
+    if not torch.equal(device.cpu(), raw):
+        raise SystemExit("native page-locked host/NPU copy lost tensor contents")
+finally:
+    manager.unpin(locked)
+print("native mlock host allocation and NPU copy verified; this is not CUDA host registration")
+PY
+}
+
+setup_ds_zenflow_finetune() {
+  install_deepspeed_source
+  install_example_dependencies "transformers==4.57.6" "datasets>=4,<5" \
+    "accelerate>=1.10.1,<2" numpy pyarrow sentencepiece safetensors ninja
+  apt-get install -y build-essential
+  ms_download_models "OPT_125M_PATH=facebook/opt-125m"
+  plant_ci_fixture ci_alpaca_16.json ALPACA_CI_PATH
+  export ZENFLOW_WORK_DIR="${CI_OUTPUT_DIR:-$GITHUB_WORKSPACE/output}/zenflow-finetune-work"
+  mkdir -p "$ZENFLOW_WORK_DIR/tatsu-lab/alpaca"
+  echo "ZENFLOW_WORK_DIR=$ZENFLOW_WORK_DIR" >> "$GITHUB_ENV"
+  echo "HF_DATASETS_OFFLINE=1" >> "$GITHUB_ENV"
+  HF_DATASETS_OFFLINE=1 python - <<'PY'
+import importlib.util
+import json
+import os
+from pathlib import Path
+import sys
+
+import datasets
+import torch_npu
+import transformers
+from datasets import Dataset, load_dataset
+from deepspeed.ops.op_builder import CPUAdamBuilder
+from transformers import AutoTokenizer, default_data_collator
+
+rows = json.loads(Path(os.environ["ALPACA_CI_PATH"]).read_text())
+if len(rows) != 16 or any(set(row) != {"instruction", "input", "output"} for row in rows):
+    raise SystemExit("ZenFlow fixture must contain 16 original Alpaca-schema rows")
+work = Path(os.environ["ZENFLOW_WORK_DIR"]).resolve()
+Dataset.from_list(rows).to_parquet(str(work / "tatsu-lab/alpaca/train.parquet"))
+os.chdir(work)
+# Match the unmodified entry's hardcoded public API call precisely. The local
+# directory is resolved natively; no dataset shim or source rewrite is used.
+dataset = load_dataset("tatsu-lab/alpaca")
+if len(dataset["train"]) != 16 or set(dataset["train"].column_names) != {"instruction", "input", "output"}:
+    raise SystemExit("ZenFlow's exact hardcoded dataset name did not resolve to the local fixture")
+entry = Path(os.environ["EXAMPLES_ROOT"]) / "training/DeepSpeed-ZenFlow/finetuning/finetune_llama.py"
+spec = importlib.util.spec_from_file_location("ds_ci_zenflow_finetune", entry)
+upstream = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = upstream
+spec.loader.exec_module(upstream)
+tokenizer = AutoTokenizer.from_pretrained(os.environ["OPT_125M_PATH"])
+if tokenizer.pad_token is None:
+    tokenizer.pad_token = tokenizer.eos_token
+# Keep the original string columns just as the entry does. The official
+# collator ignores strings, so the engine receives only model input tensors.
+tokenized = dataset["train"].map(lambda row: upstream.preprocess_alpaca(row, tokenizer), batched=False)
+for row in tokenized:
+    if len(row["input_ids"]) != 512 or row["labels"] != row["input_ids"] or sum(row["attention_mask"]) < 2:
+        raise SystemExit("ZenFlow's original preprocessing produced invalid causal training targets")
+batch = default_data_collator([tokenized[0], tokenized[1]])
+if set(batch) != {"input_ids", "attention_mask", "labels"} or batch["input_ids"].shape != (2, 512):
+    raise SystemExit(f"ZenFlow's original collator did not drop auxiliary strings: {list(batch)}")
+CPUAdamBuilder().load(verbose=True)
+print("ZenFlow local offline name resolution:", work / "tatsu-lab/alpaca", "rows:", len(tokenized))
+print("ZenFlow finetuning dependencies:", "transformers", transformers.__version__, "datasets", datasets.__version__)
+PY
+}
+
+setup_ds_opsd() {
+  install_deepspeed_source
+  install_example_dependencies "transformers==4.57.6" "accelerate>=1.10.1,<2" \
+    numpy sentencepiece safetensors ninja
+  apt-get install -y build-essential
+  ms_download_models "QWEN25_STUDENT_PATH=Qwen/Qwen2.5-0.5B-Instruct" \
+    "QWEN25_TEACHER_PATH=Qwen/Qwen2.5-0.5B"
+  plant_ci_fixture ci_rac_8.jsonl OPSD_CI_PATH
+  python - <<'PY'
+import importlib.util
+import json
+import os
+from pathlib import Path
+import sys
+
+import torch_npu
+import transformers
+from deepspeed.ops.op_builder import CPUAdamBuilder
+from deepspeed.runtime.rollout import RolloutConfig, build_rollout
+from transformers import AutoConfig, AutoTokenizer
+
+student = AutoTokenizer.from_pretrained(os.environ["QWEN25_STUDENT_PATH"], padding_side="left")
+teacher = AutoTokenizer.from_pretrained(os.environ["QWEN25_TEACHER_PATH"], padding_side="left")
+# KL compares the same token index in each logit tensor. Validate the entire
+# mapping, including added tokens, rather than merely comparing its size.
+if student.get_vocab() != teacher.get_vocab() or student.get_added_vocab() != teacher.get_added_vocab():
+    raise SystemExit("OPSD student/teacher token IDs differ; token-wise distillation is invalid")
+student_config = AutoConfig.from_pretrained(os.environ["QWEN25_STUDENT_PATH"])
+teacher_config = AutoConfig.from_pretrained(os.environ["QWEN25_TEACHER_PATH"])
+if student_config.vocab_size != teacher_config.vocab_size or max(student.get_vocab().values()) >= student_config.vocab_size:
+    raise SystemExit("OPSD model logit vocabularies do not align with their token IDs")
+if not student.chat_template:
+    raise SystemExit("OPSD instruction student must provide its own chat template")
+entry = Path(os.environ["EXAMPLES_ROOT"]) / "training/opsd/main.py"
+sys.path.insert(0, str(entry.parent))
+spec = importlib.util.spec_from_file_location("ds_ci_opsd", entry)
+upstream = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = upstream
+spec.loader.exec_module(upstream)
+dataset = upstream.PromptDataset(os.environ["OPSD_CI_PATH"], tokenizer=student,
+                                max_prompt_length=128, prompt_field="prompt")
+if len(dataset) != 8 or any(not isinstance(dataset[index], str) or not dataset[index] for index in range(len(dataset))):
+    raise SystemExit("OPSD fixture must produce eight nonempty native chat-templated prompts")
+collator = upstream.LeftPaddedPromptCollator(student, max_prompt_length=128)
+batch = collator([dataset[0], dataset[1]])
+if batch["prompt_ids"].shape[0] != 2 or not bool((batch["prompt_attention_mask"].sum(dim=1) > 0).all()):
+    raise SystemExit("OPSD native prompt collator lost valid prompt tokens")
+CPUAdamBuilder().load(verbose=True)
+print("OPSD shared token mapping verified:", len(student), "model vocab size:", student_config.vocab_size)
+print("OPSD student/teacher use different checkpoint weights; student's chat/EOS policy drives rollout")
+print("OPSD rollout API available:", RolloutConfig.__name__, build_rollout.__name__)
+print("OPSD local prompt fixture:", len(dataset), "transformers:", transformers.__version__)
+PY
+}
+
 verify_installed_runtime() {
   python - "$PROFILE" <<'PY'
 import os
@@ -655,7 +817,11 @@ print("runtime torch:", torch.__version__)
 print("runtime torch_npu:", torch_npu.__version__)
 print("runtime deepspeed:", deepspeed.__version__, deepspeed_file)
 if sys.argv[1] in {"ds_cifar", "ds_hf_autotp", "ds_variable_batch", "ds_zenflow", "ds_rac_prune",
-                  "ds_chat_prompt_eval", "ds_chat_reward_eval", "ds_hf_bench_length", "ds_superoffload"}:
+                  "ds_chat_prompt_eval", "ds_chat_reward_eval", "ds_hf_bench_length", "ds_superoffload",
+                  "ds_pin_memory", "ds_zenflow_finetune", "ds_opsd", "ds_finetune_demo",
+                  "ds_sd_distil", "ds_opsd_decode", "ds_legacy_inference_bench", "ds_hf_ds_compare",
+                  "ds_fill_mask_bert", "ds_fill_mask_electra", "ds_fill_mask_roberta",
+                  "ds_t5_translation", "ds_hybrid_rollout", "ds_asr_ctc"}:
     accelerator = get_accelerator()._name
     available = torch.npu.is_available()
     print("runtime accelerator:", accelerator, "NPU available:", available)
@@ -669,6 +835,10 @@ except ValueError as exc:
         f"{deepspeed_file}") from exc
 PY
 }
+
+# Optional profiles use the same protected dependency and source-install helpers.
+source "$(dirname "${BASH_SOURCE[0]}")/setup_inference_examples.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/setup_training_expansion.sh"
 
 supported_profiles() {
   declare -F | awk '/^declare -f setup_/ { sub(/^declare -f setup_/, ""); print }' | paste -sd' ' -

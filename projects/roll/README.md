@@ -59,7 +59,7 @@ actor 更新分支。所有新增条目待下一次手动 workflow 验收，本�
 与 PEFT 一样，模型、数据、规模等 CI 参数集中放在 manifest 的 `overlay_args`，
 数据保留在 `fixtures/`，不再维护本仓 `configs/`。
 ROLL release 的三个 launcher 只接受 `--config_path` / `--config_name`，
-不会向 Hydra 转发额外覆盖参数，因此项目脚本先调用 `scripts/prepare_config.py`：
+不会向 Hydra 转发额外覆盖参数，因此 `scripts/run_example.sh` 内置配置适配逻辑：
 用 Hydra Compose API 读取该 release 的原始 YAML（包括 defaults），应用 manifest 覆盖项，
 再把临时 YAML 交给原始 launcher。上游 YAML、example、pipeline 和 worker 源码均不修改。
 
@@ -79,6 +79,7 @@ Sokoban 的交互模板直接继承上游 defaults，CI 只覆盖环境数量和
 
 ## 运行与结果
 
+- matrix 并行上限为 4（原为 2），与 Accelerate 的默认配置一致；实际并发取决于空闲 runner。
 - schedule：`45 */6 * * *`（release-only，仅在 release tag 变化或上一轮失败时重跑）；#20 已三条全绿，定时看护已恢复。
 - 手动触发：`target_ref` 留空测最新 release，或显式指定 `main` / tag / SHA。
 - 镜像：国内 `swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12`；
@@ -106,8 +107,23 @@ Sokoban 的交互模板直接继承上游 defaults，CI 只覆盖环境数量和
 
 ## 本地配置验证
 
-安装 `hydra-core==1.3.2` 和 `PyYAML`，设置 `ROLL_UPSTREAM_ROOT` 为被测 release 的本地
-checkout 后，运行 `python -m unittest tests.test_check_supported_entries projects.roll.tests.test_roll_examples`。
-配置测试使用真实上游 YAML 与 defaults，无需 torch、Ray 或 NPU；缺少 checkout 或 Hydra 时跳过。
-完整分类账本对账需另设 `ROLL_LEDGER_ROOT` 指向相同的 v0.4.0 checkout。
+使用公共 `scripts/check_supported_entries.py` 对上游 checkout 检查 manifest，
+两个项目脚本可用 `bash -n` 检查语法。Hydra Compose 适配器已内置在
+`run_example.sh` 中，运行时会解析上游 YAML/defaults 并保存 resolved_config.yaml。
+整理时已对 v0.4.0 的 20 条配方验证配置组合、算法参数与 launcher 退出码。
 各配方的功能与接入限制记录在 manifest 注释中，新增配方需完成真实 NPU 远程验收。
+
+## Run #100 修复与文件结构
+
+Run #100 的 20 条任务均因 PyArrow/NumPy 导入冲突失败，尚未验证新增配方的
+完整 NPU 训练路径。上游 requirements_common.txt 要求 NumPy <2，并固定
+datasets 3.1.0，但未约束 PyArrow，导致安装了要求 NumPy 2 的 PyArrow 26。
+项目现在通过 constraints-npu.txt 对全部 setup 安装统一约束 NumPy 1.26.4、
+PyArrow 20.0.0、pandas 2.2.3；保留上游 datasets 版本。setup 在启动 Ray 前
+检查数据包导入与实际 Parquet 写入/读取，避免安装成功后才在所有 worker 中失败。
+
+scripts/ 仅保留 setup_example.sh 和 run_example.sh。原 prepare_config.py 的
+Hydra 参数展开、配置组合、路径检查与上游 launcher 调用全部合入 run_example.sh，
+没有删除运行功能。tests/ 仅保留 test_quick_start_ascend.py 与必要的 __init__.py，
+独立 quick-start workflow 不变。supported 仍为 20 条，公共引擎、上游源码及
+其他项目均未修改；schedule 保持原配置。

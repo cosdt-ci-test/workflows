@@ -14,6 +14,7 @@ if [[ $# -lt 1 ]]; then
 fi
 
 PROFILE="$1"
+export PIP_CONSTRAINT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/constraints-npu.txt"
 
 ASCEND_PIP_INDEX=https://repo.huaweicloud.com/ascend/repos/pypi
 FALLBACK_PIP_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
@@ -166,6 +167,20 @@ install_rollout_stack() {
     "reasoning-gym==0.1.23" "gym_sokoban" "gymnasium[toy-text]"
 
   python - <<'PY'
+import tempfile
+from pathlib import Path
+
+import numpy, pandas, pyarrow, datasets
+from datasets import Dataset, load_dataset
+print('data stack:', 'numpy', numpy.__version__, 'pandas', pandas.__version__,
+      'pyarrow', pyarrow.__version__, 'datasets', datasets.__version__)
+with tempfile.TemporaryDirectory(prefix='roll-data-probe-') as work:
+    path = Path(work) / 'train.parquet'
+    Dataset.from_list([{'text': 'ROLL NPU CI dependency probe'}]).to_parquet(str(path))
+    loaded = load_dataset('parquet', data_files={'train': str(path)}, split='train')
+    if loaded[0]['text'] != 'ROLL NPU CI dependency probe':
+        raise SystemExit('ROLL data stack Parquet round-trip failed')
+
 import torch, torch_npu, vllm, vllm_ascend, triton
 print("torch", torch.__version__)
 print("torch_npu", torch_npu.__version__)

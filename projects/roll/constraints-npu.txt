@@ -1,0 +1,4 @@
+# ROLL v0.4.0 requires NumPy <2; keep its Arrow/pandas data ABI compatible.
+numpy==1.26.4
+pyarrow==20.0.0
+pandas==2.2.3

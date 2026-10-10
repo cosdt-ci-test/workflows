@@ -71,6 +71,11 @@ NumPy 1.26.4，而未约束的 PyArrow 26 在导入时要求 NumPy 2。项目现
 pandas 2.2.3 和 datasets 3.6.0；每个 profile 在准备数据前验证导入与 Parquet
 读写。修复后仍需手动 Actions 验证完整 NPU 训练路径。
 
+Run #8 的单卡 SFT、Medusa 和图文 SFT 已通过。两卡 Qwen FSDP 在参数解析时
+失败，现已给 `--fsdp "full_shard auto_wrap"` 保留单个字符串参数；ORPO 在 setup
+阶段误用了仅 run 阶段存在的 `CI_OUTPUT_DIR`，现改在 `$TARGET_ROOT/fixtures/orpo-work`
+准备离线资产，并通过 `GITHUB_ENV` 传给 runner。两条两卡配方仍待下一轮实跑。
+
 `transformers==4.57.1` + `trl==0.12.1`。这个窗口被 example 源码钉死：
 
 - `from_pretrained(..., dtype=...)` 需要 transformers >= 4.56.0（4.55.x 只有

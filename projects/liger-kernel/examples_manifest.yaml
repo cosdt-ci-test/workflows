@@ -50,7 +50,7 @@ supported:
     profile: liger_hf_fsdp
     runner: linux-aarch64-a2-2
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args: ['--model_name ${LIGER_MODEL_PATH}', '--dataset ${LIGER_DATASET_PATH}', '--max_steps 2', '--per_device_train_batch_size 1', '--max_seq_length 256', '--bf16', '--eval_strategy no', '--save_strategy no', '--report_to none', '--logging_steps 1', '--include_num_input_tokens_seen', '--use_liger True', '--fsdp full_shard auto_wrap', '--fsdp_config config/fsdp_config.json', '--output_dir ${CI_OUTPUT_DIR}/hf_fsdp']
+    overlay_args: ['--model_name ${LIGER_MODEL_PATH}', '--dataset ${LIGER_DATASET_PATH}', '--max_steps 2', '--per_device_train_batch_size 1', '--max_seq_length 256', '--bf16', '--eval_strategy no', '--save_strategy no', '--report_to none', '--logging_steps 1', '--include_num_input_tokens_seen', '--use_liger True', '--fsdp "full_shard auto_wrap"', '--fsdp_config config/fsdp_config.json', '--output_dir ${CI_OUTPUT_DIR}/hf_fsdp']
     timeout_minutes: 180
   # 单卡 Qwen2-VL 图文 SFT：monkey_patch Qwen2-VL 的多模态 RoPE、RMSNorm、SwiGLU
   # 与 fused_linear_cross_entropy（这 4 族的 _ascend 实现 v0.8.3 都有），走 trl

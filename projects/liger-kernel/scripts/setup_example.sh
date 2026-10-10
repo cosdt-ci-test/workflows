@@ -310,7 +310,9 @@ from transformers import AutoConfig, AutoTokenizer
 env_lines = Path(os.environ['GITHUB_ENV']).read_text().splitlines()
 snapshot = Path(next(line.split('=', 1)[1] for line in reversed(env_lines)
                      if line.startswith('LIGER_ORPO_MODEL_PATH=')))
-work = Path(os.environ['CI_OUTPUT_DIR']) / 'orpo-work'
+# CI_OUTPUT_DIR belongs to the engine's run step, not setup. Stage assets
+# beside the other fixtures and forward the absolute path via GITHUB_ENV.
+work = Path(os.environ['TARGET_ROOT']) / 'fixtures' / 'orpo-work'
 alias = work / 'meta-llama/Llama-3.2-1B-Instruct'
 alias.parent.mkdir(parents=True, exist_ok=True)
 if alias.exists() or alias.is_symlink():

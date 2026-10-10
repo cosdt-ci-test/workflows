@@ -162,14 +162,28 @@ teacher 请求成功，不能只看退出码。
 - artifact：`slime-examples-<run_id>-<job_index>`（公共引擎统一命名）。
 - schedule：bring-up 期注释关闭；手动轮次全绿后由维护者决定启用（启用后由上游
   release tag 变化或上次 scheduled failure 触发）。
-- `max_parallel: 1`（bring-up 阶段保持；避免 4 卡和 8 卡任务并发争用资源）。
+- `max_parallel: 4`；实际并发仍受对应 4/8 卡 runner 的可用数量限制。
 
 ## 本地验证
 
 ```bash
 python -m pytest tests/test_check_supported_entries.py -q
-python -m unittest discover -s projects/slime/tests -p 'test_*.py'
-python -m pytest projects/roll/tests/test_roll_examples.py -q  # regression: shared-engine contract
 bash -n projects/slime/scripts/setup_example.sh
 bash -n projects/slime/scripts/run_example.sh
 ```
+
+`scripts/` 只保留 `setup_example.sh` 和 `run_example.sh`。数据准备、SFT token mask
+和 agent rollout 的运行时检查已内联进两个入口，没有删除这些验收逻辑。
+原有 examples 静态测试文件已清理；项目没有独立 quick-start 测试文件，
+`docs/Quick-start-Ascend.md` 保留。
+
+Run #20 在训练启动前暴露依赖冲突：Triton-Ascend 使用 NumPy 1.26.4，
+而 PyArrow 26 要求 NumPy 2.x。`constraints-npu.txt` 将 NumPy/PyArrow/Pandas
+分别固定为 1.26.4/20.0.0/2.2.3，并作用于全部 setup 安装；最终检查数据栈导入及表转换。
+Search-R1 的 Pyserini 0.25.0 会在 BM25 导入时创建未使用的 OpenAI 客户端，
+因此仅该 profile 设置非凭据占位 key，并将其 API 地址指向本机禁用端口；
+实际检索仍是本地 Lucene BM25，不使用 OpenAI 服务。修复后的 NPU 路径待下一轮 Actions 验证。
+
+另外五条 ReTool/Qwen3 配方在模型下载前因 `sys.argv[2]` 未传入而失败；
+已修正 downloader 的模型 repo 参数位置，并固定 OpenAI 2.6.1，防止 ModelScope
+安装将 SGLang v0.5.13 所需客户端升级到不兼容版本。

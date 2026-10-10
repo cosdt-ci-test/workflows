@@ -12,12 +12,131 @@
 # both the installed package and the execution root for run_example.sh.
 set -euo pipefail
 
+validate_sft_fixture() {
+  python - "$@" <<'PY'
+"""Check native SFT token masks before allocating Ray training actors."""
+import json
+import sys
+from pathlib import Path
+
+
+def load_messages(path):
+    rows = [json.loads(line) for line in Path(path).read_text(encoding="utf-8").splitlines() if line.strip()]
+    if len(rows) != 8:
+        raise ValueError("CI SFT fixture must contain eight conversations")
+    for row in rows:
+        messages = row["messages"]
+        if not isinstance(messages, list) or not any(m.get("role") == "assistant" and m.get("content") for m in messages):
+            raise ValueError("SFT requires a non-empty assistant response")
+    return rows
+
+
+def main():
+    from slime.utils.mask_utils import MultiTurnLossMaskGenerator
+    from slime.utils.processing_utils import load_tokenizer
+    rows = load_messages(sys.argv[1])
+    tokenizer = load_tokenizer(sys.argv[2], trust_remote_code=True)
+    generator = MultiTurnLossMaskGenerator(tokenizer, tokenizer_type="qwen3")
+    for index, row in enumerate(rows):
+        tokens, mask = generator.get_loss_mask(row["messages"])
+        if len(tokens) != len(mask) or not sum(mask):
+            raise ValueError(f"SFT row {index} has no valid supervised token mask")
+        if len(tokens) > 1024:
+            raise ValueError(f"SFT row {index} exceeds the CI token budget")
+    print("SFT fixture: eight conversations with non-empty native assistant masks")
+
+
+if __name__ == "__main__":
+    main()
+PY
+}
+
+prepare_eval_config() {
+  python - "$@" <<'PY'
+"""Create native multi-task eval config with two distinct local scorers."""
+from pathlib import Path
+import sys
+import yaml
+
+
+def build_config(fixtures):
+    fixtures = Path(fixtures).resolve()
+    return {"eval": {"defaults": {"max_response_len": 128, "top_p": 0.7, "n_samples_per_eval_prompt": 1}, "datasets": [
+        {"name": "ci_math", "path": str(fixtures / "ci_dapo_16.jsonl"), "rm_type": "deepscaler"},
+        {"name": "ci_multiple_choice", "path": str(fixtures / "ci_gpqa_8.jsonl"), "rm_type": "gpqa"},
+    ]}}
+
+
+if __name__ == "__main__":
+    destination = Path(sys.argv[2])
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(yaml.safe_dump(build_config(sys.argv[1]), sort_keys=False), encoding="utf-8")
+    print(f"native multi-task config: {destination}")
+PY
+}
+
+prepare_geo_fixture() {
+  python - "$@" <<'PY'
+"""Generate native Geo3K JSONL with small, local geometry images."""
+import argparse
+import json
+import math
+from pathlib import Path
+
+
+def prepare_fixture(source, destination):
+    from PIL import Image, ImageDraw
+    facts = json.loads(Path(source).read_text(encoding="utf-8"))
+    if len(facts) != 8:
+        raise ValueError("Geo3K CI expects eight angle questions")
+    destination = Path(destination).resolve()
+    destination.mkdir(parents=True, exist_ok=True)
+    rows = []
+    for index, fact in enumerate(facts):
+        a, b = fact["angle_a"], fact["angle_b"]
+        if not (0 < a < 90 and 0 < b < 90 and 180 - a - b == int(fact["answer"])):
+            raise ValueError(f"Invalid triangle angle fixture: {fact}")
+        image = Image.new("RGB", (128, 128), "white")
+        draw = ImageDraw.Draw(image)
+        left, right = (12, 110), (116, 110)
+        ta, tb = math.tan(math.radians(a)), math.tan(math.radians(b))
+        x = 104 * tb / (ta + tb)
+        apex = (12 + x, 110 - ta * x)
+        draw.line([left, right, apex, left], fill="black", width=2)
+        draw.text((13, 113), "A", fill="black")
+        draw.text((111, 113), "B", fill="black")
+        draw.text((apex[0] - 3, apex[1] - 11), "C", fill="black")
+        draw.text((19, 94), f"{a}", fill="black")
+        draw.text((91, 94), f"{b}", fill="black")
+        path = destination / f"triangle-{index}.png"
+        image.save(path)
+        problem = ('<image>Find angle C in the triangle. Read the labeled angles A and B from the image. '
+            'Before answering, call the scoring tool using exactly '
+            '<tool_call>{"name":"calc_score","arguments":{"answer":"YOUR_NUMBER"}}</tool_call>. '
+            'After its feedback, provide the final angle in degrees as \\boxed{YOUR_NUMBER}.')
+        rows.append({"problem": problem, "answer": fact["answer"], "images": [path.as_uri()]})
+    output = destination / "geo3k-ci.jsonl"
+    output.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    return output
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("source")
+    parser.add_argument("destination")
+    arguments = parser.parse_args()
+    print(prepare_fixture(arguments.source, arguments.destination))
+PY
+}
+
+
 if [[ $# -lt 1 ]]; then
   echo "usage: $0 <profile>" >&2
   exit 2
 fi
 
 PROFILE="$1"
+export PIP_CONSTRAINT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/constraints-npu.txt"
 
 # ----- pinned component versions (fork Dockerfile ARGs + quick_install.sh) -----
 readonly SGLANG_REF=v0.5.13
@@ -312,6 +431,16 @@ import sglang
 import slime
 import torch
 import torch_npu
+import numpy
+import pandas
+import pyarrow
+import datasets
+import ray
+
+print("data stack:", {module.__name__: module.__version__ for module in
+                      (numpy, pandas, pyarrow, datasets, ray)})
+table = pyarrow.Table.from_pandas(pandas.DataFrame({"value": [1, 2]}))
+assert table.column("value").to_pylist() == [1, 2]
 
 fork_root = Path(os.environ["SLIME_FORK_ROOT"]).resolve()
 slime_file = Path(slime.__file__).resolve()
@@ -335,7 +464,7 @@ prepare_qwen25_assets() {
   # transformers treats a non-existent path as a Hub repo id and dies with
   # HFValidationError. Hand the resolved path to the shell via a file.
   local model_path_file="$DEPS_ROOT/model_path.txt"
-  TQDM_MININTERVAL=15 python - "$model_path_file" "${SLIME_RETOOL_MODEL_REPO:-Qwen/Qwen3-4B-Instruct-2507}" <<'PY'
+  TQDM_MININTERVAL=15 python - "$model_path_file" <<'PY'
 import os
 import sys
 from modelscope import snapshot_download
@@ -404,7 +533,7 @@ setup_slime_retool() {
   python -c 'import jinja2, psutil; print("ReTool deps:", jinja2.__version__, psutil.__version__)'
 
   local model_path_file="$DEPS_ROOT/retool_model_path.txt"
-  TQDM_MININTERVAL=15 python - "$model_path_file" <<'PY'
+  TQDM_MININTERVAL=15 python - "$model_path_file" "${SLIME_RETOOL_MODEL_REPO:-Qwen/Qwen3-4B-Instruct-2507}" <<'PY'
 import os
 import sys
 from modelscope import snapshot_download
@@ -454,7 +583,7 @@ setup_slime_retool_sft() {
   # Upstream debug-train-only skips SGLang; two actor NPUs suffice for TP2.
   SLIME_RETOOL_REQUIRED_GPUS=2 setup_slime_retool
   append_project_env "SLIME_SFT_FIXTURE_JSONL=$FIXTURE_DIR/ci_retool_sft_8.jsonl"
-  python "$GITHUB_WORKSPACE/workflows/projects/slime/scripts/validate_sft_fixture.py" \
+  validate_sft_fixture \
     "$FIXTURE_DIR/ci_retool_sft_8.jsonl" "$(cat "$DEPS_ROOT/retool_model_path.txt")"
 }
 
@@ -484,7 +613,7 @@ setup_slime_multi_agent() {
 
 setup_slime_multi_task() {
   setup_slime_opd
-  python "$GITHUB_WORKSPACE/workflows/projects/slime/scripts/prepare_eval_config.py" \
+  prepare_eval_config \
     "$FIXTURE_DIR" "$DEPS_ROOT/multi-task-ci.yaml"
   append_project_env "SLIME_EVAL_CONFIG=$DEPS_ROOT/multi-task-ci.yaml"
 }
@@ -540,6 +669,12 @@ with open(sys.argv[1], "w") as output:
             pass
 PY
   python -m pip install -c "$constraints" 'pyserini==0.25.0' faiss-cpu
+  # Pyserini imports its unused OpenAI encoder even for local BM25.
+  # This is not a credential: any accidental API use must stay on loopback.
+  export OPENAI_API_KEY=ci-local-bm25-not-a-credential
+  export OPENAI_BASE_URL=http://127.0.0.1:1/v1
+  append_project_env "OPENAI_API_KEY=$OPENAI_API_KEY"
+  append_project_env "OPENAI_BASE_URL=$OPENAI_BASE_URL"
   python -c 'import faiss; from pyserini.search.lucene import LuceneSearcher; print("native CPU BM25 dependencies ready")'
   local index="$DEPS_ROOT/search-ci-index"
   python -m pyserini.index.lucene --collection JsonCollection \
@@ -583,7 +718,7 @@ PY
   fi
   append_project_env "SLIME_MODEL_PATH=$model_dir"
   local data_dir="$DEPS_ROOT/geo3k-ci"
-  python "$GITHUB_WORKSPACE/workflows/projects/slime/scripts/prepare_geo_fixture.py" \
+  prepare_geo_fixture \
     "$FIXTURE_DIR/ci_geo_angles_8.json" "$data_dir"
   append_project_env "SLIME_FIXTURE_JSONL=$data_dir/geo3k-ci.jsonl"
   # Native checkpoint._load_checkpoint_hf supports --load HF + bridge.

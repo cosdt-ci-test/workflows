@@ -6,12 +6,17 @@ scan:
   # diffusers 对齐收口：原 scan.exclude 的 36 条规则全部迁入
   # unsupported 段（上游自测 / scaffolding / tir / terminal_bench / search_agent
   # 等实现模块，带分组注释与理由），scan 只保留 root + include_extensions 两个键。
-  # 对账口径：ascend-v1.0.5 树 101 个 .py/.sh = supported(13) + unsupported(88)。
-  # 注意 main 线（v2.1.0=114、当前 main=131）与本分支树不同，勿混用口径。
+  # 对账口径（2026-10-10 改基线，以本地 v2.1.0 树为准）：v2.1.0 树 114 个
+  # .py/.sh = supported(10) + unsupported(104)，其中 unsupported 尾部 21 条
+  # 为 v2.1.0 相对 ascend-v1.0.5 的新增（标「待验证」）；ascend-v1.0.5 口径
+  # （101 = 13 + 88）中的 8 条 ascend-only 条目已删除。
 
-# NPU 支持在 ascend-v1.0.5 分支（非 main），需专用镜像
-# ghcr.io/hwvanici/areal_npu:v1.0.5-a2。
-# 国内源：ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
+# 2026-10-10 起看护目标从 ascend-v1.0.5 分支改为 release 线（最新 release
+# v2.1.0 = 本地对账树），workflow target_ref 不再 pin 分支、由引擎按 latest
+# release 解析。supported 10 条的配方与专用镜像
+# ghcr.io/hwvanici/areal_npu:v1.0.5-a2（国内源
+# ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2）系 ascend-v1.0.5 树上验证，
+# v2.1.0 树待重验——首跑失败属有效信号，逐条修复或降级 unsupported。
 # 通用配方：
 # - 双卡 colocate：rollout vllm:d1p1t2 + actor fsdp:d2p1t1；offload 解
 #   optimizer-state OOM，disk 权重同步解共卡 xccl 建不起 HCCL 组（EI0015）。
@@ -50,36 +55,6 @@ supported:
       - +total_train_steps=1
     timeout_minutes: 60
   
-  # Qwen3-VL-2B 多轮 tool-calling GRPO（双卡，实测跑通）。max_tokens_per_mb
-  # 同时是 workflow 的 max_tokens_per_traj，勿低于 1024（图片视觉 token 会超）。
-  - path: examples/multi_turn_vlm/geometry3k_grpo_mt.py
-    profile: areal-vlm-mt-grpo
-    runner: linux-aarch64-a2-2
-    npu_devices: '0,1'
-    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
-    overlay_args:
-      - --config examples/multi_turn_vlm/qwen3_vl_2b_geometry3k_grpo_mt.yaml
-      - scheduler.type=local
-      - cluster.n_gpus_per_node=2
-      - rollout.backend=vllm:d1p1t2
-      - actor.backend=fsdp:d2p1t1
-      - +actor.fsdp.offload_params=true
-      - +actor.weight_update_mode=disk
-      - actor.reward_norm.mean_level=null
-      - actor.adv_norm.mean_level=null
-      - actor.path=${AREAL_MODEL_PATH}
-      - actor.mb_spec.max_tokens_per_mb=1024
-      - ref.mb_spec.max_tokens_per_mb=1024
-      - vllm.gpu_memory_utilization=0.3
-      - gconfig.n_samples=1
-      - gconfig.max_new_tokens=64
-      - max_turns=2
-      - train_dataset.batch_size=2
-      - valid_dataset.batch_size=2
-      - +train_dataset.setup_timeout=600
-      - +valid_dataset.setup_timeout=600
-      - +total_train_steps=1
-    timeout_minutes: 60
   # GSM8K GRPO（上游 NPU 专用配置 gsm8k_grpo_npu.yaml，实测跑通）
   - path: examples/math/gsm8k_rl.py
     profile: areal-math-grpo
@@ -120,31 +95,6 @@ supported:
       - valid_dataset.batch_size=4
       - +train_dataset.setup_timeout=600
       - +valid_dataset.setup_timeout=600
-      - +total_train_steps=1
-    timeout_minutes: 60
-  # AIME RL（实测跑通）：上游无 aime 配置，setup 从 gsm8k_grpo_npu.yaml
-  # 派生（MathArena 数据转本地 parquet，经 AREAL_AIME_CONFIG 传入）
-  - path: examples/math/aime_rl.py
-    profile: areal-math-aime
-    runner: linux-aarch64-a2-2
-    npu_devices: '0,1'
-    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
-    overlay_args:
-      - --config ${AREAL_AIME_CONFIG}
-      - scheduler.type=local
-      - cluster.n_gpus_per_node=2
-      - rollout.backend=vllm:d1p1t2
-      - actor.backend=fsdp:d2p1t1
-      - +actor.fsdp.offload_params=true
-      - ++actor.weight_update_mode=disk
-      - actor.path=${AREAL_MODEL_PATH}
-      - vllm.gpu_memory_utilization=0.3
-      - gconfig.max_tokens=4096
-      - gconfig.max_new_tokens=512
-      - gconfig.n_samples=1
-      - train_dataset.max_length=4096
-      - train_dataset.batch_size=2
-      - valid_dataset.batch_size=2
       - +total_train_steps=1
     timeout_minutes: 60
   # BoBa GRPO（实测跑通）：脚本按本地 jsonl 加载，setup 预下载
@@ -224,26 +174,6 @@ supported:
       - valid_dataset.batch_size=2
       - +train_dataset.setup_timeout=600
       - +valid_dataset.setup_timeout=600
-      - +total_train_steps=1
-    timeout_minutes: 60
-  # Geometry3K VLM SFT（2026-09-28 实测跑通）：原配置 27B/megatron 16 卡，
-  # 换 2B + fsdp 看 VLM SFT 管线；yaml scheduling_spec 为 null，数据主进程
-  # 加载，无需 setup_timeout
-  - path: examples/vlm/geometry3k_sft.py
-    profile: areal-vlm-sft
-    runner: linux-aarch64-a2-2
-    npu_devices: '0,1'
-    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
-    overlay_args:
-      - --config examples/vlm_npu/qwen3_6_27b_geometry3k_sft.yaml
-      - scheduler.type=local
-      - cluster.n_gpus_per_node=2
-      - actor.backend=fsdp:d2p1t1
-      - +actor.fsdp.offload_params=true
-      - actor.path=${AREAL_MODEL_PATH}
-      - actor.mb_spec.max_tokens_per_mb=1024
-      - train_dataset.batch_size=2
-      - valid_dataset.batch_size=2
       - +total_train_steps=1
     timeout_minutes: 60
   # CLEVR 计数 GRPO：与 geometry3k 同构，复用 areal-vlm-grpo profile。重数据
@@ -396,11 +326,6 @@ unsupported:
   # UPSTREAM_BUG：dpo_pair_logratios 的序列聚合硬编码 fp64（functional.py:698，
   # 为长对精度设计），Ascend 不支持 fp64 计算
   - examples/alignment/hhrlhf_dpo.py
-  # CodeAgent 硬依赖 OPENAI + DAYTONA 外部凭据；且仓内无 config yaml
-  - examples/code/train.py
-  # mopd：actor.path 是未发布 checkpoint 占位符；leetcode 域走 CodeAgent
-  # 外部凭据；16 卡 CP4 形态压不小
-  - examples/distillation/mopd/mopd_rl.py
   # UPSTREAM_BUG：reward_fn 传函数对象，RPC JSON 序列化失败（应传点路径）
   - examples/vlm_npu/virl39k_grpo.py
   # math_agent 调外部 LLM，需 API key
@@ -425,11 +350,6 @@ unsupported:
   - examples/experimental/inference_service/human_in_the_loop_demo.py
   # fork tau2-bench + 外部 user simulator 端点（同 examples/tau2）
   - examples/experimental/inference_service/tau2_rollout.py
-
-  # geometry3k_grpo_mt 的官方 NPU 启动器（export USE_OPTIMIZED_MODEL=0 + 同
-  # config 转发 "$@"）：.py 本体已单独看护，.sh 只是包装层，无独立看护
-  # 价值（2026-10-08 自 supported 移入）。
-  - examples/multi_turn_vlm/run_geometry3k_grpo_mt_npu.sh
 
   # =====================================================================
   # ===== 2026-10-08 收口：以下各组自 scan.exclude 迁入，
@@ -505,15 +425,13 @@ unsupported:
   - examples/agent_workflow/configs.py
   - examples/countdown/reward_score.py
   - examples/multi_turn_math/config.py
-  - examples/multi_turn_vlm/config.py
   - examples/openai_agents/config.py
   - examples/tau2/utils.py
-  # 其它被调用的实现 / 环境 / 演示（agent_service 的 agent、multi_turn_vlm
-  # 的 geo3k_env、openclaw 生命周期演示、sandbox_daytona 奖励示例、
+  # 其它被调用的实现 / 环境 / 演示（agent_service 的 agent、
+  # openclaw 生命周期演示、sandbox_daytona 奖励示例、
   # tau2 的 agent、docs/debug 调试脚本）。
   - examples/agent_service/agent.py
   - examples/docs/debug/cmp_rollout.py
-  - examples/multi_turn_vlm/geo3k_env.py
   - examples/openclaw/_fmt.py
   - examples/openclaw/demo_lifecycle.py
   - examples/openclaw/set_reward.py
@@ -526,3 +444,35 @@ unsupported:
   # 上游 bug 清单 #2）。
   - examples/countdown/countdown.py
   - examples/math/gsm8k_eval.py
+
+  # =====================================================================
+  # ===== 待验证（2026-10-10 对账新增）：以下 21 条为 v2.1.0 树相对
+  # ===== ascend-v1.0.5 的新增文件，尚未在 NPU 上跑通，supported /
+  # unsupported 归属未判定，先统一挂 unsupported，验证后逐条迁移。
+  # =====================================================================
+  # hermes 会话 / 训练工具链（6）
+  - examples/hermes/__init__.py
+  - examples/hermes/hermes.py
+  - examples/hermes/hermes_loop.py
+  - examples/hermes/set_reward.py
+  - examples/hermes/start_session.py
+  - examples/hermes/train.py
+  # profile 性能剖析工具（4）
+  - examples/profile/postprocess_profile.py
+  - examples/profile/profile_rank_utils.py
+  - examples/profile/run_qwen3_30b_a3b_sft_profile.sh
+  - examples/profile/train_sft_profile.py
+  # swe（SWE-bench 风格 RL/SFT）实现与入口（7）
+  - examples/swe/agent.py
+  - examples/swe/apply_sgl_radix_cache_patch.py
+  - examples/swe/filter_function.py
+  - examples/swe/prefix_matchers.py
+  - examples/swe/preprocessors.py
+  - examples/swe/train_swe_rl.py
+  - examples/swe/utils.py
+  # vlm_npu 官方 NPU 启动器（4；geometry3k_grpo.py 与其 .sh 的被守卫入口
+  # examples/vlm/geometry3k_grpo.py 已在 supported，此处是 launcher 层）
+  - examples/vlm_npu/geometry3k_grpo.py
+  - examples/vlm_npu/qwen2_5_vl_3b_geometry3k_grpo.sh
+  - examples/vlm_npu/qwen2_5_vl_3b_virl39k_grpo_multinode.sh
+  - examples/vlm_npu/qwen3_vl_2b_geometry3k_grpo.sh

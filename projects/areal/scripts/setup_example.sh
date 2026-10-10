@@ -537,7 +537,10 @@ fi
 # an empty git repo in the job container (first-run risk: aenv must execute
 # the shell locally, not in a remote FaaS sandbox).
 if [[ "$SWE_PREP" == 1 ]]; then
-python3 <<'PY'
+# AREAL_MODEL_PATH is a non-exported shell variable from section 3; export it
+# for this heredoc only so os.environ sees it (it is already in GITHUB_ENV for
+# the run step).
+AREAL_MODEL_PATH="$AREAL_MODEL_PATH" python3 <<'PY'
 import json
 import os
 import subprocess

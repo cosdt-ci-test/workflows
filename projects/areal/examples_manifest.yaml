@@ -6,8 +6,7 @@ scan:
   # root + include_extensions 两个键；实现模块、上游自测等一律进
   # unsupported 段（带分组注释与理由）。
   # 对账口径：release 树（当前 v2.1.0）114 个 .py/.sh =
-  # supported(10) + unsupported(104)，其中尾部 13 条为可执行入口，
-  # 标「待验证」。
+  # supported(12) + unsupported(102)。
 
 # 看护 release 线（workflow target_ref 留空，由引擎按 latest release
 # 解析）。supported 配方用专用镜像 ghcr.io/hwvanici/areal_npu:v1.0.5-a2
@@ -103,7 +102,7 @@ supported:
       - ++actor.weight_update_mode=disk
       - actor.path=${AREAL_MODEL_PATH}
       - +total_train_steps=1
-      - total_train_steps=1
+      - +total_train_steps=1
     timeout_minutes: 90
   # # GSM8K GRPO（上游 NPU 专用配置 gsm8k_grpo_npu.yaml，实测跑通）
   # - path: examples/math/gsm8k_rl.py
@@ -530,16 +529,18 @@ unsupported:
   # 上游 bug 清单 #2）。
   - examples/countdown/countdown.py
   - examples/math/gsm8k_eval.py
-
-  # =====================================================================
-  # ===== 待验证（仅可执行入口）：以下 4 条尚未在 NPU 上跑通，
-  # ===== supported / unsupported 归属未判定，先统一挂 unsupported，
-  # ===== 验证后逐条迁移。
-  # =====================================================================
-  # vlm_npu：geometry3k GRPO 训练入口（内联 mathruler 奖励，与 supported
-  # 的 examples/vlm/geometry3k_grpo.py 是两个文件）+ 3 个官方 NPU 启动器；
-  # multinode .sh 跑的是 vlm_npu/virl39k_grpo.py（本体在上方 UPSTREAM_BUG
-  # 分组），3 节点 ×16 卡形态
+  # vlm_npu：geometry3k GRPO 入口的坏副本 + 3 个官方 NPU 启动器（包装层）。
+  # geometry3k_grpo.py 与 supported 的 examples/vlm/geometry3k_grpo.py 逐行
+  # 同源，仅 reward_fn 传函数对象（应为点路径字符串）——同 virl39k 的 RPC
+  # 序列化 UPSTREAM_BUG，属重复条目；qwen2_5/qwen3_vl 的 .sh 只是
+  # USE_OPTIMIZED_MODEL=0 + python 该 py 的包装（底层 py 已坏，geometry3k
+  # 覆盖面也已由 supported 条目覆盖）；multinode .sh 跑 virl39k_grpo.py
+  # （本体在上方 UPSTREAM_BUG 分组）且是 3 节点 ×16 卡多节点形态，池子无
+  # 对应 runner。
+  # 可升格出口：上游把 vlm_npu/geometry3k_grpo.py 的 reward_fn 修成点路径
+  # 后，Qwen3-VL-2B geometry3k（qwen3_vl_2b config，模型已 seed）可作独立
+  # 模型覆盖面升格——走 supported 的 vlm/geometry3k_grpo.py 入口 + config
+  # 注入即可，不需要这个 .sh。
   - examples/vlm_npu/geometry3k_grpo.py
   - examples/vlm_npu/qwen2_5_vl_3b_geometry3k_grpo.sh
   - examples/vlm_npu/qwen2_5_vl_3b_virl39k_grpo_multinode.sh

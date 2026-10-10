@@ -8,6 +8,8 @@ ms-swift 项目在 [projects.yaml](../projects.yaml) 里注册为「训练加速
 
 设计起点：截至 2026-09-10，本仓已有 [ms-swift-examples.yml](../.github/workflows/ms-swift-examples.yml) 与 [ms-swift-quick-start.yml](../.github/workflows/ms-swift-quick-start.yml) 两条流水线；清单 [examples_manifest.yaml](../projects/ms-swift/examples_manifest.yaml) 中 12 条 supported、约 200 条 unsupported；项目脚本 [setup_example.sh](../projects/ms-swift/scripts/setup_example.sh)、[run_example.sh](../projects/ms-swift/scripts/run_example.sh) 已稳定运行。本设计文档化这一状态，不是引入新行为，而是把现有的实现重新组织为可读的设计视图。
 
+> **2026-09-30 更新**：`ms-swift-examples.yml` 已迁移到共享引擎 [examples-template.yml](../.github/workflows/examples-template.yml)（thin trigger，本仓 11 条 legacy examples 流水线的最后一个）。监控语义随之变化：§2.3.1 描述的三信号 monitor（examples 树 / release / commit）被引擎的 **release 信号 + workflow-files 自触发**取代（`projects/ms-swift/**` 变更会触发一轮），失败重试与 outcome 记账由引擎的 save-monitor-state 承担；模型 / pip 缓存从 `/data/ci-cache` bind-mount 改为共享 runner 缓存（setup 内 env 重定向）。清单驱动调度、项目脚本契约、result.json 契约（§2.3.2 起）不变。本文其余部分保留迁移前设计作为历史参考；引擎级设计见 [examples-guard-engine.md](examples-guard-engine.md)。
+
 ### 1.2 范围
 
 仅覆盖 ms-swift example 看护（即 `ms-swift-examples.yml` 这条流水线及其项目脚本）。quick-start 文档看护（`ms-swift-quick-start.yml` + [test_quick_start_ascend.py](../projects/ms-swift/tests/test_quick_start_ascend.py)）走的是另一套模板（[quick-start-template.yml](../.github/workflows/quick-start-template.yml)），虽然命名相似但机制不同，本文不展开。

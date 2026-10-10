@@ -95,7 +95,7 @@ class TensorDictExamplesContract(unittest.TestCase):
         self.assertIn('uv pip install --system --no-deps -e "$TARGET_ROOT"', setup)
         self.assertNotIn('pip install -e "$TARGET_ROOT"', setup)
 
-    def test_thin_trigger_and_registry(self) -> None:
+    def test_thin_trigger(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "tensordict-examples.yml").read_text(
             encoding="utf-8"
         )
@@ -103,8 +103,6 @@ class TensorDictExamplesContract(unittest.TestCase):
         self.assertIn("upstream_repo: pytorch/tensordict", workflow)
         self.assertIn("# schedule:", workflow)
         self.assertNotIn("  schedule:\n", workflow)
-        projects = (ROOT / "projects.yaml").read_text(encoding="utf-8")
-        self.assertIn("examples: .github/workflows/tensordict-examples.yml", projects)
 
 
 if __name__ == "__main__":

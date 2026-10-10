@@ -488,14 +488,12 @@ class RollProjectTests(unittest.TestCase):
             encoding='utf-8')
         self.assertIn('linux-aarch64-a2-4', text)
 
-    def test_projects_registry_has_examples_workflow(self) -> None:
-        data = yaml.safe_load(
-            (REPO / 'projects.yaml').read_text(encoding='utf-8'))
-        roll = next(p for p in data['projects'] if p['name'] == 'roll')
-        self.assertEqual(
-            roll['workflows']['examples'],
-            '.github/workflows/roll-examples.yml',
-        )
+    def test_thin_trigger_calls_examples_engine(self) -> None:
+        text = (REPO / '.github/workflows/roll-examples.yml').read_text(
+            encoding='utf-8')
+        self.assertIn('uses: ./.github/workflows/examples-template.yml', text)
+        self.assertIn('project: roll', text)
+        self.assertIn('upstream_repo: alibaba/ROLL', text)
 
 
 if __name__ == '__main__':

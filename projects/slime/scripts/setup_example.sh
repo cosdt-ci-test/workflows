@@ -111,10 +111,15 @@ def prepare_fixture(source, destination):
         path = destination / f"triangle-{index}.png"
         image.save(path)
         problem = ('<image>Find angle C in the triangle. Read the labeled angles A and B from the image. '
-            'Before answering, call the scoring tool using exactly '
+            'The calc_score tool is available. On your FIRST turn, output ONLY a tool call '
+            'with your estimated angle, with no explanation or final answer: '
             '<tool_call>{"name":"calc_score","arguments":{"answer":"YOUR_NUMBER"}}</tool_call>. '
-            'After its feedback, provide the final angle in degrees as \\boxed{YOUR_NUMBER}.')
-        rows.append({"problem": problem, "answer": fact["answer"], "images": [path.as_uri()]})
+            'Wait for tool feedback before providing the final angle in degrees as \\boxed{YOUR_NUMBER}.')
+        tools = [{"type": "function", "function": {"name": "calc_score",
+            "description": "Check a proposed angle and return feedback before the final answer.",
+            "parameters": {"type": "object", "properties": {"answer": {"type": "string"}},
+                           "required": ["answer"]}}}]
+        rows.append({"problem": problem, "answer": fact["answer"], "images": [path.as_uri()], "tools": tools})
     output = destination / "geo3k-ci.jsonl"
     output.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
     return output
@@ -580,8 +585,8 @@ PY
 }
 
 setup_slime_retool_sft() {
-  # Upstream debug-train-only skips SGLang; two actor NPUs suffice for TP2.
-  SLIME_RETOOL_REQUIRED_GPUS=2 setup_slime_retool
+  # Four-way TP fits the 4B actor/Adam state on 32GB NPU runners.
+  SLIME_RETOOL_REQUIRED_GPUS=4 setup_slime_retool
   append_project_env "SLIME_SFT_FIXTURE_JSONL=$FIXTURE_DIR/ci_retool_sft_8.jsonl"
   validate_sft_fixture \
     "$FIXTURE_DIR/ci_retool_sft_8.jsonl" "$(cat "$DEPS_ROOT/retool_model_path.txt")"
@@ -633,12 +638,38 @@ with open(sys.argv[1], "w") as output:
         except PackageNotFoundError:
             pass
 PY
-  python -m pip install -c "$constraints" 'strands-sglang==0.3.2' camel-ai
+  # 0.4.x renamed ToolLimiter to LoopLimiter, breaking the unmodified example.
+  # 0.3.8 preserves its API but declares Transformers <5. Install the adapter
+  # separately and verify its real tokenizer API on SGLang's pinned 5.8.1.
+  python -m pip install --no-deps 'strands-sglang==0.3.8'
+  python -m pip install -c "$constraints" aiohttp jinja2 pybase64 \
+    'strands-agents[openai]==1.59.0' 'camel-ai==0.2.90'
   python - <<'PY'
 from camel.interpreters import SubprocessInterpreter
 from strands import Agent, tool
 from strands_sglang import SGLangModel, ToolLimiter, get_client_from_slime_args
 from strands_sglang.tool_parsers import HermesToolParser
+from transformers import AutoTokenizer
+from pathlib import Path
+import os
+model_path = Path(os.environ['SLIME_FORK_ROOT']).parent / 'retool_model_path.txt'
+tokenizer = AutoTokenizer.from_pretrained(model_path.read_text().strip(), local_files_only=True)
+encoded = tokenizer.apply_chat_template(
+    [{'role': 'user', 'content': 'Calculate 2 + 3 with the Python tool.'}],
+    tokenize=False, add_generation_prompt=True)
+assert isinstance(encoded, str) and tokenizer.encode(encoded)
+print('Strands adapter uses the preserved Transformers tokenizer stack')
+from types import SimpleNamespace
+probe_args = SimpleNamespace(sglang_router_ip='127.0.0.1', sglang_router_port=1,
+    sglang_server_concurrency=1, rollout_num_gpus=2, rollout_num_gpus_per_engine=2)
+model = SGLangModel(tokenizer=tokenizer,
+    client=get_client_from_slime_args(probe_args, timeout=5), tool_parser=HermesToolParser())
+for attribute in ('token_ids', 'loss_mask', 'logprobs', 'segments'):
+    if not hasattr(model.token_manager, attribute):
+        raise RuntimeError(f'Strands native TITO API missing: {attribute}')
+agent = Agent(model=model, tools=[], hooks=[ToolLimiter(max_tool_iters=5)], callback_handler=None)
+model.reset()
+agent.cleanup()
 result = SubprocessInterpreter(require_confirm=False, print_stdout=False,
     print_stderr=False, execution_timeout=5.0).run("print(2 + 3)", "python")
 if "5" not in str(result):
@@ -656,6 +687,10 @@ setup_slime_search() {
     apt-get update
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openjdk-11-jdk-headless
   fi
+  # The aarch64 JDK 11 C1 compiler crashed in IPAddressUtil.scan in run #21.
+  # Eight-document BM25 does not need JIT; keep the real Java/Lucene backend.
+  export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:+$JAVA_TOOL_OPTIONS }-Xint -XX:ActiveProcessorCount=2"
+  append_project_env "JAVA_TOOL_OPTIONS=$JAVA_TOOL_OPTIONS"
   java -version
   local constraints="$DEPS_ROOT/search-stack-constraints.txt"
   python - "$constraints" <<'PY'
@@ -737,10 +772,13 @@ processor = load_processor(model, trust_remote_code=True)
 if processor is None:
     raise RuntimeError("Geo3K native multimodal processor is unavailable")
 dataset = Dataset(fixture, tokenizer, processor, 1024,
-    prompt_key="problem", label_key="answer", multimodal_keys={"image": "images"}, apply_chat_template=True)
+    prompt_key="problem", label_key="answer", tool_key="tools",
+    multimodal_keys={"image": "images"}, apply_chat_template=True)
 if len(dataset.samples) != 8:
     raise RuntimeError("Geo3K fixture was unexpectedly filtered")
 for sample in dataset.samples:
+    if not sample.metadata or not sample.metadata.get('tools') or sample.metadata['tools'][0].get('function', {}).get('name') != 'calc_score':
+        raise RuntimeError('Geo3K native Dataset lost the scoring-tool schema')
     if not sample.multimodal_inputs or not sample.multimodal_inputs.get("images"):
         raise RuntimeError("Geo3K native Dataset lost fixture images")
     output = processor(text=sample.prompt, **sample.multimodal_inputs)

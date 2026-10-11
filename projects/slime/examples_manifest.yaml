@@ -108,21 +108,24 @@ supported:
       - "--actor-num-gpus-per-node 4"
       - "--rollout-num-gpus 4"
       - "--num-gpus-per-node 8"
-      - "--tensor-model-parallel-size 2"
+      - "--tensor-model-parallel-size 4"
       - "--rollout-num-gpus-per-engine 2"
       - "--sglang-device npu"
       - "--sglang-mem-fraction-static 0.4"
       - "--sglang-cuda-graph-max-bs 4"
-      - "--max-tokens-per-gpu 2048"
+      - "--max-tokens-per-gpu 1024"
       - "--log-probs-chunk-size 128"
       - --use-dynamic-batch-size
+      - "--recompute-granularity full"
+      - "--recompute-method uniform"
+      - "--recompute-num-layers 1"
       - "--attention-backend flash"
       - --ci-test
 
-  # ReTool SFT：监督对话训练；保留原生 SFT token mask，双卡 TP2 两步验证。
+  # ReTool SFT：监督对话训练；保留原生 SFT token mask，四卡 TP4 和重计算控制显存。
   - path: examples/retool/retool_qwen3_4b_sft.sh
     profile: slime_retool_sft
-    runner: linux-aarch64-a2-2
+    runner: linux-aarch64-a2-4
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     timeout_minutes: 300
     overlay_args:
@@ -141,16 +144,19 @@ supported:
       - --calculate-per-token-loss
       - --disable-compute-advantages-and-returns
       - --debug-train-only
-      - "--actor-num-gpus-per-node 2"
+      - "--actor-num-gpus-per-node 4"
       - "--rollout-num-gpus 0"
-      - "--num-gpus-per-node 2"
-      - "--tensor-model-parallel-size 2"
+      - "--num-gpus-per-node 4"
+      - "--tensor-model-parallel-size 4"
       - --sequence-parallel
       - "--context-parallel-size 1"
       - --use-dynamic-batch-size
-      - "--max-tokens-per-gpu 2048"
+      - "--max-tokens-per-gpu 1024"
       - "--attention-dropout 0.0"
       - "--hidden-dropout 0.0"
+      - "--recompute-granularity full"
+      - "--recompute-method uniform"
+      - "--recompute-num-layers 1"
       - "--attention-backend flash"
       - "--optimizer adam"
       - "--lr 1e-5"
@@ -326,7 +332,7 @@ supported:
       - "--actor-num-gpus-per-node 4"
       - "--rollout-num-gpus 4"
       - "--num-gpus-per-node 8"
-      - "--tensor-model-parallel-size 2"
+      - "--tensor-model-parallel-size 4"
       - "--sequence-parallel"
       - "--context-parallel-size 1"
       - "--rollout-num-gpus-per-engine 2"
@@ -334,10 +340,14 @@ supported:
       - "--sglang-mem-fraction-static 0.4"
       - "--sglang-cuda-graph-max-bs 4"
       - "--use-dynamic-batch-size"
-      - "--max-tokens-per-gpu 2048"
+      - "--max-tokens-per-gpu 1024"
       - "--attention-dropout 0.0"
       - "--hidden-dropout 0.0"
+      - "--recompute-granularity full"
+      - "--recompute-method uniform"
+      - "--recompute-num-layers 1"
       - "--attention-backend flash"
+      - "--keep-old-actor"
       - "--optimizer adam"
       - "--lr 1e-6"
       - "--weight-decay 0.1"
@@ -372,7 +382,7 @@ supported:
       - "--actor-num-gpus-per-node 4"
       - "--rollout-num-gpus 4"
       - "--num-gpus-per-node 8"
-      - "--tensor-model-parallel-size 2"
+      - "--tensor-model-parallel-size 4"
       - "--sequence-parallel"
       - "--context-parallel-size 1"
       - "--rollout-num-gpus-per-engine 2"
@@ -380,9 +390,12 @@ supported:
       - "--sglang-mem-fraction-static 0.4"
       - "--sglang-cuda-graph-max-bs 4"
       - "--use-dynamic-batch-size"
-      - "--max-tokens-per-gpu 2048"
+      - "--max-tokens-per-gpu 1024"
       - "--attention-dropout 0.0"
       - "--hidden-dropout 0.0"
+      - "--recompute-granularity full"
+      - "--recompute-method uniform"
+      - "--recompute-num-layers 1"
       - "--attention-backend flash"
       - "--optimizer adam"
       - "--lr 1e-6"
@@ -449,6 +462,7 @@ supported:
       - "--prompt-data ${SLIME_FIXTURE_JSONL}"
       - "--input-key problem"
       - "--label-key answer"
+      - "--tool-key tools"
       - "--apply-chat-template"
       - "--rm-type math"
       - "--advantage-estimator grpo"

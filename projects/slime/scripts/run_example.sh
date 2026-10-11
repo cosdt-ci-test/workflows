@@ -354,11 +354,11 @@ case "$entry_key" in
     export PYTHONPATH="$SLIME_FORK_ROOT/examples/retool:$PYTHONPATH"
     ;;
   examples/retool/retool_qwen3_4b_sft.sh)
-    require_visible_devices 2 '0,1'
+    require_visible_devices 4 '0,1,2,3'
     IFS=',' read -r -a sft_devices <<< "$ASCEND_RT_VISIBLE_DEVICES"
-    export SLIME_RETOOL_DEVICES="$(IFS=,; echo "${sft_devices[*]:0:2}")"
+    export SLIME_RETOOL_DEVICES="$(IFS=,; echo "${sft_devices[*]:0:4}")"
     : "${SLIME_SFT_FIXTURE_JSONL:?SFT fixture was not exported by setup}"
-    NUM_GPUS=2
+    NUM_GPUS=4
     MODEL_TYPE=qwen3-4B-Instruct-2507
     TRAIN_SCRIPT=train_async.py
     ;;

@@ -215,3 +215,21 @@ Search-R1 的 Pyserini 0.25.0 会在 BM25 导入时创建未使用的 OpenAI 客
 
 supported 仍为 11 条，公共引擎和上游 example 源码不改；本地验证不代替
 下一轮真实 NPU 运行，尤其需要确认 OOM 消失及 Geo3K 工具调用实际发生。
+
+## Run #22 修复
+
+[本轮运行](https://github.com/cosdt-ci-test/workflows/actions/runs/38131751791)
+11 条中 9 条通过，两条失败均发生在实际运行阶段：
+
+- Search-R1：Java/BM25 初始化已通过，奖励函数 `qa_em_format.compute_score_em`
+  读取 `ground_truth["target"]` 时发现 fixture 提供的是列表。本仓八行数据改为
+  `reward_model.ground_truth.target` 对象格式；setup 用上游评分函数逐行检查
+  正确/错误答案，不修改评分源码，真实 `/retrieve` 调用验收保留。
+- Geo3K：日志已证明模型读取图片、调用 `calc_score`、收到反馈并继续作答；
+  训练在 `calculate_log_probs_and_entropy` 的 `logits.clone()` 处 OOM，
+  需要 594 MiB、当时仅余 344 MiB。保留四卡 TP2 布局和原生多轮语义，
+  启用原生 full/uniform 每层重计算、loss 重计算、64-token log-prob/entropy
+  分块，并将训练 token microbatch 上限从 2048 降到 1024。图像、工具反馈、
+  有限梯度与两次 rollout 检查均保留，OOM 缓解效果待真实 NPU 复验。
+
+其余九条已通过配方保持不变；supported 仍为 11 条。

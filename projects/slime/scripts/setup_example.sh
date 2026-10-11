@@ -680,6 +680,28 @@ PY
 
 setup_slime_search() {
   setup_slime_opd
+  # Check the actual upstream reward contract before starting Ray/NPU jobs.
+  python - "$SLIME_FORK_ROOT" "$FIXTURE_DIR/ci_search_8.jsonl" <<'PY'
+import json, sys
+from pathlib import Path
+sys.path.insert(0, str(Path(sys.argv[1]) / 'examples/search-r1'))
+from qa_em_format import compute_score_em
+rows = [json.loads(line) for line in Path(sys.argv[2]).read_text(encoding='utf-8').splitlines() if line.strip()]
+if len(rows) != 8:
+    raise RuntimeError('Search-R1 fixture must contain eight questions')
+for index, row in enumerate(rows):
+    ground_truth = row['reward_model']['ground_truth']
+    if not isinstance(ground_truth, dict) or not isinstance(ground_truth.get('target'), list) or not ground_truth['target']:
+        raise RuntimeError(f'Search-R1 row {index}: expected ground_truth.target answer list')
+    # The native scorer receives prompt+response and skips the prompt's
+    # <answer>...</answer> format example when extracting the final answer.
+    prefix = row['prompt'][0]['content'] + '\n<|im_start|>assistant\n<think>Check the retrieved fact.</think>'
+    correct = prefix + f"<answer>{ground_truth['target'][0]}</answer>"
+    wrong = prefix + '<answer>CI deliberately wrong answer</answer>'
+    if compute_score_em(correct, ground_truth) != 1 or compute_score_em(wrong, ground_truth) != 0:
+        raise RuntimeError(f'Search-R1 row {index}: native exact-match reward contract failed')
+print('Search-R1: eight native reward labels and correct/incorrect scoring passed')
+PY
   # The upstream CLI supports BM25 without the dense encoder's .cuda().
   # Pyserini 0.25 uses Java 11 and bundles its Anserini JAR; no wiki index
   # or external search API is needed for this local eight-document corpus.

@@ -166,9 +166,11 @@ from pathlib import Path
 import torch
 import torch_npu
 import dgl
+import dgl._ffi._cy3.core
 
 source = (Path.cwd() / 'dgl-ascend/python').resolve()
 assert not Path(dgl.__file__).resolve().is_relative_to(source), 'Source tree shadows installed DGL'
+assert not Path(dgl._ffi._cy3.core.__file__).resolve().is_relative_to(source), 'Source tree shadows installed Cython extension'
 installed_lib = Path(dgl._ffi.base._LIB._name).resolve()
 assert not installed_lib.is_relative_to(source.parent), 'DGL loads the source-tree library'
 with (source.parent / 'build/libdgl.so').open('rb') as built, installed_lib.open('rb') as installed:

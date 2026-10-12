@@ -67,12 +67,16 @@ export LD_LIBRARY_PATH="$(python -c 'import torch; from pathlib import Path; pri
 bash dgl-ascend/script/build_dgl_ascend.sh
 ```
 
-**安装 Python 绑定。** 将编译好的 DGL 原生库接入 Python 的 `dgl` 接口，并构建 Cython 扩展：
+**安装 Python 绑定。** 使用兼容上游代码的 Cython 版本，将编译好的 DGL 原生库接入 Python 的 `dgl` 接口，并构建扩展：
 
 ```shell #test-setup
-cd dgl-ascend/python
-python setup.py install
-python setup.py build_ext --inplace
+pip install "Cython==3.0.12"
+```
+
+```shell #test-setup
+cd dgl-ascend/python &&
+python setup.py install &&
+python setup.py build_ext --inplace &&
 cd ../..
 ```
 

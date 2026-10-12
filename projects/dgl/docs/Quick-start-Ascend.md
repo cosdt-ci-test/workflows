@@ -60,9 +60,10 @@ git clone https://github.com/BUPT-GAMMA/dgl-ascend.git
 git -C dgl-ascend submodule update --init --recursive
 ```
 
-**编译昇腾后端。** 构建支持昇腾 NPU 的 DGL 原生库：
+**编译昇腾后端。** 将 PyTorch 随包提供的依赖库加入搜索路径，再构建支持昇腾 NPU 的 DGL 原生库：
 
 ```shell #test-setup
+export LD_LIBRARY_PATH="$(python -c 'import torch; from pathlib import Path; print(Path(torch.__file__).resolve().parent.parent / "torch.libs")'):${LD_LIBRARY_PATH}"
 bash dgl-ascend/script/build_dgl_ascend.sh
 ```
 

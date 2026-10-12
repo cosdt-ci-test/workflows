@@ -8,6 +8,8 @@
 
 文档进入 `dgl-ascend/python`，按上游安装文档依次执行 `python setup.py install` 和 `python setup.py build_ext --inplace`，最后用 `cd ../..` 返回原工作目录，暂不额外安装 Cython 和构建工具。夹具检查已安装原生库，并执行 NPU 图消息传递及反向传播检查；训练输出必须包含完整一轮结束日志和有限的 BPR 损失。GraphSAGE、HERec 和 GitCode 发行包不在本次范围。
 
+aarch64 的 PyTorch CPU wheel 将 OpenBLAS 和 libgfortran 等依赖放在 `torch.libs`。编译步骤从已安装的 PyTorch 动态定位该目录并加入 `LD_LIBRARY_PATH`，避免链接 `runUnitTests` 时找不到 OpenBLAS 的间接依赖；不修改上游源码，也不关闭原生测试目标。
+
 ## 触发
 
 `dgl-quick-start.yml` 接受：

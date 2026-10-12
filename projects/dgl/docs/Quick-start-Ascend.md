@@ -88,8 +88,7 @@ python -c "import torch, torch_npu, dgl; print('dgl version:', dgl.__version__)"
 
 输出结果如下：
 
-```shell #test-result id="install-dgl" fuzzy='...' fuzzy='xxx'
-...
+```shell #test-result id="install-dgl" fuzzy='xxx'
 dgl version: xxx
 ```
 

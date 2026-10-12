@@ -112,11 +112,11 @@ with ZipFile(archive) as dataset:
     dataset.extractall(example_dir)
 ```
 
-运行训练，查看设备和每轮的平均 BPR 损失。BPR 损失用于学习用户对已交互物品与未交互物品的相对偏好：
+使用同步模式运行 NPU 算子，避免 PyTorch 与 DGL 异步执行时的数据竞争；该模式会降低训练速度。运行训练后查看设备和每轮的平均 BPR 损失，BPR 损失用于学习用户对已交互物品与未交互物品的相对偏好：
 
 ```shell #test id="lightgcn-train"
 cd dgl-ascend/examples/pytorch/lightgcn
-python main.py --dataset gowalla --batch 2048 --recdim 64 --epochs 1 --device npu
+ASCEND_LAUNCH_BLOCKING=1 python main.py --dataset gowalla --batch 2048 --recdim 64 --epochs 1 --device npu
 ```
 
 输出结果如下：

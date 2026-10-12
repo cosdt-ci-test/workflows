@@ -10,6 +10,8 @@
 
 aarch64 的 PyTorch CPU wheel 将 OpenBLAS 和 libgfortran 等依赖放在 `torch.libs`。编译步骤从已安装的 PyTorch 动态定位该目录并加入 `LD_LIBRARY_PATH`，避免链接 `runUnitTests` 时找不到 OpenBLAS 的间接依赖；不修改上游源码，也不关闭原生测试目标。
 
+训练命令使用 `ASCEND_LAUNCH_BLOCKING=1`，以同步模式规避 PyTorch 与 DGL NPU 流之间的数据竞争，速度会低于异步模式。上游 [PR #43](https://github.com/BUPT-GAMMA/dgl-ascend/pull/43) 记录了这类流顺序问题，但尚未合入当前引擎选中的提交。夹具在训练前以同样的同步模式检查完整 Gowalla 图：从原始边独立计算 CPU 参考度数，交错执行 PyTorch 运算和 DGL 查询，重复三次逐项核对 NPU 入度、出度。保留 `GraphConv` 的零入度检查，不使用 `allow_zero_in_degree=True` 绕过错误。
+
 ## 触发
 
 `dgl-quick-start.yml` 接受：

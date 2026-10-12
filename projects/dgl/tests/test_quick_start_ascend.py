@@ -141,6 +141,8 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             self.log(f'DGL source matches engine SHA {self._source_sha}')
         if 'script/build_dgl_ascend.sh' in cmd.cmd:
             timeout = self.BUILD_TIMEOUT
+        if getattr(cmd, 'id', None) == 'lightgcn-train':
+            self._verify_training_graph(env, cwd)
         self._active_id = getattr(cmd, 'id', None)
         try:
             super()._run_one(cmd, results, env, cwd, timeout, idx)
@@ -189,6 +191,48 @@ assert x.grad is not None and torch.isfinite(x.grad).all().item()
         if actual != self._source_sha:
             raise AssertionError('DGL source changed during build or installation')
         self.log('Installed DGL graph operations and backward pass run on NPU')
+
+    def _verify_training_graph(self, env, cwd):
+        # Check the complete training graph against an independent CPU edge count.
+        # Launch blocking orders torch_npu writes before DGL's native kernels;
+        # retain GraphConv's zero-degree guard rather than suppressing it.
+        code = """
+from pathlib import Path
+import torch
+import torch_npu
+import dgl
+
+train_file = Path('dgl-ascend/examples/pytorch/lightgcn/gowalla/train.txt')
+users, items = [], []
+for line in train_file.read_text().splitlines():
+    values = list(map(int, line.split()))
+    users.extend([values[0]] * (len(values) - 1))
+    items.extend(values[1:])
+src = torch.tensor(users, dtype=torch.int64)
+n_users = int(src.max()) + 1
+dst = torch.tensor(items, dtype=torch.int64) + n_users
+n_nodes = int(dst.max()) + 1
+src_bidir = torch.cat([src, dst])
+dst_bidir = torch.cat([dst, src])
+expected_in = torch.bincount(dst_bidir, minlength=n_nodes)
+expected_out = torch.bincount(src_bidir, minlength=n_nodes)
+assert (expected_in > 0).all().item(), 'Training data contains isolated nodes'
+graph = dgl.graph((src_bidir, dst_bidir), num_nodes=n_nodes).to('npu')
+for _ in range(3):
+    # Interleave PyTorch work with DGL degree queries, as training does.
+    pending = torch.randn(4096, 64, device='npu').square()
+    for name, expected in (('in', expected_in), ('out', expected_out)):
+        actual = getattr(graph, name + '_degrees')().cpu()
+        mismatch = int((actual != expected).sum())
+        assert mismatch == 0, f'NPU {name}-degrees differ from CPU at {mismatch} nodes'
+print(f'Gowalla NPU degrees match CPU for all {n_nodes} nodes')
+"""
+        _checked_run(
+            [sys.executable, '-c', code],
+            env=dict(env, ASCEND_LAUNCH_BLOCKING='1'), cwd=cwd,
+            timeout=self.DEFAULT_COMMAND_TIMEOUT,
+        )
+        self.log('Full Gowalla graph degrees match CPU in synchronous NPU mode')
 
     def run_command(self, cmd, env, cwd, timeout, language='shell'):
         rc, output, error = super().run_command(cmd, env, cwd, timeout, language)

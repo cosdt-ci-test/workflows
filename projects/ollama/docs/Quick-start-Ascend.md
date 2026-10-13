@@ -58,10 +58,10 @@ git clone --depth 1 --branch "$(curl -fsSL https://api.github.com/repos/ollama/o
 git -C ollama apply --check ../ollama-cann.patch && git -C ollama apply ../ollama-cann.patch
 ```
 
-**构建 CANN 后端。** 构建产物保存在 `ollama/build/`，服务程序生成在 `ollama/ollama`。
+**构建 CANN 后端。** CPU 后端仅构建基础版本，CANN 后端用于 NPU 推理。构建产物保存在 `ollama/build/`，服务程序生成在 `ollama/ollama`。
 
 ```shell #test-setup
-cmake -S ollama -B ollama/build -DCMAKE_BUILD_TYPE=Release -DOLLAMA_LLAMA_BACKENDS=cann -DOLLAMA_BUILD_PARALLEL=8 -DCANN_INSTALL_DIR="$ASCEND_HOME_PATH" -DSOC_TYPE=Ascend910B4 -DOLLAMA_VERSION="$(git -C ollama describe --tags --exact-match)"
+cmake -S ollama -B ollama/build -DCMAKE_BUILD_TYPE=Release -DOLLAMA_LLAMA_BACKENDS=cann -DOLLAMA_BUILD_PARALLEL=8 -DGGML_CPU_ALL_VARIANTS=OFF -DCANN_INSTALL_DIR="$ASCEND_HOME_PATH" -DSOC_TYPE=Ascend910B4 -DOLLAMA_VERSION="$(git -C ollama describe --tags --exact-match)"
 ```
 
 ```shell #test-setup

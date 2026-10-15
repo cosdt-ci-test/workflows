@@ -134,19 +134,57 @@ PY
 }
 
 ms_download_models() {
-  # ModelScope direct pull; the runner's persistent cache makes repeat runs
-  # free. Env names are exported through GITHUB_ENV to the run step.
-  python -m pip install -q "modelscope==1.37.0"
-  TQDM_MININTERVAL="${TQDM_MININTERVAL:-15}" python - "$@" <<'PY'
+  # Private download staging avoids concurrent jobs writing the same cache.
+  # Retain it until the run step finishes; export only validated snapshots.
+  python -m pip install -q "modelscope==1.37.0" safetensors
+  TQDM_MININTERVAL="${TQDM_MININTERVAL:-15}" \
+    MODELSCOPE_DOWNLOAD_PARALLELS=1 MODELSCOPE_ENABLE_DEFAULT_HASH_VALIDATION=true \
+    python - "$@" <<'PY'
+import json
 import os
+from pathlib import Path
 import sys
+import tempfile
+import time
 
 from modelscope import snapshot_download
+from safetensors import safe_open
 
-cache = os.environ.get("MODELSCOPE_CACHE", os.path.expanduser("~/.cache/modelscope"))
+
+def validate_snapshot(local):
+    root = Path(local)
+    json.loads((root / 'config.json').read_text())
+    shards = sorted(root.glob('*.safetensors'))
+    index = root / 'model.safetensors.index.json'
+    if index.is_file():
+        expected = set(json.loads(index.read_text())['weight_map'].values())
+        if not expected.issubset({shard.name for shard in shards}):
+            raise RuntimeError(f'model weight shards missing: {root}')
+    for shard in shards:
+        with safe_open(str(shard), framework='np') as weights:
+            if not list(weights.keys()):
+                raise RuntimeError(f'empty model weights: {shard}')
+    if not shards and not list(root.glob('pytorch_model*.bin')):
+        raise RuntimeError(f'model weights missing: {root}')
+    print(f'validated model snapshot: {root}', flush=True)
+
+
+cache = tempfile.mkdtemp(prefix='liger-modelscope-', dir='/tmp')
+print('private ModelScope cache:', cache, flush=True)
 for pair in sys.argv[1:]:
     env_name, model_id = pair.split("=", 1)
-    local = snapshot_download(model_id, cache_dir=cache)
+    for attempt in range(3):
+        try:
+            local = snapshot_download(model_id, cache_dir=cache,
+                                      enable_file_lock=True, max_workers=2)
+            validate_snapshot(local)
+            break
+        except Exception as exc:
+            print(f'{model_id} attempt {attempt + 1}/3 failed: {exc}', flush=True)
+            if attempt == 2:
+                raise
+            cache = tempfile.mkdtemp(prefix='liger-modelscope-retry-', dir='/tmp')
+            time.sleep(2 * (attempt + 1))
     with open(os.environ["GITHUB_ENV"], "a") as handle:
         handle.write(f"{env_name}={local}\n")
     print(f"{env_name}={local}", flush=True)

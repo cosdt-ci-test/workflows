@@ -19,6 +19,26 @@ scan:
   root: examples
   include_extensions: ['.py', '.sh']
 
+  exclude:
+    # HF 训练共用的效率统计回调，非独立用例。
+    - examples/huggingface/callback.py
+    # Modal 云端资源与启动包装，实际执行已有训练脚本。
+    - examples/huggingface/launch_on_modal.py
+    # training.py 的重复性能参数扫描，训练入口已登记。
+    - examples/huggingface/run_benchmarks.sh
+    # Gemma 的 training.py/FSDP 启动包装，合并到 HF 训练用例。
+    - examples/huggingface/run_gemma.sh
+    # Llama 的 training.py/FSDP 启动包装，合并到 HF 训练用例。
+    - examples/huggingface/run_llama.sh
+    # training_multimodal.py 的启动包装，合并到图文 SFT 用例。
+    - examples/huggingface/run_qwen2_vl.sh
+    # Medusa 训练使用的效率统计回调，非独立用例。
+    - examples/medusa/callback.py
+    # train.py 导入的 Medusa 模型与预测头定义，非独立用例。
+    - examples/medusa/medusa_util.py
+    # train.py 的 Llama/accelerate 启动包装，合并到 Medusa 用例。
+    - examples/medusa/scripts/llama3_8b_medusa.sh
+
 supported:
   # 单卡 HuggingFace Trainer SFT：用 AutoLigerKernelForCausalLM 一行 monkey-patch 应用
   # Liger 内核（SwiGLU/RMSNorm/RoPE/FusedLinearCrossEntropy），trl SFTTrainer 训练；

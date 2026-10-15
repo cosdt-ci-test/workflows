@@ -745,7 +745,7 @@ projects:
     workflows:
       examples: .github/workflows/liger-kernel-examples.yml
       quick_start: .github/workflows/liger-kernel-quick-start.yml
-  # AReno: inclusionAI 的单机 RL post-training 工具包（SFT/DPO/GRPO/GSPO/
+# AReno: inclusionAI 的单机 RL post-training 工具包（SFT/DPO/GRPO/GSPO/
   # PPO + OpenAI 兼容 serving）。NPU 后端按上游 docs/concepts/npu.rst 的目标
   # 栈：CANN 9.0.0 + torch 2.10.0+cpu + torch_npu 2.10.0.post2（镜像用 9.0.0
   # 线，非多数项目用的 9.1.0）。源码安装时现场编译 areno.accel._areno_accel_npu
@@ -776,3 +776,20 @@ projects:
     dir: projects/evalscope
     workflows:
       quick_start: .github/workflows/evalscope-quick-start.yml
+  # xla-npu 是面向昇腾 NPU 的 XLA 后端（对接 JAX，PJRT 插件），quick start
+  # 从源码构建（build.sh: 下载 JDK/Bazel + 冻结 OpenXLA commit + bazel 编译
+  # pjrt_c_api_npu_plugin.so + 装 JAX 0.8.1），再跑 JAX-NPU 后端 smoke 和
+  # examples/ops（CPU↔NPU 算子对比）。上游正仓是 gitcode.com/cann/xla-npu
+  # （AtomGit，引擎的 GitHub API 轮询够不着），看护锚定其 GitHub 镜像
+  # hicann/xla-npu（无 release / tag，ref 链底到 /commits/HEAD，doc clone
+  # 用 gitcode 正仓）。要求 Python 3.11 + CANN ≥ 8.5.0，镜像用
+  # cann:9.0.0-py3.11（与 flash-linear-attention 同标签族）；单卡算子推理。
+  - name: xla-npu
+    category: 推理加速
+    support_level: 新兴适配
+    upstream_repo: hicann/xla-npu
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/xla-npu
+    workflows:
+      quick_start: .github/workflows/xla-npu-quick-start.yml

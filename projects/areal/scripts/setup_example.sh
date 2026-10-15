@@ -16,7 +16,7 @@ fi
 
 PROFILE="$1"
 
-SUPPORTED_PROFILES="areal-vlm-grpo areal-vlm-mt-grpo areal-vlm-sft areal-clevr-sft areal-tir-grpo areal-scaffold-grpo areal-agents-grpo areal-math-grpo areal-math-sft areal-math-aime areal-math-boba areal-countdown-grpo areal-hermes-grpo areal-openclaw-grpo areal-align"
+SUPPORTED_PROFILES="areal-vlm-grpo areal-vlm-mt-grpo areal-vlm-sft areal-clevr-sft areal-tir-grpo areal-scaffold-grpo areal-agents-grpo areal-math-grpo areal-math-sft areal-math-aime areal-math-boba areal-countdown-grpo areal-hermes-grpo areal-openclaw-grpo areal-camel-grpo areal-align"
 AIME_PREP=0
 BOBA_PREP=0
 COUNTDOWN_PREP=0
@@ -26,6 +26,7 @@ SCAFFOLD_PREP=0
 CLEVR_SUBSET_PREP=0
 HERMES_PREP=0
 OPENCLAW_PREP=0
+CAMEL_PREP=0
 case "$PROFILE" in
   areal-vlm-grpo) MODEL_ID="Qwen/Qwen2.5-VL-3B-Instruct" ;;
   areal-vlm-mt-grpo) MODEL_ID="Qwen/Qwen3-VL-2B-Instruct" ;;
@@ -53,6 +54,9 @@ case "$PROFILE" in
   # No source patch (no-patch policy) - demo_lifecycle.py runs as shipped.
   # Reuses hermes' model, already in the cache-seed volume.
   areal-openclaw-grpo) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; OPENCLAW_PREP=1 ;;
+  # camel/train.py: camel-ai ChatAgent GRPO. Needs the undeclared camel-ai
+  # package (section 1d) and a `python -m` launch (run_example.sh camel branch).
+  areal-camel-grpo) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; CAMEL_PREP=1 ;;
   # hhrlhf_dpo.py: DPO pipeline is model-agnostic; upstream yaml's 7B swapped
   # for 1.5B (7B fp32 init OOMs the 32GB cards in the pool, 15GB per run).
   areal-align) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; HHRLHF_PREP=1 ;;
@@ -132,6 +136,24 @@ if [[ "$HERMES_PREP" == 1 ]]; then
   uv pip install --system \
     --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
     hermes-agent==0.19.0
+fi
+
+# -------------------------------------------------------
+# 1d. camel profile: the camel-ai agent runtime.
+# examples/camel/train.py imports camel.agents.ChatAgent, and
+# areal.experimental.camel.openai_model imports camel.logger / camel.messages /
+# camel.models.base_model / camel.types / camel.utils; camel-ai is NOT an
+# AReaL-declared dependency, so it is installed here. camel-ai goes in with
+# --no-deps so the job's NPU torch/vllm stack is never touched (camel is
+# API-based); its lighter runtime deps come in separately (none pull torch).
+# -------------------------------------------------------
+if [[ "$CAMEL_PREP" == 1 ]]; then
+  uv pip install --system --no-deps \
+    --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+    camel-ai
+  uv pip install --system \
+    --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+    tiktoken docstring-parser colorama python-dotenv jsonschema
 fi
 
 # -------------------------------------------------------

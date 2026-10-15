@@ -378,6 +378,14 @@ PY
       tail -n 120 "$TRAIN_LOG"
     fi
     ;;
+  examples/camel/train.py)
+    # train.py defines its config dataclass (AgentRLConfig) at module scope, so
+    # it must run as a module: as a plain script __module__ is "__main__" and
+    # the dataclass cannot be deserialized cross-process (serialize_value
+    # rebuilds dataclasses by class_path). Same reason as the scaffolding
+    # branch above.
+    "$PYTHON" -m examples.camel.train "${EXTRA_ARGS[@]}" || run_rc=$?
+    ;;
   *.sh)
     # Shell examples dispatch with bash (generic guard contract: .sh -> bash,
     # .py -> python).

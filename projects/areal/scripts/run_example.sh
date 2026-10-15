@@ -126,6 +126,13 @@ case "$EXAMPLE_REL" in
 
     # 2) Agent Service with the Hermes agent (run blocks until the stack
     #    is healthy, then exits leaving the service up).
+    #    hermes-agent enables 30+ toolsets by default; their definitions ride
+    #    EVERY /v1/responses request and overflow vllm's context, making the
+    #    agent death-loop its own compressor. HermesAgent reads
+    #    HERMES_DISABLED_TOOLSETS in __init__ (hermes.py:118) - i.e. in the
+    #    Agent Service worker process - so it must be EXPORTED here, BEFORE
+    #    `areal agent run`, for the workers to inherit it. Keep only "clarify".
+    export HERMES_DISABLED_TOOLSETS="web,search,x_search,vision,video,image_gen,video_gen,computer_use,terminal,skills,browser,cronjob,file,tts,todo,memory,context_engine,session_search,project,code_execution,delegation,homeassistant,kanban,discord,discord_admin,yuanbao,feishu_doc,feishu_drive,spotify,debugging,safe,coding"
     if ! areal agent run --agent examples.hermes.hermes.HermesAgent \
         --admin-api-key "$HERMES_ADMIN_KEY" --force >"$AGENT_LOG" 2>&1; then
       echo "areal agent run failed; tail of $AGENT_LOG:"
@@ -191,31 +198,62 @@ PY
     fi
     echo "session: $SESS_KEY"
 
-    # 4) One piped conversation; hermes_loop exits cleanly on EOF. The
-    #    inf-* flags route the agent's LLM calls through the inference
-    #    gateway under the session key (self-evolution capture). The model
-    #    id is "default" - the name InferenceDataProxy registers the served
-    #    model under (log: "Model registered: name=default").
-    #    TOOLSETS: hermes-agent enables 30+ toolsets by default (web/search/
-    #    browser/terminal/vision/...); their definitions ride EVERY request
-    #    and overflow vllm's max_model_len=8192 - the agent then death-loops
-    #    its context compressor ("Context length exceeded (20 tokens).
-    #    Cannot compress further.") because tool definitions cannot be
-    #    compressed away, producing an error-message-only trajectory that
-    #    the trainer rejects. Disable everything except the minimal
-    #    "clarify" toolset so a plain greeting fits comfortably.
-    if ! echo "Say hello and introduce yourself in one sentence." | \
-        HERMES_DISABLED_TOOLSETS="web,search,x_search,vision,video,image_gen,video_gen,computer_use,terminal,skills,browser,cronjob,file,tts,todo,memory,context_engine,session_search,project,code_execution,delegation,homeassistant,kanban,discord,discord_admin,yuanbao,feishu_doc,feishu_drive,spotify,debugging,safe,coding" \
-        "$PYTHON" examples/hermes/hermes_loop.py "$AGENT_GW" \
-          --admin-api-key "$HERMES_ADMIN_KEY" \
-          --inf-base-url "$GW" \
-          --inf-model default \
-          --session-api-key "$SESS_KEY"; then
-      echo "hermes_loop failed; tails:"
+    # 4) Drive ONE agent turn directly over HTTP, bypassing hermes_loop.py:
+    #    that CLI hardcodes its httpx client timeout to 120s (:47), which the
+    #    ~11.5K-token Hermes round-trip exceeds on this NPU - it dies with
+    #    "Read timed out" while the server is still working. Sending the same
+    #    /v1/responses POST ourselves with a 600s client timeout avoids the
+    #    hardcoded limit (no source patch). inf-* route the agent's LLM calls
+    #    through the inference gateway under the session key (self-evolution
+    #    capture); model id "default" is InferenceDataProxy's served name.
+    agent_turn() {
+      "$PYTHON" - "$AGENT_GW" "$HERMES_ADMIN_KEY" "$1" "$GW" "$SESS_KEY" <<'PY'
+import json
+import sys
+import urllib.error
+import urllib.request
+
+base, key, content, inf_base, sess_key = sys.argv[1:6]
+payload = {
+    "input": [{"type": "message", "content": content}],
+    "model": "hermes-agent",
+    "user": "hermes-ci",
+    "inf_base_url": inf_base,
+    "inf_model": "default",
+    "session_api_key": sess_key,
+}
+req = urllib.request.Request(
+    f"{base.rstrip('/')}/v1/responses",
+    data=json.dumps(payload).encode(),
+    headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
+    method="POST",
+)
+try:
+    with urllib.request.urlopen(req, timeout=600) as resp:
+        data = json.loads(resp.read().decode())
+except urllib.error.HTTPError as e:
+    print(f"HTTP {e.code}: {e.read().decode()[:300]}", file=sys.stderr)
+    sys.exit(1)
+except OSError as e:
+    print(f"{type(e).__name__}: {e}", file=sys.stderr)
+    sys.exit(1)
+texts = []
+for item in data.get("output", []):
+    if item.get("type") == "message":
+        for block in item.get("content", []):
+            if block.get("type") == "output_text":
+                texts.append(block["text"])
+print("".join(texts) if texts else json.dumps(data)[:300])
+PY
+    }
+
+    if ! AGENT_REPLY=$(agent_turn "Say hello and introduce yourself in one sentence."); then
+      echo "agent turn failed; tails:"
       tail -n 60 "$AGENT_LOG"
       tail -n 40 "$TRAIN_LOG"
       exit 1
     fi
+    echo "agent reply: $AGENT_REPLY"
 
     # 5) Reward the session, then refresh it: the refresh call (start_session
     #    with the existing api_key) ends the old session, waits for the
@@ -283,25 +321,17 @@ PY
     fi
     ;;
   examples/openclaw/train.py)
-    # Online RL via the proxy gateway - same architecture as hermes, except
-    # the agent runtime is any OpenAI-compatible client rather than a bundled
-    # framework. The upstream examples/openclaw/demo_lifecycle.py already is
-    # the headless driver: health -> rl/start_session -> chat/completions
-    # (real generation; tokens + logprobs recorded) -> rl/set_reward -> a
-    # second start_session refreshes the session (ends it, exports the
-    # trajectory). --episodes 2 guarantees episode 1 is exported.
-    # demo_lifecycle runs in the BACKGROUND: episode 2's tail races the
-    # trainer's post-step-1 exit (generation is ~1.5 tok/s on a 1.5B NPU,
-    # training finishes sooner), so its exit code is NOT authoritative - the
-    # trainer's exit code is.
+    # Online RL via the proxy gateway (same architecture as hermes): the agent
+    # runtime is any OpenAI-compatible client. We drive one episode DIRECTLY
+    # over HTTP instead of the upstream examples/openclaw/demo_lifecycle.py,
+    # whose /chat/completions client timeout is hardcoded to 30s (:264) - the
+    # NPU generation exceeds that, so it dies with "Read timed out" before
+    # set_reward. Doing the same calls ourselves with a long client timeout
+    # avoids the hardcoded limit (no source patch).
     OC_ADMIN_KEY="sk-test123456"
     TRAIN_LOG="$PWD/openclaw_train.log"
-    DEMO_LOG="$PWD/openclaw_demo.log"
 
     openclaw_cleanup() {
-      if [[ -n "${DEMO_PID:-}" ]] && kill -0 "$DEMO_PID" 2>/dev/null; then
-        kill "$DEMO_PID" 2>/dev/null || true
-      fi
       if [[ -n "${TRAINER_PID:-}" ]] && kill -0 "$TRAINER_PID" 2>/dev/null; then
         kill "$TRAINER_PID" 2>/dev/null || true
       fi
@@ -332,19 +362,73 @@ PY
     fi
     echo "inference gateway: $GW"
 
-    # 2) Drive two episodes in the background (episode 2's refresh exports
-    #    episode 1's trajectory; see header for why the exit is not checked).
-    #    tee (not a plain redirect) so the driver's output also lands in the
-    #    job log for live progress; process substitution keeps $! = python pid.
-    "$PYTHON" examples/openclaw/demo_lifecycle.py "$GW" \
-      --admin-key "$OC_ADMIN_KEY" --episodes 2 > >(tee "$DEMO_LOG") 2>&1 &
-    DEMO_PID=$!
-    echo "demo_lifecycle started (pid=$DEMO_PID, log=$DEMO_LOG)"
+    # HTTP helper with a tunable client timeout ($4 seconds, default 120).
+    oc_post() {
+      "$PYTHON" - "$GW" "$1" "$2" "$3" "${4:-120}" <<'PY'
+import sys
+import urllib.error
+import urllib.request
 
-    # 3) Wait for the trainer's single step and clean exit (bounded). The
-    # driver's chat call can legitimately take up to its (patched) 600s read
-    # timeout on the slow NPU, plus the refresh + one PPO step, so allow
-    # 1200s before declaring the trainer stuck.
+base, path, key, body, timeout = sys.argv[1:6]
+req = urllib.request.Request(
+    f"{base}/{path}",
+    data=body.encode(),
+    headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
+    method="POST",
+)
+try:
+    with urllib.request.urlopen(req, timeout=float(timeout)) as resp:
+        print(resp.read().decode())
+except urllib.error.HTTPError as e:
+    print(f"HTTP {e.code}", file=sys.stderr)
+except OSError as e:
+    print(f"{type(e).__name__}: {e}", file=sys.stderr)
+PY
+    }
+    json_key() {
+      "$PYTHON" -c 'import json,sys; print(json.load(sys.stdin)["api_key"])' 2>/dev/null || true
+    }
+
+    # 2) start_session (admin) -> per-session key. 429 ("no capacity") is
+    #    retried: workers only register once the trainer is fully up.
+    SESS_KEY=""
+    for attempt in $(seq 1 24); do
+      BODY=$(oc_post rl/start_session "$OC_ADMIN_KEY" '{"task_id":"ci-openclaw-smoke"}' 60)
+      SESS_KEY=$(printf '%s' "$BODY" | json_key)
+      [[ -n "$SESS_KEY" ]] && break
+      echo "[session attempt $attempt] no session yet"
+      sleep 5
+    done
+    [[ -n "$SESS_KEY" ]] || { echo "start_session never returned a key"; tail -n 40 "$TRAIN_LOG"; exit 1; }
+    echo "session: $SESS_KEY"
+
+    # 3) chat/completions under the session key - REAL generation (tokens +
+    #    logprobs recorded for RL). Long client timeout: the NPU generates
+    #    slowly (~1.5 tok/s), far past demo_lifecycle's hardcoded 30s.
+    CHAT_BODY='{"model":"default","messages":[{"role":"system","content":"You are a helpful math tutor. Show your work step by step."},{"role":"user","content":"Solve step by step: What is 12 * 15 + 3?"}],"temperature":0.7,"max_tokens":256}'
+    CHAT=$(oc_post chat/completions "$SESS_KEY" "$CHAT_BODY" 600)
+    [[ -n "$CHAT" ]] || { echo "chat/completions failed"; tail -n 40 "$TRAIN_LOG"; exit 1; }
+    echo "chat completion: $(printf '%s' "$CHAT" | cut -c1-200)"
+
+    # 4) set_reward (session key), then refresh: start_session with the key
+    #    ends the session and exports the trajectory -> the trainer's
+    #    _OnlineAgent unblocks and trains its single step.
+    REWARD=$(oc_post rl/set_reward "$SESS_KEY" '{"reward":1.0}' 60)
+    [[ -n "$REWARD" ]] || { echo "set_reward failed"; tail -n 40 "$TRAIN_LOG"; exit 1; }
+    echo "reward applied: $REWARD"
+
+    REFRESHED=""
+    for attempt in $(seq 1 12); do
+      BODY=$(oc_post rl/start_session "$OC_ADMIN_KEY" \
+        "{\"task_id\":\"ci-openclaw-smoke\",\"api_key\":\"$SESS_KEY\"}" 130)
+      NEW_KEY=$(printf '%s' "$BODY" | json_key)
+      [[ -n "$NEW_KEY" ]] && { REFRESHED=1; echo "session refreshed (key: $NEW_KEY)"; break; }
+      echo "[refresh attempt $attempt] pipeline still cycling"
+      sleep 10
+    done
+    [[ -n "$REFRESHED" ]] || { echo "refresh never succeeded; trainer may be stuck"; tail -n 40 "$TRAIN_LOG"; exit 1; }
+
+    # 5) Trainer trains its single step and exits (bounded).
     TRAIN_WAIT_S=1200
     waited=0
     train_timed_out=0
@@ -359,17 +443,11 @@ PY
       fi
       sleep 15
       waited=$((waited + 15))
-      # Heartbeat: surface the driver's latest line so a slow-but-alive
-      # generation is distinguishable from a real hang (ANSI stripped).
-      echo "[wait ${waited}s] demo: $(tail -n 1 "$DEMO_LOG" 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | cut -c1-200)"
     done
-    kill "$DEMO_PID" 2>/dev/null || true
     if (( train_timed_out )); then
       run_rc=1
       echo "trainer wait timed out; tail of $TRAIN_LOG:"
       tail -n 120 "$TRAIN_LOG"
-      echo "--- demo_lifecycle tail ($DEMO_LOG) ---"
-      tail -n 40 "$DEMO_LOG" 2>/dev/null || true
     elif wait "$TRAINER_PID"; then
       echo "openclaw online-rl loop completed"
     else

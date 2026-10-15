@@ -52,7 +52,7 @@ case "$PROFILE" in
   # openclaw/train.py: online RL through the OpenAI-compatible proxy gateway;
   # no agent runtime package to install (demo_lifecycle.py is pure HTTP).
   # No source patch (no-patch policy) - demo_lifecycle.py runs as shipped.
-  # Reuses hermes' model, already in the cache-seed volume.
+  # Reuses hermes' model.
   areal-openclaw-grpo) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; OPENCLAW_PREP=1 ;;
   # camel/train.py: camel-ai ChatAgent GRPO. Needs the undeclared camel-ai
   # package (section 1d) and a `python -m` launch (run_example.sh camel branch).
@@ -124,9 +124,9 @@ python -c "import torch, torch_npu, vllm, vllm_ascend; from vllm.entrypoints.ope
 
 # -------------------------------------------------------
 # 1c. hermes profile: the agent runtime package. The model is the
-# standard shared-cache Qwen2.5-1.5B-Instruct (hermes-agent itself is
-# model-agnostic - it drives whatever OpenAI-compatible endpoint the
-# rollout engine serves); the Agent Service imports
+# standard Qwen2.5-1.5B-Instruct (downloaded by section 3); hermes-agent
+# itself is model-agnostic - it drives whatever OpenAI-compatible endpoint
+# the rollout engine serves. The Agent Service imports
 # examples.hermes.hermes.HermesAgent from the target checkout.
 # Index: tsinghua (not aliyun) - aliyun's PEP 658 .metadata sidecar for
 # hermes-agent's python-dotenv dep 404s intermittently; tuna mirrors the
@@ -189,89 +189,62 @@ echo "AREAL_ALLOW_DEFAULT_ADMIN_KEY=1" >> "$GITHUB_ENV"
 # -------------------------------------------------------
 # 3. Pre-download Model & Dataset (using image's native tools)
 # -------------------------------------------------------
-# No local fixtures. The dataset is fetched online at train time
-# (`load_dataset`, inside the data service); the model is resolved from the
-# shared runner cache below. Export the Hub mirror through GITHUB_ENV so the
-# run-example step inherits it too.
+# No local fixtures and no shared-cache dependency (cache-seed is NOT used):
+# the dataset is fetched online at train time (`load_dataset`, inside the data
+# service), and the model is downloaded fresh on every run - HF mirror first,
+# ModelScope (魔搭) fallback - into the per-run workspace. HF_ENDPOINT is
+# exported through GITHUB_ENV so the run-example step (and any later
+# load_dataset) inherits it.
 export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
 echo "HF_ENDPOINT=${HF_ENDPOINT}" >> "$GITHUB_ENV"
 export AREAL_MODEL_ID="$MODEL_ID"
 
-# The model comes from the shared runner cache. The pool keeps a persistent
-# volume at ~/.cache/huggingface (see cache-seed/README.md and
-# docs/examples-guard-engine.md), and cache-seed/areal/ms_seeds.yaml plants
-# every profile model into it from ModelScope (HF hub-cache layout,
-# refs/main = real HF sha). setup only resolves the snapshot path from
-# refs/main, so a warm pool is zero-network, zero-download - same pattern as
-# peft/torchtune.
-#
-# Cold-cache self-heal (sequence: cache-seed not dispatched yet, or a model
-# added since): pull once with huggingface_hub - no local_dir, so it lands in
-# the shared hub-cache layout and every later run is a hit. If HF/hf-mirror is
-# down too, fall back to ModelScope into the per-run workspace, which is only a
-# last resort: it is discarded with the workspace, so the durable fix is
-# dispatching the cache-seed workflow (projects=areal).
-#
-# The resolved path is ALSO captured into the AREAL_MODEL_PATH shell variable
-# (tee keeps the diagnostics streaming into the job log): later sections of
-# this script - countdown's tokenizer (section 6) and the scaffolding model
-# alias (section 9) - consume it and must not guess the pre-cache workspace
-# layout, which no longer exists in the shared-cache flow.
+# The resolved path is captured into the AREAL_MODEL_PATH shell variable (tee
+# keeps the diagnostics streaming into the job log) and written to GITHUB_ENV
+# for the run step. Later sections of this script - countdown's tokenizer
+# (section 6) and the scaffolding model alias (section 9) - consume it, so it
+# must be the real on-disk download dir.
 AREAL_MODEL_PATH=$(python3 <<'PY' | tee /dev/stderr | sed -n 's/^AREAL_MODEL_PATH=//p' | tail -n 1
 import os
 import subprocess
 import sys
 
 model_id = os.environ["AREAL_MODEL_ID"]
-hf_home = os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
-repo_dir = os.path.join(hf_home, "hub", "models--" + model_id.replace("/", "--"))
 workspace_dir = os.path.join(
     os.environ["GITHUB_WORKSPACE"], "areal_models", model_id.split("/")[-1]
 )
+os.makedirs(workspace_dir, exist_ok=True)
 
 
-def cached_snapshot():
-    refs = os.path.join(repo_dir, "refs", "main")
-    if not os.path.isfile(refs):
-        return None
-    with open(refs) as fh:
-        sha = fh.read().strip()
-    snap = os.path.join(repo_dir, "snapshots", sha)
-    if os.path.isdir(snap) and os.listdir(snap):
-        return snap
-    return None
+def from_hf():
+    from huggingface_hub import snapshot_download
+
+    return snapshot_download(model_id, local_dir=workspace_dir)
 
 
-snapshot = cached_snapshot()
-if snapshot is not None:
-    print(f"{model_id}: shared-cache hit -> {snapshot}", flush=True)
-else:
+def from_modelscope():
+    try:
+        from modelscope import snapshot_download as ms_snapshot
+    except ImportError:
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "-q", "modelscope==1.37.0"],
+            check=True,
+        )
+        from modelscope import snapshot_download as ms_snapshot
+    ms_snapshot(model_id, local_dir=workspace_dir)
+    return workspace_dir
+
+
+try:
+    snapshot = from_hf()
+    print(f"{model_id}: downloaded from HF -> {snapshot}", flush=True)
+except Exception as e:
     print(
-        f"{model_id}: not in the shared cache ({repo_dir}); filling it via HF",
+        f"HF download failed ({type(e).__name__}: {e}); trying ModelScope",
         flush=True,
     )
-    try:
-        from huggingface_hub import snapshot_download
-
-        snapshot = snapshot_download(model_id)
-        print(f"filled shared cache: {snapshot}", flush=True)
-    except Exception as e:
-        print(f"HF fill failed ({type(e).__name__}: {e}); trying ModelScope", flush=True)
-        snapshot = None
-
-    if snapshot is None:
-        try:
-            from modelscope import snapshot_download as ms_snapshot
-        except ImportError:
-            subprocess.run(
-                [sys.executable, "-m", "pip", "install", "-q", "modelscope==1.37.0"],
-                check=True,
-            )
-            from modelscope import snapshot_download as ms_snapshot
-        os.makedirs(workspace_dir, exist_ok=True)
-        ms_snapshot(model_id, local_dir=workspace_dir)
-        snapshot = workspace_dir
-        print(f"downloaded to ephemeral {snapshot}", flush=True)
+    snapshot = from_modelscope()
+    print(f"{model_id}: downloaded from ModelScope -> {snapshot}", flush=True)
 
 with open(os.environ["GITHUB_ENV"], "a") as fh:
     fh.write(f"AREAL_MODEL_PATH={snapshot}\n")

@@ -315,6 +315,7 @@ supported:
       - +train_dataset.setup_timeout=600
       - +valid_dataset.setup_timeout=600
       - +total_train_steps=1
+      - seed 42
     timeout_minutes: 60
 unsupported:
   # clevr SFT：与 geometry3k 同款 VLM 数据集，但 SFT 路径必崩，无 patch 绕不过：

@@ -701,23 +701,24 @@ projects:
     dir: projects/roll
     workflows:
       quick_start: .github/workflows/roll-quick-start.yml
+      examples: .github/workflows/roll-examples.yml
   # TGI quickstart guards a full source build (Rust launcher/router +
   # Python server) and a real /generate inference on a 2-card 910B
   # runner: single-card baseline + dual-card HCCL tensor parallelism
-  # (--num-shard 2). NPU support lives in the VenusTZZ fork
-  # (feat/ascend-npu, cut as releases); official upstream releases do
-  # not contain it yet, so upstream_repo points at the fork and the
-  # guard follows the fork's latest release + doc hash.
+  # (--num-shard 2). NPU support lives in the cosdt fork
+  # (feat/ascend-npu merged to main, published as releases on the
+  # fork); official upstream releases do not contain it yet, so
+  # upstream_repo points at the fork and the guard follows the fork's
+  # latest release + doc hash (release-driven, same as peft/ms-swift).
   - name: tgi
     category: 推理加速
     support_level: 新兴适配
-    upstream_repo: VenusTZZ/text-generation-inference
+    upstream_repo: cosdt/text-generation-inference
     phase: A
     runner: linux-aarch64-a2-2
     dir: projects/tgi
     workflows:
       quick_start: .github/workflows/tgi-quick-start.yml
-      examples: .github/workflows/roll-examples.yml
   # AReaL: RL 训练框架。examples 看护 release 线（引擎按 latest release
   # 解析）；supported 配方用专用镜像 ghcr.io/hwvanici/areal_npu:v1.0.5-a2
   # （vllm 栈由 setup_example.sh §1b 换装 0.22.1 线以匹配 v2.x 代码）；

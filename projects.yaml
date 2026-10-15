@@ -402,6 +402,15 @@ projects:
     dir: projects/internlm
     workflows:
       quick_start: .github/workflows/internlm-quick-start.yml
+  - name: vbench
+    category: 推理加速
+    support_level: 待支持
+    upstream_repo: Vchitect/VBench
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/vbench
+    workflows:
+      quick_start: .github/workflows/vbench-quick-start.yml
   - name: xllm
     category: 推理加速
     support_level: 基础支持

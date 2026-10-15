@@ -16,11 +16,13 @@ CI 使用 `linux-aarch64-a2-1`，Runner 自动提供一张 NPU。
 - Ubuntu 22.04 aarch64、Python 3.12、CANN toolkit 与驱动；
 - CANN 环境已通过 `source /usr/local/Ascend/ascend-toolkit/set_env.sh` 加载；
 - Git、C/C++ 编译器、CMake、FFmpeg 开发库，用于构建 CPU Decord；
-- 能访问 Python 包源、GitHub、PyTorch CPU wheel、官方 UMT 权重和 Google Drive；
+- 能访问 Python 包源、GitHub、PyTorch CPU wheel 和官方 UMT 权重；
+- 视频由仓库 cache-seed bundle 或预置缓存提供；两者都没有时，需要访问官方 Google Drive；
 - 模型及视频缓存目录可写，建议预留至少 10 GB。
 
 依赖安装、patch 和资源准备脚本位于本看护仓库的 `projects/vbench/`。
-以下命令从该目录执行；独立使用时先获取该项目目录，再设置
+以下命令从该目录执行；使用 cache-seed 时需保留看护仓库的完整目录结构，
+包括公共 `scripts/cache_seed.py` 和 `cache-seed/vbench/`。独立使用时设置
 `UPSTREAM_REF` 为目标 tag、分支或 commit。CI 会注入共享模板解析出的最新 release
 （当前为 `v0.1.4`）。补丁以最新 release 验证，不再单独维护 master 兼容分支。
 
@@ -130,8 +132,15 @@ VBench human_action import: OK
 ## 准备官方权重和视频
 
 UMT 权重从上游指定的 `OpenGVLab/VBench_Used_Models` 下载，固定 revision 并校验 SHA256。
-LaVie 视频使用[官方分发的 Google Drive 压缩包](https://github.com/Vchitect/VBench/tree/master/sampled_videos)，
-只解压原始 `human_action` 的指定 5 段视频，保留文件名和 Prompt。
+LaVie 视频优先从 `cache-seed/vbench/manifest.yaml` 声明的仓库 bundle 投递，
+复用公共 `scripts/cache_seed.py`，显式指定 VBench 缓存根目录而非默认 HF 缓存。
+仅接受原始 `human_action` 的指定 5 段视频；投递时按 manifest 校验 SHA256，
+已有文件校验通过则复用，损坏则从 bundle 恢复。manifest 不完整、源文件缺失或
+校验失败会终止准备步骤，不回退到网络下载掩盖问题。
+
+没有 bundle manifest 时保留原来的手动预置／官方下载方式：已有 5 段缓存则直接复用，
+否则下载[官方 Google Drive 压缩包](https://github.com/Vchitect/VBench/tree/master/sampled_videos)，
+只解压指定视频，保留文件名和 Prompt。
 脚本从上游 `VBench_full_info.json` 选出对应原始记录，生成本次评测清单。
 
 ```shell #test id="prepare-assets"
@@ -144,9 +153,12 @@ python -u scripts/prepare_assets.py vbench-src
 ```
 
 CI 持久化 `/root/.cache/vbench`（宿主机 `/data/ci-cache/vbench`）；其中包括 `umt_model/`、
-`lavie.zip` 和 `lavie/human_action/` 中的 5 段原始视频。首次需要下载，后续复用缓存；
-checkpoint 校验失败时重新下载。Hugging Face 的 LaVie 镜像需要数据集访问授权，
-因此这里采用上游 README 公布的 Google Drive 来源。
+`lavie/human_action/` 中的 5 段原始视频，以及使用官方下载时产生的 `lavie.zip`。
+bundle 随看护仓库 checkout 到达 Runner，不要求为 Runner 配置代理，也不要求
+在 Runner 中放置 HF Token。权重仍按原来的方式下载并校验，视频 bundle 不包含权重。
+当前看护仓库已包含这 5 段原始视频及生成的 manifest，SHA256 已与官方数据集
+revision `8c89bb0218a12323d04821d11ec03c780d0dfb9c` 的 LFS 元数据核对。
+bundle 的来源记录及重建流程见项目 README 的 cache-seed 章节。
 
 Google Drive 可能触发下载配额限制。此时需提前把官方 `lavie.zip` 放入缓存根目录，
 或者从有访问权限的官方 HF 数据集中取得这 5 段原始视频，放入

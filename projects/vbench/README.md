@@ -10,11 +10,63 @@ checkpoint, and evaluates five original LaVie videos on one Ascend NPU.
 The one-Prompt subset preserves the upstream inputs and scoring algorithm;
 it is not a complete benchmark or leaderboard result.
 
-The official LaVie Drive archive may hit quota. A runner can prepopulate
+When `cache-seed/vbench/manifest.yaml` is present, asset preparation invokes
+the shared `scripts/cache_seed.py` with an explicit VBench cache root. It
+verifies the five original videos against the manifest, reuses matching
+cached files, and restores corrupt ones from the repository bundle. Invalid
+or incomplete bundles fail rather than silently falling back to a download.
+No changes to the shared workflow or seeder are needed.
+
+Without a bundle, the official LaVie Drive archive may hit quota. A runner can prepopulate
 `/data/ci-cache/vbench/lavie.zip` or its five original videos under
 `/data/ci-cache/vbench/lavie/human_action/`; the executable document lists
 their exact names. Missing data is a test failure, not a skip. HF hosts the
 same dataset but requires approved access.
+
+## Staging the official video cache seed
+
+The repository includes the five original videos and their generated manifest
+under [cache-seed/vbench](../../cache-seed/vbench/README.md). Their SHA256 values
+were verified against the official dataset's LFS metadata. A cold runner cache
+is populated from this bundle, without Google Drive access or an HF token.
+The following commands document how to rebuild it; do not add an empty
+manifest or substitute generated videos.
+
+On a machine with access to the official data, either extract the five original
+files from the upstream LaVie archive, or obtain approved access to the
+[official HF dataset](https://huggingface.co/datasets/Vchitect/VBench_sampled_video)
+and log in locally. Do not put the token into this repository or the CI logs.
+For example, after approval and `hf auth login`:
+
+```bash
+for index in 0 1 2 3 4; do
+  hf download Vchitect/VBench_sampled_video \
+    "lavie/human_action/A person is strumming guitar-${index}.mp4" \
+    --repo-type dataset \
+    --revision 8c89bb0218a12323d04821d11ec03c780d0dfb9c \
+    --local-dir /tmp/vbench-official
+done
+```
+
+From the guard repository root, stage **only** those five MP4 files. The
+shared bundler computes the real SHA256 values; do not hand-write them:
+
+```bash
+python scripts/bundle_cache.py --project vbench \
+  --src /tmp/vbench-official/lavie/human_action \
+  --prefix lavie/human_action
+```
+
+Review `cache-seed/vbench/manifest.yaml` and the five files under
+`cache-seed/vbench/lavie/human_action/`, including their provenance and
+redistribution terms, before committing them. Do not include HF download
+metadata or credentials. With the bundle in the checked-out workflow ref,
+the existing `prepare-assets` document step seeds it automatically into
+`${VBENCH_CACHE_DIR:-/root/.cache/vbench}` and validates video decoding.
+An additional `cache-seed.yml` dispatch is unnecessary; that workflow's
+default HF root is **not** VBench's mounted cache volume.
+
+## Patch scope and verification
 
 One patch is validated against the latest release (currently v0.1.4).
 It retains a small installation profile and adapts only the CLI NPU startup.

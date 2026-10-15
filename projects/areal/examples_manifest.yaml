@@ -317,7 +317,6 @@ supported:
       - +train_dataset.setup_timeout=600
       - +valid_dataset.setup_timeout=600
       - +total_train_steps=1
-      - seed 42
     timeout_minutes: 60
   # Agent Workflow（OpenAI SDK agent，GSM8K）：workflow = areal.workflow.openai.
   # math_agent.MathAgent。agent 用的是 AReaL 经 extra_kwargs 注入的**本地** proxy
@@ -342,7 +341,7 @@ supported:
       - actor.mb_spec.max_tokens_per_mb=1024
       - ref.mb_spec.max_tokens_per_mb=1024
       - vllm.gpu_memory_utilization=0.3
-      - +gconfig.max_new_tokens=64
+      - ++gconfig.max_new_tokens=64
       - gconfig.max_tokens=256
       - gconfig.n_samples=1
       - train_dataset.batch_size=2
@@ -352,49 +351,40 @@ supported:
       - +total_train_steps=1
     timeout_minutes: 60
 unsupported:
-  # clevr SFT：与 geometry3k 同款 VLM 数据集，但 SFT 路径必崩，无 patch 绕不过：
-  # 1) loader 读错 processor 键名——areal/dataset/clevr_count_70k.py:110 用
-  #    processed_input.get("token_type_ids", None)（旧键），transformers 5.x 已改名
-  #    mm_token_type_ids，恒取到 None；
-  # 2) SFT 会把样本过 collate_samples_to_list（areal/utils/data.py:172）；该键不是
-  #    multi_modal_input* 且值为 None → torch.tensor(None) 报 "Could not infer dtype
-  #    of NoneType"（dataloader worker 内）；
-  # 3) AReaL 自钉 transformers>=5.0.0,<=5.3.0（pyproject.toml:52），只能改上游 loader
-  #    源码（改键名/判空）才通——不打 patch 无法绕。
-  # 备注：supported 的 geometry3k_grpo 读同一个错键，但 GRPO 不 collate 数据集样本，
-  # 故不受影响。修好后回迁：profile areal-clevr-sft 与 setup 第 10 步保留未删。
+  # clevr SFT：loader 读错 processor 键名，SFT 路径必崩，改上游源码才能通：
+  # 1) clevr_count_70k.py:110 用旧键 token_type_ids 去取「mm_token_type_ids」，
+  #    transformers 5.x 下恒为 None；
+  # 2) SFT 会把样本过 collate（data.py:172），None 触发 torch.tensor(None) 崩。
+  # （geometry3k_grpo 读同一错键无碍——GRPO 不 collate 数据集样本。）
   - examples/vlm/clevr_count_70k_sft.py
-  # hhrlhf RW：引擎在打包前读 cu_seqlens，必 KeyError，无 patch 绕不过：
-  # 1) rw_modeling_collate_fn（areal/trainer/rw_trainer.py:61-73）只产 input_ids +
-  #    attention_mask，不含 cu_seqlens（其由 train_batch 内部打包时才生成）；
-  # 2) RWEngine._train_rw（areal/trainer/rw/rw_engine.py:50-53）先调 _rw_loss_weight
-  #    → x["cu_seqlens"]（:21；:53/:69 还读其 device）→ KeyError；
-  # 3) 无 config 开关可绕，只能改引擎源码。
+  # hhrlhf RW：引擎在打包前读 cu_seqlens，必 KeyError，改上游源码才能通：
+  # 1) collate 只产 input_ids + attention_mask（rw_trainer.py:61-73），cu_seqlens
+  #    要等 train_batch 内部打包时才生成；
+  # 2) 但 _train_rw 先读 x["cu_seqlens"]（rw_engine.py:52→21）→ KeyError，无开关。
   - examples/alignment/hhrlhf_rw.py
-  # hhrlhf DPO：loss 聚合硬编码 fp64，Ascend 不支持 fp64 计算，无 patch 绕不过：
-  # 1) areal/utils/functional/functional.py:829-835（dpo_pair_logratios）用
-  #    torch.float64 + .double() + index_add_ 做 scatter-add（注释称"为长对精度
-  #    设计"，fp32 累加会翻 log-ratio 符号）；
-  # 2) 该函数由 DPOEngine 直接调用（areal/trainer/dpo/dpo_engine.py:169），调用点与
-  #    函数内均无 dtype/config 开关；
-  # 3) 只能改上游源码（fp64→fp32 或加开关）才通。
+  # hhrlhf DPO：loss 聚合硬编码 fp64，Ascend 不支持 fp64，改上游源码才能通：
+  # dpo_pair_logratios（functional.py:829-835）用 torch.float64 累加，调用处
+  # （dpo_engine.py:169）无 dtype 开关。
   - examples/alignment/hhrlhf_dpo.py
-  # virl39k GRPO：reward_fn 以函数对象传入，跨进程 RPC 序列化必失败，无 patch 绕不过：
-  # 1) 入口把 workflow_kwargs={"reward_fn": virl39k_reward_fn, ...}（examples/vlm_npu/
-  #    virl39k_grpo.py:52-53）传的是**函数对象**；
-  # 2) workflow_kwargs 要经 RPC 送到 rollout worker，serialize_value（areal/infra/rpc/
-  #    serialization.py:625-626）对函数原样透传 → JSON 序列化失败（可用条目如
-  #    math/gsm8k_rl.py 传的是点路径字符串）；
-  # 3) reward_fn 在入口脚本内构造、非 config 字段，无 overlay 可改——只能改上游源码。
-  # 同 bug：vlm_npu/geometry3k_grpo.py。
+  # virl39k GRPO：reward_fn 传的是函数对象，跨进程 RPC 序列化失败，改源码才能通：
+  # 1) entry 传 reward_fn=virl39k_reward_fn（virl39k_grpo.py:52-53），要经 RPC 送
+  #    worker；serialize_value 对函数原样透传 → JSON 失败（正常条目传"点路径"字符串）；
+  # 2) 该值在 entry 内构造、非 config，无 overlay 可改。
+  # （同 bug：vlm_npu/geometry3k_grpo.py。）
   - examples/vlm_npu/virl39k_grpo.py
-  # 常驻服务 demo：需 API key + 交互 stdin，无 pass/fail 终点
+  # Agent Service 常驻服务 demo：无 pass/fail 终点，跑不通——
+  # 1) agent 走外部 Anthropic API（claude-agent-sdk + ANTHROPIC_API_KEY，agent.py:24,57）；
+  # 2) 起服务后进交互 stdin 循环（input()），无终点。
   - examples/agent_service/run_agent_service.py
-  # 多节点 ray + 带外 user simulator（独立 30B vLLM 服务）+ fork 版
-  # tau2-bench + 本地数据
+  # tau2-bench（fork）代理模式 RL，跑不通：
+  # 1) 依赖 fork 版 tau2-bench 包 + 本地 tau2 数据；
+  # 2) user simulator 是独立 LLM 服务（config_*_airline.yaml 指向带外 30B/235B
+  #    模型），另需多节点 ray。
   - examples/tau2/train.py
-  # task 环境靠 docker compose，需挂宿主 docker.sock——CI 引擎零挂载；
-  # 另需 sglang[srt_npu]/camel_ai/terminal_bench 一串依赖
+  # terminal_bench 终端任务 RL，跑不通：
+  # 1) task 环境靠 docker compose，需宿主 docker.sock（CI 引擎零挂载）；
+  # 2) 另需 terminal_bench 包 + camel-ai + sglang[srt_npu] 依赖，且数据集目录
+  #    <repo>/dataset/ 仓库里没有。
   - examples/terminal_bench/train.py
   # docstring 自述需 SERPER_KEY_ID（外部搜索 API）+ LLM judge
   - examples/scaffolding/search_scaffolding.py

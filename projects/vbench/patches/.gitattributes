@@ -1,0 +1,3 @@
+# Unified diffs must retain upstream context whitespace for git apply.
+# Applicability and Python syntax are validated by test_ascend_patch.py.
+*.patch -whitespace

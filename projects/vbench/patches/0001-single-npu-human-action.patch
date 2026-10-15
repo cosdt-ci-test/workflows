@@ -1,0 +1,232 @@
+diff --git a/MANIFEST.in b/MANIFEST.in
+--- a/MANIFEST.in
++++ b/MANIFEST.in
+@@ -2,2 +2,3 @@
+ include requirements.txt
++include requirements-human-action.txt
+ recursive-include vbench/third_party *.yaml
+diff --git a/evaluate.py b/evaluate.py
+index aa443f0..c4ec2e2 100644
+--- a/evaluate.py
++++ b/evaluate.py
+@@ -2,6 +2,7 @@ import torch
+ import os
+ from vbench import VBench
+ from vbench.distributed import dist_init, print0
++from vbench.device import get_device
+ from datetime import datetime
+ import argparse
+ import json
+@@ -10,6 +11,7 @@ def parse_args():
+ 
+     CUR_DIR = os.path.dirname(os.path.abspath(__file__))
+     parser = argparse.ArgumentParser(description='VBench', formatter_class=argparse.RawTextHelpFormatter)
++    parser.add_argument('--device', default=None, help='Evaluation device, e.g. npu:0, cuda:0, cpu')
+     parser.add_argument(
+         "--output_path",
+         type=str,
+@@ -106,9 +108,9 @@ def parse_args():
+ def main():
+     args = parse_args()
+ 
+-    dist_init()
++    device = get_device(args.device)
++    dist_init(device)
+     print0(f'args: {args}')
+-    device = torch.device("cuda")
+     my_VBench = VBench(device, args.full_json_dir, args.output_path)
+     
+     print0(f'start evaluation')
+diff --git a/requirements-human-action.txt b/requirements-human-action.txt
+new file mode 100644
+index 0000000..2746e41
+--- /dev/null
++++ b/requirements-human-action.txt
+@@ -0,0 +1,9 @@
++torch>=2.9,<2.10
++torchvision>=0.24,<0.25
++numpy>=1.26,<2
++Pillow>=10
++timm==0.9.12
++opencv-python>=4.8,<4.12
++decord==0.6.0
++tqdm
++scipy
+diff --git a/setup.py b/setup.py
+index 13e28fa..ce4cb4a 100644
+--- a/setup.py
++++ b/setup.py
+@@ -29,7 +29,11 @@ def fetch_readme():
+     return text
+ 
+ def fetch_requirements():
+-    filename = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'requirements.txt')
++    profile = os.environ.get('VBENCH_INSTALL_PROFILE', 'full')
++    if profile not in ('full', 'human_action'):
++        raise ValueError(f'Unknown VBENCH_INSTALL_PROFILE: {profile}')
++    requirements = 'requirements-human-action.txt' if profile == 'human_action' else 'requirements.txt'
++    filename = os.path.join(os.path.dirname(os.path.realpath(__file__)), requirements)
+     with open(filename, 'r') as f:
+         envs = [line.rstrip('\n') for line in f.readlines() if '@' not in line]
+     return envs
+diff --git a/vbench/__init__.py b/vbench/__init__.py
+index 83e284e..f00d7b5 100755
+--- a/vbench/__init__.py
++++ b/vbench/__init__.py
+@@ -4,4 +4,5 @@
+ import importlib
+ from itertools import chain
+ from pathlib import Path
++from .device import get_device
+ 
+@@ -11,6 +12,6 @@
+ class VBench(object):
+     def __init__(self, device, full_info_dir, output_path):
+-        self.device = device                        # cuda or cpu
++        self.device = get_device(device)
+         self.full_info_dir = full_info_dir          # full json file that VBench originally provides
+         self.output_path = output_path              # output directory to save VBench results
+         os.makedirs(self.output_path, exist_ok=True)
+diff --git a/vbench/device.py b/vbench/device.py
+new file mode 100644
+index 0000000..fbddaab
+--- /dev/null
++++ b/vbench/device.py
+@@ -0,0 +1,25 @@
++"""Select a device for single-device VBench evaluation."""
++
++import os
++import torch
++
++
++def get_device(requested=None):
++    """Register the NPU backend when needed; explicit NPU never falls back."""
++    if requested is not None and not str(requested).startswith('npu'):
++        return torch.device(requested)
++    try:
++        import torch_npu  # noqa: F401
++    except ImportError as exc:
++        if requested is not None:
++            raise RuntimeError('NPU evaluation requires torch_npu') from exc
++    available = hasattr(torch, 'npu') and torch.npu.is_available()
++    if not available:
++        if requested is not None:
++            raise RuntimeError('The requested Ascend NPU is not available')
++        return torch.device('cuda' if torch.cuda.is_available() else 'cpu')
++    device = torch.device(requested or f'npu:{os.environ.get("LOCAL_RANK", "0")}')
++    if device.index is None:
++        device = torch.device(f'npu:{os.environ.get("LOCAL_RANK", "0")}')
++    torch.npu.set_device(device)
++    return device
+diff --git a/vbench/distributed.py b/vbench/distributed.py
+index fb536db..464b400 100644
+--- a/vbench/distributed.py
++++ b/vbench/distributed.py
+@@ -21,7 +21,12 @@ def print0(*args, **kwargs):
+         print(*args, **kwargs)
+ 
+ 
+-def dist_init():
++def dist_init(device=None):
++    # The documented single-device evaluation does not need collectives.
++    if int(os.environ.get('WORLD_SIZE', '1')) == 1:
++        return
++    if device is not None and device.type == 'npu':
++        raise RuntimeError('This Ascend patch supports single-NPU evaluation only')
+     if 'MASTER_ADDR' not in os.environ:
+         os.environ['MASTER_ADDR'] = 'localhost'
+     if 'MASTER_PORT' not in os.environ:
+diff --git a/vbench/human_action.py b/vbench/human_action.py
+index 7d6468f..e457556 100755
+--- a/vbench/human_action.py
++++ b/vbench/human_action.py
+@@ -1,7 +1,6 @@
+ import os
+ import json
+ import numpy as np
+-import clip
+ from PIL import Image
+ import torch
+ import torch.nn as nn
+@@ -41,8 +40,18 @@ def build_dict():
+     return results
+ 
+ 
++def _load_weights(model, state_dict):
++    # UMT recomputes/interpolates sinusoidal positions for 16 input frames.
++    # The official checkpoint intentionally omits this generated parameter.
++    incompatible = model.load_state_dict(state_dict, strict=False)
++    missing = set(incompatible.missing_keys) - {'pos_embed'}
++    if missing or incompatible.unexpected_keys:
++        raise RuntimeError(f'UMT checkpoint mismatch: missing={sorted(missing)}, '
++                           f'unexpected={incompatible.unexpected_keys}')
++
++
+ def human_action(umt_path, video_list, device):
+-    state_dict = torch.load(umt_path, map_location='cpu')
++    state_dict = torch.load(umt_path, map_location='cpu', weights_only=True)
+     model = create_model(
+         "vit_large_patch16_224",
+         pretrained=False,
+@@ -67,8 +76,10 @@ def human_action(umt_path, video_list, device):
+         Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+     ])
+     model = model.to(device)
+-    model.load_state_dict(state_dict, strict=False)
++    # Fail if weights are missing instead of evaluating a random model.
++    _load_weights(model, state_dict)
+     model.eval()
++    print(f'UMT device: {next(model.parameters()).device}', flush=True)
+     cat_dict = build_dict()
+     cnt= 0
+     cor_num = 0
+@@ -82,6 +93,8 @@ def human_action(umt_path, video_list, device):
+         images = images.to(device)
+         with torch.no_grad():
+             logits = torch.sigmoid(model(images))
++            if logits.device != images.device or not torch.isfinite(logits).all():
++                raise RuntimeError('UMT must produce finite logits on the requested device')
+             results, indices = torch.topk(logits, 5, dim=1)
+         indices = indices.squeeze().tolist()
+         results = results.squeeze().tolist()
+@@ -102,6 +115,7 @@ def human_action(umt_path, video_list, device):
+             # print(f"{cnt}: {video_path} false, gt: {video_label_ls}, top-5: {cat_ls}, logits: {results}", flush=True)
+             pass
+         video_results.append({
++            'device': str(images.device),
+             'video_path': video_path, 
+             'video_results': flag,
+             'cor_num_per_video': cor_num_per_video,})
+diff --git a/vbench/launch/evaluate.py b/vbench/launch/evaluate.py
+index 785ffdf..2ba779f 100644
+--- a/vbench/launch/evaluate.py
++++ b/vbench/launch/evaluate.py
+@@ -2,6 +2,7 @@ import torch
+ import os
+ from vbench import VBench
+ from vbench.distributed import dist_init, print0
++from vbench.device import get_device
+ from datetime import datetime
+ import argparse
+ import json
+@@ -10,6 +11,7 @@ def parse_args():
+ 
+     CUR_DIR = os.path.dirname(os.path.abspath(__file__))
+     parser = argparse.ArgumentParser(description='VBench', formatter_class=argparse.RawTextHelpFormatter)
++    parser.add_argument('--device', default=None, help='Evaluation device, e.g. npu:0, cuda:0, cpu')
+     parser.add_argument(
+         "--output_path",
+         type=str,
+@@ -106,9 +108,9 @@ def parse_args():
+ def main():
+     args = parse_args()
+ 
+-    dist_init()
++    device = get_device(args.device)
++    dist_init(device)
+     print0(f'args: {args}')
+-    device = torch.device("cuda")
+     my_VBench = VBench(device, args.full_json_dir, args.output_path)
+     
+     print0(f'start evaluation')
+

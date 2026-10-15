@@ -1,0 +1,31 @@
+# human_action from the official VBench README. All project adaptation lives
+# in projects/vbench/patches and is checked/applied by the executable document.
+name: vbench-quick-start
+
+concurrency:
+  group: vbench-quick-start
+  cancel-in-progress: false
+
+on:
+  # Enable after the first successful NPU workflow_dispatch run.
+  # schedule:
+  #   - cron: '40 */12 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  vbench-quick-start:
+    uses: ./.github/workflows/quick-start-template.yml
+    with:
+      project: vbench
+      test_runner: '["linux-aarch64-a2-1"]'
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+      container_options: >-
+        --volume=/data/ci-cache/vbench:/root/.cache/vbench
+      timeout_minutes: 180
+      upstream_repo: Vchitect/VBench
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/vbench/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/vbench/docs/Quick-start-Ascend.md
+      test_command: python -u -m unittest tests.test_quick_start_ascend -v 2>&1

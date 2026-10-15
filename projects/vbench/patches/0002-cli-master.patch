@@ -1,0 +1,33 @@
+diff --git a/vbench/cli/evaluate.py b/vbench/cli/evaluate.py
+index a0f8259..754a0b0 100644
+--- a/vbench/cli/evaluate.py
++++ b/vbench/cli/evaluate.py
+@@ -5,6 +5,7 @@ import argparse
+ CUR_DIR = os.path.dirname(os.path.abspath(__file__))
+ def register_subparsers(subparser):
+     parser = subparser.add_parser('evaluate', formatter_class=argparse.RawTextHelpFormatter)
++    parser.add_argument('--device', default=None, help='Evaluation device, e.g. npu:0, cuda:0, cpu')
+     parser.add_argument(
+         "--ngpus",
+         type=int,
+@@ -110,16 +111,14 @@ def stringify_cmd(cmd_ls):
+ 
+ ## TODO
+ def evaluate(args):
+-    cmd = ['python', '-m', 'torch.distributed.run', '--standalone', '--nproc_per_node', str(args.ngpus), f'{CUR_DIR}/../launch/evaluate.py']
++    import sys
++    cmd = [sys.executable, '-m', 'torch.distributed.run', '--standalone', '--nproc_per_node', str(args.ngpus), f'{CUR_DIR}/../launch/evaluate.py']
+     args_dict = vars(args)
+     for arg in args_dict:
+         if arg == "ngpus" or (args_dict[arg] == None) or arg == "func":
+             continue
+-        if arg in ["videos_path", "prompt", "prompt_file", "output_path", "full_json_dir"]:
+-            cmd.append(f"--{arg}=\"{str(args_dict[arg])}\"")
+-            continue
+         cmd.append(f'--{arg}')
+         cmd.append(str(args_dict[arg]))
+     
+-    subprocess.run(stringify_cmd(cmd), shell=True)
++    subprocess.run(cmd, check=True)
+ 
+

@@ -1,0 +1,15 @@
+# Runtime stack for CANN 9.1 / Python 3.12. Dependencies of unrelated VBench
+# evaluators are excluded by the patched human_action installation profile.
+torch==2.9.0
+torch-npu==2.9.0.post2
+torchvision==0.24.0
+numpy==1.26.4
+timm==0.9.12
+opencv-python==4.11.0.86
+decord==0.6.0
+gdown==6.4.2
+cuda-python<0
+nvidia-cublas-cu12<0
+nvidia-cuda-runtime-cu12<0
+nvidia-cudnn-cu12<0
+nvidia-nccl-cu12<0

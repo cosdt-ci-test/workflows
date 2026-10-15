@@ -409,7 +409,7 @@ supported:
       - vllm.gpu_memory_utilization=0.25
       - vllm.max_model_len=16384
       - gconfig.max_new_tokens=256
-      - +rollout.setup_timeout=1800
+      - ++rollout.setup_timeout=1800
     timeout_minutes: 90
 unsupported:
   # ===== 上游源码 bug（改上游源码才能通，无 overlay 可绕）=======================

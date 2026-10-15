@@ -1036,7 +1036,122 @@ if is_training_expansion_entry; then
   exit 0
 fi
 
+run_vllm_benchmark() {
+  require_visible_devices 1 '0'
+  : "${VLLM_CI_MODEL_PATH:?local vLLM model is required}"
+  : "${VLLM_CI_BENCH_ROOT:?benchmark tokenizer directory is required}"
+  export ASCEND_RT_VISIBLE_DEVICES="$(first_visible_devices 1)"
+  export VLLM_WORKER_MULTIPROC_METHOD=spawn
+  export OPENAI_API_KEY=ci-local-not-a-credential
+  local port server_pid log ready=0
+  port="$(master_port_for 130)"
+  log="$CI_OUTPUT_DIR/vllm-server.log"
+  vllm serve "$VLLM_CI_MODEL_PATH" --served-model-name ci-model \
+    --host 127.0.0.1 --port "$port" --max-model-len 256 \
+    --max-num-seqs 4 --gpu-memory-utilization 0.5 --enforce-eager > "$log" 2>&1 &
+  server_pid=$!
+  trap 'kill "$server_pid" 2>/dev/null || true; wait "$server_pid" 2>/dev/null || true' EXIT
+  for ((attempt=0; attempt<180; attempt++)); do
+    if curl --noproxy '*' -fsS "http://127.0.0.1:$port/health" >/dev/null 2>&1; then ready=1; break; fi
+    if ! kill -0 "$server_pid" 2>/dev/null; then cat "$log"; exit 1; fi
+    sleep 2
+  done
+  if ((ready == 0)); then cat "$log"; echo 'vLLM server did not become ready' >&2; exit 1; fi
+  cd "$VLLM_CI_BENCH_ROOT"
+  local url="http://127.0.0.1:$port/v1/completions"
+  if [[ "$entry_key" == benchmarks/inference/mii/run_benchmark.py ]]; then
+    # The client's barrier can keep forked workers alive after a parent error.
+    timeout --kill-after=10s 5m "$PYTHON" "$LAUNCH_PATH" "${EXTRA_ARGS[@]}" \
+      --openai_api_url "$url" --openai_api_key "$OPENAI_API_KEY"
+  else
+    PYTHONPATH="$EXAMPLES_ROOT/benchmarks/inference/deepspeedometer/src${PYTHONPATH:+:$PYTHONPATH}" \
+      "$PYTHON" -m deepspeedometer.benchmark_runner "${EXTRA_ARGS[@]}" --url "$url"
+  fi
+  # Clean up while the local PID is in scope; preserve native failures above.
+  kill "$server_pid"
+  wait "$server_pid" || true
+  trap - EXIT
+}
+
 case "$entry_key" in
+  training/autotuning/hf/*/test_tune.sh)
+    require_visible_devices 1 '0'
+    : "${AUTOTUNE_WORK:?autotuning dependencies/data were not exported}"
+    : "${AUTOTUNE_MODEL_PATH:?local autotuning model is required}"
+    cd "$CI_OUTPUT_DIR"
+    "$PYTHON" - "$CI_OUTPUT_DIR" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+output = Path(sys.argv[1])
+config = {'train_micro_batch_size_per_gpu': [1, 2], 'gradient_accumulation_steps': 1,
+          'zero_optimization': {'stage': 0},
+          'autotuning': {'enabled': True, 'fast': True, 'start_profile_step': 1, 'end_profile_step': 3,
+                         'results_dir': str(output / 'tuning-results'), 'exps_dir': str(output / 'tuning-experiments'),
+                         'arg_mappings': {'train_micro_batch_size_per_gpu': '--per_device_train_batch_size',
+                                          'gradient_accumulation_steps': '--gradient_accumulation_steps'}}}
+(output / 'autotuning.json').write_text(json.dumps(config))
+(output / 'hostfile').write_text('localhost slots=1\n')
+PY
+    # evaluate.load('accuracy') finds the unchanged official metric locally.
+    cd "$AUTOTUNE_WORK"
+    deepspeed --autotuning run --hostfile "$CI_OUTPUT_DIR/hostfile" --num_nodes 1 --num_gpus 1 \
+      --master_port "$(master_port_for 132)" "$AUTOTUNE_WORK/train.py" \
+      --deepspeed "$CI_OUTPUT_DIR/autotuning.json" --model_name_or_path "$AUTOTUNE_MODEL_PATH" \
+      --train_file "$AUTOTUNE_WORK/train.json" --validation_file "$AUTOTUNE_WORK/train.json" \
+      --do_train --max_steps 5 \
+      --per_device_train_batch_size 1 --save_strategy no --report_to none \
+      --output_dir "$CI_OUTPUT_DIR/train" "${EXTRA_ARGS[@]}"
+    # The native tuner can log failed experiments and exit zero without a result.
+    test -s "$CI_OUTPUT_DIR/tuning-results/ds_config_optimal.json"
+    exit 0
+    ;;
+  compression/reasoning_aware_compression/bash_script/eval_math500.sh)
+    require_visible_devices 1 '0'
+    : "${VLLM_CI_MODEL_PATH:?local vLLM model is required}"
+    : "${MATH500_CI_WORK:?local MATH-500 task/data are required}"
+    export VLLM_WORKER_MULTIPROC_METHOD=spawn
+    # Preserve the shell recipe's model/sampling/metric semantics, using the
+    # current native CLI and custom-task hook to select eight local problems.
+    lighteval vllm \
+      "model_name=$VLLM_CI_MODEL_PATH,max_model_length=256,gpu_memory_utilization=0.8,override_chat_template=true,generation_parameters={max_new_tokens:16,temperature:0.6,top_p:0.95}" \
+      'ci_math500|0' --custom-tasks "$MATH500_CI_WORK/task.py" "${EXTRA_ARGS[@]}"
+    exit 0
+    ;;
+  benchmarks/inference/mii/run_benchmark.py|benchmarks/inference/deepspeedometer/src/deepspeedometer/benchmark_runner.py)
+    run_vllm_benchmark
+    exit 0
+    ;;
+  deepnvme/ds_io/ds_io_sweep.sh)
+    require_visible_devices 1 '0'
+    ulimit -Sl "$(ulimit -Hl)"
+    mkdir -p "$CI_OUTPUT_DIR/aio"
+    # Same ds_io accelerator recipe as the sweep, reduced to one write/read pair.
+    ds_io "${EXTRA_ARGS[@]}" --folder_to_device_mapping "$CI_OUTPUT_DIR/aio:0"
+    ds_io "${EXTRA_ARGS[@]}" --folder_to_device_mapping "$CI_OUTPUT_DIR/aio:0" --read
+    exit 0
+    ;;
+  training/deepspeed_finetune_demo/evaluate/gsm8k/gen_gsm8k.py|training/deepspeed_finetune_demo/evaluate/mmlu/gen_mmlu.py|compression/reasoning_aware_compression/collect_traces.py)
+    require_visible_devices 1 '0'
+    require_overlay_path --model directory
+    export ASCEND_RT_VISIBLE_DEVICES="$(first_visible_devices 1)"
+    export VLLM_WORKER_MULTIPROC_METHOD=spawn
+    # Fail rather than silently exercising CPU/CUDA instead of Ascend.
+    "$PYTHON" -c 'import torch, torch_npu; from vllm.platforms import current_platform; assert current_platform.device_type == "npu" and torch.npu.is_available(), "vLLM must select available NPU"'
+    if [[ "$entry_key" == compression/reasoning_aware_compression/collect_traces.py ]]; then
+      require_overlay_path --dataset file
+    else
+      : "${VLLM_CI_DATA_ROOT:?native local evaluation datasets were not exported by setup}"
+      [[ -d "$VLLM_CI_DATA_ROOT" ]] || { echo "local evaluation dataset root missing: $VLLM_CI_DATA_ROOT" >&2; exit 1; }
+      # load_dataset('openai/gsm8k' or 'cais/mmlu') natively finds the staged
+      # local directories from this cwd; no monkeypatch or source edit.
+      cd "$VLLM_CI_DATA_ROOT"
+    fi
+    # Keep the original program's exit status; no answer/accuracy threshold.
+    "$PYTHON" "$LAUNCH_PATH" "${EXTRA_ARGS[@]}"
+    exit 0
+    ;;
   training/cifar/run_ds_moe.sh)
     run_cifar_moe
     exit 0

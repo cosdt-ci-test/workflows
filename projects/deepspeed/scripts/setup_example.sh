@@ -78,7 +78,9 @@ ms_download_models() {
   # modelscope>=1.38 splits hub code into modelscope-hub; pin the last pre-split
   # release because the runner mirror may only expose an older hub for the latest wheel.
   python -m pip install -q "modelscope==1.37.0" safetensors
-  TQDM_MININTERVAL="${TQDM_MININTERVAL:-15}" python - "$@" <<'PY'
+  TQDM_MININTERVAL="${TQDM_MININTERVAL:-15}" \
+    MODELSCOPE_DOWNLOAD_PARALLELS=1 MODELSCOPE_ENABLE_DEFAULT_HASH_VALIDATION=true \
+    python - "$@" <<'PY'
 import json
 import os
 from pathlib import Path
@@ -93,6 +95,7 @@ def validate_snapshot(local):
     root = Path(local)
     if not (root / 'config.json').is_file():
         raise RuntimeError(f'model config missing: {root}')
+    json.loads((root / 'config.json').read_text())
     shards = sorted(root.glob('*.safetensors'))
     index = root / 'model.safetensors.index.json'
     if index.is_file():
@@ -108,7 +111,10 @@ def validate_snapshot(local):
     print(f'validated model assets: {root}, {len(shards)} safetensors shard(s)', flush=True)
 
 
-MODEL_CACHE = os.environ.get("MODELSCOPE_CACHE", os.path.expanduser("~/.cache/modelscope"))
+# A shared snapshot can change after validation while another job downloads
+# into it. Keep every model in this setup's private cache through the run step.
+MODEL_CACHE = tempfile.mkdtemp(prefix='deepspeed-modelscope-', dir='/tmp')
+print('private ModelScope cache:', MODEL_CACHE, flush=True)
 for pair in sys.argv[1:]:
     env_name, model_id = pair.split("=", 1)
     cache = MODEL_CACHE
@@ -119,7 +125,8 @@ for pair in sys.argv[1:]:
     for attempt in range(3):
         try:
             local = snapshot_download(model_id, cache_dir=cache,
-                                      ignore_file_pattern=ignored, max_workers=2)
+                                      ignore_file_pattern=ignored, max_workers=2,
+                                      enable_file_lock=True)
             validate_snapshot(local)
             break
         except Exception as exc:
@@ -128,9 +135,7 @@ for pair in sys.argv[1:]:
                 raise
             # A fresh job-owned cache avoids trusting a corrupt cached shard.
             # Keep the old files untouched; never purge the runner-wide cache.
-            retries = Path(os.environ['GITHUB_WORKSPACE']) / '.ci' / 'deepspeed-model-retries'
-            retries.mkdir(parents=True, exist_ok=True)
-            cache = tempfile.mkdtemp(prefix='snapshot-', dir=retries)
+            cache = tempfile.mkdtemp(prefix='deepspeed-modelscope-retry-', dir='/tmp')
             time.sleep(2 * (attempt + 1))
     with open(os.environ["GITHUB_ENV"], "a") as fh:
         fh.write(f"{env_name}={local}\n")
@@ -307,6 +312,38 @@ setup_ds_cifar() {
   plant_cifar10
 }
 
+# DS-Chat reloads the tokenizer from config._name_or_path even when its model
+# argument is local. Keep that lookup local in a job-owned asset view, without
+# changing the upstream code or the shared ModelScope snapshot.
+prepare_chat_model_view() {
+  python - <<'PY'
+import json
+import os
+from pathlib import Path
+import tempfile
+from transformers import AutoTokenizer
+
+snapshot = Path(os.environ['OPT_125M_PATH']).resolve()
+views = Path(os.environ['GITHUB_WORKSPACE']) / '.ci' / 'deepspeed-chat-models'
+views.mkdir(parents=True, exist_ok=True)
+view = Path(tempfile.mkdtemp(prefix='opt-125m-', dir=views))
+for asset in snapshot.iterdir():
+    if asset.name != 'config.json':
+        (view / asset.name).symlink_to(asset, target_is_directory=asset.is_dir())
+config = json.loads((snapshot / 'config.json').read_text())
+config['_name_or_path'] = str(view)
+(view / 'config.json').write_text(json.dumps(config))
+AutoTokenizer.from_pretrained(str(view), local_files_only=True)
+with open(os.environ['GITHUB_ENV'], 'a') as env:
+    env.write(f'OPT_125M_PATH={view}\n')
+print('DS-Chat offline model/tokenizer view:', view)
+PY
+  local model_path
+  model_path="$(awk '/^OPT_125M_PATH=/ { value = substr($0, 15) } END { print value }' "$GITHUB_ENV")"
+  [[ -d "$model_path" ]] || { echo 'DS-Chat local model view missing' >&2; return 1; }
+  export OPT_125M_PATH="$model_path"
+}
+
 # Shared DeepSpeed-Chat setup: DS source + transformers + opt-125m + fixture.
 setup_ds_chat() {
   local fixture="$1"
@@ -320,6 +357,7 @@ setup_ds_chat() {
     "protobuf==3.20.3" tensorboard
   install_chat_source_path
   ms_download_models "OPT_125M_PATH=facebook/opt-125m"
+  prepare_chat_model_view
   plant_chat_fixture "$fixture"
 }
 
@@ -337,6 +375,7 @@ setup_ds_chat_eval_dependencies() {
     "protobuf==3.20.3" tensorboard
   install_chat_source_path
   ms_download_models "OPT_125M_PATH=facebook/opt-125m"
+  prepare_chat_model_view
   python - <<'PY'
 import importlib.util
 import os
@@ -1147,11 +1186,17 @@ PY
 }
 
 download_sd15_ci_model() {
-  install_example_dependencies 'modelscope==1.37.0'
-  python - <<'PY'
+  install_example_dependencies 'modelscope==1.37.0' safetensors
+  TQDM_MININTERVAL="${TQDM_MININTERVAL:-15}" \
+    MODELSCOPE_DOWNLOAD_PARALLELS=1 MODELSCOPE_ENABLE_DEFAULT_HASH_VALIDATION=true \
+    python - <<'PY'
+import json
 import os
 from pathlib import Path
+import tempfile
+import time
 from modelscope import snapshot_download
+from safetensors import safe_open
 
 # Full Diffusers components, but not duplicate .bin/root .ckpt weights. The
 # final unchanged entry reloads the safety checker when constructing its pipeline.
@@ -1163,15 +1208,39 @@ patterns = [
     'vae/config.json', 'vae/diffusion_pytorch_model.safetensors',
     'safety_checker/config.json', 'safety_checker/model.safetensors',
 ]
-path = snapshot_download('AI-ModelScope/stable-diffusion-v1-5',
-                         allow_patterns=patterns,
-                         cache_dir=os.environ.get('MODELSCOPE_CACHE', os.path.expanduser('~/.cache/modelscope')))
 required = [name for name in patterns if '*' not in name]
 required += ['tokenizer/vocab.json', 'tokenizer/merges.txt', 'tokenizer/tokenizer_config.json']
-for name in required:
-    asset = Path(path) / name
-    if not asset.is_file() or not asset.stat().st_size:
-        raise SystemExit(f'SD15 complete local Diffusers asset missing: {asset}')
+
+
+def validate_components(local):
+    for name in required:
+        asset = Path(local) / name
+        if not asset.is_file() or not asset.stat().st_size:
+            raise RuntimeError(f'SD15 complete local Diffusers asset missing: {asset}')
+        if asset.suffix == '.json':
+            json.loads(asset.read_text())
+        elif asset.suffix == '.safetensors':
+            with safe_open(str(asset), framework='np') as weights:
+                if not list(weights.keys()):
+                    raise RuntimeError(f'SD15 empty component weights: {asset}')
+    print('validated SD15 tokenizer and all four weight components:', local, flush=True)
+
+
+cache = tempfile.mkdtemp(prefix='deepspeed-sd15-', dir='/tmp')
+print('private SD15 ModelScope cache:', cache, flush=True)
+for attempt in range(3):
+    try:
+        path = snapshot_download('AI-ModelScope/stable-diffusion-v1-5',
+                                 allow_patterns=patterns, cache_dir=cache,
+                                 enable_file_lock=True, max_workers=2)
+        validate_components(path)
+        break
+    except Exception as exc:
+        print(f'SD15 attempt {attempt + 1}/3 failed: {exc}', flush=True)
+        if attempt == 2:
+            raise
+        cache = tempfile.mkdtemp(prefix='deepspeed-sd15-retry-', dir='/tmp')
+        time.sleep(2 * (attempt + 1))
 with open(os.environ['GITHUB_ENV'], 'a') as handle:
     handle.write(f'SD15_PATH={path}\n')
 print('complete ModelScope SD15 Diffusers components:', path)
@@ -1283,6 +1352,214 @@ print('OPSD rollout APIs:', HybridEngineRollout.__name__, HybridEngineRolloutCon
 PY
 }
 
+# vLLM examples run in their own prebuilt image, not the training image.
+# Preserve the image's torch/NPU/vLLM runtime; prepare a compatible data stack
+# and select the tokenizer API required by each native client.
+verify_vllm_runtime() {
+  python - <<'PY'
+from importlib.metadata import version
+import torch
+import torch_npu
+from vllm.platforms import current_platform
+
+for name, expected in {'vllm': '0.23.0', 'vllm-ascend': '0.23.0',
+                       'torch': '2.10.0', 'torch-npu': '2.10.0.post4'}.items():
+    actual = version(name).split('+')[0]
+    print(f'vLLM image runtime: {name}={actual}')
+    if actual != expected:
+        raise SystemExit(f'{name}: expected {expected}, got {actual}; do not replace the image stack')
+if current_platform.device_type != 'npu' or not torch.npu.is_available():
+    raise SystemExit(f'vLLM must select available NPU, got {current_platform.device_type}')
+if torch.ones(2, device='npu').sum().item() != 2:
+    raise SystemExit('vLLM NPU allocation/reduction preflight failed')
+print('vLLM Ascend platform and NPU preflight passed')
+PY
+}
+
+prepare_vllm_image() {
+  verify_vllm_runtime
+  local constraint_dir="$GITHUB_WORKSPACE/.ci/deepspeed-vllm"
+  mkdir -p "$constraint_dir"
+  export PIP_CONSTRAINT="$constraint_dir/protected-serving-stack.txt"
+  python - "$PIP_CONSTRAINT" "$PROFILE" "${2:-}" <<'PY'
+from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
+import sys
+
+protected = ('torch', 'torch-npu', 'vllm', 'vllm-ascend',
+             'triton', 'triton-ascend', 'safetensors')
+if not sys.argv[3]:
+    protected += ('transformers', 'huggingface-hub', 'tokenizers')
+lines = []
+for name in protected:
+    try:
+        lines.append(f'{name}=={version(name)}\n')
+    except PackageNotFoundError:
+        pass
+if sys.argv[3]:
+    lines += [f'transformers=={sys.argv[3]}\n', 'huggingface-hub>=0.34.0,<1.0\n',
+              'tokenizers>=0.22.0,<=0.23.0\n']
+numpy_version = '2.2.6' if sys.argv[2] == 'ds_math500' else '1.26.4'
+lines += [f'numpy=={numpy_version}\n', 'scipy==1.16.3\n',
+          'pyarrow==20.0.0\n', 'pandas==2.2.3\n']
+Path(sys.argv[1]).write_text(''.join(lines))
+print('Serving runtime and compatible data constraints:\n' + ''.join(lines))
+PY
+  install_deepspeed_source
+  # The original GSM8K/MMLU calls include trust_remote_code; use datasets 3.x
+  # with native local-directory loading, without replacing load_dataset.
+  install_example_dependencies numpy scipy pyarrow pandas transformers "${1:-datasets==3.6.0}"
+  python -c 'import numpy, scipy, pandas, pyarrow; print("vLLM data stack:", numpy.__version__, scipy.__version__, pandas.__version__, pyarrow.__version__)'
+  ms_download_models 'VLLM_CI_MODEL_PATH=Qwen/Qwen2.5-0.5B-Instruct'
+  python - <<'PY'
+import os
+from transformers import AutoTokenizer
+tokenizer = AutoTokenizer.from_pretrained(os.environ['VLLM_CI_MODEL_PATH'], local_files_only=True)
+print('vLLM CI local tokenizer:', type(tokenizer).__name__)
+PY
+}
+
+setup_ds_vllm_eval() {
+  prepare_vllm_image
+  export VLLM_CI_DATA_ROOT="$GITHUB_WORKSPACE/.ci/deepspeed-vllm/data"
+  python - "$FIXTURE_DIR" "$VLLM_CI_DATA_ROOT" <<'PY'
+import json
+import os
+from pathlib import Path
+import sys
+os.environ['HF_HUB_OFFLINE'] = '1'
+os.environ['HF_DATASETS_OFFLINE'] = '1'
+from datasets import Dataset, load_dataset
+
+fixture_root, data_root = map(Path, sys.argv[1:])
+previous = Path.cwd()
+for repo, config, fixture, fields in (
+    ('openai/gsm8k', 'main', 'ci_gsm8k_8.jsonl', {'question', 'answer'}),
+    ('cais/mmlu', 'all', 'ci_mmlu_8.jsonl', {'question', 'choices', 'answer'}),
+):
+    rows = [json.loads(line) for line in (fixture_root / fixture).read_text().splitlines() if line.strip()]
+    if len(rows) != 8 or any(set(row) != fields for row in rows):
+        raise SystemExit(f'{fixture}: expected eight native-schema rows')
+    directory = data_root / repo
+    directory.mkdir(parents=True, exist_ok=True)
+    Dataset.from_list(rows).to_parquet(directory / 'test.parquet')
+    (directory / 'README.md').write_text(
+        f'---\nconfigs:\n- config_name: {config}\n  data_files:\n'
+        '  - split: test\n    path: test.parquet\n---\nLocal eight-question CI fixture.\n'
+    )
+    try:
+        os.chdir(data_root)
+        # Same repository/config/split call as the unchanged original entry.
+        loaded = load_dataset(repo, config, split='test', trust_remote_code=True)
+    finally:
+        os.chdir(previous)
+    if loaded.to_list() != rows:
+        raise SystemExit(f'{repo}: native local-directory resolution changed CI data')
+    print(f'Native local dataset verified: {repo}/{config}, {len(loaded)} rows')
+with open(os.environ['GITHUB_ENV'], 'a') as output:
+    output.write(f'VLLM_CI_DATA_ROOT={data_root.resolve()}\n')
+    output.write('HF_HUB_OFFLINE=1\nHF_DATASETS_OFFLINE=1\n')
+PY
+}
+
+setup_ds_vllm_traces() {
+  prepare_vllm_image
+  plant_ci_fixture ci_rac_8.jsonl RAC_CI_PATH
+}
+
+setup_ds_vllm_bench() {
+  if [[ "${EXAMPLE_PATH:-}" == benchmarks/inference/mii/run_benchmark.py ]]; then
+    # This unchanged client calls batch_encode_plus, removed in Transformers 5.
+    prepare_vllm_image 'datasets==3.6.0' '4.57.6'
+  else
+    prepare_vllm_image
+  fi
+  install_example_dependencies loguru tabulate requests 'pydantic>=2,<3'
+  local work="$GITHUB_WORKSPACE/.ci/deepspeed-vllm/benchmark"
+  mkdir -p "$work"
+  ln -s "$VLLM_CI_MODEL_PATH" "$work/ci-model"
+  echo "VLLM_CI_BENCH_ROOT=$work" >> "$GITHUB_ENV"
+}
+
+setup_ds_aio() {
+  install_deepspeed_source
+  apt-get install -y libaio-dev build-essential
+  python -c 'from deepspeed.ops.op_builder import AsyncIOBuilder; AsyncIOBuilder().load(verbose=True)'
+}
+
+setup_ds_math500() {
+  prepare_vllm_image 'datasets>=4,<5'
+  # This lighteval commit carries PR #1211 (tokenizer/TokensPrompt APIs for
+  # vLLM >=0.19) plus PR #1402, which encodes strings before xxhash 4.x hashing.
+  # Do not install its vllm extra or replace the image engine.
+  install_example_dependencies \
+    'lighteval[math] @ git+https://github.com/huggingface/lighteval.git@b634749d160b080071b9a8e3f5e5a7153dd130c0' \
+    ray more_itertools
+  local work="$GITHUB_WORKSPACE/.ci/deepspeed-math500"
+  python - "$work" "$FIXTURE_DIR/ci_gsm8k_8.jsonl" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+work, fixture = map(Path, sys.argv[1:])
+(work / 'data').mkdir(parents=True, exist_ok=True)
+rows = [json.loads(line) for line in fixture.read_text().splitlines()]
+with (work / 'data/test.jsonl').open('w') as output:
+    for row in rows:
+        answer = row['answer'].split('####')[-1].strip()
+        output.write(json.dumps({'problem': row['question'], 'solution': answer, 'answer': answer}) + '\n')
+(work / 'task.py').write_text(
+    'import os\nfrom dataclasses import replace\n'
+    'from lighteval.tasks.tasks.math_500 import math_500\n'
+    'TASKS_TABLE = [replace(math_500, name="ci_math500", '
+    'hf_repo=os.environ["MATH500_DATA_PATH"], generation_size=16)]\n'
+)
+PY
+  printf 'MATH500_CI_WORK=%s\nMATH500_DATA_PATH=%s/data\n' "$work" "$work" >> "$GITHUB_ENV"
+}
+
+setup_ds_autotune() {
+  local model="$1" script="$2"
+  install_deepspeed_source
+  install_example_dependencies 'transformers==4.57.6' 'datasets==3.6.0' \
+    'accelerate>=1.10.1,<2' 'evaluate==0.4.6' scikit-learn sentencepiece protobuf tabulate
+  ms_download_models "AUTOTUNE_MODEL_PATH=$model"
+  local work="$GITHUB_WORKSPACE/.ci/deepspeed-autotune"
+  mkdir -p "$work"
+  curl -fL "https://raw.githubusercontent.com/huggingface/transformers/v4.57.6/examples/pytorch/$script" \
+    -o "$work/train.py"
+  if [[ "$script" == text-classification/* ]]; then
+    cp "$FIXTURE_DIR/ci_mnli_8.jsonl" "$work/train.json"
+    mkdir -p "$work/accuracy"
+    curl -fL https://raw.githubusercontent.com/huggingface/evaluate/v0.4.6/metrics/accuracy/accuracy.py \
+      -o "$work/accuracy/accuracy.py"
+  else
+    cp "$FIXTURE_DIR/ci_rac_8.jsonl" "$work/train.json"
+  fi
+  # Autotuner's native scheduler uses localhost SSH/pdsh for experiment cleanup.
+  # Keys and configuration belong only to this CI container, never the host.
+  apt-get install -y pdsh openssh-server
+  ssh-keygen -q -t ed25519 -N '' -f "$work/key"
+  ssh-keygen -q -t ed25519 -N '' -f "$work/hostkey"
+  mkdir -p /run/sshd
+  /usr/sbin/sshd -f /dev/null -p 2222 -h "$work/hostkey" \
+    -o ListenAddress=127.0.0.1 -o AuthorizedKeysFile="$work/key.pub" \
+    -o PermitRootLogin=prohibit-password -o StrictModes=no -o PasswordAuthentication=no \
+    -o UsePAM=yes -o KbdInteractiveAuthentication=no -o PidFile="$work/sshd.pid"
+  # The launcher preflight and each tuner experiment call plain ssh, not pdsh.
+  # Ubuntu's client config includes this container-local fragment for all three.
+  mkdir -p /etc/ssh/ssh_config.d
+  printf 'Host localhost 127.0.0.1\n  HostName 127.0.0.1\n  Port 2222\n  IdentityFile %s/key\n  IdentitiesOnly yes\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n' \
+    "$work" > /etc/ssh/ssh_config.d/deepspeed-ci.conf
+  ssh -o BatchMode=yes localhost true
+  printf 'AUTOTUNE_WORK=%s\n' "$work" >> "$GITHUB_ENV"
+}
+
+setup_ds_autotune_bert() { setup_ds_autotune AI-ModelScope/bert-base-cased text-classification/run_glue.py; }
+setup_ds_autotune_deberta() { setup_ds_autotune microsoft/deberta-v3-small text-classification/run_glue.py; }
+setup_ds_autotune_distilbert() { setup_ds_autotune AI-ModelScope/distilbert-base-uncased text-classification/run_glue.py; }
+setup_ds_autotune_gpt2() { setup_ds_autotune AI-ModelScope/gpt2 language-modeling/run_clm.py; }
+
 supported_profiles() {
   declare -F | awk '/^declare -f setup_/ { sub(/^declare -f setup_/, ""); print }' | paste -sd' ' -
 }
@@ -1301,6 +1578,16 @@ GITHUB_ENV="${GITHUB_ENV:?GITHUB_ENV is required}"
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 
 select_pip_index
+# Do not run the training stack installer or its fixed scientific-stack
+# checks for these independently scheduled vLLM image jobs.
+case "$PROFILE" in
+  ds_vllm_eval|ds_vllm_traces|ds_vllm_bench|ds_math500)
+    "setup_${PROFILE}"
+    verify_vllm_runtime
+    verify_installed_runtime
+    exit 0
+    ;;
+esac
 python -m pip install -U pip setuptools wheel
 ensure_torch_stack
 python -m pip install numpy scipy pyarrow pandas

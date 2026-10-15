@@ -6,7 +6,7 @@ scan:
   # root + include_extensions 两个键；实现模块、上游自测等一律进
   # unsupported 段（带分组注释与理由）。
   # 对账口径：release 树（当前 v2.1.0）114 个 .py/.sh =
-  # supported(11) + unsupported(103)。
+  # supported(12) + unsupported(102)。
 
 # 看护 release 线（workflow target_ref 留空，由引擎按 latest release
 # 解析）。supported 配方用专用镜像 ghcr.io/hwvanici/areal_npu:v1.0.5-a2
@@ -289,10 +289,12 @@ supported:
   #     - +total_train_steps=1
   #   timeout_minutes: 60
   
-  # camel-ai 的 ChatAgent 多轮 GRPO（GSM8K）。两处不同于常规条目：AgentRLConfig
-  # 定义在入口脚本，必须以 `python -m examples.camel.train` 启动（run_example.sh
-  # 的 camel 分支）——否则 __module__ 为 "__main__"，跨进程序列化找不到该类；
-  # camel-ai 非 AReaL 声明依赖，由 setup 的 areal-camel-grpo profile 另装。
+  # camel-ai 的 ChatAgent 多轮 GRPO（GSM8K）。AgentRLConfig 定义在入口脚本，其
+  # __module__ 恒为 "__main__"（plain 脚本与 python -m 都一样）→ 引擎 worker 无法
+  # import，配置反序列化退化成 dict、config.<attr> 全炸；run_example.sh 的 camel 分支
+  # 改为把该文件当模块 import 后调用 main()，class_path 成 examples.camel.train.
+  # AgentRLConfig 才可被 worker 重建。camel-ai 非 AReaL 声明依赖，由 setup 的
+  # areal-camel-grpo profile 另装。
   - path: examples/camel/train.py
     profile: areal-camel-grpo
     runner: linux-aarch64-a2-2
@@ -317,6 +319,38 @@ supported:
       - +total_train_steps=1
       - seed 42
     timeout_minutes: 60
+  # Agent Workflow（OpenAI SDK agent，GSM8K）：workflow = areal.workflow.openai.
+  # math_agent.MathAgent。agent 用的是 AReaL 经 extra_kwargs 注入的**本地** proxy
+  # endpoint（base_url=proxy_addr + session api_key，见 experimental/openai/proxy/
+  # workflow.py:125-132），非外部 LLM，无需 key；AgentConfig 在同目录 configs.py
+  # （run_example.sh 的 PYTHONPATH 已覆盖该目录）。复用 areal-agents-grpo。
+  - path: examples/agent_workflow/train.py
+    profile: areal-agents-grpo
+    runner: linux-aarch64-a2-2
+    npu_devices: '0,1'
+    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
+    overlay_args:
+      - --config examples/agent_workflow/config.yaml
+      - scheduler.type=local
+      - cluster.n_gpus_per_node=2
+      - rollout.backend=vllm:d1p1t2
+      - +rollout.setup_timeout=1800
+      - actor.backend=fsdp:d2p1t1
+      - +actor.fsdp.offload_params=true
+      - ++actor.weight_update_mode=disk
+      - actor.path=${AREAL_MODEL_PATH}
+      - actor.mb_spec.max_tokens_per_mb=1024
+      - ref.mb_spec.max_tokens_per_mb=1024
+      - vllm.gpu_memory_utilization=0.3
+      - +gconfig.max_new_tokens=64
+      - gconfig.max_tokens=256
+      - gconfig.n_samples=1
+      - train_dataset.batch_size=2
+      - valid_dataset.batch_size=2
+      - +train_dataset.setup_timeout=600
+      - +valid_dataset.setup_timeout=600
+      - +total_train_steps=1
+    timeout_minutes: 60
 unsupported:
   # clevr SFT：与 geometry3k 同款 VLM 数据集，但 SFT 路径必崩，无 patch 绕不过：
   # 1) loader 读错 processor 键名——areal/dataset/clevr_count_70k.py:110 用
@@ -337,13 +371,23 @@ unsupported:
   #    → x["cu_seqlens"]（:21；:53/:69 还读其 device）→ KeyError；
   # 3) 无 config 开关可绕，只能改引擎源码。
   - examples/alignment/hhrlhf_rw.py
-  # UPSTREAM_BUG：dpo_pair_logratios 的序列聚合硬编码 fp64（functional.py:698，
-  # 为长对精度设计），Ascend 不支持 fp64 计算
+  # hhrlhf DPO：loss 聚合硬编码 fp64，Ascend 不支持 fp64 计算，无 patch 绕不过：
+  # 1) areal/utils/functional/functional.py:829-835（dpo_pair_logratios）用
+  #    torch.float64 + .double() + index_add_ 做 scatter-add（注释称"为长对精度
+  #    设计"，fp32 累加会翻 log-ratio 符号）；
+  # 2) 该函数由 DPOEngine 直接调用（areal/trainer/dpo/dpo_engine.py:169），调用点与
+  #    函数内均无 dtype/config 开关；
+  # 3) 只能改上游源码（fp64→fp32 或加开关）才通。
   - examples/alignment/hhrlhf_dpo.py
-  # UPSTREAM_BUG：reward_fn 传函数对象，RPC JSON 序列化失败（应传点路径）
+  # virl39k GRPO：reward_fn 以函数对象传入，跨进程 RPC 序列化必失败，无 patch 绕不过：
+  # 1) 入口把 workflow_kwargs={"reward_fn": virl39k_reward_fn, ...}（examples/vlm_npu/
+  #    virl39k_grpo.py:52-53）传的是**函数对象**；
+  # 2) workflow_kwargs 要经 RPC 送到 rollout worker，serialize_value（areal/infra/rpc/
+  #    serialization.py:625-626）对函数原样透传 → JSON 序列化失败（可用条目如
+  #    math/gsm8k_rl.py 传的是点路径字符串）；
+  # 3) reward_fn 在入口脚本内构造、非 config 字段，无 overlay 可改——只能改上游源码。
+  # 同 bug：vlm_npu/geometry3k_grpo.py。
   - examples/vlm_npu/virl39k_grpo.py
-  # math_agent 调外部 LLM，需 API key
-  - examples/agent_workflow/train.py
   # 常驻服务 demo：需 API key + 交互 stdin，无 pass/fail 终点
   - examples/agent_service/run_agent_service.py
   # 多节点 ray + 带外 user simulator（独立 30B vLLM 服务）+ fork 版

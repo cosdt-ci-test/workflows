@@ -379,12 +379,14 @@ PY
     fi
     ;;
   examples/camel/train.py)
-    # train.py defines its config dataclass (AgentRLConfig) at module scope, so
-    # it must run as a module: as a plain script __module__ is "__main__" and
-    # the dataclass cannot be deserialized cross-process (serialize_value
-    # rebuilds dataclasses by class_path). Same reason as the scaffolding
-    # branch above.
-    "$PYTHON" -m examples.camel.train "${EXTRA_ARGS[@]}" || run_rc=$?
+    # train.py defines its config dataclass (AgentRLConfig) at module scope.
+    # Whether run as a plain script or via `python -m`, the class's __module__
+    # is "__main__" (verified), so the engine worker cannot import it and
+    # deserialize_value degrades the config to a plain dict -> config.seed
+    # AttributeError. Importing the file as a module instead gives the class
+    # the path "examples.camel.train.AgentRLConfig" (importable in the worker,
+    # repo root is on PYTHONPATH) and we call main() explicitly.
+    "$PYTHON" -c "import sys; from examples.camel.train import main; main(sys.argv[1:])" "${EXTRA_ARGS[@]}" || run_rc=$?
     ;;
   *.sh)
     # Shell examples dispatch with bash (generic guard contract: .sh -> bash,

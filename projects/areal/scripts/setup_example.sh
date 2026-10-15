@@ -16,7 +16,7 @@ fi
 
 PROFILE="$1"
 
-SUPPORTED_PROFILES="areal-vlm-grpo areal-vlm-mt-grpo areal-vlm-sft areal-clevr-sft areal-tir-grpo areal-scaffold-grpo areal-agents-grpo areal-math-grpo areal-math-sft areal-math-aime areal-math-boba areal-countdown-grpo areal-hermes-grpo areal-openclaw-grpo areal-camel-grpo areal-align"
+SUPPORTED_PROFILES="areal-vlm-grpo areal-vlm-mt-grpo areal-vlm-sft areal-clevr-sft areal-tir-grpo areal-scaffold-grpo areal-agents-grpo areal-math-grpo areal-math-sft areal-math-aime areal-math-boba areal-countdown-grpo areal-hermes-grpo areal-openclaw-grpo areal-camel-grpo areal-online-rollout areal-align"
 AIME_PREP=0
 BOBA_PREP=0
 COUNTDOWN_PREP=0
@@ -57,6 +57,9 @@ case "$PROFILE" in
   # camel/train.py: camel-ai ChatAgent GRPO. Needs the undeclared camel-ai
   # package (section 1d) and a `python -m` launch (run_example.sh camel branch).
   areal-camel-grpo) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; CAMEL_PREP=1 ;;
+  # online_rollout.py: rollout-only online demo; no extra runtime to install
+  # (drive is run_example.sh's online_rollout branch).
+  areal-online-rollout) MODEL_ID="Qwen/Qwen3-1.7B" ;;
   # hhrlhf_dpo.py: DPO pipeline is model-agnostic; upstream yaml's 7B swapped
   # for 1.5B (7B fp32 init OOMs the 32GB cards in the pool, 15GB per run).
   areal-align) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; HHRLHF_PREP=1 ;;

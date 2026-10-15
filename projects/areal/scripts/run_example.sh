@@ -466,6 +466,132 @@ PY
     # repo root is on PYTHONPATH) and we call main() explicitly.
     "$PYTHON" -c "import sys; from examples.camel.train import main; main(sys.argv[1:])" "${EXTRA_ARGS[@]}" || run_rc=$?
     ;;
+  examples/experimental/inference_service/online_rollout.py)
+    # Rollout-only online example: online_rollout.py starts the gateway then
+    # BLOCKS in rollout_batch(data=None) waiting for EXTERNAL traffic. We
+    # supply that traffic ourselves over HTTP (start_session ->
+    # chat/completions -> set_reward -> refresh) - pure client calls, no
+    # source patch - until it has collected batch_size trajectories and
+    # prints "Rollout complete". (batch_size is pinned to 1 via the overlay.)
+    ROLLOUT_LOG="$PWD/online_rollout.log"
+    OR_ADMIN_KEY="sk-test123456"
+
+    online_rollout_cleanup() {
+      if [[ -n "${ROLLOUT_PID:-}" ]] && kill -0 "$ROLLOUT_PID" 2>/dev/null; then
+        kill "$ROLLOUT_PID" 2>/dev/null || true
+      fi
+    }
+    trap online_rollout_cleanup EXIT
+
+    "$PYTHON" "$LAUNCH_PATH" "${EXTRA_ARGS[@]}" >"$ROLLOUT_LOG" 2>&1 &
+    ROLLOUT_PID=$!
+
+    GW=""
+    for i in $(seq 1 120); do
+      GW=$(grep 'Proxy gateway available at' "$ROLLOUT_LOG" 2>/dev/null | tail -1 \
+        | grep -oE 'https?://[A-Za-z0-9._:-]+' | tail -1 || true)
+      [[ -n "$GW" ]] && break
+      if ! kill -0 "$ROLLOUT_PID" 2>/dev/null; then
+        echo "online_rollout exited before the gateway came up; tail:"
+        tail -n 120 "$ROLLOUT_LOG"
+        exit 1
+      fi
+      echo "[wait $((i * 10))s] rollout: $(tail -n 1 "$ROLLOUT_LOG" 2>/dev/null | cut -c1-200)"
+      sleep 10
+    done
+    if [[ -z "$GW" ]]; then
+      echo "proxy gateway did not come up; tail:"
+      tail -n 120 "$ROLLOUT_LOG"
+      exit 1
+    fi
+    echo "inference gateway: $GW"
+
+    oc_post() {
+      "$PYTHON" - "$GW" "$1" "$2" "$3" "${4:-120}" <<'PY'
+import sys
+import urllib.error
+import urllib.request
+
+base, path, key, body, timeout = sys.argv[1:6]
+req = urllib.request.Request(
+    f"{base}/{path}",
+    data=body.encode(),
+    headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
+    method="POST",
+)
+try:
+    with urllib.request.urlopen(req, timeout=float(timeout)) as resp:
+        print(resp.read().decode())
+except urllib.error.HTTPError as e:
+    print(f"HTTP {e.code}", file=sys.stderr)
+except OSError as e:
+    print(f"{type(e).__name__}: {e}", file=sys.stderr)
+PY
+    }
+    json_key() {
+      "$PYTHON" -c 'import json,sys; print(json.load(sys.stdin)["api_key"])' 2>/dev/null || true
+    }
+
+    SESS_KEY=""
+    for attempt in $(seq 1 24); do
+      BODY=$(oc_post rl/start_session "$OR_ADMIN_KEY" '{"task_id":"ci-online-rollout"}' 60)
+      SESS_KEY=$(printf '%s' "$BODY" | json_key)
+      [[ -n "$SESS_KEY" ]] && break
+      echo "[session attempt $attempt] no session yet"
+      sleep 5
+    done
+    [[ -n "$SESS_KEY" ]] || { echo "start_session never returned a key"; tail -n 40 "$ROLLOUT_LOG"; exit 1; }
+    echo "session: $SESS_KEY"
+
+    CHAT_BODY='{"model":"default","messages":[{"role":"user","content":"What is 12 * 15 + 3?"}],"temperature":0.7,"max_tokens":256}'
+    CHAT=$(oc_post chat/completions "$SESS_KEY" "$CHAT_BODY" 600)
+    [[ -n "$CHAT" ]] || { echo "chat/completions failed"; tail -n 40 "$ROLLOUT_LOG"; exit 1; }
+    echo "chat completion: $(printf '%s' "$CHAT" | cut -c1-160)"
+
+    REWARD=$(oc_post rl/set_reward "$SESS_KEY" '{"reward":1.0}' 60)
+    [[ -n "$REWARD" ]] || { echo "set_reward failed"; tail -n 40 "$ROLLOUT_LOG"; exit 1; }
+    echo "reward applied: $REWARD"
+
+    # Refresh ends the session and exports the trajectory -> rollout_batch's
+    # online workflow unblocks once batch_size trajectories are collected.
+    REFRESHED=""
+    for attempt in $(seq 1 12); do
+      BODY=$(oc_post rl/start_session "$OR_ADMIN_KEY" \
+        "{\"task_id\":\"ci-online-rollout\",\"api_key\":\"$SESS_KEY\"}" 130)
+      NEW_KEY=$(printf '%s' "$BODY" | json_key)
+      [[ -n "$NEW_KEY" ]] && { REFRESHED=1; echo "session refreshed"; break; }
+      echo "[refresh attempt $attempt] waiting for export"
+      sleep 10
+    done
+    [[ -n "$REFRESHED" ]] || { echo "refresh never succeeded"; tail -n 40 "$ROLLOUT_LOG"; exit 1; }
+
+    # online_rollout.py should now print "Rollout complete" and exit 0.
+    TRAIN_WAIT_S=600
+    waited=0
+    while kill -0 "$ROLLOUT_PID" 2>/dev/null; do
+      if grep -q 'Rollout complete' "$ROLLOUT_LOG" 2>/dev/null; then
+        sleep 3
+        break
+      fi
+      if (( waited >= TRAIN_WAIT_S )); then
+        echo "online_rollout still running after ${TRAIN_WAIT_S}s; killing and dumping"
+        kill "$ROLLOUT_PID" 2>/dev/null || true
+        sleep 5
+        kill -9 "$ROLLOUT_PID" 2>/dev/null || true
+        break
+      fi
+      sleep 5
+      waited=$((waited + 5))
+    done
+    if grep -q 'Rollout complete' "$ROLLOUT_LOG" 2>/dev/null; then
+      echo "online_rollout completed"
+      grep 'Rollout complete' "$ROLLOUT_LOG" | tail -1
+    else
+      run_rc=1
+      echo "no 'Rollout complete' seen; tail of $ROLLOUT_LOG:"
+      tail -n 120 "$ROLLOUT_LOG"
+    fi
+    ;;
   *.sh)
     # Shell examples dispatch with bash (generic guard contract: .sh -> bash,
     # .py -> python).

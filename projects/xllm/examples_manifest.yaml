@@ -2,6 +2,12 @@ version: 1
 scan:
   root: examples
   include_extensions: ['.py']
+  # examples/__init__.py 是包标识文件（非可运行 example）。每日对账脚本
+  # examples_check.py 会按 scan 段递归扫描 examples/**/*.py，把它当作未
+  # 纳管的入口而判红。按 reconcile 语义用 exclude 精确剔除（covered 只做
+  # 精确/前缀匹配，不支持 glob，故必须写完整字面量而非 **/__init__.py）。
+  exclude:
+    - examples/__init__.py
 # 模型路径走 ${XLLM_MODEL_PATH}：setup_example.sh 从共享 runner 缓存
 # （cache-seed/xllm/ms_seeds.yaml plant）解析并经 GITHUB_ENV 注入，
 # run_example.sh 的 overlay 展开时替换。旧值

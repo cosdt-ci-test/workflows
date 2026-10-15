@@ -22,7 +22,7 @@ CI 使用 `linux-aarch64-a2-1`，Runner 自动提供一张 NPU。
 依赖安装、patch 和资源准备脚本位于本看护仓库的 `projects/vbench/`。
 以下命令从该目录执行；独立使用时先获取该项目目录，再设置
 `UPSTREAM_REF` 为目标 tag、分支或 commit。CI 会注入共享模板解析出的最新 release
-（当前为 `v0.1.4`）。patch 同时对当前 `master` 做了应用检查。
+（当前为 `v0.1.4`）。补丁以最新 release 验证，不再单独维护 master 兼容分支。
 
 ### 本文档示例使用的版本
 
@@ -96,10 +96,11 @@ echo "VBench Ascend patches applied"
 ...VBench Ascend patches applied
 ```
 
-patch 增加 `npu:0` 设备选择、单进程评测、`human_action` 安装依赖集合和设备结果记录；
+patch 增加 CLI 的 `npu:0` 设备选择、NPU 单进程启动和 `human_action` 安装依赖集合；
 保留 UMT 网络、16 帧采样、预处理、sigmoid、top-5 与 0.85 阈值。
-显式请求 NPU 而设备不可用时直接失败。上游增加了 CUDA 安装检查的版本还会应用对应补丁。
-所有 patch 先通过 `git apply --check`，上游结构不匹配时停止并要求审阅补丁。
+官方 Python API 原本就透传设备，无需修改；共享分布式逻辑和 CUDA 启动行为也保持原样。
+显式请求 NPU 而设备不可用时直接失败。单份补丁先通过 `git apply --check`；
+未来 release 的源码或安装条件发生变化时，失败后审阅并更新补丁，不切换到旧版本。
 
 ## 安装 VBench
 
@@ -175,29 +176,38 @@ vbench evaluate \
 ## 使用官方 Python API 并验证结果
 
 同一示例还验证 README 中的 Python API。两个入口使用同一组权重和视频。
-评分可以为零，测试不要求预设准确率；要求原始视频确实经过 NPU 评测、输出有限分数，
-并且每个结果都包含完整的 5 段视频。
+`runtime_checks` 是看护侧验证工具，通过 PyTorch forward hook 观察真实计算，并检查
+checkpoint 与模型的权重对应关系，不替换模型、输入或评分过程。评分可以为零，
+测试不要求预设准确率；要求 5 次前向的模型、输入和输出都位于 NPU，输出有限，
+并且结果保持上游 JSON 格式。
 
 ```python #test id="human-action-api"
 import json
 import math
+import os
 from pathlib import Path
 
 import torch
 import torch_npu
+import vbench.human_action as human_action
 from vbench import VBench
+from scripts.prepare_assets import UMT_FILENAME
+from scripts.runtime_checks import watch_human_action
 
 my_VBench = VBench(
     torch.device("npu:0"),
     "vbench-src/human_action_full_info.json",
     "output/vbench/api",
 )
-my_VBench.evaluate(
-    videos_path="vbench-src/sampled_videos/lavie/human_action",
-    name="lavie_human_action",
-    dimension_list=["human_action"],
-)
+cache = Path(os.environ.get("VBENCH_CACHE_DIR", Path.home() / ".cache/vbench"))
+with watch_human_action(human_action, cache / "umt_model" / UMT_FILENAME) as observed:
+    my_VBench.evaluate(
+        videos_path="vbench-src/sampled_videos/lavie/human_action",
+        name="lavie_human_action",
+        dimension_list=["human_action"],
+    )
 torch.npu.synchronize()
+assert observed == ["npu:0"] * 5, observed
 
 for entry in ("cli", "api"):
     files = list(Path(f"output/vbench/{entry}").glob("*_eval_results.json"))
@@ -206,7 +216,7 @@ for entry in ("cli", "api"):
     assert math.isfinite(score) and 0 <= score <= 1
     assert len(videos) == 5
     assert len({v["video_path"] for v in videos}) == 5
-    assert all(v["device"] == "npu:0" for v in videos)
+    assert all(set(v) == {"video_path", "video_results", "cor_num_per_video"} for v in videos)
     assert all(isinstance(v["video_results"], bool) for v in videos)
     print(f"{entry}: {len(videos)} videos evaluated on npu:0")
 print("VBench human_action NPU Quick Start PASSED")

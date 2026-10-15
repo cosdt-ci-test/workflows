@@ -1,0 +1,98 @@
+# xla-npu quick start guard - project thin trigger.
+#
+# Calls the common engine .github/workflows/quick-start-template.yml;
+# this file only declares what varies per project: schedule,
+# concurrency, runner, container image + options, upstream repo,
+# monitored doc, and the test entry command. The guard loop, cache
+# I/O, state relay and publishing all live in the engine. See the
+# engine's `workflow_call.inputs` block for the full input contract.
+#
+# Cache keys (quick-start-monitor-state-xla-npu_*) and artifact names
+# (xla-npu-quick-start-<run_id>) are derived from project=xla-npu.
+#
+# Upstream: the canonical repo is gitcode.com/cann/xla-npu (China
+# AtomGit platform, which the engine's GitHub API polling cannot
+# reach). We poll hicann/xla-npu — its GitHub mirror — which publishes
+# no releases and no tags, so the engine's ref fallback chain
+# (/releases/latest -> /releases -> /tags -> /commits/HEAD) bottoms out
+# at /commits/HEAD and anchors the mirror's default-branch HEAD sha as
+# the change key. The doc clones from gitcode.com/cann/xla-npu (the
+# canonical source, a superset of the mirror's history) and checks out
+# that sha.
+#
+# NOTE: only workflow_dispatch is enabled for now (per spec: same
+# onboarding rhythm as tilelang / dgl / lightx2v). Once the pipeline
+# runs green and stable, re-enable the schedule block below to start
+# the periodic monitor loop. Until then, the engine's schedule-only
+# steps (monitor / record-monitor-outcome / cache save) simply never
+# run.
+#
+# No ModelScope / pip bind mounts: the doc does a pure source build
+# (JDK / Bazel / OpenXLA downloads live inside the clone's build/
+# dir via huaweicloud mirrors) and an operator-only smoke (random
+# tensors), no model weights to cache. The self-hosted NPU runner
+# (linux-aarch64-a2-1) auto-passes /dev/davinci* into the container
+# via the cluster device-plugin.
+
+name: xla-npu-quick-start
+
+concurrency:
+  group: ${{ github.event_name == 'schedule' && 'xla-npu-quick-start-schedule' || format('manual-{0}', github.run_id) }}
+  # cancel-in-progress: false because (1) a schedule run cancelled
+  # mid-way loses its outcome writeback - the outcome is what makes
+  # the retry mechanism work, and the 'if: always()' guard isn't
+  # enough when the container is being torn down; (2) dispatch runs
+  # already live in unique groups so there's nothing to cancel.
+  cancel-in-progress: false
+
+on:
+  # schedule: deliberately NOT enabled yet - see the header note.
+  # Enable with e.g. `- cron: '45 */6 * * *'` once the pipeline is
+  # proven stable on manual runs.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  xla-npu-quick-start:
+    uses: ./.github/workflows/quick-start-template.yml
+    with:
+      # Namespaces cache keys (quick-start-monitor-state-xla-npu_*), artifacts
+      # (xla-npu-quick-start-<run_id>) and the test working dir
+      # (workflows/projects/xla-npu).
+      project: xla-npu
+      # Self-hosted single-NPU runner for the test job only; the engine
+      # pins the cache I/O jobs (restore-cache / publish-and-persist) to
+      # GitHub-hosted ubuntu-latest. xla-npu's ops/qwen/examples are
+      # single-device inference workloads, so one card is enough.
+      test_runner: '["linux-aarch64-a2-1"]'
+      # xla-npu requires Python 3.11 (build.sh hard-requires >= 3.11 and
+      # freezes the bazel hermetic toolchain at 3.11) and CANN >= 8.5.0.
+      # CANN 9.0.0 satisfies the requirement; the py3.11 variant is the
+      # same tag family flash-linear-attention pins to.
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
+      # No extra bind-mounts: pure source build + operator smoke, no
+      # weights and no cross-run wheel cache (build.sh downloads JDK /
+      # Bazel / OpenXLA it into the clone's build/ dir each run).
+      container_options: ''
+      # Doc body does: git clone xla-npu (gitcode) + ./build/build.sh
+      # install (JDK/Bazel download + OpenXLA checkout + bazel compile
+      # of the PJRT plugin + JAX install) + JAX-NPU backend smoke +
+      # examples/ops CPU-vs-NPU comparison. 240 min covers the cold
+      # source build (dominant cost) + operator run.
+      timeout_minutes: 240
+      # GitHub mirror of gitcode.com/cann/xla-npu, polled by the engine
+      # (see header note). Tagless -> ref chain bottoms out at
+      # /commits/HEAD.
+      upstream_repo: hicann/xla-npu
+      # GitHub Contents API URL (NOT raw.githubusercontent.com) — same
+      # authenticated doc-hash contract as xtuner / xdit / dgl / aibrix.
+      # The engine's monitor hashes it and the test fetches the same URL.
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/xla-npu/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/xla-npu/docs/Quick-start-Ascend.md
+      # cwd is workflows/projects/xla-npu; env contract (MONITORED_DOC_URL /
+      # UPSTREAM_REF / NPU_READY) is injected by the engine. All project
+      # env prep (CANN env + build tools + working dir) lives in the test
+      # subclass's prepare_environment hook; the build itself is in the doc.
+      test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1

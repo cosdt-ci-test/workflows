@@ -16,7 +16,7 @@ fi
 
 PROFILE="$1"
 
-SUPPORTED_PROFILES="areal-vlm-grpo areal-vlm-mt-grpo areal-vlm-sft areal-clevr-sft areal-tir-grpo areal-scaffold-grpo areal-agents-grpo areal-math-grpo areal-math-sft areal-math-aime areal-math-boba areal-countdown-grpo areal-hermes-grpo areal-openclaw-grpo areal-align"
+SUPPORTED_PROFILES="areal-vlm-grpo areal-vlm-mt-grpo areal-vlm-sft areal-clevr-sft areal-tir-grpo areal-scaffold-grpo areal-agents-grpo areal-math-grpo areal-math-sft areal-math-aime areal-math-boba areal-countdown-grpo areal-hermes-grpo areal-openclaw-grpo areal-camel-grpo areal-online-rollout areal-hitl-demo areal-tau2-grpo areal-agent-service areal-align"
 AIME_PREP=0
 BOBA_PREP=0
 COUNTDOWN_PREP=0
@@ -26,6 +26,10 @@ SCAFFOLD_PREP=0
 CLEVR_SUBSET_PREP=0
 HERMES_PREP=0
 OPENCLAW_PREP=0
+CAMEL_PREP=0
+HITL_PREP=0
+TAU2_PREP=0
+AGENT_SERVICE_PREP=0
 case "$PROFILE" in
   areal-vlm-grpo) MODEL_ID="Qwen/Qwen2.5-VL-3B-Instruct" ;;
   areal-vlm-mt-grpo) MODEL_ID="Qwen/Qwen3-VL-2B-Instruct" ;;
@@ -51,8 +55,25 @@ case "$PROFILE" in
   # openclaw/train.py: online RL through the OpenAI-compatible proxy gateway;
   # no agent runtime package to install (demo_lifecycle.py is pure HTTP).
   # No source patch (no-patch policy) - demo_lifecycle.py runs as shipped.
-  # Reuses hermes' model, already in the cache-seed volume.
+  # Reuses hermes' model.
   areal-openclaw-grpo) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; OPENCLAW_PREP=1 ;;
+  # camel/train.py: camel-ai ChatAgent GRPO. Needs the undeclared camel-ai
+  # package (section 1d) and a `python -m` launch (run_example.sh camel branch).
+  areal-camel-grpo) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; CAMEL_PREP=1 ;;
+  # online_rollout.py: rollout-only online demo; no extra runtime to install
+  # (drive is run_example.sh's online_rollout branch).
+  areal-online-rollout) MODEL_ID="Qwen/Qwen3-1.7B" ;;
+  # human_in_the_loop_demo.py: zeroclaw-driven HITL demo; section 1e installs
+  # the CLI and plants its home config skeleton.
+  areal-hitl-demo) MODEL_ID="Qwen/Qwen3-0.6B"; HITL_PREP=1 ;;
+  # tau2/train.py: multi-turn customer-service RL (real user simulator; the
+  # user LLM is hosted locally by run_example.sh's tau2 branch). Section 1f
+  # installs the tau2-bench fork + data.
+  areal-tau2-grpo) MODEL_ID="Qwen/Qwen3-1.7B"; TAU2_PREP=1 ;;
+  # agent_service/run_agent_service.py: Claude Agent SDK micro-service; the
+  # Claude Code CLI it spawns is installed in section 1g; run_example.sh's
+  # agent-service branch points its API traffic at a local sidecar gateway.
+  areal-agent-service) MODEL_ID="Qwen/Qwen3-0.6B"; AGENT_SERVICE_PREP=1 ;;
   # hhrlhf_dpo.py: DPO pipeline is model-agnostic; upstream yaml's 7B swapped
   # for 1.5B (7B fp32 init OOMs the 32GB cards in the pool, 15GB per run).
   areal-align) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; HHRLHF_PREP=1 ;;
@@ -66,6 +87,27 @@ if [[ -z "${TARGET_ROOT:-}" || -z "${GITHUB_WORKSPACE:-}" || -z "${GITHUB_ENV:-}
   echo "TARGET_ROOT / GITHUB_WORKSPACE / GITHUB_ENV must be set" >&2
   exit 2
 fi
+
+# -------------------------------------------------------
+# Shared helpers: mirror pip installs, shallow clones, tarball
+# fetches - one place for the mirror URLs and CI timeout budget.
+# -------------------------------------------------------
+pip_tuna() {
+  uv pip install --system --index-url https://pypi.tuna.tsinghua.edu.cn/simple "$@"
+}
+
+pip_aliyun() {
+  uv pip install --system --index-url https://mirrors.aliyun.com/pypi/simple "$@"
+}
+
+shallow_clone() {
+  git clone --depth 1 --branch "$2" "$1" "$3"
+}
+
+fetch_tarball() {
+  curl -fsSL --connect-timeout 30 --max-time 600 "$1" -o "$2" \
+    || { echo "failed to download $1" >&2; exit 2; }
+}
 
 # -------------------------------------------------------
 # 1. Install the AReaL source under test.
@@ -107,31 +149,140 @@ uv pip install --no-deps -e "$TARGET_ROOT" --system
 # image or vllm-ascend catches up with mainline's target layout.
 # -------------------------------------------------------
 VLLM_SRC="$GITHUB_WORKSPACE/vllm-0.22.1-src"
-git clone --depth 1 --branch v0.22.1 https://github.com/vllm-project/vllm.git "$VLLM_SRC"
-uv pip install --system --no-deps \
-  --index-url https://mirrors.aliyun.com/pypi/simple \
-  vllm-ascend==0.22.1rc1
-uv pip install --system \
-  --index-url https://mirrors.aliyun.com/pypi/simple \
-  "setuptools-rust>=1.9.0" "setuptools-scm>=8.0"
+shallow_clone https://github.com/vllm-project/vllm.git v0.22.1 "$VLLM_SRC"
+pip_aliyun --no-deps vllm-ascend==0.22.1rc1
+pip_aliyun "setuptools-rust>=1.9.0" "setuptools-scm>=8.0"
 VLLM_TARGET_DEVICE=empty uv pip install --system --no-deps --no-build-isolation \
   -e "$VLLM_SRC"
 python -c "import torch, torch_npu, vllm, vllm_ascend; from vllm.entrypoints.openai.utils import validate_json_request; print(f'vllm {vllm.__version__} + vllm-ascend 0.22.1rc1 layout OK; torch {torch.__version__}, torch_npu {torch_npu.__version__}')"
 
 # -------------------------------------------------------
 # 1c. hermes profile: the agent runtime package. The model is the
-# standard shared-cache Qwen2.5-1.5B-Instruct (hermes-agent itself is
-# model-agnostic - it drives whatever OpenAI-compatible endpoint the
-# rollout engine serves); the Agent Service imports
+# standard Qwen2.5-1.5B-Instruct (downloaded by section 3); hermes-agent
+# itself is model-agnostic - it drives whatever OpenAI-compatible endpoint
+# the rollout engine serves. The Agent Service imports
 # examples.hermes.hermes.HermesAgent from the target checkout.
 # Index: tsinghua (not aliyun) - aliyun's PEP 658 .metadata sidecar for
 # hermes-agent's python-dotenv dep 404s intermittently; tuna mirrors the
 # metadata reliably (same mirror as transformers-quick-start.yml).
 # -------------------------------------------------------
 if [[ "$HERMES_PREP" == 1 ]]; then
-  uv pip install --system \
-    --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
-    hermes-agent==0.19.0
+  pip_tuna hermes-agent==0.19.0
+fi
+
+# -------------------------------------------------------
+# 1d. camel profile: the camel-ai agent runtime.
+# examples/camel/train.py imports camel.agents.ChatAgent, and
+# areal.experimental.camel.openai_model imports camel.logger / camel.messages /
+# camel.models.base_model / camel.types / camel.utils; camel-ai is NOT an
+# AReaL-declared dependency, so it is installed here. camel-ai goes in with
+# --no-deps so the job's NPU torch/vllm stack is never touched (camel is
+# API-based); its lighter runtime deps come in separately (none pull torch).
+# -------------------------------------------------------
+if [[ "$CAMEL_PREP" == 1 ]]; then
+  pip_tuna --no-deps camel-ai
+  pip_tuna tiktoken docstring-parser colorama python-dotenv jsonschema
+fi
+
+# -------------------------------------------------------
+# 1e. hitl-demo profile: the zeroclaw chat client + its home
+# config skeleton. human_in_the_loop_demo.py drives its own traffic through
+# the zeroclaw CLI (`zeroclaw agent -m ... --session-state-file ...`), so the
+# binary must be on PATH. The demo's FIRST action on the config is
+# shutil.copy2(~/.zeroclaw/config.toml, .demo_bak) -> FileNotFoundError if the
+# file is missing, and its regex patch silently skips a missing
+# default_provider line - so plant a minimal skeleton in the runner home dir
+# (the demo backs it up and restores it on exit; AReaL source is untouched).
+# If zeroclaw.com turns out unreachable from the CN runners, switch to the
+# fork's GitHub Releases aarch64-linux tarball.
+# -------------------------------------------------------
+if [[ "$HITL_PREP" == 1 ]]; then
+  # PINNED to v0.6.0: the last release line whose CLI matches the demo's
+  # hardcoded invocation `zeroclaw agent -m ... --session-state-file ...`.
+  # v0.6.0's agent subcommand has NO --agent flag and its Providers list
+  # documents `custom:<URL>` - the inline OpenAI-compatible provider the
+  # demo's config patcher writes. v0.7+ introduced the agent-alias system
+  # and made --agent REQUIRED ("Required - there is no default agent"),
+  # so the current official build (zeroclaw.com / releases/latest, v0.8.x)
+  # rejects the demo's invocation with a usage error (observed rc=2).
+  # zeroclaw.com's installer has no version flag, so fetch the pinned
+  # release tarball directly - github release downloads are reachable from
+  # the CN runners (zeroclaw.com's own installer fetches from there).
+  # /usr/local/bin is on the default PATH, so no PATH plumbing is needed.
+  ZC_VERSION=v0.6.0
+  ZC_ASSET="zeroclaw-aarch64-unknown-linux-gnu.tar.gz"
+  ZC_URL="https://github.com/zeroclaw-labs/zeroclaw/releases/download/${ZC_VERSION}/${ZC_ASSET}"
+  ZC_TMP="$(mktemp -d)"
+  # a 404 here usually means the aarch64 asset is missing in $ZC_VERSION
+  fetch_tarball "$ZC_URL" "$ZC_TMP/$ZC_ASSET"
+  tar -xzf "$ZC_TMP/$ZC_ASSET" -C "$ZC_TMP"
+  [[ -x "$ZC_TMP/zeroclaw" ]] || { echo "$ZC_ASSET did not contain a zeroclaw binary" >&2; exit 2; }
+  install -m 0755 "$ZC_TMP/zeroclaw" /usr/local/bin/zeroclaw
+  rm -rf "$ZC_TMP"
+  zeroclaw --version || { echo "zeroclaw failed to run" >&2; exit 2; }
+  # Same flat keys the demo's patcher regexes target (plus workspace_dir,
+  # mirroring what v0.6.0's own installer writes); the demo rewrites
+  # default_provider/api_key to the live gateway on start.
+  mkdir -p "$HOME/.zeroclaw"
+  cat > "$HOME/.zeroclaw/config.toml" <<'TOML'
+default_provider = "custom:http://localhost:1"
+default_model = "default"
+api_key = "placeholder"
+workspace_dir = "/tmp/zeroclaw-workspace"
+TOML
+  echo "planted minimal ~/.zeroclaw/config.toml skeleton"
+fi
+
+# -------------------------------------------------------
+# 1f. tau2 profile: the tau2-bench fork (async orchestrator
+# + user simulator) and its task data. TAU2_DATA_DIR must reach the trainer
+# AND the rollout workers (the inline workflow loads tasks from the
+# registry), so it is exported through GITHUB_ENV - the local scheduler's
+# workers inherit the environment.
+# -------------------------------------------------------
+if [[ "$TAU2_PREP" == 1 ]]; then
+  TAU2_DIR="$GITHUB_WORKSPACE/areal_tau2/tau2-bench"
+  shallow_clone https://github.com/dhh1995/tau2-bench.git dhh/async-and-custom-completion "$TAU2_DIR"
+  [[ -d "$TAU2_DIR/data" ]] || { echo "tau2-bench data/ not found in fork" >&2; exit 2; }
+  pip_tuna "$TAU2_DIR"
+  echo "TAU2_DATA_DIR=$TAU2_DIR/data" >> "$GITHUB_ENV"
+  echo "tau2-bench fork installed; TAU2_DATA_DIR=$TAU2_DIR/data"
+fi
+
+# -------------------------------------------------------
+# 1g. agent-service profile: the Claude Agent SDK stack.
+# examples/agent_service's ClaudeAgent shells out through claude-agent-sdk,
+# whose ClaudeSDKClient spawns the Claude Code CLI (an npm package) - so
+# besides the pip package we need Node >= 18 and the CLI itself. The NPU
+# image ships no node, so install a pinned Node from the npmmirror CDN
+# (CN-reachable, unlike nodejs.org) and the CLI from the npmmirror
+# registry. The API traffic is pointed at the LOCAL gateway by
+# run_example.sh's agent-service branch (ANTHROPIC_BASE_URL) - no real
+# Anthropic key is ever used.
+# -------------------------------------------------------
+if [[ "$AGENT_SERVICE_PREP" == 1 ]]; then
+  pip_tuna claude-agent-sdk
+  AS_NEED_NODE=1
+  if command -v node >/dev/null 2>&1; then
+    AS_NODE_MAJOR="$(node --version | sed 's/^v\([0-9]*\).*/\1/')"
+    if (( AS_NODE_MAJOR >= 18 )); then AS_NEED_NODE=0; fi
+  fi
+  if [[ "$AS_NEED_NODE" == 1 ]]; then
+    AS_NODE_VERSION=v22.14.0
+    AS_NODE_DIR="/usr/local/node-${AS_NODE_VERSION}"
+    fetch_tarball \
+      "https://registry.npmmirror.com/-/binary/node/${AS_NODE_VERSION}/node-${AS_NODE_VERSION}-linux-arm64.tar.gz" \
+      /tmp/as-node.tar.gz
+    mkdir -p "$AS_NODE_DIR"
+    tar -xzf /tmp/as-node.tar.gz -C "$AS_NODE_DIR" --strip-components=1
+    export PATH="$AS_NODE_DIR/bin:$PATH"
+    echo "PATH=$PATH" >> "$GITHUB_ENV"
+  fi
+  node --version || { echo "node unavailable for the claude CLI" >&2; exit 2; }
+  npm install -g @anthropic-ai/claude-code \
+    --registry=https://registry.npmmirror.com \
+    || { echo "claude code CLI install failed" >&2; exit 2; }
+  claude --version || { echo "claude CLI failed to run" >&2; exit 2; }
 fi
 
 # -------------------------------------------------------
@@ -167,89 +318,62 @@ echo "AREAL_ALLOW_DEFAULT_ADMIN_KEY=1" >> "$GITHUB_ENV"
 # -------------------------------------------------------
 # 3. Pre-download Model & Dataset (using image's native tools)
 # -------------------------------------------------------
-# No local fixtures. The dataset is fetched online at train time
-# (`load_dataset`, inside the data service); the model is resolved from the
-# shared runner cache below. Export the Hub mirror through GITHUB_ENV so the
-# run-example step inherits it too.
+# No local fixtures and no shared-cache dependency (cache-seed is NOT used):
+# the dataset is fetched online at train time (`load_dataset`, inside the data
+# service), and the model is downloaded fresh on every run - HF mirror first,
+# ModelScope (魔搭) fallback - into the per-run workspace. HF_ENDPOINT is
+# exported through GITHUB_ENV so the run-example step (and any later
+# load_dataset) inherits it.
 export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
 echo "HF_ENDPOINT=${HF_ENDPOINT}" >> "$GITHUB_ENV"
 export AREAL_MODEL_ID="$MODEL_ID"
 
-# The model comes from the shared runner cache. The pool keeps a persistent
-# volume at ~/.cache/huggingface (see cache-seed/README.md and
-# docs/examples-guard-engine.md), and cache-seed/areal/ms_seeds.yaml plants
-# every profile model into it from ModelScope (HF hub-cache layout,
-# refs/main = real HF sha). setup only resolves the snapshot path from
-# refs/main, so a warm pool is zero-network, zero-download - same pattern as
-# peft/torchtune.
-#
-# Cold-cache self-heal (sequence: cache-seed not dispatched yet, or a model
-# added since): pull once with huggingface_hub - no local_dir, so it lands in
-# the shared hub-cache layout and every later run is a hit. If HF/hf-mirror is
-# down too, fall back to ModelScope into the per-run workspace, which is only a
-# last resort: it is discarded with the workspace, so the durable fix is
-# dispatching the cache-seed workflow (projects=areal).
-#
-# The resolved path is ALSO captured into the AREAL_MODEL_PATH shell variable
-# (tee keeps the diagnostics streaming into the job log): later sections of
-# this script - countdown's tokenizer (section 6) and the scaffolding model
-# alias (section 9) - consume it and must not guess the pre-cache workspace
-# layout, which no longer exists in the shared-cache flow.
+# The resolved path is captured into the AREAL_MODEL_PATH shell variable (tee
+# keeps the diagnostics streaming into the job log) and written to GITHUB_ENV
+# for the run step. Later sections of this script - countdown's tokenizer
+# (section 6) and the scaffolding model alias (section 9) - consume it, so it
+# must be the real on-disk download dir.
 AREAL_MODEL_PATH=$(python3 <<'PY' | tee /dev/stderr | sed -n 's/^AREAL_MODEL_PATH=//p' | tail -n 1
 import os
 import subprocess
 import sys
 
 model_id = os.environ["AREAL_MODEL_ID"]
-hf_home = os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
-repo_dir = os.path.join(hf_home, "hub", "models--" + model_id.replace("/", "--"))
 workspace_dir = os.path.join(
     os.environ["GITHUB_WORKSPACE"], "areal_models", model_id.split("/")[-1]
 )
+os.makedirs(workspace_dir, exist_ok=True)
 
 
-def cached_snapshot():
-    refs = os.path.join(repo_dir, "refs", "main")
-    if not os.path.isfile(refs):
-        return None
-    with open(refs) as fh:
-        sha = fh.read().strip()
-    snap = os.path.join(repo_dir, "snapshots", sha)
-    if os.path.isdir(snap) and os.listdir(snap):
-        return snap
-    return None
+def from_hf():
+    from huggingface_hub import snapshot_download
+
+    return snapshot_download(model_id, local_dir=workspace_dir)
 
 
-snapshot = cached_snapshot()
-if snapshot is not None:
-    print(f"{model_id}: shared-cache hit -> {snapshot}", flush=True)
-else:
+def from_modelscope():
+    try:
+        from modelscope import snapshot_download as ms_snapshot
+    except ImportError:
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "-q", "modelscope==1.37.0"],
+            check=True,
+        )
+        from modelscope import snapshot_download as ms_snapshot
+    ms_snapshot(model_id, local_dir=workspace_dir)
+    return workspace_dir
+
+
+try:
+    snapshot = from_hf()
+    print(f"{model_id}: downloaded from HF -> {snapshot}", flush=True)
+except Exception as e:
     print(
-        f"{model_id}: not in the shared cache ({repo_dir}); filling it via HF",
+        f"HF download failed ({type(e).__name__}: {e}); trying ModelScope",
         flush=True,
     )
-    try:
-        from huggingface_hub import snapshot_download
-
-        snapshot = snapshot_download(model_id)
-        print(f"filled shared cache: {snapshot}", flush=True)
-    except Exception as e:
-        print(f"HF fill failed ({type(e).__name__}: {e}); trying ModelScope", flush=True)
-        snapshot = None
-
-    if snapshot is None:
-        try:
-            from modelscope import snapshot_download as ms_snapshot
-        except ImportError:
-            subprocess.run(
-                [sys.executable, "-m", "pip", "install", "-q", "modelscope==1.37.0"],
-                check=True,
-            )
-            from modelscope import snapshot_download as ms_snapshot
-        os.makedirs(workspace_dir, exist_ok=True)
-        ms_snapshot(model_id, local_dir=workspace_dir)
-        snapshot = workspace_dir
-        print(f"downloaded to ephemeral {snapshot}", flush=True)
+    snapshot = from_modelscope()
+    print(f"{model_id}: downloaded from ModelScope -> {snapshot}", flush=True)
 
 with open(os.environ["GITHUB_ENV"], "a") as fh:
     fh.write(f"AREAL_MODEL_PATH={snapshot}\n")

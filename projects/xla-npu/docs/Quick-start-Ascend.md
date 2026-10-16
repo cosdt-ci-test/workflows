@@ -141,7 +141,7 @@ jax xxx
 
 ```shell #test id="jax-npu-smoke"
 source xla-npu/build/xla_npu_env
-python - <<'PY' > /tmp/smoke.log 2>&1
+python - <<'PY'
 import os
 import jax
 import jax.numpy as jnp
@@ -158,18 +158,17 @@ y = jax.jit(jax.nn.gelu)(x)
 result = y.block_until_ready()
 print(f'backend=npu devices={len(jax.devices())} shape={list(result.shape)}')
 PY
-grep '^backend=npu' /tmp/smoke.log || { tail -n 60 /tmp/smoke.log; exit 1; }
 ```
 
 输出结果如下：
 
-```shell #test-result id="jax-npu-smoke" fuzzy='xxx'
-backend=npu devices=xxx shape=[2, 4]
+```shell #test-result id="jax-npu-smoke" fuzzy='xxx' fuzzy='...'
+...backend=npu devices=xxx shape=[2, 4]
 ```
 
 其中 `backend=npu` 是 JAX 探测到 xla-npu PJRT 插件后给出的标识；`devices` 数量等于机器可用 NPU 卡数。如果这一步 `default_backend()` 不是 `npu`，多半是 `PJRT_NAMES_AND_LIBRARY_PATHS` 没指对插件路径——回到「验证编译产物」一节检查 `.so` 是否存在。
 
-> 脚本输出重定向到 `/tmp/smoke.log`：XLA-NPU 运行时会向 stdout 刷大量 `[XLA_NPU.INFO]` 日志，这里用 `grep` 只取回最终那行 `backend=npu ...` 作为断言；失败时自动打印日志尾部便于定位。
+> XLA-NPU 运行时会向 stdout 刷大量 `[XLA_NPU.INFO]` 初始化/融合编译日志，预期输出开头的 `...`（非贪婪通配）吞掉这些前缀，只锚定最后一行 `backend=npu devices=xxx shape=[2, 4]`。
 
 ## 运行算子测试样例
 

@@ -54,6 +54,27 @@ PY
 # PyPI torch wheel over the image's torch_npu-compatible build.
 python -m pip install 'uv' 'cmake>=3.22'
 python -m pip install 'numpy' 'cloudpickle' 'packaging' 'importlib_metadata' 'orjson' 'pyvers>=0.2,<0.3'
+case "${EXAMPLE_PATH:-}" in
+  tutorials/sphinx_tuto/tensordict_module.py)
+    # Same torch 2.9 / CANN 9.1 compiler recipe as the Liger-Kernel guard.
+    # Keep torch.compile's native Inductor backend, not an eager replacement.
+    python -m pip uninstall -y triton
+    python -m pip install --no-deps 'triton-ascend==3.2.2' \
+      --extra-index-url https://triton-ascend.osinfra.cn/pypi/simple
+    python - <<'PY'
+import triton
+from triton.backends import backends
+
+if 'ascend' not in backends:
+    raise SystemExit('Ascend Triton backend is required for the compile example')
+print('Triton version:', triton.__version__, 'backends:', list(backends))
+PY
+    ;;
+  tutorials/sphinx_tuto/serialization_speed.py)
+    # Enable every optional format used by the unchanged upstream benchmark.
+    python -m pip install matplotlib safetensors 'zarr>=3,<4'
+    ;;
+esac
 uv pip install --system --no-deps -e "$TARGET_ROOT" --config-settings editable_mode=compat
 
 python - <<'PY'

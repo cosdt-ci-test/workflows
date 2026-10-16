@@ -36,7 +36,8 @@ SUPPORTED = {
     "tensordict_preallocation.py",
     "tensordict_slicing.py",
     "streamed_tensordict.py",
-    "tensordict_memory.py",
+    "tensordict_module.py",
+    "serialization_speed.py",
 }
 
 
@@ -58,8 +59,8 @@ class TensorDictExamplesContract(unittest.TestCase):
             {path.removeprefix(prefix) for path in supported_paths | unsupported_paths},
             TUTORIALS,
         )
-        self.assertEqual(len(supported), 8)
-        self.assertEqual(len(unsupported), 6)
+        self.assertEqual(len(supported), 9)
+        self.assertEqual(len(unsupported), 5)
 
         lines = text.splitlines()
         for item in supported:
@@ -88,6 +89,12 @@ class TensorDictExamplesContract(unittest.TestCase):
         self.assertIn('leaf.device.type != "npu"', run)
         self.assertIn('require_npu(namespace.get("params_stack")', run)
         self.assertIn('require_npu(exported_output, "exported module output")', run)
+        self.assertIn('require_npu(list(namespace["LAYOUTS"].values())', run)
+        self.assertIn('export MPLBACKEND=Agg', run)
+        self.assertNotIn('stream tutorial did not collect ten buckets', run)
+        self.assertNotIn('tutorials/sphinx_tuto/tensordict_memory.py', run)
+        self.assertIn("'triton-ascend==3.2.2'", setup)
+        self.assertIn("matplotlib safetensors 'zarr>=3,<4'", setup)
         self.assertIn('"NPU is unavailable; refusing CPU fallback"', run)
         self.assertIn('torch==2.9.0 torch_npu==2.9.0.post2', setup)
         self.assertIn('reusing compatible torch/torch_npu stack', setup)

@@ -163,12 +163,12 @@ PY
 输出结果如下：
 
 ```shell #test-result id="jax-npu-smoke" fuzzy='xxx' fuzzy='...'
-...backend=npu devices=xxx shape=[2, 4]
+...backend=npu devices=xxx shape=[2, 4]...
 ```
 
 其中 `backend=npu` 是 JAX 探测到 xla-npu PJRT 插件后给出的标识；`devices` 数量等于机器可用 NPU 卡数。如果这一步 `default_backend()` 不是 `npu`，多半是 `PJRT_NAMES_AND_LIBRARY_PATHS` 没指对插件路径——回到「验证编译产物」一节检查 `.so` 是否存在。
 
-> XLA-NPU 运行时会向 stdout 刷大量 `[XLA_NPU.INFO]` 初始化/融合编译日志，预期输出开头的 `...`（非贪婪通配）吞掉这些前缀，只锚定最后一行 `backend=npu devices=xxx shape=[2, 4]`。
+> XLA-NPU 运行时会向 stdout 刷大量 `[XLA_NPU.INFO]` 初始化/融合编译日志；而且 `NpuPlatform::Initialize` 注册了 `std::atexit(AclCleanup)`，进程退出时还会补一行 `ACL finalize success in atexit`（见 `xla_npu/stream_executor/npu_platform.cc`）。所以预期输出前后各用一个 `...`（非贪婪通配）把前导日志与尾部 atexit 行都吞掉，只锚定 `backend=npu devices=xxx shape=[2, 4]` 这行。
 
 ## 运行算子测试样例
 

@@ -744,11 +744,21 @@ PY
     #    tau2 training entry; start_user_sim sets USER_SIM_PID/USER_SIM_LOG).
     start_user_sim "$PWD/tau2_rollout_usersim.log" || exit 1
 
-    # 2) tau2_rollout in the FOREGROUND: it self-drives the batch loop
-    #    (agent sessions through the gateway it hosts, user turns against
-    #    the sidecar above) and exits when the dataloader is exhausted.
+    # 2) tau2_rollout in the background with a heartbeat: it self-drives
+    #    the batch loop (agent sessions through the gateway it hosts, user
+    #    turns against the sidecar above) and exits when the dataloader is
+    #    exhausted. Its whole output goes to $TR_LOG - without a heartbeat
+    #    the job log stays silent for the entire run (engine init alone is
+    #    ~3min; the dataloader iterates the FULL tau2 split, and
+    #    get_tau2_dataset pads anything under 128 tasks up to 128).
+    "$PYTHON" "$LAUNCH_PATH" "${EXTRA_ARGS[@]}" >"$TR_LOG" 2>&1 &
+    TR_PID=$!
+    while kill -0 "$TR_PID" 2>/dev/null; do
+      echo "[tau2_rollout] $(tail -n 1 "$TR_LOG" 2>/dev/null | cut -c1-200)"
+      sleep 30
+    done
     tr_rc=0
-    "$PYTHON" "$LAUNCH_PATH" "${EXTRA_ARGS[@]}" >"$TR_LOG" 2>&1 || tr_rc=$?
+    wait "$TR_PID" || tr_rc=$?
     if (( tr_rc == 0 )) && grep -q 'Rollout complete' "$TR_LOG"; then
       echo "tau2_rollout completed"
       grep 'Rollout complete' "$TR_LOG" | tail -1

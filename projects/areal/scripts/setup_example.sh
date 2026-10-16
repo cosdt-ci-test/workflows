@@ -89,6 +89,27 @@ if [[ -z "${TARGET_ROOT:-}" || -z "${GITHUB_WORKSPACE:-}" || -z "${GITHUB_ENV:-}
 fi
 
 # -------------------------------------------------------
+# Shared helpers: mirror pip installs, shallow clones, tarball
+# fetches - one place for the mirror URLs and CI timeout budget.
+# -------------------------------------------------------
+pip_tuna() {
+  uv pip install --system --index-url https://pypi.tuna.tsinghua.edu.cn/simple "$@"
+}
+
+pip_aliyun() {
+  uv pip install --system --index-url https://mirrors.aliyun.com/pypi/simple "$@"
+}
+
+shallow_clone() {
+  git clone --depth 1 --branch "$2" "$1" "$3"
+}
+
+fetch_tarball() {
+  curl -fsSL --connect-timeout 30 --max-time 600 "$1" -o "$2" \
+    || { echo "failed to download $1" >&2; exit 2; }
+}
+
+# -------------------------------------------------------
 # 1. Install the AReaL source under test.
 # The official image ships its own copy of AReaL, but we need to use
 # the checked-out TARGET_ROOT version because it may contain fixes.
@@ -128,13 +149,9 @@ uv pip install --no-deps -e "$TARGET_ROOT" --system
 # image or vllm-ascend catches up with mainline's target layout.
 # -------------------------------------------------------
 VLLM_SRC="$GITHUB_WORKSPACE/vllm-0.22.1-src"
-git clone --depth 1 --branch v0.22.1 https://github.com/vllm-project/vllm.git "$VLLM_SRC"
-uv pip install --system --no-deps \
-  --index-url https://mirrors.aliyun.com/pypi/simple \
-  vllm-ascend==0.22.1rc1
-uv pip install --system \
-  --index-url https://mirrors.aliyun.com/pypi/simple \
-  "setuptools-rust>=1.9.0" "setuptools-scm>=8.0"
+shallow_clone https://github.com/vllm-project/vllm.git v0.22.1 "$VLLM_SRC"
+pip_aliyun --no-deps vllm-ascend==0.22.1rc1
+pip_aliyun "setuptools-rust>=1.9.0" "setuptools-scm>=8.0"
 VLLM_TARGET_DEVICE=empty uv pip install --system --no-deps --no-build-isolation \
   -e "$VLLM_SRC"
 python -c "import torch, torch_npu, vllm, vllm_ascend; from vllm.entrypoints.openai.utils import validate_json_request; print(f'vllm {vllm.__version__} + vllm-ascend 0.22.1rc1 layout OK; torch {torch.__version__}, torch_npu {torch_npu.__version__}')"
@@ -150,9 +167,7 @@ python -c "import torch, torch_npu, vllm, vllm_ascend; from vllm.entrypoints.ope
 # metadata reliably (same mirror as transformers-quick-start.yml).
 # -------------------------------------------------------
 if [[ "$HERMES_PREP" == 1 ]]; then
-  uv pip install --system \
-    --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
-    hermes-agent==0.19.0
+  pip_tuna hermes-agent==0.19.0
 fi
 
 # -------------------------------------------------------
@@ -165,12 +180,8 @@ fi
 # API-based); its lighter runtime deps come in separately (none pull torch).
 # -------------------------------------------------------
 if [[ "$CAMEL_PREP" == 1 ]]; then
-  uv pip install --system --no-deps \
-    --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
-    camel-ai
-  uv pip install --system \
-    --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
-    tiktoken docstring-parser colorama python-dotenv jsonschema
+  pip_tuna --no-deps camel-ai
+  pip_tuna tiktoken docstring-parser colorama python-dotenv jsonschema
 fi
 
 # -------------------------------------------------------
@@ -202,8 +213,8 @@ if [[ "$HITL_PREP" == 1 ]]; then
   ZC_ASSET="zeroclaw-aarch64-unknown-linux-gnu.tar.gz"
   ZC_URL="https://github.com/zeroclaw-labs/zeroclaw/releases/download/${ZC_VERSION}/${ZC_ASSET}"
   ZC_TMP="$(mktemp -d)"
-  curl -fsSL --connect-timeout 30 --max-time 600 "$ZC_URL" -o "$ZC_TMP/$ZC_ASSET" \
-    || { echo "failed to download $ZC_URL (aarch64 asset missing in $ZC_VERSION?)" >&2; exit 2; }
+  # a 404 here usually means the aarch64 asset is missing in $ZC_VERSION
+  fetch_tarball "$ZC_URL" "$ZC_TMP/$ZC_ASSET"
   tar -xzf "$ZC_TMP/$ZC_ASSET" -C "$ZC_TMP"
   [[ -x "$ZC_TMP/zeroclaw" ]] || { echo "$ZC_ASSET did not contain a zeroclaw binary" >&2; exit 2; }
   install -m 0755 "$ZC_TMP/zeroclaw" /usr/local/bin/zeroclaw
@@ -231,12 +242,9 @@ fi
 # -------------------------------------------------------
 if [[ "$TAU2_PREP" == 1 ]]; then
   TAU2_DIR="$GITHUB_WORKSPACE/areal_tau2/tau2-bench"
-  git clone --depth 1 -b dhh/async-and-custom-completion \
-    https://github.com/dhh1995/tau2-bench.git "$TAU2_DIR"
+  shallow_clone https://github.com/dhh1995/tau2-bench.git dhh/async-and-custom-completion "$TAU2_DIR"
   [[ -d "$TAU2_DIR/data" ]] || { echo "tau2-bench data/ not found in fork" >&2; exit 2; }
-  uv pip install --system \
-    --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
-    "$TAU2_DIR"
+  pip_tuna "$TAU2_DIR"
   echo "TAU2_DATA_DIR=$TAU2_DIR/data" >> "$GITHUB_ENV"
   echo "tau2-bench fork installed; TAU2_DATA_DIR=$TAU2_DIR/data"
 fi
@@ -253,9 +261,7 @@ fi
 # Anthropic key is ever used.
 # -------------------------------------------------------
 if [[ "$AGENT_SERVICE_PREP" == 1 ]]; then
-  uv pip install --system \
-    --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
-    claude-agent-sdk
+  pip_tuna claude-agent-sdk
   AS_NEED_NODE=1
   if command -v node >/dev/null 2>&1; then
     AS_NODE_MAJOR="$(node --version | sed 's/^v\([0-9]*\).*/\1/')"
@@ -264,10 +270,9 @@ if [[ "$AGENT_SERVICE_PREP" == 1 ]]; then
   if [[ "$AS_NEED_NODE" == 1 ]]; then
     AS_NODE_VERSION=v22.14.0
     AS_NODE_DIR="/usr/local/node-${AS_NODE_VERSION}"
-    curl -fsSL --connect-timeout 30 --max-time 600 \
+    fetch_tarball \
       "https://registry.npmmirror.com/-/binary/node/${AS_NODE_VERSION}/node-${AS_NODE_VERSION}-linux-arm64.tar.gz" \
-      -o /tmp/as-node.tar.gz \
-      || { echo "node download from npmmirror failed" >&2; exit 2; }
+      /tmp/as-node.tar.gz
     mkdir -p "$AS_NODE_DIR"
     tar -xzf /tmp/as-node.tar.gz -C "$AS_NODE_DIR" --strip-components=1
     export PATH="$AS_NODE_DIR/bin:$PATH"

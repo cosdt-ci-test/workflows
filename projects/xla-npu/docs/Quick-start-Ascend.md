@@ -162,11 +162,13 @@ PY
 
 输出结果如下：
 
-```shell #test-result id="jax-npu-smoke" fuzzy='xxx'
-backend=npu devices=xxx shape=[2, 4]
+```shell #test-result id="jax-npu-smoke" fuzzy='xxx' fuzzy='...'
+...backend=npu devices=xxx shape=[2, 4]
 ```
 
 其中 `backend=npu` 是 JAX 探测到 xla-npu PJRT 插件后给出的标识；`devices` 数量等于机器可用 NPU 卡数。如果这一步 `default_backend()` 不是 `npu`，多半是 `PJRT_NAMES_AND_LIBRARY_PATHS` 没指对插件路径——回到「验证编译产物」一节检查 `.so` 是否存在。
+
+> XLA-NPU 运行时会向 stdout 刷大量 `[XLA_NPU.INFO]` 初始化/融合编译日志，预期输出开头的 `...`（非贪婪通配）吞掉这些前缀，只锚定最后一行 `backend=npu devices=xxx shape=[2, 4]`。
 
 ## 运行算子测试样例
 

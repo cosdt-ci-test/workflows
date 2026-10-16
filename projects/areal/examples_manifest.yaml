@@ -6,7 +6,7 @@ scan:
   # root + include_extensions 两个键；实现模块、上游自测等一律进
   # unsupported 段（带分组注释与理由）。
   # 对账口径：release 树（当前 v2.1.0）114 个 .py/.sh =
-  # supported(17) + unsupported(97)。
+  # supported(18) + unsupported(96)。
 
 # 看护 release 线（workflow target_ref 留空，由引擎按 latest release
 # 解析）。supported 配方用专用镜像 ghcr.io/hwvanici/areal_npu:v1.0.5-a2
@@ -42,6 +42,9 @@ supported:
       - +actor.fsdp.offload_params=true
       - +actor.weight_update_mode=disk
       - actor.enable_tree_training=false
+      - actor.pad_to_maximum=false
+      - actor.mb_spec.max_tokens_per_mb=1024
+      - ref.mb_spec.max_tokens_per_mb=1024
       - actor.path=${AREAL_MODEL_PATH}
       - econfig.max_steps=2
       - econfig.user_llm_base_url=http://127.0.0.1:18888/v1/
@@ -458,6 +461,22 @@ supported:
   #     - --inference-backend vllm
   #     - --actor-path ${AREAL_MODEL_PATH}
   #   timeout_minutes: 90
+  # Agent Service（Claude Agent SDK 微服务）：Agent Service 本身不带模型——
+  # ClaudeAgent 经 claude-agent-sdk 拉起 Claude Code CLI，其 API 流量由
+  # ANTHROPIC_BASE_URL 指向 sidecar online_rollout 栈的 /v1/messages（v2 网关
+  # Anthropic 路由 + data proxy 的 Anthropic→OpenAI 翻译，本地 vLLM 当后端，
+  # 全程无需真实 Anthropic key）。run_example 的 agent-service 分支：fifo 挂住
+  # 交互 stdin → 驱动一次 /v1/responses → 关 fifo（EOF）→ 干净退出 0。
+  # argparse 严格解析，overlay 只能传它的 flag（--admin-api-key）。
+  - path: examples/agent_service/run_agent_service.py
+    profile: areal-agent-service
+    runner: linux-aarch64-a2-1
+    npu_devices: '0'
+    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
+    overlay_args:
+      - --admin-api-key
+      - areal-agent-admin
+    timeout_minutes: 90
 unsupported:
   # ===== 上游源码 bug（改上游源码才能通，无 overlay 可绕）=======================
   # 以下 4 条都是上游脚本 / 引擎自身的 bug，实测必崩：
@@ -477,7 +496,6 @@ unsupported:
 
   # ===== 需外部服务 / 密钥 / 集群（CI 单机零外部依赖，跑不通）=================
   # 链路本身健康，但依赖 CI 提供不了的外部资源：
-  - examples/agent_service/run_agent_service.py                 # 外部 Anthropic（claude-agent-sdk + ANTHROPIC_API_KEY）+ 交互 stdin，无终点
   - examples/experimental/inference_service/tau2_rollout.py      # 同上（tau2 fork + 外部 user LLM 端点）
   # terminal_bench：任务需要另起 docker 容器跑——agent 的每条 shell 命令和最终
   # 测试都在容器里执行（Terminal/DockerComposeManager 起容器 :197-206，评估把

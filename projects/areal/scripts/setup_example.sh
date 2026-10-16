@@ -16,7 +16,7 @@ fi
 
 PROFILE="$1"
 
-SUPPORTED_PROFILES="areal-vlm-grpo areal-vlm-mt-grpo areal-vlm-sft areal-clevr-sft areal-tir-grpo areal-scaffold-grpo areal-agents-grpo areal-math-grpo areal-math-sft areal-math-aime areal-math-boba areal-countdown-grpo areal-hermes-grpo areal-openclaw-grpo areal-camel-grpo areal-online-rollout areal-hitl-demo areal-tau2-grpo areal-align"
+SUPPORTED_PROFILES="areal-vlm-grpo areal-vlm-mt-grpo areal-vlm-sft areal-clevr-sft areal-tir-grpo areal-scaffold-grpo areal-agents-grpo areal-math-grpo areal-math-sft areal-math-aime areal-math-boba areal-countdown-grpo areal-hermes-grpo areal-openclaw-grpo areal-camel-grpo areal-online-rollout areal-hitl-demo areal-tau2-grpo areal-agent-service areal-align"
 AIME_PREP=0
 BOBA_PREP=0
 COUNTDOWN_PREP=0
@@ -29,6 +29,7 @@ OPENCLAW_PREP=0
 CAMEL_PREP=0
 HITL_PREP=0
 TAU2_PREP=0
+AGENT_SERVICE_PREP=0
 case "$PROFILE" in
   areal-vlm-grpo) MODEL_ID="Qwen/Qwen2.5-VL-3B-Instruct" ;;
   areal-vlm-mt-grpo) MODEL_ID="Qwen/Qwen3-VL-2B-Instruct" ;;
@@ -69,6 +70,10 @@ case "$PROFILE" in
   # user LLM is hosted locally by run_example.sh's tau2 branch). Section 1f
   # installs the tau2-bench fork + data.
   areal-tau2-grpo) MODEL_ID="Qwen/Qwen3-1.7B"; TAU2_PREP=1 ;;
+  # agent_service/run_agent_service.py: Claude Agent SDK micro-service; the
+  # Claude Code CLI it spawns is installed in section 1g; run_example.sh's
+  # agent-service branch points its API traffic at a local sidecar gateway.
+  areal-agent-service) MODEL_ID="Qwen/Qwen3-0.6B"; AGENT_SERVICE_PREP=1 ;;
   # hhrlhf_dpo.py: DPO pipeline is model-agnostic; upstream yaml's 7B swapped
   # for 1.5B (7B fp32 init OOMs the 32GB cards in the pool, 15GB per run).
   areal-align) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; HHRLHF_PREP=1 ;;
@@ -234,6 +239,45 @@ if [[ "$TAU2_PREP" == 1 ]]; then
     "$TAU2_DIR"
   echo "TAU2_DATA_DIR=$TAU2_DIR/data" >> "$GITHUB_ENV"
   echo "tau2-bench fork installed; TAU2_DATA_DIR=$TAU2_DIR/data"
+fi
+
+# -------------------------------------------------------
+# 1g. agent-service profile: the Claude Agent SDK stack.
+# examples/agent_service's ClaudeAgent shells out through claude-agent-sdk,
+# whose ClaudeSDKClient spawns the Claude Code CLI (an npm package) - so
+# besides the pip package we need Node >= 18 and the CLI itself. The NPU
+# image ships no node, so install a pinned Node from the npmmirror CDN
+# (CN-reachable, unlike nodejs.org) and the CLI from the npmmirror
+# registry. The API traffic is pointed at the LOCAL gateway by
+# run_example.sh's agent-service branch (ANTHROPIC_BASE_URL) - no real
+# Anthropic key is ever used.
+# -------------------------------------------------------
+if [[ "$AGENT_SERVICE_PREP" == 1 ]]; then
+  uv pip install --system \
+    --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+    claude-agent-sdk
+  AS_NEED_NODE=1
+  if command -v node >/dev/null 2>&1; then
+    AS_NODE_MAJOR="$(node --version | sed 's/^v\([0-9]*\).*/\1/')"
+    if (( AS_NODE_MAJOR >= 18 )); then AS_NEED_NODE=0; fi
+  fi
+  if [[ "$AS_NEED_NODE" == 1 ]]; then
+    AS_NODE_VERSION=v22.14.0
+    AS_NODE_DIR="/usr/local/node-${AS_NODE_VERSION}"
+    curl -fsSL --connect-timeout 30 --max-time 600 \
+      "https://cdn.npmmirror.com/bin/node/${AS_NODE_VERSION}/node-${AS_NODE_VERSION}-linux-arm64.tar.gz" \
+      -o /tmp/as-node.tar.gz \
+      || { echo "node download from npmmirror failed" >&2; exit 2; }
+    mkdir -p "$AS_NODE_DIR"
+    tar -xzf /tmp/as-node.tar.gz -C "$AS_NODE_DIR" --strip-components=1
+    export PATH="$AS_NODE_DIR/bin:$PATH"
+    echo "PATH=$PATH" >> "$GITHUB_ENV"
+  fi
+  node --version || { echo "node unavailable for the claude CLI" >&2; exit 2; }
+  npm install -g @anthropic-ai/claude-code \
+    --registry=https://registry.npmmirror.com \
+    || { echo "claude code CLI install failed" >&2; exit 2; }
+  claude --version || { echo "claude CLI failed to run" >&2; exit 2; }
 fi
 
 # -------------------------------------------------------

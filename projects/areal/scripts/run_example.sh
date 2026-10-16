@@ -683,6 +683,178 @@ PY
       tail -n 40 "$USER_SIM_LOG"
     fi
     ;;
+  examples/agent_service/run_agent_service.py)
+    # The Agent Service hosts NO model itself: ClaudeAgent shells out via
+    # claude-agent-sdk, whose ClaudeSDKClient spawns the Claude Code CLI -
+    # the API traffic goes wherever ANTHROPIC_BASE_URL points. Point it at a
+    # SIDECAR online_rollout stack: its v2 gateway serves the Anthropic
+    # /v1/messages route and the data proxy translates Anthropic->OpenAI onto
+    # the local vLLM, so no real Anthropic key is needed. The service's own
+    # stdin loop is interactive: hold it open with a FIFO writer, drive ONE
+    # /v1/responses request (the shape documented in the example README),
+    # then close the FIFO -> EOF -> clean exit 0 = pass. The sidecar's
+    # rollout_batch never completes (no RL sessions are driven); it is just
+    # the LLM backend and is killed at the end.
+    AS_ADMIN_KEY="areal-agent-admin"
+    AS_SIDECAR_KEY="sk-test123456"
+    AS_SVC_LOG="$PWD/agent_service.log"
+    AS_ROLLOUT_LOG="$PWD/agent_service_rollout.log"
+    AS_FIFO="$PWD/agent_service_stdin.fifo"
+
+    agent_service_cleanup() {
+      exec 3>&- 2>/dev/null || true
+      if [[ -n "${AS_SVC_PID:-}" ]] && kill -0 "$AS_SVC_PID" 2>/dev/null; then
+        kill "$AS_SVC_PID" 2>/dev/null || true
+      fi
+      if [[ -n "${AS_ROLLOUT_PID:-}" ]] && kill -0 "$AS_ROLLOUT_PID" 2>/dev/null; then
+        kill "$AS_ROLLOUT_PID" 2>/dev/null || true
+      fi
+    }
+    trap agent_service_cleanup EXIT
+
+    # 1) Sidecar: online_rollout.py (vLLM + gateway serving /v1/messages,
+    #    registered model name "default").
+    "$PYTHON" examples/experimental/inference_service/online_rollout.py \
+      --config examples/experimental/inference_service/online_rollout.yaml \
+      rollout.backend=vllm:d1p1t1 \
+      actor.backend=fsdp:d1p1t1 \
+      actor.path="$AREAL_MODEL_PATH" \
+      train_dataset.batch_size=1 \
+      vllm.gpu_memory_utilization=0.25 \
+      vllm.max_model_len=16384 \
+      gconfig.max_new_tokens=256 \
+      +rollout.setup_timeout=1800 \
+      >"$AS_ROLLOUT_LOG" 2>&1 &
+    AS_ROLLOUT_PID=$!
+
+    AS_INF_GW=""
+    for i in $(seq 1 120); do
+      AS_INF_GW=$(grep 'Proxy gateway available at' "$AS_ROLLOUT_LOG" 2>/dev/null | tail -1 \
+        | grep -oE 'https?://[A-Za-z0-9._:-]+' | tail -1 || true)
+      [[ -n "$AS_INF_GW" ]] && break
+      if ! kill -0 "$AS_ROLLOUT_PID" 2>/dev/null; then
+        echo "sidecar online_rollout exited early; tail of $AS_ROLLOUT_LOG:"
+        tail -n 120 "$AS_ROLLOUT_LOG"
+        exit 1
+      fi
+      echo "[sidecar wait $((i * 10))s] $(tail -n 1 "$AS_ROLLOUT_LOG" 2>/dev/null | cut -c1-200)"
+      sleep 10
+    done
+    if [[ -z "$AS_INF_GW" ]]; then
+      echo "sidecar gateway did not come up; tail of $AS_ROLLOUT_LOG:"
+      tail -n 120 "$AS_ROLLOUT_LOG"
+      exit 1
+    fi
+    echo "sidecar inference gateway: $AS_INF_GW"
+
+    # 2) The Agent Service, stdin held open by a FIFO writer on fd 3 (a plain
+    #    background run would hit EOF immediately and exit). Claude Code CLI
+    #    env: traffic -> the sidecar gateway; nonessential phones-home
+    #    disabled (those hosts are unreachable from the CN runners and would
+    #    stall the CLI); generous API timeout for the slow NPU generation.
+    mkfifo "$AS_FIFO"
+    ANTHROPIC_BASE_URL="$AS_INF_GW" \
+    ANTHROPIC_API_KEY="$AS_SIDECAR_KEY" \
+    CLAUDE_MODEL=default \
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
+    DISABLE_TELEMETRY=1 \
+    API_TIMEOUT_MS=600000 \
+      "$PYTHON" "$LAUNCH_PATH" "${EXTRA_ARGS[@]}" <"$AS_FIFO" >"$AS_SVC_LOG" 2>&1 &
+    AS_SVC_PID=$!
+    exec 3>"$AS_FIFO"
+
+    # 3) Wait for the service gateway ("Gateway: http://..."), then /health.
+    AS_AGENT_GW=""
+    for i in $(seq 1 60); do
+      AS_AGENT_GW=$(grep 'Gateway:' "$AS_SVC_LOG" 2>/dev/null | tail -1 \
+        | grep -oE 'https?://[A-Za-z0-9._:-]+' | tail -1 || true)
+      [[ -n "$AS_AGENT_GW" ]] && break
+      kill -0 "$AS_SVC_PID" 2>/dev/null || break
+      sleep 5
+    done
+    as_svc_healthy() {
+      "$PYTHON" -c "import urllib.request; urllib.request.urlopen('${AS_AGENT_GW}/health', timeout=5)" >/dev/null 2>&1
+    }
+    if [[ -n "$AS_AGENT_GW" ]]; then
+      for i in $(seq 1 24); do
+        as_svc_healthy && break
+        kill -0 "$AS_SVC_PID" 2>/dev/null || break
+        sleep 5
+      done
+    fi
+    if [[ -z "$AS_AGENT_GW" ]] || ! as_svc_healthy; then
+      echo "agent service gateway not healthy; tail of $AS_SVC_LOG:"
+      tail -n 120 "$AS_SVC_LOG"
+      exit 1
+    fi
+    echo "agent service gateway: $AS_AGENT_GW"
+
+    # 4) ONE conversation through the service (the README's documented
+    #    request shape). The worker spawns the Claude Code CLI, whose API
+    #    calls land on the sidecar's /v1/messages -> local vLLM.
+    AS_RESP=""
+    AS_RESP=$("$PYTHON" - "$AS_AGENT_GW" "$AS_ADMIN_KEY" <<'PY'
+import json
+import sys
+import urllib.error
+import urllib.request
+
+gw, key = sys.argv[1:3]
+payload = {
+    "input": [{"type": "message", "content": "Say hello in one sentence."}],
+    "model": "claude-agent",
+    "user": "ci-agent-service",
+}
+req = urllib.request.Request(
+    f"{gw.rstrip('/')}/v1/responses",
+    data=json.dumps(payload).encode(),
+    headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
+    method="POST",
+)
+try:
+    with urllib.request.urlopen(req, timeout=600) as resp:
+        print(resp.read().decode())
+except urllib.error.HTTPError as e:
+    print(f"HTTP {e.code}: {e.read().decode()[:500]}", file=sys.stderr)
+    sys.exit(1)
+except OSError as e:
+    print(f"{type(e).__name__}: {e}", file=sys.stderr)
+    sys.exit(1)
+PY
+    ) || AS_RESP=""
+    if [[ -z "$AS_RESP" ]] || ! printf '%s' "$AS_RESP" | grep -q 'completed'; then
+      run_rc=1
+      echo "agent turn failed; response head + service tail:"
+      printf '%s\n' "$AS_RESP" | cut -c1-400
+      tail -n 80 "$AS_SVC_LOG"
+    else
+      echo "agent reply: $(printf '%s' "$AS_RESP" | grep -oE '"text": *"[^"]{0,120}' | head -1)"
+    fi
+
+    # 5) Close the FIFO writer -> the interactive loop sees EOF -> cleanup +
+    #    exit 0. The service's exit code is the pass criterion.
+    exec 3>&-
+    as_exited=0
+    for i in $(seq 1 24); do
+      kill -0 "$AS_SVC_PID" 2>/dev/null || { as_exited=1; break; }
+      sleep 5
+    done
+    if (( as_exited == 1 )); then
+      as_rc=0
+      wait "$AS_SVC_PID" || as_rc=$?
+      if (( as_rc == 0 )) && (( run_rc == 0 )); then
+        echo "agent_service completed"
+      else
+        run_rc=${as_rc:-1}
+        echo "agent service exited rc=$as_rc; tail of $AS_SVC_LOG:"
+        tail -n 120 "$AS_SVC_LOG"
+      fi
+    else
+      run_rc=1
+      echo "agent service did not exit after EOF; tail of $AS_SVC_LOG:"
+      tail -n 120 "$AS_SVC_LOG"
+    fi
+    ;;
   *.sh)
     # Shell examples dispatch with bash (generic guard contract: .sh -> bash,
     # .py -> python).

@@ -600,11 +600,11 @@ PY
     # lacks the demo's interface - zeroclaw.com's installer ships the
     # OFFICIAL build, while the demo targets the dhh1995 fork. A connection
     # error instead means the syntax is fine.
-    # Dump the official CLI surface first: whether `agent -m` and
-    # --session-state-file exist at all.
-    { zeroclaw --help; echo "--------"; zeroclaw agent --help; } \
+    # Dump the official CLI surface first: version (for later pinning) and
+    # whether `agent -m` / --session-state-file exist at all.
+    { zeroclaw --version; echo "--------"; zeroclaw --help; echo "--------"; zeroclaw agent --help; } \
       >"$PWD/zc_help.log" 2>&1 || true
-    echo "--- zeroclaw --help / agent --help (head -n 60) ---"
+    echo "--- zeroclaw version / --help / agent --help (head -n 60) ---"
     head -n 60 "$PWD/zc_help.log" 2>/dev/null || true
     timeout 30 zeroclaw agent -m "probe" \
       --session-state-file "$PWD/zc_probe.json" >"$PWD/zc_probe.log" 2>&1 \

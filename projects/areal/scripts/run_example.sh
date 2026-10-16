@@ -593,6 +593,17 @@ PY
     # exit 0 AND "Rollout complete" in the demo output (on success it echoes
     # the rollout log tail incl. "Databatch detected").
     HITL_LOG="$PWD/hitl_demo.log"
+    # Diagnose the zeroclaw build BEFORE the demo swallows its stderr
+    # (check_output discards the captured output on failure): run the demo's
+    # exact invocation shape against the placeholder config
+    # (custom:http://localhost:1). rc=2 + usage text = the installed CLI
+    # lacks the demo's interface - zeroclaw.com's installer ships the
+    # OFFICIAL build, while the demo targets the dhh1995 fork. A connection
+    # error instead means the syntax is fine.
+    timeout 30 zeroclaw agent -m "probe" \
+      --session-state-file "$PWD/zc_probe.json" >"$PWD/zc_probe.log" 2>&1 \
+      || echo "zeroclaw probe rc=$? (usage error = wrong build; connection error = syntax OK)"
+    cat "$PWD/zc_probe.log" 2>/dev/null || true
     demo_rc=0
     "$PYTHON" "$LAUNCH_PATH" "${EXTRA_ARGS[@]}" >"$HITL_LOG" 2>&1 || demo_rc=$?
     if (( demo_rc == 0 )) && grep -q 'Rollout complete' "$HITL_LOG"; then
@@ -602,6 +613,68 @@ PY
       run_rc=1
       echo "hitl demo failed (rc=$demo_rc, or no 'Rollout complete' - hollow run?); tail of $HITL_LOG:"
       tail -n 80 "$HITL_LOG"
+    fi
+    ;;
+  examples/tau2/train.py)
+    # Tau2 keeps its REAL user simulator (solo_mode=false): host the user
+    # LLM locally on the runner's 2nd card with the SAME weights (zero extra
+    # download) and point econfig.user_llm_base_url at it (the overlay sets
+    # the URL). The trainer is pinned to card 0 via npu_devices, so the two
+    # never collide. Multiple --served-model-name aliases absorb whatever
+    # model string the tau2 client sends (econfig.user_llm uses litellm
+    # "openai/..." naming) - vLLM matches the model field strictly.
+    USER_SIM_PORT=18888
+    USER_SIM_LOG="$PWD/tau2_user_sim.log"
+
+    tau2_cleanup() {
+      if [[ -n "${USER_SIM_PID:-}" ]] && kill -0 "$USER_SIM_PID" 2>/dev/null; then
+        kill "$USER_SIM_PID" 2>/dev/null || true
+      fi
+    }
+    trap tau2_cleanup EXIT
+
+    # 1) User-simulator vLLM on physical device 1 (the child env override
+    #    replaces the job-wide ASCEND_RT_VISIBLE_DEVICES=0).
+    ASCEND_RT_VISIBLE_DEVICES=1 "$PYTHON" -m vllm.entrypoints.openai.api_server \
+      --model "$AREAL_MODEL_PATH" \
+      --served-model-name default openai/self-hosted-Qwen2.5-72B self-hosted-Qwen2.5-72B \
+      --port "$USER_SIM_PORT" \
+      --max-model-len 4096 \
+      --gpu-memory-utilization 0.85 \
+      >"$USER_SIM_LOG" 2>&1 &
+    USER_SIM_PID=$!
+    echo "user-sim vLLM started (pid=$USER_SIM_PID, port=$USER_SIM_PORT, log=$USER_SIM_LOG)"
+
+    user_sim_healthy() {
+      "$PYTHON" -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${USER_SIM_PORT}/health', timeout=5)" >/dev/null 2>&1
+    }
+    for i in $(seq 1 120); do
+      user_sim_healthy && break
+      if ! kill -0 "$USER_SIM_PID" 2>/dev/null; then
+        echo "user-sim vLLM exited early; tail of $USER_SIM_LOG:"
+        tail -n 120 "$USER_SIM_LOG"
+        exit 1
+      fi
+      echo "[user-sim wait $((i * 5))s] $(tail -n 1 "$USER_SIM_LOG" 2>/dev/null | cut -c1-200)"
+      sleep 5
+    done
+    user_sim_healthy || {
+      echo "user-sim vLLM not healthy after 10min; tail of $USER_SIM_LOG:"
+      tail -n 120 "$USER_SIM_LOG"
+      exit 1
+    }
+    echo "user-sim vLLM healthy"
+
+    # 2) Trainer in the foreground; its exit code is authoritative (the
+    #    user-sim server is torn down by the EXIT trap).
+    tau2_rc=0
+    "$PYTHON" "$LAUNCH_PATH" "${EXTRA_ARGS[@]}" || tau2_rc=$?
+    if (( tau2_rc == 0 )); then
+      echo "tau2 training completed"
+    else
+      run_rc=$tau2_rc
+      echo "tau2 trainer exited rc=$tau2_rc; user-sim tail:"
+      tail -n 40 "$USER_SIM_LOG"
     fi
     ;;
   *.sh)

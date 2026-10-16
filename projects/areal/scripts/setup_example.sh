@@ -16,7 +16,7 @@ fi
 
 PROFILE="$1"
 
-SUPPORTED_PROFILES="areal-vlm-grpo areal-vlm-mt-grpo areal-vlm-sft areal-clevr-sft areal-tir-grpo areal-scaffold-grpo areal-agents-grpo areal-math-grpo areal-math-sft areal-math-aime areal-math-boba areal-countdown-grpo areal-hermes-grpo areal-openclaw-grpo areal-camel-grpo areal-online-rollout areal-hitl-demo areal-align"
+SUPPORTED_PROFILES="areal-vlm-grpo areal-vlm-mt-grpo areal-vlm-sft areal-clevr-sft areal-tir-grpo areal-scaffold-grpo areal-agents-grpo areal-math-grpo areal-math-sft areal-math-aime areal-math-boba areal-countdown-grpo areal-hermes-grpo areal-openclaw-grpo areal-camel-grpo areal-online-rollout areal-hitl-demo areal-tau2-grpo areal-align"
 AIME_PREP=0
 BOBA_PREP=0
 COUNTDOWN_PREP=0
@@ -28,6 +28,7 @@ HERMES_PREP=0
 OPENCLAW_PREP=0
 CAMEL_PREP=0
 HITL_PREP=0
+TAU2_PREP=0
 case "$PROFILE" in
   areal-vlm-grpo) MODEL_ID="Qwen/Qwen2.5-VL-3B-Instruct" ;;
   areal-vlm-mt-grpo) MODEL_ID="Qwen/Qwen3-VL-2B-Instruct" ;;
@@ -64,6 +65,10 @@ case "$PROFILE" in
   # human_in_the_loop_demo.py: zeroclaw-driven HITL demo; section 1e installs
   # the CLI and plants its home config skeleton.
   areal-hitl-demo) MODEL_ID="Qwen/Qwen3-0.6B"; HITL_PREP=1 ;;
+  # tau2/train.py: multi-turn customer-service RL (real user simulator; the
+  # user LLM is hosted locally by run_example.sh's tau2 branch). Section 1f
+  # installs the tau2-bench fork + data.
+  areal-tau2-grpo) MODEL_ID="Qwen/Qwen3-1.7B"; TAU2_PREP=1 ;;
   # hhrlhf_dpo.py: DPO pipeline is model-agnostic; upstream yaml's 7B swapped
   # for 1.5B (7B fp32 init OOMs the 32GB cards in the pool, 15GB per run).
   areal-align) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; HHRLHF_PREP=1 ;;
@@ -197,6 +202,25 @@ default_model = "default"
 api_key = "placeholder"
 TOML
   echo "planted minimal ~/.zeroclaw/config.toml skeleton"
+fi
+
+# -------------------------------------------------------
+# 1f. tau2 profile: the tau2-bench fork (async orchestrator
+# + user simulator) and its task data. TAU2_DATA_DIR must reach the trainer
+# AND the rollout workers (the inline workflow loads tasks from the
+# registry), so it is exported through GITHUB_ENV - the local scheduler's
+# workers inherit the environment.
+# -------------------------------------------------------
+if [[ "$TAU2_PREP" == 1 ]]; then
+  TAU2_DIR="$GITHUB_WORKSPACE/areal_tau2/tau2-bench"
+  git clone --depth 1 -b dhh/async-and-custom-completion \
+    https://github.com/dhh1995/tau2-bench.git "$TAU2_DIR"
+  [[ -d "$TAU2_DIR/data" ]] || { echo "tau2-bench data/ not found in fork" >&2; exit 2; }
+  uv pip install --system \
+    --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+    "$TAU2_DIR"
+  echo "TAU2_DATA_DIR=$TAU2_DIR/data" >> "$GITHUB_ENV"
+  echo "tau2-bench fork installed; TAU2_DATA_DIR=$TAU2_DIR/data"
 fi
 
 # -------------------------------------------------------

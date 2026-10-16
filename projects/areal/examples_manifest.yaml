@@ -410,7 +410,7 @@ supported:
   #     - vllm.max_model_len=16384
   #     - gconfig.max_new_tokens=256
   #     - ++rollout.setup_timeout=1800
-    timeout_minutes: 90
+    # timeout_minutes: 90
   # HITL 在线 RL demo（zeroclaw 客户端）：生态验证——真实第三方 OpenAI 兼容 CLI 打
   # AReaL 网关。demo 自带完整驱动（起 online_rollout → 临时改写 ~/.zeroclaw/
   # config.toml → 4 轮问答 + set_reward）；argparse 严格解析，overlay 只能传它的

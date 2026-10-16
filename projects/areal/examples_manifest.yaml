@@ -53,7 +53,7 @@ supported:
       - valid_dataset.batch_size=1
       - stats_logger.wandb.mode=disabled
       - vllm.gpu_memory_utilization=0.3
-      - vllm.max_model_len=4096
+      - vllm.max_model_len=8192
       - +rollout.setup_timeout=1800
       - total_train_steps=1
       - total_train_epochs=1

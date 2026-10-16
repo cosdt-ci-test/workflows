@@ -1,6 +1,6 @@
 version: 1
 # 只把上游可运行的用例 .py 作为对账单位；不把文档、图片或 benchmarks 当成 example。
-# 模块编译、序列化两条新增用例待 NPU CI 验证；不修改上游源码。
+# 序列化新增用例已在 #6/#7 通过；不修改上游源码。
 scan:
   root: tutorials/sphinx_tuto
   include_extensions: ['.py']
@@ -50,13 +50,7 @@ supported:
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     timeout_minutes: 90
 
-  # 模块组合与原生 torch.compile；小型合成模型，补齐 Ascend Triton，待 NPU 实跑。
-  - path: tutorials/sphinx_tuto/tensordict_module.py
-    profile: tensordict_npu
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    timeout_minutes: 90
-  # 序列化格式与吞吐对比；保留每布局 128MiB/8 次的原生配方，待 NPU 实跑。
+  # 序列化格式与吞吐对比；每布局 128MiB/8 次的原生配方，#6/#7 已通过。
   - path: tutorials/sphinx_tuto/serialization_speed.py
     profile: tensordict_npu
     runner: linux-aarch64-a2-1
@@ -64,6 +58,8 @@ supported:
     timeout_minutes: 90
 
 unsupported:
+  # 模块组合与编译；#7 原生计时统计在默认 NPU 上执行 float64 quantile/sort，当前算子不支持。
+  - tutorials/sphinx_tuto/tensordict_module.py
   # 内存映射与设备迁移；v0.15.0 原生断言直接比较 CPU memmap 与 NPU 张量，无设备选择参数，暂不支持。
   - tutorials/sphinx_tuto/tensordict_memory.py
   # FashionMNIST 双模型训练；显式选择 CPU/CUDA，无 NPU 设备参数。

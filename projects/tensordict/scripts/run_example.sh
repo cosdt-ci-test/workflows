@@ -13,7 +13,6 @@ case "$entry" in
   tutorials/sphinx_tuto/tensordict_preallocation.py|\
   tutorials/sphinx_tuto/tensordict_slicing.py|\
   tutorials/sphinx_tuto/streamed_tensordict.py|\
-  tutorials/sphinx_tuto/tensordict_module.py|\
   tutorials/sphinx_tuto/serialization_speed.py) ;;
   *) echo "unsupported TensorDict tutorial entry: ${entry:-<missing>}" >&2; exit 2 ;;
 esac
@@ -95,8 +94,6 @@ elif name == "streamed_tensordict.py":
     checked = require_npu(namespace["bucket0"], "stream bucket")
     checked += require_npu(namespace["data_cont"], "initial nested densification")
     checked += require_npu(namespace["td"], "asynchronous nested densification")
-elif name == "tensordict_module.py":
-    checked = require_npu(namespace["td"], "probabilistic module output")
 elif name == "serialization_speed.py":
     checked = require_npu(list(namespace["LAYOUTS"].values()), "serialization layouts")
 else:

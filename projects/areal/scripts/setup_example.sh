@@ -267,30 +267,6 @@ echo "USE_OPTIMIZED_MODEL=0" >> "$GITHUB_ENV"
 echo "AREAL_ALLOW_DEFAULT_ADMIN_KEY=1" >> "$GITHUB_ENV"
 
 # -------------------------------------------------------
-# Docker-capability probe (informational, <1s, every profile):
-# terminal_bench's task environments need docker-in-docker, and dockerd
-# needs CAP_SYS_ADMIN (mount/cgroups) - merely installing the docker
-# binaries is useless without it. Print the evidence; nothing here fails.
-# -------------------------------------------------------
-DC_CAPS=$(awk '/^CapEff/ {print $2}' /proc/self/status 2>/dev/null || echo 0)
-if (( 16#$DC_CAPS & (1 << 21) )); then
-  echo "docker-capability: CAP_SYS_ADMIN present (CapEff=$DC_CAPS) - dind might work"
-else
-  echo "docker-capability: CAP_SYS_ADMIN ABSENT (CapEff=$DC_CAPS) - dockerd cannot start here"
-fi
-DC_MNT=$(mktemp -d)
-if mount -t tmpfs none "$DC_MNT" >/dev/null 2>&1; then
-  echo "docker-capability: tmpfs mount OK - container looks privileged"
-  umount "$DC_MNT" >/dev/null 2>&1 || true
-else
-  echo "docker-capability: tmpfs mount DENIED - unprivileged"
-fi
-rm -rf "$DC_MNT" >/dev/null 2>&1 || true
-command -v docker >/dev/null 2>&1 \
-  && echo "docker-capability: docker binary present" \
-  || echo "docker-capability: no docker binary in image"
-
-# -------------------------------------------------------
 # 3. Pre-download Model & Dataset (using image's native tools)
 # -------------------------------------------------------
 # No local fixtures and no shared-cache dependency (cache-seed is NOT used):

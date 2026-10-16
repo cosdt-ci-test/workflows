@@ -1,6 +1,9 @@
 """Test-side checkpoint and device probes; leave VBench scoring unchanged."""
 
 from contextlib import contextmanager
+import json
+import math
+from pathlib import Path
 
 import torch
 
@@ -51,3 +54,23 @@ def watch_human_action(module, checkpoint, device="npu:0"):
         module.create_model = original
         for handle in handles:
             handle.remove()
+
+
+@contextmanager
+def check_api(module, checkpoint, device="npu:0", output_root="output/vbench"):
+    """Keep acceptance assertions around, rather than inside, the user's example."""
+    with watch_human_action(module, checkpoint, device) as observed:
+        yield
+        if torch.device(device).type == "npu":
+            torch.npu.synchronize()
+    assert observed == [str(torch.device(device))] * 5, "Expected five forwards on the target device"
+    for entry in ("cli", "api"):
+        files = list((Path(output_root) / entry).glob("*_eval_results.json"))
+        assert len(files) == 1, (entry, files)
+        score, videos = json.loads(files[0].read_text())["human_action"]
+        assert math.isfinite(score) and 0 <= score <= 1, "Invalid human_action score"
+        assert len(videos) == 5
+        assert len({video["video_path"] for video in videos}) == 5
+        assert all(set(video) == {"video_path", "video_results", "cor_num_per_video"}
+                   for video in videos)
+        assert all(isinstance(video["video_results"], bool) for video in videos)

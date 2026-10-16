@@ -1,6 +1,7 @@
 """Real CPU tensors exercise test-side probes; NPU acceptance stays in CI."""
 
 import importlib.util
+import json
 import tempfile
 import types
 import unittest
@@ -72,6 +73,57 @@ class TestRuntimeChecks(unittest.TestCase):
                     raise RuntimeError("evaluation failed")
         self.assertIs(module.create_model, factory)
         self.assertFalse(model._forward_hooks)
+
+    def _api_fixture(self, root):
+        model = torch.nn.Linear(4, 2)
+        module = types.SimpleNamespace(create_model=lambda: model)
+        checkpoint = root / "model.pth"
+        torch.save(model.state_dict(), checkpoint)
+        output = root / "output"
+        videos = [{"video_path": f"video-{i}.mp4", "video_results": False,
+                   "cor_num_per_video": 0} for i in range(5)]
+        for entry in ("cli", "api"):
+            directory = output / entry
+            directory.mkdir(parents=True)
+            (directory / "example_eval_results.json").write_text(
+                json.dumps({"human_action": [0.0, videos]}))
+        return model, module, checkpoint, output
+
+    def test_api_guard_checks_real_forwards_and_both_result_files(self):
+        checks = self._module()
+        self.assertTrue(hasattr(checks, "check_api"))
+        with tempfile.TemporaryDirectory() as directory:
+            model, module, checkpoint, output = self._api_fixture(Path(directory))
+            with checks.check_api(module, checkpoint, device="cpu", output_root=output):
+                evaluated = module.create_model()
+                for _ in range(5):
+                    evaluated(torch.ones(1, 4))
+            self.assertFalse(model._forward_hooks)
+
+    def test_api_guard_rejects_an_example_that_does_not_run_the_model(self):
+        checks = self._module()
+        self.assertTrue(hasattr(checks, "check_api"))
+        with tempfile.TemporaryDirectory() as directory:
+            _, module, checkpoint, output = self._api_fixture(Path(directory))
+            with self.assertRaisesRegex(AssertionError, "five forwards"):
+                with checks.check_api(module, checkpoint, device="cpu", output_root=output):
+                    pass
+
+    def test_api_guard_rejects_invalid_scores_and_removes_hooks(self):
+        checks = self._module()
+        self.assertTrue(hasattr(checks, "check_api"))
+        with tempfile.TemporaryDirectory() as directory:
+            model, module, checkpoint, output = self._api_fixture(Path(directory))
+            result = output / "api/example_eval_results.json"
+            data = json.loads(result.read_text())
+            data["human_action"][0] = float("nan")
+            result.write_text(json.dumps(data))
+            with self.assertRaisesRegex(AssertionError, "score"):
+                with checks.check_api(module, checkpoint, device="cpu", output_root=output):
+                    evaluated = module.create_model()
+                    for _ in range(5):
+                        evaluated(torch.ones(1, 4))
+            self.assertFalse(model._forward_hooks)
 
 
 if __name__ == "__main__":

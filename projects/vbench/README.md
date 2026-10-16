@@ -74,8 +74,15 @@ The public Python API, root evaluate.py, shared distributed code, scoring
 algorithm and result schema retain their upstream behavior. A model-device
 log is the only instrumentation added to human_action.
 
+The Quick Start is written for Ascend users: installation, input preparation,
+the public CLI/API and output locations. Runner/cache delivery and patch
+maintenance details belong in this README, not in the user-facing guide.
+
 Checkpoint coverage and forward-device/finite-output assertions live in
-the guard's runtime_checks helper, using real model forwards. Version pins
+the guard's runtime_checks helper, using real model forwards. The project test
+entry wraps the unchanged document API code in `check_api`, which also checks
+both CLI/API result files. Users can run that API example without the test
+helpers or a preceding CLI run. Version pins
 live in constraints-npu.txt, rather than the patch. No separate master
 compatibility patches are maintained. A new release with incompatible code
 fails `git apply --check` and requires patch review; it does not select an

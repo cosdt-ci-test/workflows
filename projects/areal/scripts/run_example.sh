@@ -528,14 +528,16 @@ except OSError as e:
     print(f"{type(e).__name__}: {e}", file=sys.stderr)
 PY
     }
-    json_key() {
-      "$PYTHON" -c 'import json,sys; print(json.load(sys.stdin)["api_key"])' 2>/dev/null || true
+    # v2 session shape: request {"task_id","group_size"}; response
+    # {"group_id","sessions":[{"session_id","session_api_key"}]}.
+    json_sess_key() {
+      "$PYTHON" -c 'import json,sys; print(json.load(sys.stdin)["sessions"][0]["session_api_key"])' 2>/dev/null || true
     }
 
     SESS_KEY=""
     for attempt in $(seq 1 24); do
-      BODY=$(oc_post rl/start_session "$OR_ADMIN_KEY" '{"task_id":"ci-online-rollout"}' 60)
-      SESS_KEY=$(printf '%s' "$BODY" | json_key)
+      BODY=$(oc_post rl/start_session "$OR_ADMIN_KEY" '{"task_id":"ci-online-rollout","group_size":1}' 60)
+      SESS_KEY=$(printf '%s' "$BODY" | json_sess_key)
       [[ -n "$SESS_KEY" ]] && break
       echo "[session attempt $attempt] no session yet"
       sleep 5
@@ -543,27 +545,16 @@ PY
     [[ -n "$SESS_KEY" ]] || { echo "start_session never returned a key"; tail -n 40 "$ROLLOUT_LOG"; exit 1; }
     echo "session: $SESS_KEY"
 
-    CHAT_BODY='{"model":"default","messages":[{"role":"user","content":"What is 12 * 15 + 3?"}],"temperature":0.7,"max_tokens":256}'
+    CHAT_BODY='{"model":"default","messages":[{"role":"user","content":"What is 12 * 15 + 3?"}],"max_tokens":256}'
     CHAT=$(oc_post chat/completions "$SESS_KEY" "$CHAT_BODY" 600)
     [[ -n "$CHAT" ]] || { echo "chat/completions failed"; tail -n 40 "$ROLLOUT_LOG"; exit 1; }
     echo "chat completion: $(printf '%s' "$CHAT" | cut -c1-160)"
 
-    REWARD=$(oc_post rl/set_reward "$SESS_KEY" '{"reward":1.0}' 60)
+    # Marking the reward makes the data proxy report the trajectory ready; the
+    # online workflow then picks it up and exports it (no v1-style refresh).
+    REWARD=$(oc_post rl/set_reward "$SESS_KEY" '{"interaction_id":null,"reward":1.0}' 60)
     [[ -n "$REWARD" ]] || { echo "set_reward failed"; tail -n 40 "$ROLLOUT_LOG"; exit 1; }
     echo "reward applied: $REWARD"
-
-    # Refresh ends the session and exports the trajectory -> rollout_batch's
-    # online workflow unblocks once batch_size trajectories are collected.
-    REFRESHED=""
-    for attempt in $(seq 1 12); do
-      BODY=$(oc_post rl/start_session "$OR_ADMIN_KEY" \
-        "{\"task_id\":\"ci-online-rollout\",\"api_key\":\"$SESS_KEY\"}" 130)
-      NEW_KEY=$(printf '%s' "$BODY" | json_key)
-      [[ -n "$NEW_KEY" ]] && { REFRESHED=1; echo "session refreshed"; break; }
-      echo "[refresh attempt $attempt] waiting for export"
-      sleep 10
-    done
-    [[ -n "$REFRESHED" ]] || { echo "refresh never succeeded"; tail -n 40 "$ROLLOUT_LOG"; exit 1; }
 
     # online_rollout.py should now print "Rollout complete" and exit 0.
     TRAIN_WAIT_S=600

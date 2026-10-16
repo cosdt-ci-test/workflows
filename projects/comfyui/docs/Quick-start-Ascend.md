@@ -100,17 +100,18 @@ HEAD xxx
 
 ## 安装依赖
 
-ComfyUI 的 `requirements.txt` 中 `torch` / `torchvision` 未 pin 版本。warm runner 上 `pip install -r requirements.txt` 常为 no-op（依赖被标「已满足」却实际缺失），会漏装 `comfy_aimdo` 等运行时依赖，导致 `main.py` 启动失败。故用 `--force-reinstall` 强制重装全部 requirements，同时把 `torch==2.9.0` / `torchvision==0.24.0` 钉在命令行，避免未 pin 的 `torch` 被升级、破坏 torch ↔ torch_npu ↔ CANN 配套；`torchaudio==2.9.0`（不在 requirements.txt 中）与 ModelScope 下载工具单独安装：
+ComfyUI 的 `requirements.txt` 精确 pin 了一批包（如 `comfyui-workflow-templates==0.11.84`），而集群内网 PyPI 镜像尚未同步这些版本；直接 `pip install -r requirements.txt` 会因个别 pin 无法满足而**整条安装中止、一个包都不装**（`bash -c` 下错误被末尾命令的退出码掩盖）。故追加 `--extra-index-url` 指向公网 PyPI 镜像补全这些版本：
 
 ```shell #test-setup
 cd ComfyUI
-python -m pip install "torchaudio==2.9.0"
-python -m pip install --force-reinstall "torch==2.9.0" "torchvision==0.24.0" -r requirements.txt
+python -m pip install "torchvision==0.24.0" "torchaudio==2.9.0"
+python -m pip install -r requirements.txt "torch==2.9.0" --extra-index-url https://mirrors.aliyun.com/pypi/simple
 python -m pip install modelscope
 ```
 
-> - `requirements.txt` 用 `--force-reinstall` 强制重装（含 `comfy_aimdo`、`comfy-kitchen`、`kornia`、`spandrel` 等运行时依赖），避免 warm runner 把安装判为 no-op 而漏装；`torch` / `torchvision` 钉死在 2.9.0 / 0.24.0 不会被改动。
-> - `torchaudio` 不在上游 requirements.txt 中，`modelscope` 为 ModelScope 下载模型所需，二者需显式安装。
+> - `requirements.txt` 按上游原样安装；`--extra-index-url` 仅用于补全内网镜像尚未同步的版本。此处**不加 `--force-reinstall`**：`torch` 已装好，强制重装反而可能从公网拉入与 `torch_npu` 不配套的 torch。
+> - 先显式安装与 `torch 2.9.0` 配套的 `torchvision==0.24.0` / `torchaudio==2.9.0`，并在 requirements 一并钉住 `torch==2.9.0`，避免 requirements 中未 pin 的 `torch` 被升级、破坏 torch ↔ torch_npu ↔ CANN 配套。
+> - `modelscope` 为 ModelScope 下载模型所需，需显式安装。
 > - torch / torch_npu 栈沿用机器上已装好的版本（前置条件），本文档不重装。
 
 验证依赖可用：

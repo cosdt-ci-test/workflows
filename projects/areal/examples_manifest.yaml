@@ -6,7 +6,7 @@ scan:
   # root + include_extensions 两个键；实现模块、上游自测等一律进
   # unsupported 段（带分组注释与理由）。
   # 对账口径：release 树（当前 v2.1.0）114 个 .py/.sh =
-  # supported(15) + unsupported(99)。
+  # supported(16) + unsupported(98)。
 
 # 看护 release 线（workflow target_ref 留空，由引擎按 latest release
 # 解析）。supported 配方用专用镜像 ghcr.io/hwvanici/areal_npu:v1.0.5-a2
@@ -392,24 +392,37 @@ supported:
   #     - total_train_steps=1
   #     - total_train_epochs=1
   #   timeout_minutes: 90
-  # 在线推理服务（rollout-only）：online_rollout.py 起 gateway 后等外部流量；
-  # run_example.sh 用直接 HTTP 造流量（start_session→chat/completions→set_reward
-  # →refresh），收满 batch_size 轨迹即打印 Rollout complete 退出。
-  - path: examples/experimental/inference_service/online_rollout.py
-    profile: areal-online-rollout
+  # # 在线推理服务（rollout-only）：online_rollout.py 起 gateway 后等外部流量；
+  # # run_example.sh 用直接 HTTP 造流量（start_session→chat/completions→set_reward
+  # # →refresh），收满 batch_size 轨迹即打印 Rollout complete 退出。
+  # - path: examples/experimental/inference_service/online_rollout.py
+  #   profile: areal-online-rollout
+  #   runner: linux-aarch64-a2-1
+  #   npu_devices: '0'
+  #   image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
+  #   overlay_args:
+  #     - --config examples/experimental/inference_service/online_rollout.yaml
+  #     - rollout.backend=vllm:d1p1t1
+  #     - actor.backend=fsdp:d1p1t1
+  #     - actor.path=${AREAL_MODEL_PATH}
+  #     - train_dataset.batch_size=1
+  #     - vllm.gpu_memory_utilization=0.25
+  #     - vllm.max_model_len=16384
+  #     - gconfig.max_new_tokens=256
+  #     - ++rollout.setup_timeout=1800
+    timeout_minutes: 90
+  # HITL 在线 RL demo（zeroclaw 客户端）：生态验证——真实第三方 OpenAI 兼容 CLI 打
+  # AReaL 网关。demo 自带完整驱动（起 online_rollout → 临时改写 ~/.zeroclaw/
+  # config.toml → 4 轮问答 + set_reward）；argparse 严格解析，overlay 只能传它的
+  # flag。链路与 online_rollout 重叠，增量即 zeroclaw 兼容性本身。
+  - path: examples/experimental/inference_service/human_in_the_loop_demo.py
+    profile: areal-hitl-demo
     runner: linux-aarch64-a2-1
     npu_devices: '0'
     image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
     overlay_args:
-      - --config examples/experimental/inference_service/online_rollout.yaml
-      - rollout.backend=vllm:d1p1t1
-      - actor.backend=fsdp:d1p1t1
-      - actor.path=${AREAL_MODEL_PATH}
-      - train_dataset.batch_size=1
-      - vllm.gpu_memory_utilization=0.25
-      - vllm.max_model_len=16384
-      - gconfig.max_new_tokens=256
-      - ++rollout.setup_timeout=1800
+      - --inference-backend vllm
+      - --actor-path ${AREAL_MODEL_PATH}
     timeout_minutes: 90
 unsupported:
   # ===== 上游源码 bug（改上游源码才能通，无 overlay 可绕）=======================
@@ -436,7 +449,6 @@ unsupported:
   - examples/terminal_bench/train.py                            # task 靠 docker compose（需宿主 docker.sock）+ terminal_bench/camel-ai 依赖 + 仓库无 dataset/
   - examples/scaffolding/search_scaffolding.py                  # 真实网络搜索，需 SERPER_KEY_ID + JINA_API_KEYS
   - examples/search_agent/tongyi_deepresearch/train.py          # judge 引擎硬编码 SGLang（NPU 不支持）+ 搜索需 SERPER/JINA key
-  - examples/experimental/inference_service/human_in_the_loop_demo.py   # 靠外部 `zeroclaw` CLI + 改写 ~/.zeroclaw/config.toml
   - examples/swe/train_swe_rl.py                                # 沙箱必须 AEnvironment 集群（k8s+Helm），CI 无集群也自建不了
   # 恢复条件：AEnvironment 出自托管 / 注入 AENV_SYSTEM_URL / 提供上述密钥与服务
 

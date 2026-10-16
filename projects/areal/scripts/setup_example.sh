@@ -16,7 +16,7 @@ fi
 
 PROFILE="$1"
 
-SUPPORTED_PROFILES="areal-vlm-grpo areal-vlm-mt-grpo areal-vlm-sft areal-clevr-sft areal-tir-grpo areal-scaffold-grpo areal-agents-grpo areal-math-grpo areal-math-sft areal-math-aime areal-math-boba areal-countdown-grpo areal-hermes-grpo areal-openclaw-grpo areal-camel-grpo areal-online-rollout areal-align"
+SUPPORTED_PROFILES="areal-vlm-grpo areal-vlm-mt-grpo areal-vlm-sft areal-clevr-sft areal-tir-grpo areal-scaffold-grpo areal-agents-grpo areal-math-grpo areal-math-sft areal-math-aime areal-math-boba areal-countdown-grpo areal-hermes-grpo areal-openclaw-grpo areal-camel-grpo areal-online-rollout areal-hitl-demo areal-align"
 AIME_PREP=0
 BOBA_PREP=0
 COUNTDOWN_PREP=0
@@ -27,6 +27,7 @@ CLEVR_SUBSET_PREP=0
 HERMES_PREP=0
 OPENCLAW_PREP=0
 CAMEL_PREP=0
+HITL_PREP=0
 case "$PROFILE" in
   areal-vlm-grpo) MODEL_ID="Qwen/Qwen2.5-VL-3B-Instruct" ;;
   areal-vlm-mt-grpo) MODEL_ID="Qwen/Qwen3-VL-2B-Instruct" ;;
@@ -60,6 +61,9 @@ case "$PROFILE" in
   # online_rollout.py: rollout-only online demo; no extra runtime to install
   # (drive is run_example.sh's online_rollout branch).
   areal-online-rollout) MODEL_ID="Qwen/Qwen3-1.7B" ;;
+  # human_in_the_loop_demo.py: zeroclaw-driven HITL demo; section 1e installs
+  # the CLI and plants its home config skeleton.
+  areal-hitl-demo) MODEL_ID="Qwen/Qwen3-0.6B"; HITL_PREP=1 ;;
   # hhrlhf_dpo.py: DPO pipeline is model-agnostic; upstream yaml's 7B swapped
   # for 1.5B (7B fp32 init OOMs the 32GB cards in the pool, 15GB per run).
   areal-align) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; HHRLHF_PREP=1 ;;
@@ -157,6 +161,42 @@ if [[ "$CAMEL_PREP" == 1 ]]; then
   uv pip install --system \
     --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
     tiktoken docstring-parser colorama python-dotenv jsonschema
+fi
+
+# -------------------------------------------------------
+# 1e. hitl-demo profile: the zeroclaw chat client + its home
+# config skeleton. human_in_the_loop_demo.py drives its own traffic through
+# the zeroclaw CLI (`zeroclaw agent -m ... --session-state-file ...`), so the
+# binary must be on PATH. The demo's FIRST action on the config is
+# shutil.copy2(~/.zeroclaw/config.toml, .demo_bak) -> FileNotFoundError if the
+# file is missing, and its regex patch silently skips a missing
+# default_provider line - so plant a minimal skeleton in the runner home dir
+# (the demo backs it up and restores it on exit; AReaL source is untouched).
+# If zeroclaw.com turns out unreachable from the CN runners, switch to the
+# fork's GitHub Releases aarch64-linux tarball.
+# -------------------------------------------------------
+if [[ "$HITL_PREP" == 1 ]]; then
+  curl -fsSL --connect-timeout 30 --max-time 600 \
+    https://zeroclaw.com/install.sh | bash
+  # Installers typically drop the binary outside the non-interactive PATH
+  # (~/.local/bin and friends); the demo spawns `zeroclaw` via PATH lookup,
+  # so locate it and export for this step AND the run step (GITHUB_ENV).
+  if ! command -v zeroclaw >/dev/null 2>&1; then
+    ZC_BIN="$(find "$HOME" -maxdepth 4 \( -type f -o -type l \) -name zeroclaw 2>/dev/null | head -n 1 || true)"
+    [[ -n "$ZC_BIN" ]] || { echo "zeroclaw binary not found after install" >&2; exit 2; }
+    export PATH="$(dirname "$ZC_BIN"):$PATH"
+    echo "PATH=$PATH" >> "$GITHUB_ENV"
+    echo "zeroclaw located at $ZC_BIN (added to PATH)"
+  fi
+  zeroclaw --version >/dev/null 2>&1 || zeroclaw --help >/dev/null 2>&1 \
+    || { echo "zeroclaw failed to run" >&2; exit 2; }
+  mkdir -p "$HOME/.zeroclaw"
+  cat > "$HOME/.zeroclaw/config.toml" <<'TOML'
+default_provider = "custom:http://localhost:1"
+default_model = "default"
+api_key = "placeholder"
+TOML
+  echo "planted minimal ~/.zeroclaw/config.toml skeleton"
 fi
 
 # -------------------------------------------------------

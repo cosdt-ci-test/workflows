@@ -583,6 +583,27 @@ PY
       tail -n 120 "$ROLLOUT_LOG"
     fi
     ;;
+  examples/experimental/inference_service/human_in_the_loop_demo.py)
+    # The demo brings its own driver (launches online_rollout.py itself,
+    # temporarily points ~/.zeroclaw/config.toml at the local gateway, runs
+    # 4 HITL rounds via the zeroclaw CLI, then checks the rollout log). Its
+    # exit code is LOOSE though: zeroclaw failures are caught (empty answer,
+    # reward 0) and a missing "Rollout complete" only prints a warning
+    # before "Demo finished" + exit 0. Make the pass criterion strict:
+    # exit 0 AND "Rollout complete" in the demo output (on success it echoes
+    # the rollout log tail incl. "Databatch detected").
+    HITL_LOG="$PWD/hitl_demo.log"
+    demo_rc=0
+    "$PYTHON" "$LAUNCH_PATH" "${EXTRA_ARGS[@]}" >"$HITL_LOG" 2>&1 || demo_rc=$?
+    if (( demo_rc == 0 )) && grep -q 'Rollout complete' "$HITL_LOG"; then
+      echo "hitl demo completed"
+      grep 'Rollout complete' "$HITL_LOG" | tail -1
+    else
+      run_rc=1
+      echo "hitl demo failed (rc=$demo_rc, or no 'Rollout complete' - hollow run?); tail of $HITL_LOG:"
+      tail -n 80 "$HITL_LOG"
+    fi
+    ;;
   *.sh)
     # Shell examples dispatch with bash (generic guard contract: .sh -> bash,
     # .py -> python).

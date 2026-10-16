@@ -464,49 +464,49 @@ supported:
   #     - --inference-backend vllm
   #     - --actor-path ${AREAL_MODEL_PATH}
   #   timeout_minutes: 90
-  # # Agent Service（Claude Agent SDK 微服务）：Agent Service 本身不带模型——
-  # # ClaudeAgent 经 claude-agent-sdk 拉起 Claude Code CLI，其 API 流量由
-  # # ANTHROPIC_BASE_URL 指向 sidecar online_rollout 栈的 /v1/messages（v2 网关
-  # # Anthropic 路由 + data proxy 的 Anthropic→OpenAI 翻译，本地 vLLM 当后端，
-  # # 全程无需真实 Anthropic key）。run_example 的 agent-service 分支：fifo 挂住
-  # # 交互 stdin → 驱动一次 /v1/responses → 关 fifo（EOF）→ 干净退出 0。
-  # # argparse 严格解析，overlay 只能传它的 flag（--admin-api-key）。
-  # - path: examples/agent_service/run_agent_service.py
-  #   profile: areal-agent-service
-  #   runner: linux-aarch64-a2-1
-  #   npu_devices: '0'
-  #   image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
-  #   overlay_args:
-  #     - --admin-api-key
-  #     - areal-agent-admin
-  #   timeout_minutes: 90
-  # tau2 rollout-only：与 tau2/train.py 同一个 Tau2AgentWorkflow（真用户模拟器，
-  # airline 域），但直接驱动 v2 推理服务（RolloutControllerV2 批量 rollout，无
-  # PPO 栈），且自带终点（跑完 dataloater 打印 Rollout complete 退出 0）。
-  # run_example 分支在 2 号卡起本地 user-sim vLLM（同训练条目）；rollout 独占
-  # 0 卡（无 actor，vllm 可用高 util）。复用 areal-tau2-grpo（fork+数据同装）。
-  - path: examples/experimental/inference_service/tau2_rollout.py
-    profile: areal-tau2-grpo
-    runner: linux-aarch64-a2-2
+  # Agent Service（Claude Agent SDK 微服务）：Agent Service 本身不带模型——
+  # ClaudeAgent 经 claude-agent-sdk 拉起 Claude Code CLI，其 API 流量由
+  # ANTHROPIC_BASE_URL 指向 sidecar online_rollout 栈的 /v1/messages（v2 网关
+  # Anthropic 路由 + data proxy 的 Anthropic→OpenAI 翻译，本地 vLLM 当后端，
+  # 全程无需真实 Anthropic key）。run_example 的 agent-service 分支：fifo 挂住
+  # 交互 stdin → 驱动一次 /v1/responses → 关 fifo（EOF）→ 干净退出 0。
+  # argparse 严格解析，overlay 只能传它的 flag（--admin-api-key）。
+  - path: examples/agent_service/run_agent_service.py
+    profile: areal-agent-service
+    runner: linux-aarch64-a2-1
     npu_devices: '0'
     image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
     overlay_args:
-      - --config examples/experimental/inference_service/tau2_rollout.yaml
-      - cluster.n_gpus_per_node=1
-      - model_path=${AREAL_MODEL_PATH}
-      - rollout.backend=vllm:d1p1t1
-      - +vllm.gpu_memory_utilization=0.85
-      - +vllm.max_model_len=16384
-      - econfig.domain=airline
-      - econfig.max_steps=2
-      - econfig.user_llm_base_url=http://127.0.0.1:18888/v1/
-      - econfig.user_llm_args.max_completion_tokens=64
-      - gconfig.n_samples=1
-      - gconfig.max_new_tokens=64
-      - gconfig.max_tokens=8192
-      - train_dataset.batch_size=16
-      - ++rollout.setup_timeout=1800
+      - --admin-api-key
+      - areal-agent-admin
     timeout_minutes: 90
+  # # tau2 rollout-only：与 tau2/train.py 同一个 Tau2AgentWorkflow（真用户模拟器，
+  # # airline 域），但直接驱动 v2 推理服务（RolloutControllerV2 批量 rollout，无
+  # # PPO 栈），且自带终点（跑完 dataloater 打印 Rollout complete 退出 0）。
+  # # run_example 分支在 2 号卡起本地 user-sim vLLM（同训练条目）；rollout 独占
+  # # 0 卡（无 actor，vllm 可用高 util）。复用 areal-tau2-grpo（fork+数据同装）。
+  # - path: examples/experimental/inference_service/tau2_rollout.py
+  #   profile: areal-tau2-grpo
+  #   runner: linux-aarch64-a2-2
+  #   npu_devices: '0'
+  #   image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
+  #   overlay_args:
+  #     - --config examples/experimental/inference_service/tau2_rollout.yaml
+  #     - cluster.n_gpus_per_node=1
+  #     - model_path=${AREAL_MODEL_PATH}
+  #     - rollout.backend=vllm:d1p1t1
+  #     - +vllm.gpu_memory_utilization=0.85
+  #     - +vllm.max_model_len=16384
+  #     - econfig.domain=airline
+  #     - econfig.max_steps=2
+  #     - econfig.user_llm_base_url=http://127.0.0.1:18888/v1/
+  #     - econfig.user_llm_args.max_completion_tokens=64
+  #     - gconfig.n_samples=1
+  #     - gconfig.max_new_tokens=64
+  #     - gconfig.max_tokens=8192
+  #     - train_dataset.batch_size=16
+  #     - ++rollout.setup_timeout=1800
+  #   timeout_minutes: 90
 unsupported:
   # ===== 上游源码 bug（改上游源码才能通，无 overlay 可绕）=======================
   # 以下 4 条都是上游脚本 / 引擎自身的 bug，实测必崩：

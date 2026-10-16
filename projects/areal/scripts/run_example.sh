@@ -643,7 +643,7 @@ PY
       vllm.gpu_memory_utilization=0.25 \
       vllm.max_model_len=16384 \
       gconfig.max_new_tokens=256 \
-      +rollout.setup_timeout=1800 \
+      rollout.setup_timeout=1800 \
       >"$AS_ROLLOUT_LOG" 2>&1 &
     AS_ROLLOUT_PID=$!
 

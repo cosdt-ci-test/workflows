@@ -855,6 +855,72 @@ PY
       tail -n 120 "$AS_SVC_LOG"
     fi
     ;;
+  examples/experimental/inference_service/tau2_rollout.py)
+    # Rollout-only tau2: the SAME real agent + user simulator as the
+    # training entry (Tau2AgentWorkflow, airline domain), but driven through
+    # RolloutControllerV2 directly - no PPO stack - and self-terminating:
+    # it iterates its dataloader, prints per-batch reward stats, then
+    # "Rollout complete (N batches)" and exits 0. Same card layout as the
+    # training entry: rollout vLLM pinned to card 0 via npu_devices, the
+    # user-simulator vLLM on card 1 (child env override).
+    TR_USER_SIM_PORT=18888
+    TR_USER_SIM_LOG="$PWD/tau2_rollout_usersim.log"
+    TR_LOG="$PWD/tau2_rollout.log"
+
+    tau2_rollout_cleanup() {
+      if [[ -n "${TR_USER_SIM_PID:-}" ]] && kill -0 "$TR_USER_SIM_PID" 2>/dev/null; then
+        kill "$TR_USER_SIM_PID" 2>/dev/null || true
+      fi
+    }
+    trap tau2_rollout_cleanup EXIT
+
+    # 1) User-simulator vLLM on physical device 1 (identical launch to the
+    #    tau2 training entry).
+    ASCEND_RT_VISIBLE_DEVICES=1 "$PYTHON" -m vllm.entrypoints.openai.api_server \
+      --model "$AREAL_MODEL_PATH" \
+      --served-model-name default openai/self-hosted-Qwen2.5-72B self-hosted-Qwen2.5-72B \
+      --port "$TR_USER_SIM_PORT" \
+      --max-model-len 4096 \
+      --gpu-memory-utilization 0.85 \
+      >"$TR_USER_SIM_LOG" 2>&1 &
+    TR_USER_SIM_PID=$!
+    echo "user-sim vLLM started (pid=$TR_USER_SIM_PID, port=$TR_USER_SIM_PORT, log=$TR_USER_SIM_LOG)"
+
+    tr_us_healthy() {
+      "$PYTHON" -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${TR_USER_SIM_PORT}/health', timeout=5)" >/dev/null 2>&1
+    }
+    for i in $(seq 1 120); do
+      tr_us_healthy && break
+      if ! kill -0 "$TR_USER_SIM_PID" 2>/dev/null; then
+        echo "user-sim vLLM exited early; tail of $TR_USER_SIM_LOG:"
+        tail -n 120 "$TR_USER_SIM_LOG"
+        exit 1
+      fi
+      echo "[user-sim wait $((i * 5))s] $(tail -n 1 "$TR_USER_SIM_LOG" 2>/dev/null | cut -c1-200)"
+      sleep 5
+    done
+    tr_us_healthy || {
+      echo "user-sim vLLM not healthy after 10min; tail of $TR_USER_SIM_LOG:"
+      tail -n 120 "$TR_USER_SIM_LOG"
+      exit 1
+    }
+    echo "user-sim vLLM healthy"
+
+    # 2) tau2_rollout in the FOREGROUND: it self-drives the batch loop
+    #    (agent sessions through the gateway it hosts, user turns against
+    #    the sidecar above) and exits when the dataloader is exhausted.
+    tr_rc=0
+    "$PYTHON" "$LAUNCH_PATH" "${EXTRA_ARGS[@]}" >"$TR_LOG" 2>&1 || tr_rc=$?
+    if (( tr_rc == 0 )) && grep -q 'Rollout complete' "$TR_LOG"; then
+      echo "tau2_rollout completed"
+      grep 'Rollout complete' "$TR_LOG" | tail -1
+      grep 'avg_reward' "$TR_LOG" | tail -3 || true
+    else
+      run_rc=${tr_rc:-1}
+      echo "tau2_rollout failed (rc=$tr_rc, or no 'Rollout complete'); tail of $TR_LOG:"
+      tail -n 120 "$TR_LOG"
+    fi
+    ;;
   *.sh)
     # Shell examples dispatch with bash (generic guard contract: .sh -> bash,
     # .py -> python).

@@ -62,6 +62,7 @@ case "${EXAMPLE_PATH:-}" in
   tutorials/sphinx_tuto/tensordict_module.py)
     # Same torch 2.9 / CANN 9.1 compiler recipe as the Liger-Kernel guard.
     # Keep torch.compile's native Inductor backend, not an eager replacement.
+    python -m pip install pybind11
     python -m pip uninstall -y triton
     python -m pip install --no-deps 'triton-ascend==3.2.2' \
       --extra-index-url https://triton-ascend.osinfra.cn/pypi/simple

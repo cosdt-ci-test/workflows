@@ -62,7 +62,134 @@ dump_forked_logs() {
   while IFS= read -r f; do
     echo "===== $f (tail -n 200) ====="
     tail -n 200 "$f" || true
-  done < <(find "$root" -type f -name 'data-*.log' 2>/dev/null)
+   done < <(find "$root" -type f -name 'data-*.log' 2>/dev/null)
+ }
+
+# ---------------------------------------------------------------------------
+# Shared helpers for the orchestration branches below: the online-RL entries
+# all drive gateways over HTTP and wait on background processes.
+# ---------------------------------------------------------------------------
+
+# POST <base>/<path> with a Bearer key and a JSON body; $5 = client timeout
+# (default 120s). Prints the response body on success; on failure prints the
+# status + body head to stderr and prints nothing (rc stays 0 - callers test
+# for empty output).
+http_post() {
+  "$PYTHON" - "$1" "$2" "$3" "$4" "${5:-120}" <<'PY'
+import sys
+import urllib.error
+import urllib.request
+
+base, path, key, body, timeout = sys.argv[1:6]
+req = urllib.request.Request(
+    f"{base}/{path}",
+    data=body.encode(),
+    headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
+    method="POST",
+)
+try:
+    with urllib.request.urlopen(req, timeout=float(timeout)) as resp:
+        print(resp.read().decode())
+except urllib.error.HTTPError as e:
+    print(f"HTTP {e.code}: {e.read().decode()[:300]}", file=sys.stderr)
+except OSError as e:
+    print(f"{type(e).__name__}: {e}", file=sys.stderr)
+PY
+}
+
+# Extract a JSON field from stdin: json_pick '["api_key"]' (v1 flat session
+# contract) or json_pick '["sessions"][0]["session_api_key"]' (v2 nested).
+# Prints nothing on a parse failure.
+json_pick() {
+  "$PYTHON" -c "import json,sys; print(json.load(sys.stdin)$1)" 2>/dev/null || true
+}
+
+# True when the URL answers within 5s.
+http_healthy() {
+  "$PYTHON" -c "import urllib.request; urllib.request.urlopen('$1', timeout=5)" >/dev/null 2>&1
+}
+
+# Wait for "Proxy gateway available at <url>" in a background process's log.
+# Echoes the gateway URL; returns 1 (with a log tail on stderr) when the
+# process dies first or 20min elapse. The URL charset is strict: areal log
+# lines can carry ANSI colour bytes right after the URL, and a looser
+# pattern would swallow the ESC byte into the address.
+wait_gateway() {
+  local log=$1 pid=$2 label=${3:-proc} gw i
+  for i in $(seq 1 120); do
+    gw=$(grep 'Proxy gateway available at' "$log" 2>/dev/null | tail -1 \
+      | grep -oE 'https?://[A-Za-z0-9._:-]+' | tail -1 || true)
+    [[ -n "$gw" ]] && { echo "$gw"; return 0; }
+    if ! kill -0 "$pid" 2>/dev/null; then
+      echo "$label exited before the gateway came up; tail of $log:" >&2
+      tail -n 120 "$log" >&2
+      return 1
+    fi
+    echo "[wait $((i * 10))s] $label: $(tail -n 1 "$log" 2>/dev/null | cut -c1-200)"
+    sleep 10
+  done
+  echo "$label gateway did not come up in 20min; tail of $log:" >&2
+  tail -n 120 "$log" >&2
+  return 1
+}
+
+# Launch the tau2 user-simulator vLLM on physical device 1 (the child env
+# override replaces the job-wide ASCEND_RT_VISIBLE_DEVICES=0 - the rollout
+# owns card 0) and wait for its /health. Sets USER_SIM_PID/USER_SIM_LOG;
+# the caller's EXIT trap kills it. The multiple --served-model-name aliases
+# absorb whatever model string the tau2 client sends (econfig.user_llm uses
+# litellm "openai/..." naming) - vLLM matches the model field strictly.
+start_user_sim() {
+  local log=$1 i
+  USER_SIM_PORT=18888
+  USER_SIM_LOG="$log"
+  ASCEND_RT_VISIBLE_DEVICES=1 "$PYTHON" -m vllm.entrypoints.openai.api_server \
+    --model "$AREAL_MODEL_PATH" \
+    --served-model-name default openai/self-hosted-Qwen2.5-72B self-hosted-Qwen2.5-72B \
+    --port "$USER_SIM_PORT" \
+    --max-model-len 4096 \
+    --gpu-memory-utilization 0.85 \
+    >"$USER_SIM_LOG" 2>&1 &
+  USER_SIM_PID=$!
+  echo "user-sim vLLM started (pid=$USER_SIM_PID, port=$USER_SIM_PORT, log=$USER_SIM_LOG)"
+  for i in $(seq 1 120); do
+    http_healthy "http://127.0.0.1:${USER_SIM_PORT}/health" && { echo "user-sim vLLM healthy"; return 0; }
+    if ! kill -0 "$USER_SIM_PID" 2>/dev/null; then
+      echo "user-sim vLLM exited early; tail of $USER_SIM_LOG:" >&2
+      tail -n 120 "$USER_SIM_LOG" >&2
+      return 1
+    fi
+    echo "[user-sim wait $((i * 5))s] $(tail -n 1 "$USER_SIM_LOG" 2>/dev/null | cut -c1-200)"
+    sleep 5
+  done
+  echo "user-sim vLLM not healthy after 10min; tail of $USER_SIM_LOG:" >&2
+  tail -n 120 "$USER_SIM_LOG" >&2
+  return 1
+}
+
+# Bounded wait for a background process: return once the pid dies, once
+# <done_pattern> appears in <logfile> (if given), or after <timeout_s>
+# (TERM then KILL; sets WAIT_TIMED_OUT=1 so the caller can fail the job).
+wait_bounded() {
+  local pid=$1 timeout=$2 logfile=$3 pattern=${4:-}
+  local waited=0
+  WAIT_TIMED_OUT=0
+  while kill -0 "$pid" 2>/dev/null; do
+    if [[ -n "$pattern" ]] && grep -q "$pattern" "$logfile" 2>/dev/null; then
+      sleep 3
+      return 0
+    fi
+    if (( waited >= timeout )); then
+      WAIT_TIMED_OUT=1
+      kill "$pid" 2>/dev/null || true
+      sleep 5
+      kill -9 "$pid" 2>/dev/null || true
+      return 0
+    fi
+    sleep 15
+    waited=$((waited + 15))
+  done
+  return 0
 }
 
 run_rc=0
@@ -101,27 +228,7 @@ case "$EXAMPLE_REL" in
     "$PYTHON" "$LAUNCH_PATH" "${EXTRA_ARGS[@]}" >"$TRAIN_LOG" 2>&1 &
     TRAINER_PID=$!
 
-    GW=""
-    for i in $(seq 1 120); do
-      # Strict URL charset: the areal log line can carry ANSI colour bytes
-      # right after the URL, and [^[:space:]] would swallow the ESC byte;
-      # requests then dies with "Failed to parse: http://...<ESC>/...".
-      GW=$(grep 'Proxy gateway available at' "$TRAIN_LOG" 2>/dev/null | tail -1 \
-        | grep -oE 'https?://[A-Za-z0-9._:-]+' | tail -1 || true)
-      [[ -n "$GW" ]] && break
-      if ! kill -0 "$TRAINER_PID" 2>/dev/null; then
-        echo "trainer exited before the gateway came up; tail of $TRAIN_LOG:"
-        tail -n 120 "$TRAIN_LOG"
-        exit 1
-      fi
-      echo "[wait $((i * 10))s] trainer: $(tail -n 1 "$TRAIN_LOG" 2>/dev/null | cut -c1-200)"
-      sleep 10
-    done
-    if [[ -z "$GW" ]]; then
-      echo "proxy gateway did not come up in 20min; tail of $TRAIN_LOG:"
-      tail -n 120 "$TRAIN_LOG"
-      exit 1
-    fi
+    GW=$(wait_gateway "$TRAIN_LOG" "$TRAINER_PID" trainer) || exit 1
     echo "inference gateway: $GW"
 
     # 2) Agent Service with the Hermes agent (run blocks until the stack
@@ -159,34 +266,10 @@ case "$EXAMPLE_REL" in
     #    spawns zombie sessions until all 3 workers' capacity is exhausted
     #    and everything 429s. 429 ("no capacity") is retried: workers only
     #    register in the readiness queue after the trainer is fully up.
-    gw_post() {
-      # $1 = path, $2 = bearer key, $3 = json body; prints body on HTTP 200,
-      # nothing otherwise (status goes to stderr for the retry log).
-      "$PYTHON" - "$GW" "$1" "$2" "$3" <<'PY'
-import sys, urllib.request, urllib.error
-
-_, base, path, key, body = sys.argv
-req = urllib.request.Request(
-    f"{base}/{path}",
-    data=body.encode(),
-    headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
-    method="POST",
-)
-try:
-    with urllib.request.urlopen(req, timeout=180) as resp:
-        print(resp.read().decode())
-except urllib.error.HTTPError as e:
-    print(f"HTTP {e.code}", file=sys.stderr)
-except OSError as e:
-    print(f"{type(e).__name__}: {e}", file=sys.stderr)
-PY
-    }
-
     SESS_KEY=""
     for attempt in $(seq 1 24); do
-      BODY=$(gw_post rl/start_session sk-areal-ci '{"task_id":"ci-hermes-smoke"}')
-      SESS_KEY=$(printf '%s' "$BODY" | "$PYTHON" -c \
-        'import json,sys; print(json.load(sys.stdin)["api_key"])' 2>/dev/null || true)
+      BODY=$(http_post "$GW" rl/start_session sk-areal-ci '{"task_id":"ci-hermes-smoke"}' 180)
+      SESS_KEY=$(printf '%s' "$BODY" | json_pick '["api_key"]')
       [[ -n "$SESS_KEY" ]] && break
       echo "[session attempt $attempt] no session yet (capacity/registering)"
       sleep 5
@@ -259,9 +342,9 @@ PY
     #    with the existing api_key) ends the old session, waits for the
     #    training pipeline to cycle and starts a new one with the same key -
     #    the trajectory export unblocks the trainer's _OnlineAgent. Both go
-    #    through gw_post (v1 contract: 200 on success). Refresh can 429 while
+    #    through http_post (v1 contract: 200 on success). Refresh can 429 while
     #    the pipeline cycles (refresh_timeout on the gateway side), so retry.
-    REWARD_RESP=$(gw_post rl/set_reward "$SESS_KEY" '{"reward":1.0}')
+    REWARD_RESP=$(http_post "$GW" rl/set_reward "$SESS_KEY" '{"reward":1.0}' 180)
     if [[ -z "$REWARD_RESP" ]]; then
       echo "set_reward failed; tail of $TRAIN_LOG:"
       tail -n 40 "$TRAIN_LOG"
@@ -271,10 +354,9 @@ PY
 
     REFRESHED=""
     for attempt in $(seq 1 12); do
-      BODY=$(gw_post rl/start_session sk-areal-ci \
-        "{\"task_id\":\"ci-hermes-smoke\",\"api_key\":\"$SESS_KEY\"}")
-      NEW_KEY=$(printf '%s' "$BODY" | "$PYTHON" -c \
-        'import json,sys; print(json.load(sys.stdin)["api_key"])' 2>/dev/null || true)
+      BODY=$(http_post "$GW" rl/start_session sk-areal-ci \
+        "{\"task_id\":\"ci-hermes-smoke\",\"api_key\":\"$SESS_KEY\"}" 180)
+      NEW_KEY=$(printf '%s' "$BODY" | json_pick '["api_key"]')
       if [[ -n "$NEW_KEY" ]]; then
         REFRESHED=1
         echo "session refreshed (key: $NEW_KEY)"
@@ -293,24 +375,10 @@ PY
     #    trajectory (empty/error-only session) leaves the trainer waiting
     #    for the NEXT session forever - instead of holding the runner until
     #    the job timeout, fail after 15 min with the trainer log dumped.
-    TRAIN_WAIT_S=900
-    waited=0
-    train_timed_out=0
-    while kill -0 "$TRAINER_PID" 2>/dev/null; do
-      if (( waited >= TRAIN_WAIT_S )); then
-        echo "trainer still running after ${TRAIN_WAIT_S}s - likely waiting for another session (rejected trajectory?); killing and dumping"
-        train_timed_out=1
-        kill "$TRAINER_PID" 2>/dev/null || true
-        sleep 5
-        kill -9 "$TRAINER_PID" 2>/dev/null || true
-        break
-      fi
-      sleep 15
-      waited=$((waited + 15))
-    done
-    if (( train_timed_out )); then
+    wait_bounded "$TRAINER_PID" 900 "$TRAIN_LOG"
+    if (( WAIT_TIMED_OUT )); then
       run_rc=1
-      echo "trainer wait timed out; tail of $TRAIN_LOG:"
+      echo "trainer still running after 900s - likely waiting for another session (rejected trajectory?); tail of $TRAIN_LOG:"
       tail -n 120 "$TRAIN_LOG"
     elif wait "$TRAINER_PID"; then
       echo "hermes online-rl loop completed"
@@ -342,59 +410,15 @@ PY
     "$PYTHON" "$LAUNCH_PATH" "${EXTRA_ARGS[@]}" >"$TRAIN_LOG" 2>&1 &
     TRAINER_PID=$!
 
-    GW=""
-    for i in $(seq 1 120); do
-      GW=$(grep 'Proxy gateway available at' "$TRAIN_LOG" 2>/dev/null | tail -1 \
-        | grep -oE 'https?://[A-Za-z0-9._:-]+' | tail -1 || true)
-      [[ -n "$GW" ]] && break
-      if ! kill -0 "$TRAINER_PID" 2>/dev/null; then
-        echo "trainer exited before the gateway came up; tail of $TRAIN_LOG:"
-        tail -n 120 "$TRAIN_LOG"
-        exit 1
-      fi
-      echo "[wait $((i * 10))s] trainer: $(tail -n 1 "$TRAIN_LOG" 2>/dev/null | cut -c1-200)"
-      sleep 10
-    done
-    if [[ -z "$GW" ]]; then
-      echo "proxy gateway did not come up in 20min; tail of $TRAIN_LOG:"
-      tail -n 120 "$TRAIN_LOG"
-      exit 1
-    fi
+    GW=$(wait_gateway "$TRAIN_LOG" "$TRAINER_PID" trainer) || exit 1
     echo "inference gateway: $GW"
-
-    # HTTP helper with a tunable client timeout ($4 seconds, default 120).
-    oc_post() {
-      "$PYTHON" - "$GW" "$1" "$2" "$3" "${4:-120}" <<'PY'
-import sys
-import urllib.error
-import urllib.request
-
-base, path, key, body, timeout = sys.argv[1:6]
-req = urllib.request.Request(
-    f"{base}/{path}",
-    data=body.encode(),
-    headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
-    method="POST",
-)
-try:
-    with urllib.request.urlopen(req, timeout=float(timeout)) as resp:
-        print(resp.read().decode())
-except urllib.error.HTTPError as e:
-    print(f"HTTP {e.code}", file=sys.stderr)
-except OSError as e:
-    print(f"{type(e).__name__}: {e}", file=sys.stderr)
-PY
-    }
-    json_key() {
-      "$PYTHON" -c 'import json,sys; print(json.load(sys.stdin)["api_key"])' 2>/dev/null || true
-    }
 
     # 2) start_session (admin) -> per-session key. 429 ("no capacity") is
     #    retried: workers only register once the trainer is fully up.
     SESS_KEY=""
     for attempt in $(seq 1 24); do
-      BODY=$(oc_post rl/start_session "$OC_ADMIN_KEY" '{"task_id":"ci-openclaw-smoke"}' 60)
-      SESS_KEY=$(printf '%s' "$BODY" | json_key)
+      BODY=$(http_post "$GW" rl/start_session "$OC_ADMIN_KEY" '{"task_id":"ci-openclaw-smoke"}' 60)
+      SESS_KEY=$(printf '%s' "$BODY" | json_pick '["api_key"]')
       [[ -n "$SESS_KEY" ]] && break
       echo "[session attempt $attempt] no session yet"
       sleep 5
@@ -406,22 +430,22 @@ PY
     #    logprobs recorded for RL). Long client timeout: the NPU generates
     #    slowly (~1.5 tok/s), far past demo_lifecycle's hardcoded 30s.
     CHAT_BODY='{"model":"default","messages":[{"role":"system","content":"You are a helpful math tutor. Show your work step by step."},{"role":"user","content":"Solve step by step: What is 12 * 15 + 3?"}],"temperature":0.7,"max_tokens":256}'
-    CHAT=$(oc_post chat/completions "$SESS_KEY" "$CHAT_BODY" 600)
+    CHAT=$(http_post "$GW" chat/completions "$SESS_KEY" "$CHAT_BODY" 600)
     [[ -n "$CHAT" ]] || { echo "chat/completions failed"; tail -n 40 "$TRAIN_LOG"; exit 1; }
     echo "chat completion: $(printf '%s' "$CHAT" | cut -c1-200)"
 
     # 4) set_reward (session key), then refresh: start_session with the key
     #    ends the session and exports the trajectory -> the trainer's
     #    _OnlineAgent unblocks and trains its single step.
-    REWARD=$(oc_post rl/set_reward "$SESS_KEY" '{"reward":1.0}' 60)
+    REWARD=$(http_post "$GW" rl/set_reward "$SESS_KEY" '{"reward":1.0}' 60)
     [[ -n "$REWARD" ]] || { echo "set_reward failed"; tail -n 40 "$TRAIN_LOG"; exit 1; }
     echo "reward applied: $REWARD"
 
     REFRESHED=""
     for attempt in $(seq 1 12); do
-      BODY=$(oc_post rl/start_session "$OC_ADMIN_KEY" \
+      BODY=$(http_post "$GW" rl/start_session "$OC_ADMIN_KEY" \
         "{\"task_id\":\"ci-openclaw-smoke\",\"api_key\":\"$SESS_KEY\"}" 130)
-      NEW_KEY=$(printf '%s' "$BODY" | json_key)
+      NEW_KEY=$(printf '%s' "$BODY" | json_pick '["api_key"]')
       [[ -n "$NEW_KEY" ]] && { REFRESHED=1; echo "session refreshed (key: $NEW_KEY)"; break; }
       echo "[refresh attempt $attempt] pipeline still cycling"
       sleep 10
@@ -429,22 +453,8 @@ PY
     [[ -n "$REFRESHED" ]] || { echo "refresh never succeeded; trainer may be stuck"; tail -n 40 "$TRAIN_LOG"; exit 1; }
 
     # 5) Trainer trains its single step and exits (bounded).
-    TRAIN_WAIT_S=1200
-    waited=0
-    train_timed_out=0
-    while kill -0 "$TRAINER_PID" 2>/dev/null; do
-      if (( waited >= TRAIN_WAIT_S )); then
-        echo "trainer still running after ${TRAIN_WAIT_S}s - killing and dumping"
-        train_timed_out=1
-        kill "$TRAINER_PID" 2>/dev/null || true
-        sleep 5
-        kill -9 "$TRAINER_PID" 2>/dev/null || true
-        break
-      fi
-      sleep 15
-      waited=$((waited + 15))
-    done
-    if (( train_timed_out )); then
+    wait_bounded "$TRAINER_PID" 1200 "$TRAIN_LOG"
+    if (( WAIT_TIMED_OUT )); then
       run_rc=1
       echo "trainer wait timed out; tail of $TRAIN_LOG:"
       tail -n 120 "$TRAIN_LOG"
@@ -486,58 +496,15 @@ PY
     "$PYTHON" "$LAUNCH_PATH" "${EXTRA_ARGS[@]}" >"$ROLLOUT_LOG" 2>&1 &
     ROLLOUT_PID=$!
 
-    GW=""
-    for i in $(seq 1 120); do
-      GW=$(grep 'Proxy gateway available at' "$ROLLOUT_LOG" 2>/dev/null | tail -1 \
-        | grep -oE 'https?://[A-Za-z0-9._:-]+' | tail -1 || true)
-      [[ -n "$GW" ]] && break
-      if ! kill -0 "$ROLLOUT_PID" 2>/dev/null; then
-        echo "online_rollout exited before the gateway came up; tail:"
-        tail -n 120 "$ROLLOUT_LOG"
-        exit 1
-      fi
-      echo "[wait $((i * 10))s] rollout: $(tail -n 1 "$ROLLOUT_LOG" 2>/dev/null | cut -c1-200)"
-      sleep 10
-    done
-    if [[ -z "$GW" ]]; then
-      echo "proxy gateway did not come up; tail:"
-      tail -n 120 "$ROLLOUT_LOG"
-      exit 1
-    fi
+    GW=$(wait_gateway "$ROLLOUT_LOG" "$ROLLOUT_PID" rollout) || exit 1
     echo "inference gateway: $GW"
 
-    oc_post() {
-      "$PYTHON" - "$GW" "$1" "$2" "$3" "${4:-120}" <<'PY'
-import sys
-import urllib.error
-import urllib.request
-
-base, path, key, body, timeout = sys.argv[1:6]
-req = urllib.request.Request(
-    f"{base}/{path}",
-    data=body.encode(),
-    headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
-    method="POST",
-)
-try:
-    with urllib.request.urlopen(req, timeout=float(timeout)) as resp:
-        print(resp.read().decode())
-except urllib.error.HTTPError as e:
-    print(f"HTTP {e.code}", file=sys.stderr)
-except OSError as e:
-    print(f"{type(e).__name__}: {e}", file=sys.stderr)
-PY
-    }
     # v2 session shape: request {"task_id","group_size"}; response
     # {"group_id","sessions":[{"session_id","session_api_key"}]}.
-    json_sess_key() {
-      "$PYTHON" -c 'import json,sys; print(json.load(sys.stdin)["sessions"][0]["session_api_key"])' 2>/dev/null || true
-    }
-
     SESS_KEY=""
     for attempt in $(seq 1 24); do
-      BODY=$(oc_post rl/start_session "$OR_ADMIN_KEY" '{"task_id":"ci-online-rollout","group_size":1}' 60)
-      SESS_KEY=$(printf '%s' "$BODY" | json_sess_key)
+      BODY=$(http_post "$GW" rl/start_session "$OR_ADMIN_KEY" '{"task_id":"ci-online-rollout","group_size":1}' 60)
+      SESS_KEY=$(printf '%s' "$BODY" | json_pick '["sessions"][0]["session_api_key"]')
       [[ -n "$SESS_KEY" ]] && break
       echo "[session attempt $attempt] no session yet"
       sleep 5
@@ -546,34 +513,18 @@ PY
     echo "session: $SESS_KEY"
 
     CHAT_BODY='{"model":"default","messages":[{"role":"user","content":"What is 12 * 15 + 3?"}],"max_tokens":256}'
-    CHAT=$(oc_post chat/completions "$SESS_KEY" "$CHAT_BODY" 600)
+    CHAT=$(http_post "$GW" chat/completions "$SESS_KEY" "$CHAT_BODY" 600)
     [[ -n "$CHAT" ]] || { echo "chat/completions failed"; tail -n 40 "$ROLLOUT_LOG"; exit 1; }
     echo "chat completion: $(printf '%s' "$CHAT" | cut -c1-160)"
 
     # Marking the reward makes the data proxy report the trajectory ready; the
     # online workflow then picks it up and exports it (no v1-style refresh).
-    REWARD=$(oc_post rl/set_reward "$SESS_KEY" '{"interaction_id":null,"reward":1.0}' 60)
+    REWARD=$(http_post "$GW" rl/set_reward "$SESS_KEY" '{"interaction_id":null,"reward":1.0}' 60)
     [[ -n "$REWARD" ]] || { echo "set_reward failed"; tail -n 40 "$ROLLOUT_LOG"; exit 1; }
     echo "reward applied: $REWARD"
 
     # online_rollout.py should now print "Rollout complete" and exit 0.
-    TRAIN_WAIT_S=600
-    waited=0
-    while kill -0 "$ROLLOUT_PID" 2>/dev/null; do
-      if grep -q 'Rollout complete' "$ROLLOUT_LOG" 2>/dev/null; then
-        sleep 3
-        break
-      fi
-      if (( waited >= TRAIN_WAIT_S )); then
-        echo "online_rollout still running after ${TRAIN_WAIT_S}s; killing and dumping"
-        kill "$ROLLOUT_PID" 2>/dev/null || true
-        sleep 5
-        kill -9 "$ROLLOUT_PID" 2>/dev/null || true
-        break
-      fi
-      sleep 5
-      waited=$((waited + 5))
-    done
+    wait_bounded "$ROLLOUT_PID" 600 "$ROLLOUT_LOG" 'Rollout complete'
     if grep -q 'Rollout complete' "$ROLLOUT_LOG" 2>/dev/null; then
       echo "online_rollout completed"
       grep 'Rollout complete' "$ROLLOUT_LOG" | tail -1
@@ -629,9 +580,6 @@ PY
     # never collide. Multiple --served-model-name aliases absorb whatever
     # model string the tau2 client sends (econfig.user_llm uses litellm
     # "openai/..." naming) - vLLM matches the model field strictly.
-    USER_SIM_PORT=18888
-    USER_SIM_LOG="$PWD/tau2_user_sim.log"
-
     tau2_cleanup() {
       if [[ -n "${USER_SIM_PID:-}" ]] && kill -0 "$USER_SIM_PID" 2>/dev/null; then
         kill "$USER_SIM_PID" 2>/dev/null || true
@@ -639,37 +587,9 @@ PY
     }
     trap tau2_cleanup EXIT
 
-    # 1) User-simulator vLLM on physical device 1 (the child env override
-    #    replaces the job-wide ASCEND_RT_VISIBLE_DEVICES=0).
-    ASCEND_RT_VISIBLE_DEVICES=1 "$PYTHON" -m vllm.entrypoints.openai.api_server \
-      --model "$AREAL_MODEL_PATH" \
-      --served-model-name default openai/self-hosted-Qwen2.5-72B self-hosted-Qwen2.5-72B \
-      --port "$USER_SIM_PORT" \
-      --max-model-len 4096 \
-      --gpu-memory-utilization 0.85 \
-      >"$USER_SIM_LOG" 2>&1 &
-    USER_SIM_PID=$!
-    echo "user-sim vLLM started (pid=$USER_SIM_PID, port=$USER_SIM_PORT, log=$USER_SIM_LOG)"
-
-    user_sim_healthy() {
-      "$PYTHON" -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${USER_SIM_PORT}/health', timeout=5)" >/dev/null 2>&1
-    }
-    for i in $(seq 1 120); do
-      user_sim_healthy && break
-      if ! kill -0 "$USER_SIM_PID" 2>/dev/null; then
-        echo "user-sim vLLM exited early; tail of $USER_SIM_LOG:"
-        tail -n 120 "$USER_SIM_LOG"
-        exit 1
-      fi
-      echo "[user-sim wait $((i * 5))s] $(tail -n 1 "$USER_SIM_LOG" 2>/dev/null | cut -c1-200)"
-      sleep 5
-    done
-    user_sim_healthy || {
-      echo "user-sim vLLM not healthy after 10min; tail of $USER_SIM_LOG:"
-      tail -n 120 "$USER_SIM_LOG"
-      exit 1
-    }
-    echo "user-sim vLLM healthy"
+    # 1) User-simulator vLLM on physical device 1 via the shared helper
+    #    (sets USER_SIM_PID/USER_SIM_LOG; the EXIT trap above kills it).
+    start_user_sim "$PWD/tau2_user_sim.log" || exit 1
 
     # 2) Trainer in the foreground; its exit code is authoritative (the
     #    user-sim server is torn down by the EXIT trap).
@@ -727,24 +647,7 @@ PY
       >"$AS_ROLLOUT_LOG" 2>&1 &
     AS_ROLLOUT_PID=$!
 
-    AS_INF_GW=""
-    for i in $(seq 1 120); do
-      AS_INF_GW=$(grep 'Proxy gateway available at' "$AS_ROLLOUT_LOG" 2>/dev/null | tail -1 \
-        | grep -oE 'https?://[A-Za-z0-9._:-]+' | tail -1 || true)
-      [[ -n "$AS_INF_GW" ]] && break
-      if ! kill -0 "$AS_ROLLOUT_PID" 2>/dev/null; then
-        echo "sidecar online_rollout exited early; tail of $AS_ROLLOUT_LOG:"
-        tail -n 120 "$AS_ROLLOUT_LOG"
-        exit 1
-      fi
-      echo "[sidecar wait $((i * 10))s] $(tail -n 1 "$AS_ROLLOUT_LOG" 2>/dev/null | cut -c1-200)"
-      sleep 10
-    done
-    if [[ -z "$AS_INF_GW" ]]; then
-      echo "sidecar gateway did not come up; tail of $AS_ROLLOUT_LOG:"
-      tail -n 120 "$AS_ROLLOUT_LOG"
-      exit 1
-    fi
+    AS_INF_GW=$(wait_gateway "$AS_ROLLOUT_LOG" "$AS_ROLLOUT_PID" sidecar) || exit 1
     echo "sidecar inference gateway: $AS_INF_GW"
 
     # 2) The Agent Service, stdin held open by a FIFO writer on fd 3 (a plain
@@ -772,17 +675,14 @@ PY
       kill -0 "$AS_SVC_PID" 2>/dev/null || break
       sleep 5
     done
-    as_svc_healthy() {
-      "$PYTHON" -c "import urllib.request; urllib.request.urlopen('${AS_AGENT_GW}/health', timeout=5)" >/dev/null 2>&1
-    }
     if [[ -n "$AS_AGENT_GW" ]]; then
       for i in $(seq 1 24); do
-        as_svc_healthy && break
+        http_healthy "${AS_AGENT_GW}/health" && break
         kill -0 "$AS_SVC_PID" 2>/dev/null || break
         sleep 5
       done
     fi
-    if [[ -z "$AS_AGENT_GW" ]] || ! as_svc_healthy; then
+    if [[ -z "$AS_AGENT_GW" ]] || ! http_healthy "${AS_AGENT_GW}/health"; then
       echo "agent service gateway not healthy; tail of $AS_SVC_LOG:"
       tail -n 120 "$AS_SVC_LOG"
       exit 1
@@ -792,36 +692,8 @@ PY
     # 4) ONE conversation through the service (the README's documented
     #    request shape). The worker spawns the Claude Code CLI, whose API
     #    calls land on the sidecar's /v1/messages -> local vLLM.
-    AS_RESP=""
-    AS_RESP=$("$PYTHON" - "$AS_AGENT_GW" "$AS_ADMIN_KEY" <<'PY'
-import json
-import sys
-import urllib.error
-import urllib.request
-
-gw, key = sys.argv[1:3]
-payload = {
-    "input": [{"type": "message", "content": "Say hello in one sentence."}],
-    "model": "claude-agent",
-    "user": "ci-agent-service",
-}
-req = urllib.request.Request(
-    f"{gw.rstrip('/')}/v1/responses",
-    data=json.dumps(payload).encode(),
-    headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
-    method="POST",
-)
-try:
-    with urllib.request.urlopen(req, timeout=600) as resp:
-        print(resp.read().decode())
-except urllib.error.HTTPError as e:
-    print(f"HTTP {e.code}: {e.read().decode()[:500]}", file=sys.stderr)
-    sys.exit(1)
-except OSError as e:
-    print(f"{type(e).__name__}: {e}", file=sys.stderr)
-    sys.exit(1)
-PY
-    ) || AS_RESP=""
+    AS_RESP=$(http_post "$AS_AGENT_GW" v1/responses "$AS_ADMIN_KEY" \
+      '{"input":[{"type":"message","content":"Say hello in one sentence."}],"model":"claude-agent","user":"ci-agent-service"}' 600)
     if [[ -z "$AS_RESP" ]] || ! printf '%s' "$AS_RESP" | grep -q 'completed'; then
       run_rc=1
       echo "agent turn failed; response head + service tail:"
@@ -834,12 +706,8 @@ PY
     # 5) Close the FIFO writer -> the interactive loop sees EOF -> cleanup +
     #    exit 0. The service's exit code is the pass criterion.
     exec 3>&-
-    as_exited=0
-    for i in $(seq 1 24); do
-      kill -0 "$AS_SVC_PID" 2>/dev/null || { as_exited=1; break; }
-      sleep 5
-    done
-    if (( as_exited == 1 )); then
+    wait_bounded "$AS_SVC_PID" 120 "$AS_SVC_LOG"
+    if (( WAIT_TIMED_OUT == 0 )); then
       as_rc=0
       wait "$AS_SVC_PID" || as_rc=$?
       if (( as_rc == 0 )) && (( run_rc == 0 )); then
@@ -863,48 +731,18 @@ PY
     # "Rollout complete (N batches)" and exits 0. Same card layout as the
     # training entry: rollout vLLM pinned to card 0 via npu_devices, the
     # user-simulator vLLM on card 1 (child env override).
-    TR_USER_SIM_PORT=18888
-    TR_USER_SIM_LOG="$PWD/tau2_rollout_usersim.log"
     TR_LOG="$PWD/tau2_rollout.log"
 
     tau2_rollout_cleanup() {
-      if [[ -n "${TR_USER_SIM_PID:-}" ]] && kill -0 "$TR_USER_SIM_PID" 2>/dev/null; then
-        kill "$TR_USER_SIM_PID" 2>/dev/null || true
+      if [[ -n "${USER_SIM_PID:-}" ]] && kill -0 "$USER_SIM_PID" 2>/dev/null; then
+        kill "$USER_SIM_PID" 2>/dev/null || true
       fi
     }
     trap tau2_rollout_cleanup EXIT
 
     # 1) User-simulator vLLM on physical device 1 (identical launch to the
-    #    tau2 training entry).
-    ASCEND_RT_VISIBLE_DEVICES=1 "$PYTHON" -m vllm.entrypoints.openai.api_server \
-      --model "$AREAL_MODEL_PATH" \
-      --served-model-name default openai/self-hosted-Qwen2.5-72B self-hosted-Qwen2.5-72B \
-      --port "$TR_USER_SIM_PORT" \
-      --max-model-len 4096 \
-      --gpu-memory-utilization 0.85 \
-      >"$TR_USER_SIM_LOG" 2>&1 &
-    TR_USER_SIM_PID=$!
-    echo "user-sim vLLM started (pid=$TR_USER_SIM_PID, port=$TR_USER_SIM_PORT, log=$TR_USER_SIM_LOG)"
-
-    tr_us_healthy() {
-      "$PYTHON" -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${TR_USER_SIM_PORT}/health', timeout=5)" >/dev/null 2>&1
-    }
-    for i in $(seq 1 120); do
-      tr_us_healthy && break
-      if ! kill -0 "$TR_USER_SIM_PID" 2>/dev/null; then
-        echo "user-sim vLLM exited early; tail of $TR_USER_SIM_LOG:"
-        tail -n 120 "$TR_USER_SIM_LOG"
-        exit 1
-      fi
-      echo "[user-sim wait $((i * 5))s] $(tail -n 1 "$TR_USER_SIM_LOG" 2>/dev/null | cut -c1-200)"
-      sleep 5
-    done
-    tr_us_healthy || {
-      echo "user-sim vLLM not healthy after 10min; tail of $TR_USER_SIM_LOG:"
-      tail -n 120 "$TR_USER_SIM_LOG"
-      exit 1
-    }
-    echo "user-sim vLLM healthy"
+    #    tau2 training entry; start_user_sim sets USER_SIM_PID/USER_SIM_LOG).
+    start_user_sim "$PWD/tau2_rollout_usersim.log" || exit 1
 
     # 2) tau2_rollout in the FOREGROUND: it self-drives the batch loop
     #    (agent sessions through the gateway it hosts, user turns against

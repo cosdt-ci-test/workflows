@@ -24,46 +24,46 @@ scan:
 #   processor warmup + tokenizer 深拷贝）在慢机上会超，RL 条目统一
 #   +rollout.setup_timeout=1800 兜底。
 supported:
-  # tau2-bench 客服多轮 RL（保留真实 UserSimulator，solo_mode=false）：用户侧由
-  # run_example 在另一张卡拉本地 vLLM（同一份 Qwen3-1.7B 权重、多 served-model-name
-  # 别名吸收 econfig.user_llm 的 litellm 命名），econfig.user_llm_base_url 指过去；
-  # agent 侧照常走 AReaL proxy。max_steps/new_tokens/n_samples/batch_size 压到
-  # 冒烟量级（单集远低于入口硬编码的 600s episode 超时）。
-  - path: examples/tau2/train.py
-    profile: areal-tau2-grpo
-    runner: linux-aarch64-a2-2
-    npu_devices: '0'
-    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
-    overlay_args:
-      - --config examples/tau2/config_1.7b_airline.yaml
-      - cluster.n_gpus_per_node=1
-      - rollout.backend=vllm:d1p1t1
-      - actor.backend=fsdp:d1p1t1
-      - +actor.fsdp.offload_params=true
-      - +actor.weight_update_mode=disk
-      - actor.enable_tree_training=false
-      # mb 容量必须 ≥ 单条最长轨迹（tau2 airline 轨迹 ~4978 token，1024 时
-      # ffd_allocate 直接 RuntimeError）；24576+pad_to_maximum=true 实测 OOM
-      # （4978 垫到 24576 的 5 倍 padding）——8192 + 不垫的组合。
-      - actor.pad_to_maximum=false
-      - actor.mb_spec.max_tokens_per_mb=8192
-      - ref.mb_spec.max_tokens_per_mb=8192
-      - actor.path=${AREAL_MODEL_PATH}
-      - econfig.max_steps=2
-      - econfig.user_llm_base_url=http://127.0.0.1:18888/v1/
-      - econfig.user_llm_args.max_completion_tokens=64
-      - gconfig.n_samples=1
-      - gconfig.max_new_tokens=64
-      - gconfig.max_tokens=8192
-      - train_dataset.batch_size=1
-      - valid_dataset.batch_size=1
-      - stats_logger.wandb.mode=disabled
-      - vllm.gpu_memory_utilization=0.3
-      - vllm.max_model_len=8192
-      - +rollout.setup_timeout=1800
-      - total_train_steps=1
-      - total_train_epochs=1
-    timeout_minutes: 90
+  # # tau2-bench 客服多轮 RL（保留真实 UserSimulator，solo_mode=false）：用户侧由
+  # # run_example 在另一张卡拉本地 vLLM（同一份 Qwen3-1.7B 权重、多 served-model-name
+  # # 别名吸收 econfig.user_llm 的 litellm 命名），econfig.user_llm_base_url 指过去；
+  # # agent 侧照常走 AReaL proxy。max_steps/new_tokens/n_samples/batch_size 压到
+  # # 冒烟量级（单集远低于入口硬编码的 600s episode 超时）。
+  # - path: examples/tau2/train.py
+  #   profile: areal-tau2-grpo
+  #   runner: linux-aarch64-a2-2
+  #   npu_devices: '0'
+  #   image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
+  #   overlay_args:
+  #     - --config examples/tau2/config_1.7b_airline.yaml
+  #     - cluster.n_gpus_per_node=1
+  #     - rollout.backend=vllm:d1p1t1
+  #     - actor.backend=fsdp:d1p1t1
+  #     - +actor.fsdp.offload_params=true
+  #     - +actor.weight_update_mode=disk
+  #     - actor.enable_tree_training=false
+  #     # mb 容量必须 ≥ 单条最长轨迹（tau2 airline 轨迹 ~4978 token，1024 时
+  #     # ffd_allocate 直接 RuntimeError）；24576+pad_to_maximum=true 实测 OOM
+  #     # （4978 垫到 24576 的 5 倍 padding）——8192 + 不垫的组合。
+  #     - actor.pad_to_maximum=false
+  #     - actor.mb_spec.max_tokens_per_mb=8192
+  #     - ref.mb_spec.max_tokens_per_mb=8192
+  #     - actor.path=${AREAL_MODEL_PATH}
+  #     - econfig.max_steps=2
+  #     - econfig.user_llm_base_url=http://127.0.0.1:18888/v1/
+  #     - econfig.user_llm_args.max_completion_tokens=64
+  #     - gconfig.n_samples=1
+  #     - gconfig.max_new_tokens=64
+  #     - gconfig.max_tokens=8192
+  #     - train_dataset.batch_size=1
+  #     - valid_dataset.batch_size=1
+  #     - stats_logger.wandb.mode=disabled
+  #     - vllm.gpu_memory_utilization=0.3
+  #     - vllm.max_model_len=8192
+  #     - +rollout.setup_timeout=1800
+  #     - total_train_steps=1
+  #     - total_train_epochs=1
+  #   timeout_minutes: 90
   # # Qwen2.5-VL-3B Geometry3K GRPO（双卡）
   # - path: examples/vlm/geometry3k_grpo.py
   #   profile: areal-vlm-grpo
@@ -464,22 +464,22 @@ supported:
   #     - --inference-backend vllm
   #     - --actor-path ${AREAL_MODEL_PATH}
   #   timeout_minutes: 90
-  # Agent Service（Claude Agent SDK 微服务）：Agent Service 本身不带模型——
-  # ClaudeAgent 经 claude-agent-sdk 拉起 Claude Code CLI，其 API 流量由
-  # ANTHROPIC_BASE_URL 指向 sidecar online_rollout 栈的 /v1/messages（v2 网关
-  # Anthropic 路由 + data proxy 的 Anthropic→OpenAI 翻译，本地 vLLM 当后端，
-  # 全程无需真实 Anthropic key）。run_example 的 agent-service 分支：fifo 挂住
-  # 交互 stdin → 驱动一次 /v1/responses → 关 fifo（EOF）→ 干净退出 0。
-  # argparse 严格解析，overlay 只能传它的 flag（--admin-api-key）。
-  - path: examples/agent_service/run_agent_service.py
-    profile: areal-agent-service
-    runner: linux-aarch64-a2-1
-    npu_devices: '0'
-    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
-    overlay_args:
-      - --admin-api-key
-      - areal-agent-admin
-    timeout_minutes: 90
+  # # Agent Service（Claude Agent SDK 微服务）：Agent Service 本身不带模型——
+  # # ClaudeAgent 经 claude-agent-sdk 拉起 Claude Code CLI，其 API 流量由
+  # # ANTHROPIC_BASE_URL 指向 sidecar online_rollout 栈的 /v1/messages（v2 网关
+  # # Anthropic 路由 + data proxy 的 Anthropic→OpenAI 翻译，本地 vLLM 当后端，
+  # # 全程无需真实 Anthropic key）。run_example 的 agent-service 分支：fifo 挂住
+  # # 交互 stdin → 驱动一次 /v1/responses → 关 fifo（EOF）→ 干净退出 0。
+  # # argparse 严格解析，overlay 只能传它的 flag（--admin-api-key）。
+  # - path: examples/agent_service/run_agent_service.py
+  #   profile: areal-agent-service
+  #   runner: linux-aarch64-a2-1
+  #   npu_devices: '0'
+  #   image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
+  #   overlay_args:
+  #     - --admin-api-key
+  #     - areal-agent-admin
+  #   timeout_minutes: 90
   # tau2 rollout-only：与 tau2/train.py 同一个 Tau2AgentWorkflow（真用户模拟器，
   # airline 域），但直接驱动 v2 推理服务（RolloutControllerV2 批量 rollout，无
   # PPO 栈），且自带终点（跑完 dataloater 打印 Rollout complete 退出 0）。
@@ -495,8 +495,8 @@ supported:
       - cluster.n_gpus_per_node=1
       - model_path=${AREAL_MODEL_PATH}
       - rollout.backend=vllm:d1p1t1
-      - vllm.gpu_memory_utilization=0.85
-      - vllm.max_model_len=16384
+      - +vllm.gpu_memory_utilization=0.85
+      - +vllm.max_model_len=16384
       - econfig.domain=airline
       - econfig.max_steps=2
       - econfig.user_llm_base_url=http://127.0.0.1:18888/v1/
@@ -505,7 +505,7 @@ supported:
       - gconfig.max_new_tokens=64
       - gconfig.max_tokens=8192
       - train_dataset.batch_size=16
-      - +rollout.setup_timeout=1800
+      - ++rollout.setup_timeout=1800
     timeout_minutes: 90
 unsupported:
   # ===== 上游源码 bug（改上游源码才能通，无 overlay 可绕）=======================

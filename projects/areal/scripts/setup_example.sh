@@ -265,7 +265,8 @@ if [[ "$AGENT_SERVICE_PREP" == 1 ]]; then
     AS_NODE_VERSION=v22.14.0
     AS_NODE_DIR="/usr/local/node-${AS_NODE_VERSION}"
     curl -fsSL --connect-timeout 30 --max-time 600 \
-      https://registry.npmmirror.com/-/binary/node/${AS_NODE_VERSION}/node-${AS_NODE_VERSION}-linux-arm64.tar.gz 
+      "https://registry.npmmirror.com/-/binary/node/${AS_NODE_VERSION}/node-${AS_NODE_VERSION}-linux-arm64.tar.gz" \
+      -o /tmp/as-node.tar.gz \
       || { echo "node download from npmmirror failed" >&2; exit 2; }
     mkdir -p "$AS_NODE_DIR"
     tar -xzf /tmp/as-node.tar.gz -C "$AS_NODE_DIR" --strip-components=1

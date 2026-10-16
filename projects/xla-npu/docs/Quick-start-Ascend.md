@@ -168,8 +168,6 @@ PY
 
 其中 `backend=npu` 是 JAX 探测到 xla-npu PJRT 插件后给出的标识；`devices` 数量等于机器可用 NPU 卡数。如果这一步 `default_backend()` 不是 `npu`，多半是 `PJRT_NAMES_AND_LIBRARY_PATHS` 没指对插件路径——回到「验证编译产物」一节检查 `.so` 是否存在。
 
-> XLA-NPU 运行时会向 stdout 刷大量 `[XLA_NPU.INFO]` 初始化/融合编译日志；而且 `NpuPlatform::Initialize` 注册了 `std::atexit(AclCleanup)`，进程退出时还会补一行 `ACL finalize success in atexit`（见 `xla_npu/stream_executor/npu_platform.cc`）。所以预期输出前后各用一个 `...`（非贪婪通配）把前导日志与尾部 atexit 行都吞掉，只锚定 `backend=npu devices=xxx shape=[2, 4]` 这行。
-
 ## 运行算子测试样例
 
 运行官方 `examples/ops` 样例：JAX 先在同一份输入上分别跑 CPU 与 NPU，再对比两者结果（最大绝对误差 / 最大相对误差 / 逐算子通过状态），全部算子一致时打印 `TEST PASSED`：

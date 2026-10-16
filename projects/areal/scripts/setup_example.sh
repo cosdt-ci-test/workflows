@@ -181,8 +181,14 @@ fi
 # fork's GitHub Releases aarch64-linux tarball.
 # -------------------------------------------------------
 if [[ "$HITL_PREP" == 1 ]]; then
+  # AReaL's own Dockerfile installs the OFFICIAL zeroclaw-labs build
+  # (releases/latest) with --skip-quickstart; the dhh1995/zeroclaw link in
+  # the example README is stale (404 - the fork became the zeroclaw-labs
+  # org). Match the Dockerfile: same official build via zeroclaw.com
+  # (reachable from the CN runners, unlike raw.githubusercontent.com),
+  # quickstart skipped - the demo patches the config itself.
   curl -fsSL --connect-timeout 30 --max-time 600 \
-    https://zeroclaw.com/install.sh | bash
+    https://zeroclaw.com/install.sh | bash -s -- --skip-quickstart
   # Installers typically drop the binary outside the non-interactive PATH
   # (~/.local/bin and friends); the demo spawns `zeroclaw` via PATH lookup,
   # so locate it and export for this step AND the run step (GITHUB_ENV).

@@ -106,6 +106,7 @@ ComfyUI 的 `requirements.txt` 里 `torchvision` / `torchaudio` 未 pin 版本�
 cd ComfyUI
 python -m pip install "torchvision==0.24.0" "torchaudio==2.9.0"
 python -m pip install -r requirements.txt
+python -m pip install --upgrade torchsde
 python -m pip install modelscope
 ```
 

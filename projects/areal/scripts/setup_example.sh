@@ -181,31 +181,38 @@ fi
 # fork's GitHub Releases aarch64-linux tarball.
 # -------------------------------------------------------
 if [[ "$HITL_PREP" == 1 ]]; then
-  # AReaL's own Dockerfile installs the OFFICIAL zeroclaw-labs build
-  # (releases/latest) with --skip-quickstart; the dhh1995/zeroclaw link in
-  # the example README is stale (404 - the fork became the zeroclaw-labs
-  # org). Match the Dockerfile: same official build via zeroclaw.com
-  # (reachable from the CN runners, unlike raw.githubusercontent.com),
-  # quickstart skipped - the demo patches the config itself.
-  curl -fsSL --connect-timeout 30 --max-time 600 \
-    https://zeroclaw.com/install.sh | bash -s -- --skip-quickstart
-  # Installers typically drop the binary outside the non-interactive PATH
-  # (~/.local/bin and friends); the demo spawns `zeroclaw` via PATH lookup,
-  # so locate it and export for this step AND the run step (GITHUB_ENV).
-  if ! command -v zeroclaw >/dev/null 2>&1; then
-    ZC_BIN="$(find "$HOME" -maxdepth 4 \( -type f -o -type l \) -name zeroclaw 2>/dev/null | head -n 1 || true)"
-    [[ -n "$ZC_BIN" ]] || { echo "zeroclaw binary not found after install" >&2; exit 2; }
-    export PATH="$(dirname "$ZC_BIN"):$PATH"
-    echo "PATH=$PATH" >> "$GITHUB_ENV"
-    echo "zeroclaw located at $ZC_BIN (added to PATH)"
-  fi
-  zeroclaw --version >/dev/null 2>&1 || zeroclaw --help >/dev/null 2>&1 \
-    || { echo "zeroclaw failed to run" >&2; exit 2; }
+  # PINNED to v0.6.0: the last release line whose CLI matches the demo's
+  # hardcoded invocation `zeroclaw agent -m ... --session-state-file ...`.
+  # v0.6.0's agent subcommand has NO --agent flag and its Providers list
+  # documents `custom:<URL>` - the inline OpenAI-compatible provider the
+  # demo's config patcher writes. v0.7+ introduced the agent-alias system
+  # and made --agent REQUIRED ("Required - there is no default agent"),
+  # so the current official build (zeroclaw.com / releases/latest, v0.8.x)
+  # rejects the demo's invocation with a usage error (observed rc=2).
+  # zeroclaw.com's installer has no version flag, so fetch the pinned
+  # release tarball directly - github release downloads are reachable from
+  # the CN runners (zeroclaw.com's own installer fetches from there).
+  # /usr/local/bin is on the default PATH, so no PATH plumbing is needed.
+  ZC_VERSION=v0.6.0
+  ZC_ASSET="zeroclaw-aarch64-unknown-linux-gnu.tar.gz"
+  ZC_URL="https://github.com/zeroclaw-labs/zeroclaw/releases/download/${ZC_VERSION}/${ZC_ASSET}"
+  ZC_TMP="$(mktemp -d)"
+  curl -fsSL --connect-timeout 30 --max-time 600 "$ZC_URL" -o "$ZC_TMP/$ZC_ASSET" \
+    || { echo "failed to download $ZC_URL (aarch64 asset missing in $ZC_VERSION?)" >&2; exit 2; }
+  tar -xzf "$ZC_TMP/$ZC_ASSET" -C "$ZC_TMP"
+  [[ -x "$ZC_TMP/zeroclaw" ]] || { echo "$ZC_ASSET did not contain a zeroclaw binary" >&2; exit 2; }
+  install -m 0755 "$ZC_TMP/zeroclaw" /usr/local/bin/zeroclaw
+  rm -rf "$ZC_TMP"
+  zeroclaw --version || { echo "zeroclaw failed to run" >&2; exit 2; }
+  # Same flat keys the demo's patcher regexes target (plus workspace_dir,
+  # mirroring what v0.6.0's own installer writes); the demo rewrites
+  # default_provider/api_key to the live gateway on start.
   mkdir -p "$HOME/.zeroclaw"
   cat > "$HOME/.zeroclaw/config.toml" <<'TOML'
 default_provider = "custom:http://localhost:1"
 default_model = "default"
 api_key = "placeholder"
+workspace_dir = "/tmp/zeroclaw-workspace"
 TOML
   echo "planted minimal ~/.zeroclaw/config.toml skeleton"
 fi

@@ -7,6 +7,8 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
+import sys
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -53,9 +55,32 @@ def write_subset_info(source: Path, destination: Path) -> None:
     destination.write_text(json.dumps(selected, indent=2), encoding="utf-8")
 
 
+def seed_samples(cache: Path) -> bool:
+    """Restore a checked-in video bundle, without changing the shared cache layout."""
+    root = Path(__file__).resolve().parents[3]
+    manifest = root / "cache-seed/vbench/manifest.yaml"
+    if not manifest.is_file():
+        return False
+
+    import yaml
+
+    entries = (yaml.safe_load(manifest.read_text(encoding="utf-8")) or {}).get("files", [])
+    expected = {f"lavie/human_action/{PROMPT}-{i}.mp4" for i in range(5)}
+    if len(entries) != 5 or {entry.get("path") for entry in entries} != expected:
+        raise ValueError("VBench cache seed must contain exactly the five original LaVie videos")
+    subprocess.run(
+        [sys.executable, str(root / "scripts/cache_seed.py"),
+         "--projects", "vbench", "--root", str(cache)],
+        check=True,
+    )
+    print(f"LaVie cache seed: 5 videos SHA256 verified in {cache}", flush=True)
+    return True
+
+
 def prepare_samples(cache: Path, destination: Path) -> list[Path]:
     import cv2
 
+    seed_samples(cache)
     cached = cache / "lavie/human_action"
     paths = [cached / f"{PROMPT}-{i}.mp4" for i in range(5)]
     if not all(path.is_file() for path in paths):

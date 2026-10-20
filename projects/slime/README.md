@@ -86,7 +86,7 @@ teacher。训练参数留在 manifest。环境仍是现有华为 CANN 镜像 + s
 
 ReTool 的上游 `.sh` 包含 CUDA 检测、Ray 清理、四卡 colocate/TP2 配置与固定模型、
 数据和 W&B。#16 在四卡共享布局下出现推理 health-check 超时和训练 actor 初始化断言；
-项目 runner 改用八卡中训练/推理各四卡隔离，仍保留 TP2 和自定义生成/奖励函数。setup 补齐
+项目 runner 改用八卡中训练/推理各四卡隔离，训练 TP4、推理 TP2，保留自定义生成/奖励函数。setup 补齐
 `jinja2`、`psutil`，从 ModelScope 下载模型并用 fork 工具转为 `_torch_dist`。
 `tool_sandbox.py` 会在容器内执行模型生成的 Python 代码，因此仅使用本地 fixture
 与最小权限 workflow；这条尚无 fork NPU 端到端先例，需以远程训练日志验收。
@@ -101,7 +101,7 @@ actor 在创建时抛出无源码位置的 `AssertionError`。日志显示 fork 
 
 | example | runner | 保留语义与 CI 规模 |
 |---|---|---|
-| `retool/retool_qwen3_4b_sft.sh` | a2-2 | 官方训练专用 SFT 模式、原生 assistant token mask；Qwen3-4B-Instruct-2507，8 行 messages fixture、TP2、两次 rollout |
+| `retool/retool_qwen3_4b_sft.sh` | a2-4 | 官方训练专用 SFT 模式、原生 assistant token mask；Qwen3-4B-Instruct-2507，8 行 messages fixture、TP4、全层重计算、两次 rollout |
 | `on_policy_distillation/run-qwen3-8B-opd-megatron.sh` | a2-8 | 真实 Megatron 教师 checkpoint 自蒸馏；Qwen2.5-0.5B、训练 4 + rollout 4、TP2、两个短 rollout |
 | `train_infer_mismatch_helper/run-qwen3-4b-mis.sh` | a2-8 | 保留原生 MIS/TIS 函数及 TP2/CP2；Qwen3-4B-Instruct-2507、训练/推理各 4 卡、两个短 rollout |
 
@@ -162,14 +162,74 @@ teacher 请求成功，不能只看退出码。
 - artifact：`slime-examples-<run_id>-<job_index>`（公共引擎统一命名）。
 - schedule：bring-up 期注释关闭；手动轮次全绿后由维护者决定启用（启用后由上游
   release tag 变化或上次 scheduled failure 触发）。
-- `max_parallel: 1`（bring-up 阶段保持；避免 4 卡和 8 卡任务并发争用资源）。
+- `max_parallel: 4`；实际并发仍受对应 4/8 卡 runner 的可用数量限制。
 
 ## 本地验证
 
 ```bash
 python -m pytest tests/test_check_supported_entries.py -q
-python -m unittest discover -s projects/slime/tests -p 'test_*.py'
-python -m pytest projects/roll/tests/test_roll_examples.py -q  # regression: shared-engine contract
 bash -n projects/slime/scripts/setup_example.sh
 bash -n projects/slime/scripts/run_example.sh
 ```
+
+`scripts/` 只保留 `setup_example.sh` 和 `run_example.sh`。数据准备、SFT token mask
+和 agent rollout 的运行时检查已内联进两个入口，没有删除这些验收逻辑。
+原有 examples 静态测试文件已清理；项目没有独立 quick-start 测试文件，
+`docs/Quick-start-Ascend.md` 保留。
+
+Run #20 在训练启动前暴露依赖冲突：Triton-Ascend 使用 NumPy 1.26.4，
+而 PyArrow 26 要求 NumPy 2.x。`constraints-npu.txt` 将 NumPy/PyArrow/Pandas
+分别固定为 1.26.4/20.0.0/2.2.3，并作用于全部 setup 安装；最终检查数据栈导入及表转换。
+Search-R1 的 Pyserini 0.25.0 会在 BM25 导入时创建未使用的 OpenAI 客户端，
+因此仅该 profile 设置非凭据占位 key，并将其 API 地址指向本机禁用端口；
+实际检索仍是本地 Lucene BM25，不使用 OpenAI 服务。修复后的 NPU 路径待下一轮 Actions 验证。
+
+另外五条 ReTool/Qwen3 配方在模型下载前因 `sys.argv[2]` 未传入而失败；
+已修正 downloader 的模型 repo 参数位置，并固定 OpenAI 2.6.1，防止 ModelScope
+安装将 SGLang v0.5.13 所需客户端升级到不兼容版本。
+
+## Run #21 修复
+
+本轮 11 条中 5 条通过，剩余问题已进入各配方的实际路径：
+
+- ReTool RL/SFT：32GB NPU 上 4B 模型训练 OOM。训练改为四卡 TP4，
+  补齐官方 `.sh` 的 full/uniform 重计算，token microbatch 上限缩为 1024。
+  SFT runner 从 a2-2 改为 a2-4；RL 仍是训练四卡、推理四卡，推理 TP2。
+- multi-agent：原生 agent_system 不保存 rollout_log_probs，小批量的 log-prob
+  复用优化使优势计算拿到 None。启用原生 keep-old-actor，触发训练侧真实
+  log-prob 重算；不补造概率值，三阶段智能体验收保留。训练同样采用 TP4 和重计算。
+- Strands：0.3.2 限制 Transformers <5，与 SGLang 固定的 5.8.1 冲突。
+  0.4.x 又将 ToolLimiter 改名，会破坏未修改的 example。选用保留原 API 的
+  0.3.8，单独安装 adapter 并显式安装其其他依赖；仅覆盖它声明的 Transformers
+  <5 边界，保留 SGLang 的 5.8.1，不改任何源码。setup 实测 tokenizer、
+  SGLangModel/ToolLimiter/HermesToolParser、TITO 属性和 Python 工具执行接口；
+  这项跨声明版本兼容仍需远程真实 rollout 验证。
+  训练 TP4 和重计算控制新配方的显存需求。
+- Search-R1：Java 11 在 aarch64 的 C1 编译代码 IPAddressUtil.scan 中崩溃。
+  仅本地八文档 BM25 profile 设置 JAVA_TOOL_OPTIONS=-Xint，关闭 JIT 并限制
+  JVM CPU 数；Java/Lucene 和原生检索服务仍保留。这是针对崩溃帧的 CI 缓解，待远程复验。
+- Geo3K：训练完成，但模型绕过工具直接回答，被多轮验收拒绝。fixture 现在
+  提供原生 tools schema，manifest 用 --tool-key tools 将评分工具声明交给
+  chat template，提示要求先调用工具、收到反馈后再回答。仍要求真实图像、
+  calc_score 反馈和 1→0→1 mask；不能仅凭训练退出码通过。
+
+supported 仍为 11 条，公共引擎和上游 example 源码不改；本地验证不代替
+下一轮真实 NPU 运行，尤其需要确认 OOM 消失及 Geo3K 工具调用实际发生。
+
+## Run #22 修复
+
+[本轮运行](https://github.com/cosdt-ci-test/workflows/actions/runs/38131751791)
+11 条中 9 条通过，两条失败均发生在实际运行阶段：
+
+- Search-R1：Java/BM25 初始化已通过，奖励函数 `qa_em_format.compute_score_em`
+  读取 `ground_truth["target"]` 时发现 fixture 提供的是列表。本仓八行数据改为
+  `reward_model.ground_truth.target` 对象格式；setup 用上游评分函数逐行检查
+  正确/错误答案，不修改评分源码，真实 `/retrieve` 调用验收保留。
+- Geo3K：日志已证明模型读取图片、调用 `calc_score`、收到反馈并继续作答；
+  训练在 `calculate_log_probs_and_entropy` 的 `logits.clone()` 处 OOM，
+  需要 594 MiB、当时仅余 344 MiB。保留四卡 TP2 布局和原生多轮语义，
+  启用原生 full/uniform 每层重计算、loss 重计算、64-token log-prob/entropy
+  分块，并将训练 token microbatch 上限从 2048 降到 1024。图像、工具反馈、
+  有限梯度与两次 rollout 检查均保留，OOM 缓解效果待真实 NPU 复验。
+
+其余九条已通过配方保持不变；supported 仍为 11 条。

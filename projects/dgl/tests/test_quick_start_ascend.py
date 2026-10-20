@@ -1,95 +1,74 @@
-"""Quick-start-Ascend documentation test: end-to-end case built on top
-of the ``MarkdownDocTestBase`` contract.
+"""Build the engine-selected DGL-Ascend commit and train LightGCN on one NPU.
 
-Document under test: ``projects/dgl/docs/Quick-start-Ascend.md``
-(follows the ``docs/markdown_doc_test_label.md`` contract: every
-``shell`` code block carries one of the ``#test`` / ``#test-setup`` /
-``#test-result`` labels plus ``id=`` / ``store=`` / ``load='x>>y'`` /
-``fuzzy='xxx'`` parameters).
-
-Run: ``python -m unittest tests.test_quick_start_ascend -v 2>&1``
-
-Environment variables (injected by the quick-start engine workflow
-``quick-start-template.yml``, triggered by ``dgl-quick-start.yml``):
-    ``MONITORED_DOC_URL``         Required; raw URL of the document under test.
-    ``UPSTREAM_REF``              Injected by the engine but NOT consumed
-                                  by the doc body. The upstream fork
-                                  (BUPT-GAMMA/dgl-ascend) publishes no
-                                  releases or tags, so the engine's ref
-                                  fallback chain bottoms out at
-                                  ``/commits/HEAD`` and anchors the fork's
-                                  default-branch HEAD sha as the change
-                                  key. The doc's clone block just clones
-                                  the default branch (master) — exactly
-                                  what a user gets.
-    ``NPU_READY=true``            Required, otherwise the class is skipped.
-                                  End-to-end tests only run on the NPU runner:
-                                  local dev machines / normal ubuntu runners
-                                  have no ``/dev/davinci*`` device, and the
-                                  hard run would fail on ``import torch_npu``.
-
-The doc body is cwd-relative ("wherever you run it is the project
-root"): clone to ``./dgl-ascend``, build there, examples run from the
-clone's ``examples/pytorch/lightgcn``. CI pins the execution cwd in
-``prepare_environment`` via ``os.chdir('/root/dgl-test')``.
+MONITORED_DOC_URL selects the document through the GitHub Contents API.
+UPSTREAM_REF is the full default-branch SHA resolved for this tagless fork.
+NPU_READY=true enables the end-to-end test. User paths are relative to cwd;
+the fixture supplies CANN, CUDA exclusions, a temporary cwd, and card 0.
 """
 
 from __future__ import annotations
 
+import math
 import os
+import re
+import shutil
 import subprocess
+import sys
+import tempfile
 import unittest
+from pathlib import Path
 
 from workflows.markdown_doc_test_base import MarkdownDocTestBase
 
 
-def _is_truthy(value: str | None) -> bool:
-    """``'true'`` -> True (case-insensitive); anything else (including unset) -> False."""
-    if not value:
-        return False
-    return value.strip().lower() == 'true'
+def _checked_run(argv, *, env, cwd, timeout=120):
+    result = subprocess.run(
+        argv, capture_output=True, text=True, env=env, cwd=cwd, timeout=timeout,
+    )
+    if result.returncode:
+        raise AssertionError(
+            f'command failed (rc={result.returncode}): {argv!r}\n'
+            f'stdout:\n{result.stdout}\nstderr:\n{result.stderr}'
+        )
+    return result.stdout.strip()
 
 
-def _e2e_enabled() -> bool:
-    """Return True when ``NPU_READY=true`` is set, releasing the skip."""
-    return _is_truthy(os.environ.get('NPU_READY'))
+def _pin_source(repo: Path, upstream_ref: str, env: dict) -> str:
+    if not re.fullmatch(r'[0-9a-f]{40}', upstream_ref):
+        raise AssertionError('UPSTREAM_REF must be the full engine-resolved SHA')
+    # The branch may advance between engine resolution and the document clone.
+    exists = subprocess.run(
+        ['git', 'cat-file', '-e', upstream_ref + '^{commit}'],
+        capture_output=True, env=env, cwd=repo, timeout=120,
+    )
+    if exists.returncode:
+        _checked_run(['git', 'fetch', 'origin', upstream_ref], env=env, cwd=repo)
+    _checked_run(['git', 'checkout', '--detach', upstream_ref], env=env, cwd=repo)
+    actual = _checked_run(['git', 'rev-parse', 'HEAD'], env=env, cwd=repo)
+    if actual != upstream_ref:
+        raise AssertionError(f'checkout {actual} differs from engine SHA {upstream_ref}')
+    return actual
+
+
+def _validate_training_output(output: str) -> float:
+    match = re.search(r'Epoch 1/1 finished\.[^\n]*Average BPR Loss:\s*(\S+)', output)
+    if not match:
+        raise AssertionError('LightGCN did not finish its training epoch')
+    try:
+        loss = float(match.group(1))
+    except ValueError as exc:
+        raise AssertionError('LightGCN reported an invalid BPR loss') from exc
+    if not math.isfinite(loss):
+        raise AssertionError(f'LightGCN reported a non-finite BPR loss: {loss}')
+    return loss
 
 
 class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
-    """``Quick-start-Ascend.md`` end-to-end test: fetch doc -> validate
-    contract -> run ``#test-setup`` / ``#test`` in order -> compare against
-    ``#test-result``.
+    DEFAULT_COMMAND_TIMEOUT = 1800
+    BUILD_TIMEOUT = 7200
+    USER_AGENT = 'cosdt-ci-test/dgl-quick-start'
+    _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
 
-    Scope (single card):
-      * The doc installs the pinned torch stack (torch 2.9.0 +
-        torch_npu 2.9.0.post2) — a deliberate attempt to reuse the
-        CI's existing torch line rather than the fork's documented
-        torch 2.8.0 / py3.10. The fork's CMake does NOT pin a torch
-        version: it just ``find_package(Torch REQUIRED)`` and links
-        ``c10_npu`` from torch_npu. ``import dgl`` + ``torch.npu.
-        is_available()`` are asserted in the verify block.
-      * DGL-Ascend itself is installed from source: ``git clone`` the
-        fork + ``git submodule update --init --recursive`` +
-        ``bash script/build_dgl_ascend.sh`` (CMake ``-DUSE_ASCEND=ON
-        -DUSE_CUDA=OFF``, SOC=910B4) + ``pip install -e .``.
-      * Smoke: LightGCN trains one epoch on gowalla (``wget`` train.txt
-        + test.txt from the RecZoo ``Gowalla_m1`` HF dataset via
-        hf-mirror + ``python main.py --dataset gowalla --batch 2048
-        --recdim 64 --epochs 1 --device npu``), asserted via the
-        ``Average BPR Loss`` log line.
-    """
-
-    DEFAULT_COMMAND_TIMEOUT = 7200  # 2h baseline; source build of DGL rides on this
-    USER_AGENT = 'cosdt-ci-test/quick-start'
-    ERROR_MARKERS = (
-        *MarkdownDocTestBase.ERROR_MARKERS,  # generic [ERROR] + Traceback
-    )
-
-    # Process-level CUDA exclusion list. The cluster's PyPI cache
-    # auto-resolves transitive CUDA deps from torch on aarch64; those
-    # CUDA wheels have no aarch64+torch_npu ABI match. Excluding them
-    # with ``<0`` forces ``resolution-impossible`` early so the resolver
-    # picks the pure-CPU / torch_npu wheels instead.
     _CUDA_CONSTRAINTS = (
         'cuda-toolkit<0',
         'cuda-python<0',
@@ -130,124 +109,206 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         'nvidia-nvjitlink-cu12<0',
         'nvidia-nvtx-cu12<0',
     )
-    _CONSTRAINTS_FILE = '/tmp/dgl_npu_constraints.txt'
-
-    # CANN toolkit: source once to get ASCEND_HOME / LD_LIBRARY_PATH etc.
-    _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
-
-    # Doc execution cwd for CI: the doc body is cwd-relative (clone to
-    # ./dgl-ascend, build there, examples run from the clone), so
-    # "wherever the user runs it" is the project root. CI chdirs to
-    # /root/dgl-test to keep the clone + build out of the checkout dir.
-    _PROJECT_ROOT = '/root/dgl-test'
-
-    # ----------------------------------------------------------
-    # prepare_environment: CANN env + CUDA constraints + uv +
-    # torch stack probe + doc execution cwd + card pin
-    # ----------------------------------------------------------
 
     @classmethod
     def prepare_environment(cls) -> None:
-        """Source CANN env + write CUDA exclusion list + install uv +
-        probe torch stack + chdir to the doc cwd + pin card 0.
-
-        ``dgl-ascend`` itself is NOT installed here — the doc's install
-        block exercises the source build (``git clone`` + ``bash
-        script/build_dgl_ascend.sh`` + ``pip install -e .``), so a
-        broken build surfaces as a fuzzy mismatch in the doc's verify
-        block rather than being masked by a pre-built copy.
-
-        The doc body is cwd-relative; ``os.chdir(_PROJECT_ROOT)`` here
-        makes every doc command run under /root/dgl-test (the engine
-        executes each block with ``cwd=Path.cwd()``).
-        """
-        # 0) CANN env: source set_env.sh and merge the env stream into
-        # os.environ
-        if os.path.isfile(cls._CANN_SET_ENV):
-            merged = subprocess.run(
-                ['bash', '-c', f'source {cls._CANN_SET_ENV} >/dev/null 2>&1; env'],
-                capture_output=True, text=True, check=True,
-            )
-            for line in merged.stdout.splitlines():
-                if '=' not in line:
-                    continue
-                key, _, value = line.partition('=')
-                os.environ.setdefault(key, value)
-            print('setup: sourced CANN env from set_env.sh')
-        else:
-            print(
-                f'setup: skipping CANN env source ({cls._CANN_SET_ENV} not present)'
-            )
-
-        # 1) CUDA exclusion list + process-level env
-        with open(cls._CONSTRAINTS_FILE, 'w', encoding='utf-8') as fh:
-            fh.write('\n'.join(cls._CUDA_CONSTRAINTS) + '\n')
-        os.environ['PIP_CONSTRAINT'] = cls._CONSTRAINTS_FILE
-        os.environ['UV_CONSTRAINT'] = cls._CONSTRAINTS_FILE
-
-        # 2) uv: the doc's install block calls ``uv pip install ...``.
-        subprocess.run(
-            ['python', '-m', 'pip', 'install', 'uv'],
-            check=True,
+        cls._original_cwd = Path.cwd()
+        cls._original_env = os.environ.copy()
+        cls._work_dir = None
+        cls.addClassCleanup(cls._cleanup_environment)
+        if not Path(cls._CANN_SET_ENV).is_file():
+            raise RuntimeError(f'CANN environment script missing: {cls._CANN_SET_ENV}')
+        merged = subprocess.run(
+            ['bash', '-c', f'source {cls._CANN_SET_ENV} >/dev/null 2>&1 && env -0'],
+            capture_output=True, check=True, timeout=120,
         )
-
-        # 3) torch stack probe: reuse the image's torch stack if it
-        # imports and sees the NPU; otherwise the doc's
-        # `dgl-install-torch` #test-setup block installs the pinned stack.
-        _PROBE_SCRIPT = (
-            'import torch, torch_npu\n'
-            'raise SystemExit(0 if torch.npu.is_available() else 1)\n'
-        )
-        probe = subprocess.run(
-            ['python', '-c', _PROBE_SCRIPT],
-            capture_output=True,
-            check=False,  # probe's success/failure is the branch signal — don't raise
-        )
-        if probe.returncode == 0:
-            _VERSIONS_SCRIPT = (
-                'import torch, torch_npu; '
-                'print(torch.__version__, torch_npu.__version__)'
-            )
-            versions = subprocess.run(
-                ['python', '-c', _VERSIONS_SCRIPT],
-                capture_output=True, text=True, check=True,
-            )
-            print(f'setup: reusing image torch stack ({versions.stdout.strip()})')
-        else:
-            print('setup: torch stack probe failed, doc install-torch will install the pinned stack')
-
-        # 4) execution cwd: chdir to /root/dgl-test.
-        try:
-            os.makedirs(cls._PROJECT_ROOT, exist_ok=True)
-        except OSError as exc:
-            print(f'setup: doc cwd mkdir failed: {exc}')
-        os.chdir(cls._PROJECT_ROOT)
-        print(f'setup: cwd -> {os.getcwd()}')
-
-        # 4.5) ASCEND_RT_VISIBLE_DEVICES=0: pin card 0 for the single-card smoke.
+        for entry in merged.stdout.split(b'\0'):
+            if b'=' in entry:
+                key, value = entry.split(b'=', 1)
+                os.environ[os.fsdecode(key)] = os.fsdecode(value)
+        cls._work_dir = Path(tempfile.mkdtemp(prefix='dgl-quick-start-'))
+        constraints = cls._work_dir / 'pip-constraints.txt'
+        constraints.write_text('\n'.join(cls._CUDA_CONSTRAINTS) + '\n', encoding='utf-8')
+        os.environ['PIP_CONSTRAINT'] = str(constraints)
         os.environ['ASCEND_RT_VISIBLE_DEVICES'] = '0'
+        os.environ['DGLBACKEND'] = 'pytorch'
+        os.chdir(cls._work_dir)
 
-    # ----------------------------------------------------------
-    # test entry
-    # ----------------------------------------------------------
+    def _run_one(self, cmd, results, env, cwd, timeout, idx):
+        repo = Path(cwd) / 'dgl-ascend'
+        if (repo / '.git').is_dir() and not getattr(self, '_source_sha', None):
+            self._source_sha = _pin_source(repo, env.get('UPSTREAM_REF', ''), env)
+            self.log(f'DGL source matches engine SHA {self._source_sha}')
+        if 'script/build_dgl_ascend.sh' in cmd.cmd:
+            timeout = self.BUILD_TIMEOUT
+        if getattr(cmd, 'id', None) == 'lightgcn-train':
+            self._verify_training_graph(env, cwd)
+        self._active_id = getattr(cmd, 'id', None)
+        try:
+            super()._run_one(cmd, results, env, cwd, timeout, idx)
+        finally:
+            self._active_id = None
+        if getattr(cmd, 'id', None) == 'install-ascend-deps':
+            _checked_run(
+                [sys.executable, '-c',
+                 'import torch, torch_npu; '
+                 "assert torch.npu.is_available(), 'NPU unavailable'; "
+                 "assert torch.npu.device_count() > 0, 'No visible NPU'"],
+                env=env, cwd=cwd,
+            )
+        if getattr(cmd, 'id', None) == 'install-dgl':
+            self._verify_installed_backend(env, cwd)
+
+    def _verify_installed_backend(self, env, cwd):
+        # Validate installation provenance outside the source package directory,
+        # then exercise graph message passing and its backward path on the NPU.
+        code = """
+from hashlib import file_digest
+from pathlib import Path
+import torch
+import torch_npu
+import dgl
+import dgl._ffi._cy3.core
+
+source = (Path.cwd() / 'dgl-ascend/python').resolve()
+assert not Path(dgl.__file__).resolve().is_relative_to(source), 'Source tree shadows installed DGL'
+assert not Path(dgl._ffi._cy3.core.__file__).resolve().is_relative_to(source), 'Source tree shadows installed Cython extension'
+installed_lib = Path(dgl._ffi.base._LIB._name).resolve()
+assert not installed_lib.is_relative_to(source.parent), 'DGL loads the source-tree library'
+with (source.parent / 'build/libdgl.so').open('rb') as built, installed_lib.open('rb') as installed:
+    assert file_digest(built, 'sha256').digest() == file_digest(installed, 'sha256').digest(), \
+        'Installed DGL library differs from this checkout build'
+graph = dgl.graph(([0, 1, 2], [1, 2, 0])).to('npu')
+x = torch.ones(3, 2, device='npu', requires_grad=True)
+graph.ndata['x'] = x
+graph.update_all(dgl.function.copy_u('x', 'm'), dgl.function.sum('m', 'h'))
+assert graph.device.type == 'npu' and graph.ndata['h'].device.type == 'npu'
+graph.ndata['h'].sum().backward()
+assert x.grad is not None and torch.isfinite(x.grad).all().item()
+"""
+        _checked_run([sys.executable, '-c', code], env=env, cwd=cwd)
+        actual = _checked_run(['git', 'rev-parse', 'HEAD'], env=env, cwd=Path(cwd) / 'dgl-ascend')
+        if actual != self._source_sha:
+            raise AssertionError('DGL source changed during build or installation')
+        self.log('Installed DGL graph operations and backward pass run on NPU')
+
+    def _verify_training_graph(self, env, cwd):
+        # Check the complete training graph against an independent CPU edge count.
+        # Launch blocking orders torch_npu writes before DGL's native kernels;
+        # retain GraphConv's zero-degree guard rather than suppressing it.
+        code = """
+from pathlib import Path
+import torch
+import torch_npu
+import dgl
+
+train_file = Path('dgl-ascend/examples/pytorch/lightgcn/gowalla/train.txt')
+users, items = [], []
+for line in train_file.read_text().splitlines():
+    values = list(map(int, line.split()))
+    users.extend([values[0]] * (len(values) - 1))
+    items.extend(values[1:])
+src = torch.tensor(users, dtype=torch.int64)
+n_users = int(src.max()) + 1
+dst = torch.tensor(items, dtype=torch.int64) + n_users
+n_nodes = int(dst.max()) + 1
+src_bidir = torch.cat([src, dst])
+dst_bidir = torch.cat([dst, src])
+expected_in = torch.bincount(dst_bidir, minlength=n_nodes)
+expected_out = torch.bincount(src_bidir, minlength=n_nodes)
+assert (expected_in > 0).all().item(), 'Training data contains isolated nodes'
+graph = dgl.graph((src_bidir, dst_bidir), num_nodes=n_nodes).to('npu')
+for _ in range(3):
+    # Interleave PyTorch work with DGL degree queries, as training does.
+    pending = torch.randn(4096, 64, device='npu').square()
+    for name, expected in (('in', expected_in), ('out', expected_out)):
+        actual = getattr(graph, name + '_degrees')().cpu()
+        mismatch = int((actual != expected).sum())
+        assert mismatch == 0, f'NPU {name}-degrees differ from CPU at {mismatch} nodes'
+print(f'Gowalla NPU degrees match CPU for all {n_nodes} nodes')
+"""
+        _checked_run(
+            [sys.executable, '-c', code],
+            env=dict(env, ASCEND_LAUNCH_BLOCKING='1'), cwd=cwd,
+            timeout=self.DEFAULT_COMMAND_TIMEOUT,
+        )
+        self.log('Full Gowalla graph degrees match CPU in synchronous NPU mode')
+
+    def run_command(self, cmd, env, cwd, timeout, language='shell'):
+        rc, output, error = super().run_command(cmd, env, cwd, timeout, language)
+        if rc == 0 and getattr(self, '_active_id', None) == 'lightgcn-train':
+            _validate_training_output(output)
+            # Put summary fields on separate lines for the document comparison.
+            output = re.sub(r'(?m)^[ \t]+device:', 'device:', output)
+            output = re.sub(r'(?m)^(.+?)(Average BPR Loss:)', r'\1\n\2', output)
+        return rc, output, error
 
     @classmethod
-    def setUpClass(cls) -> None:
-        """Run env setup once per test class. The ``if _e2e_enabled()``
-        body guard keeps heavy setup from firing when ``NPU_READY`` is unset."""
-        if _e2e_enabled():
+    def _cleanup_environment(cls):
+        if getattr(cls, '_original_env', None) is None:
+            return
+        os.chdir(cls._original_cwd)
+        os.environ.clear()
+        os.environ.update(cls._original_env)
+        if cls._work_dir is not None:
+            shutil.rmtree(cls._work_dir)
+        cls._original_env = None
+
+    def post_process(self):
+        self._cleanup_environment()
+
+    @classmethod
+    def setUpClass(cls):
+        if os.environ.get('NPU_READY', '').strip().lower() == 'true':
             cls.prepare_environment()
 
-    @unittest.skipIf(
-        not _e2e_enabled(),
-        'end-to-end requires NPU runner; set NPU_READY=true',
+    @unittest.skipUnless(
+        os.environ.get('NPU_READY', '').strip().lower() == 'true',
+        'end-to-end requires an Ascend NPU runner',
     )
-    def test_runs_doc(self) -> None:
-        """Template-method entry point. The base class
-        ``run_template()`` runs the full ``pre_process`` -> ``parse`` ->
-        ``execute`` -> ``post_process`` flow."""
-
+    def test_runs_doc(self):
         self.run_template()
+
+
+class TestGuardValidation(unittest.TestCase):
+    def test_checkout_matches_engine_even_if_branch_advanced(self):
+        with tempfile.TemporaryDirectory(prefix='dgl-source-test-') as directory:
+            repo = Path(directory)
+            env = os.environ.copy()
+            _checked_run(['git', 'init', '-q'], env=env, cwd=repo)
+            sha = None
+            for value in ('engine-selected', 'newer-branch-head'):
+                (repo / 'revision.txt').write_text(value, encoding='utf-8')
+                _checked_run(['git', 'add', 'revision.txt'], env=env, cwd=repo)
+                _checked_run(
+                    ['git', '-c', 'user.name=Guard Test',
+                     '-c', 'user.email=guard-test@example.invalid',
+                     'commit', '-q', '-m', value],
+                    env=env, cwd=repo,
+                )
+                if sha is None:
+                    sha = _checked_run(['git', 'rev-parse', 'HEAD'], env=env, cwd=repo)
+            self.assertEqual(_pin_source(repo, sha, env), sha)
+            self.assertEqual((repo / 'revision.txt').read_text(), 'engine-selected')
+
+    def test_missing_or_unresolved_ref_is_rejected(self):
+        for ref in ('', 'master', 'v0.0.2'):
+            with self.subTest(ref=ref), self.assertRaises(AssertionError):
+                _pin_source(Path.cwd(), ref, os.environ.copy())
+
+    def test_completed_training_has_finite_loss(self):
+        output = 'Epoch 1/1 finished. Epoch time: 64.64s, Average BPR Loss: 0.6739\n'
+        self.assertEqual(_validate_training_output(output), 0.6739)
+
+    def test_invalid_or_incomplete_training_is_rejected(self):
+        for output in (
+            'Average BPR Loss: 0.6739',
+            'Epoch 1/1 finished. Average BPR Loss: nan',
+            'Epoch 1/1 finished. Average BPR Loss: inf',
+            'Epoch 1/1 finished. Average BPR Loss: invalid',
+        ):
+            with self.subTest(output=output), self.assertRaises(AssertionError):
+                _validate_training_output(output)
 
 
 if __name__ == '__main__':

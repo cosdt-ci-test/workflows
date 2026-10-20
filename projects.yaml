@@ -141,18 +141,12 @@ projects:
     workflows:
       examples: .github/workflows/diffusers-examples.yml
       quick_start: .github/workflows/diffusers-quick-start.yml
-  # DGL quick-start guard scope: single-card LightGCN smoke on NPU,
-  # backed by the Huawei×BUPT fork BUPT-GAMMA/dgl-ascend (dmlc/dgl
-  # proper has no Ascend backend). The fork publishes no releases/tags,
-  # so the engine's ref chain bottoms out at /commits/HEAD (default
-  # branch HEAD sha) instead of a release. The doc installs the pinned
-  # torch stack (torch 2.9.0 + torch_npu 2.9.0.post2 — reusing the CI's
-  # torch line, not the fork's documented torch 2.8.0/py3.10) and builds
-  # DGL-Ascend from source (git clone + submodule + build_dgl_ascend.sh
-  # with -DUSE_ASCEND=ON -DUSE_CUDA=OFF, SOC=910B4 + pip install -e .).
-  # Smoke runs LightGCN one epoch on gowalla (official dgl-data zip)
-  # via `python main.py --device npu`. timeout_minutes=240 covers the
-  # full source build. Multi-model (GraphSAGE/HERec) is pointer-only.
+  # DGL-Ascend quick start: build the GitHub fork at the engine-resolved
+  # default-branch SHA (no releases/tags), using torch 2.9.0 and
+  # torch_npu 2.9.0.post2. Install with setup.py, verify NPU graph
+  # operations and backward, then train LightGCN for one epoch with
+  # the official Gowalla archive. No model source patch is needed.
+  # timeout_minutes=240 includes the cold source build; manual trigger only.
   - name: dgl
     category: 训练加速
     support_level: 新兴适配

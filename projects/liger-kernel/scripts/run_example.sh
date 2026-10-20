@@ -19,15 +19,6 @@ export EXAMPLE_REL
 EXAMPLES_ROOT="${EXAMPLES_ROOT:-$TARGET_ROOT}"
 export EXAMPLES_ROOT
 
-if [[ "$EXAMPLE_REL" == examples/alignment/run_orpo.py ]]; then
-  source /usr/local/Ascend/ascend-toolkit/set_env.sh
-  PYTHON="$(command -v python3 || command -v python)"
-  export PYTHON
-  mkdir -p "$CI_OUTPUT_DIR"
-  bash "$(dirname "${BASH_SOURCE[0]}")/run_orpo.sh"
-  exit 0
-fi
-
 case "$EXAMPLE_REL" in
   examples/huggingface/training.py|examples/huggingface/run_qwen.sh|examples/medusa/train.py|examples/huggingface/training_multimodal.py) ;;
   *)

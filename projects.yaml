@@ -784,12 +784,12 @@ projects:
   # hicann/xla-npu（无 release / tag，ref 链底到 /commits/HEAD，doc clone
   # 用 gitcode 正仓）。要求 Python 3.11 + CANN ≥ 8.5.0，镜像用
   # cann:9.0.0-py3.11（与 flash-linear-attention 同标签族）；单卡算子推理。
-  - name: xla-npu
+  - name: xla
     category: 推理加速
     support_level: 新兴适配
     upstream_repo: hicann/xla-npu
     phase: A
     runner: linux-aarch64-a2-1
-    dir: projects/xla-npu
+    dir: projects/xla
     workflows:
-      quick_start: .github/workflows/xla-npu-quick-start.yml
+      quick_start: .github/workflows/xla-quick-start.yml

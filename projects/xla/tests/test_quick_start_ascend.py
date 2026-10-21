@@ -1,7 +1,7 @@
 """Quick-start-Ascend documentation test: end-to-end case built on top
 of the ``MarkdownDocTestBase`` contract.
 
-Document under test: ``projects/xla-npu/docs/Quick-start-Ascend.md``
+Document under test: ``projects/xla/docs/Quick-start-Ascend.md``
 (follows the ``docs/markdown_doc_test_label.md`` contract: every
 ``shell`` code block carries one of the ``#test`` / ``#test-setup`` /
 ``#test-result`` labels plus ``id=`` / ``store=`` / ``load='x>>y'`` /
@@ -10,7 +10,7 @@ Document under test: ``projects/xla-npu/docs/Quick-start-Ascend.md``
 Run: ``python -m unittest tests.test_quick_start_ascend -v 2>&1``
 
 Environment variables (injected by GitHub workflow
-``xla-npu-quick-start.yml`` via the shared engine
+``xla-quick-start.yml`` via the shared engine
 ``quick-start-template.yml``):
     ``MONITORED_DOC_URL``         Required; GitHub Contents API URL of the
                                   document under test (the engine's monitor
@@ -75,7 +75,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     DEFAULT_COMMAND_TIMEOUT = 14400
 
     # Monitored source is the cosdt-ci-test/workflows fork (this repo):
-    # the doc lives at projects/xla-npu/docs/Quick-start-Ascend.md and
+    # the doc lives at projects/xla/docs/Quick-start-Ascend.md and
     # the engine sets MONITORED_DOC_URL to the GitHub Contents API URL
     # for the same path.
     USER_AGENT = 'cosdt-ci-test/quick-start'

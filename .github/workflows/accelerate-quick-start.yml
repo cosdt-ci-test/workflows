@@ -1,14 +1,17 @@
 # accelerate quick start guard - project thin trigger.
 #
-# Calls the common engine .github/workflows/quick-start-template.yml;
-# this file only declares what varies per project: schedule,
-# concurrency, runner, container image + options, upstream repo,
-# monitored doc, and the test entry command. The guard loop, cache
-# I/O, state relay and publishing all live in the engine. See the
-# engine's `workflow_call.inputs` block for the full input contract.
+# Calls the common engine .github/workflows/quick-start-template.yml
+# twice (once per machine generation) and merges the two results with a
+# shared composite action. This file only declares what varies per
+# project: schedule, concurrency, machine generations (runner + image),
+# upstream repo, monitored doc, and the test entry command. The guard
+# loop, cache I/O, state relay, publishing and result aggregation all
+# live in the engine + the merge action.
 #
-# Cache keys (quick-start-monitor-state-accelerate_*) and artifact names
-# are derived from project=accelerate, not from the workflow name.
+# Cache keys (quick-start-monitor-state-accelerate-<machine_type>_*) and
+# per-machine artifact names (accelerate-quick-start-<run_id>-<machine_type>)
+# are derived from project=accelerate + machine_type, not from the
+# workflow name.
 
 name: accelerate-quick-start
 
@@ -20,8 +23,8 @@ concurrency:
   # cancel-in-progress: false because (1) a schedule run cancelled
   # mid-way loses its outcome writeback - the outcome is what makes
   # the retry mechanism work, and the 'if: always()' guard isn't
-  # enough when the container is being torn down; (2) dispatch runs
-  # already live in unique groups so there's nothing to cancel.
+  # enough when the container is being torn down; (2) dispatch / PR
+  # runs already live in unique groups so there's nothing to cancel.
   cancel-in-progress: false
 
 on:
@@ -32,44 +35,72 @@ on:
     # enough that doc fixes propagate within a day.
     - cron: '15 */6 * * *'
   workflow_dispatch:
+  # PR trigger: docs/tests changes get a guard run. paths filter avoids
+  # burning the self-hosted NPU runner on unrelated PRs. `pull_request`
+  # (not `pull_request_target`): contents: read is enough, no
+  # write-token risk. {0} in doc_url is filled with the PR head SHA so
+  # the PR-version of the doc is tested; fork PRs 404 on doc fetch and
+  # are accepted (content lands on this repo post-merge).
+  pull_request:
+    branches: [main]
+    paths:
+      - 'projects/accelerate/**'
+      - '.github/workflows/accelerate-quick-start.yml'
 
 permissions:
   contents: read
 
 jobs:
-  accelerate-quick-start:
+  qs-a2:
     uses: ./.github/workflows/quick-start-template.yml
     with:
-      # Namespaces cache keys (quick-start-monitor-state-accelerate_*), artifacts
-      # (accelerate-quick-start-<run_id>) and the test working dir
-      # (workflows/projects/accelerate).
+      # Namespaces cache keys (quick-start-monitor-state-accelerate-a2_*),
+      # per-machine artifacts (accelerate-quick-start-<run_id>-a2) and the
+      # test working dir (workflows/projects/accelerate).
       project: accelerate
-      # Self-hosted dual-NPU runner for the test job only; the engine
-      # pins the cache I/O jobs (restore-cache / publish-and-persist) to
-      # GitHub-hosted ubuntu-latest. Two cards are mounted so the
-      # cross-process `gather_for_metrics` test can run a real 2-rank
-      # all_gather. ASCEND_RT_VISIBLE_DEVICES=0,1 is set in the test
-      # subclass (projects/accelerate/tests/test_quick_start_ascend.py)
-      # to expose both — the template doesn't inject it.
+      machine_type: a2
+      # Dual-card NPU runner: the DDP training / gather_for_metrics /
+      # load_checkpoint_and_dispatch sections all need 2 visible devices
+      # (`accelerate launch --num_processes 2`, device_map npu:0 + npu:1).
       test_runner: '["linux-aarch64-a2-2"]'
       image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-      container_options: >-
-      # Doc body now does: git clone + uv pip install -e . + accelerate env
-      # + init_empty_weights + accelerate launch (DDP 2-rank, no-amp) +
-      # gather_for_metrics single + gather_for_metrics multi +
-      # accelerate launch (DDP 2-rank, bf16). 90 min covers cold cache +
-      # cold launch + 2-rank hccl init.
       timeout_minutes: 90
       upstream_repo: huggingface/accelerate
       # The doc under guard. Both URLs point at the cosdt-ci-test fork
-      # (this repo): the workflow monitors doc drift on this repo, not
-      # upstream — the doc is our authored artifact, accelerate's own
-      # quicktour lives at docs/source/quicktour.md and is referenced
-      # from inside the doc body.
-      doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/accelerate/docs/Quick-start-Ascend.md
+      # (this repo); {0} is the PR head SHA on PR runs, 'main' otherwise.
+      doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/{0}/projects/accelerate/docs/Quick-start-Ascend.md
       doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/accelerate/docs/Quick-start-Ascend.md
-      # cwd is workflows/projects/accelerate; env contract (MONITORED_DOC_URL /
-      # UPSTREAM_REF / NPU_READY) is injected by the engine. All project
-      # env prep and installs live in the test subclass's
-      # prepare_environment hook.
+      # cwd is workflows/projects/accelerate; env contract
+      # (MONITORED_DOC_URL / UPSTREAM_REF / NPU_READY) is injected by the
+      # engine. All project env prep and installs live in the test
+      # subclass's prepare_environment hook.
       test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1
+
+  qs-a3:
+    uses: ./.github/workflows/quick-start-template.yml
+    with:
+      project: accelerate
+      machine_type: a3
+      # Atlas 900 A3 (Ascend 910C) leg. TODO(verify): confirm the a3
+      # runner label and the SWR 910C CANN image tag before enabling.
+      test_runner: '["linux-aarch64-a3-2"]'
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910c-ubuntu22.04-py3.12
+      timeout_minutes: 90
+      upstream_repo: huggingface/accelerate
+      doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/{0}/projects/accelerate/docs/Quick-start-Ascend.md
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/accelerate/docs/Quick-start-Ascend.md
+      test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1
+
+  merge:
+    needs: [qs-a2, qs-a3]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout workflows (provides the merge action)
+        uses: actions/checkout@v6
+      - name: Merge per-machine results into one artifact
+        uses: ./.github/actions/merge-quick-start-results
+        with:
+          project: accelerate
+          result_a2: ${{ needs.qs-a2.outputs.result_json }}
+          result_a3: ${{ needs.qs-a3.outputs.result_json }}

@@ -1,0 +1,49 @@
+# Merge per-machine quick-start results into one aggregate artifact.
+#
+# A thin trigger that runs the engine twice (once per machine generation)
+# calls this composite action from a `merge` job. It collects each leg's
+# result.json (shipped out of the engine via workflow_call.outputs), lays
+# them out under per-machine subdirectories, and uploads a single
+# aggregate artifact <project>-quick-start-<run_id>.
+#
+# Empty inputs (a leg whose monitor decided need_to_test=false) are
+# skipped rather than materialized as an empty file.
+
+name: merge-quick-start-results
+description: Collect per-machine quick-start result.json files into one aggregate artifact.
+
+inputs:
+  project:
+    description: Project name, used as the aggregate artifact prefix.
+    required: true
+  result_a2:
+    description: Single-line result.json for the a2 leg (empty when that leg skipped).
+    required: false
+    default: ''
+  result_a3:
+    description: Single-line result.json for the a3 leg (empty when that leg skipped).
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Materialize per-machine results
+      shell: bash
+      env:
+        RESULT_A2: ${{ inputs.result_a2 }}
+        RESULT_A3: ${{ inputs.result_a3 }}
+      run: |
+        set -euo pipefail
+        mkdir -p output/a2 output/a3
+        [ -z "$RESULT_A2" ] || printf '%s\n' "$RESULT_A2" > output/a2/result.json
+        [ -z "$RESULT_A3" ] || printf '%s\n' "$RESULT_A3" > output/a3/result.json
+        echo "materialized per-machine results:"
+        find output -type f | sort
+
+    - name: Upload aggregate result
+      uses: actions/upload-artifact@v6
+      with:
+        name: ${{ inputs.project }}-quick-start-${{ github.run_id }}
+        path: output/
+        if-no-files-found: warn

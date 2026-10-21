@@ -82,9 +82,9 @@ jobs:
       project: accelerate
       machine_type: a3
       # Atlas 900 A3 (Ascend 910C) leg. TODO(verify): confirm the a3
-      # runner label and the SWR 910C CANN image tag before enabling.
+      # runner label before enabling.
       test_runner: '["linux-aarch64-a3-2"]'
-      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910c-ubuntu22.04-py3.12
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-a3-ubuntu22.04-py3.12
       timeout_minutes: 90
       upstream_repo: huggingface/accelerate
       doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/{0}/projects/accelerate/docs/Quick-start-Ascend.md

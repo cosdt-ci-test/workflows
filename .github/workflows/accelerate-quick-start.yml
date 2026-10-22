@@ -104,3 +104,5 @@ jobs:
           project: accelerate
           result_a2: ${{ needs.qs-a2.outputs.result_json }}
           result_a3: ${{ needs.qs-a3.outputs.result_json }}
+          name_a2: qs-a2
+          name_a3: qs-a3

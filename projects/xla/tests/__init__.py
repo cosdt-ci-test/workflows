@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 
 # sys.path bootstrap: make ``workflows.*`` resolvable.
-_REPO_ROOT = Path(__file__).resolve().parents[3]  # tests/ -> xla-npu/ -> projects/ -> workflows/
+_REPO_ROOT = Path(__file__).resolve().parents[3]  # tests/ -> xla/ -> projects/ -> workflows/
 _SRC = _REPO_ROOT / 'src'
 for _p in (_SRC, _REPO_ROOT):
     _ps = str(_p)

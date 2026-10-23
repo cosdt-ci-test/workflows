@@ -30,15 +30,14 @@ Scope note: the doc body covers the smoke path for **stock torchvision**
 running under ``torch_npu`` PrivateUse1 dispatch. ``torch`` /
 ``torch_npu`` are installed by the doc body via ``uv pip install`` from
 Aliyun PyPI mirror / Huawei Cloud ascend pypi
-(versions per [Ascend PyTorch Compatibility 矩阵](https://gitcode.com/Ascend/pytorch/blob/main/COMPATIBILITY.en.md): torch==2.12.0 / torch_npu==2.12.0 / CANN==9.1.0).
+(versions per [Ascend PyTorch Compatibility 矩阵](https://gitcode.com/Ascend/pytorch/blob/main/COMPATIBILITY.en.md): torch==2.14.0+cpu / torch_npu==2.14.0 / CANN==9.1.0).
 ``torchvision`` is installed from source: `git clone
-github.com/pytorch/vision` at the latest release tag + apply the
-Stable ABI compat patch ``patches/torch-2.12-stable-api-permute.patch``
-(v0.29.0 targets torch 2.14's stable API surface and uses
-``torch::stable::permute``, which torch 2.12/2.13 lack — the patch
-swaps the two permute call sites for an equivalent transpose chain)
-+ ``uv pip install -e .`` with ``FORCE_CUDA=0``, mirroring ms-swift's
-source build pattern. No Ascend/vision fork
+github.com/pytorch/vision` at the latest release tag + `uv pip install -e .`
+with ``FORCE_CUDA=0``, mirroring ms-swift's source build pattern. No
+Stable ABI patch: torch 2.14.0's stable API already ships
+``torch::stable::permute`` (which torchvision v0.29.0's
+``deform_conv2d_kernel.cpp`` uses), so the earlier torch-2.12-era
+transpose-chain patch is no longer needed. No Ascend/vision fork
 build: the fork is a ``torchvision_npu`` patch package whose ops
 (``deform_conv`` / ``roi_pool``) are not exercised by the transforms.v2 smoke
 path, and its ``csrc`` includes a ``npu_decode_video_kernel.{cpp,hpp}`` that

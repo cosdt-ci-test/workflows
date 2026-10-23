@@ -1,7 +1,7 @@
 version: 1
 # 以共享引擎本次解析的 pytorch/vision release 为受测树：examples/cpp + gallery 的 plot_*.py + references 的独立入口。
 # gallery/transforms/helpers.py 与 references 下被 import 的模块是配套代码，不计作独立 example。
-# 仅对当前 release 的 torchvision 库源码应用现有 Stable ABI 兼容补丁，不修改任何 example 源码。
+# torch 2.14.0 起 stable API 含 permute，无需再对库源码打补丁，不修改任何 example 源码。
 scan:
   root: ''
   include_extensions: ['.py', '.cpp']

@@ -1,0 +1,109 @@
+# opencv quick start guard (OpenCV 5.0 feature-tour variant) - project thin trigger.
+#
+# Calls the common engine .github/workflows/quick-start-template.yml;
+# this file only declares what varies per project: schedule,
+# concurrency, runner, container image + options, upstream repo,
+# monitored doc, and the test entry command. The guard loop, cache
+# I/O, state relay and publishing all live in the engine. See the
+# engine's `workflow_call.inputs` block for the full input contract.
+#
+# Why a separate project namespace instead of reusing `opencv`:
+#   * the engine namespaces the monitor-state cache by `with.project`,
+#     and the three guards watch *different* docs (5.x feature tour vs
+#     5.x patch walkthrough vs 4.11.0 zero-patch) - sharing the
+#     namespace would make each doc's hash overwrite the other's and
+#     all of them would re-run forever;
+#   * `scripts/examples_check.py` rejects two thin workflows with the
+#     same `with.project`;
+#   * the three builds install to different prefixes
+#     (/usr/local/opencv-cann vs /usr/local/opencv-cann-5 vs
+#     /usr/local/opencv-cann-411) so they can share one self-hosted
+#     runner without clobbering each other.
+
+name: opencv-quick-start-opencv5
+
+concurrency:
+  # format() is load-bearing: a '||' between 'manual-' and
+  # github.run_id would short-circuit on the truthy literal and
+  # every dispatch would share one 'manual-' group.
+  group: ${{ github.event_name == 'schedule' && 'opencv-quick-start-opencv5-schedule' || format('manual-{0}', github.run_id) }}
+  # cancel-in-progress: false because (1) a schedule run cancelled
+  # mid-way loses its outcome writeback - the outcome is what makes
+  # the retry mechanism work, and the 'if: always()' guard isn't
+  # enough when the container is being torn down; (2) dispatch runs
+  # already live in unique groups so there's nothing to cancel.
+  cancel-in-progress: false
+
+on:
+  schedule:
+    # Every 6 hours, same cadence as the other OpenCV guards. The doc
+    # follows the upstream *latest release* tag via the `<ref>`
+    # placeholder (the engine resolves /releases/latest), so the
+    # upstream-change trigger is meaningful here; the doc-hash trigger
+    # is the other one: any edit to the doc re-runs the whole build +
+    # inference chain.
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  opencv-quick-start-opencv5:
+    uses: ./.github/workflows/quick-start-template.yml
+    with:
+      # Namespaces cache keys (quick-start-monitor-state-opencv-opencv5_*),
+      # artifacts (opencv-opencv5-quick-start-<run_id>) and the test
+      # working dir (workflows/projects/opencv-opencv5).
+      project: opencv-opencv5
+      # Self-hosted NPU runner for the test job only; the engine pins
+      # the cache I/O jobs (restore-cache / publish-and-persist) to
+      # GitHub-hosted ubuntu-latest.
+      test_runner: '["linux-aarch64-a2-4"]'
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+      # OpenCV source build needs ~6 GB free disk; --privileged lets
+      # cmake's IPPICV download helper write into /tmp without sandbox
+      # surprises, --shm-size=64g keeps make from hitting /dev/shm
+      # pressure during parallel compile. CANN-side devices mounted
+      # explicitly so cmake's `find_package(Ascend)` can dlopen acl
+      # libraries on the configure phase for header discovery.
+      container_options: >-
+        --privileged --shm-size=64g
+        --device=/dev/davinci0
+        --device=/dev/davinci_manager
+        --device=/dev/devmm_svm
+        --device=/dev/hisi_hdc
+        --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
+        --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
+        --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
+      # Doc body does: apt-get install build deps (aliyun mirror) +
+      # git clone opencv + opencv_contrib @ <ref> (upstream latest
+      # release) + 3 source patches (cv::MatShape forwarding / narrow
+      # CANN op headers for the aarch64 +-128 MiB branch-range limit /
+      # NULL-stream fallback) + CANN library bridge (3 symlinks into
+      # <CANN>/lib64) + cmake -DWITH_CANN=ON configure (Debug -O0,
+      # BUILD_LIST = 8 modules incl. cannops + its gtest target) +
+      # cmake --build --target install + opencv_version smoke +
+      # opencv_test_cannops gtest (53 of 78 cases expected to pass) +
+      # Python binding smoke + the 5.0-only transposeND / flipND core
+      # ops + MobileNetV2 ONNX forward TWICE: once with 5.0's default
+      # (new) graph engine - asserted NOT to reach the NPU - and once
+      # with the classic engine (OPENCV_FORCE_DNN_ENGINE=1) - asserted
+      # to compile the GE graph and convert >= 100 layers (top-1 = 372).
+      # 240 min leaves room for the build chain + first-time IPPICV /
+      # ADE / ACL graph cache pulls.
+      timeout_minutes: 240
+      upstream_repo: opencv/opencv
+      # No fixed_ref: the doc consumes the `<ref>` placeholder, which
+      # the engine resolves from upstream /releases/latest (5.0.x at
+      # the time of writing). The doc's patch scripts assert on 5.0-only
+      # upstream strings, so a 5.1/6.0 release fails the doc's own
+      # patch blocks - that is the intended "review the patches" signal.
+      # `?ref=${{ github.sha }}` so test fetches THIS branch's doc, not main.
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/opencv/docs/Quick-start-Ascend-OpenCV5.md?ref=${{ github.sha }}
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/opencv/docs/Quick-start-Ascend-OpenCV5.md
+      # cwd is workflows/projects/opencv-opencv5; env contract
+      # (MONITORED_DOC_URL / UPSTREAM_REF / NPU_READY) is injected by
+      # the engine. All project env prep and installs live in the test
+      # subclass's prepare_environment hook.
+      test_command: python -m unittest tests.test_quick_start_ascend_opencv5 -v 2>&1

@@ -82,9 +82,34 @@ if [[ "$profile" == vision_flow_npu || "$profile" == vision_video_npu ]]; then
   kind=flow
   if [[ "$profile" == vision_video_npu ]]; then
     kind=video
+    # fixture encoder only (PyAV bundles its own FFmpeg); the train script
+    # never goes through it.
     uv pip install --system 'av>=14,<17'
+    # torchvision v0.29 removed video decoding: Kinetics/VideoClips imports
+    # torchcodec unconditionally. torchcodec >=0.12 builds against torch's
+    # stable ABI (torch >=2.11; this stack runs 2.14.0), and the single
+    # manylinux aarch64 wheel decodes on CPU with no CUDA libraries.
+    # --no-deps keeps it from resolving a CUDA-flavored torch over the
+    # torch_npu pair.
+    uv pip install --system --no-deps torchcodec==0.17.0
+    # torchcodec dlopen()s system FFmpeg (4-9) at decode time; install the
+    # shared libs unconditionally (fast no-op when the image already has
+    # them) so a missing libav* surfaces here instead of mid-training.
+    apt-get update -qq && apt-get install -y -qq --no-install-recommends ffmpeg
   fi
   python "$PROJECT_ROOT/scripts/prepare_ci_assets.py" "$kind" "$VISION_REFERENCE_DATA_ROOT"
+  if [[ "$profile" == vision_video_npu ]]; then
+    # fail fast when torchcodec cannot load FFmpeg or decode the fixture
+    python - "$VISION_REFERENCE_DATA_ROOT" <<'PY'
+import sys
+
+from torchcodec.decoders import VideoDecoder
+
+decoder = VideoDecoder(f"{sys.argv[1]}/ci_template.avi")
+frame = decoder[0]
+print(f"torchcodec decode ok: {tuple(frame.shape)}")
+PY
+  fi
   [[ -z "${GITHUB_ENV:-}" ]] || printf 'VISION_REFERENCE_DATA_ROOT=%s\n' "$VISION_REFERENCE_DATA_ROOT" >> "$GITHUB_ENV"
 fi
 

@@ -1,24 +1,43 @@
 #!/usr/bin/env python3
 """Apply the CANN source patches to a fresh opencv + opencv_contrib checkout.
 
-These 5-slot / 8-hunk patches are what make opencv mainline (5.0.0) compile
-+ link against CANN 9.1.0 on aarch64. Each is idempotent (checks before
-patching), so re-running on an already-patched tree is a no-op.
+These patches are what make opencv mainline (5.0.0) compile + link against
+CANN 9.1.0 on aarch64. Each is idempotent (checks before patching), so
+re-running on an already-patched tree is a no-op.
 
 Run from the WORK dir that contains the two checkouts as siblings:
 
     cd <WORK>                      # e.g. /home/coder/work
     python3 patch_opencv_cann.py   # expects ./opencv and ./opencv_contrib
 
-Patches (see docs/Quick-start-Ascend.md §"打 5 个源码补丁" for rationale):
-  (a-d) CannConstOp ctor `std::vector<int>` -> `cv::MatShape` (+ gemm/matmul
-        shape assignments) — aarch64/CANN 9.1.0 compile incompatibility
-  (e-f) `all_ops.h` -> `array_ops.h` + per-layer narrow op headers — the
-        ~1500-op header blows the aarch64 link (R_AARCH64_CALL26 overflow)
-  (g-h) OperatorRunner::run / AscendC kernel_launch NULL-stream fallback —
-        CANN 9.1.0 rejects a NULL stream with EH0008
-  (i-j) H2D/D2H host-buffer clamp — defensive: driver >= 25.5.x reports
-        dataset buffer sizes with alignment padding
+Only 3 upstream incompatibilities are worked around; every one of them is
+reproduced and justified in docs/Quick-start-Ascend.md §4:
+
+  1. (a-d) OpenCV 5.0 renamed the shape type to cv::MatShape and dropped
+     vector<int>::front().  Upstream's CANN backend still uses the 4.x
+     spelling, so it does not compile.  Fix = ONE added cv::MatShape
+     overload (upstream's vector<int> constructor is left untouched) plus
+     the 3 assignments that no longer type-check.
+  2. (e-f) CANN's all_ops.h declares ~1500 ops; pulling it into every dnn
+     TU (op_cann.hpp -> net_impl.hpp -> everything) pushes libopencv_dnn's
+     .text past the aarch64 R_AARCH64_CALL26/JUMP26 +/-128 MiB window and
+     the link dies with "relocation truncated to fit".  Fix = narrow op
+     headers, per TU.
+  3. (g) CANN 9.x rejects a NULL stream (EH0008); upstream's CANN ops
+     pass the stream through unchanged and also has the `if (rawStream ==
+     nullptr)` branch inverted.  Fix = fall back to the context's default
+     stream.
+  4. (h) NOT patched any more.  The AscendC kernel_launch template has
+     the same NULL-stream shape, but reverting it changes no test
+     outcome: the 53 cannops cases still pass, and the only AscendC
+     kernel we ship (threshold) faults on device with an upstream UB
+     overflow either way, so that path is covered by neither variant.
+  5. (i-j) NOT patched any more.  The H2D/D2H host-buffer clamp was
+     defensive hardening for a >= 25.5.x driver that was never observed to
+     report a padded size (measured acl_size == host_size == 4000); the
+     crash it was meant to prevent was a driver/toolkit version mismatch
+     (25.5.2 driver x CANN 9.1.0) corrupting the heap at exit, which is
+     fixed on the host side, not in this source.
 """
 from __future__ import annotations
 
@@ -44,51 +63,44 @@ def patch(rel, old, new, *, expect_present=True, count=1):
 
 
 def main() -> None:
-    # (a) CannConstOp ctor type: std::vector<int> -> cv::MatShape
-    for rel in ['opencv/modules/dnn/src/op_cann.hpp',
-                'opencv/modules/dnn/src/op_cann.cpp']:
-        patch(rel,
-              'const std::vector<int>& shape, const std::string& name',
-              'const cv::MatShape& shape, const std::string& name')
+    # (a) op_cann.hpp: add a cv::MatShape overload declaration.  The upstream
+    #     std::vector<int> constructor stays exactly as it is.
+    patch('opencv/modules/dnn/src/op_cann.hpp',
+          '        CannConstOp(const uint8_t* data, const int dtype, const std::vector<int>& shape, const std::string& name);',
+          '        CannConstOp(const uint8_t* data, const int dtype, const std::vector<int>& shape, const std::string& name);\n'
+          '        CannConstOp(const uint8_t* data, const int dtype, const cv::MatShape& shape, const std::string& name);')
 
-    # (b) hpp delegating overload declaration
-    hp = pathlib.Path('opencv/modules/dnn/src/op_cann.hpp')
-    hs = hp.read_text()
-    decl_old = 'CannConstOp(const uint8_t* data, const int dtype, const cv::MatShape& shape, const std::string& name);'
-    decl_new = (decl_old
-                + '\n        CannConstOp(const uint8_t* data, const int dtype, const std::vector<int>& shape, const std::string& name);')
-    if decl_new.splitlines()[1] not in hs and decl_old in hs:
-        hp.write_text(hs.replace(decl_old, decl_new, 1))
-        print('(patch) op_cann.hpp: +1 std::vector<int> overload decl')
-    elif decl_new.splitlines()[1] in hs:
-        print('(ok)   op_cann.hpp: decl already patched')
-
-    # (c) cpp delegating ctor
+    # (b) op_cann.cpp: the MatShape overload forwards to the upstream
+    #     std::vector<int> constructor (which keeps upstream's body).
     cp = pathlib.Path('opencv/modules/dnn/src/op_cann.cpp')
     cs = cp.read_text()
-    anchor = 'op_ = std::make_shared<ge::op::Const>(name);\n    op_->set_attr_value(*ge_tensor);\n}\n'
-    deleg = ('\nCannConstOp::CannConstOp(const uint8_t* data, const int dtype, const std::vector<int>& shape, const std::string& name)\n'
-             '    : CannConstOp(data, dtype, cv::MatShape(shape), name) {}\n')
+    deleg = ('\nCannConstOp::CannConstOp(const uint8_t* data, const int dtype, const cv::MatShape& shape, const std::string& name)\n'
+             '    : CannConstOp(data, dtype, std::vector<int>(shape.begin(), shape.end()), name) {}\n')
     if deleg.strip() in cs:
-        print('(ok)   op_cann.cpp: delegating ctor already patched')
-    elif anchor in cs:
+        print('(ok)   op_cann.cpp: MatShape forwarding ctor already patched')
+    elif 'CannConstOp::CannConstOp(const uint8_t* data, const int dtype, const std::vector<int>& shape, const std::string& name)\n{\n' in cs:
+        anchor = ('op_ = std::make_shared<ge::op::Const>(name);\n'
+                  '    op_->set_attr_value(*ge_tensor);\n}\n')
+        if anchor not in cs:
+            raise SystemExit('op_cann.cpp: anchor not found')
         cp.write_text(cs.replace(anchor, anchor + deleg, 1))
-        print('(patch) op_cann.cpp: +1 delegating ctor')
+        print('(patch) op_cann.cpp: +1 MatShape forwarding ctor')
     else:
-        raise SystemExit('op_cann.cpp: anchor not found')
+        raise SystemExit('op_cann.cpp: std::vector<int> ctor not found')
 
-    # (d) gemm + matmul MatShape assignments
+    # (c)(d) cv::MatShape has no front() and cannot be assigned from a
+    #       std::vector<int> -> fix the 3 assignments that no longer compile.
     patch('opencv/modules/dnn/src/layers/gemm_layer.cpp',
           '            shape_C = std::vector<int>{dim};',
-          '            shape_C = cv::MatShape(1, &dim);')
+          '            shape_C = cv::MatShape(1, dim);')
     patch('opencv/modules/dnn/src/layers/matmul_layer.cpp',
           '                if (real_ndims_C == 1 && bias_shape.front() != 1) {',
           '                if (real_ndims_C == 1 && bias_shape[0] != 1) {')
     patch('opencv/modules/dnn/src/layers/matmul_layer.cpp',
           '                    bias_shape = std::vector<int>{bias_shape.front()};',
-          '                    int _bias_val = bias_shape[0]; bias_shape = cv::MatShape(1, &_bias_val);')
+          '                    bias_shape = cv::MatShape(1, bias_shape[0]);')
 
-    # (e) all_ops.h -> array_ops.h (1500-op header blows aarch64 link)
+    # (e) all_ops.h -> array_ops.h (1500-op header blows the aarch64 link)
     old_block = '''#ifdef CANN_VERSION_BELOW_6_3_ALPHA002
     #include "op_proto/built-in/inc/all_ops.h" // ge::Conv2D, ...
 #else
@@ -188,73 +200,10 @@ def main() -> None:
     else:
         patch('opencv_contrib/modules/cannops/src/cann_call.cpp', old_g, new_g)
 
-    # (h) kernel_launch NULL stream + acl_rt.h include
-    p = pathlib.Path('opencv_contrib/modules/cannops/include/opencv2/cann_call.hpp')
-    s = p.read_text()
-    old_h = '''    std::shared_ptr<uchar> tilingDevice =
-        mallocAndUpload(&tiling, sizeof(TILING_TYPE), stream, AscendMat::defaultAllocator());
-    aclrtStream rawStream = AscendStreamAccessor::getStream(stream);
-    CV_ACL_SAFE_CALL(kernel(1, rawStream, tilingDevice.get(), args...));
-    if (rawStream == nullptr)
-    {
-        stream.waitForCompletion();
-    }'''
-    new_h = '''    std::shared_ptr<uchar> tilingDevice =
-        mallocAndUpload(&tiling, sizeof(TILING_TYPE), stream, AscendMat::defaultAllocator());
-    aclrtStream rawStream = AscendStreamAccessor::getStream(stream);
-    aclrtStream execStream = rawStream;
-    if (execStream == nullptr)
-        CV_ACL_SAFE_CALL(aclrtCtxGetCurrentDefaultStream(&execStream));
-    CV_ACL_SAFE_CALL(kernel(1, execStream, tilingDevice.get(), args...));
-    CV_ACL_SAFE_CALL(aclrtSynchronizeStream(execStream));'''
-    inc_old = '#include <acl/acl_base.h>'
-    inc_new = '#include <acl/acl_base.h>\n#include <acl/acl_rt.h>'
-    if 'aclrtCtxGetCurrentDefaultStream' in s:
-        print('(ok)   cann_call.hpp: kernel_launch body already patched')
-    elif old_h in s:
-        s = s.replace(old_h, new_h, 1)
-        if inc_old in s and inc_new not in s:
-            s = s.replace(inc_old, inc_new, 1)
-        p.write_text(s)
-        print('(patch) cann_call.hpp: NULL-stream + acl_rt.h include')
-    else:
-        print('(skip) cann_call.hpp: kernel_launch body not found (may not need patch)')
-
-    # (i) + (j) H2D/D2H host-buffer clamp
-    p = pathlib.Path('opencv/modules/dnn/src/op_cann.cpp')
-    s = p.read_text()
-    if 'host_size = (size_t)input_wrappers[i]->host->total()' in s:
-        print('(ok)   op_cann.cpp: H2D/D2H clamp already patched')
-    else:
-        old_in = '''        auto db = aclmdlGetDatasetBuffer(inputs, i);
-        auto p_device = aclGetDataBufferAddr(db);
-        auto db_size = aclGetDataBufferSizeV2(db);
-
-        ACL_CHECK_RET(aclrtMemcpy(p_device, db_size, p_host, db_size, ACL_MEMCPY_HOST_TO_DEVICE));'''
-        new_in = '''        auto db = aclmdlGetDatasetBuffer(inputs, i);
-        auto p_device = aclGetDataBufferAddr(db);
-        auto db_size = aclGetDataBufferSizeV2(db);
-        size_t host_size = (size_t)input_wrappers[i]->host->total() * input_wrappers[i]->host->elemSize();
-        size_t copy_size = db_size < host_size ? db_size : host_size;
-        ACL_CHECK_RET(aclrtMemcpy(p_device, db_size, p_host, copy_size, ACL_MEMCPY_HOST_TO_DEVICE));'''
-        if old_in in s:
-            s = s.replace(old_in, new_in, 1)
-        old_out = '''        auto db = aclmdlGetDatasetBuffer(outputs, i);
-        auto p_device = aclGetDataBufferAddr(db);
-        auto db_size = aclGetDataBufferSizeV2(db);
-
-        ACL_CHECK_RET(aclrtMemcpy(p_host, db_size, p_device, db_size, ACL_MEMCPY_DEVICE_TO_HOST));'''
-        new_out = '''        auto db = aclmdlGetDatasetBuffer(outputs, i);
-        auto p_device = aclGetDataBufferAddr(db);
-        auto db_size = aclGetDataBufferSizeV2(db);
-        size_t host_size = (size_t)output_wrappers[i]->host->total() * output_wrappers[i]->host->elemSize();
-        size_t copy_size = db_size < host_size ? db_size : host_size;
-        CV_LOG_INFO(NULL, "DNN/CANN: output[" << i << "] acl_size=" << db_size << " host_size=" << host_size);
-        ACL_CHECK_RET(aclrtMemcpy(p_host, host_size, p_device, copy_size, ACL_MEMCPY_DEVICE_TO_HOST));'''
-        if old_out in s:
-            s = s.replace(old_out, new_out, 1)
-        p.write_text(s)
-        print('(patch) op_cann.cpp: H2D/D2H host-buffer clamp applied')
+    # (h) 已删除：AscendC kernel_launch 的 NULL 流 fallback 回退后测不出差别
+    #（53 个 cannops 用例仍全过；唯一的 AscendC kernel threshold 因上游
+    #  UB 越界在设备侧崩，两种写法都挂）。详见
+    #  docs/Quick-start-Ascend.md §4c 末尾的说明。
 
 
 if __name__ == '__main__':

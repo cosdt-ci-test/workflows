@@ -15,12 +15,12 @@
 #      the engine's run-example job reuses the same self-hosted
 #      runner (linux-aarch64-a2-1) and the install path
 #      /usr/local/opencv-cann lives in the same image overlay.
-#      The build is the same 5-patch sequence the Quick-start-Ascend
+#      The build is the same 3-patch sequence the Quick-start-Ascend
 #      doc runs (sources: modules/dnn/src/op_cann.{hpp,cpp} + 23 layer
-#      TUs, opencv_contrib/modules/cannops/{src,include}/*, ACL D2H
-#      clamp); see docs/Quick-start-Ascend.md §"打 5 个源码补丁" for
-#      the rationale of each patch (CANN 9.1.0 + aarch64
-#      incompatibilities + driver 25.5.x host-buffer alignment).
+#      TUs, opencv_contrib/modules/cannops/src/cann_call.cpp); see
+#      docs/Quick-start-Ascend.md §"打 3 组源码补丁" for the rationale
+#      of each patch (OpenCV 5.0 cv::MatShape API drift + the aarch64
+#      link ceiling of CANN's all_ops.h + CANN 9.x NULL-stream rule).
 #   3. Prepend the source-built cv2 site-packages to PYTHONPATH so
 #      example scripts import cv2 with DNN_BACKEND_CANN compiled in.
 #   4. Write the resolved fixtures (baboon.jpg copied from the

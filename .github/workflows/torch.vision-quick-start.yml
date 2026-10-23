@@ -29,9 +29,10 @@
 # deform_conv2d_kernel.cpp uses torch::stable::permute, which only
 # enters the stable API surface in torch 2.14 (2.12 / 2.13 wheels'
 # stable/ops.h lack it). With torch 2.14.0+cpu (aliyun
-# pytorch-wheels/cpu) + torch_npu 2.14.0 (aliyun pypi/simple), the
-# source build compiles cleanly with no patch — the earlier
-# torch-2.12-era transpose-chain compat patch is dropped.
+# pytorch-wheels/cpu) + torch_npu 2.14.0 (PyPI, served through the
+# cluster pip-cache gateway), the source build compiles cleanly with no
+# patch — the earlier torch-2.12-era transpose-chain compat patch is
+# dropped.
 #
 # No container devices / volumes: torch_npu auto-registers with the
 # CANN base image, and torchvision transforms run on synthetic PIL
@@ -95,13 +96,13 @@ jobs:
       # needed for the doc body's smoke path (transforms.v2 + NPU
       # dispatch on a synthetic PIL image).
       container_options: ''
-      # Doc body does: uv pip install torch / torch_npu from Aliyun
-      # pytorch-wheels + aliyun pypi/simple dual-source (torch_npu is
-      # the slowest piece, ~30 min on cold cache), then stock torchvision
-      # via FORCE_CUDA=0 source build of the latest pytorch/vision release,
-      # then 9 transforms.v2 smoke tests that exercise torch_npu
-      # PrivateUse1 dispatch. 60 min leaves room for installs +
-      # transforms / NPU-dispatch tests.
+      # Doc body does: uv pip install torch from Aliyun pytorch-wheels
+      # + torch_npu from the default index (PyPI via the cluster pip
+      # cache gateway; torch_npu is the slowest piece, ~30 min on cold
+      # cache), then stock torchvision via FORCE_CUDA=0 source build of
+      # the latest pytorch/vision release, then 9 transforms.v2 smoke
+      # tests that exercise torch_npu PrivateUse1 dispatch. 60 min leaves
+      # room for installs + transforms / NPU-dispatch tests.
       timeout_minutes: 60
       # Ascend/vision is the fork whose ops don't intersect transforms.v2;
       # the doc builds stock pytorch/vision from source instead (see header).

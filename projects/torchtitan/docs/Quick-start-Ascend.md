@@ -84,7 +84,7 @@ Python 3.12.xxx
 
 ```shell #test-setup
 uv pip install -f https://mirrors.aliyun.com/pytorch-wheels/cpu torch==2.14.0
-uv pip install --extra-index-url https://mirrors.aliyun.com/pypi/simple torch_npu==2.14.0
+uv pip install torch_npu==2.14.0
 ```
 
 检查 torch / torch_npu 是否装好且 NPU 设备可用：

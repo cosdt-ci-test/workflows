@@ -94,6 +94,8 @@ git clone --depth 1 --branch <ref> https://github.com/opencv/opencv_contrib.git
 
 OpenCV mainline 与 CANN 9.1.0 / aarch64 有 3 处不兼容（3 个 patch 脚本假设 runner resolve 到 `5.0.0` tag；其它 tag 上 `assert old in s` 会抛错，需要重写 patch 适配）。按顺序跑这 3 段脚本（幂等，已打过会断言跳过）。
 
+> **不想打补丁？** 走 [Quick-start-Ascend-NoPatch.md](Quick-start-Ascend-NoPatch.md)：版本钉 **4.11.0** + **Release(-O3)** + 不编 `opencv_contrib`，**零源码补丁**也能得到带 CANN 后端的 `cv2`（实测 dnn `.text` 52 MiB，一次链接通过，NPU top-1=372）。代价是拿不到 OpenCV 5.x 的新 DNN 图引擎，也没有 `cv2.cann`。
+
 | 组 | 上游哪里坏了 | 改法 |
 | --- | --- | --- |
 | 4a | OpenCV 5.0 把 shape 类型换成 `cv::MatShape`（`explicit` 构造、**没有** `front()`） | 新增 1 个 `cv::MatShape` 重载转发给上游构造 + 修 3 处赋值 |

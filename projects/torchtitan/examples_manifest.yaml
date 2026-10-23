@@ -66,7 +66,28 @@ unsupported:
   - torchtitan/models/llama3/config_registry.py:llama3_debugmodel_dist_gemm
   - torchtitan/models/llama3/config_registry.py:sft_debugmodel
 
-  # llama3_8b：与 debugmodel 同一三墙（flex+ComplexRoPE+ChunkedLoss），仅 arch 规模更大。
+  # llama3_8b：两重阻塞（与 debugmodel 的 flex/ComplexRoPE/ChunkedLoss 三墙同源）——
+  # (1) 规模：~8.03B 参数，bf16 权重 16.1GB + 梯度 16.1GB + AdamW fp32 状态 64.2GB，
+  #     FSDP shard=2 后每卡约 48GB，超出 910B4 的 32GB HBM → 必须开
+  #     --training.enable-cpu-offload 才装得下；
+  # (2) cpu_offload 初始化必挂：torchtitan trainer.py 在 enable_cpu_offload 下把
+  #     init_device 设为 "cpu"，权重在 CPU 上初始化；此时 DTensor 的 mesh 仍是
+  #     device 类型（npu，对应上游 issue 里的 cuda），而 local tensor 在 CPU，
+  #     torch DTensor 的 RNG tracker 只推进 device 侧 RNG → CPU RNG 状态陈旧 →
+  #     normal_() 每次返回同样的值 → torch 2.12/2.14 的 nn.init.trunc_normal_
+  #     拒绝采样 while 循环永不收敛（卡在同一参数上无限重填）。
+  #     上游 issue：pytorch/pytorch#180088、#196072，修复方向 #199209
+  #     （拒绝采样实现来自 #174997）。与 CANN / torch_npu 无关（torch 2.12 时代同样现象）。
+  # 实测（hdc-stable-npu-1, CANN 9.2.0 + torch 2.14 + torch_npu 2.14）：
+  #   native 栈停在 at::native::normal_（真在算随机数，非内存回收自旋/通信空等）；
+  #   RSS 3.3GB / cgroup 32GB、无 OOM → 与内存无关；同一 FSDPLinear 实例的同一参数
+  #   被反复重填（8B 卡在 embedding 的 262M 元素分片）；规模无关——6M 参数的
+  #   debugmodel 开 cpu_offload 同样死锁（单参数 524K 元素、填充 16ms）；
+  #   与 FSDP2 相关——去掉 FSDP2 的裸 DTensor 复现（Shard(0) over npu mesh，
+  #   含完整拒绝采样循环与跨 rank 归约）全部秒过。
+  #   规避（不改上游）：自定义 param_init 用 uniform+erfinv 等价实现（不走拒绝采样），
+  #   或从 checkpoint 加载跳过 init_weights。
+  # 退役条件：上游修复 CPU local tensor 的 RNG 推进（#199209）后重测。
   - torchtitan/models/llama3/config_registry.py:llama3_8b
 
   # --- llama3 float8 系：三墙 + 量化墙 ---

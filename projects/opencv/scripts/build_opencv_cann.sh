@@ -3,8 +3,8 @@
 # Idempotent — re-runs are no-ops if the build is already installed
 # at /usr/local/opencv-cann.
 #
-# This is the build half of the setup. The 5 source patches are the
-# same ones Quick-start-Ascend.md §"打 5 个源码补丁" applies; see
+# This is the build half of the setup. The 3 source patch groups are the
+# same ones Quick-start-Ascend.md §"打 3 组源码补丁" applies; see
 # that section for the per-patch rationale. We replicate them here so
 # the example-guard setup is self-contained.
 #

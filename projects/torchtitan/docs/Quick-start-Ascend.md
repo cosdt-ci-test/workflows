@@ -17,7 +17,7 @@ Atlas 900 A2 / A3 训练系列产品或者 Ascend 950 系列产品，并按需�
 
 **配套机器**：
 
-- **机器类型**：Atlas 900 A2 PODc（Ascend 910B4，32 GB × 2 — CANN / 驱动预留约 2.5 GB，每张卡 PyTorch 实测可用 ~30 GB）
+- **机器类型**：Atlas 900 A2 PODc（Ascend 910B4，32 GB × 2 — CANN / 驱动预留约 2.5 GB，每张卡可用约 30 GB）
 - **操作系统**：Ubuntu 22.04
 
 **配套镜像**：
@@ -67,7 +67,7 @@ npu-smi info
 
 > 如果 `npu-smi` 不存在，请回到 [Ascend 官方快速安装指南](https://ascend.github.io/docs/sources/ascend/quick_install.html) 补装驱动。
 
-> 如果 `HBM-Usage` 异常偏高（如 >30 GB 且进程表为空），通常是宿主机侧的其他占用（容器内看不到持有进程），本文档 debugmodel 规模（~6 M 参数）在剩余 ~2 GB HBM 下实测仍可完成。
+> 如果 `HBM-Usage` 异常偏高（如 >30 GB 且进程表为空），通常是宿主机侧的其他占用（容器内看不到持有进程），本文档 debugmodel 规模（~6 M 参数）在剩余 ~2 GB HBM 下仍可完成。
 
 检查 Python 版本：
 
@@ -231,10 +231,10 @@ tokenizer_config.json
 
 ### 兼容性说明与 NPU override
 
-torchtitan v0.3.0 + torch 2.14 + torch_npu 2.14.0 + CANN 9.2.0 + triton-ascend 3.6.0 组合上，旧版文档的六条限制中三条已随版本升级消失，两条残留硬墙通过 torchtitan **官方 override 机制**（`--override.imports`，见 `torchtitan/config/override.py`——上游明确设计为 "Swaps any Configurable for an alternative implementation — without modifying config_registry functions or any other in-repo code"）在不改动上游源码的前提下替换组件配置，loss 墙用上游 registry 的现成变体配置规避。本文档全程**零 sed、零 monkey-patch**，torchtitan 源码树保持 git clean。
+torchtitan v0.3.0 的语言模型默认使用 flex attention 与 complex64 RoPE 缓存，二者在 NPU 上均不可用：flex 的 Triton 模板与 mask 子图在 torch_npu 2.14.0 上有缺口，aclnnIndex 则没有 DT_COMPLEX64 实现。本文档用 torchtitan **官方 override 机制**（`--override.imports`，见 `torchtitan/config/override.py`）替换这两个组件的配置，并用上游 registry 自带的 `llama3_debugmodel_ce_loss` 配置替代默认的分块 loss，全程**不修改上游源码**，torchtitan 源码树保持 git clean。
 
 
-**8B 规模仍未验证。** 8B 走 `--training.enable-cpu-offload` 路径时权重在 CPU 上经 DTensor dispatch 逐参数 `init_weights`，旧栈实测单个 `trunc_normal_` 超过 1.5 小时不完成（接近活锁），新栈未复测。多卡章节因此仍用 `debugmodel` 双卡（FSDP shard=2 + HCCL 双卡 + DTensor 参数分布 + bf16 全部覆盖），8B 规模验证留待后续。
+**8B 规模不在本文档的验证范围。** 8B（~8.03 B 参数）在双卡 32 GB 上需要 `--training.enable-cpu-offload` 才装得下（FSDP shard=2 后每卡约 48 GB > 32 GB HBM），而该组合会触发 PyTorch 上游已知缺陷：DTensor 的 RNG tracker 对「device 类型 mesh + CPU local tensor」不推进 CPU RNG，导致 `nn.init.trunc_normal_` 的拒绝采样循环不收敛（`pytorch/pytorch#180088`、`pytorch/pytorch#196072`，修复方向 `pytorch/pytorch#199209`）。因此本文档的多卡章节使用 `debugmodel` 双卡（FSDP shard=2 + HCCL 双卡 + DTensor 参数分布 + bf16 全部覆盖）。
 
 
 ### 安装 NPU override 模块
@@ -244,15 +244,14 @@ override 模块是一个普通的 Python 文件，放在 torchtitan 仓库**之�
 ```shell #test-setup
 mkdir -p "$HOME/tt-npu-overrides"
 cat > "$HOME/tt-npu-overrides/npu_compat.py" << 'PYEOF'
-"""NPU compat overrides for torchtitan v0.3.0 on Ascend (CANN 9.2.0 stack).
+"""NPU compat overrides for torchtitan v0.3.0 on Ascend.
 
-Uses torchtitan's official @override mechanism (--override.imports).
-No upstream source file is modified.
+Activated via torchtitan's official override mechanism
+(--override.imports); no upstream source file is modified.
 
-- ComplexRoPE -> CosSinRoPE: aclnnIndex has no DT_COMPLEX64 impl (CANN 9.2.0).
-- FlexAttention -> ScaledDotProductAttention: NPU flex path gaps
-  (mask_out template MLIR fail; document-masking aten.index subgraph).
-  SDPA dispatches to aclnn flash attention.
+- ComplexRoPE -> CosSinRoPE: aclnnIndex has no DT_COMPLEX64 implementation.
+- FlexAttention -> ScaledDotProductAttention: the NPU flex path is not
+  usable; SDPA dispatches to aclnn flash attention.
 """
 from torchtitan.config.override import derive, override
 from torchtitan.models.common.attention import (
@@ -293,7 +292,7 @@ PYTHONPATH="$HOME/tt-npu-overrides" python -c "import npu_compat; from torchtita
 
 ### 单卡训练
 
-用 `torchrun --nproc_per_node=1` 在 1 张 NPU 上跑 `debugmodel` 真跑 2 步，验证配置解析、初始化、加载 tokenizer、build dataloader、forward + backward 整条链路能跑通。`llama3_debugmodel_ce_loss` 是上游 registry 自带的 CrossEntropyLoss 变体（~6 M 参数量，单卡 30 GB 完全够装）；`--override.imports` 激活上一步的两个 NPU 兼容替换（rope + attention，日志会打印 12 个节点的替换明细和 `Applied 12 override(s)`）。走真实 HCCL backend（`--comm.mode default`）让 c10d 把 `npu` 路由到 `hccl`，1-rank 下所有集合通信都是 self-barrier，不会真的有跨卡流量。多卡 FSDP shard 训练见下一节「多卡训练」（8B 规模在本栈暂未验证，见「兼容性说明与 NPU override」）：
+用 `torchrun --nproc_per_node=1` 在 1 张 NPU 上跑 `debugmodel` 真跑 2 步，验证配置解析、初始化、加载 tokenizer、build dataloader、forward + backward 整条链路能跑通。`llama3_debugmodel_ce_loss` 是上游 registry 自带的 CrossEntropyLoss 变体（~6 M 参数量，单卡 30 GB 完全够装）；`--override.imports` 激活上一步的两个 NPU 兼容替换（rope + attention，日志会打印 12 个节点的替换明细和 `Applied 12 override(s)`）。走真实 HCCL backend（`--comm.mode default`）让 c10d 把 `npu` 路由到 `hccl`，1-rank 下所有集合通信都是 self-barrier，不会真的有跨卡流量。多卡 FSDP shard 训练见下一节「多卡训练」（8B 规模不在本文档验证范围，见「兼容性说明与 NPU override」）：
 
 ```shell #test id="torchtitan-train-debug" load="upstream_ref>>ref"
 cd torchtitan && git checkout -f <ref>
@@ -332,7 +331,7 @@ torchrun --nproc_per_node=1 \
 
 ### 多卡训练
 
-用 torchrun 起 2 个 rank 跑 `debugmodel` 真分布式训练，`--training.steps 2` 真跑 2 步。`data_parallel_shard_degree = -1` 在双卡下解析成 2，FSDP 把 params / grads / Adam state 按 shard 分摊到两张卡，验证 HCCL 双卡集合通信 + FSDP shard>1 + DTensor 参数分布整条链路；叠 `--training.dtype bfloat16` 验证混合精度。多卡使用**默认 spmd backend**（torch 2.14 的 FSDP 注解翻译就位，双卡实测通过，无需 `--parallelism.spmd-backend` 覆盖）；`HCCL_NPU_SOCKET_PORT_RANGE` 用于错开同容器两个 rank 的 HCCL 监听端口（否则 `EI0020` 端口冲突，见「兼容性说明与 NPU override」）：
+用 torchrun 起 2 个 rank 跑 `debugmodel` 真分布式训练，`--training.steps 2` 真跑 2 步。`data_parallel_shard_degree = -1` 在双卡下解析成 2，FSDP 把 params / grads / Adam state 按 shard 分摊到两张卡，验证 HCCL 双卡集合通信 + FSDP shard>1 + DTensor 参数分布整条链路；叠 `--training.dtype bfloat16` 验证混合精度。多卡使用**默认 spmd backend**（torch ≥2.13 的 FSDP 注解翻译已就位，无需 `--parallelism.spmd-backend` 覆盖）；`HCCL_NPU_SOCKET_PORT_RANGE` 用于错开同容器两个 rank 的 HCCL 监听端口（否则报 `EI0020` 端口冲突）：
 
 ```shell #test id="torchtitan-train-2card" load="upstream_ref>>ref"
 cd torchtitan && git checkout -f <ref>
@@ -373,5 +372,3 @@ torchrun --nproc_per_node=2 \
 [default0]:[titan] ... - root - INFO - Training completed
 [default0]:[titan] ... - root - INFO - Process group destroyed
 ```
-
-> 8B 规模随 cpu-offload 初始化问题在新栈复测通过后恢复。

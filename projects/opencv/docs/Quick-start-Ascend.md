@@ -90,73 +90,92 @@ git clone --depth 1 --branch <ref> https://github.com/opencv/opencv.git
 git clone --depth 1 --branch <ref> https://github.com/opencv/opencv_contrib.git
 ```
 
-## 打 5 个源码补丁
+## 打 3 组源码补丁
 
-OpenCV mainline 与 CANN 9.1.0 / aarch64 有 4 处不兼容 + 1 处宿主驱动兼容性缺陷（5 个 patch 脚本假设 runner resolve 到 `5.0.0` tag；其它 tag 上 `assert old in s` 会抛错，需要重写 patch 适配）。按顺序跑这 5 段脚本（幂等，已打过会断言跳过）。
+OpenCV mainline 与 CANN 9.1.0 / aarch64 有 3 处不兼容（3 个 patch 脚本假设 runner resolve 到 `5.0.0` tag；其它 tag 上 `assert old in s` 会抛错，需要重写 patch 适配）。按顺序跑这 3 段脚本（幂等，已打过会断言跳过）。
+
+| 组 | 上游哪里坏了 | 改法 |
+| --- | --- | --- |
+| 4a | OpenCV 5.0 把 shape 类型换成 `cv::MatShape`（`explicit` 构造、**没有** `front()`） | 新增 1 个 `cv::MatShape` 重载转发给上游构造 + 修 3 处赋值 |
+| 4b | `all_ops.h` 的 ~1500 个 op 把 dnn `.text` 撑破 aarch64 ±128 MiB 链接窗口 | per-TU 窄 op 头 |
+| 4c | CANN 9.x 拒绝 NULL 流（EH0008） | `OperatorRunner::run` 回落到 ctx 默认流 |
+
+> 之前还有第 5 组「H2D/D2H 宿主缓冲收窄」，**已删除**：它防的是"驱动报的 buffer size 比 shape 字节数大"，而实测 `acl_size == host_size == 4000`（无 padding），该路径本来就不是崩溃根因；当时真正的堆损坏是**宿主驱动 25.5.2 × 镜像 CANN 9.1.0 版本错配**导致 `DvppWrapperManager` 析构时 free 到坏块，属宿主环境问题（配套驱动 25.3.rc1.2 上无此现象），不该用源码补丁兜。
 
 ### 4a. `cv::MatShape` 改了类型
 
-`CannConstOp` 主构造 + `gemm_layer` / `matmul_layer` 还在用老的 `std::vector<int>` 形式，编译不过。加一个委托重载 + 修两处赋值。
+OpenCV 5.0 把 shape 类型换成了 `cv::MatShape`（构造是 `explicit`，且**没有** `front()`），上游 CANN 后端还停在 4.x 的 `std::vector<int>` 写法，编译不过。
+
+改法保持最小：**上游的 `std::vector<int>` 构造函数原样保留**，只**新增**一个 `cv::MatShape` 重载转发给它；再修 3 处已经编译不过的赋值。
 
 ```shell #test-setup
 python3 - <<'PY'
 import pathlib
-# (a) 主构造：std::vector<int>& → cv::MatShape&
-old = 'const std::vector<int>& shape, const std::string& name'
-new = 'const cv::MatShape& shape, const std::string& name'
-for rel in ['opencv/modules/dnn/src/op_cann.hpp',
-            'opencv/modules/dnn/src/op_cann.cpp']:
-    p = pathlib.Path(rel); s = p.read_text()
-    assert old in s, f'{rel}: pattern not found'
-    p.write_text(s.replace(old, new))
-    print(f'(a) {rel}: {s.count(old)} occurrence(s) -> MatShape&')
 
-# (b) hpp 加 vector<int> 转发重载声明
+# (a) op_cann.hpp: 新增 cv::MatShape 重载声明（上游 vector<int> 主构造不动）
 hp = pathlib.Path('opencv/modules/dnn/src/op_cann.hpp')
 hs = hp.read_text()
-decl_old = 'CannConstOp(const uint8_t* data, const int dtype, const cv::MatShape& shape, const std::string& name);'
-decl_new = (decl_old
-            + '\n        CannConstOp(const uint8_t* data, const int dtype, const std::vector<int>& shape, const std::string& name);')
-assert decl_old in hs and decl_new.splitlines()[1] not in hs, 'hpp decl already patched'
-hp.write_text(hs.replace(decl_old, decl_new, 1))
-print('(b) op_cann.hpp: +1 std::vector<int>& overload decl')
+decl_v = 'CannConstOp(const uint8_t* data, const int dtype, const std::vector<int>& shape, const std::string& name);'
+decl_m = 'CannConstOp(const uint8_t* data, const int dtype, const cv::MatShape& shape, const std::string& name);'
+assert decl_v in hs, 'hpp: upstream std::vector<int> decl not found'
+if decl_m in hs:
+    print('(a) op_cann.hpp: MatShape overload decl already present')
+else:
+    hp.write_text(hs.replace(decl_v, decl_v + '\n        ' + decl_m, 1))
+    print('(a) op_cann.hpp: +1 cv::MatShape overload decl')
 
-# (c) cpp 加 vector<int> 转发构造函数
+# (b) op_cann.cpp: MatShape 重载转发给上游 vector<int> 构造（上游函数体不改）
 cp = pathlib.Path('opencv/modules/dnn/src/op_cann.cpp')
 cs = cp.read_text()
+deleg = ('\nCannConstOp::CannConstOp(const uint8_t* data, const int dtype, const cv::MatShape& shape, const std::string& name)\n'
+         '    : CannConstOp(data, dtype, std::vector<int>(shape.begin(), shape.end()), name) {}\n')
 anchor = 'op_ = std::make_shared<ge::op::Const>(name);\n    op_->set_attr_value(*ge_tensor);\n}\n'
-deleg = ('\nCannConstOp::CannConstOp(const uint8_t* data, const int dtype, const std::vector<int>& shape, const std::string& name)\n'
-         '    : CannConstOp(data, dtype, cv::MatShape(shape), name) {}\n')
-assert anchor in cs and deleg.strip() not in cs, 'cpp delegating ctor already patched or anchor missing'
-cp.write_text(cs.replace(anchor, anchor + deleg, 1))
-print('(c) op_cann.cpp: +1 std::vector<int>& delegating ctor')
+if deleg.strip() in cs:
+    print('(b) op_cann.cpp: MatShape forwarding ctor already present')
+else:
+    assert anchor in cs, 'cpp: anchor not found'
+    cp.write_text(cs.replace(anchor, anchor + deleg, 1))
+    print('(b) op_cann.cpp: +1 MatShape forwarding ctor')
 
-# (d) 两处 MatShape = std::vector<int>{...} 赋值改成 MatShape(1, &val) 构造
+# (c)(d) cv::MatShape 没有 front()、也不能从 std::vector<int> 赋值 -> 修 3 处
 fixes = [
     ('opencv/modules/dnn/src/layers/gemm_layer.cpp',
      '            shape_C = std::vector<int>{dim};',
-     '            shape_C = cv::MatShape(1, &dim);'),
+     '            shape_C = cv::MatShape(1, dim);'),
     ('opencv/modules/dnn/src/layers/matmul_layer.cpp',
      '                if (real_ndims_C == 1 && bias_shape.front() != 1) {',
      '                if (real_ndims_C == 1 && bias_shape[0] != 1) {'),
     ('opencv/modules/dnn/src/layers/matmul_layer.cpp',
      '                    bias_shape = std::vector<int>{bias_shape.front()};',
-     '                    int _bias_val = bias_shape[0]; bias_shape = cv::MatShape(1, &_bias_val);'),
+     '                    bias_shape = cv::MatShape(1, bias_shape[0]);'),
 ]
 for rel, o, n in fixes:
     p = pathlib.Path(rel); s = p.read_text()
+    if n in s:
+        print(f'(c)(d) {rel}: already patched')
+        continue
     assert o in s, f'{rel}: pattern not found'
-    assert n not in s, f'{rel}: already patched'
     p.write_text(s.replace(o, n, 1))
-    print(f'(d) {rel}: 1 assignment fixed')
+    print(f'(c)(d) {rel}: 1 assignment fixed')
 PY
 ```
 
-预期：`(a)`/`(b)`/`(c)`/`(d)` 各 1 行打印，`grep` 确认两处 `cv::MatShape(1, &...)`。
+预期：`(a)`/`(b)` 各 1 行打印，`(c)(d)` 打印 3 行（gemm 1 + matmul 2）；`grep 'cv::MatShape' opencv/modules/dnn/src/layers/{gemm,matmul}_layer.cpp` 各命中 1 处。
 
 ### 4b. 缩小 CANN op 头（避免 aarch64 链接炸）
 
-`all_ops.h` 有 ~1500 个 op，aarch64 + Debug 下链接必炸；换成窄头 `array_ops.h`，并给每个 layer TU 插它实际用到的窄头。
+`all_ops.h` 有 ~1500 个 op。`op_cann.hpp` 被 `net_impl.hpp` 拉进**每个** dnn TU，于是每个 TU 都背上 ~4 MB 的 op 内联代码（97 个 TU 间接入 `op_cann.hpp`），`libopencv_dnn.so` 的 `.text` 撑破 aarch64 `R_AARCH64_CALL26/JUMP26` 的 ±128 MiB 窗口，链接直接死在 `relocation truncated to fit`（CI 33244401262，报在 protobuf 的 `Arena::AllocateAlignedWithCleanup` 上——溢出的是总 `.text` 跨度，被随机挑中的受害者）。
+
+Debug 与 Release **都炸**（Release 下实测同样 `relocation truncated to fit: R_AARCH64_JUMP26`），换优化级别救不了，只能缩头：换成窄头 `array_ops.h`，并给每个 layer TU 插它实际用到的窄头。
+
+> 23 个窄头**不能**合并成一个"域头并集"（那样补丁少 22 处，看着很美）。实测同一个 TU 的 `.text*`：
+
+> | TU | `all_ops.h` | per-TU 窄头（采用） | 域头并集 |
+> | --- | --- | --- | --- |
+> | `convolution_layer.cpp` | 4,026,788 | 361,616 | 2,036,904 |
+> | `net.cpp` | 3,966,196 | 209,708 | 1,976,312 |
+>
+> 并集方案是窄头的 5.6~9.4 倍，外推到 97 个 TU 仍约 195 MB > 128 MiB，链接照炸。
 
 ```shell #test-setup
 python3 - <<'PY'
@@ -271,98 +290,32 @@ PY
 
 预期：打印 `(g) patched`。
 
-### 4d. AscendC `kernel_launch` 模板（NULL 流 + 缺头）
+**这组是必需的（实测）**：把 `(g)` 回退成上游写法后重编，`opencv_test_cannops` 的 53 个用例里 **48 个挂**（只剩 5 个过），报错是
 
-同 NULL 流坑，并补 `acl_rt.h` include（模板里调 `aclrtCreateStream` / `aclrtSynchronizeStream`，声明在 `acl_rt.h`，原头只有 `acl_base.h`）。
-
-```shell #test-setup
-python3 - <<'PY'
-import pathlib
-p = pathlib.Path('opencv_contrib/modules/cannops/include/opencv2/cann_call.hpp')
-s = p.read_text()
-inc_old = '#include <acl/acl_base.h>'
-inc_new = '#include <acl/acl_base.h>\n#include <acl/acl_rt.h>'
-assert inc_old in s and inc_new not in s
-s = s.replace(inc_old, inc_new, 1)
-old = '''    std::shared_ptr<uchar> tilingDevice =
-        mallocAndUpload(&tiling, sizeof(TILING_TYPE), stream, AscendMat::defaultAllocator());
-    aclrtStream rawStream = AscendStreamAccessor::getStream(stream);
-    CV_ACL_SAFE_CALL(kernel(1, rawStream, tilingDevice.get(), args...));
-    if (rawStream == nullptr)
-    {
-        stream.waitForCompletion();
-    }'''
-new = '''    std::shared_ptr<uchar> tilingDevice =
-        mallocAndUpload(&tiling, sizeof(TILING_TYPE), stream, AscendMat::defaultAllocator());
-    aclrtStream rawStream = AscendStreamAccessor::getStream(stream);
-    aclrtStream execStream = rawStream;
-    if (execStream == nullptr)
-        CV_ACL_SAFE_CALL(aclrtCtxGetCurrentDefaultStream(&execStream));
-    CV_ACL_SAFE_CALL(kernel(1, execStream, tilingDevice.get(), args...));
-    CV_ACL_SAFE_CALL(aclrtSynchronizeStream(execStream));'''
-assert old in s, 'cann_call.hpp: kernel_launch body not found'
-p.write_text(s.replace(old, new, 1))
-print('(h) cann_call.hpp: NULL-stream fallback + acl_rt.h patched')
-PY
+```
+Invalid_Argument_Null_Pointer(EH0008): aclrtAllocatorGetByStream failed because stream cannot be a NULL pointer.
+E29999: Assert ((stream) != nullptr) failed[FUNC:AiCoreLaunchKernelWithHandle]
 ```
 
-预期：打印 `(h) patched`。
+也就是说 CANN 9.1.0 真的不接 NULL 流（`aclopCompileAndExecute` → `AiCoreLaunchKernel*` 一路断言非空）。上游那行 `if (rawStream == nullptr) aclrtSynchronizeStream(rawStream)` 本身也是错的（同步一个 NULL 流），补丁顺手把它改成同步真正用的那条流。
 
-### 4e. CANN 整图执行的宿主缓冲收窄（防御性加固）
+### 4d. AscendC `kernel_launch` 模板：**不打**这个补丁（实测测不出差别）
 
-`CannNet::forward`（`op_cann.cpp`）做输入/输出 H2D/D2H 拷贝时，把 ACL 报告的 dataset buffer 字节数直接当作宿主 `Mat` 的容量上限使用（输出方向 `aclrtMemcpy` 的目的端 bound 是 `db_size` 而非宿主实际字节数）。实测（驱动 25.5.2 环境，4e 加的日志）`acl_size == host_size == 4000`、无 padding，**此路径并非崩溃根因**；但该写法在 ACL 报告 size 大于 shape 字节数时必然溢出，属结构性隐患，双向 clamp 收窄并打 `acl_size`/`host_size` 日志留证。
+上游 `cann_call.hpp` 的 `kernel_launch` 模板有同一个毛病（把 `rawStream` 可能是 `nullptr` 的值直接喂给 `kernel(...)`，并且 `acl_rt.h` 没 include）。我们**实测过**要不要打这个补丁，结论是**不打**：
 
-> **堆损坏真因（gdb backtrace 实锤）**：宿主机驱动 25.5.2 × 镜像 CANN 9.1.0 **错配**的组合下，堆在运行期被写坏（HAL 层 `libascend_hal.so` 来自 25.5.2 驱动挂载，ACL/DVPP 用户态来自镜像 9.1.0），到进程 `exit()` 的 atexit 阶段 `libacl_dvpp_mpi.so` 的 `DvppWrapperManager::~DvppWrapperManager()` 才 free 到坏块 → `corrupted double-linked list` + SIGABRT（rc=134）。**推理本身完全正确**（top-1/score 与配套环境逐位一致）。修复见下文 DNN 块末尾的 `os._exit(0)`；驱动与 CANN 配套的正常环境（如 25.3.rc1.2）无此问题。
+| 变体 | 53 个 cannops 用例 | 3 个 threshold 用例（CI 排除清单里） |
+| --- | --- | --- |
+| 打了（ctx 默认流 fallback + `acl_rt.h`） | 53/53 过 | 3/3 挂 |
+| 不打（上游原样） | 53/53 过 | 3/3 挂 |
 
-```shell #test-setup
-python3 - <<'PY'
-import pathlib
+- 53 个用例**根本走不到** `kernel_launch`：CI 的排除清单里的 3 个 threshold 用例就是唯一走 AscendC kernel 的用例，被排除了；
+- 那 3 个用例打不打补丁都挂，但**挂的原因跟流无关**：设备侧 AICore 报 `vector core exception` —— "The address for the VEC instruction to read/write UB is out of bounds"，是上游 AscendC kernel 自己的越界 bug（所以 CI 才排除它们）。两种写法只是把同一个设备侧错误报在不同的同步点上（打了报在 `kernel_launch`，没打报在 `waitForCompletion`）。
 
-# (i) 输入 H2D：拷贝字节数收窄到宿主 Mat 实际大小（防越界读）
-p = pathlib.Path('opencv/modules/dnn/src/op_cann.cpp')
-s = p.read_text()
-old_in = '''        auto db = aclmdlGetDatasetBuffer(inputs, i);
-        auto p_device = aclGetDataBufferAddr(db);
-        auto db_size = aclGetDataBufferSizeV2(db);
+所以 quick start 不打这个补丁。**如果将来上游 AscendC kernel 的越界被修好、并且真的用上 NULL 流**，再把同样的 ctx 默认流 fallback 加回去（连同 `acl_rt.h`）——那时它才有可观测的收益。
 
-        ACL_CHECK_RET(aclrtMemcpy(p_device, db_size, p_host, db_size, ACL_MEMCPY_HOST_TO_DEVICE));'''
-new_in = '''        auto db = aclmdlGetDatasetBuffer(inputs, i);
-        auto p_device = aclGetDataBufferAddr(db);
-        auto db_size = aclGetDataBufferSizeV2(db);
-        // (i) driver >= 25.5.x may report dataset buffer size with alignment padding,
-        // larger than the host Mat's actual bytes; clamp copies to the host size on
-        // both directions to avoid overrunning the host heap.
-        size_t host_size = (size_t)input_wrappers[i]->host->total() * input_wrappers[i]->host->elemSize();
-        size_t copy_size = db_size < host_size ? db_size : host_size;
-        ACL_CHECK_RET(aclrtMemcpy(p_device, db_size, p_host, copy_size, ACL_MEMCPY_HOST_TO_DEVICE));'''
-assert old_in in s, 'op_cann.cpp: input memcpy block not found'
-s = s.replace(old_in, new_in, 1)
-
-# (j) 输出 D2H：拷贝字节数收窄到宿主 Mat 实际大小（防越界写 = 堆损坏根因），并打日志
-old_out = '''        auto db = aclmdlGetDatasetBuffer(outputs, i);
-        auto p_device = aclGetDataBufferAddr(db);
-        auto db_size = aclGetDataBufferSizeV2(db);
-
-        ACL_CHECK_RET(aclrtMemcpy(p_host, db_size, p_device, db_size, ACL_MEMCPY_DEVICE_TO_HOST));'''
-new_out = '''        auto db = aclmdlGetDatasetBuffer(outputs, i);
-        auto p_device = aclGetDataBufferAddr(db);
-        auto db_size = aclGetDataBufferSizeV2(db);
-        // (j) clamp the copy to the host capacity: with host driver >= 25.5.x the
-        // reported output size can exceed the shape-implied bytes (padding), and
-        // copying db_size bytes into the smaller host Mat corrupts the heap.
-        size_t host_size = (size_t)output_wrappers[i]->host->total() * output_wrappers[i]->host->elemSize();
-        size_t copy_size = db_size < host_size ? db_size : host_size;
-        CV_LOG_INFO(NULL, "DNN/CANN: output[" << i << "] acl_size=" << db_size << " host_size=" << host_size);
-        ACL_CHECK_RET(aclrtMemcpy(p_host, host_size, p_device, copy_size, ACL_MEMCPY_DEVICE_TO_HOST));'''
-assert old_out in s, 'op_cann.cpp: output memcpy block not found'
-assert new_out not in s, 'op_cann.cpp: already patched'
-s = s.replace(old_out, new_out, 1)
-p.write_text(s)
-print('(i)(j) op_cann.cpp: host-buffer clamped H2D/D2H memcpy + size log')
-PY
-```
-
-预期：打印 `(i)(j) ... patched` 一行；`grep 'host_size=' opencv/modules/dnn/src/op_cann.cpp` 命中 1 处。
+> **宿主环境的坑（不是源码问题，所以源码里不做缓冲收窄）**：宿主机驱动 25.5.2 × 镜像 CANN 9.1.0 **错配**的组合下，堆在运行期被写坏（HAL 层 `libascend_hal.so` 来自 25.5.2 驱动挂载，ACL/DVPP 用户态来自镜像 9.1.0），到进程 `exit()` 的 atexit 阶段 `libacl_dvpp_mpi.so` 的 `DvppWrapperManager::~DvppWrapperManager()` 才 free 到坏块 → `corrupted double-linked list` + SIGABRT（rc=134）。**推理本身完全正确**（top-1/score 与配套环境逐位一致）。修复见下文 DNN 块末尾的 `os._exit(0)`；驱动与 CANN 配套的正常环境（如 25.3.rc1.2）无此问题。
+>
+> 顺带说明为什么源码里**不**再收窄 H2D/D2H 的拷贝字节数：那处补丁防的是"驱动报的 buffer size 大于 shape 字节数"，而加日志实测 `acl_size == host_size == 4000`（无 padding），该路径本来就不是崩溃根因。
 
 ## 桥接 CANN 9.1.0 的库目录
 
@@ -682,7 +635,7 @@ cv2.imwrite('/tmp/dnn-result.png', img)
 # 结果不经 python 的缓冲 stdout 输出，而是用原始 syscall 写文件：
 # 1) GE 编译会 fork 子进程，子进程 exit(0) 会把继承的 stdout 缓冲冲到
 #    C++ 日志行的中间（实测 "model bytes" 粘在半截 INFO 行上）；
-# 2) 驱动 25.5.2 × CANN 9.1.0 错配环境堆已损坏（见补丁 4e 小节），
+# 2) 驱动 25.5.2 × CANN 9.1.0 错配环境堆已损坏（见 §4d 末尾的「宿主环境的坑」），
 #    os.write 不经过 C 堆最稳。bash 的 `echo; cat` 保证锚点行干净。
 result = (
     'model bytes: %d\n'
@@ -723,4 +676,4 @@ top class score: 0.xxx
 
 ![NPU 推理标注结果](images/dnn-result.png)
 
-> 首次 forward 含 GE 图编译（`converting ge::Graph to OM buffer`），约 0.5~1 分钟出 `Compile success, model size = 9759197`；进程内二次 forward 约 1ms。若 graph check 报 `ret = 4294967295` 且日志有 `No module named 'tbe'`，是 `PYTHONPATH` 被**整体覆盖**（见上文 quickstart 开头的 prepend 说明）。forward 时补丁 4e 会打一行 `DNN/CANN: output[0] acl_size=... host_size=...` 留证（实测两种驱动下均为 `4000 == 4000`）。块末尾的 `os._exit(0)` 是对驱动/CANN 错配环境 DVPP atexit 堆损坏的规避，详见补丁 4e 小节的真因说明。
+> 首次 forward 含 GE 图编译（`converting ge::Graph to OM buffer`），约 0.5~1 分钟出 `Compile success, model size = 9759197`；进程内二次 forward 约 1ms。若 graph check 报 `ret = 4294967295` 且日志有 `No module named 'tbe'`，是 `PYTHONPATH` 被**整体覆盖**（见上文 quickstart 开头的 prepend 说明）。块末尾的 `os._exit(0)` 是对驱动/CANN 错配环境 DVPP atexit 堆损坏的规避，详见 §4d 末尾的环境说明。

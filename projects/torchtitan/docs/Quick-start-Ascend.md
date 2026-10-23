@@ -32,9 +32,9 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-910b-ubuntu22.04-py3.12
 | CANN | 9.2.0 |
 | torch | 2.14.0 |
 | torch_npu | 2.14.0 |
-| triton-ascend | 3.6.0（正式版） |
-| modelscope | 最新release |
-| torchtitan | 最新 release（≥ v0.3.0） |
+| triton-ascend | 3.6.0 |
+| modelscope | 1.40.2 |
+| torchtitan | 最新 release |
 | 训练配置 | 单卡 / 多卡均使用 `torchtitan/models/llama3/config_registry.py::llama3_debugmodel_ce_loss`（上游提供的 CrossEntropyLoss 变体，基于 debugmodel：dim=256 / 6 层 / 16 head / vocab 2048，~6 M 参数；多卡为 FSDP shard=2 + bf16） |
 
 
@@ -106,7 +106,7 @@ count: 2
 ### 安装 modelscope
 
 ```shell #test-setup
-uv pip install modelscope
+uv pip install modelscope==1.40.2
 ```
 
 打印安装版本：
@@ -115,8 +115,8 @@ python -c "import modelscope; print('modelscope', modelscope.__version__)"
 ```
 
 输出结果如下：
-```shell #test-result id="modelscope-install" fuzzy='xxx'
-modelscope xxx
+```shell #test-result id="modelscope-install"
+modelscope 1.40.2
 ```
 ### 安装 triton-ascend
 
@@ -153,7 +153,11 @@ python -c "import torchtitan; print('torchtitan', torchtitan.__version__)"
 ```shell #test-result id="torchtitan-install-binary" fuzzy='xxx'
 torchtitan xxx
 ```
-- xxx 表示最新的版本号
+
+```{admonition} Note
+:class: note
+`xxx` 为模糊占位符，表示安装的最新版本号。
+```
 
 <!--
 ```shell #test-setup
@@ -175,14 +179,22 @@ cd torchtitan
 uv pip install -e .
 python -c "import torchtitan; print('torchtitan', torchtitan.__version__)"
 ```
-\<ref> 为工作流注入的最新 release tag
+
+```{admonition} Note
+:class: note
+`<ref>` 不是字面文本，是上文 `store="upstream_ref"` 块捕获的注入参数——工作流把 `UPSTREAM_REF` 环境变量（pytorch/torchtitan 最新 release tag）注入后捕获，`load="upstream_ref>>ref"` 再把它替换进命令里的 `<ref>` 占位符。手工执行时直接替换成目标 tag（如 `v0.3.0`）。
+```
 
 输出结果类似如下：
 
 ```shell #test-result id="torchtitan-install-source" fuzzy='xxx'
 torchtitan xxx
 ```
-- xxx 表示最新的版本号
+
+```{admonition} Note
+:class: note
+`xxx` 为模糊占位符，表示安装的最新版本号。
+```
 
 ## 跑训练
 
@@ -198,6 +210,11 @@ python -c "from modelscope import snapshot_download; print(snapshot_download('LL
 
 ```shell #test id="modelscope-verify-tokenizer" load="ms_tokenizer_path>>ms_tokenizer_path"
 ls <ms_tokenizer_path>
+```
+
+```{admonition} Note
+:class: note
+`<ms_tokenizer_path>` 不是字面文本，是上一节 `store="ms_tokenizer_path"` 块捕获的注入参数——该块运行 `snapshot_download` 并把 stdout 最后一行（模型落盘路径）捕获存为变量，`load="ms_tokenizer_path>>ms_tokenizer_path"` 再把它替换进本命令的占位符。手工执行时直接替换成上一步打印的路径。
 ```
 
 ```shell #test-result id="modelscope-verify-tokenizer" fuzzy='...' 
@@ -216,20 +233,9 @@ tokenizer_config.json
 
 torchtitan v0.3.0 + torch 2.14 + torch_npu 2.14.0 + CANN 9.2.0 + triton-ascend 3.6.0 组合上，旧版文档的六条限制中三条已随版本升级消失，两条残留硬墙通过 torchtitan **官方 override 机制**（`--override.imports`，见 `torchtitan/config/override.py`——上游明确设计为 "Swaps any Configurable for an alternative implementation — without modifying config_registry functions or any other in-repo code"）在不改动上游源码的前提下替换组件配置，loss 墙用上游 registry 的现成变体配置规避。本文档全程**零 sed、零 monkey-patch**，torchtitan 源码树保持 git clean。
 
-**已随 torch 2.14 消失的限制**：`set_pg_timeouts` 依赖的 `torch.distributed.set_timeout` 模块级 API（torch ≥2.13 原生提供，训练第 1 步后调整 PG 超时不再 `AttributeError`）；多卡默认 `spmd_types` 后端（torch ≥2.13 的 FSDP `dp_mesh_dims` 注解翻译就位，双卡实测默认 backend 可用，无需再传 `--parallelism.spmd-backend full_dtensor`）。`ChunkedLossWrapper` 在 torch_npu 2.14 上未复测，本文档直接使用上游 `llama3_debugmodel_ce_loss`（标准 `CrossEntropyLoss`，数学等价、仅无分块峰值内存优化），不依赖其修复。
-
-**残留限制一：`aclnnIndex` 不支持 complex64（CANN 9.2.0 实测未修复）。** llama3 注册表默认 `ComplexRoPE`（complex64 缓存），forward 里 `rope_cache[positions]` 索引落到 `aclnnIndex` 直接报 `AclNN_Parameter_Error: not implemented for DT_COMPLEX64`。通过 override 换成数学等价的实数实现 `CosSinRoPE`（cos/sin 缓存 + rotate-half）；它不支持 llama scaling，override 同时把 `scaling="llama"` 改为 `"none"`——llama scaling 只影响 >8k 长上下文的频率插值，对本文档 256 seq 的 smoke 数值无影响。
-
-**残留限制二：flex attention 在 torch_npu 2.14.0 上不可用（三个缺口，均实测）。** ① 默认 `mask_out` 模板族在 MLIR 转换阶段编译失败（`ConvertLinalgIRToBinary` 报错），需环境变量 `TORCHINDUCTOR_FLEXATTENTION_MASKOUT=0` 切到 `mask_in` 模板才能编过；② flex backward 撞 torch_npu 2.14.0 对 torch 2.14 的两处 API 漂移（vendored `make_reduction` 缺 `strict_sum` 参数、`NPUCombinedScheduling` 跳过父类初始化缺 `_nv_universal_gemm_scheduling` 属性）；③ 语言模型路径标配的 document masking（`doc_id[q_idx]` 索引进 mask 子图）触发 `SubgraphLoweringException`（`aten.index` 无法在 NPU 子图 lowering 中建 buffer）。三处缺口全部在 torch_npu 的 Python 适配层——CANN 9.2.0 的 bishengir 编译器本身已能编 flex 模板 kernel（简单 causal mask 下 flex fwd+bwd 实测通过、数值与 SDPA 对齐），待 torch_npu 后续版本修复后 flex 默认路径可整体回退。在此之前本文档通过 override 把 llama3 的 attention 切到 **SDPA**——torch_npu 的 SDPA 走 aclnn flash attention，是 NPU 生态的标准 attention 路径（vllm-ascend 同款）。代价：SMOKE 不再验证 flex kernel 本身，文档 masking 语义为纯 causal（靠 `is_causal`），对 2 步训练验证无影响。
 
 **8B 规模仍未验证。** 8B 走 `--training.enable-cpu-offload` 路径时权重在 CPU 上经 DTensor dispatch 逐参数 `init_weights`，旧栈实测单个 `trunc_normal_` 超过 1.5 小时不完成（接近活锁），新栈未复测。多卡章节因此仍用 `debugmodel` 双卡（FSDP shard=2 + HCCL 双卡 + DTensor 参数分布 + bf16 全部覆盖），8B 规模验证留待后续。
 
-**运行环境注意**：
-
-- `TORCHINDUCTOR_COMPILE_THREADS=1`：inductor 并行编译 worker 的内存峰值在容器 cgroup 限制（本机实测 32 GB）下会触发 OOM killer 直接 `SIGKILL` 训练进程（无任何报错输出），串行编译稳妥。
-- 双卡追加 `HCCL_NPU_SOCKET_PORT_RANGE=60000-60200`：同一容器内两个 rank 的 HCCL 网卡套接字默认同抢 16666 端口（`Communication_Error_Bind_IP_Port EI0020`），指定端口范围错开。
-- 国内网络环境需要 `HF_ENDPOINT=https://hf-mirror.com`（训练数据集 `c4_test` 从 HuggingFace 拉取；GitHub runner 等可直连 HF 的环境无需设置）。
-- triton-ascend 3.6.0 正式版 `backends/ascend/utils.py` 硬编码 `-std=c++17`，与 torch 2.14 ATen 头的 C++20 要求冲突——该问题只影响 flex 路径的 `npu_utils.cpp` 现场编译；本文档 SDPA 路径冷缓存实测不触发，无需处理（如自行实验 flex，需用 `CC` 指向把 `-std=c++17` 替换为 `c++20` 的 g++ wrapper）。
 
 ### 安装 NPU override 模块
 
@@ -355,19 +361,17 @@ torchrun --nproc_per_node=2 \
 
 输出结果类似如下：
 
-```shell #test-result id="torchtitan-train-2card" fuzzy='xxx' fuzzy='...'
-[default0]:[titan] xxx - root - INFO - torchtitan version: xxx
-[default0]:[titan] xxx - root - INFO - Building device mesh with parallelism: xxx
-[default0]:[titan] xxx - root - INFO - Applied 12 override(s)
-[default0]:[titan] xxx - root - INFO - Building llama3 debugmodel
+```shell #test-result id="torchtitan-train-2card"
+[default0]:[titan] ... - root - INFO - torchtitan version: ...
+[default0]:[titan] ... - root - INFO - Building device mesh with parallelism: ...
+[default0]:[titan] ... - root - INFO - Applied 12 override(s)
+[default0]:[titan] ... - root - INFO - Building llama3 debugmodel
 ...
-[default0]:[titan] xxx - root - INFO - Synchronizing and adjusting timeout for all ProcessGroups to 0:01:40
+[default0]:[titan] ... - root - INFO - Synchronizing and adjusting timeout for all ProcessGroups to 0:01:40
 ...
-[default0]:[titan] xxx - root - INFO - Sleeping 2 seconds for other ranks to complete
-[default0]:[titan] xxx - root - INFO - Training completed
-[default0]:[titan] xxx - root - INFO - Process group destroyed
+[default0]:[titan] ... - root - INFO - Sleeping 2 seconds for other ranks to complete
+[default0]:[titan] ... - root - INFO - Training completed
+[default0]:[titan] ... - root - INFO - Process group destroyed
 ```
 
-> `Synchronizing and adjusting timeout` 一行即 `set_pg_timeouts` 正常工作的标志（torch 2.14 原生 `torch.distributed.set_timeout`），它出现在第 1 步完成之后。
-
-> 退役条件：限制一随 CANN 的 `aclnnIndex` 支持 complex64（或 torch_npu 补转换实现）后可移除 rope override；限制二随 torch_npu 修复 flex 三处缺口（mask_out 模板 MLIR、backward 两处 API 漂移、document-masking 子图 `aten.index`）后可整体回退 flex 默认路径并移除 attention override；8B 规模随 cpu-offload 初始化问题在新栈复测通过后恢复。
+> 8B 规模随 cpu-offload 初始化问题在新栈复测通过后恢复。

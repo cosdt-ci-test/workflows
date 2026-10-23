@@ -87,10 +87,6 @@ uv pip install -f https://mirrors.aliyun.com/pytorch-wheels/cpu torch==2.14.0
 uv pip install torch_npu==2.14.0
 ```
 
-> `torch_npu` 不指定 `--extra-index-url`：2.14.0 已发布到 **PyPI**（2026-10-15），默认 index 就能取到——CI 里默认 index 是集群 pip 缓存网关代理的 PyPI（`UV_INDEX_URL`），第一次拉取后由网关缓存住，后续 job 走缓存而不是再走一遍外网；本地则是 PyPI 或你自己的镜像。华为云 ascend 源最高只到 `2.9.0.dev20251120`，PyPI 才是 2.10+ 的唯一来源。
->
-> `torch` 本体只能从阿里云 `pytorch-wheels/cpu` 拿：PyPI 上的 `torch==2.14.0` aarch64 wheel 是 454 MB 的 CUDA 构建，会和 torch_npu 的 PrivateUse1 dispatch 冲突。`==2.14.0` 会同时匹配到阿里云的 `2.14.0+cpu`（local 版本排序更高，解析器取它）和 PyPI 的 `2.14.0`。
-
 检查 torch / torch_npu 是否装好且 NPU 设备可用：
 
 ```shell #test id="check-torch"

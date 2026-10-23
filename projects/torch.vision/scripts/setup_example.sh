@@ -20,9 +20,16 @@ echo "TorchVision tested commit: $(git -C "$TARGET_ROOT" rev-parse HEAD)"
 # Use the same public Ascend-compatible wheel sources as this project's
 # quick-start. The source install below uses --no-deps and FORCE_CUDA=0 so
 # torchvision cannot replace torch_npu's matching PyTorch with a CUDA wheel.
+#
+# torch_npu comes from the default index (CI: the cluster pip-cache
+# gateway proxying PyPI; locally: PyPI or the user's own mirror) —
+# torch_npu 2.14.0 is published on PyPI (2026-10-15), so no
+# --extra-index-url is needed. torch itself must come from aliyun's
+# pytorch-wheels/cpu find-links repo: PyPI's torch==2.14.0 aarch64 wheel
+# is the 454 MB CUDA build and collides with torch_npu's dispatch.
 python -m pip install uv
 uv pip install --system -f https://mirrors.aliyun.com/pytorch-wheels/cpu 'torch==2.14.0+cpu'
-uv pip install --system --extra-index-url https://mirrors.aliyun.com/pypi/simple 'torch_npu==2.14.0'
+uv pip install --system 'torch_npu==2.14.0'
 uv pip install --system 'pillow>=10.0' numpy
 FORCE_CUDA=0 uv pip install --system --no-build-isolation --no-deps -e "$TARGET_ROOT"
 

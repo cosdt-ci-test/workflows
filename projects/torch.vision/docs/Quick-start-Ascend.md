@@ -80,10 +80,10 @@ Python 3.12.xxx
 
 ```shell #test-setup
 uv pip install -f https://mirrors.aliyun.com/pytorch-wheels/cpu torch==2.14.0+cpu
-uv pip install --extra-index-url https://mirrors.aliyun.com/pypi/simple torch_npu==2.14.0
+uv pip install torch_npu==2.14.0
 ```
 
-> torchvision v0.29.0（2026-09 发布）把 C 扩展迁移到 PyTorch Stable C ABI，构建目标钉在 torch 2.14（`setup.py` 里 `TORCH_TARGET_VERSION=0x020e000000000000`），`deform_conv2d_kernel.cpp` 用了 `torch::stable::permute`——该函数 **2.14 才进 stable API**（2.12 / 2.13 wheel 的 `stable/ops.h` 里都没有）。因此本组合直接把 torch / torch_npu 升到 **2.14.0**：torch 2.14.0+cpu wheel 的 stable API 完整含 `permute`（实测解包 `torch/csrc/stable/ops.h` 确认），源码构建 torchvision 时**无需任何补丁**。torch_npu 2.14.0 在 aliyun pypi/simple 上有，且其 metadata 强依赖 `torch==2.14.0.*`，跟 torch 2.14.0+cpu 严格配对（这也是为什么必须显式写 `2.14.0+cpu`——`+cpu` 后缀缺失会让解析器拉到默认 PyPI 的 CUDA 版 torch，跟 torch_npu 的 PrivateUse1 dispatch 冲突）。
+> torchvision v0.29.0（2026-09 发布）把 C 扩展迁移到 PyTorch Stable C ABI，构建目标钉在 torch 2.14（`setup.py` 里 `TORCH_TARGET_VERSION=0x020e000000000000`），`deform_conv2d_kernel.cpp` 用了 `torch::stable::permute`——该函数 **2.14 才进 stable API**（2.12 / 2.13 wheel 的 `stable/ops.h` 里都没有）。因此本组合直接把 torch / torch_npu 升到 **2.14.0**：torch 2.14.0+cpu wheel 的 stable API 完整含 `permute`（实测解包 `torch/csrc/stable/ops.h` 确认），源码构建 torchvision 时**无需任何补丁**。torch_npu 2.14.0 在 **PyPI** 上有（2026-10-15 发布），所以不需要 `--extra-index-url`：默认 index 即可取到——CI 里默认 index 是集群 pip 缓存网关代理的 PyPI（`UV_INDEX_URL`），拉过一次之后由网关缓存；华为云 ascend 源最高只到 `2.9.0.dev20251120`，PyPI 才是 2.10+ 的唯一来源。torch_npu 的 metadata 强依赖 `torch==2.14.0.*`，跟 torch 2.14.0+cpu 严格配对（这也是为什么必须显式写 `2.14.0+cpu`——`+cpu` 后缀缺失会让解析器拉到默认 PyPI 的 CUDA 版 torch，跟 torch_npu 的 PrivateUse1 dispatch 冲突）；torch 本体也只能从阿里云 `pytorch-wheels/cpu` 取，PyPI 上的 `torch==2.14.0` aarch64 wheel 是 454 MB 的 CUDA 构建。
 
 检查 torch / torch_npu 是否装好且 NPU 设备可用：
 

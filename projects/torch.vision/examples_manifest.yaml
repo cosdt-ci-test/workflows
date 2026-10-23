@@ -50,14 +50,19 @@ supported:
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     timeout_minutes: 120
   # R3D-18 视频分类；400 类本地四帧短视频、32×32/50 训练批次，NPU。解码走
-  # torchcodec（torchvision v0.29 移除了视频解码，Kinetics/VideoClips 无条件
-  # import 它），setup 装 torchcodec 0.17.0 + 系统 ffmpeg；2026-10-23 首跑
-  # 缺 torchcodec 失败，修复后待复验。
+  # torchcodec（torchvision v0.29 移除了视频解码），setup 从 download.pytorch.org
+  # 直连装 0.17.0+cpu wheel（PyPI aarch64 是 CUDA 构建）+ 系统 ffmpeg。CANN
+  # 9.1.0 的 fp32 Conv3DBackpropInput kernel 不支持 stride_d > kernel_d
+  # （R3D-18 layer2-4 downsample 1x1x1 conv / stride(2,2,2)，run 39895381622；
+  # allow_tf32/internal_format 均绕不开，npu-3 最小复现确认），fp16 kernel 正常
+  # ——用上游 --amp 降 fp16，run_example 的 transfer_to_npu shim 把
+  # torch.cuda.amp.autocast 映射到 NPU autocast（+cpu torch 构建上原生是
+  # no-op；npu-3 实测 autocast fp16 + 反传 + GradScaler + optimizer 全通）。
   - path: references/video_classification/train.py
     profile: vision_video_npu
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args: [--model, r3d_18, --device, 'npu:0', --epochs, '1', --batch-size, '8', --workers, '0', --clip-len, '4', --frame-rate, '8', --clips-per-video, '1', --lr-warmup-epochs, '0', --lr, '0.001', --train-crop-size, '32', '32', --train-resize-size, '40', '40', --val-crop-size, '32', '32', --val-resize-size, '40', '40']
+    overlay_args: [--model, r3d_18, --device, 'npu:0', --epochs, '1', --batch-size, '8', --workers, '0', --clip-len, '4', --frame-rate, '8', --clips-per-video, '1', --lr-warmup-epochs, '0', --lr, '0.001', --train-crop-size, '32', '32', --train-resize-size, '40', '40', --val-crop-size, '32', '32', --val-resize-size, '40', '40', --amp]
     timeout_minutes: 120
   # RAFT-small 光流训练；4 对本地帧/合成 .flo、1 epoch 两步，单卡 NPU（2026-10-23 CI 实跑通过）。
   - path: references/optical_flow/train.py

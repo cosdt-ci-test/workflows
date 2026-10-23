@@ -1,0 +1,18 @@
+version: 1
+# opencv-nopatch 的看护对象是**文档**，不是 example 脚本：
+# projects/opencv/docs/Quick-start-Ascend-NoPatch.md（OpenCV 4.11.0 +
+# WITH_CANN=ON + 零源码补丁的源码构建 + NPU DNN 推理）由
+# .github/workflows/opencv-quick-start-nopatch.yml 触发，测试入口是
+# projects/opencv-nopatch/tests/test_quick_start_ascend_nopatch.py
+# （跑文档里的 #test / #test-setup 块，#test-result 逐条比对）。
+#
+# 上游 example 树的看护仍然归 projects/opencv/examples_manifest.yaml：
+# 两个 project 指向同一棵 opencv/opencv 的 samples 树，examples-check 的
+# scan 语义是「覆盖 = supported 路径 + unsupported 条目 + scan.exclude」，
+# 同一棵树扫两遍只是重复劳动，而且 upstream 的 sample 清单只维护一份。
+#
+# 本 project 自己没有 example 脚本，所以 supported / unsupported 都是空的，
+# 也不声明 scan 段（examples-check 对没有 examples 侧 thin workflow 的
+# project 一律记为 not_in_scope，不参与 failed / error 统计）。
+supported: []
+unsupported: []

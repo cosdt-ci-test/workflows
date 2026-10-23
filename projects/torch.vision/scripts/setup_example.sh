@@ -87,11 +87,15 @@ if [[ "$profile" == vision_flow_npu || "$profile" == vision_video_npu ]]; then
     uv pip install --system 'av>=14,<17'
     # torchvision v0.29 removed video decoding: Kinetics/VideoClips imports
     # torchcodec unconditionally. torchcodec >=0.12 builds against torch's
-    # stable ABI (torch >=2.11; this stack runs 2.14.0), and the single
-    # manylinux aarch64 wheel decodes on CPU with no CUDA libraries.
-    # --no-deps keeps it from resolving a CUDA-flavored torch over the
-    # torch_npu pair.
-    uv pip install --system --no-deps torchcodec==0.17.0
+    # stable ABI (torch >=2.11; this stack runs 2.14.0). PyPI's aarch64
+    # wheel is the CUDA build - libtorchcodec_image.so links
+    # libnvrtc.so.13 (run 39894257350) - so fetch the +cpu variant by
+    # direct URL from download.pytorch.org/whl/cpu, same as peft's setup
+    # does for torch/torchvision +cpu wheels. --no-deps keeps the
+    # resolver from ever seeing a CUDA-flavored torch.
+    CP_ABI=$(python -c "import sys; print(f'cp{sys.version_info.major}{sys.version_info.minor}')")
+    uv pip install --system --no-deps \
+      "https://download.pytorch.org/whl/cpu/torchcodec-0.17.0%2Bcpu-${CP_ABI}-${CP_ABI}-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl"
     # torchcodec dlopen()s system FFmpeg (4-9) at decode time; install the
     # shared libs unconditionally (fast no-op when the image already has
     # them) so a missing libav* surfaces here instead of mid-training.

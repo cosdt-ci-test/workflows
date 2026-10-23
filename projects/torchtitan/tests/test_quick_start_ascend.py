@@ -60,17 +60,19 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     """
 
     # torchtitan's smallest meaningful command — `python -m torchtitan.train
-    # --module llama3 --config llama3_debugmodel --training.steps 1
-    # --comm.mode fake_backend` — needs to: clone torchtitan (~5 MB
-    # sparse), `uv pip install -r requirements.txt` (torchdata / datasets /
-    # tensorboard / wandb / fsspec / tyro / tokenizers / safetensors /
-    # einops / pillow on v0.2.x; cluster cache resolves most in well under
-    # a minute on a warm runner), `uv pip install -e . --no-deps`, then run
-    # a 2-step fake-backend training that builds the Llama 3 debug model
-    # (~256 dim / 6 layers) on NPU. 60 minutes: the first train step on a
-    # cold cache compiles the flex-attention triton kernel through the
-    # bisheng compiler on NPU (tens of seconds per config), dwarfing the
-    # install chain; watch runs showed 1300s is not enough for that.
+    # --module llama3 --config llama3_debugmodel_ce_loss --override.imports
+    # npu_compat.cos_sin_rope npu_compat.sdpa --training.steps 2
+    # --comm.mode default` — needs to: clone torchtitan (~5 MB sparse),
+    # `uv pip install -e .`, write the NPU override module
+    # ($HOME/tt-npu-overrides/npu_compat.py, swapped in via torchtitan's
+    # official @override mechanism — no upstream source patching), then run
+    # a 2-step HCCL training that builds the Llama 3 debug model (~256
+    # dim / 6 layers) on NPU with SDPA attention (aclnn flash attention;
+    # the flex path hits torch_npu 2.14.0 lowering gaps, see the doc's
+    # compat section). 60 minutes: first cold-cache run still compiles a
+    # handful of dataloader Triton kernels through the bisheng compiler
+    # (serial, TORCHINDUCTOR_COMPILE_THREADS=1, to stay under the runner
+    # cgroup memory limit) plus the model build/init chain.
     DEFAULT_COMMAND_TIMEOUT = 3600
 
     # Monitored source is the cosdt-ci-test/workflows fork (this repo): the

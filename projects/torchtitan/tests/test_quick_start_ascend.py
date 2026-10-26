@@ -28,6 +28,7 @@ Environment variables (injected by GitHub workflow
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import unittest
 
@@ -46,6 +47,23 @@ def _e2e_enabled() -> bool:
     return _is_truthy(os.environ.get('NPU_READY'))
 
 
+def _doc_ref() -> str:
+    """The ref the monitored doc was fetched from.
+
+    The doc pulls the NPU override module from this repo with the same ref,
+    so the two never drift.  ``raw.githubusercontent.com/<owner>/<repo>/<ref>/...``
+    carries it in the path; the contents API carries it as ``?ref=``.
+    """
+    url = os.environ.get('MONITORED_DOC_URL', '')
+    m = re.search(r'raw\.githubusercontent\.com/[^/]+/[^/]+/([^/]+)/', url)
+    if m:
+        return m.group(1)
+    m = re.search(r'[?&]ref=([^&]+)', url)
+    if m:
+        return m.group(1)
+    return 'main'
+
+
 class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     """``Quick-start-Ascend.md`` end-to-end test: fetch doc → validate
     contract → run ``#test-setup`` / ``#test`` in order → compare against
@@ -60,19 +78,23 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     """
 
     # torchtitan's smallest meaningful command — `python -m torchtitan.train
-    # --module llama3 --config llama3_debugmodel_ce_loss --override.imports
-    # npu_compat.cos_sin_rope npu_compat.sdpa --training.steps 2
-    # --comm.mode default` — needs to: clone torchtitan (~5 MB sparse),
-    # `uv pip install -e .`, write the NPU override module
-    # ($HOME/tt-npu-overrides/npu_compat.py, swapped in via torchtitan's
-    # official @override mechanism — no upstream source patching), then run
-    # a 2-step HCCL training that builds the Llama 3 debug model (~256
-    # dim / 6 layers) on NPU with SDPA attention (aclnn flash attention;
-    # the flex path hits torch_npu 2.14.0 lowering gaps, see the doc's
-    # compat section). 60 minutes: first cold-cache run still compiles a
-    # handful of dataloader Triton kernels through the bisheng compiler
-    # (serial, TORCHINDUCTOR_COMPILE_THREADS=1, to stay under the runner
-    # cgroup memory limit) plus the model build/init chain.
+    # --module llama3 --config llama3_debugmodel --override.imports
+    # npu_compat.npu_attention --training.steps 2 --comm.mode default` —
+    # needs to: clone torchtitan (~5 MB sparse), `uv pip install -e .`, pull
+    # the NPU override module ($HOME/tt-npu-overrides/npu_compat.py +
+    # check_npu_overrides.py, from this repo at the doc's own ref, swapped
+    # in via torchtitan's official @override mechanism — no upstream source
+    # patching), assert the override is numerically equivalent to the
+    # upstream components it stands in for, then run a 2-step HCCL training
+    # that builds the Llama 3 debug model (~256 dim / 6 layers) on NPU with
+    # SDPA attention (aclnn flash attention + an explicit block-causal
+    # mask; the flex path hits torch_npu 2.14.0 lowering gaps, see the
+    # doc's compat section). 60 minutes: first cold-cache run still
+    # compiles a handful of dataloader Triton kernels through the bisheng
+    # compiler (serial, TORCHINDUCTOR_COMPILE_THREADS=1, to stay under the
+    # runner cgroup memory limit) plus the model build/init chain.
+    # The loss is upstream's default (`llama3_debugmodel` -> ChunkedLossWrapper);
+    # the 2026-09 meta-tensor leak no longer reproduces on torch 2.14.
     DEFAULT_COMMAND_TIMEOUT = 3600
 
     # Monitored source is the cosdt-ci-test/workflows fork (this repo): the
@@ -209,6 +231,13 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             ['python', '-m', 'pip', 'install', 'uv'],
             check=True,
         )
+
+        # 3) DOC_REF: the ref the monitored doc was fetched from. The doc
+        #    pulls the NPU override module (npu_compat.py +
+        #    check_npu_overrides.py) from this repo with the same ref, so
+        #    the doc and the module never drift apart.
+        os.environ['DOC_REF'] = _doc_ref()
+        print(f'setup: DOC_REF={os.environ["DOC_REF"]}')
 
         # 3) torchtitan transitive deps (tyro / tokenizers / safetensors /
         # datasets / tensorboard / wandb / torchdata / fsspec / einops /

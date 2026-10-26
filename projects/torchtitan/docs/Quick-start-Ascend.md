@@ -35,7 +35,7 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-910b-ubuntu22.04-py3.12
 | triton-ascend | 3.6.0 |
 | modelscope | 1.40.2 |
 | torchtitan | 最新 release |
-| 训练配置 | 单卡 / 多卡均使用 `torchtitan/models/llama3/config_registry.py::llama3_debugmodel_ce_loss`（上游提供的 CrossEntropyLoss 变体，基于 debugmodel：dim=256 / 6 层 / 16 head / vocab 2048，~6 M 参数；多卡为 FSDP shard=2 + bf16） |
+| 训练配置 | 单卡 / 多卡均使用上游默认配置 `torchtitan/models/llama3/config_registry.py::llama3_debugmodel`（默认 `ChunkedLossWrapper` loss；基于 debugmodel：dim=256 / 6 层 / 16 head / vocab 2048，~6 M 参数；多卡为 FSDP shard=2 + bf16） |
 
 
 ### 检查前置是否满足
@@ -231,54 +231,53 @@ tokenizer_config.json
 
 ### 兼容性说明与 NPU override
 
-torchtitan v0.3.0 的语言模型默认使用 flex attention 与 complex64 RoPE 缓存，二者在 NPU 上均不可用：flex 的 Triton 模板与 mask 子图在 torch_npu 2.14.0 上有缺口，aclnnIndex 则没有 DT_COMPLEX64 实现。本文档用 torchtitan **官方 override 机制**（`--override.imports`，见 `torchtitan/config/override.py`）替换这两个组件的配置，并用上游 registry 自带的 `llama3_debugmodel_ce_loss` 配置替代默认的分块 loss，全程**不修改上游源码**，torchtitan 源码树保持 git clean。
+torchtitan v0.3.0 的语言模型默认使用 flex attention 与 complex64 RoPE 缓存，二者在 NPU 上均不可用：flex 路径在 torch_npu 2.14.0 上编不出来，aclnnIndex 则没有 DT_COMPLEX64 实现。本文档用 torchtitan **官方 override 机制**（`--override.imports`，见 `torchtitan/config/override.py`）替换这两个组件，**全程不修改上游源码**，torchtitan 源码树保持 git clean。
 
+loss 用上游自己的默认配置（`llama3_debugmodel` → `ChunkedLossWrapper`），不做任何绕路。
+
+**flex 路径不可用的准确根因**（2026-10-26 在 910B4 上逐层实测，三层各自独立成立）：
+
+1. `torch_npu` 2.14.0 的 `lowering.make_reduction` 缺 `strict_sum` 形参，而 torch 2.14 的 inductor `sum_` lowering 总是传它 —— NPU 上**任何**被编译的 reduction 都会失败（不限于 flex；torchtitan 的 `compile` 特性整体不可用）。
+2. `triton-ascend` 3.6.0 在 `triton/backends/ascend/utils.py:709` 硬编码 `-std=c++17`，而 torch 2.14 的 ATen headers 要求 C++20 —— 运行期扩展 `npu_utils` 编不出来。
+3. `torch_npu` 自己的 flex lowering（`torch_npu/_inductor/kernel/flex_attention.py:746`）抛 `SubgraphLoweringException: Buffers cannot be created while lowering a pointwise subgraph` —— 这是真实的能力缺口；①②属于依赖版本错配。
+
+**override 换进去的组件与上游数值等价**（这一点由下一节的等价性检查在每次运行时断言）：
+
+- **RoPE**：上游 `ComplexRoPE` 的 complex64 缓存是用位置 id 直接索引的（`aclnnIndex` 无 `DT_COMPLEX64` 实现）。override 改为把缓存看成 float32 的实部/虚部两半、在实数域做同样的 gather，再交回上游自己的旋转代码 —— 缓存数学（含 llama 频率缩放）和相邻维配对约定都是上游的，实测与上游 `ComplexRoPE` 输出**逐位相同**。
+  （注意：上游自带的 `CosSinRoPE` **不能**当替代品 —— 它用 rotate-half 配对约定 `(d0,d8),(d1,d9)…`，且对 `scaling="llama"` 直接抛 `NotImplementedError`，与上游 `ComplexRoPE` 的相对误差约 113%。）
+- **逐文档 block-causal 掩码**：上游只给 Flex / Varlen backend 构造 per-document 掩码（`trainer.py:738-748`），而 upstream 的 SDPA 被显式禁止用作语言模型 backend（`get_attention_config("sdpa")` 直接抛错，理由就是它吃不了 per-document 位置）。override 换成一个带**显式 dense block-causal 掩码**的 SDPA（aclnn SDPA 支持 `attn_mask`），保留上游的掩码语义：一个 token 只关注同一文档中在它之前的 token。
 
 **8B 规模不在本文档的验证范围。** 8B（~8.03 B 参数）在双卡 32 GB 上需要 `--training.enable-cpu-offload` 才装得下（FSDP shard=2 后每卡约 48 GB > 32 GB HBM），而该组合会触发 PyTorch 上游已知缺陷：DTensor 的 RNG tracker 对「device 类型 mesh + CPU local tensor」不推进 CPU RNG，导致 `nn.init.trunc_normal_` 的拒绝采样循环不收敛（`pytorch/pytorch#180088`、`pytorch/pytorch#196072`，修复方向 `pytorch/pytorch#199209`）。因此本文档的多卡章节使用 `debugmodel` 双卡（FSDP shard=2 + HCCL 双卡 + DTensor 参数分布 + bf16 全部覆盖）。
 
 
 ### 安装 NPU override 模块
 
-override 模块是一个普通的 Python 文件，放在 torchtitan 仓库**之外**（不污染源码树），通过 `PYTHONPATH` + `--override.imports module.function` 激活。`@override(target=...)` 按 Config 类型匹配、按节点 FQN 替换，对 debugmodel 会精确命中全部 6 层的 `model_spec.model.layers.*.attention.rope` 和 `.inner_attention` 节点：
+override 模块是本仓（cosdt-ci-test/workflows）里的两个普通 Python 文件，放在 torchtitan 仓库**之外**（不污染源码树），通过 `PYTHONPATH` + `--override.imports module.function` 激活：
+
+| 文件 | 作用 |
+| --- | --- |
+| `projects/torchtitan/example/npu_compat.py` | override 模块本身：注册一个 `npu_attention` 工厂，替换 `GQAttention.Config` 节点 |
+| `projects/torchtitan/example/check_npu_overrides.py` | 等价性自检脚本（CPU）：断言替换进去的组件与上游组件数值等价 |
+
+`@override(target=...)` 按 Config 类型匹配、按节点 FQN 替换。因为上游框架**禁止嵌套 override**（一个 override 声明了另一个 override 节点的祖先就会报错），RoPE 与 inner attention 两处替换折进同一个 `GQAttention.Config` override 里 —— 对 debugmodel 会精确命中全部 6 层的 `model_spec.model.layers.*.attention` 节点（每个节点内部再换 rope / inner_attention）：
 
 ```shell #test-setup
 mkdir -p "$HOME/tt-npu-overrides"
-cat > "$HOME/tt-npu-overrides/npu_compat.py" << 'PYEOF'
-"""NPU compat overrides for torchtitan v0.3.0 on Ascend.
-
-Activated via torchtitan's official override mechanism
-(--override.imports); no upstream source file is modified.
-
-- ComplexRoPE -> CosSinRoPE: aclnnIndex has no DT_COMPLEX64 implementation.
-- FlexAttention -> ScaledDotProductAttention: the NPU flex path is not
-  usable; SDPA dispatches to aclnn flash attention.
-"""
-from torchtitan.config.override import derive, override
-from torchtitan.models.common.attention import (
-    FlexAttention,
-    ScaledDotProductAttention,
-)
-from torchtitan.models.common.rope import ComplexRoPE, CosSinRoPE
-
-
-@override(
-    target=ComplexRoPE.Config,
-    description="complex64 RoPE cache -> real cos/sin (aclnnIndex lacks DT_COMPLEX64)",
-)
-def cos_sin_rope(cfg: ComplexRoPE.Config) -> CosSinRoPE.Config:
-    return derive(cfg, CosSinRoPE.Config, scaling="none")
-
-
-@override(
-    target=FlexAttention.Config,
-    description="flex attention -> SDPA (aclnn flash attention)",
-)
-def sdpa(cfg: FlexAttention.Config) -> ScaledDotProductAttention.Config:
-    return ScaledDotProductAttention.Config()
-PYEOF
+BASE="https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/torchtitan/example"
+REF="${DOC_REF:-main}"
+AUTH=()
+[ -n "${GH_TOKEN:-}" ] && AUTH+=(-H "Authorization: Bearer $GH_TOKEN")
+for f in npu_compat.py check_npu_overrides.py; do
+  curl -fsSL --retry 3 --retry-connrefused --retry-delay 2 \
+    -H "Accept: application/vnd.github.raw" "${AUTH[@]}" \
+    "$BASE/$f?ref=$REF" -o "$HOME/tt-npu-overrides/$f"
+done
 ```
 
-验证两个 override 工厂都完成注册：
+> `${DOC_REF:-main}` 是被本文档自身所在的 ref（CI 里由测试注入 `DOC_REF`，手工执行时默认 `main`），保证拉到的 override 模块与本文档来自同一个版本。
+> 走 contents API 而不是 raw.githubusercontent.com：NPU runner 到 raw 端点不通，到 api 端点通（base class 里也是这么取文档的）；仓库是 public，匿名即可，`GH_TOKEN` 存在时带上以提高限流额度。
+
+验证 override 工厂完成注册：
 
 ```shell #test id="override-register"
 PYTHONPATH="$HOME/tt-npu-overrides" python -c "import npu_compat; from torchtitan.config.override import _REGISTRY; print(sorted(_REGISTRY))"
@@ -287,12 +286,24 @@ PYTHONPATH="$HOME/tt-npu-overrides" python -c "import npu_compat; from torchtita
 输出结果如下：
 
 ```shell #test-result id="override-register"
-['npu_compat.cos_sin_rope', 'npu_compat.sdpa']
+['npu_compat.npu_attention']
+```
+
+再断言替换进去的组件与上游组件**数值等价**（CPU 即可跑，不需要 NPU）：RoPE 与上游 `ComplexRoPE` 的输出必须逐位一致，attention 与朴素实现的逐文档 causal 掩码注意力必须一致。
+
+```shell #test id="override-equivalence"
+python "$HOME/tt-npu-overrides/check_npu_overrides.py"
+```
+
+输出结果如下：
+
+```shell #test-result id="override-equivalence"
+npu override equivalence: rope OK, mask OK
 ```
 
 ### 单卡训练
 
-用 `torchrun --nproc_per_node=1` 在 1 张 NPU 上跑 `debugmodel` 真跑 2 步，验证配置解析、初始化、加载 tokenizer、build dataloader、forward + backward 整条链路能跑通。`llama3_debugmodel_ce_loss` 是上游 registry 自带的 CrossEntropyLoss 变体（~6 M 参数量，单卡 30 GB 完全够装）；`--override.imports` 激活上一步的两个 NPU 兼容替换（rope + attention，日志会打印 12 个节点的替换明细和 `Applied 12 override(s)`）。走真实 HCCL backend（`--comm.mode default`）让 c10d 把 `npu` 路由到 `hccl`，1-rank 下所有集合通信都是 self-barrier，不会真的有跨卡流量。多卡 FSDP shard 训练见下一节「多卡训练」（8B 规模不在本文档验证范围，见「兼容性说明与 NPU override」）：
+用 `torchrun --nproc_per_node=1` 在 1 张 NPU 上跑 `debugmodel` 真跑 2 步，验证配置解析、初始化、加载 tokenizer、build dataloader、forward + backward 整条链路能跑通。`llama3_debugmodel` 是上游 registry 的默认配置（loss = 默认 `ChunkedLossWrapper`，~6 M 参数量，单卡 30 GB 完全够装）；`--override.imports` 激活上一步的 NPU 兼容替换（日志会打印 6 个节点的替换明细和 `Applied 6 override(s)`）。走真实 HCCL backend（`--comm.mode default`）让 c10d 把 `npu` 路由到 `hccl`，1-rank 下所有集合通信都是 self-barrier，不会真的有跨卡流量。多卡 FSDP shard 训练见下一节「多卡训练」（8B 规模不在本文档验证范围，见「兼容性说明与 NPU override」）：
 
 ```shell #test id="torchtitan-train-debug" load="upstream_ref>>ref"
 cd torchtitan && git checkout -f <ref>
@@ -304,8 +315,8 @@ torchrun --nproc_per_node=1 \
     --rdzv_endpoint="localhost:0" \
     -m torchtitan.train \
     --module llama3 \
-    --config llama3_debugmodel_ce_loss \
-    --override.imports npu_compat.cos_sin_rope npu_compat.sdpa \
+    --config llama3_debugmodel \
+    --override.imports npu_compat.npu_attention \
     --comm.mode default \
     --training.steps 2 \
     --training.local-batch-size 1 \
@@ -319,9 +330,9 @@ torchrun --nproc_per_node=1 \
 
 ```shell #test-result id="torchtitan-train-debug" fuzzy='xxx' fuzzy='...'
 [titan] xxx - root - INFO - torchtitan version: xxx
-[titan] xxx - root - INFO - [Override] npu_compat.cos_sin_rope: model_spec.model.layers.0.attention.rope ComplexRoPE.Config -> CosSinRoPE.Config
+[titan] xxx - root - INFO - [Override] npu_compat.npu_attention: model_spec.model.layers.0.attention GQAttention.Config -> NpuGQAttention.Config
 ...
-[titan] xxx - root - INFO - Applied 12 override(s)
+[titan] xxx - root - INFO - Applied 6 override(s)
 [titan] xxx - root - INFO - Building llama3 debugmodel
 ...
 [titan] xxx - root - INFO - Sleeping 2 seconds for other ranks to complete
@@ -346,8 +357,8 @@ torchrun --nproc_per_node=2 \
     --tee 3 \
     -m torchtitan.train \
     --module llama3 \
-    --config llama3_debugmodel_ce_loss \
-    --override.imports npu_compat.cos_sin_rope npu_compat.sdpa \
+    --config llama3_debugmodel \
+    --override.imports npu_compat.npu_attention \
     --comm.mode default \
     --training.dtype bfloat16 \
     --training.steps 2 \
@@ -363,7 +374,7 @@ torchrun --nproc_per_node=2 \
 ```shell #test-result id="torchtitan-train-2card"
 [default0]:[titan] ... - root - INFO - torchtitan version: ...
 [default0]:[titan] ... - root - INFO - Building device mesh with parallelism: ...
-[default0]:[titan] ... - root - INFO - Applied 12 override(s)
+[default0]:[titan] ... - root - INFO - Applied 6 override(s)
 [default0]:[titan] ... - root - INFO - Building llama3 debugmodel
 ...
 [default0]:[titan] ... - root - INFO - Synchronizing and adjusting timeout for all ProcessGroups to 0:01:40

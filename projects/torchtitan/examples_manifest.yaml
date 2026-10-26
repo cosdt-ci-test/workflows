@@ -5,23 +5,128 @@ scan:
   # torchtitan 的 "example" 不是目录 + 脚本的形态，而是单个 train.py
   # 入口 + `--module X --config Y` CLI 参数选模型配置。所以
   # scan.root 设为仓库根 `torchtitan`，include_extensions 留宽；
-  # 非 example 形态的子树（configs / docs / tests / proto / requirements）
-  # 在本仓 examples 流水线里要么扩展名天然不命中（.yaml / .md），
-  # 要么已落入 unsupported 段（test_*.py / tests/** / rl 子树 import 库
-  # / graph_trainer precompile 等），本段不再有"声明性 exclude"字段。
-  # 本清单 supported/unsupported 都按 「(path, overlay_args)」组合语义
-  # 记录，不依赖 scan 的扫描结果。
+  # 其余子树都是库代码而非 example，用 exclude 声明「不是 example」
+  # （覆盖判定：supported(非 project 源) ∪ unsupported ∪ exclude）。
+  #
+  # 注意：本项目的 supported 条目是 project 源的启动脚本
+  # （projects/torchtitan/example/），它们调用上游的 torchtitan.train
+  # 入口，因此上游的 train.py / trainer.py 也不计入 example。
+  exclude:
+    - torchtitan/__init__.py
+    - torchtitan/components
+    - torchtitan/config
+    - torchtitan/distributed
+    - torchtitan/experiments
+    - torchtitan/hf_datasets
+    - torchtitan/models
+    - torchtitan/observability
+    - torchtitan/ops
+    - torchtitan/overrides
+    - torchtitan/protocols
+    - torchtitan/tools
+    - torchtitan/train.py
+    - torchtitan/trainer.py
 
-# No supported examples (2026-09-24): all five llama3 debugmodel variants
-# (debugmodel 1-card / 2-card, ce_loss, dist_gemm, sft) moved to unsupported
-# because they only run on the NPU stack via runtime monkey-patches
-# (sitecustomize shim in run_example.sh) or source sed patches, which
-# contradict the no-source-patch policy. Version alignment cannot remove
-# them either (need CANN/triton-ascend/torch_npu upstream fixes; see the
-# llama3 block under unsupported).
-supported: []
+# The example set of this project is the (module, config) combinations
+# below, not a file tree: the unsupported section records them as
+# "<path>:<config>" entries (the daily reconciliation matches paths
+# literally, so these entries are reported as stale by design - the
+# per-config reasons live in the comments next to them).
+#
 
-unsupported:
+# Supported examples run torchtitan's own trainer entry point
+# (`python -m torchtitan.train --module X --config Y`) through the
+# project-side launchers in projects/torchtitan/example/ (source: project).
+#
+# The NPU-incompatible attention stack is replaced through torchtitan's
+# official override mechanism (--override.imports, see
+# torchtitan/config/override.py + torchtitan/overrides/README.md).
+# One override replaces the `GQAttention.Config` node (the framework rejects
+# nested overrides), carrying both fixes:
+#   RealGatherComplexRoPE - upstream ComplexRoPE keeps a complex64 cache and
+#       indexes it with the position ids; aclnnIndex has no DT_COMPLEX64
+#       implementation. The override gathers the same values in real space
+#       and hands them back to upstream's own rotation code.
+#   BlockCausalSDPA - upstream builds the per-document block-causal mask only
+#       for the Flex / Varlen backends (neither compiles on NPU), and upstream
+#       forbids SDPA as a language-model backend (it cannot consume
+#       per-document positions). The override feeds SDPA an explicit dense
+#       block-causal mask instead (aclnn SDPA accepts attn_mask).
+# Both replacements are numerically equivalent to the upstream components
+# they stand in for; projects/torchtitan/example/check_npu_overrides.py
+# asserts that on CPU (measured 2026-10-26: rope max_abs_diff 0.0 - bit
+# identical, since upstream's own cache math and rotation are reused; mask
+# max_abs_diff 3.6e-07 against a naive per-document causal reference).
+# The loss is upstream's own default (`llama3_debugmodel` ->
+# ChunkedLossWrapper): the 2026-09 "ChunkedLossWrapper backward-inside-forward
+# meta-tensor leak" does NOT reproduce on torch 2.14 / torch_npu 2.14
+# (re-verified 2026-10-26 on hdc-stable-npu-3: 1-card / 2-card FSDP,
+# seq-len 256 and 2048, all exit 0), so the `llama3_debugmodel_ce_loss`
+# detour is dropped. No upstream source file is modified - the torchtitan
+# checkout stays clean.
+#
+# Stack: CANN 9.2.0 (container image) / torch 2.14.0 / torch_npu 2.14.0 /
+# triton-ascend 3.6.0 (Ascend fork) / modelscope 1.40.2.
+supported:
+  # 1) Single card: 2 steps of llama3 debugmodel on one NPU. Covers config
+  #    parsing, model build, tokenizer + dataloader (c4_test), forward /
+  #    backward, optimizer step, metrics, checkpoint write.
+  #    Config is upstream's default `llama3_debugmodel` (ChunkedLossWrapper) -
+  #    no loss override, no config detour.
+  - path: example/run_llama3_debugmodel_1card.sh
+    source: project
+    profile: torchtitan
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-910b-ubuntu22.04-py3.12
+    npu_devices: '0'
+    overlay_args:
+      - --module llama3
+      - --config llama3_debugmodel
+      - --override.imports npu_compat.npu_attention
+      - --comm.mode default
+      - --training.steps 2
+      - --training.local-batch-size 1
+      - --training.seq-len 256
+      - --metrics.log-freq 1
+      - --metrics.disable-color-printing
+      - --dump-folder ${CI_OUTPUT_DIR}/llama3_debugmodel_1card
+    timeout_minutes: 60
+
+  # 2) Two cards: same model with FSDP shard=2 + bfloat16. Adds real
+  #    cross-rank HCCL collectives, DTensor parameter distribution and the
+  #    default spmd backend (torch >= 2.13 translates the FSDP annotations,
+  #    so no --parallelism.spmd-backend override is needed).
+  - path: example/run_llama3_debugmodel_2card.sh
+    source: project
+    profile: torchtitan
+    runner: linux-aarch64-a2-2
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-910b-ubuntu22.04-py3.12
+    npu_devices: '0,1'
+    overlay_args:
+      - --module llama3
+      - --config llama3_debugmodel
+      - --override.imports npu_compat.npu_attention
+      - --comm.mode default
+      - --training.dtype bfloat16
+      - --training.steps 2
+      - --training.local-batch-size 1
+      - --training.seq-len 256
+      - --metrics.log-freq 1
+      - --metrics.disable-color-printing
+      - --dump-folder ${CI_OUTPUT_DIR}/llama3_debugmodel_2card
+    timeout_minutes: 90
+
+# No upstream file is an example on its own: torchtitan's examples are
+# (module, config) combinations, recorded in `unsupported_configs` below.
+# The upstream library tree is declared as "not an example" via
+# scan.exclude, so the path-based reconciliation has nothing to flag.
+unsupported: []
+
+# (module, config) ledger of the examples this project does NOT run, with
+# the reason per family. The reconciliation matches paths literally, so
+# these compound entries are not machine-checked - they are the human
+# record of what was tried and why it is out of scope.
+unsupported_configs:
   # flux_debugmodel：源 scan 看起来可上，但实证 1 卡 full_dtensor 路径连撞
   # 五道墙，全部不是"NPU 缺算子"，是 v0.3.0 source-level + 离线 pod 缺网络
   # 共同叠加：(1) flux/parallelize.py:70 `assert dp_mesh is not None` —— 1 卡
@@ -47,26 +152,46 @@ unsupported:
   # 性质；按 [[no-source-patch-policy]] 应继续留 unsupported，注释归档实证结论。
   - torchtitan/models/flux/config_registry.py:flux_debugmodel
 
-  # --- llama3 系：flex 墙 + ComplexRoPE 复数墙 + ChunkedLoss 墙（三墙全中）---
-  # ComplexRoPE(scaling="llama") 用 torch.polar/view_as_complex 生成 complex64（models/common/rope.py:233,261），
-  # NPU aclnnIndex 无 DT_COMPLEX64 实现；默认 loss=ChunkedLossWrapper（components/loss.py:567，
-  # backward-inside-forward 在 NPU 触发 meta 张量泄漏）。
-  # 以下 5 条（debugmodel 单卡 / debugmodel 双卡 / debugmodel_dist_gemm /
-  # sft_debugmodel + ce_loss 变体）在 2026-09-22 靠 run_example.sh 的
-  # sitecustomize monkey-patch（SDPA 强制 / CosSinRoPE 替换 / ChunkedLossWrapper
-  # bypass / set_timeout 补缺 / create_block_mask 剥离）实证 exit 0，一度移入
-  # supported。2026-09-24 决策移回 unsupported：这些 monkey-patch 虽不落盘
-  # （run_example.sh:5 禁止 git add/commit/push），但运行时覆盖了上游函数/类，
-  # 等价于 patch；且调整依赖版本无法消除——退役分别需要 CANN/triton-ascend
-  # 支持编译 inductor flex 模板（限制一）、aclnnIndex 支持 complex64（限制二）、
-  # torch_npu 发布配套 torch≥2.13 的版本（限制三/五，同时解除 set_timeout /
-  # separate_full_blocks / spmd_types 三处版本错配）。上游修复后再移回 supported。
+  # --- llama3 系：debugmodel 系现在是通过 project 侧 launcher 跑的（见 supported 段，
+  # --config llama3_debugmodel），所以下面这些 upstream config_registry 入口按
+  # 「不是 example 文件」的语义留在 unsupported 段（reconciliation 按路径字面匹配，
+  # 会按设计报 stale；per-config 理由见本段注释）。
+  # 2026-10-26 复测（hdc-stable-npu-3，CANN 9.1.0 / torch 2.14.0 / torch_npu 2.14.0 /
+  # triton-ascend 3.6.0，torchtitan v0.3.0 干净 checkout）修正了原来的「三墙」结论：
+  #   · ComplexRoPE 复数墙 —— 仍然成立。rope.py:233,261 用 torch.polar/view_as_complex
+  #     生成 complex64，NPU 的 aclnnIndex 无 DT_COMPLEX64 实现（实测
+  #     AclNN_Parameter_Error(EZ1001): Tensor self not implemented for DT_COMPLEX64）。
+  #     supported 段用 npu_compat.npu_attention 在实数域做同样的 gather 绕过（数值与
+  #     upstream 逐位一致），但「upstream 组件在 NPU 上原样跑不了」这个事实不变。
+  #   · flex 墙 —— 仍然成立，但根因是三层，不是「NPU 缺算子」：
+  #     ① torch_npu 2.14.0 的 lowering.make_reduction 缺 strict_sum 形参，而 torch 2.14
+  #       的 inductor sum_ lowering 总是传它 → NPU 上**任何** compiled reduction 都挂
+  #       （连带 torchtitan 的 compile 特性整体不可用，与 flex 无关）；
+  #     ② triton-ascend 3.6.0 硬编码 -std=c++17（backends/ascend/utils.py:709），而
+  #       torch 2.14 的 ATen headers 要 C++20 → npu_utils 运行期扩展编不出来；
+  #     ③ torch_npu 自己的 flex lowering（_inductor/kernel/flex_attention.py:746）
+  #       SubgraphLoweringException: Buffers cannot be created while lowering a
+  #       pointwise subgraph —— 这层是真实的能力缺口，①②只是依赖版本 skew。
+  #     supported 段同样用 override 把 flex 换成带 dense block-causal 掩码的 SDPA
+  #     （upstream 禁止 SDPA 作语言模型 backend，因为它吃不了 per-document 位置）。
+  #   · ChunkedLoss 墙 —— **不再成立**。ChunkedLossWrapper（components/loss.py:567）在
+  #     torch 2.14 / torch_npu 2.14 上跑通（1 卡 / 2 卡 FSDP / seq-len 256 / 2048 全
+  #     exit 0），2026-09 记的 backward-inside-forward meta tensor 泄漏是 torch 2.12
+  #     时代的问题 → supported 段已改用 upstream 默认配置 llama3_debugmodel，不再走
+  #     llama3_debugmodel_ce_loss 绕路。
+  # 仍未列入 supported 的原因：这些是 upstream config_registry 入口，我们不把它们当
+  # example 文件直接跑（launcher 侧见 supported 段）。
+  # 注：上面两墙对「配置本身」的阻塞可被同一套 override 绕开 —— 2026-10-26 实测
+  # qwen3_debugmodel / qwen3_debugmodel_non_fused_qkv / qwen3_debugmodel_moe_param_groups
+  # （只加 flex→SDPA override）与 gpt_oss_debugmodel_flex（再加 varlen→SDPA）均 exit 0，
+  # 即这些条目多数只是「还没给该族配 override」，不是硬墙。
   - torchtitan/models/llama3/config_registry.py:llama3_debugmodel
   - torchtitan/models/llama3/config_registry.py:llama3_debugmodel_ce_loss
   - torchtitan/models/llama3/config_registry.py:llama3_debugmodel_dist_gemm
   - torchtitan/models/llama3/config_registry.py:sft_debugmodel
 
-  # llama3_8b：两重阻塞（与 debugmodel 的 flex/ComplexRoPE/ChunkedLoss 三墙同源）——
+  # llama3_8b：两重阻塞（与 debugmodel 的 flex / ComplexRoPE 两墙同源；ChunkedLoss 墙
+  # 在 torch 2.14 上已不成立，见上面 llama3 系段落）——
   # (1) 规模：~8.03B 参数，bf16 权重 16.1GB + 梯度 16.1GB + AdamW fp32 状态 64.2GB，
   #     FSDP shard=2 后每卡约 48GB，超出 910B4 的 32GB HBM → 必须开
   #     --training.enable-cpu-offload 才装得下；
@@ -90,13 +215,13 @@ unsupported:
   # 退役条件：上游修复 CPU local tensor 的 RNG 推进（#199209）后重测。
   - torchtitan/models/llama3/config_registry.py:llama3_8b
 
-  # --- llama3 float8 系：三墙 + 量化墙 ---
+  # --- llama3 float8 系：两墙 + 量化墙 ---
   # float8 非 emulate 需 has_cuda_capability(8,9)（components/quantization/float8.py:86），NPU 直接 ValueError。
   - torchtitan/models/llama3/config_registry.py:llama3_debugmodel_float8
-  # emulate=True 能过 float8 check（float8.py:88），但仍依赖 torchao 且 flex+ComplexRoPE+ChunkedLoss 三墙未解。
+  # emulate=True 能过 float8 check（float8.py:88），但仍依赖 torchao 且 flex + ComplexRoPE 两墙未解。
   - torchtitan/models/llama3/config_registry.py:llama3_debugmodel_float8_emulate_lora
 
-  # --- qwen3 系：RoPE 无墙（CosSinRoPE 纯 cos/sin，无 complex），但 flex + ChunkedLoss 两墙 ---
+  # --- qwen3 系：RoPE 无墙（CosSinRoPE 纯 cos/sin，无 complex），但 flex 墙 ---
   - torchtitan/models/qwen3/config_registry.py:qwen3_debugmodel
   - torchtitan/models/qwen3/config_registry.py:qwen3_debugmodel_moe_param_groups
   - torchtitan/models/qwen3/config_registry.py:qwen3_debugmodel_non_fused_qkv
@@ -107,12 +232,12 @@ unsupported:
   - torchtitan/models/qwen3/config_registry.py:qwen3_1_7b
   - torchtitan/models/qwen3/config_registry.py:qwen3_14b
   # sft_qwen3_8b_math：attn_backend="varlen"（config_registry.py:464）→ torch.nn.attention.varlen 是 CUDA FA
-  # 专属 API，NPU 无实现；ChunkedLoss 墙仍在。
+  # 专属 API，NPU 无实现。
   - torchtitan/models/qwen3/config_registry.py:sft_qwen3_8b_math
 
-  # --- qwen3_5 系：MRoPE(CosSinRoPE) 无 complex 墙，但 flex + ChunkedLoss 两墙 ---
+  # --- qwen3_5 系：MRoPE(CosSinRoPE) 无 complex 墙，但 flex 墙 ---
   # qwen35_* 是 MLLM（MultiModalTokenizer + MMDataLoader 图像管线，数据属 asset 非 NPU 范畴）；
-  # 训练侧 flex + ChunkedLoss 两墙仍是硬阻塞。
+  # 训练侧 flex 墙仍是硬阻塞。
   - torchtitan/models/qwen3_5/config_registry.py:qwen35_debugmodel
   # debugmodel_moe：两墙 + `_grouped_mm`；且 mesh dp_shard=2/pp=2/ep=4/tp=2 需 >4 卡。
   - torchtitan/models/qwen3_5/config_registry.py:qwen35_debugmodel_moe
@@ -121,12 +246,12 @@ unsupported:
   - torchtitan/models/qwen3_5/config_registry.py:qwen35_4b
   - torchtitan/models/qwen3_5/config_registry.py:qwen35_9b
 
-  # --- gpt_oss 系：CosSinRoPE(yarn) 无 complex 墙，但 flex + ChunkedLoss 两墙 ---
+  # --- gpt_oss 系：CosSinRoPE(yarn) 无 complex 墙，但 flex 墙 ---
   # 注意 gpt_oss 默认 attn_backend="varlen"（models/gpt_oss/__init__.py:391，已单列 CUDA-only 段）；
-  # 本 flex 变体只换掉 varlen，flex 墙 + ChunkedLoss 墙仍在。
+  # 本 flex 变体只换掉 varlen，flex 墙仍在。
   - torchtitan/models/gpt_oss/config_registry.py:gpt_oss_debugmodel_flex
 
-  # --- transformers_modeling_backend 系：loss 用 CrossEntropyLoss 直连（无 ChunkedLoss 墙），
+  # --- transformers_modeling_backend 系：loss 用 CrossEntropyLoss 直连，
   # 但 attention 被硬路由到 flex（experiments/transformers_modeling_backend/model.py:168 _ATTN_IMPLEMENTATION=
   # "flex_torchtitan"，_configure_hf_attention 改 config._attn_implementation 走 _flex_attention_torchtitan），
   # 不提供 SDPA 出口 → flex 墙仍在。---
@@ -153,9 +278,13 @@ unsupported:
 
   # ===== LM 类：FlexAttention CANN 编译墙（triton-ascend 编不出 flex 模板 kernel，
   # BiShengIR 内部 hivm.hir.store / scf.for 报 vector loop tiling）—— no-patch 无解。
+  # 2026-10-26 复测：flex 墙的根因已定位为三层（见上面 llama3 系段落）——除 torch_npu 自身
+  # 的 flex lowering 缺口外，torch_npu 2.14.0 的 make_reduction(strict_sum=) 与
+  # triton-ascend 3.6.0 的 -std=c++17 也各自独立地卡住编译路径。
   # 配套阻塞：default spmd_types 缺 torch.distributed._local_tensor（torch 2.12 不含）、
-  # MoE `torch._grouped_mm` 无 NPU 算子（torch_npu 仅 npu_grouped_matmul,签名不同）、
-  # ChunkedLossWrapper 在 NPU 上 backward-inside-forward 触发 meta 张量泄漏。
+  # MoE `torch._grouped_mm` 无 NPU 算子（torch_npu 仅 npu_grouped_matmul,签名不同）。
+  # （ChunkedLossWrapper 的 meta tensor 泄漏是 torch 2.12 时代的问题，torch 2.14 上
+  #  已不复现，故不再列为阻塞项。）
   - torchtitan/models/deepseek_v3/config_registry.py:deepseek_v3_debugmodel
   - torchtitan/models/deepseek_v3/config_registry.py:deepseek_v3_debugmodel_mtp
   - torchtitan/models/deepseek_v3/config_registry.py:deepseek_v3_debugmodel_minimal_async_ep
@@ -226,6 +355,10 @@ unsupported:
   # NPU 侧由 triton-ascend 转译给 CANN bishengir 编译器，而该编译器编不出
   # 这个 kernel（hivm.hir.store / vector loop tiling 报错在编译器二进制内部）。
   # 两条路都堵死 → NPU 上编译不过、跑不起来。
+  # 2026-10-26 补充：graph_trainer 强制 compile 这条路还被 torch_npu 2.14.0 的
+  # lowering.make_reduction 缺 strict_sum 形参独立卡死——NPU 上任何 compiled reduction
+  # 都挂（见上面 llama3 系段落第 ① 层），所以即使 flex 的编译问题被修掉，
+  # graph_trainer 在当前 pin 上仍跑不起来。
   - torchtitan/experiments/graph_trainer/deepseek_v3/config_registry.py:graph_trainer_deepseek_v3_debugmodel
   - torchtitan/experiments/graph_trainer/qwen3/config_registry.py:graph_trainer_qwen3_debugmodel
   - torchtitan/experiments/graph_trainer/muse_glimmer/config_registry.py:graph_trainer_muse_glimmer_debugmodel

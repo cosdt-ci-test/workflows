@@ -295,20 +295,32 @@ projects:
       quick_start: .github/workflows/torchtitan-quick-start.yml
       # Release-only examples guard on the shared engine
       # example-template.yml (design: docs/examples-guard-engine.md).
-      # First supported entries (4) all run on debugmodel / sft_debugmodel
-      # (dim=256 / 6L / 16H / vocab 2048, ~6 M params — fits single 30 GB
-      # card, FSDP shard=2 splits cleanly on 2-card): 1-card debugmodel,
-      # 1-card debugmodel_ce_loss (drift signal for patch 4 vs upstream
-      # CE config), 2-card full_dtensor + bf16 (HCCL + DTensor), 1-card
-      # sft_debugmodel. Smoke = 2 steps, ~5 min each. unsupported covers
-      # 8B/70B/405B (CPU-offload 活锁 + OOM), all float8/MXFP8/NVFP4
-      # variants (no NPU backend), torch 2.13+ deps (dist_gemm /
-      # varlen_attn / spmd_types default), every other model family
-      # (qwen3 / qwen35 / gpt_oss / deepseek_v3 / kimi / flux /
-      # muse_glimmer — flex + custom kernels unverified), RL
-      # (vllm-ascend ABI mismatch torch 2.12), and forge / graph_trainer
-      # / torchft / transformers_modeling_backend (CUDA-only cudagraph /
-      # torchft NCCL / HF AutoModel untested).
+      # Supported entries (2) run torchtitan's own trainer entry point
+      # (`python -m torchtitan.train --module llama3 --config ...`) through
+      # project-side launchers (projects/torchtitan/example/): 1-card and
+      # 2-card llama3 debugmodel (upstream's default config, ~6 M params —
+      # fits a single 30 GB card, FSDP shard=2 splits cleanly on 2 cards;
+      # the default ChunkedLossWrapper loss runs on torch 2.14 / torch_npu
+      # 2.14, so no loss detour). The NPU-incompatible attention stack
+      # (complex64 RoPE cache, flex attention) is swapped through
+      # torchtitan's official override mechanism (--override.imports), so
+      # the upstream checkout is never patched. The replacement components
+      # are numerically equivalent to the upstream ones they stand in for
+      # (rope bit-identical, mask within 3.6e-07) and that is asserted on
+      # every quick-start run by projects/torchtitan/example/
+      # check_npu_overrides.py. Smoke = 2 steps, ~3 min each.
+      # Stack: CANN 9.2.0 / torch 2.14.0 / torch_npu 2.14.0 /
+      # triton-ascend 3.6.0. The (module, config) ledger of everything
+      # NOT run lives in projects/torchtitan/examples_manifest.yaml
+      # (unsupported_configs), e.g. 8B and larger (cpu-offload init
+      # livelock, pytorch/pytorch#180088), float8/MXFP8/NVFP4 variants
+      # (no NPU backend), and the other model families (they mostly need
+      # the same override applied to their own family - flex wall, see the
+      # manifest).
+      # Note: on this stack torch_npu 2.14.0 cannot lower ANY compiled
+      # reduction (make_reduction lacks strict_sum), so torchtitan's
+      # compile feature and the graph_trainer recipes are out of reach
+      # regardless of flex.
       examples: .github/workflows/torchtitan-examples.yml
   - name: colossalai
     category: 推理加速

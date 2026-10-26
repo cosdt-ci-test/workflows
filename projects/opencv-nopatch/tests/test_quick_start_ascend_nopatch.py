@@ -77,6 +77,13 @@ class TestQuickStartAscendNoPatch(MarkdownDocTestBase, unittest.TestCase):
         6. Python binding smoke (cv2 import + ``DNN_BACKEND_CANN`` enum);
         7. MobileNetV2 ONNX NPU forward (classic DNN engine — 4.14's
            default, no ``OPENCV_FORCE_DNN_ENGINE`` needed) with top-1 = 372;
+           the block also raises the log level to INFO and flushes
+           ``std::cout`` so the doc can assert three CANN-backend log
+           lines (``DNN/CANN: converting ge::Graph to OM buffer`` /
+           ``Compile success, model size = ...`` /
+           ``DNN/CANN: OM buffer size = ...``) — that is what proves the
+           forward really ran on the NPU rather than on the CPU engine
+           (both produce top-1 = 372);
         8. videoio smoke (MJPG write 10 frames -> read back 10) — the
            doc's ``BUILD_LIST`` carries ``videoio``, and MJPG rides
            OpenCV's *built-in* MJPEG codec (``modules/videoio/src/mjpeg/``
@@ -98,6 +105,15 @@ class TestQuickStartAscendNoPatch(MarkdownDocTestBase, unittest.TestCase):
         *MarkdownDocTestBase.ERROR_MARKERS,  # generic [ERROR] + Traceback
         'applicaiton exception',  # CANN toolkit emits this typo (sic) in its Python driver
         'ERR99999',  # CANN sentinel for unrecoverable runtime failure
+        # OpenCV's DNN/CANN backend silently falls back to the CPU engine
+        # when a layer doesn't support CANN: net_cann.cpp's initBackend()
+        # logs this CV_LOG_ONCE_WARNING and then does
+        # ``if (!newWasSupported) return;``.  A top-1 of 372 is produced by
+        # the CPU engine too (0.9148 vs the NPU's 0.9143), so without this
+        # marker the guard cannot tell "ran on the NPU" from "fell back to
+        # the CPU".  It is a WARNING-level message, so it is emitted at the
+        # default log level and lands on stderr, which the engine scans.
+        'Going back to default backend on CPU target',
     )
 
     # Install prefix of the doc's source build. Distinct from the main

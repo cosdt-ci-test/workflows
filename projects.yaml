@@ -619,6 +619,31 @@ projects:
     dir: projects/funasr
     workflows:
       quick_start: .github/workflows/funasr-quick-start.yml
+  # mmengine quickstart exercises the OpenMMLab engine (the framework
+  # layer under mmdet / mmcls / mmseg / mmocr ...) on Ascend NPU. MMEngine
+  # ships no models, so the doc drives a self-contained toy project: a
+  # 16-dim two-class MLP over a synthetic Gaussian dataset plus a custom
+  # metric / dataset / hook, wired through a two-level Config. 17 NPU
+  # smokes cover the core features -- device abstraction
+  # (get_device -> 'npu'), the Config system (_base_ inheritance +
+  # {{}} interpolation), the registries (MODELS / METRICS / DATASETS /
+  # HOOKS / FUNCTIONS + build_from_cfg), BaseDataset + Compose, the full
+  # Runner training loop (dataloader / optim / scheduler / evaluator /
+  # checkpoint / logger), custom Hooks, AMP (AmpOptimWrapper on the NPU
+  # GradScaler), test/eval, checkpoint round-trip, MessageHub logging,
+  # Visualizer, file IO, torch_npu fused optimizers, and NPUProfilerHook.
+  # MMEngine has native Ascend support (mmengine.device -> npu,
+  # Runner.wrap_model -> model.to(get_device()), AmpOptimWrapper ->
+  # torch.npu.amp.GradScaler), so no SDK shim is needed.
+  - name: mmengine
+    category: 训练加速
+    support_level: 基础支持
+    upstream_repo: open-mmlab/mmengine
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/mmengine
+    workflows:
+      quick_start: .github/workflows/mmengine-quick-start.yml
   # axolotl quickstart installs the latest GitHub release from PyPI
   # (--no-build-isolation --no-deps, no CUDA extras) on CANN 9.1.0 +
   # torch 2.11 / torch_npu 2.11, then runs a 3-step LoRA SFT of

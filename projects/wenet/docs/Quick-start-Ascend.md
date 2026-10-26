@@ -249,15 +249,21 @@ lang_char.txt ok
 
 ## 8. 模型训练（stage 4）
 
-`run_npu.sh` 脚本中实现了 NPU 卡号的自动获取和相关环境变量设置，可直接启动昇腾 NPU 上的模型训练。为控制时长，将 `max_epoch` 从 240 缩短到 1（其余参数全部保持脚本默认值）：
+`run_npu.sh` 脚本中实现了 NPU 卡号的自动获取和相关环境变量设置，可直接启动昇腾 NPU 上的模型训练。为控制时长并提高单卡吞吐，调整两处超参：`max_epoch` 从 240 缩短到 1；micro-batch 从 16 提到 64、梯度累积从 4 降到 1——等效 batch 仍为 64（16×4），训练语义不变，但 forward/backward 次数降到 1/4，单次前向的矩阵乘更宽，910B4 的算力填充率更高。若设备显存不足，按 `batch_size × accum_grad = 64` 等比回调即可：
 
 > **注意**：训练产物校验放在命令尾部，快速失败：
 
 ```shell #test-setup id="train"
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
+# 块内任一步失败立即中断：本块以 run_npu.sh 结尾，否则尾部 rc 会吞掉前面的失败
+set -e
 cd wenet/examples/aishell/s0
 cp conf/train_conformer.yaml conf/train_conformer_1ep.yaml
 sed -i 's/max_epoch: .*/max_epoch: 1/' conf/train_conformer_1ep.yaml
+# 单卡吞吐：micro-batch 16→64、梯度累积 4→1，等效 batch 仍是 64，
+# 但 batch 16 时 910B4 的算力大量闲置（矩阵乘 M 维太小），放大后填充率更高
+sed -i 's/batch_size: 16$/batch_size: 64/' conf/train_conformer_1ep.yaml
+sed -i 's/^accum_grad: 4$/accum_grad: 1/' conf/train_conformer_1ep.yaml
 # NPU fork-safety 适配：主进程初始化 CANN 后 fork 出的 DataLoader worker 会段
 # 错误（torch_npu 2.2 + CANN 8.0 已知问题），必须单进程读取（num_workers=0）。
 # torch 2.2 还要求 num_workers=0 时 persistent_workers=False 且
@@ -265,7 +271,9 @@ sed -i 's/max_epoch: .*/max_epoch: 1/' conf/train_conformer_1ep.yaml
 sed -i 's/^num_workers=.*/num_workers=0/' run_npu.sh
 sed -i 's/persistent_workers=True/persistent_workers=args.num_workers > 0/g' "$(git rev-parse --show-toplevel)/wenet/utils/train_utils.py"
 sed -i 's/prefetch_factor=args.prefetch/prefetch_factor=args.prefetch if args.num_workers > 0 else None/g' "$(git rev-parse --show-toplevel)/wenet/utils/train_utils.py"
-# 源码改写校验：sed 路径或匹配失败时立即报错，避免被命令块尾部的 rc=0 吞掉
+# 改写校验：sed 匹配失败时静默返回 0，必须显式确认每条都落到了
+grep -q 'batch_size: 64$' conf/train_conformer_1ep.yaml
+grep -q '^accum_grad: 1$' conf/train_conformer_1ep.yaml
 grep -q "persistent_workers=args.num_workers > 0" "$(git rev-parse --show-toplevel)/wenet/utils/train_utils.py"
 grep -q "if args.num_workers > 0 else None" "$(git rev-parse --show-toplevel)/wenet/utils/train_utils.py"
 bash run_npu.sh --stage 4 --stop_stage 4 --train_config conf/train_conformer_1ep.yaml --data /root/asr-data/OpenSLR/33

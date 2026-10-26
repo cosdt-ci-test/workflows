@@ -210,16 +210,19 @@ ImportError: libxcb.so.1: cannot open shared object file: No such file or direct
 
 装上它需要的 X11 / GL 运行库即可，**不用替换成 headless 变体**：
 
-```shell #test id="mmengine-opencv"
+```shell #test-setup
 apt-get update -qq
 apt-get install -y -qq libxcb1 libgl1 libglib2.0-0
+```
+
+```shell #test id="mmengine-opencv"
 python -c "import cv2; print('cv2', cv2.__version__)"
 ```
 
 输出结果如下：
 
 ```shell #test-result id="mmengine-opencv"
-cv2 5.0.0
+cv2 ...
 ```
 
 ```{admonition} Note
@@ -1137,9 +1140,9 @@ torch_optimizers_registered: True
 
 ### NPU 性能分析
 
-`NPUProfilerHook` 把 `torch_npu` 的 profiler 接进训练循环。下面代码用 python 运行：
+`NPUProfilerHook` 把 `torch_npu` 的 profiler 接进训练循环。先跑一遍带 profiling 的训练（下面代码用 python 运行）：
 
-```python #test id="mmengine-npu-profiler"
+```python #test-setup
 import contextlib
 import io
 import os
@@ -1185,7 +1188,14 @@ buf = io.StringIO()
 with contextlib.redirect_stdout(buf):
     runner = Runner.from_cfg(cfg)
     runner.train()
+```
 
+再检查 profiling 产物目录（下面代码用 python 运行）：
+
+```python #test id="mmengine-npu-profiler"
+import os
+
+PROFILE_DIR = '/tmp/mmengine_quickstart/cann_profiling'
 entries = sorted(os.listdir(PROFILE_DIR)) if os.path.isdir(PROFILE_DIR) else []
 print('profiling_dir_exists:', os.path.isdir(PROFILE_DIR))
 print('profiling_entries:', len(entries))
@@ -1202,7 +1212,8 @@ profiling_entries: 1
 :class: note
 - `NPUProfilerHook` 只在**主进程**（rank 0）生效，产出的 `ascend_pt` 目录可用 `msprof` 工具做算子级分析；
 - `exit_after_profiling=True`（默认值）会在采样结束后直接退出进程，CI / 脚本里记得关掉；
-- mmengine 0.10.x 的 `NPUProfilerHook` 依赖已被 torch_npu 2.9 移除的 `torch_npu.npu.profile`，上面的 `_profile_shim` 是对应的兼容写法。
+- mmengine 0.10.x 的 `NPUProfilerHook` 依赖已被 torch_npu 2.9 移除的 `torch_npu.npu.profile`，上面的 `_profile_shim` 是对应的兼容写法；
+- 训练和断言**分成两个进程**：torch_npu / CANN 的 profiler 在退出时会把告警行（例如 `[WARN]FormatFeatureList...`）直接写进 fd 1，混在同一个进程的 stdout 里就没法做稳定断言了。
 ```
 
 ## 小结

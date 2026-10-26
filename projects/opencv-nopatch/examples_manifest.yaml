@@ -1,6 +1,6 @@
 version: 1
 # opencv-nopatch 的看护对象是**文档**，不是 example 脚本：
-# projects/opencv/docs/Quick-start-Ascend-NoPatch.md（OpenCV 4.11.0 +
+# projects/opencv/docs/Quick-start-Ascend-NoPatch.md（OpenCV 4.14.0 +
 # WITH_CANN=ON + 零源码补丁的源码构建 + NPU DNN 推理）由
 # .github/workflows/opencv-quick-start-nopatch.yml 触发，测试入口是
 # projects/opencv-nopatch/tests/test_quick_start_ascend_nopatch.py

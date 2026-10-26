@@ -11,27 +11,27 @@ Run: ``python -m unittest tests.test_quick_start_ascend_nopatch -v 2>&1``
 
 What makes this guard different from ``projects/opencv``'s guard:
 
-* the doc pins OpenCV **4.11.0** and builds it with **zero source patches**
+* the doc pins OpenCV **4.14.0** and builds it with **zero source patches**
   (``git status --porcelain`` must stay empty), so this guard is the
   regression net for "the CANN backend still compiles untouched upstream
   code" — if a future CANN SDK or OpenCV release breaks that, the
   ``np-opencv-source-pristine`` / ``np-opencv-cmake-configure`` blocks
   fail here first;
-* the install prefix is **``/usr/local/opencv-cann-411``**, not the
+* the install prefix is **``/usr/local/opencv-cann-414``**, not the
   main guard's ``/usr/local/opencv-cann``: the two guards may land on the
-  same self-hosted runner, and a 4.11.0 install must not overwrite (or be
+  same self-hosted runner, and a 4.14.0 install must not overwrite (or be
   overwritten by) the patched 5.x install;
 * the doc has **no ``<ref>`` placeholder** — the version is pinned in the
   document, so ``UPSTREAM_REF`` is not consumed by the command bodies
   (the engine still injects it; the thin workflow pins
-  ``fixed_ref: 4.11.0`` so the monitor watches that tag instead of the
+  ``fixed_ref: 4.14.0`` so the monitor watches that tag instead of the
   latest release).
 
 Environment variables (injected by the quick-start engine workflow
 ``quick-start-template.yml``, triggered by
 ``opencv-quick-start-nopatch.yml``):
     ``MONITORED_DOC_URL``         Required; raw URL of the document under test.
-    ``UPSTREAM_REF``              Injected but unused (doc pins 4.11.0).
+    ``UPSTREAM_REF``              Injected but unused (doc pins 4.14.0).
     ``NPU_READY=true``            Required, otherwise the class is skipped.
                                   End-to-end tests only run on the NPU runner:
                                   local dev machines / normal ubuntu runners
@@ -68,20 +68,24 @@ class TestQuickStartAscendNoPatch(MarkdownDocTestBase, unittest.TestCase):
 
     The doc's heaviest steps are:
         1. ``apt-get install`` build deps (cmake / gcc / libjpeg / libpng / libtiff);
-        2. ``git clone --depth 1 --branch 4.11.0`` opencv (upstream, untouched);
+        2. ``git clone --depth 1 --branch 4.14.0`` opencv (upstream, untouched);
         3. CANN library layout bridge (3 symlinks into ``<CANN>/lib64``);
         4. ``cmake -DWITH_CANN=ON -DCMAKE_BUILD_TYPE=Release`` configure;
         5. ``cmake --build . --target install`` (Release -O3 — the whole
            point of this variant: no narrow-op-header patch needed, but
            every ``all_ops.h`` TU is heavy: ~3 GB RSS each);
         6. Python binding smoke (cv2 import + ``DNN_BACKEND_CANN`` enum);
-        7. MobileNetV2 ONNX NPU forward (classic DNN engine — 4.11's
-           default, no ``OPENCV_FORCE_DNN_ENGINE`` needed) with top-1 = 372.
+        7. MobileNetV2 ONNX NPU forward (classic DNN engine — 4.14's
+           default, no ``OPENCV_FORCE_DNN_ENGINE`` needed) with top-1 = 372;
+        8. videoio smoke (MJPG write 10 frames -> read back 10) — the
+           doc's ``BUILD_LIST`` carries ``videoio``, and MJPG rides
+           OpenCV's *built-in* MJPEG codec (``modules/videoio/src/mjpeg/``
+           + ``cap_mjpeg.cpp``), so it needs no ffmpeg on the runner.
     """
 
     # The build is the long pole: Release -O3 with CANN's ``all_ops.h``
     # (~1500 ops) in the dnn layer TUs costs ~3 GB RSS and several
-    # minutes per TU. 4.11.0 + 6 modules is a smaller build than the
+    # minutes per TU. 4.14.0 + 6 modules is a smaller build than the
     # main guard's 8 modules, and the a2-4 runner has far more RAM than
     # the 32 GB cgroup the local verification ran under — hence
     # ``OPENCV_BUILD_JOBS`` below. 9000s per command keeps generous
@@ -97,10 +101,10 @@ class TestQuickStartAscendNoPatch(MarkdownDocTestBase, unittest.TestCase):
     )
 
     # Install prefix of the doc's source build. Distinct from the main
-    # guard's /usr/local/opencv-cann so a 4.11.0 install can never
+    # guard's /usr/local/opencv-cann so a 4.14.0 install can never
     # clobber (or be clobbered by) the patched 5.x one when both guards
     # land on the same self-hosted runner.
-    _OPENCV_INSTALL = '/usr/local/opencv-cann-411'
+    _OPENCV_INSTALL = '/usr/local/opencv-cann-414'
     _OPENCV_PYTHONPATH = f'{_OPENCV_INSTALL}/lib/python3.12/site-packages'
 
     # Build parallelism for the doc's ``cmake --build`` block. The doc
@@ -150,7 +154,7 @@ class TestQuickStartAscendNoPatch(MarkdownDocTestBase, unittest.TestCase):
             )
         print(
             f'setup: PYTHONPATH -> {os.environ["PYTHONPATH"]} '
-            '(prepended source-built cv2 4.11.0; kept image entries)'
+            '(prepended source-built cv2 4.14.0; kept image entries)'
         )
 
         # 2) Build parallelism (see _BUILD_JOBS).

@@ -31,6 +31,38 @@
 
 > 为什么 4.x 天然比 5.x 省补丁：`all_ops.h` 是 **CANN 的头**，与 OpenCV 版本无关 ⇒ 每个引用 TU 展开的体积恒定，`.text` 随 TU 数量线性增长。实测引用 `op_cann.hpp` 的 TU 数：4.11.0 = 27，**4.14.0 = 28**（多的那个是 `layers/reduce_layer.cpp` —— 4.14 给 reduce 层新增了 CANN 后端支持），5.0.0 = 39。dnn 源码量则是 4.11.0 = 2,999,863 B → **4.14.0 = 3,068,750 B（+2.3%）** → 5.0.0 = 4,518,814 B（+50.6%）。4.14 站在「TU 只多 1 个、自身代码只多 2.3%」的位置，离 128 MiB 窗口还有 ~74 MiB 余量；5.0 站在「TU 多 39%、自身代码多 50%」的位置，就撞墙了。
 
+## 这条路线的 NPU 覆盖到哪（重要边界）
+
+**零补丁 ⇒ NPU 能力只有 DNN 推理这一条。** `imgproc` / `imgcodecs` / `videoio` 在本文这条路线下**全部走 CPU**。
+
+OpenCV 4.x 的 NPU 加速只有两处入口：
+
+| 入口 | 在哪 | 本文的零补丁路线覆盖到吗 |
+| --- | --- | --- |
+| DNN CANN 后端 | 主仓 `modules/dnn`（`WITH_CANN=ON`） | ✅ **覆盖** —— 本文验证的那条 |
+| `cv2.cann.*` 经典算子 | contrib `modules/cannops` | ❌ **不覆盖** —— 本文不编 contrib |
+
+所以本文那几件 CPU 事情，NPU 归属是这样：
+
+| 本文验证的 CPU 场景 | 能上 NPU 吗 |
+| --- | --- |
+| 读图 / 写图（`imread` / `imwrite`） | ❌ `imgcodecs` 没有 NPU 解码路径 |
+| 颜色空间（`cvtColor`） | ✅ 但要走 `cv2.cann.cvtColor`（见下） |
+| 缩放（`resize`） | ✅ 但要走 `cv2.cann.resize`（见下） |
+| 绘制（`rectangle` / `putText`） | ❌ cannops 没有绘图算子 |
+| 视频读写（`VideoWriter` / `VideoCapture`） | ❌ contrib 的 DVPP 只封装了 `hi_mpi_vpc_*`（resize / crop / border），**没有 vdec / venc**；视频编解码仍是 CPU |
+
+**一个容易误解的点**：`cv2.cann.cvtColor` **不是** `cv2.cvtColor` 的 NPU 加速版 —— 它是签名不同的**并行 API 线**（`AscendMat` 进出、可选 `stream=` 参数）。`cv2.cvtColor` / `cv2.resize` 永远走 CPU。
+
+`cv2.cann` 在 4.14.0 上暴露 23 个算子（`modules/cannops/include/opencv2/cann_interface.hpp`）：
+
+| 后端 | 算子 |
+| --- | --- |
+| ACL 算子编译（GE 图） | `cvtColor` `threshold` `add` `subtract` `multiply` `divide` `addWeighted` `bitwise_and` `bitwise_not` `bitwise_or` `bitwise_xor` `merge` `split` `transpose` `flip` `rotate` |
+| DVPP VPC（硬件） | `resize` `crop` `cropResize` `cropResizeMakeBorder` `copyMakeBorder` |
+
+要拿到它们就得编 contrib，而 contrib 的 `cann_call.cpp` 在 CANN 9.1.0 上有 NULL 流缺陷（见「已知边界」），必须打补丁 —— 那就不是本文这条零补丁路线了。
+
 
 ## 另一个坑：CANN 9.2 的裁剪版 `libgraph.so`
 
@@ -572,7 +604,7 @@ top class score: 0.xxx
 
 ## 已知边界
 
-- **没有 `cv2.cann`**：本文不编 `opencv_contrib`，所以 `cv2.cann.cvtColor` 这类 contrib 经典算子加速 API 不可用（主文档有）。**这不是「本文偷懒」，是 4.x 上源码级确认的死路**：`opencv_contrib/modules/cannops/src/cann_call.cpp` 在 4.11.0 与 4.14.0 之间**逐字节相同**（43 个文件、823,803 B），`OperatorRunner::run()` 把 `AscendStream::Null()`（`stream == nullptr`）直接喂给 `aclopCompileAndExecute`，CANN 9.1.0 断言 `stream != nullptr` ⇒ 实测 53 个 cannops 用例挂 48 个（`E29999: Assert ((stream) != nullptr)` + `Invalid_Argument_Null_Pointer(EH0008)`）。**上游还有逻辑反转 bug**：`if (rawStream == nullptr) aclrtSynchronizeStream(rawStream);` —— NULL 时反而去同步 NULL 流。要跑 `cv2.cann` 就得编 contrib + 打那组 NULL 流兜底补丁。
+- **没有 `cv2.cann`**：本文不编 `opencv_contrib`，所以 `cv2.cann.cvtColor` / `cv2.cann.resize` 这类 contrib 经典算子加速 API 不可用（主文档有）。算子面和「为什么它们不能替换 `cv2.*`」见上一节「这条路线的 NPU 覆盖到哪」。**这不是「本文偷懒」，是 4.x 上源码级确认的死路**：`opencv_contrib/modules/cannops/src/cann_call.cpp` 在 4.11.0 与 4.14.0 之间**逐字节相同**（43 个文件、823,803 B），`OperatorRunner::run()` 把 `AscendStream::Null()`（`stream == nullptr`）直接喂给 `aclopCompileAndExecute`，CANN 9.1.0 断言 `stream != nullptr` ⇒ 实测 53 个 cannops 用例挂 48 个（`E29999: Assert ((stream) != nullptr)` + `Invalid_Argument_Null_Pointer(EH0008)`）。**上游还有逻辑反转 bug**：`if (rawStream == nullptr) aclrtSynchronizeStream(rawStream);` —— NULL 时反而去同步 NULL 流。要跑 `cv2.cann` 就得编 contrib + 打那组 NULL 流兜底补丁。
 - **没有 OpenCV 5.x**：4.14.0 没有 5.0 的新 DNN 图引擎（`onnx_importer2`），也没有 5.0 的其它新特性。反过来 4.14.0 也有 5.0 没有的东西：**reduce 层的 CANN 后端支持**（`layers/reduce_layer.cpp` 从 4.14 起才 include `op_cann.hpp`）。
 - **没有 `opencv_test_cannops` 单测**：那个 gtest 二进制来自 `opencv_contrib` 的 cannops 模块，本文不编 contrib，所以没有那 53 个用例的证据；NPU 正确性由上面的 MobileNetV2 top-1 对齐来兜。
 - **编译并行度受内存配额约束**：`all_ops.h` 那几个 TU 每个吃 3GB 上下，cgroup 32GB 的容器里 `--parallel` 别超过 6，否则 OOM killer 会杀掉 `cc1plus`。

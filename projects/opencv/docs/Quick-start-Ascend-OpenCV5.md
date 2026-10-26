@@ -4,14 +4,14 @@
 
 本文分两半：
 
-- **§2 特性导览**：OpenCV 5.0 的核心特性 + 「特性 → 昇腾可用性」矩阵（哪条能用、哪条被墙、为什么）；
+- **§2 特性导览**：只讲**跟 NPU 有关**的部分——昇腾有几条非 CPU 通路、5.0 的改动怎么影响它们、其余纯 CPU 特性的一览表；
 - **§3~§10 跑通路径**：自包含的源码构建 + CPU API + NPU 推理，每一步都可复制粘贴、每一步都有可核对的输出。
 
 ## 1. 与同仓其它 OpenCV 文档的关系
 
 | 文档 | OpenCV 版本 | 源码补丁 | 定位 |
 | --- | --- | --- | --- |
-| **本文** | 5.0（跟随上游 latest release） | 3 组 | 5.0 特性导览 + 昇腾可用性矩阵 + 跑通路径 |
+| **本文** | 5.0（跟随上游 latest release） | 3 组 | 5.0 的**昇腾视角**特性导览（非 CPU 通路 + 影响） + 跑通路径 |
 | [Quick-start-Ascend.md](Quick-start-Ascend.md) | 5.0（跟随上游 latest release） | 3 组 | 同一配方，偏「补丁逐行说明 + cannops 单测证据」 |
 | [Quick-start-Ascend-NoPatch.md](Quick-start-Ascend-NoPatch.md) | 4.11.0（钉死） | 0 组 | 不想维护本地补丁时的退路（放弃 5.x 特性） |
 
@@ -22,118 +22,111 @@
 
 > **版本口径**：本文的 `<ref>` 由 CI 注入，解析自上游 GitHub `releases/latest`。截至 2026-10-23，上游把它标成 **5.0.0**（4.14.0 是 4.x 维护线，发布更晚但**不是** latest）。§5 的补丁脚本只对 **5.0.x** 成立（`cv::MatShape` 是 5.0 引入的，4.x 里根本没有这个类型），上游一旦出 5.1/6.0，需要人工复核补丁。
 
-## 2. OpenCV 5.0 核心特性
+## 2. OpenCV 5.0 与昇腾的关系（只看非 CPU 通路）
 
-> **上游事实来源**（本文 §2 逐条对着这三份一手材料核过，不是凭印象）：
+> **本节只讲跟 NPU 有关的部分。**OpenCV 5.0 的新特性绝大多数是**纯 CPU** 的（§2.4 有一览表），跟昇腾没有关系，本文不逐条验证、也不在 npu-4 上跑它们。
 >
-> - [OpenCV 5 wiki](https://github.com/opencv/opencv/wiki/OpenCV-5)：5.0.0 发布说明（2026-06 定的稿）
-> - [OpenCV 4→5 迁移指南](https://github.com/opencv/opencv/wiki/OpenCV-4-to-5-migration)：破坏性变更的权威清单
-> - [OpenCV Change Log](https://github.com/opencv/opencv/wiki/OpenCV-Change-Logs)：5.0 段官方写的是 "ChangeLog is TBD"，明细看上面两份
->
-> 另外本文**直接比对了 `5.0.0` 与 `4.14.0` 两个 tag 的源码树**（GitHub API `contents` / `git trees`），用来判定「这条到底是 5.0 新增，还是 4.x 早就有」——下面每条都打了来源标记。
-> 「昇腾上的状态」一列是本文在 910B4 上实测出来的。
+> 上游事实来源：[OpenCV 5 wiki](https://github.com/opencv/opencv/wiki/OpenCV-5)、[4→5 迁移指南](https://github.com/opencv/opencv/wiki/OpenCV-4-to-5-migration)、[Change Log](https://github.com/opencv/opencv/wiki/OpenCV-Change-Logs)（5.0 段官方写的是 "ChangeLog is TBD"，明细看前两份）；并比对了 `5.0.0` 与 `4.14.0` 两个 tag 的源码树。**凡是上游文档与源码树打架的，以源码树为准。**
 
-**来源标记**（判定依据是上游文档 + 源码树比对，不是印象）：
+### 2.1 昇腾在 OpenCV 5.0 上有几条非 CPU 通路
 
-| 标记 | 含义 |
-| --- | --- |
-| `[4.x]` | 4.x 时代就有，5.0 只是延续 / 增强 |
-| `[5.0 新增]` | 5.0 引入的新能力 |
-| `[5.0 行为变化]` | API 签名不变，但结果 / 语义变了（升级要改代码或重录基线） |
-| `[5.0 移除]` | 5.0 删掉了 |
-
-### 2.1 DNN 模块：引擎重写 + 原生 LLM/VLM
-
-`[5.0 新增]` **新推理引擎**与经典引擎并存。5.0 把 dnn 从「固定 layer 序列」重写成**带类型的算子图**：形状推断、常量折叠、算子融合（含 attention / MatMul 融合，FlashAttention 风格实现）、原生**动态与符号 shape**、控制流子图（`If` / `Loop`）、量化图、统一 buffer pool / 内存池。上游口径：**新引擎覆盖 >64% 的 ONNX 规范，4.x 不到 13%**。
-
-`[5.0 新增]` **引擎选择**：`cv::dnn::readNet()` / `readNetFromONNX()` 新增 `int engine = ENGINE_AUTO` 参数，默认先试新引擎、加载失败自动回落经典引擎。也可以用环境变量 `OPENCV_FORCE_DNN_ENGINE`：`1`=经典引擎、`2`=新引擎（模型不支持就报错）、`3`=auto（默认）、`4`=ONNX Runtime。**模型加载后不能再切引擎**（两套引擎内部表示不同）。
-
-`[5.0 新增]` **ONNX Runtime 集成**：`cmake -DWITH_ONNXRUNTIME=ON -DDOWNLOAD_ONNXRUNTIME=ON`（NVIDIA GPU 再加 `-DDOWNLOAD_ONNXRUNTIME_GPU=ON`）。OpenCV 用自己的 ONNX parser 构造 ORT 图，所以只需要 ORT 本体，不必装整个 onnx 包。
-
-`[5.0 行为变化]` **新引擎目前只跑 CPU**——上游原话是 "The new engine currently runs on CPU only"，GPU 支持留到后续版本。**这一条直接决定了昇腾上必须显式选经典引擎**（§10）。
-
-`[5.0 新增]` **原生 LLM / VLM**：新引擎内置 tokenizer、attention 层、解码块、后处理与 **KV-cache**，可端到端跑 VLM。5.0.0 的 `samples/dnn/` 里对应 5 个样例：`gpt2_inference.py` / `qwen_inference.py` / `gemma3_inference.py` / `vlm_inference.py` / `ldm_inpainting.py`（扩散模型）。
-
-`[5.0 移除]` **Darknet / Caffe 解析器删除**（`readNetFromDarknet()` / `readNetFromCaffe()` 没了）；**TFLite 仍由经典引擎支持**。
-
-`[5.0 行为变化]` **模型仓库搬家**：OpenCV 的小模型集合迁到 HuggingFace `huggingface.co/opencv`（统一 ONNX 格式），样例用 `cd samples/dnn && python3 download_models.py` 拉。
-
-> **性能对比要看官方的完整表，别看二手总结**：[OpenCV 5 DNN Benchmarks](https://github.com/opencv/opencv/wiki/OpenCV-5-DNN-Benchmarks)。它是**分模型**的，不是全面更快——Intel i9 上 OpenCV 5 快的有：X-Feat 6.2 vs 10.3 ms、owlv2 1074.7 vs 1542.6 ms、BiRefNet 7178 vs 9503.1 ms；慢的有：RAFT 1193 vs 685.2 ms、SAM3 (Encoder) 7753 vs 6194 ms、SwinIR 225.7 vs 164.7 ms（均为 OpenCV vs ONNX Runtime 1.25.1，毫秒，越小越好）。
-
-### 2.2 core：数据类型、维度、形状
-
-- `[5.0 新增]` **五种新数据类型**：`CV_16BF`（`cv::bfloat`）、`CV_32U`、`CV_64U`、`CV_64S`、`CV_Bool`（1 字节/值，非零即 true，可当 `CV_8U`/`CV_8S` mask 用）。`CV_16F`（`cv::hfloat`）**4.x 就有**，不是 5.0 新增。`hfloat` / `bfloat` 的算术在没有原生支持的硬件上也能用（内部走高效的标量/向量转换）。
-- `[5.0 新增]` **1D / 0D 数组原生支持**：4.x 里 `std::vector` 会被当成 Nx1 矩阵，5.0 里它就是真正的 1D 数组（`dims == rows == 1`，`cols == total()`）；0D 数组（标量）同理（`dims == 0`）。判空用 `mat.empty()` 而不是 `total() == 0`。
-- `[5.0 新增]` **shape 类型换成 `cv::MatShape`**（`MatSize` 保留为别名）：带上 layout 信息，而且**内嵌在 `Mat` / `UMat` / `GpuMat` 里不再额外动态分配**；dnn 的形状推断大量使用它。**这正是 §5 组 1 补丁要适配的东西。**
-- `[5.0 新增]` **LAPACK 始终可用**：没装外部 LAPACK 就编一个内置小子集 → 更好的 SVD / 特征值分解 / USAC。
-- `[4.x]` `cv::broadcast` / `cv::transposeND` / `cv::flipND` **不是 5.0 新增**：5.0.0、4.14.0、4.13.0、4.12.0 的 `core.hpp` 里三者都在（4.14 只是给 `transposeND` 加了 identity / 2D 顺序的快路径）。5.0 在这块的真正变化是上面那条 `MatShape`。
-
-### 2.3 imgproc / videoio：被重写的算子、新字体
-
-- `[5.0 行为变化]` **仿射 / 透视 / 重映射重写**：`warpAffine` / `warpPerspective` / `remap` 的双线性、双三次插值不再用查表近似，**结果更准也更快**（上游口径：提速 10% ~ 300%+，视平台 / 尺寸 / 类型 / flags 而定）。API 不变，但**数值与 4.x 略有差异**——逐像素比对 4.x 基线的测试要重录。
-- `[5.0 行为变化]` **最近邻 resize 改用 Pillow 算法**：`INTER_NEAREST` 与 `INTER_NEAREST_EXACT` 现在等价，输出与 Pillow 逐像素对齐（跟 Pillow 做像素级比对的老测试要注意方向变了）。
-- `[5.0 新增]` **新的文字渲染引擎**：基于 STB TrueType，内嵌 Rubik 可变字体，新增 `cv::FontFace` 类与 `putText()` / `getTextSize()` 的新重载，支持 UTF-8、自定义 `.ttf`/`.otf`、内置 `"sans"` / `"italic"` / `"uni"`（`"uni"` 带 CJK）。旧的 `FONT_HERSHEY_*` 仍可用，但底层已换成新引擎，**字号与字形跟 4.x 不一样**；复杂整形（阿拉伯文、天城文）和彩色 emoji 暂不支持。
-- `[4.x 起有 / 5.0 自动启用]` **TRUCO 轮廓提取**：`modules/imgproc/src/contours_truco.cpp` 在 **4.14.0 里就有**（4.14 的 Change Log 记着 "Added findTRUContours - lock-free parallel contour extraction"），5.0 的变化是 `cv::findContours()` **在可用时自动切到 TRUCO**，比旧实现快数倍。
-- `[5.0 行为变化]` **`VideoCapture::get()` 对不支持的属性返回 `-1`**（4.x 返回 0，而 0 对很多属性是合法值）。判「该后端不支持」要改成 `val < 0`。
-
-### 2.4 HAL 与厂商加速：先纠正一个常见误解
-
-- `[4.x]` **Universal intrinsics**（`v_exp` / `v_log` / `v_erf` / `v_sincos` 等）、**`AlgorithmHint`**（速度 vs 精度）、**厂商 HAL 扩展点**——**都是 4.x 时代就有的**，5.0 只是延续。上游 alpha Change Log 给这些条目标的就是 "5+4.x"（= 4.x 已有、5.0 也提一句）。
-- `[4.x]` **一套向量代码映射到 SSE / AVX2 / AVX512 / NEON / SVE / RVV** 也是 4.x 的能力。`hal/kleidicv`（Arm KleidiCV）和 `3rdparty/fastcv`（Qualcomm FastCV）在 **4.14.0 里就已经在**；5.0.0 的 `hal/` 是 `armpl carotene fastcv ipp kleidicv ndsrvp riscv-rvv`，4.14.0 是同样这七个 **外加 `openvx`**（5.0 随 OpenVX 支持一起删掉了）。
-- `[5.0 计划中，未落地]` 真正的「**HAL 2.0**」= 面向**非 CPU 后端**的厂商加速接口 + 把 `UMat` 扩成通用异构容器（上游 issue #25019 / #25025）。上游 Change Log 明确标成 "5.0, 5.x: expected"——**5.0.0 里没有**，`core/hal/interface.h` 里也没有 HAL 2.0 的版本标记。所以「OpenCV 5.0 有了 HAL 2.0」是个常见误传。
-
-### 2.5 模块重组与移除
-
-- `[5.0 行为变化]` **`calib3d` 拆成 4 个模块**：`geometry`（2D/3D 几何：`findHomography` / `solvePnP` / `triangulatePoints` …）、`calib`（相机标定）、`stereo`（双目深度）、`ptcloud`（TSDF / 视觉里程计 / 点云 I/O）。C++ 里 `opencv2/calib3d.hpp` 仍可用（只是个聚合头，依次 include 那三个）；**Python 完全透明**，还是 `cv2.findHomography()`。
-  > 上游自己的文档在这点上前后不一致：迁移指南正文写 "split into three focused modules"，但标题、表格和实际 tag 都是**四个**（`5.0.0` 的 `modules/` 下有 `calib geometry stereo ptcloud`，没有 `3d`）。以源码树为准。
-  > 兼容头 `opencv2/calib3d.hpp` 还在，但住在 `modules/calib/include/opencv2/` 下，只 include 了 geometry / stereo / calib **三个**——要用 TSDF / ICP / 点云 I/O 得另外 include `opencv2/ptcloud.hpp`。
-- `[5.0 行为变化]` **imgproc 的计算几何搬去 `geometry`**：`convexHull` / `convexityDefects` / `isContourConvex` / `minEnclosingCircle` / `minEnclosingTriangle` / `minAreaRect` / `fitEllipse` / `Subdiv2D`（Delaunay）等。Python 同样透明。
-- `[5.0 新增]` **`features2d` 更名 `features`**，并扩到处理深度网络产生的特征向量：主库新增 **ALIKED**、**DISK** 与 **LightGlue** 匹配器，以及基于 **Annoy** 的 ANN 检索（`annoy.cpp` 在 4.14.0 里没有，是 5.0 新增）。
-  - ⚠️ **FLANN 模块并没有被移除**：`5.0.0` 的 `modules/flann/src/` 里 `flann.cpp` + `miniflann.cpp` 都还在。上游 2024-12 的 alpha Change Log 写过「`FLANN` as a separate module will be gone」，但 5.0.0 正式版**没执行**这条——Annoy 是**新增**的替代实现，不是「移除 FLANN」。（典型的「只看 wiki 概要会被坑」。）
-  - 迁去 contrib `xfeatures2d` 的是 SURF / BRIEF / FREAK / LUCID / DAISY 等老检测器；**SIFT / ORB / FAST / GoodFeaturesToTrack / MSER 留在主库**。
-- `[5.0 行为变化]` **G-API**、经典 **ml**、**Haar / HOG 检测器**（`xobjdetect`）搬去 `opencv_contrib`；主库 `objdetect` 里的 DNN 人脸检测（`FaceDetectorYN`）不需要 contrib。
-- `[5.0 移除]` **遗留 C API**（`CvMat` / `cvCreateMat` / `cvFindContours` …，只保留 `CV_8U` 这类宏）、**OpenVX 支持**、**Caffe / Darknet 解析器**。
-- `[5.0 行为变化]` **samples 清理**：约 50% 的 C++ samples、5% 的 Python samples 被删，剩余的大改。
-- `[5.0 行为变化]` **USAC 成为所有鲁棒估计算法的默认后端**（单应 / 本质矩阵 / 基础矩阵 / PnP …）：PROSAC / NAPSAC / Progressive-NAPSAC、MSAC / MAGSAC++ / LMeds、LO-RANSAC / GC-RANSAC、SPRT 提前终止，并支持多线程。USAC 算法本身 4.x 就有，5.0 变的是「成为默认后端」。
-- `[5.0 新增]` **多目相机标定流水线**（`calib`）：N 台相机三阶段（逐相机内参 → 两两外参 → 全局优化），支持针孔 / 鱼眼及混合阵列、棋盘 / ChArUco / 圆点板，容忍「不是每台相机每帧都看全标定板」的部分观测。
-- `[5.0 新增]` **点云 / mesh**（`ptcloud`）：TSDF、ICP、视觉里程计，及 `.ply` / `.obj` 导入导出。
-
-### 2.6 语言 / 绑定 / 文档
-
-- `[5.0 新增]` **C++17 最低**（编译器下限 GCC 8 / Clang 9 / MSVC 2017；C++20 / 23 计划中）；**Python 2 移除**，要求 Python 3.6+。
-- `[4.x]` **NumPy 2.x 兼容不是 5.0 特性**：4.x 已有实验性 NumPy 2.0 支持，4.12.0 起把 `ndarray.ptp()` 换成 `np.ptp()` 以兼容 2.0。
-- `[5.0 行为变化]` **模块重组对 Python 透明**：函数仍在 `cv2.<func>()`，只是 `cv2.ml.*`（未编 contrib 时）、`cv2.CascadeClassifier` / `cv2.HOGDescriptor` 需要编 `opencv_contrib`。
-- `[5.0 行为变化]` **Python 的 1D 语义**：`np.array` 作为 `InputArray` 现在映射成 1D `Mat`（4.x 是 Nx1 列向量），依赖 `.rows` / `.cols` 的代码要改用 `.total()`。
-- `[5.0]` **文档**：5.0.0 源码树里 `doc/`（Doxygen）与 `docs_sphinx/`（Sphinx 骨架，含 `conf.py`）**两套并存**；docs.opencv.org 换成响应式新主题（侧边栏 / Ctrl+K 搜索 / 明暗色）。
-
-### 2.7 特性 → 昇腾 CANN 后端可用性矩阵
-
-这是本文最该看的一张表。**结论先行：5.0 的「招牌」特性（新图引擎、原生 LLM/VLM）目前一个都上不了 NPU**——昇腾要走的是 4.x 时代的**经典引擎 + CANN 后端**。反过来，5.0 里那些「跟后端无关」的新能力（新 dtype、1D/0D Mat、新字体、USAC……）在昇腾机器上**照常可用**，只是它们本来就是 CPU 算子。
-
-| 5.0 特性 | 昇腾 CANN 后端上的状态 | 依据 / 绕法 |
+| 通路 | 5.0 状态 | 本文实测（910B4 / CANN 9.2.0 / OpenCV 5.0.0） |
 | --- | --- | --- |
-| **新图引擎**（算子图、形状推断、融合、内存池） | ❌ **不走 NPU** | 上游明说 "The new engine currently runs on CPU only"；本文实测：5.0 默认 `ENGINE_AUTO` → 新图引擎，`setPreferableBackend` / `setPreferableTarget` 被静默忽略，只打两条 WARN（§10.1）。**必须** `OPENCV_FORCE_DNN_ENGINE=1`（或 `readNetFromONNX(path, cv2.dnn.ENGINE_CLASSIC)`）强制经典引擎（§10.2） |
-| `ENGINE_ORT`（ONNX Runtime 后端） | ❌ 未编 | 需要 `-DWITH_ONNXRUNTIME=ON`；本文没编（而且 ORT 也不是 NPU 路径） |
-| **原生 LLM / VLM**（内置 tokenizer + KV-cache） | ❌ **只能 CPU** | 同上：新引擎不支持非 CPU 后端。5.0.0 的 `samples/dnn/{gpt2,qwen,gemma3,vlm}_inference.py` 全部硬编码 `ENGINE_NEW` |
-| 新 dtype（`CV_16BF` / `CV_32U` / `CV_64U` / `CV_64S` / `CV_Bool`） | ⚠ core 层可用，CANN 后端不认 | ACL 算子图的元素类型是有限集合；bf16 张量进不了 CANN 算子图 |
-| **1D / 0D Mat**、shape 类型换成 `cv::MatShape` | ⚠ **编译不过，必须打补丁** | 上游 CANN 后端 `modules/dnn/src/op_cann.hpp` 从 4.11 到 5.0.0 **一行没改**（构造函数仍是 `const std::vector<int>&`），而 5.0 的 `cv::MatShape` 是 `explicit` 且**没有 `front()`** → §5 组 1 补丁 |
-| `broadcast` / `transposeND` / `flipND` | ✅ CPU 可用，无 NPU 路径 | ⚠️ 这三个**是 4.x 就有的**（≤4.12），不是 5.0 新增；实测：§9 的两个 ND 算子在源码版 `cv2` 上正常返回；CANN 后端未实现它们 |
-| **imgproc 重写**（warp 加速 / 最近邻改 Pillow / STB 字体 / TRUCO 自动启用） | ✅ 纯 CPU | 与后端无关；但**数值与 4.x 有差异**，逐像素基线要重录（§2.3） |
-| **USAC 默认后端** / 多目标定 / `ptcloud`（TSDF·ICP·ply·obj） | ✅ 纯 CPU | 与后端无关 |
-| Universal Intrinsics / `AlgorithmHint` / KleidiCV / FastCV / IPP | ⚠ 与 NPU 无关，且**是 4.x 遗产** | CPU SIMD 层；昇腾 aarch64 走 NEON。5.0 的「HAL 2.0（非 CPU HAL）」**未落地**（§2.4） |
-| `calib3d` → `geometry` / `calib` / `stereo` / `ptcloud` | ✅ 纯 CPU | 与后端无关（4 个模块，不是 3 个） |
-| `features2d` → `features`（ALIKED / DISK / LightGlue / Annoy） | ✅ 纯 CPU | 与后端无关；**FLANN 模块仍在**（§2.5） |
-| G-API / 经典 ml / Haar-HOG 移到 contrib | ⚬ 需额外编 `opencv_contrib` | 本文编了 contrib（为了 `cv2.cann` 经典算子加速） |
-| 移除遗留 C API | ⚠ 迁移成本 | 与 CANN 后端无关（后端是 C++ 内部实现） |
-| 移除 Caffe / Darknet 解析器 | ⚠ `samples/dnn/openpose.py` 断供 | 与后端无关；TFLite 仍可用（走经典引擎） |
-| C++17 / Python 3 | ⚠ 环境约束 | 镜像 GCC 11.4 满足 C++17；CANN 的 GE 图编译依赖镜像里的 Python 站点包（见 §10.2 的 `PYTHONPATH` 警告） |
+| **DNN 经典引擎 + CANN 后端** | ✅ **唯一能上卡的 DNN 通路**（4.x 时代那条，5.0 原样保留） | 103 层转 CANN 算子、GE 图编译 1 次、top-1 372、score 0.9142662（§2.3 台账 / §10.2） |
+| **contrib `cannops`（`cv2.cann`）** | ✅ 用 CANN 算子加速经典图像算子 | 单测 **53/53** 通过（§8.1） |
+| **DNN 新图引擎**（5.0 的招牌） | ❌ **上游写死 CPU only** | 默认 `ENGINE_AUTO` 会落到它 → 推理成功但**完全不上卡**：请求 CANN 后端只打 2 条 WARN、**0** 次 GE 图编译（§2.3 台账 P5 / §10.1） |
+| **ONNX Runtime 后端** | ❌ 不是 NPU 路径；本文也没编（要 `-DWITH_ONNXRUNTIME=ON`） | — |
+| **非 CPU HAL 2.0**（厂商加速接口 + UMat 通用异构容器） | ❌ **5.0.0 未落地**（上游标 "5.0, 5.x: expected"，issue #25019 / #25025） | — |
+| NPU 视频解码 / NPU 图像处理（`cannops` 之外） | ❌ OpenCV 5.0 主仓没有这类通路 | — |
 
-### 2.8 本文覆盖边界（明确没覆盖什么）
+**一句话结论**：5.0 给昇腾带来的**不是新能力，而是风险**——新特性大多与 NPU 无关，而唯一那条能上卡的通路（经典引擎 + CANN 后端）在 5.0 源码树上还得先打 3 组补丁才编得过（§5），默认引擎还会把你悄悄甩到不上卡的新引擎上（§10.1）。
+
+### 2.2 5.0 的改动里，真正影响 NPU 通路的那几条
+
+| 5.0 的变化 | 对 NPU 通路的影响 | 依据 |
+| --- | --- | --- |
+| **DNN 引擎重写**（带类型的算子图、形状推断、算子融合、动态 shape、控制流子图；ONNX 覆盖 >64%，4.x 不到 13%） | ⚠️ **默认引擎换了**：`ENGINE_AUTO` 先试新引擎，而新引擎**不支持任何非 CPU 后端**——此时再调 `setPreferableBackend(CANN)` **不报错也不生效**，只打 2 条 WARN 就把模型留在 CPU | 上游："The new engine currently runs on CPU only"；本文实测：2 条 WARN、**0** 次 GE 图编译、**0** 层转 CANN 算子，跑出来的 score 是 CPU 值 0.9148015 而经典引擎 + CANN 是 0.9142662（§2.3 台账 P5 / §10.1） |
+| **引擎选择 API**：`readNet(path, engine)` + 环境变量 `OPENCV_FORCE_DNN_ENGINE`（1=经典 / 2=新 / 3=auto / 4=ORT） | ✅ 给了回到经典引擎的开关 | §10.2；实测 `cv2.dnn.ENGINE_CLASSIC` 与 `OPENCV_FORCE_DNN_ENGINE=1` **完全等价**：都是 103 层转 CANN 算子、1 次 GE 图编译、top-1 372、score 0.9142662（§2.3 台账 P1 vs P6） |
+| **模型加载后不能换引擎**（两套引擎内部表示不同） | ⚠️ 只能在 `readNet` 时选 | 上游迁移指南 |
+| **Darknet / Caffe 解析器删除**（TFLite 仍由经典引擎支持） | ⚠️ 老模型必须先转 ONNX 才能上卡 | 上游迁移指南 |
+| **模型仓库迁到 HuggingFace `huggingface.co/opencv`**（全 ONNX） | ℹ️ 换模型来源 | 上游 wiki |
+| **shape 类型换成 `cv::MatShape`**（`MatSize` 留作别名） | ❌ **CANN 后端编译不过**：上游 `modules/dnn/src/op_cann.hpp` 的构造函数签名还是 `const std::vector<int>&`，而 `cv::MatShape` 是 `explicit` 且**没有 `front()`** | `op_cann.hpp` 在 4.14.0 与 5.0.0 上 **md5 完全相同**（`4034857f…`）→ §5 组 1 补丁 |
+| **1D / 0D Mat** | ❌ 同上（同一个 `cv::MatShape` 断裂） | §5 组 1 |
+| **新 dtype**（`CV_16BF` / `CV_32U` / `CV_64U` / `CV_64S` / `CV_Bool`） | ❌ **CANN 后端只吃 fp32**：blob 的 tensor desc 恒为 `ge::DT_FLOAT`；常量权重只接受 `CV_32F` / `CV_32S`，其它一律 `StsNotImplemented` | 5.0.0 `op_cann.cpp` 源码；**连 fp16 也不行**（`CV_16F` 是 4.x 就有的类型）：实测喂 fp16 blob 直接抛 `layer.cpp:274`，`'input' is 7 (CV_16FC1)`，CPU 后端同样抛（§2.3 台账 P2） |
+| **量化（int8）** | ❌ CANN 后端明确不支持：`CV_Assert(!base.netWasQuantized); // does not support quantized net for now`；而且 **5.0 把量化入口本身删了** | 5.0.0 `net_cann.cpp`；4.14.0 的 `dnn.hpp` 还有 `CV_WRAP Net quantize(InputArrayOfArrays calibData, ...)`，5.0.0 没有 → Python 侧 `dir(cv2.dnn)` 里 quant 相关为空，**构造不出量化网**（§2.3 台账 P3） |
+| **CANN 后端不支持的层** | ⚠️ **不是报错，是回落 CPU**：`"layer ... is not supported by CANN backend. Going back to default backend on CPU target"` → 混合执行（部分层在 NPU、部分在 CPU），只打一条 WARN | 5.0.0 `net_cann.cpp`；实测 MobileNetV2-12 的 103 层**全部**转成了 CANN 算子、回落 WARN **0** 条（§2.3 台账 P1） |
+| **后端 / 目标不可再切** | ⚠️ `CV_Error`：`DNN: Can't switch backend from CANN to other`（`net_cann.cpp:75`）/ `DNN: Can't switch target from NPU to other`（`net_cann.cpp:85`） | 5.0.0 `net_cann.cpp` + 实测报错原文（§2.3 台账 P4） |
+| **原生 LLM / VLM**（tokenizer + KV-cache；`samples/dnn/{gpt2,qwen,gemma3,vlm}_inference.py`） | ❌ **只能 CPU**：样例硬编码 `cv.dnn.ENGINE_NEW` | 5.0.0 样例源码 |
+
+> 上游 CANN 后端在 4.11 → 5.0.0 之间**一行没改**（`op_cann.hpp` 逐字节相同、`net_cann.cpp` 里那几行也一字不差），所以上面这批限制**不是 5.0 引入的**，是 4.x 时代就有的；5.0 只是把默认引擎换掉，让它更容易被忽略。
+
+### 2.3 经典引擎 + CANN 后端在 5.0 上的能力边界
+
+下面每条都在 **910B4 / CANN 9.2.0 / OpenCV 5.0.0** 上实测过（探针台账见本节末表），源码出处一并给出。
+
+- **只吃 fp32，而且这条限制在 DNN 层就生效**：
+  - CANN 侧：输入 / 输出 blob 的 tensor desc 在 `CannBackendWrapper` 构造函数里写死 `ge::DT_FLOAT`；常量算子（权重 / bias）只接受 `CV_32F` 与 `CV_32S`，其它一律 `StsNotImplemented`。
+  - 实测：喂 `CV_16F`（fp16）blob → 直接抛 `modules/dnn/src/layer.cpp:274` 的 `Layer::getTypes`：`'input == CV_32F || input == CV_64F || input == CV_8S || input == CV_8U || input == CV_64S'`，`where 'input' is 7 (CV_16FC1)`。**换成 CPU 后端报的是同一个错**——说明 fp16 是被 DNN 输入层的类型检查挡掉的，跟上不上卡无关；但 CANN 后端自己另外只认 fp32。
+- **不支持量化网**：int8 量化模型在 `initBackend()` 就被 `CV_Assert(!base.netWasQuantized)` 挡掉。**5.0 还把量化入口删了**：4.14.0 的 `modules/dnn/include/opencv2/dnn/dnn.hpp` 里还有 `CV_WRAP Net quantize(InputArrayOfArrays calibData, int inputsDtype, int outputsDtype, bool perChannel=true);`，5.0.0 没有了——Python 侧 `dir(cv2.dnn)` 里 quant 相关属性为空，**根本构造不出量化网**。
+- **层覆盖是白名单，回落不报错**：某个层 `supportBackend(DNN_BACKEND_CANN)` 为假时，该层**回落 CPU**（只打一条 WARN 就继续跑），于是「上了 NPU」≠「全图都在 NPU」，要数 `DNN/CANN: converting layer ...` 的条数。实测 MobileNetV2-12 的 **103 层全部**转成了 CANN 算子、回落 WARN **0** 条——这个模型恰好全支持，换个模型就不一定。
+- **切换后端 / 目标会直接报错**，所以 `setPreferableBackend` 必须在 `readNet` 之后、第一次 `forward` 之前调用。实测原文：
+  - `net_cann.cpp:75` → `DNN: Can't switch backend from CANN to other`
+  - `net_cann.cpp:85` → `DNN: Can't switch target from NPU to other`
+- **最容易踩的一条：默认引擎会把你 silently 留在 CPU**。`readNetFromONNX(path)` 默认走新图引擎；这时再调 `setPreferableBackend(DNN_BACKEND_CANN)` / `setPreferableTarget(DNN_TARGET_NPU)` **既不报错也不生效**，只打两条 WARN 就把模型留在 CPU：
+  - `net_impl_backend.cpp:297` → `Back-ends are not supported by the new graph engine for now`
+  - `net_impl_backend.cpp:345` → `Targets are not supported by the new graph engine for now`
+
+  实测这一路：**0 次 GE 图编译、0 层转 CANN 算子**，跑出来的 score = **0.9148015**（新引擎 CPU 值），而经典引擎 + CANN 是 **0.9142662**——**两个分数不同，就说明模型根本没上卡**。这是判断「到底上没上卡」最省事的办法：比分数，或者数 `converting ge::Graph to OM buffer` 的次数。
+
+#### 本文在 910B4 上跑过的 NPU 侧探针台账
+
+| 探针 | 做法 | 实测结果 |
+| --- | --- | --- |
+| **P1** | `readNetFromONNX(..., ENGINE_CLASSIC)` + CANN/NPU，fp32 输入 | top-1 **372**，score **0.9142662197419854**；`converting layer` **103** 条、`converting ge::Graph to OM buffer` **1** 次、回落 WARN **0** 条 |
+| **P2** | 同上，输入 blob 换成 `CV_16F` | 抛 `layer.cpp:274`（`where 'input' is 7 (CV_16FC1)`）；把后端换成 CPU 抛同一个错 |
+| **P3** | 量化网 | 5.0 的 `cv2.dnn` 没有任何 quantize 入口 → 构造不出来，只能停在源码级判断 |
+| **P4** | 进 CANN 之后试着切回 CPU 后端 / CPU 目标 | 两条 `CV_Error`：`DNN: Can't switch backend from CANN to other`、`DNN: Can't switch target from NPU to other` |
+| **P5** | 默认引擎（`ENGINE_AUTO`）+ 请求 CANN 后端 | 2 条 new-engine WARN；**0** 次 GE 图编译、**0** 层转 CANN 算子；score **0.9148015**（CPU 值） |
+| **P6** | `OPENCV_FORCE_DNN_ENGINE=1` + 默认 `readNetFromONNX` | 与 P1 **完全一致**（103 层 / 1 次 GE 编译 / score 0.9142662）→ 环境变量与 API 参数等价 |
+| **P7** | 经典引擎 + **CPU 后端** + fp16 输入 | 抛**同一个** `layer.cpp:274` → fp16 被挡是 DNN 通用行为，不是 CANN 特有 |
+
+### 2.4 其余 5.0 特性一览（纯 CPU，与昇腾无关，本文不逐条验证）
+
+来源标记：`[4.x]` = 4.x 就有、5.0 延续；`[5.0 新增]` / `[5.0 行为变化]` / `[5.0 移除]` = 5.0 的改动。
+
+| 特性 | 来源 | 上游口径（一行） | 昇腾影响 |
+| --- | --- | --- | --- |
+| ONNX Runtime 集成 | `[5.0 新增]` | `-DWITH_ONNXRUNTIME=ON -DDOWNLOAD_ONNXRUNTIME=ON`（GPU 再加 `_GPU`） | 不是 NPU 路径；本文未编 |
+| 新引擎 ONNX 覆盖率 | `[5.0 新增]` | >64%（4.x 不到 13%） | 见 §2.2 |
+| `CV_16BF` / `CV_32U` / `CV_64U` / `CV_64S` / `CV_Bool` | `[5.0 新增]` | `CV_16F` 是 4.x 就有，不是 5.0 新增 | 见 §2.2（CANN 只吃 fp32） |
+| 1D / 0D Mat | `[5.0 新增]` | 1D：`dims==rows==1`；0D：`dims==0`；用 `empty()` 判空 | 见 §2.2（编译断裂） |
+| `MatShape` 取代 `MatSize` | `[5.0 新增]` | 带 layout，内嵌进 Mat 不额外分配 | 见 §2.2（编译断裂） |
+| LAPACK 始终可用 | `[5.0 新增]` | 无外部库时编内置小子集 | 纯 CPU |
+| `warpAffine` / `warpPerspective` / `remap` 重写 | `[5.0 行为变化]` | 不再用查表插值；提速 10%~300%+；**数值与 4.x 略有差异** | 纯 CPU |
+| 最近邻 resize 改用 Pillow 算法 | `[5.0 行为变化]` | `INTER_NEAREST` 与 `INTER_NEAREST_EXACT` 现在等价 | 纯 CPU |
+| STB TrueType 字体引擎 + `cv::FontFace` | `[5.0 新增]` | 内嵌 Rubik；旧 `FONT_HERSHEY_*` 字形 / 字号也变了 | 纯 CPU |
+| TRUCO 轮廓提取 | `[4.x 起有，5.0 自动启用]` | `contours_truco.cpp` 在 4.14.0 就有；5.0 让 `findContours()` 自动切换 | 纯 CPU |
+| `VideoCapture::get()` 不支持时返回 `-1` | `[5.0 行为变化]` | 4.x 返回 0（0 对很多属性是合法值） | 纯 CPU |
+| Universal intrinsics / `AlgorithmHint` | `[4.x]` | `v_exp`/`v_log`/`v_erf`/`v_sincos`；KleidiCV / FastCV / IPP 全是 4.x 遗产 | 纯 CPU |
+| 「HAL 2.0」（非 CPU HAL） | `[未落地]` | 上游标 "5.0, 5.x: expected" | 见 §2.1 |
+| `calib3d` → `geometry`/`calib`/`stereo`/`ptcloud` | `[5.0 行为变化]` | **4 个**模块（迁移指南正文写 "three" 是笔误）；Python 透明 | 纯 CPU |
+| imgproc 计算几何 → `geometry` | `[5.0 行为变化]` | `convexHull` / `Delaunay` / `Subdiv2D` 等 | 纯 CPU |
+| `features2d` → `features` + ALIKED / DISK / LightGlue / Annoy | `[5.0 新增]` | **FLANN 模块没有被移除**（5.0.0 仍有 `modules/flann/src/flann.cpp`） | 纯 CPU |
+| G-API / 经典 ml / Haar-HOG → contrib | `[5.0 行为变化]` | 需编 `opencv_contrib` | 本文只编了 `cannops` |
+| 移除遗留 C API / OpenVX | `[5.0 移除]` | 只保留 `CV_*` 这类宏 | 与后端无关 |
+| USAC 成默认后端 / 多目标定 / `ptcloud` | `[5.0 新增]` | PROSAC·MAGSAC++·GC-RANSAC·SPRT；TSDF·ICP·`.ply`·`.obj` | 纯 CPU |
+| C++17 / Python 3 | `[5.0 新增]` | Python 2 移除；编译器下限 GCC 8 | 环境约束（镜像 GCC 11.4 满足） |
+| NumPy 2 兼容 | `[4.x]` | 4.12.0 起改用 `np.ptp()` | 与后端无关 |
+| samples 清理 | `[5.0 行为变化]` | 约 50% C++ samples、5% Python samples 被删 | 与后端无关 |
+| `cv::broadcast` / `transposeND` / `flipND` | `[4.x]` | ≤4.12 就有，**不是 5.0 新增** | 纯 CPU（§9e 演示） |
+
+### 2.5 本文覆盖边界（明确没覆盖什么）
 
 - **本文没编的**：`onnxruntime` 后端、`opencv_contrib` 里除 `cannops` 外的模块（`xobjdetect` / `xfeatures2d` / `ml` / `gapi` / `rgbd`…）、Java / JS / ObjC 绑定、OpenCL 路径。
-- **本文编了但不逐条验证的**：`core, imgproc, imgcodecs, videoio, dnn, python3, cannops, ts`（见 §7 的 `BUILD_LIST`）。§2 里凡是纯 CPU 的新特性，本文只保证「API 存在、能 import」，**不保证逐个跑过**；真正跑过的是 §9 的 CPU quickstart、§10 的 NPU 推理、§8.1 的 cannops gtest。
-- **本文没有覆盖的上游能力**：C++ API 的完整迁移面、Java 绑定的 import 变更、samples 集合、`docs.opencv.org` 新文档站本身。
-- **本节（§2）的判定方法**：官方 wiki + 迁移指南 + Change Log 三份文档，与 `5.0.0` / `4.14.0` 两个 tag 的源码树逐条比对。**凡是上游文档与源码树打架的，以源码树为准**（§2.5 的 calib3d 拆成几个模块、FLANN 移不移除，两处都踩过这个坑）。
+- **本文编了但不逐条验证的**：`core, imgproc, imgcodecs, videoio, dnn, python3, cannops, ts`（见 §7 的 `BUILD_LIST`）。§2.4 里凡是纯 CPU 的特性，本文**只保证「API 存在、能 import」，不保证逐个跑过**，本文也没在 NPU 上验证它们。
+- **真正跑过的只有三处**：§9 的 CPU quickstart、§10 的 NPU 推理（经典引擎 + 新引擎各一遍）、§8.1 的 `cannops` gtest。
+- **本文没有覆盖的上游能力**：C++ API 的完整迁移面、Java 绑定的 import 变更、samples 集合、`docs.opencv.org` 新文档站。
+- **§2.2 / §2.3 的判定方法**：上游 wiki + 迁移指南 + Change Log 三份文档，与 `5.0.0` / `4.14.0` 两个 tag 的源码树逐条比对；带「实测」标记的是本文在 910B4 上跑出来的——§2.3 末尾的 P1–P7 探针台账就是这些实测的原始记录。**纯 CPU 特性不在验证范围内**：§2.4 表里的东西本文只做源码级判定。
 
 ## 3. 前置条件
 
@@ -239,7 +232,7 @@ cd ../opencv_contrib && git describe --tags
 
 ## 5. 打 3 组源码补丁
 
-OpenCV 5.0 mainline 与 CANN 9.x / aarch64 有 3 处不兼容（对应 §2.7 矩阵里的两行）。按顺序跑这 3 段脚本。**三段都是幂等的**：重复跑会打印 `already patched` 并跳过，所以中途失败可以直接重跑。
+OpenCV 5.0 mainline 与 CANN 9.x / aarch64 有 3 处不兼容（对应 §2.2 里的两行）。按顺序跑这 3 段脚本。**三段都是幂等的**：重复跑会打印 `already patched` 并跳过，所以中途失败可以直接重跑。
 
 | 组 | 上游哪里坏了 | 改法 |
 | --- | --- | --- |
@@ -710,7 +703,7 @@ rect+text drawn, image mean: xxx
 
 ### 9e. N 维算子（`transposeND` / `flipND`）
 
-`cv::transposeND` / `cv::flipND` 是 core 的 N 维算子：前者在任意维度上按置换重排，后者沿指定轴翻转。⚠️ **它们是 4.x 就有的（≤4.12），不是 5.0 新增**（§2.2）。Python 绑定里，**单通道**的二维数组可以直接喂：
+`cv::transposeND` / `cv::flipND` 是 core 的 N 维算子：前者在任意维度上按置换重排，后者沿指定轴翻转。⚠️ **它们是 4.x 就有的（≤4.12），不是 5.0 新增**（§2.4）。Python 绑定里，**单通道**的二维数组可以直接喂：
 
 ```shell #test id="ocv5-nd-ops"
 python << 'PY'
@@ -728,7 +721,7 @@ transposeND([1,0]): [[0.0, 3.0], [1.0, 4.0], [2.0, 5.0]]
 flipND(axis=0): [[3.0, 4.0, 5.0], [0.0, 1.0, 2.0]]
 ```
 
-> 注意 Python 绑定的边界：numpy 的三维数组 `(H, W, C)` 在 OpenCV 里是「二维矩阵 + C 通道」，不是 3 维 Mat——所以 `transposeND` 对它会报 `Input array should be single-channel`。真正的 N 维用法在 C++ 侧（`cv::Mat` 的 `dims > 2`）。注意这条限制跟 5.0 的 1D/0D Mat 语义无关（§2.2），那是 Python 绑定层的既有边界。
+> 注意 Python 绑定的边界：numpy 的三维数组 `(H, W, C)` 在 OpenCV 里是「二维矩阵 + C 通道」，不是 3 维 Mat——所以 `transposeND` 对它会报 `Input array should be single-channel`。真正的 N 维用法在 C++ 侧（`cv::Mat` 的 `dims > 2`）。注意这条限制跟 5.0 的 1D/0D Mat 语义无关（§2.4），那是 Python 绑定层的既有边界。
 
 ## 10. NPU 上跑一次 DNN 推理
 
@@ -890,7 +883,9 @@ top class score: xxx
 
 ## 11. 已知边界
 
-- **5.0 的招牌特性上不了 NPU**：新图引擎、ONNX Runtime 后端、原生 LLM/VLM 在昇腾上目前都只能 CPU（§2.7）。要用 NPU 推理，必须 `OPENCV_FORCE_DNN_ENGINE=1` 走经典引擎。
+- **5.0 的招牌特性上不了 NPU**：新图引擎、ONNX Runtime 后端、原生 LLM/VLM 在昇腾上目前都只能 CPU（§2.1 / §2.2）。要用 NPU 推理，必须 `OPENCV_FORCE_DNN_ENGINE=1` 走经典引擎。
+- **经典引擎 + CANN 后端的能力边界**（源码级 + 910B4 实测，§2.3）：只吃 **fp32**（连 fp16 都不行）、**拒绝 int8 量化网**（5.0 还把 `Net quantize` 入口删了）、**不支持的层回落 CPU 而不是报错**（所以「上了 NPU」≠「全图在 NPU」）、后端/目标不可再切。这几条是 4.x 时代就有的限制，不是 5.0 引入的。
+- **默认引擎会把你 silently 留在 CPU**（实测，§2.3 台账 P5）：`ENGINE_AUTO` 落到新图引擎后再请求 CANN 后端/目标**既不报错也不生效**，只打 2 条 WARN，GE 图编译 **0** 次、CANN 算子 **0** 个，跑出来是 CPU 的分数（0.9148015，而经典引擎 + CANN 是 0.9142662）。**判断「到底上没上卡」要数 `converting ge::Graph to OM buffer` / `converting layer` 的条数，或者比分数**，不能看「推理没报错」。
 - **引擎可以在 Python 侧显式选**：`cv2.dnn.readNetFromONNX(path, cv2.dnn.ENGINE_CLASSIC)` 直接走经典引擎（实测与 `OPENCV_FORCE_DNN_ENGINE=1` 等价：GE 图编译 1 次、103 层转 CANN 算子、top-1 372、score 0.9142661690711975 完全一致）。常量 `ENGINE_NEW`=2 / `ENGINE_CLASSIC`=1 / `ENGINE_AUTO`=3 / `ENGINE_ORT`=4 都在 `cv2.dnn` 里（只是 `cv2.dnn.EngineType` 这个**类型**没绑定）。本文统一用环境变量 `OPENCV_FORCE_DNN_ENGINE=1`：它对进程里所有 net 生效，脚本不用逐个改 `readNet` 调用。
 - **`cv2.dnn.Tokenizer` 存在但默认是空实现**：`cv2.dnn.Tokenizer()` 之后直接 `encode()` 会报 `Tokenizer impl null`，需要先 `Tokenizer_load(...)` 灌模型；本文未展开（它跟 NPU 无关）。
 - **Python 绑定不支持真正的 N 维 Mat**：numpy 的三维数组会被当成「二维 + 通道」，`transposeND` 因此要求单通道输入（§9e）。

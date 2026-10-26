@@ -94,7 +94,9 @@ git clone --depth 1 --branch <ref> https://github.com/opencv/opencv_contrib.git
 
 OpenCV mainline 与 CANN 9.1.0 / aarch64 有 3 处不兼容（3 个 patch 脚本假设 runner resolve 到 `5.0.0` tag；其它 tag 上 `assert old in s` 会抛错，需要重写 patch 适配）。按顺序跑这 3 段脚本（幂等，已打过会断言跳过）。
 
-> **不想打补丁？** 走 [Quick-start-Ascend-NoPatch.md](Quick-start-Ascend-NoPatch.md)：版本钉 **4.11.0** + **Release(-O3)** + 不编 `opencv_contrib`，**零源码补丁**也能得到带 CANN 后端的 `cv2`（实测 dnn `.text` 52 MiB，一次链接通过，NPU top-1=372）。代价是拿不到 OpenCV 5.x 的新 DNN 图引擎，也没有 `cv2.cann`。
+> **不想打补丁？** 走 [Quick-start-Ascend-NoPatch.md](Quick-start-Ascend-NoPatch.md)：版本钉 **4.14.0**（4.x 的末代）+ **Release(-O3)** + 不编 `opencv_contrib`，**零源码补丁**也能得到带 CANN 后端的 `cv2`（实测 dnn `.text` 53.3 MiB，一次链接通过，NPU top-1=372 / 0.9143）。代价是拿不到 OpenCV 5.x 的新 DNN 图引擎，也没有 `cv2.cann`。
+>
+> 为什么 4.x 天然比 5.x 省补丁：`all_ops.h` 是 **CANN 的头**，与 OpenCV 版本无关 ⇒ `.text` 随「引用 `op_cann.hpp` 的 TU 数」线性增长。实测 4.11.0 = 27 个 TU、**4.14.0 = 28 个**、5.0.0 = **39 个**；dnn 源码量 4.11.0 → 4.14.0 只 +2.3%，→ 5.0.0 却 +50.6%。4.14 离 aarch64 的 ±128 MiB 分支窗口还有 ~74 MiB 余量，5.0 撞墙 —— 这就是本文那 3 组补丁里「窄 op 头」那组的由来。
 
 | 组 | 上游哪里坏了 | 改法 |
 | --- | --- | --- |

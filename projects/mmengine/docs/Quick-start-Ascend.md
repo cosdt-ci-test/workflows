@@ -178,26 +178,25 @@ mmengine source tree pristine
 
 ### 使用 pip 进行安装
 
-从 PyPI 安装（如果前面已经从源码装过，先卸载掉 editable 安装）：
-
-```shell #test-setup
-uv pip uninstall mmengine
-uv pip install mmengine
-```
+从 PyPI 安装（如果前面已经从源码装过，先卸载掉 editable 安装），并确认装到位：
 
 ```shell #test id="mmengine-version"
+uv pip uninstall mmengine
+uv pip install mmengine
 python -c "import mmengine; print('mmengine', mmengine.__version__)"
 ```
 
 输出结果类似如下：
 
 ```shell #test-result id="mmengine-version"
-mmengine 0.10.7
+mmengine ...
 ```
 
 ```{admonition} Note
 :class: note
-`uv pip uninstall` 对未安装的包返回 0 且只打印一行 warning，所以这段命令是幂等的，可以反复执行。
+- `uv pip uninstall` 对未安装的包返回 0 且只打印一行 warning，所以这段命令是幂等的，可以反复执行；
+- `uv` 把安装过程的所有输出都写在 **stderr** 上，stdout 只有最后 `print` 出来的那一行，所以合在一个代码块里也不影响结果比对；
+- `...` 表示 PyPI 上的最新正式版本号（当前是 0.10.7），上游发新版时这里不需要改。
 ```
 
 ### 补齐 opencv 的运行库依赖（无头容器必做）

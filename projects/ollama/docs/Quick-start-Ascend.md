@@ -4,6 +4,8 @@ Ollama 提供本地大语言模型的导入、管理和推理服务。本文从�
 
 昇腾接入目前需要应用本文提供的实验补丁，尚未包含在 Ollama 官方发布包中。
 
+截至 2026-10-26，最新正式版为 Ollama v0.40.11，内置 llama.cpp b11845。当前四文件补丁已通过该版本及 v0.40.3 的应用检查，并通过 v0.40.11 的 Linux 顶层构建配置检查；v0.40.11 的 CANN 原生编译和 NPU 推理仍需实机验收。后续版本须重新检查补丁适用性及构建要求。
+
 ## 前置条件
 
 ### 硬件
@@ -15,7 +17,7 @@ Atlas A2 系列的 Ascend 910B4 设备，并完成设备驱动安装及设备挂
 在运行示例前，需要准备：
 
 - Linux、Python 3.12，以及 Git、curl 和 C/C++ 编译器。
-- Go 1.26.0 或更新版本，参考 [Go 安装文档](https://go.dev/doc/install)。
+- Go 1.26.10 或更新版本，参考 [Go 安装文档](https://go.dev/doc/install)。
 - 可用的 CANN，参考[快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html)。
 
 本文使用 CANN 9.1.0；模型采用 CANN 支持的 Q4_0 GGUF 格式。

@@ -1,10 +1,26 @@
 # Ollama Ascend 快速入门接入与验证状态
 
-本目录保存 Ollama 的原生 CANN 接入补丁和快速入门看护入口。调查日期为 **2026-10-13**；已完成 prototype 的源码与补丁兼容性验证，**CANN 原生构建和 NPU 推理均尚未验证**。
+本目录保存 Ollama 的原生 CANN 接入补丁和快速入门看护入口。当前适配基线更新为 **Ollama v0.40.11 与 llama.cpp b11845**，核对日期为 **2026-10-26**。四文件补丁的应用和 Linux 顶层构建配置已检查，**新版 CANN 原生编译和 NPU 推理仍需实机验收**。
 
-[用户文档](docs/Quick-start-Ascend.md)、[测试夹具](tests/test_quick_start_ascend.py)和手动 [workflow](../../.github/workflows/ollama-quick-start.yml) 均已落地，首次原生构建和 NPU 推理验收尚未完成。
+[用户文档](docs/Quick-start-Ascend.md)、[测试夹具](tests/test_quick_start_ascend.py)和手动 [workflow](../../.github/workflows/ollama-quick-start.yml) 跟随运行时选定的官方 release，并记录实际源码与补丁 SHA；不将当前兼容性结论外推到未来版本。
 
-## 上游调查快照（2026-10-13）
+## 当前版本兼容性
+
+| 项目 | 本次核对结果 |
+|---|---|
+| 最新正式版 | [v0.40.11](https://github.com/ollama/ollama/releases/tag/v0.40.11)，2026-10-24 发布 |
+| Ollama 源码 | `675150d6ad2747df1e218ef59de9194bc4a7e538` |
+| llama.cpp | `b11845`，`9ff0d7e90f0faaa7c16017e6dcf9cf91c50a100e` |
+| Go 最低版本 | 源码 `go.mod` 要求 `1.26.10`，夹具已同步工具链及完整版本比较 |
+| 补丁范围 | 仍为 4 个生产文件、25 行新增代码；仅刷新新版 diff 定位与文件索引 |
+| 补丁来源 | `lltiaor/ollama` 的 `add-cann-backend` 分支，提交 `4fb09cd96961b80e11c1824acf7a7609343cc785`；基于开发提交 `d44c2581904a98430e348d89cc2af1529b1808a0` |
+| 应用检查 | v0.40.11、v0.40.3 均通过，已在隔离的 v0.40.11 检出中实际应用 |
+| Linux 顶层配置 | WSL Ubuntu x86_64、CMake 4.2.3；CANN 构建任务和参数生成正确 |
+| 未完成项 | 本机没有 CANN 工具链及 NPU；未进行 CANN 原生编译、服务运行与 NPU 推理，也未验证 ARM 编译或文档固定的 CMake 3.31.10 |
+
+三个设备接入 Go 文件与 v0.40.3 相同；顶层 CMake 的变化主要涉及 MLX 打包，CANN 仍可复用原有子构建函数。新版 llama.cpp 保留 `ggml-cann` 目标、CANN 设备命名及通用动态加载机制，因此继续省略原生探测候选修改。未来正式版仍需重新检查并完成实机验收。
+
+## 历史上游调查快照（2026-10-13）
 
 - 调查时 [Ascend PR #5872](https://github.com/ollama/ollama/pull/5872) 尚未合入，head 为 `1be1fa6b63397ffa5ae7e9b0578d1fcd517e497e`。
 - 调查时最新 release 为 `v0.40.3`，提交为 `eab97e9f92b9a25c2d52d2cc6c1b1c99bd9fae21`；调查的 main 为 `a5276525531a75dda69b69226aa5e369cd3933e7`。这些版本是调查快照，不是后续运行的固定版本。
@@ -13,24 +29,25 @@
 
 ## 原型范围
 
-[ollama-cann.patch](patches/ollama-cann.patch) 使用目标版本自带的 CANN 实现，增加五处接入，不搬运旧 PR 的 ACL 探测代码或算子源码：
+[ollama-cann.patch](patches/ollama-cann.patch) 使用目标版本自带的 CANN 实现，增加四处接入，不搬运旧 PR 的 ACL 探测代码或算子源码：
 
 | 上游文件 | 改动 |
 |---|---|
 | `cmake/local.cmake` | 接受 `OLLAMA_LLAMA_BACKENDS=cann`，构建 `ggml-cann`，传递 CANN 安装目录和 SoC 型号 |
 | `discover/llama_server.go` | 将 `CANN0` 等设备名归类为 `CANN` |
-| `discover/native_probe_platform.go` | 将 `libggml-cann.so` 加入原生设备探测列表 |
 | `discover/runner.go` | 将父进程可见设备列表映射回子进程筛选 ID |
 | `ml/device.go` | 通过 `ASCEND_RT_VISIBLE_DEVICES` 传递实际选中的 NPU |
 
-补丁另外包含四项 Go 回归测试，覆盖设备分类、原生库探测、可见设备编号映射和子进程设备选择。已有的通用安装布局与动态库搜索机制可以复用，后端安装在 `build/lib/ollama/cann/`。
+当前精简补丁只修改上述 4 个生产文件，共新增 25 行，不附带 Go 回归测试文件。已有的通用安装布局与动态库搜索机制可以复用，后端安装在 `build/lib/ollama/cann/`。快速入门夹具保留实际构建、设备枚举和模型推理验收。
 
-## 已完成的 prototype 验证记录
+最小接入复用 llama-server 已有的通用后端加载与设备列表输出，不修改原生探测候选列表。该裁剪已复核 Ollama v0.40.11 与 llama.cpp b11845 的源码链路；历史验证记录不等于当前四文件补丁已完成实机验收。
+
+## 历史 prototype 验证记录
 
 - 原型补丁在上述 release 和 main 的干净检出中均通过 `git apply --check`。
 - 在 release 检出中实际应用补丁成功。
 - Linux 顶层 CMake configure 成功；生成的 CANN 子构建命令包含 `GGML_CANN=ON`、`OLLAMA_GPU_BACKEND=cann`，并正确转发 toolkit 目录和 `SOC_TYPE`。
-- 使用临时 Go 1.26.9 工具链运行 `go test ./discover ./ml -run TestCANN -count=1 -v`，四项补丁回归测试通过。
+- 历史含测试版本曾使用临时 Go 1.26.9 工具链运行 `go test ./discover ./ml -run TestCANN -count=1 -v`，四项回归测试通过；当前精简补丁已移出这些测试，夹具不再执行该命令。
 - 尚未完成原生模块编译、服务加载或 NPU 推理。
 
 `git apply --check` 只证明补丁适用性，顶层 CMake configure 只证明构建入口接通，Go 回归测试只覆盖接入逻辑。以上结果均不能证明 CANN 原生构建或 NPU 推理成功。
@@ -64,7 +81,7 @@ GitHub 要求 `workflow_dispatch` 的 workflow 文件先存在于默认分支，
 | `reports/chat-response.json` | `/api/chat` 非流式响应，检查非空回复及正数生成 token |
 | `reports/loaded-models.json` | `/api/ps` 响应，检查模型加载及正数设备显存占用 |
 
-详细构建与推理证据输出到 job 日志：夹具打印包含源码 SHA、补丁 SHA256、响应与设备检查结果的 JSON 汇总，失败时打印服务日志尾部（log tail）。原始服务日志及 JSON 另保留在挂载缓存的 `reports/` 子目录，便于检查首次加载过程；共享引擎仅上传 `result.json`，这些额外文件不会自动进入 artifact。当前仍需完成首次上卡验收，原生 CANN 构建、服务加载和 NPU 推理的实际结果尚无证据。
+详细构建与推理证据输出到 job 日志：夹具打印包含源码 SHA、补丁 SHA256、响应与设备检查结果的 JSON 汇总，失败时打印服务日志尾部（log tail）。原始服务日志及 JSON 另保留在挂载缓存的 `reports/` 子目录，便于检查首次加载过程；共享引擎仅上传 `result.json`，这些额外文件不会自动进入 artifact。当前 v0.40.11 四文件补丁仍需完成上卡验收，不能将旧版本结果视为新版原生构建、服务加载和 NPU 推理的证明。
 
 ## 参考资料
 

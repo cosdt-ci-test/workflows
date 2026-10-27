@@ -298,7 +298,50 @@ supported:
       - --dump-folder ${CI_OUTPUT_DIR}/qwen3_0_6b
     timeout_minutes: 60
 
-  # 6) muse_glimmer, single card (text path; the multimodal variant needs
+  # 6) deepseek_v3, single card. Its attention is the family's own
+  #    Attention(BaseAttention) (not GQAttention), so it needs the
+  #    per-family override in example/npu_compat_deepseek.py -- the same
+  #    two fixes (real-space RoPE gather, SDPA with a dense block-causal
+  #    mask), with upstream's forward plus a positions passthrough.
+  #    MLA's value head dim differs from q/k's, which SDPA accepts.
+  - path: example/run_train_1card.sh
+    source: project
+    profile: torchtitan
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-910b-ubuntu22.04-py3.12
+    npu_devices: '0'
+    overlay_args:
+      - --module deepseek_v3
+      - --config deepseek_v3_debugmodel
+      - --override.imports npu_compat_deepseek.deepseek_attention
+      - --comm.mode default
+      - --training.steps 2
+      - --training.local-batch-size 1
+      - --training.seq-len 256
+      - --metrics.log-freq 1
+      - --metrics.disable-color-printing
+      - --dump-folder ${CI_OUTPUT_DIR}/deepseek_v3_debugmodel
+    timeout_minutes: 60
+  - path: example/run_train_1card.sh
+    source: project
+    profile: torchtitan
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-910b-ubuntu22.04-py3.12
+    npu_devices: '0'
+    overlay_args:
+      - --module deepseek_v3
+      - --config deepseek_v3_debugmodel_mtp
+      - --override.imports npu_compat_deepseek.deepseek_attention
+      - --comm.mode default
+      - --training.steps 2
+      - --training.local-batch-size 1
+      - --training.seq-len 256
+      - --metrics.log-freq 1
+      - --metrics.disable-color-printing
+      - --dump-folder ${CI_OUTPUT_DIR}/deepseek_v3_debugmodel_mtp
+    timeout_minutes: 60
+
+  # 7) muse_glimmer, single card (text path; the multimodal variant needs
   #    an NPU op the vision path does not have yet).
   - path: example/run_train_1card.sh
     source: project
@@ -481,8 +524,10 @@ unsupported_configs:
   # ===== LM 类：FlexAttention CANN 编译墙（triton-ascend 编不出 flex 模板 kernel，
   # BiShengIR 内部 hivm.hir.store / scf.for 报 vector loop tiling）—— no-patch 无解。
   # 2026-10-27 复测：deepseek_v3 的 attention 类也是自己的 `Attention(BaseAttention)`
-  # （models/deepseek_v3/model.py:28），不是 GQAttention 的子类 → 同样需要 per-family
-  # override。EP 变体另有硬约束（实测，hdc-stable-npu-2）：
+  # （models/deepseek_v3/model.py:28），不是 GQAttention 的子类 → 需要 per-family
+  # override；该 override 已落地（example/npu_compat_deepseek.py），debugmodel 与
+  # debugmodel_mtp 两条实测 exit 0（见 supported 段）。剩下的 EP 变体另有硬约束
+  # （实测，hdc-stable-npu-2）：
   #   · deepseek_v3_debugmodel_minimal_async_ep：上游配置自身不自洽 —— config 里
   #     expert_parallel_degree=1，而 MinimalAsyncEPTokenDispatcher 硬性要求 ep>1
   #     （token_dispatcher.py:1059 "ep_mesh must be set"）；2 卡实测撞 mesh 断言
@@ -501,8 +546,6 @@ unsupported_configs:
   # MoE `torch._grouped_mm` 无 NPU 算子（torch_npu 仅 npu_grouped_matmul,签名不同）。
   # （ChunkedLossWrapper 的 meta tensor 泄漏是 torch 2.12 时代的问题，torch 2.14 上
   #  已不复现，故不再列为阻塞项。）
-  - torchtitan/models/deepseek_v3/config_registry.py:deepseek_v3_debugmodel
-  - torchtitan/models/deepseek_v3/config_registry.py:deepseek_v3_debugmodel_mtp
   - torchtitan/models/deepseek_v3/config_registry.py:deepseek_v3_debugmodel_minimal_async_ep
   - torchtitan/models/deepseek_v3/config_registry.py:deepseek_v3_16b
   - torchtitan/models/deepseek_v3/config_registry.py:deepseek_v3_16b_minimal_async_ep

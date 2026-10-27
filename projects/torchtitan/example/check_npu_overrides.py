@@ -119,10 +119,31 @@ def check_rope_selection() -> str:
     return f'llama3={type(llama_rope).__name__}, qwen3={type(qwen_rope).__name__}'
 
 
+def check_deepseek_rope_selection() -> str:
+    """The deepseek override must swap its ComplexRoPE (it uses ComplexRoPE).
+
+    deepseek_v3 has its own attention class, so the per-family override
+    (npu_compat_deepseek.py) carries the same real-space gather.
+    """
+    from torchtitan.config.override import OverrideConfig, apply_overrides
+    from torchtitan.models.deepseek_v3 import model_registry as deepseek_models
+
+    import npu_compat_deepseek  # noqa: F401  (registers the override)
+
+    spec = deepseek_models('debugmodel')
+    apply_overrides(
+        OverrideConfig(imports=['npu_compat_deepseek.deepseek_attention']),
+        spec.model,
+    )
+    rope = spec.model.layers[0].attention.rope
+    assert isinstance(rope, RealGatherComplexRoPE.Config), type(rope)
+    return f'deepseek={type(rope).__qualname__}'
+
+
 def main() -> int:
     rope_diff = check_rope()
     mask_diff = check_mask()
-    selection = check_rope_selection()
+    selection = check_rope_selection() + ", " + check_deepseek_rope_selection()
     print(
         'npu override equivalence: rope OK, mask OK, rope selection OK',
         file=sys.stdout,

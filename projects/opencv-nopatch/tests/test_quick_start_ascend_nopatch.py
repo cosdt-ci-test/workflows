@@ -84,6 +84,13 @@ class TestQuickStartAscendNoPatch(MarkdownDocTestBase, unittest.TestCase):
            ``DNN/CANN: OM buffer size = ...``) — that is what proves the
            forward really ran on the NPU rather than on the CPU engine
            (both produce top-1 = 372);
+           the block builds **two** net instances (CANN/NPU + a plain
+           classic/CPU reference) and asserts they agree — same top-1,
+           top-1 score within 0.01, same output shape/dtype.  So the doc
+           proves both halves: the NPU path was taken (log markers) and it
+           computed the right answer (numeric agreement).  The per-forward
+           timings are reported but never asserted — the runner's CPU
+           differs from any developer's.
         8. videoio smoke (MJPG write 10 frames -> read back 10) — the
            doc's ``BUILD_LIST`` carries ``videoio``, and MJPG rides
            OpenCV's *built-in* MJPEG codec (``modules/videoio/src/mjpeg/``

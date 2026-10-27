@@ -487,16 +487,27 @@ readback frames: 10
 python -c "
 import cv2
 print('cv2 version:', cv2.__version__)
-print('CANN backend available:', cv2.dnn.DNN_BACKEND_CANN)
-print('NPU target available:', cv2.dnn.DNN_TARGET_NPU)
+# 「枚举存在」不能证明后端编进去了：cv2.dnn.DNN_BACKEND_CANN 是无条件暴露的
+# （opencv2/dnn/dnn.hpp 的 enum Backend 里没有 #ifdef 守卫），不带 CANN 的
+# 构建照样打印得出来。
+# 真检查看后端注册表：modules/dnn/src/registry.cpp 里只有 #ifdef HAVE_CANN
+# 才会登记 (DNN_BACKEND_CANN, DNN_TARGET_NPU)，于是
+# getAvailableTargets(CANN) 在没编 CANN 时返回空列表。
+print('OPENCV backend targets:', cv2.dnn.getAvailableTargets(cv2.dnn.DNN_BACKEND_OPENCV))
+cann_targets = cv2.dnn.getAvailableTargets(cv2.dnn.DNN_BACKEND_CANN)
+print('CANN backend targets:', cann_targets)
+if cv2.dnn.DNN_TARGET_NPU not in cann_targets:
+    raise SystemExit('CANN/NPU backend is NOT compiled into this cv2: %r' % (cann_targets,))
+print('CANN/NPU backend available: True')
 "
 ```
 
 输出结果如下：
 ```shell #test-result id="np-opencv-py-version" fuzzy='xxx'
 cv2 version: xxx
-CANN backend available: xxx
-NPU target available: xxx
+OPENCV backend targets: xxx
+CANN backend targets: xxx
+CANN/NPU backend available: True
 ```
 
 跑 MobileNetV2（onnx/models 的 `mobilenetv2-12`，PyTorch 导出，13,964,571 bytes）：
@@ -547,9 +558,15 @@ if not os.path.exists(MODEL_PATH):
                     raise
                 time.sleep(10)
 
-net = cv2.dnn.readNetFromONNX(MODEL_PATH)
-net.setPreferableBackend(cv2.dnn.DNN_BACKEND_CANN)
-net.setPreferableTarget(cv2.dnn.DNN_TARGET_NPU)
+# 两个 net 实例：NPU 那份走 CANN 后端，CPU 那份用默认 classic 引擎。
+# 必须分开建 —— modules/dnn/src/net_cann.cpp 的 initBackend() 开头就是
+#   if (netWasConverted && netWasAllocated) return;
+# 同一个 net 上第二次 forward 直接复用已编译的 OM，不会再走一遍后端初始化。
+net_npu = cv2.dnn.readNetFromONNX(MODEL_PATH)
+net_npu.setPreferableBackend(cv2.dnn.DNN_BACKEND_CANN)
+net_npu.setPreferableTarget(cv2.dnn.DNN_TARGET_NPU)
+
+net_cpu = cv2.dnn.readNetFromONNX(MODEL_PATH)  # 不设 backend/target => classic 引擎 + CPU
 
 image = cv2.imread('opencv/samples/data/baboon.jpg')
 x = cv2.resize(image, (224, 224)).astype(np.float32) / 255.0  # BGR, [0,1]
@@ -559,19 +576,30 @@ std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 x = (x - mean) / std
 blob = np.ascontiguousarray(x.transpose(2, 0, 1))[np.newaxis]  # 1xCxHxW float32
 
-net.setInput(blob)
+net_npu.setInput(blob)
+net_cpu.setInput(blob)
 
 # 捕获 OpenCV 的 INFO 日志。它们写进 C++ 的 std::cout（libstdc++ 默认让
 # std::cout 与 C 的 stdout 同步，OpenCV 全树没有 sync_with_stdio(false)），
 # 行首还带时间戳 + 绝对编译路径 + 函数名，没法直接拿来断言 —— 所以这里把
 # fd 1 临时改到文件，跑完 forward 再刷一次缓冲取回来，最后只把「归一化后
 # 的标记行」写进结果文件。
+# 四次 forward（NPU 冷启 / NPU 计时 / CPU 热身 / CPU 计时）都在这个重定向
+# 里跑：OpenCV 的 INFO 日志跟着一起进文件，不会污染块的 stdout ——
+# stdout 要和 #test-result 逐字对齐。
 LOG_PATH = '/tmp/cv_cann_log.txt'
 saved_fd = os.dup(1)
 log_fd = os.open(LOG_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
 os.dup2(log_fd, 1)
 try:
-    out = net.forward()
+    out = net_npu.forward()          # 冷启：含 GE 图编译（0.5~1 分钟）
+    t0 = time.perf_counter()
+    out = net_npu.forward()          # 复用已编译的 OM —— 这才是纯推理耗时
+    npu_ms = (time.perf_counter() - t0) * 1000.0
+    out_cpu = net_cpu.forward()      # CPU 对照：先热身一次，让引擎把懒初始化做完
+    t0 = time.perf_counter()
+    out_cpu = net_cpu.forward()
+    cpu_ms = (time.perf_counter() - t0) * 1000.0
 finally:
     # fflush(NULL) 把 C++ std::cout 的缓冲刷进上面的文件。不刷就只能指望
     # GE 图编译 fork() 出来的子进程 exit(0) 时顺手 flush —— 而那只带得出
@@ -591,28 +619,55 @@ CANN_MARKERS = (
     'Compile success, model size = ',               # :348 GE 图编译成功
     'DNN/CANN: OM buffer size = ',                  # :238 OM 模型装进 CannNet
 )
-missing = [m for m in CANN_MARKERS if m not in cann_log]
-if missing:
-    # 少了标记 = 这次压根没走 CANN 后端。日志尾巴打出来方便定位。
-    msg = 'CANN backend markers missing: %r' % (missing,)
+
+
+def _fail(msg):
+    """把失败原因同时写进 stderr 和结果文件，然后退出 1。
+
+    写结果文件是因为块的最后一条命令是 cat：调用方万一没开 set -e，
+    cat 出来的内容也得跟 #test-result 对不上，不能出现「上一轮的陈旧
+    文件刚好蒙对」的假通过。
+    """
     sys.stderr.write(msg + '\n')
-    sys.stderr.write('---- captured OpenCV log (tail 40) ----\n')
-    sys.stderr.write('\n'.join(cann_log.splitlines()[-40:]) + '\n')
-    # 顺手把失败信息写进结果文件：调用方万一没开 set -e，cat 出来的内容也对不上
-    # #test-result，不会出现「上一轮的陈旧文件刚好蒙对」的假通过。
     fd = os.open('/tmp/dnn_result.txt', os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
     os.write(fd, (msg + '\n').encode())
     os.close(fd)
     sys.exit(1)
 
+
+missing = [m for m in CANN_MARKERS if m not in cann_log]
+if missing:
+    # 少了标记 = 这次压根没走 CANN 后端。日志尾巴打出来方便定位。
+    sys.stderr.write('---- captured OpenCV log (tail 40) ----\n')
+    sys.stderr.write('\n'.join(cann_log.splitlines()[-40:]) + '\n')
+    _fail('CANN backend markers missing: %r' % (missing,))
+
+
 # mobilenetv2-12 输出是 logits（不含 softmax），自己归一化
-logits = out.reshape(-1)
-e = np.exp(logits - logits.max())
-prob = e / e.sum()
+def _top1(out_blob):
+    logits = out_blob.reshape(-1)
+    e = np.exp(logits - logits.max())
+    prob = e / e.sum()
+    return int(np.argmax(prob)), float(np.max(prob))
+
+
+idx_npu, score_npu = _top1(out)
+idx_cpu, score_cpu = _top1(out_cpu)
+
+# NPU 与 CPU 必须给出同一个答案 —— 这是「加速器算对了」唯一的硬判据。
+# 光看 top-1 相同不够（分类一致不代表数值一致），所以分数也要在容差内。
+if idx_npu != idx_cpu:
+    _fail('NPU vs CPU top-1 mismatch: npu=#%d cpu=#%d' % (idx_npu, idx_cpu))
+if abs(score_npu - score_cpu) > 0.01:
+    _fail('NPU vs CPU score mismatch: npu=%.6f cpu=%.6f (tol 0.01)'
+          % (score_npu, score_cpu))
+if out.shape != out_cpu.shape or out.dtype != out_cpu.dtype:
+    _fail('NPU vs CPU output mismatch: %s/%s vs %s/%s'
+          % (out.shape, out.dtype, out_cpu.shape, out_cpu.dtype))
 
 img = image.copy()
 cv2.rectangle(img, (10, 10), (500, 500), (0, 255, 0), thickness=2)
-label = 'top-1: #372 patas monkey  %.3f' % float(np.max(prob))
+label = 'top-1: #%d patas monkey  %.3f' % (idx_npu, score_npu)
 cv2.putText(img, label, (30, 45), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
 cv2.imwrite('/tmp/dnn-result.png', img)
 
@@ -624,8 +679,13 @@ lines += [
     'model bytes: %d' % os.path.getsize(MODEL_PATH),
     'output shape: %s' % (out.shape,),
     'output dtype: %s' % out.dtype,
-    'top class index: %d' % int(np.argmax(prob)),
-    'top class score: %s' % float(np.max(prob)),
+    'top class index: %d' % idx_npu,
+    'top class score: %s' % score_npu,
+    'cpu top class index: %d' % idx_cpu,
+    'cpu top class score: %s' % score_cpu,
+    'npu forward ms: %d' % round(npu_ms),
+    'cpu forward ms: %d' % round(cpu_ms),
+    'npu/cpu time ratio: %0.2f' % (cpu_ms / npu_ms if npu_ms > 0 else 0.0),
 ]
 result = '\n'.join(lines) + '\n'
 fd = os.open('/tmp/dnn_result.txt', os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
@@ -649,14 +709,21 @@ output shape: (1, 1000)
 output dtype: float32
 top class index: 372
 top class score: 0.xxx
+cpu top class index: 372
+cpu top class score: 0.xxx
+npu forward ms: xxx
+cpu forward ms: xxx
+npu/cpu time ratio: xxx
 ...
 ```
 
-预期：`output shape (1, 1000)`、`float32`；baboon.jpg 的 top-1 是 **ImageNet-1k 第 372 类（patas / hussar monkey，赤猴）**，score ≈ 0.91（4.14.0 + CANN 9.1.0 实测 **0.9143**；同一份构建走默认 CPU 引擎是 **0.9148**，两者一致；baboon 本尊 373 排第二 ≈ 0.03）。前三行 `cann marker:` 是「这次真的上了 NPU」的硬证据（见下一节）。标注结果如下：
+预期：`output shape (1, 1000)`、`float32`；baboon.jpg 的 top-1 是 **ImageNet-1k 第 372 类（patas / hussar monkey，赤猴）**，score ≈ 0.91（4.14.0 + CANN 9.1.0 实测 **0.9143**；同一份构建走默认 CPU 引擎是 **0.9148**，两者一致；baboon 本尊 373 排第二 ≈ 0.03）。前三行 `cann marker:` 是「这次真的上了 NPU」的硬证据（见下一节）。
+
+脚本同时建了**两个 net 实例**喂同一份输入：一个挂 CANN 后端 + NPU target，一个不挂后端（4.x 的默认 = classic 引擎 + CPU target）。然后硬断言两者 **top-1 相同、top-1 分数差 ≤ 0.01、输出 shape/dtype 相同** —— 加速器算错了就直接退出 1，不会把「跑完了」当成「跑对了」。`npu forward ms` / `cpu forward ms` 量的是**热启** forward（不含 GE 图编译），`npu/cpu time ratio` = CPU 耗时 ÷ NPU 耗时；**这两个数只作参考，脚本不对它们设阈值**（CI runner 的 CPU 型号和核数不固定，写死阈值必然漂）。标注结果如下：
 
 ![NPU 推理标注结果](images/dnn-result.png)
 
-> 首次 forward 含 GE 图编译（`converting ge::Graph to OM buffer`），约 0.5~1 分钟出 `Compile success, model size = ...`；进程内二次 forward 约 1ms。
+> 首次 forward 含 GE 图编译（`converting ge::Graph to OM buffer`），约 0.5~1 分钟出 `Compile success, model size = ...`；进程内二次 forward 约 1ms —— 脚本的 `npu forward ms` 量的就是这一次（第二次 forward 命中 `net_cann.cpp:107-108` 的 `if (netWasConverted && netWasAllocated) return;`，直接复用已编译的 OM，不再重跑后端初始化）。
 
 ### 怎么证明这次真的跑在 NPU 上
 
@@ -667,6 +734,10 @@ top class score: 0.xxx
 | `DNN/CANN: converting ge::Graph to OM buffer` | `net_cann.cpp:236` | 逐层转换出来的图交给了 GE，开始编 OM |
 | `Compile success, model size = ...` | `net_cann.cpp:348` | GE 图编译成功、产出了 OM 模型（**fork 之后的父进程侧**） |
 | `DNN/CANN: OM buffer size = ...` | `net_cann.cpp:238` | OM 模型被装进 `CannNet` 准备执行 |
+
+这张表证明的是「**后端确实被调用了**」。但「被调用了」和「算对了」是两件事 —— 所以脚本还并行跑了一个**不挂后端的 CPU 对照**（classic 引擎 + CPU target），硬断言：top-1 相同、top-1 分数差 ≤ 0.01、输出 shape/dtype 相同。三者任一不满足就退出 1。
+
+再往前一步，「这个 cv2 到底有没有把 CANN 后端编进去」本身也是源码级可判定的，上一节的脚本已经查了：`cv2.dnn.getAvailableTargets(cv2.dnn.DNN_BACKEND_CANN)` 返回 `DNN_TARGET_NPU` 才说明 `modules/dnn/src/registry.cpp:157-160` 里那条 `#ifdef HAVE_CANN` 的注册真的生效了。**光看 `cv2.dnn.DNN_BACKEND_CANN` 这个枚举存在是证明不了任何事的** —— `opencv2/dnn/dnn.hpp` 的 `enum Backend` 没有 `#ifdef HAVE_CANN` 守卫，不带 CANN 的构建照样打印得出来。
 
 配套的守护脚本（`projects/opencv-nopatch/tests/test_quick_start_ascend_nopatch.py`）把 **`Going back to default backend on CPU target`** 加进了 `ERROR_MARKERS`：那是 `initBackend()` 在**某一层不支持 CANN** 时打的 WARNING（`CV_LOG_ONCE_WARNING`），打完之后 `if (!newWasSupported) return;` —— **静默回落到 CPU 引擎**。这一行一旦出现，就说明这次推理压根没上 NPU，守护直接判红。
 
@@ -692,7 +763,7 @@ top class score: 0.xxx
 
 - **没有 `cv2.cann`**：本文不编 `opencv_contrib`，所以 `cv2.cann.cvtColor` / `cv2.cann.resize` 这类 contrib 经典算子加速 API 不可用（主文档有）。算子面和「为什么它们不能替换 `cv2.*`」见上一节「这条路线的 NPU 覆盖到哪」。**这不是「本文偷懒」，是 4.x 上源码级确认的死路**：`opencv_contrib/modules/cannops/src/cann_call.cpp` 在 4.11.0 与 4.14.0 之间**逐字节相同**（43 个文件、823,803 B），`OperatorRunner::run()` 把 `AscendStream::Null()`（`stream == nullptr`）直接喂给 `aclopCompileAndExecute`，CANN 9.1.0 断言 `stream != nullptr` ⇒ 实测 53 个 cannops 用例挂 48 个（`E29999: Assert ((stream) != nullptr)` + `Invalid_Argument_Null_Pointer(EH0008)`）。**上游还有逻辑反转 bug**：`if (rawStream == nullptr) aclrtSynchronizeStream(rawStream);` —— NULL 时反而去同步 NULL 流。要跑 `cv2.cann` 就得编 contrib + 打那组 NULL 流兜底补丁。
 - **没有 OpenCV 5.x**：4.14.0 没有 5.0 的新 DNN 图引擎（`onnx_importer2`），也没有 5.0 的其它新特性。反过来 4.14.0 也有 5.0 没有的东西：**reduce 层的 CANN 后端支持**（`layers/reduce_layer.cpp` 从 4.14 起才 include `op_cann.hpp`）。
-- **没有 `opencv_test_cannops` 单测**：那个 gtest 二进制来自 `opencv_contrib` 的 cannops 模块，本文不编 contrib，所以没有那 53 个用例的证据；NPU 正确性由上面的 MobileNetV2 top-1 对齐 + 三行 `cann marker:`（CANN 后端日志标记）来兜。
+- **没有 `opencv_test_cannops` 单测**：那个 gtest 二进制来自 `opencv_contrib` 的 cannops 模块，本文不编 contrib，所以没有那 53 个用例的证据；NPU 正确性由上面的 **MobileNetV2 的 NPU-vs-CPU 数值对照**（top-1 相同 + 分数差 ≤ 0.01 + shape/dtype 相同）+ 三行 `cann marker:`（CANN 后端日志标记）来兜。
 - **编译并行度受内存配额约束**：`all_ops.h` 那几个 TU 每个吃 3GB 上下，cgroup 32GB 的容器里 `--parallel` 别超过 6，否则 OOM killer 会杀掉 `cc1plus`。
 - **「Release 就不用窄 op 头补丁」不是通用解法**：本条只在 **4.x** 上实测成立（4.14.0 的 Release 构建 dnn `.text` 53.3 MiB → 链接通过；4.11.0 是 52.0 MiB）。同样条件下 **5.0.0 实测仍然失败**：Release + `all_ops.h` 链接报 `relocation truncated to fit: R_AARCH64_JUMP26`，受害者是 protobuf 的 `AddDescriptorsRunner::AddDescriptorsRunner`（**报错对象随链接顺序随机变**，5.0.0 的 Debug 构建里同一个坑出现过 `Arena::AllocateAlignedWithCleanup` 版本 —— 所以「链接炸了但报错看着跟 CANN 无关」是常态，别顺着报错对象查根因）。也就是说：**分支范围是 aarch64 的硬约束，缩 `.text` 只是缓解，不是保证**；OpenCV 5.x 要过这一关只有窄 op 头一条路（主文档的 3 组补丁之一）。
 - **没有 `opencv_version` 等命令行工具**：它们属于 `apps/`，而 `apps` 被 `-DBUILD_opencv_apps=OFF` 关掉了（原因见「配置并编译」一节）。

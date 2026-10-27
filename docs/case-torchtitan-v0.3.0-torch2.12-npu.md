@@ -203,6 +203,27 @@ master 均已修复但未回合 2.12.0，修复手段全部是 sed 镜像上游 
 
 ### 7.5 覆盖面的扩展（2026-10-27）
 
+CI 首跑（run 40466975087，torchtitan-examples，main 分支，39 个 job）：13 条单卡 + 2 条双卡全绿；
+2 条八卡里 qwen3_14b 绿、deepseek_v3_16b 红（compile 撞 B1，见下）；4 卡的 sft_qwen3_8b_math 红（缺 16 GB 预训练权重）。
+
+- **deepseek_v3_16b 撞 B1**：该 recipe 开了 `compile=CompileConfig(enable=True, components=["loss"])`，
+  编出来的 loss 走 inductor → torch_npu 2.14.0 的 `make_reduction` 缺 `strict_sum` 形参 →
+  `TypeError: make_reduction() got an unexpected keyword argument 'strict_sum'`。条目改加
+  `--compile.no-enable`（tyro 的正确写法是 `--compile.no-enable`，不是 `--no-compile.enable`，
+  也不是 `--compile.enable false`）→ 跳过编译 loss 的路径。这条墙对所有编译型 recipe
+  （graph_trainer 等）同样成立。
+- **sft_qwen3_8b_math 缺权重**：SFT recipe 从 `hf_assets_path`（./assets/hf/Qwen3-8B）加载 8B
+  预训练权重，setup 只拉了 tokenizer → `RuntimeError: Missing key in checkpoint state_dict:
+  lm_head.weight.`（HF 的 Qwen3-8B 是 tied embedding，权重里没有 lm_head）。而 examples 的 setup
+  是**按 profile** 跑的（所有 entry 共用），16 GB 权重每个 job 拉一遍不现实（该 workflow 没有
+  模型缓存卷）→ 退回 unsupported。数据侧没有障碍：gsm8k 只有 7473 行 / 约 2.3 MB parquet
+  （modelscope 的 `AI-ModelScope/gsm8k` 有同一份文件），CI 机器也能直连 huggingface.co。
+- **CLI 覆盖的两个坑**（都实测过）：`load_dataset(..., name="main")` 的 `"main"` 配置名改不掉
+  （tyro 拒绝 `--dataloader.load-dataset-kwargs.name` 的三种写法；本地目录只暴露 `default`）；
+  bool 字段要关掉得用 `--<path>.no-enable` 这种 tyro 形式。
+
+
+
 supported 从 2 条扩到 17 条：13 条单卡 + 1 条双卡（llama3 debugmodel，FSDP shard=2 + bf16）+ 1 条双卡（qwen3_1_7b，1.7B 的权重+优化器状态 ~20 GB 在 32 GB 单卡上 OOM）+ 2 条八卡（deepseek_v3_16b 的 expert_parallel_degree=8、qwen3_14b 的 14B×12B=168 GB）。八卡两条落在 CI 的 `linux-aarch64-a2-8` runner 上（coder workspace 当时没能拿到 8 卡）。
 
 同一套 override（`npu_compat.npu_attention`，替换 `GQAttention.Config` 节点）在实测中又放行了 9 个组合，supported 从 2 条变 11 条（10 条单卡 + 1 条双卡 FSDP）：

@@ -100,6 +100,7 @@ TOKENIZER_FILES = [
 for repo, dest in [
     ("Qwen/Qwen3-0.6B", "Qwen3-0.6B"),
     ("Qwen/Qwen3-1.7B", "Qwen3-1.7B"),
+    ("Qwen/Qwen3-8B", "Qwen3-8B"),
     ("Qwen/Qwen3-14B", "Qwen3-14B"),
     ("deepseek-ai/deepseek-moe-16b-base", "deepseek-moe-16b-base"),
 ]:

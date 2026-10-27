@@ -174,7 +174,11 @@ echo "${UPSTREAM_REF}"
 -->
 
 ```shell #test id="torchtitan-install-source" load="upstream_ref>>ref"
-git clone --depth 1 --branch <ref> https://github.com/pytorch/torchtitan.git
+rm -rf torchtitan torchtitan.tar.gz
+curl -fsSL --retry 3 --retry-connrefused --retry-delay 2 \
+  "https://api.github.com/repos/pytorch/torchtitan/tarball/<ref>" -o torchtitan.tar.gz
+mkdir -p torchtitan
+tar xzf torchtitan.tar.gz -C torchtitan --strip-components=1
 cd torchtitan
 uv pip install -e .
 python -c "import torchtitan; print('torchtitan', torchtitan.__version__)"
@@ -183,6 +187,11 @@ python -c "import torchtitan; print('torchtitan', torchtitan.__version__)"
 ```{admonition} Note
 :class: note
 `<ref>` 不是字面文本，是上文 `store="upstream_ref"` 块捕获的注入参数——工作流把 `UPSTREAM_REF` 环境变量（pytorch/torchtitan 最新 release tag）注入后捕获，`load="upstream_ref>>ref"` 再把它替换进命令里的 `<ref>` 占位符。手工执行时直接替换成目标 tag（如 `v0.3.0`）。
+```
+
+```{admonition} Note
+:class: note
+这里用 GitHub **contents/tarball API** 而不是 `git clone`：受限网络下匿名 HTTPS clone 的数据面会被掐断（实测 `GnuTLS recv error (-110)` / 连接超时），而同一集群到 `api.github.com` 的数据面稳定（实测 7.2 MB / 2.5 s）。取到的 tarball 就是该 tag 对应的 commit，与 clone 得到的源码一致，只是没有 `.git`（因此后面的训练步骤不再需要 `git checkout`）。
 ```
 
 输出结果类似如下：
@@ -306,7 +315,7 @@ npu override equivalence: rope OK, mask OK, rope selection OK
 用 `torchrun --nproc_per_node=1` 在 1 张 NPU 上跑 `debugmodel` 真跑 2 步，验证配置解析、初始化、加载 tokenizer、build dataloader、forward + backward 整条链路能跑通。`llama3_debugmodel` 是上游 registry 的默认配置（loss = 默认 `ChunkedLossWrapper`，~6 M 参数量，单卡 30 GB 完全够装）；`--override.imports` 激活上一步的 NPU 兼容替换（日志会打印 6 个节点的替换明细和 `Applied 6 override(s)`）。走真实 HCCL backend（`--comm.mode default`）让 c10d 把 `npu` 路由到 `hccl`，1-rank 下所有集合通信都是 self-barrier，不会真的有跨卡流量。多卡 FSDP shard 训练见下一节「多卡训练」（8B 规模不在本文档验证范围，见「兼容性说明与 NPU override」）：
 
 ```shell #test id="torchtitan-train-debug" load="upstream_ref>>ref"
-cd torchtitan && git checkout -f <ref>
+cd torchtitan
 PYTHONPATH="$HOME/tt-npu-overrides" \
 ASCEND_RT_VISIBLE_DEVICES=0 \
 TORCHINDUCTOR_COMPILE_THREADS=1 \
@@ -345,7 +354,7 @@ torchrun --nproc_per_node=1 \
 用 torchrun 起 2 个 rank 跑 `debugmodel` 真分布式训练，`--training.steps 2` 真跑 2 步。`data_parallel_shard_degree = -1` 在双卡下解析成 2，FSDP 把 params / grads / Adam state 按 shard 分摊到两张卡，验证 HCCL 双卡集合通信 + FSDP shard>1 + DTensor 参数分布整条链路；叠 `--training.dtype bfloat16` 验证混合精度。多卡使用**默认 spmd backend**（torch ≥2.13 的 FSDP 注解翻译已就位，无需 `--parallelism.spmd-backend` 覆盖）；`HCCL_NPU_SOCKET_PORT_RANGE` 用于错开同容器两个 rank 的 HCCL 监听端口（否则报 `EI0020` 端口冲突）：
 
 ```shell #test id="torchtitan-train-2card" load="upstream_ref>>ref"
-cd torchtitan && git checkout -f <ref>
+cd torchtitan
 PYTHONPATH="$HOME/tt-npu-overrides" \
 ASCEND_RT_VISIBLE_DEVICES=0,1 \
 HCCL_NPU_SOCKET_PORT_RANGE=60000-60200 \

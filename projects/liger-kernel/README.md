@@ -8,12 +8,21 @@ release。setup 从同一个 `$TARGET_ROOT` checkout 安装 Liger 源码，因�
 
 ## 为什么可行
 
-v0.8.3 已原生带 Ascend NPU 后端：内核实现位于
+v0.8.3 起上游原生带 Ascend NPU 后端：内核实现位于
 `src/liger_kernel/ops/backends/_ascend/`，按设备自动选中；上层有
 `infer_device()`（NPU 上返回 `"npu"`）与 `infer_comm_backend()`（返回 `"hccl"`）
 两个抽象。上游 README 的 Ascend 安装段 pin 了 `torch==2.9.0` /
 `torch_npu==2.9.0` / `triton-ascend==3.2.2` / `CANN==9.1.0`，并挂了华为官方
 Ascend-CI 的 `liger_kernel.yml` 徽章——本项目 setup 即复刻该配方。
+
+v0.8.5 起 `src/liger_kernel/transformers/monkey_patch.py` 在 import 时硬校验
+`transformers >= 5.0.0`（低于该版本直接 `ImportError`），而 examples 仍是 trl 0.12
+的写法。项目因此把依赖窗口整体上移到 **transformers==5.3.0 + trl==0.12.1**：
+5.3.0 是华为 Ascend-CI 在 torch 2.9.0 上验证过的 5.x 配对；0.12.1 是最后一个仍
+接受 `SFTTrainer(max_seq_length=)`、`DataCollatorForCompletionOnlyLM` 和
+`tokenizer=` 别名的 trl 版本（它的 `@deprecate_kwarg("tokenizer",
+new_name="processing_class")` 让 transformers 5 的 Trainer/ORPOTrainer 也接受
+`tokenizer=`）。examples 源码一行不改。
 
 镜像用 `swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12`，
 与本仓 tensordict、trl 等项目同款。CANN 基础镜像可能完全不带 PyTorch（tensordict
@@ -24,24 +33,29 @@ Ascend-CI 的 `liger_kernel.yml` 徽章——本项目 setup 即复刻该配方�
 但装出来的 import 名仍是 `triton`（Ascend 版替换 PyPI 同名包），所以安装前先卸载
 PyPI triton，幂等判断用 `pip show triton-ascend`。
 
-## supported 清单
+## supported 清单（8 条）
 
-已有三条单卡任务在手动 workflow #5（commit `33c39b2`）全部通过，包含实际训练步骤和
-三个成功的 `result.json`；被测版本为 v0.8.3。Run #9 已验证四条 SFT/Medusa 配方全部通过，包括两卡 Qwen FSDP。
-ORPO 的实际 NPU 损失求导失败，现退回 unsupported；当前 supported 共四条。
+前 3 条是在新栈上已验证 API 兼容的核心入口；后 5 条是首轮取证用的实验条目，
+按上游原样规模跑（不压规模），跑红即按 manifest 注释里的原因退回 unsupported。
 
-| example | 作用 | 压规模方式 |
-|---|---|---|
-| `examples/huggingface/training.py` | `AutoLigerKernelForCausalLM` 一行 monkey-patch 应用 Liger 内核，trl `SFTTrainer` 做 SFT | `--max_steps 3`、batch 2、seq 256，不开 FSDP |
-| `examples/huggingface/run_qwen.sh` | 上述 SFT 的两卡 FSDP 配方，验证 torchrun、HCCL 和 full shard | 复刻上游 launcher；改用 ModelScope 0.5B、2 卡、2 步、每卡 batch 1、本地 8 行数据 |
-| `examples/medusa/train.py` | 冻结 backbone、注入 medusa 多头，用 `fused_linear_cross_entropy` 训练多 token 预测头 | `--max_steps 1`、`--medusa_num_heads 2`、`--medusa_return True` |
-| `examples/huggingface/training_multimodal.py` | Qwen2-VL 图文 SFT，monkey-patch 多模态 RoPE / RMSNorm / SwiGLU / FLCE | `--max_steps 1`、batch 1、seq 256，数据换 4 行本地 fixture |
+| example | 说明 |
+|---|---|
+| `examples/huggingface/training.py` | 单卡 SFT：`AutoLigerKernelForCausalLM` 一行 monkey-patch 应用 Liger 内核，trl `SFTTrainer` 训练 |
+| `examples/huggingface/run_qwen.sh` | 上述 SFT 的两卡 FSDP 配方，验证 torchrun、HCCL 与 full shard |
+| `examples/huggingface/training_multimodal.py` | Qwen2-VL 图文 SFT：monkey-patch 多模态 RoPE / RMSNorm / SwiGLU / FLCE |
+| `examples/alignment/run_orpo.py`（实验） | ORPO 偏好对齐：`LigerORPOTrainer` 的 chunked ORPO loss |
+| `examples/huggingface/run_gemma.sh`（实验） | 上游四卡 Gemma-7B FSDP 启动包装 |
+| `examples/huggingface/run_llama.sh`（实验） | 上游四卡 Llama-3-8B FSDP 启动包装 |
+| `examples/huggingface/run_qwen2_vl.sh`（实验） | 上游四卡 Qwen2-VL-7B FSDP 启动包装 |
+| `examples/huggingface/run_benchmarks.sh`（实验） | 30 次复跑（use_liger×batch×5 次）的基准脚本 |
 
-四条都不改源码。文本训练与 Medusa 模型走 ModelScope 的 `Qwen/Qwen2.5-0.5B-Instruct`；多模态那条
-走 ModelScope 的 `Qwen/Qwen2-VL-2B-Instruct`。设备由 liger 的 `infer_device()` 与
-accelerate 自动落到 NPU。前两条带 upstream 自带的 `EfficiencyCallback`，其
-`on_init_end` 强制要求 `--include_num_input_tokens_seen` 与 `--logging_steps 1`，
-overlay 必须带这两个。
+三条核心条目的规模压缩方式：单卡 SFT 用 `--max_steps 3`、batch 2、seq 256；两卡
+FSDP 复刻上游 launcher 但改 2 卡、ModelScope 0.5B、2 步、每卡 batch 1、本地 8 行
+数据；多模态例 `--max_steps 1`、batch 1、数据换 4 行本地 fixture。文本与多模态
+模型走 ModelScope 的 `Qwen/Qwen2.5-0.5B-Instruct` 与 `Qwen/Qwen2-VL-2B-Instruct`，
+设备由 `infer_device()` 与 accelerate 自动落到 NPU。前两条带 upstream 的
+`EfficiencyCallback`，其 `on_init_end` 强制要求 `--include_num_input_tokens_seen`
+与 `--logging_steps 1`，overlay 必须带这两个。
 
 `run_qwen.sh` 原脚本固定 `torchrun` 四进程、Qwen2-7B、每卡 batch 48，而且不透传额外
 参数。项目 runner 按该脚本启动 `training.py`，用 manifest 覆盖模型、数据和规模，并保持
@@ -62,61 +76,63 @@ fixture 全部由 setup 现生成，不往仓库塞二进制：
 多模态那条额外装 `torchvision==0.24.0`：`AutoProcessor` 走 torchvision 图像后端，
 纯文本栈里没有它，缺了会抛 `AutoVideoProcessor requires the Torchvision library`。
 
+实验条目的额外准备：
+
+- ORPO 的 example 写死 gated 模型 `meta-llama/Llama-3.2-1B-Instruct`、数据集
+  `trl-lib/tldr-preference`、batch 32 / 100 步，且没有 CLI 开关。setup 用 ModelScope
+  的 `LLM-Research/Llama-3.2-1B-Instruct` 把权重镜像进 HF hub cache
+  （`models--meta-llama--…/refs/main` + `snapshots/` 布局），并预缓存偏好数据集，
+  run 步以 `HF_HUB_OFFLINE/TRANSFORMERS_OFFLINE/HF_DATASETS_OFFLINE` 离线解析。
+  该例历史记录（Run #9，v0.8.3 栈）是首步在 `fused_linear_preference.py` 的
+  `torch.func.grad_and_value` 内调 `F.logsigmoid` 报
+  `NotImplementedError: Cannot access storage of TensorWrapper`；首轮实跑就是要判定
+  它在 transformers 5.3.0 + trl 0.12.1 栈上是否仍然存在。
+- 三个上游启动包装与基准脚本自带 torchrun、模型和数据集，没有 CLI 可压规模：
+  gemma/llama/mistral 都是 gated 模型，`run_qwen2_vl.sh` 未覆盖数据集参数、会去拉
+  gated 的 `the_cauldron`（168 GB），仓库侧没有 HF token，预计首轮在下载处失败。
+  按结果决定保留或退回 unsupported。
+
+## unsupported（9 条）
+
+- `examples/medusa/train.py`：`Trainer(tokenizer=...)` 在 transformers 5.0 被移除，
+  当前栈（liger 硬性要求 >=5.0.0）下必然 `TypeError`，需上游迁移到
+  `processing_class`。
+- `examples/lightning/training.py`：示例传 `pl.Trainer(accelerator="npu")`，但
+  lightning 主线（2.6.6 实测）的 accelerator 注册表只有 cpu/cuda/mps/tpu，直接
+  `ValueError: You selected an invalid accelerator name`。能注册 `"npu"` 的插件包
+  在 PyPI（42 万+ 包索引里无 lightning+npu 组合）、昇腾 pypi 镜像和 Gitee 上都不
+  存在，环境侧无解。
+- 两条 Megatron：源码固定 `torch.cuda.set_device`、`.cuda()` 和 NCCL，增加卡数
+  无法改变设备后端。
+- `launch_on_modal.py`、`medusa/scripts/llama3_8b_medusa.sh` 及 3 个配套模块
+  （`hf/callback.py`、`medusa/callback.py`、`medusa_util.py`）：Modal 云 GPU / nvidia-smi
+  数卡，或非独立入口。
+
 ## 依赖版本窗口（关键约束）
 
-Run #7 的五条任务均被数据依赖冲突阻断：Triton-Ascend 3.2.2 要求
-NumPy 1.26.4，而未约束的 PyArrow 26 在导入时要求 NumPy 2。项目现在通过
-`constraints-npu.txt` 对所有 setup 安装统一约束 NumPy 1.26.4、PyArrow 20.0.0、
-pandas 2.2.3 和 datasets 3.6.0；每个 profile 在准备数据前验证导入与 Parquet
-读写。修复后仍需手动 Actions 验证完整 NPU 训练路径。
-
-Run #8 的单卡 SFT、Medusa 和图文 SFT 已通过。两卡 Qwen FSDP 在参数解析时
-失败，现已给 `--fsdp "full_shard auto_wrap"` 保留单个字符串参数；ORPO 在 setup
-阶段误用了仅 run 阶段存在的 `CI_OUTPUT_DIR`，现改在 `$TARGET_ROOT/fixtures/orpo-work`
-准备离线资产，并通过 `GITHUB_ENV` 传给 runner。后续 Run #9 的 Qwen FSDP 已通过；ORPO 进入训练后出现的真实兼容错误见下文。
-
-`transformers==4.57.1` + `trl==0.12.1`。这个窗口被 example 源码钉死：
-
-- `from_pretrained(..., dtype=...)` 需要 transformers >= 4.56.0（4.55.x 只有
-  `torch_dtype=`，传 `dtype=` 抛 `Object of type dtype is not JSON serializable`）。
-- `Trainer(tokenizer=...)`（medusa 用）在 transformers 5.0 被彻底移除。
-- `SFTTrainer(max_seq_length=...)`（hf 与多模态例用）从 trl 0.13.0 起移入 `SFTConfig`。
-- `DataCollatorForCompletionOnlyLM`（hf 例用）在 trl 0.20.0 被删除。
-
-窗口内唯一同时满足的组合即 4.57.1 + 0.12.1，已用逐字节相同的 `training.py` 与
-`training_multimodal.py` 在 CPU 上跑通训练步验证；上卡实测由手动 workflow 完成。
-
-## unsupported
-
-当前 supported 为 **4 条**，均已在 Run #9 通过。unsupported 保留 ORPO、
-Lightning 和两条 Megatron，具体功能与限制在 manifest 中以中文注释记录。
-
-- ORPO：Run #9 已完成本地资产准备和两卡 FSDP 初始化，但首次训练步在
-  `fused_linear_preference.py` 的 `torch.func.grad_and_value` 内调用
-  `orpo_loss.py` 的 `F.logsigmoid` 时，两 rank 均报
-  `NotImplementedError: Cannot access storage of TensorWrapper`。
-  关闭可选 torch.compile 后，该原生求导路径仍失败；不是模型下载、CLI 或卡数问题。
-  在不替换损失、不 monkey-patch torch.func、不修改上游源码的边界下，暂不调度。
-  恢复前需先在 NPU 上验证同一 logsigmoid 求导路径，再验证两卡完整训练。
-- Lightning：`pl.Trainer(accelerator=infer_device())` 传 `"npu"`，而 Lightning 只注册
-  cpu/cuda/mps/xla，且 `torch.optim.AdamW(fused=True)` 在 NPU 无 `_fused_adamw_` 实现；
-  源码还把 MMLU 拆出固定 4096 行验证集，不能用很小的 CI fixture。
-- Megatron 两条虽只需两进程，源码仍固定 `torch.cuda.set_device`、`.cuda()` 和 NCCL；
-  增加 runner 卡数无法改变设备后端。
+- 数据栈仍由 `constraints-npu.txt` 统一锁定 NumPy 1.26.4 / PyArrow 20.0.0 /
+  pandas 2.2.3 / datasets 3.6.0（Triton-Ascend 3.2.2 要求 NumPy 1.26），与
+  transformers 5.3.0 + trl 0.12.1 不冲突。
+- transformers 5.3.0 会把 huggingface-hub 拉到 1.x（`<2.0,>=1.3`）；datasets 3.6
+  与 modelscope 1.37 在该组合下已本地验证可 import，模型下载仍走 ModelScope。
+- 已用逐字节相同的 `training.py`、`training_multimodal.py` 在 CPU 上以
+  5.3.0 + 0.12.1 跑通训练步（覆盖 `DataCollatorForCompletionOnlyLM`、
+  `SFTTrainer(max_seq_length=)`、`tokenizer=` 别名与 EfficiencyCallback）；
+  上卡由手动 workflow 完成。
 
 ## 已知边界
 
-medusa 例的 `max_steps` 必须保持 1：其 callback 的 MFU 分支 `_get_gpu_peak_tflops`
-只识别 A100/H100/V100，Ascend 上返回 `None`，第 2 步的 TFLOPS 除法会崩。warmup
-步数为 2，故 1 步安全；这是上游代码问题。
-
-artifact 由公共引擎命名为 `liger-kernel-examples-<run_id>-<job_index>`。
+- transformers 5 的 FSDP/HCCL 路径与 Qwen2-VL（5.2 起新增 `Qwen2VLRMSNorm`）在
+  NPU 上的行为需要在实机确认——这两条以前只在 4.57.1 上验证过。
+- medusa 的 `max_steps` 必须为 1 的旧边界随条目一起失效（现已 unsupported）。
+- artifact 由公共引擎命名为 `liger-kernel-examples-<run_id>-<job_index>`。
 
 ## 文件结构
 
-与 Accelerate examples 一样，入口集中在 `scripts/setup_example.sh` 和
-`scripts/run_example.sh`，依赖约束在 `constraints-npu.txt`，本地数据在 `fixtures/`。
-ORPO 已依据 Run #9 的真实兼容错误退回 unsupported，并删除不再调度的
-setup/launcher 配方；不再单独维护 `run_orpo.sh`。
-项目不再保留 `tests/` 目录；独立 quick-start workflow 使用
-`scripts/test_quick_start_ascend.py` 执行文档验证，不影响 examples 启动契约。
+入口集中在 `scripts/setup_example.sh`（`install_hf_stack` 统一装 transformers/trl
+栈，各 profile 负责模型与数据准备）与 `scripts/run_example.sh`（按入口区分单卡/
+两卡/四卡，并校验各自的训练后产物），依赖约束在 `constraints-npu.txt`，本地数据在
+`fixtures/`。本项目不再使用 `scan.exclude`：所有被扫描单元都显式登记为 supported
+或 unsupported，让 `examples-check` 的新增/失效差异更直观。
+项目不保留 `tests/` 目录；独立 quick-start workflow 使用
+`scripts/test_quick_start_ascend.py` 做文档验证，不影响 examples 启动契约。

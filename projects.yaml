@@ -773,9 +773,10 @@ projects:
     workflows:
       examples: .github/workflows/areal-examples.yml
   # Liger-Kernel 内置 Triton 算子（RMSNorm/RoPE/SwiGLU/FusedLinearCrossEntropy）。
-  # v0.8.3 已原生带 Ascend 后端（ops/backends/_ascend）与 infer_device()/hccl 抽象，
-  # NPU 栈 pin（torch 2.9.0 + torch_npu 2.9.0 + triton-ascend 3.2.2 + CANN 9.1.0）
-  # 与华为官方 Ascend-CI liger_kernel.yml 一致；examples 和 quick start 各走共享引擎。
+  # v0.8.3 起原生带 Ascend 后端（ops/backends/_ascend）与 infer_device()/hccl 抽象；
+  # v0.8.5 起上游硬性要求 transformers>=5.0.0，项目栈固定 transformers 5.3.0 +
+  # trl 0.12.1，NPU 侧 torch 2.9.0 + torch_npu 2.9.0.post2 + triton-ascend 3.2.2 +
+  # CANN 9.1.0 与华为 Ascend-CI liger_kernel.yml 一致；examples 和 quick start 各走共享引擎。
   - name: liger-kernel
     category: 训练加速
     support_level: 基础支持

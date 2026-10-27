@@ -40,7 +40,7 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 pip install torch==2.9.0 torch-npu==2.9.0.post2
 pip install modelscope transformers==4.57.1 accelerate==1.10.1 datasets==4.2.0 \
     tokenizers==0.22.1 fire==0.7.1 pandas==2.2.2 tqdm bitsandbytes==0.48.1 \
-    trl==0.24.0 scikit-learn polars openai requests aiohttp
+    trl==0.24.0 scikit-learn wandb==0.22.2 polars openai requests aiohttp
 ```
 
 ---
@@ -77,6 +77,11 @@ ENTRIES = [
 ]
 NO_IMPORT = {'rq/generate_indices.py'}
 
+# README 里另有一个导入 torch、但不碰设备的脚本：没有 shim 也应在 NPU 环境
+# 里能导入，一并检查，避免"改完 torch 就崩"。其余脚本（convert_dataset.py、
+# rqkmeans_*.py、merge/split/calc）不 import torch，与 NPU 无关。
+EXTRA_IMPORTS = ['data/amazon18_data_process.py']
+
 
 def run(args, cwd):
     return subprocess.run(args, cwd=cwd, capture_output=True, text=True)
@@ -91,7 +96,7 @@ missing = [f for f in ENTRIES
 print(f'entry scripts importing the shim: {len(ENTRIES) - len(missing)}/{len(ENTRIES)}')
 
 import_fail = []
-importable = [f for f in ENTRIES if f not in NO_IMPORT]
+importable = [f for f in ENTRIES if f not in NO_IMPORT] + EXTRA_IMPORTS
 for f in importable:
     script = pathlib.Path(f)
     code = (
@@ -128,7 +133,7 @@ PY
 
 ```shell #test-result id="audit"
 entry scripts importing the shim: 13/13
-entry module import: 12/12
+entry module import: 13/13
 cuda api mapped to npu: True 1
 device selected by evaluate.py: cuda
 ```
@@ -137,12 +142,29 @@ device selected by evaluate.py: cuda
 
 ---
 
+## README 脚本覆盖对照
+
+| README 命令 | 本次验证深度 |
+| --- | --- |
+| `bash sft.sh` | 实跑（`Quick-start-Ascend.md`，落盘 `model.safetensors`） |
+| `bash evaluate.sh` | 实跑（199 条预测，`calc.py` 的 CC 为 0） |
+| `bash rl.sh` | 导入（`rl.py` 依赖 `trl`/`deepspeed`/`sasrec.py`，实际训练未跑） |
+| `bash data/amazon18_data_process.sh` | 导入（不碰设备；实跑需下载 Amazon 原始评论） |
+| `bash rq/amazon_text2emb.sh` | 导入（实跑需原始元数据与文本嵌入） |
+| `bash rq/rqvae.sh` | 导入（实跑需文本嵌入） |
+| `bash rqkmeans_plus.sh` | 导入 |
+| `bash rq/generate_indices_plus.sh` | 导入 |
+| `python rq/generate_indices.py` | 静态（无 `__main__` 守卫，导入即训练） |
+| `bash rqkmeans_constrained.sh`、`python rqkmeans_faiss.py` | 与 NPU 无关（`faiss` / `numpy` / `polars`，不 import torch） |
+| `python convert_dataset.py` | 与 NPU 无关（不 import torch） |
+
+结论：README 里**所有 import torch 的脚本**要么实跑、要么经过导入检查；剩下未实跑的只有依赖模型权重、原始数据或 CUDA-only vLLM 的那几条。
+
 ## 未覆盖范围
 
 | 未验证项 | 原因 |
 | --- | --- |
-| RL / GRPO 实际训练 | 其 vLLM 路径为 CUDA-only；`use_vllm=False` 的原生生成路径吞吐过低，不适合作冒烟，本次只验证 `rl.py` / `rl_gpr.py` 在 NPU 上可导入 |
+| RL / GRPO 实际训练 | vLLM 路径为 CUDA-only；`use_vllm=False` 的原生生成路径吞吐过低，不适合作冒烟 |
 | 多卡 DDP | 单卡 runner；DeepSpeed 配置未在本审计中执行 |
-| `rq/generate_indices.py` 运行时 | 无 `__main__` 守卫，导入即训练，需要 RQ-VAE checkpoint 与 `.npy` 嵌入 |
-| `rq/rqkmeans_faiss.py` / `rq/rqkmeans_constrained.py` | 不依赖 torch 设备（`faiss` / `numpy`+`polars`），与 NPU 适配无关 |
-| 各脚本的实际业务逻辑 | 本次只覆盖导入期；训练/推理行为由 `Quick-start-Ascend.md` 的 SFT + 评估覆盖 |
+| `rq/` 预处理的业务输出 | 需要 RQ-VAE checkpoint 与 `.npy` 嵌入，属数据准备而非 NPU 适配 |
+| 训练/推理行为本身 | 由 `Quick-start-Ascend.md` 的 SFT + 评估覆盖 |

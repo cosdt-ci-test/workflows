@@ -366,7 +366,31 @@ supported:
       - --dump-folder ${CI_OUTPUT_DIR}/qwen3_1_7b
     timeout_minutes: 90
 
-  # 8) Eight cards: deepseek_v3_16b, whose recipe asks for expert parallelism
+  # 8) Four cards: sft_qwen3_8b_math -- the SFT recipe on an 8B model
+  #    (8B x 12 bytes = 96 GB, so three cards would not do).  The recipe's
+  #    dataset is HF's openai/gsm8k (7473 train rows, ~2.3 MB of parquet),
+  #    which the CI runners can reach; nothing to stage.  Its tokenizer asset
+  #    (Qwen3-8B) comes from modelscope like the other size tiers.
+  - path: example/run_train_4card.sh
+    source: project
+    profile: torchtitan
+    runner: linux-aarch64-a2-4
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-910b-ubuntu22.04-py3.12
+    npu_devices: '0,1,2,3'
+    overlay_args:
+      - --module qwen3
+      - --config sft_qwen3_8b_math
+      - --override.imports npu_compat.npu_attention
+      - --comm.mode default
+      - --training.steps 2
+      - --training.local-batch-size 1
+      - --training.seq-len 256
+      - --metrics.log-freq 1
+      - --metrics.disable-color-printing
+      - --dump-folder ${CI_OUTPUT_DIR}/sft_qwen3_8b_math
+    timeout_minutes: 120
+
+  # 9) Eight cards: deepseek_v3_16b, whose recipe asks for expert parallelism
   #    of 8 (16B x 12 bytes = 192 GB, spread over 8 x 32 GB).  Needs the
   #    per-family override and the deepseek-moe-16b-base tokenizer asset.
   - path: example/run_train_8card.sh
@@ -389,7 +413,7 @@ supported:
       - --dump-folder ${CI_OUTPUT_DIR}/deepseek_v3_16b
     timeout_minutes: 120
 
-  # 9) Eight cards: qwen3_14b (14B x 12 bytes = 168 GB).  Same override and
+  # 10) Eight cards: qwen3_14b (14B x 12 bytes = 168 GB).  Same override and
   #    dataset override as the 0.6B entry; the tokenizer asset is fetched by
   #    setup_example.sh.
   - path: example/run_train_8card.sh
@@ -412,7 +436,7 @@ supported:
       - --dump-folder ${CI_OUTPUT_DIR}/qwen3_14b
     timeout_minutes: 120
 
-  # 10) muse_glimmer, single card (text path; the multimodal variant needs
+  # 11) muse_glimmer, single card (text path; the multimodal variant needs
   #    an NPU op the vision path does not have yet).
   - path: example/run_train_1card.sh
     source: project
@@ -542,9 +566,6 @@ unsupported_configs:
   # debugmodel 规模的 MoE 实测不触发 `torch._grouped_mm`（models/common/moe.py:120，CUDA 专属，
   # torch_npu 只有 npu_grouped_matmul、签名不同）—— supported 段的 moe 两条 exit 0。
   - torchtitan/models/qwen3/config_registry.py:qwen3_0_6b
-  # sft_qwen3_8b_math：attn_backend="varlen"（config_registry.py:464）→ torch.nn.attention.varlen 是 CUDA FA
-  # 专属 API，NPU 无实现。
-  - torchtitan/models/qwen3/config_registry.py:sft_qwen3_8b_math
 
   # --- qwen3_5 系：MRoPE(CosSinRoPE) 无 complex 墙，但 flex 墙 ---
   # qwen35_* 是 MLLM（MultiModalTokenizer + MMDataLoader 图像管线，数据属 asset 非 NPU 范畴）；

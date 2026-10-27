@@ -80,24 +80,25 @@ pip install modelscope transformers==4.57.1 accelerate==1.10.1 datasets==4.2.0 \
 
 ## 5. 确认 NPU 适配已生效
 
-仓库已内置 `npu_support.py`：导入时尝试加载 `torch_npu` 的 `transfer_to_npu`，把 `torch.cuda.*`、`device_map` 等透明映射到 NPU；未安装 `torch_npu` 时整段空操作，CUDA/CPU 路径不受影响。各入口脚本顶部已 `import npu_support`，此节只校验改动落位。
+仓库已内置 `npu_support.py`：导入时尝试加载 `torch_npu` 的 `transfer_to_npu`，把 `torch.cuda.*`、`device_map` 等透明映射到 NPU；未安装 `torch_npu` 时整段空操作，CUDA/CPU 路径不受影响。13 个入口脚本都已在顶部导入该 shim，`rq/` 下的脚本还把仓库根目录加入 `sys.path`——它们以自身目录为工作目录运行，否则找不到根目录下的 shim。此节校验改动落位。
 
 ```shell #test id="patch"
 cd MiniOneRec
 test -f npu_support.py && echo "shim present"
 test -f requirements-npu.txt && echo "requirements present"
-grep -c "^import npu_support$" sft.py evaluate.py
+test "$(grep -l '^import npu_support$' sft.py evaluate.py sft_gpr.py ts_rec_sft.py \
+    rl.py rl_gpr.py sasrec.py rq/rqvae.py rq/rqkmeans_plus.py rq/generate_indices.py \
+    rq/generate_indices_plus.py rq/text2emb/amazon_text2emb.py \
+    rq/text2emb/amazon_text2emb_gpr.py | wc -l)" -eq 13 \
+    && echo "entry scripts shimmed: 13/13"
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 python -c "import npu_support; print('shim import ok')"
 ```
 
-输出结果如下（`grep -c` 对多文件逐行输出 `文件名:匹配行数`）：
-
 ```shell #test-result id="patch"
 shim present
 requirements present
-sft.py:1
-evaluate.py:1
+entry scripts shimmed: 13/13
 shim import ok
 ```
 

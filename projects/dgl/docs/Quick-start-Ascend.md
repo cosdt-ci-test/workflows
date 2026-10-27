@@ -1,4 +1,4 @@
-# DGL (Ascend NPU)
+# DGL (Huawei Ascend NPU)
 
 DGL 提供图数据结构、消息传递和图神经网络模块。DGL-Ascend 为这些接口增加昇腾 NPU 后端，让图结构和模型参数在 NPU 上参与计算。本文完成源码安装，并用 LightGCN 训练一个图推荐模型。
 
@@ -40,15 +40,10 @@ python -c "import torch, torch_npu; print('torch version:', torch.__version__); 
 
 输出结果如下：
 
-```shell #test-result id="install-ascend-deps" fuzzy='...' fuzzy='xxx'
+```shell #test-result id="install-ascend-deps" fuzzy='...'
 ...
-torch version: 2.9.0xxx
+torch version: 2.9.0+cpu
 torch_npu version: 2.9.0.post2
-```
-
-```{admonition} Note
-:class: note
-`xxx` 表示实际安装的 PyTorch 版本后缀，如 `+cpu`，也可能为空；`...` 表示省略的安装日志。
 ```
 
 ## 安装 DGL
@@ -71,10 +66,10 @@ git -C dgl-ascend submodule update --init --recursive
 bash dgl-ascend/script/build_dgl_ascend.sh
 ```
 
-**安装 Python 绑定。** 使用兼容上游代码的 Cython 版本，将编译好的 DGL 原生库接入 Python 的 `dgl` 接口，并构建扩展：
+**安装 Python 绑定。** 安装兼容上游代码的 Cython 版本和 Python 运行依赖，再将编译好的 DGL 原生库接入 Python 的 `dgl` 接口并构建扩展：
 
 ```shell #test-setup
-pip install "Cython==3.0.12"
+pip install "Cython==3.0.12" packaging pandas "pydantic>=2.0" tqdm
 ```
 
 ```shell #test-setup
@@ -139,7 +134,7 @@ Average BPR Loss: xxx
 
 ```{admonition} Note
 :class: note
-`xxx` 表示本轮训练的平均 BPR 损失，以实际运行结果为准；`...` 表示省略的训练日志。
+`xxx` 表示本轮训练的平均 BPR 损失，以实际运行结果为准。
 ```
 
 ## 外部链接

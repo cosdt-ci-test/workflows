@@ -6,7 +6,7 @@
 
 上游 GitHub fork 没有 release/tag，引擎通过 `/commits/HEAD` 解析完整 SHA。测试夹具在文档 clone 后、子模块更新前检出该 SHA，并核对已安装原生库与本次编译产物的 SHA256，保证 artifact 的 `target_ref` 与实际构建源码一致。摘要采用分块读取计算，兼容 Python 3.10。验证不在源码包目录中运行。
 
-文档先安装 `Cython==3.0.12`，兼容上游 Cython 代码中的 Python 2 `long` 名称；新版编译器会报 `undeclared name not builtin: long`。随后进入 `dgl-ascend/python`，按上游安装文档依次执行 `python setup.py install` 和 `python setup.py build_ext --inplace`，最后用 `cd ../..` 返回原工作目录。每条命令独占一行，安装后的独立导入检查拦截安装失败。夹具检查已安装的 Cython 扩展和原生库，并执行 NPU 图消息传递及反向传播检查；训练输出必须包含完整一轮结束日志和有限的 BPR 损失。GraphSAGE、HERec 和 GitCode 发行包不在本次范围。
+文档先安装 `Cython==3.0.12`，兼容上游 Cython 代码中的 Python 2 `long` 名称；新版编译器会报 `undeclared name not builtin: long`。同一命令补齐 `packaging`、`pandas`、`pydantic>=2.0` 和 `tqdm`：这些均为上游声明的运行依赖，当前基础镜像未预装，不能仅靠 `setup.py install` 的成功返回判断依赖已满足。随后进入 `dgl-ascend/python`，按上游安装文档依次执行 `python setup.py install` 和 `python setup.py build_ext --inplace`，最后用 `cd ../..` 返回原工作目录。每条命令独占一行，安装后的独立导入检查拦截安装失败。夹具检查已安装的 Cython 扩展和原生库，并执行 NPU 图消息传递及反向传播检查；训练输出必须包含完整一轮结束日志和有限的 BPR 损失。GraphSAGE、HERec 和 GitCode 发行包不在本次范围。
 
 编译直接使用上游脚本，不额外添加 `torch.libs` 搜索路径；训练使用默认 NPU 执行模式，不注入强制同步配置。夹具在训练前使用与训练命令相同的环境检查完整 Gowalla 图：从原始边独立计算 CPU 参考度数，交错执行 PyTorch 运算和 DGL 查询，重复三次逐项核对 NPU 入度、出度。保留 `GraphConv` 的零入度检查，不使用 `allow_zero_in_degree=True` 绕过错误。若新环境运行失败，再根据具体日志补充所需适配。
 

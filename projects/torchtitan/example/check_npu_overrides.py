@@ -25,7 +25,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from npu_compat import BlockCausalSDPA, RealGatherComplexRoPE  # noqa: E402
 
-from torchtitan.models.common.rope import ComplexRoPE  # noqa: E402
+from torchtitan.models.common.rope import (  # noqa: E402
+    ComplexRoPE,
+    CosSinRoPE,
+)
 
 TOL = 1e-5
 
@@ -87,16 +90,47 @@ def check_mask() -> float:
     return diff
 
 
+def check_rope_selection() -> str:
+    """The override must only touch the ComplexRoPE-based models.
+
+    qwen3 / qwen3_5 / gpt_oss use upstream's ``CosSinRoPE`` (a real cache, no
+    DT_COMPLEX64 problem, rotate-half dim pairing); llama3 / deepseek_v3 /
+    kimi / muse_glimmer use ``ComplexRoPE`` (complex64 cache, adjacent-dim
+    pairing).  Swapping the CosSinRoPE ones would silently change the pairing
+    convention, so they must be left alone.
+    """
+    from torchtitan.config.override import OverrideConfig, apply_overrides
+    from torchtitan.models.llama3 import model_registry as llama3_models
+    from torchtitan.models.qwen3 import model_registry as qwen3_models
+
+    import npu_compat  # noqa: F401  (registers the override)
+
+    llama = llama3_models('debugmodel')
+    qwen = qwen3_models('debugmodel')
+    for spec in (llama, qwen):
+        apply_overrides(
+            OverrideConfig(imports=['npu_compat.npu_attention']), spec.model
+        )
+
+    llama_rope = llama.model.layers[0].attention.rope
+    qwen_rope = qwen.model.layers[0].attention.rope
+    assert isinstance(llama_rope, RealGatherComplexRoPE.Config), type(llama_rope)
+    assert type(qwen_rope) is CosSinRoPE.Config, type(qwen_rope)
+    return f'llama3={type(llama_rope).__name__}, qwen3={type(qwen_rope).__name__}'
+
+
 def main() -> int:
     rope_diff = check_rope()
     mask_diff = check_mask()
+    selection = check_rope_selection()
     print(
-        f"npu override equivalence: rope OK, mask OK",
+        'npu override equivalence: rope OK, mask OK, rope selection OK',
         file=sys.stdout,
     )
     print(
-        f"rope max_abs_diff={rope_diff:.3e} (tol {TOL:.0e}), "
-        f"mask max_abs_diff={mask_diff:.3e} (tol {TOL:.0e})",
+        f'rope max_abs_diff={rope_diff:.3e} (tol {TOL:.0e}), '
+        f'mask max_abs_diff={mask_diff:.3e} (tol {TOL:.0e}), '
+        f'rope selection: {selection}',
         file=sys.stderr,
     )
     return 0

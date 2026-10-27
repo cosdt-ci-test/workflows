@@ -298,7 +298,7 @@ python "$HOME/tt-npu-overrides/check_npu_overrides.py"
 输出结果如下：
 
 ```shell #test-result id="override-equivalence"
-npu override equivalence: rope OK, mask OK
+npu override equivalence: rope OK, mask OK, rope selection OK
 ```
 
 ### 单卡训练

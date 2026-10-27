@@ -163,7 +163,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         # Validate installation provenance outside the source package directory,
         # then exercise graph message passing and its backward path on the NPU.
         code = """
-from hashlib import file_digest
+from hashlib import sha256
 from pathlib import Path
 import torch
 import torch_npu
@@ -175,9 +175,15 @@ assert not Path(dgl.__file__).resolve().is_relative_to(source), 'Source tree sha
 assert not Path(dgl._ffi._cy3.core.__file__).resolve().is_relative_to(source), 'Source tree shadows installed Cython extension'
 installed_lib = Path(dgl._ffi.base._LIB._name).resolve()
 assert not installed_lib.is_relative_to(source.parent), 'DGL loads the source-tree library'
-with (source.parent / 'build/libdgl.so').open('rb') as built, installed_lib.open('rb') as installed:
-    assert file_digest(built, 'sha256').digest() == file_digest(installed, 'sha256').digest(), \
-        'Installed DGL library differs from this checkout build'
+def digest_file(path):
+    digest = sha256()
+    with path.open('rb') as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+            digest.update(chunk)
+    return digest.digest()
+
+assert digest_file(source.parent / 'build/libdgl.so') == digest_file(installed_lib), \
+    'Installed DGL library differs from this checkout build'
 graph = dgl.graph(([0, 1, 2], [1, 2, 0])).to('npu')
 x = torch.ones(3, 2, device='npu', requires_grad=True)
 graph.ndata['x'] = x

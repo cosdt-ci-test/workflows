@@ -14,11 +14,10 @@ Atlas 900 A2 训练系列产品（Ascend 910B4），并按需完成物理机或�
 
 - 可用的 Python 环境
 - 可用的 CANN（参考[快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html)）
-- 用于源码编译的 Git、CMake 3.18 及以上版本、GCC/G++、Make 和 Python 开发头文件
 
-本文档示例使用 Python 3.12、CANN 9.1.0。
+本文档示例使用 Python 3.10、CANN 9.1.0。
 
-本文档配套镜像：`swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12`
+本文档配套镜像：`swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10`
 
 ## 加载 CANN 环境
 
@@ -35,6 +34,7 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 ```shell #test id="install-ascend-deps"
 pip install torch==2.9.0 --index-url https://download.pytorch.org/whl/cpu
 pip install torch_npu==2.9.0.post2 --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi
+
 python -c "import torch, torch_npu; print('torch version:', torch.__version__); print('torch_npu version:', torch_npu.__version__)"
 ```
 
@@ -46,9 +46,14 @@ torch version: 2.9.0xxx
 torch_npu version: 2.9.0.post2
 ```
 
+```{admonition} Note
+:class: note
+`xxx` 表示实际安装的 PyTorch 版本后缀，如 `+cpu`，也可能为空；`...` 表示省略的安装日志。
+```
+
 ## 安装 DGL
 
-**获取源码。** DGL-Ascend 包含昇腾图计算算子，需要编译源码后安装：
+**获取源码。** DGL-Ascend 使深度图学习库（[DGL](https://github.com/dmlc/dgl)）能够在昇腾 NPU 上运行，由 BUPT-GAMMA 团队开发。
 
 ```shell #test-setup
 git clone https://github.com/BUPT-GAMMA/dgl-ascend.git
@@ -74,9 +79,9 @@ pip install "Cython==3.0.12"
 ```
 
 ```shell #test-setup
-cd dgl-ascend/python &&
-python setup.py install &&
-python setup.py build_ext --inplace &&
+cd dgl-ascend/python
+python setup.py install
+python setup.py build_ext --inplace
 cd ../..
 ```
 
@@ -90,6 +95,11 @@ python -c "import torch, torch_npu, dgl; print('dgl version:', dgl.__version__)"
 
 ```shell #test-result id="install-dgl" fuzzy='xxx'
 dgl version: xxx
+```
+
+```{admonition} Note
+:class: note
+`xxx` 表示实际安装的 DGL 版本号。
 ```
 
 ## 用法示例
@@ -126,6 +136,11 @@ ASCEND_LAUNCH_BLOCKING=1 python main.py --dataset gowalla --batch 2048 --recdim 
 device: npu
 ...
 Average BPR Loss: xxx
+```
+
+```{admonition} Note
+:class: note
+`xxx` 表示本轮训练的平均 BPR 损失，以实际运行结果为准；`...` 表示省略的训练日志。
 ```
 
 ## 外部链接

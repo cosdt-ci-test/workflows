@@ -203,8 +203,15 @@ master 均已修复但未回合 2.12.0，修复手段全部是 sed 镜像上游 
 
 ### 7.5 覆盖面的扩展（2026-10-27）
 
-CI 首跑（run 40466975087，torchtitan-examples，main 分支，39 个 job）：13 条单卡 + 2 条双卡全绿；
+CI 首跑（run 40466975087，torchtitan-examples，main 分支）：13 条单卡 + 2 条双卡全绿；
 2 条八卡里 qwen3_14b 绿、deepseek_v3_16b 红（compile 撞 B1，见下）；4 卡的 sft_qwen3_8b_math 红（缺 16 GB 预训练权重）。
+
+第二轮（run 40478193658，hdc 分支）：35/36 绿。修掉的两处都验证了：
+`--compile.no-enable` 让 deepseek_v3_16b（16B + expert parallelism 8）跑通（`Applied 27 override(s)`，
+loss 11.98 → 11.52）；唯一还红的是 qwen3_14b —— **不是 NPU 算子问题，是显存装不下**：
+step 1 就到 28.09 GiB/卡（95.27%），下一个 1.45 GiB 的分配直接 NPU OOM（8 卡全红）。
+算得过来：14B × (2 权重 + 2 梯度 + 8 AdamW fp32) = 168 GB / 8 卡 = 21 GB/卡，再加激活就满 →
+退回 unsupported（8 卡这一档只有 MoE 能用）。
 
 - **deepseek_v3_16b 撞 B1**：该 recipe 开了 `compile=CompileConfig(enable=True, components=["loss"])`，
   编出来的 loss 走 inductor → torch_npu 2.14.0 的 `make_reduction` 缺 `strict_sum` 形参 →

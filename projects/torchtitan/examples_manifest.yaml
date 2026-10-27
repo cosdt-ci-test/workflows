@@ -397,30 +397,7 @@ supported:
       - --dump-folder ${CI_OUTPUT_DIR}/deepseek_v3_16b
     timeout_minutes: 120
 
-  # 9) Eight cards: qwen3_14b (14B x 12 bytes = 168 GB).  Same override and
-  #    dataset override as the 0.6B entry; the tokenizer asset is fetched by
-  #    setup_example.sh.
-  - path: example/run_train_8card.sh
-    source: project
-    profile: torchtitan
-    runner: linux-aarch64-a2-8
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-910b-ubuntu22.04-py3.12
-    npu_devices: '0,1,2,3,4,5,6,7'
-    overlay_args:
-      - --module qwen3
-      - --config qwen3_14b
-      - --override.imports npu_compat.npu_attention
-      - --comm.mode default
-      - --dataloader.dataset c4_test
-      - --training.steps 2
-      - --training.local-batch-size 1
-      - --training.seq-len 256
-      - --metrics.log-freq 1
-      - --metrics.disable-color-printing
-      - --dump-folder ${CI_OUTPUT_DIR}/qwen3_14b
-    timeout_minutes: 120
-
-  # 10) muse_glimmer, single card (text path; the multimodal variant needs
+  # 9) muse_glimmer, single card (text path; the multimodal variant needs
   #    an NPU op the vision path does not have yet).
   - path: example/run_train_1card.sh
     source: project
@@ -550,6 +527,13 @@ unsupported_configs:
   # 另注：recipe 里 load_dataset(..., name="main") 的 "main" 配置名**无法从 CLI 改**
   # （tyro 拒绝 --dataloader.load-dataset-kwargs.name 的三种写法），本地目录只暴露
   # "default" → 想用本地替身数据必须改上游配置。
+
+  # qwen3_14b：dense 14B 的权重 + AdamW 状态放不进 8 张 32GB 卡 —— CI 实测
+  # （run 40478193658）：step 1 就到 28.09 GiB/卡（95.27%），下一个 1.45 GiB 的
+  # 分配直接 NPU OOM（8 卡全红）。算得过来：14B x (2 权重 + 2 梯度 + 8 AdamW fp32)
+  # = 168 GB / 8 卡 = 21 GB/卡，再加激活就满。8 卡这一档只有 MoE 能用
+  # （deepseek_v3_16b 的 ep=8 绿了）。要跑 14B dense 需要更多卡或 8-bit 优化器。
+  - torchtitan/models/qwen3/config_registry.py:qwen3_14b
 
   # --- qwen3 系：RoPE 无墙（CosSinRoPE 纯 cos/sin，无 complex），debugmodel 系已跑通
   # （见 supported 段：debugmodel / non_fused_qkv / moe_param_groups / moe_debug，

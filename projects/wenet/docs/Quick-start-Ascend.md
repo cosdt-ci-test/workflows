@@ -84,6 +84,8 @@ git checkout main
 
 安装 WeNet 及其 NPU 依赖（与官方安装指南一致：`[torch-npu]` extra 已将 torch / torch-npu / torchaudio 钉在推荐版本 2.2.0，并附带 `numpy<2`；`requirements.txt` 只约束 `deepspeed>=0.14.0`，为避免 pip 解析到与 torch 2.2.0 不兼容的 0.16+，安装后显式回钉 0.14.4）：
 
+> **注意**：WeNet 的安装依赖 `openai-whisper` 只发布源码包，其 `setup.py` 仍 `import pkg_resources`，而 setuptools 82 起已移除该模块，直接安装会构建失败并中断整条 `pip` 命令。下面的命令先固定一个较旧的 setuptools、并对需要构建源码包的三条 `pip` 关闭构建隔离。
+
 ```shell #test-setup id="install"
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 # 块内任一步失败立即中断：pip 的返回码只反映最后一条命令，否则前面的失败会被吞掉
@@ -101,15 +103,16 @@ pip install "deepspeed==0.14.4"
 # train_utils.py 无条件 import tensorboardX；requirements.txt 是开发全量清单
 # （含 flake8/clang-format 等与训练无关项），故训练核心依赖在此显式补齐
 pip install tensorboardX
-# 安装结果校验：确认 editable 安装已注册、torchaudio 没被 requirements 升级走样
-python -c "import deepspeed, tensorboardX, torchaudio, importlib.metadata as m; print('wenet', m.version('wenet'), '| torchaudio', torchaudio.__version__, '| deepspeed', deepspeed.__version__)"
+# 安装结果校验：确认 editable 安装已注册、训练必需依赖可导入
+python -c "import deepspeed, tensorboardX, importlib.metadata as m; print('wenet', m.version('wenet'), '| deepspeed', deepspeed.__version__)"
 ```
 
-安装 sox：
+安装 `sox`（`sox` 命令与 `libsox-dev` 头文件）以及 `libgomp1`（`torchaudio` 运行期依赖，`libtorchaudio.so`
+需要系统提供 `libgomp.so.1`；torch 自带的 OpenMP 运行时是带哈希后缀的私有名字，无法替代）：
 
 ```shell #test-setup
 pip install sox
-apt-get update && apt-get install -y sox libsox-dev || true
+apt-get update && apt-get install -y sox libsox-dev libgomp1 || true
 ```
 
 ---
@@ -118,7 +121,7 @@ apt-get update && apt-get install -y sox libsox-dev || true
 
 ```shell #test id="check-npu"
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
-python -c "import torch, torch_npu; print('torch:', torch.__version__); print('torch_npu:', torch_npu.__version__); print('npu available:', torch.npu.is_available()); print('npu count:', torch.npu.device_count())"
+python -c "import torch, torch_npu, torchaudio; print('torch:', torch.__version__); print('torch_npu:', torch_npu.__version__); print('torchaudio:', torchaudio.__version__); print('npu available:', torch.npu.is_available()); print('npu count:', torch.npu.device_count())"
 ```
 
 输出结果如下：
@@ -126,6 +129,7 @@ python -c "import torch, torch_npu; print('torch:', torch.__version__); print('t
 ```shell #test-result id="check-npu" fuzzy='xxx'
 torch: xxx
 torch_npu: xxx
+torchaudio: xxx
 npu available: True
 npu count: 1
 ```

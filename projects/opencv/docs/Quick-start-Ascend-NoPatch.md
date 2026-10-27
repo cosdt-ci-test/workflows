@@ -213,6 +213,13 @@ OpenCV 的 `OpenCVFindCANN.cmake` 在 `${CANN_INSTALL_DIR}/{acllib,lib64,compile
 
 注意 **不要**指向 `<CANN>/aarch64-linux/devlib/linux/aarch64/` —— 那是裁剪过的设备侧运行时（`libgraph.so` 只有 198 KB，少了 `ge::AscendString` 的比较运算符，见上一节）。
 
+> **`libgraph_base.so` 的文件名**：OpenCV 的 `cmake/OpenCVFindCANN.cmake` 里是
+> `find_library(found_libgraph_base NAMES graph_base PATHS "${CANN_INSTALL_DIR}/compiler/lib64" NO_DEFAULT_PATH)`
+> —— 找的是 `graph_base`，而 CANN 9.2.0 的 toolkit 里这个库叫 **`libgraph_base.so`**（`lib` 和 `graph_base` 之间没有多余下划线）。
+> 所以 `compiler/lib64` 必须指向**完整** lib64（里面就有 `libgraph_base.so`）；实测手工只挑几个库软链过去的话，
+> `find_library` 直接 `NOTFOUND`，链接期报 `No rule to make target '.../compiler/lib64/libgraph_base.so'`
+> （make 把 .so 当成链接的前置文件）。本文的软链方案指向完整目录，所以这条自动满足。
+
 先确认本机的 `<CANN>/lib64` 是完整版：
 
 ```shell #test id="np-cann-lib-layout"
@@ -333,6 +340,8 @@ xxx
 > 实测（4.14.0 + CANN 9.1.0 + gcc 11.4 + Release -O3）：`libopencv_dnn.so.4.14.0` 的 `.text` = **55,920,432 B（≈53.3 MiB）**，`Total` = 77,111,426 B，库文件 98,067,792 B。这个数比 aarch64 的 ±128 MiB 分支窗口小一个量级，所以**不需要**窄 op 头补丁。同一份源码在 Debug(-O0) 下 `.text` 会涨到 516MB，直接撑爆窗口。
 >
 > 对照：4.11.0 同参数是 `.text` = 54,529,328 B（52.0 MiB）—— 4.14.0 多出的 ~1.3 MiB 就是第 28 个 CANN TU（`reduce_layer.cpp`）展开 `all_ops.h` 的代价。
+>
+> 换 CANN 9.2.0 复测（npu-4 / 910B4 / gcc 11.4 / Release -O3，同一份 4.14.0 源码、零补丁）：`.text` = **56,123,568 B（≈53.5 MiB）**、`Total` = 77,331,307 B、库文件 98,304,552 B —— 与 9.1.0 相差 ~0.2 MiB（CANN 头文件版本差异），离 128 MiB 窗口的余量不变。
 
 ```shell #test id="np-opencv-dnn-text-size"
 size -A /usr/local/opencv-cann-414/lib/libopencv_dnn.so.4.14.0 | grep -E '^\.text|^Total'
@@ -505,10 +514,12 @@ print('CANN/NPU backend available: True')
 输出结果如下：
 ```shell #test-result id="np-opencv-py-version" fuzzy='xxx'
 cv2 version: xxx
-OPENCV backend targets: xxx
-CANN backend targets: xxx
+OPENCV backend targets: [0]
+CANN backend targets: [9]
 CANN/NPU backend available: True
 ```
+
+`getAvailableTargets` 返回的是**后端注册表里实际登记的 target**：`DNN_BACKEND_OPENCV` → `[0]`（`DNN_TARGET_CPU`）、`DNN_BACKEND_CANN` → `[9]`（`DNN_TARGET_NPU`）。两个数值取自 `opencv2/dnn/dnn.hpp` 的 `enum Target`（`DNN_TARGET_CPU = 0` 起数，`DNN_TARGET_NPU` 是第 10 个）。**空列表 = 这个后端根本没编进来** —— `modules/dnn/src/registry.cpp` 里 `(DNN_BACKEND_CANN, DNN_TARGET_NPU)` 的登记被 `#ifdef HAVE_CANN` 包着，不带 CANN 的构建 `getAvailableTargets(CANN)` 返回 `[]`，脚本随即退出 1。
 
 跑 MobileNetV2（onnx/models 的 `mobilenetv2-12`，PyTorch 导出，13,964,571 bytes）：
 
@@ -717,13 +728,15 @@ npu/cpu time ratio: xxx
 ...
 ```
 
-预期：`output shape (1, 1000)`、`float32`；baboon.jpg 的 top-1 是 **ImageNet-1k 第 372 类（patas / hussar monkey，赤猴）**，score ≈ 0.91（4.14.0 + CANN 9.1.0 实测 **0.9143**；同一份构建走默认 CPU 引擎是 **0.9148**，两者一致；baboon 本尊 373 排第二 ≈ 0.03）。前三行 `cann marker:` 是「这次真的上了 NPU」的硬证据（见下一节）。
+预期：`output shape (1, 1000)`、`float32`；baboon.jpg 的 top-1 是 **ImageNet-1k 第 372 类（patas / hussar monkey，赤猴）**，score ≈ 0.91（4.14.0 + CANN 9.1.0 实测 **0.9143**；换 CANN 9.2.0 在 910B4 上复测是 **0.91427**，与前者一致到小数点后 4 位；同一份构建走默认 CPU 引擎是 **0.9148**（9.2.0 复测 0.91480），NPU 与 CPU 的分差 ≈ 0.0005，远小于脚本的 0.01 容差；baboon 本尊 373 排第二 ≈ 0.03）。前三行 `cann marker:` 是「这次真的上了 NPU」的硬证据（见下一节）。
 
 脚本同时建了**两个 net 实例**喂同一份输入：一个挂 CANN 后端 + NPU target，一个不挂后端（4.x 的默认 = classic 引擎 + CPU target）。然后硬断言两者 **top-1 相同、top-1 分数差 ≤ 0.01、输出 shape/dtype 相同** —— 加速器算错了就直接退出 1，不会把「跑完了」当成「跑对了」。`npu forward ms` / `cpu forward ms` 量的是**热启** forward（不含 GE 图编译），`npu/cpu time ratio` = CPU 耗时 ÷ NPU 耗时；**这两个数只作参考，脚本不对它们设阈值**（CI runner 的 CPU 型号和核数不固定，写死阈值必然漂）。标注结果如下：
 
 ![NPU 推理标注结果](images/dnn-result.png)
 
 > 首次 forward 含 GE 图编译（`converting ge::Graph to OM buffer`），约 0.5~1 分钟出 `Compile success, model size = ...`；进程内二次 forward 约 1ms —— 脚本的 `npu forward ms` 量的就是这一次（第二次 forward 命中 `net_cann.cpp:107-108` 的 `if (netWasConverted && netWasAllocated) return;`，直接复用已编译的 OM，不再重跑后端初始化）。
+>
+> 实测（4.14.0 + CANN 9.2.0 / 910B4 / npu-4）：GE 图编译 **36.2 s**，产出的 OM 模型 **9,763,442 B**；二次 forward **1 ms**，同一份输入的 CPU 对照 **36 ms**（比值 ≈ 48×）。这两个数**只作参考**，脚本不对它们设阈值（CI runner 的 CPU 型号和核数不固定）。
 
 ### 怎么证明这次真的跑在 NPU 上
 

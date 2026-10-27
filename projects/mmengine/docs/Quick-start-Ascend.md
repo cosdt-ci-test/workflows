@@ -176,12 +176,18 @@ test -z "$(git -C mmengine-src status --porcelain)" && echo "mmengine source tre
 mmengine source tree pristine
 ```
 
+<!-- 如果前面已经从源码装过，先把 editable 安装卸掉 -->
+<!--
+```shell #test-setup
+uv pip uninstall mmengine
+```
+-->
+
 ### 使用 pip 进行安装
 
-从 PyPI 安装（如果前面已经从源码装过，先卸载掉 editable 安装），并确认装到位：
+从 PyPI 安装，并确认装到位：
 
 ```shell #test id="mmengine-version"
-uv pip uninstall mmengine
 uv pip install mmengine
 python -c "import mmengine; print('mmengine', mmengine.__version__)"
 ```
@@ -194,6 +200,7 @@ mmengine ...
 
 ```{admonition} Note
 :class: note
+- 上面那个「卸载 editable 安装」的步骤藏在 HTML 注释里，只对**按上一节从源码装过**的人才需要；普通用户直接 `uv pip install mmengine` 就行；
 - `uv pip uninstall` 对未安装的包返回 0 且只打印一行 warning，所以这段命令是幂等的，可以反复执行；
 - `uv` 把安装过程的所有输出都写在 **stderr** 上，stdout 只有最后 `print` 出来的那一行，所以合在一个代码块里也不影响结果比对；
 - `...` 表示 PyPI 上的最新正式版本号（当前是 0.10.7），上游发新版时这里不需要改。

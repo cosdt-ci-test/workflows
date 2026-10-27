@@ -272,7 +272,33 @@ supported:
       - --dump-folder ${CI_OUTPUT_DIR}/qwen3_moe_debug
     timeout_minutes: 60
 
-  # 5) muse_glimmer, single card (text path; the multimodal variant needs
+  # 5) A size tier, not just a debugmodel: qwen3_0_6b (0.6B params) on one
+  #    card.  Two things the debugmodel recipes do not need: the real
+  #    tokenizer (the recipe's hf_assets_path points at ./assets/hf/Qwen3-0.6B,
+  #    which setup_example.sh fetches from modelscope) and a dataset override
+  #    (the recipe asks for HF's allenai/c4, unreachable from the cluster;
+  #    c4_test is the local copy the debugmodel recipes use).
+  - path: example/run_train_1card.sh
+    source: project
+    profile: torchtitan
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-910b-ubuntu22.04-py3.12
+    npu_devices: '0'
+    overlay_args:
+      - --module qwen3
+      - --config qwen3_0_6b
+      - --override.imports npu_compat.npu_attention
+      - --comm.mode default
+      - --dataloader.dataset c4_test
+      - --training.steps 2
+      - --training.local-batch-size 1
+      - --training.seq-len 256
+      - --metrics.log-freq 1
+      - --metrics.disable-color-printing
+      - --dump-folder ${CI_OUTPUT_DIR}/qwen3_0_6b
+    timeout_minutes: 60
+
+  # 6) muse_glimmer, single card (text path; the multimodal variant needs
   #    an NPU op the vision path does not have yet).
   - path: example/run_train_1card.sh
     source: project

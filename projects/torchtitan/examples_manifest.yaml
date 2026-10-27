@@ -79,6 +79,7 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-910b-ubuntu22.04-py3.12
     npu_devices: '0'
+    name: llama3/llama3_debugmodel
     overlay_args:
       - --module llama3
       - --config llama3_debugmodel
@@ -102,6 +103,7 @@ supported:
     runner: linux-aarch64-a2-2
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-910b-ubuntu22.04-py3.12
     npu_devices: '0,1'
+    name: llama3/llama3_debugmodel (2 cards)
     overlay_args:
       - --module llama3
       - --config llama3_debugmodel
@@ -128,6 +130,7 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-910b-ubuntu22.04-py3.12
     npu_devices: '0'
+    name: llama3/llama3_debugmodel_varlen_attn
     overlay_args:
       - --module llama3
       - --config llama3_debugmodel_varlen_attn
@@ -146,6 +149,7 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-910b-ubuntu22.04-py3.12
     npu_devices: '0'
+    name: llama3/llama3_debugmodel_ce_loss
     overlay_args:
       - --module llama3
       - --config llama3_debugmodel_ce_loss
@@ -164,6 +168,7 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-910b-ubuntu22.04-py3.12
     npu_devices: '0'
+    name: llama3/llama3_debugmodel_dist_gemm
     overlay_args:
       - --module llama3
       - --config llama3_debugmodel_dist_gemm
@@ -182,6 +187,7 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-910b-ubuntu22.04-py3.12
     npu_devices: '0'
+    name: llama3/sft_debugmodel
     overlay_args:
       - --module llama3
       - --config sft_debugmodel
@@ -205,6 +211,7 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-910b-ubuntu22.04-py3.12
     npu_devices: '0'
+    name: qwen3/qwen3_debugmodel
     overlay_args:
       - --module qwen3
       - --config qwen3_debugmodel
@@ -223,6 +230,7 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-910b-ubuntu22.04-py3.12
     npu_devices: '0'
+    name: qwen3/qwen3_debugmodel_non_fused_qkv
     overlay_args:
       - --module qwen3
       - --config qwen3_debugmodel_non_fused_qkv
@@ -241,6 +249,7 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-910b-ubuntu22.04-py3.12
     npu_devices: '0'
+    name: qwen3/qwen3_debugmodel_moe_param_groups
     overlay_args:
       - --module qwen3
       - --config qwen3_debugmodel_moe_param_groups
@@ -259,6 +268,7 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-910b-ubuntu22.04-py3.12
     npu_devices: '0'
+    name: qwen3/qwen3_moe_debug
     overlay_args:
       - --module qwen3
       - --config qwen3_moe_debug
@@ -284,6 +294,7 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-910b-ubuntu22.04-py3.12
     npu_devices: '0'
+    name: qwen3/qwen3_0_6b
     overlay_args:
       - --module qwen3
       - --config qwen3_0_6b
@@ -310,6 +321,7 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-910b-ubuntu22.04-py3.12
     npu_devices: '0'
+    name: deepseek_v3/deepseek_v3_debugmodel
     overlay_args:
       - --module deepseek_v3
       - --config deepseek_v3_debugmodel
@@ -328,6 +340,7 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-910b-ubuntu22.04-py3.12
     npu_devices: '0'
+    name: deepseek_v3/deepseek_v3_debugmodel_mtp
     overlay_args:
       - --module deepseek_v3
       - --config deepseek_v3_debugmodel_mtp
@@ -352,6 +365,7 @@ supported:
     runner: linux-aarch64-a2-2
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-910b-ubuntu22.04-py3.12
     npu_devices: '0,1'
+    name: qwen3/qwen3_1_7b (2 cards)
     overlay_args:
       - --module qwen3
       - --config qwen3_1_7b
@@ -375,6 +389,7 @@ supported:
     runner: linux-aarch64-a2-8
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-910b-ubuntu22.04-py3.12
     npu_devices: '0,1,2,3,4,5,6,7'
+    name: deepseek_v3/deepseek_v3_16b (8 cards)
     overlay_args:
       - --module deepseek_v3
       - --config deepseek_v3_16b
@@ -405,6 +420,7 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-910b-ubuntu22.04-py3.12
     npu_devices: '0'
+    name: muse_glimmer/muse_glimmer_debugmodel
     overlay_args:
       - --module muse_glimmer
       - --config muse_glimmer_debugmodel

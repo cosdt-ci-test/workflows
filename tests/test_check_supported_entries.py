@@ -87,6 +87,30 @@ class CheckSupportedEntriesTests(unittest.TestCase):
         self.assertIn('overlay_args must be a list of non-empty strings',
                       stderr)
 
+    def test_explicit_name_overrides_the_path_derived_one(self) -> None:
+        """Entries sharing one launcher need distinct job labels.
+
+        torchtitan's single-card entries all point at the same
+        example/run_train_1card.sh, so the path-derived label would
+        collapse them into one job name; the manifest names them by the
+        upstream (module, config) identity instead.
+        """
+        manifest = VALID_MANIFEST.replace(
+            '    timeout_minutes: 90\n',
+            "    timeout_minutes: 90\n    name: qwen3/qwen3_debugmodel\n")
+        code, outputs, _ = self._run(manifest)
+        self.assertEqual(code, 0)
+        matrix = outputs['supported_matrix']
+        self.assertEqual(matrix[0]['name'], 'qwen3/qwen3_debugmodel')
+
+    def test_empty_name_fails(self) -> None:
+        manifest = VALID_MANIFEST.replace(
+            '    timeout_minutes: 90\n',
+            "    timeout_minutes: 90\n    name: '  '\n")
+        code, _, stderr = self._run(manifest)
+        self.assertEqual(code, 1)
+        self.assertIn('name must be a non-empty string', stderr)
+
     def test_launcher_field_passes_through(self) -> None:
         manifest = VALID_MANIFEST.replace(
             '    timeout_minutes: 90\n',

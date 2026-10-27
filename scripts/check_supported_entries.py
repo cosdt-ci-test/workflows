@@ -94,13 +94,29 @@ def validate(
             entry['exec'] = exec_path.strip()
         if launcher is not None:
             entry['launcher'] = launcher.strip()
-        # Display name for the run-example job label: full relative path
-        # with the extension stripped (examples/sft/run_peft.sh ->
-        # examples/sft/run_peft; a bare foo.py -> foo). Uniform and
-        # unique - same-named scripts in different directories get
+        # Display name for the run-example job label. Default: the full
+        # relative path with the extension stripped (examples/sft/run_peft.sh
+        # -> examples/sft/run_peft; a bare foo.py -> foo). Uniform and
+        # unique per path - same-named scripts in different directories get
         # distinct labels (peft's five */train_dreambooth.py used to
         # collapse to a single "train_dreambooth").
-        entry['name'] = str(relative_path.with_suffix(''))
+        #
+        # A manifest entry may override it with `name:` when several
+        # entries share one launcher: torchtitan's single-card entries all
+        # point at example/run_train_1card.sh (module and config come from
+        # overlay_args), so path-derived labels would collapse into one job
+        # name and the CI UI could not tell the entries apart. The override
+        # is the example's identity -- for torchtitan the (module, config)
+        # pair upstream names its recipes by.
+        name = item.get('name')
+        if name is not None and (
+                not isinstance(name, str) or not name.strip()):
+            errors.append(f'{path}: name must be a non-empty string')
+            continue
+        entry['name'] = (
+            name.strip() if name is not None
+            else str(relative_path.with_suffix(''))
+        )
         entries.append(entry)
     return entries, errors
 

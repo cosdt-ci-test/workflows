@@ -65,10 +65,9 @@ git clone https://github.com/BUPT-GAMMA/dgl-ascend.git
 git -C dgl-ascend submodule update --init --recursive
 ```
 
-**编译昇腾后端。** 将 PyTorch 随包提供的依赖库加入搜索路径，再构建支持昇腾 NPU 的 DGL 原生库：
+**编译昇腾后端。** 构建支持昇腾 NPU 的 DGL 原生库：
 
 ```shell #test-setup
-export LD_LIBRARY_PATH="$(python -c 'import torch; from pathlib import Path; print(Path(torch.__file__).resolve().parent.parent / "torch.libs")'):${LD_LIBRARY_PATH}"
 bash dgl-ascend/script/build_dgl_ascend.sh
 ```
 
@@ -122,11 +121,11 @@ with ZipFile(archive) as dataset:
     dataset.extractall(example_dir)
 ```
 
-使用同步模式运行 NPU 算子，避免 PyTorch 与 DGL 异步执行时的数据竞争；该模式会降低训练速度。运行训练后查看设备和每轮的平均 BPR 损失，BPR 损失用于学习用户对已交互物品与未交互物品的相对偏好：
+运行训练，查看设备和每轮的平均 BPR 损失。BPR 损失用于学习用户对已交互物品与未交互物品的相对偏好：
 
 ```shell #test id="lightgcn-train"
 cd dgl-ascend/examples/pytorch/lightgcn
-ASCEND_LAUNCH_BLOCKING=1 python main.py --dataset gowalla --batch 2048 --recdim 64 --epochs 1 --device npu
+python main.py --dataset gowalla --batch 2048 --recdim 64 --epochs 1 --device npu
 ```
 
 输出结果如下：

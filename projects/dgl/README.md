@@ -8,9 +8,7 @@
 
 文档先安装 `Cython==3.0.12`，兼容上游 Cython 代码中的 Python 2 `long` 名称；新版编译器会报 `undeclared name not builtin: long`。随后进入 `dgl-ascend/python`，按上游安装文档依次执行 `python setup.py install` 和 `python setup.py build_ext --inplace`，最后用 `cd ../..` 返回原工作目录。每条命令独占一行，安装后的独立导入检查拦截安装失败。夹具检查已安装的 Cython 扩展和原生库，并执行 NPU 图消息传递及反向传播检查；训练输出必须包含完整一轮结束日志和有限的 BPR 损失。GraphSAGE、HERec 和 GitCode 发行包不在本次范围。
 
-aarch64 的 PyTorch CPU wheel 将 OpenBLAS 和 libgfortran 等依赖放在 `torch.libs`。编译步骤从已安装的 PyTorch 动态定位该目录并加入 `LD_LIBRARY_PATH`，避免链接 `runUnitTests` 时找不到 OpenBLAS 的间接依赖；不修改上游源码，也不关闭原生测试目标。
-
-训练命令使用 `ASCEND_LAUNCH_BLOCKING=1`，以同步模式规避 PyTorch 与 DGL NPU 流之间的数据竞争，速度会低于异步模式。上游 [PR #43](https://github.com/BUPT-GAMMA/dgl-ascend/pull/43) 记录了这类流顺序问题，但尚未合入当前引擎选中的提交。夹具在训练前以同样的同步模式检查完整 Gowalla 图：从原始边独立计算 CPU 参考度数，交错执行 PyTorch 运算和 DGL 查询，重复三次逐项核对 NPU 入度、出度。保留 `GraphConv` 的零入度检查，不使用 `allow_zero_in_degree=True` 绕过错误。
+编译直接使用上游脚本，不额外添加 `torch.libs` 搜索路径；训练使用默认 NPU 执行模式，不注入强制同步配置。夹具在训练前使用与训练命令相同的环境检查完整 Gowalla 图：从原始边独立计算 CPU 参考度数，交错执行 PyTorch 运算和 DGL 查询，重复三次逐项核对 NPU 入度、出度。保留 `GraphConv` 的零入度检查，不使用 `allow_zero_in_degree=True` 绕过错误。若新环境运行失败，再根据具体日志补充所需适配。
 
 ## 触发
 

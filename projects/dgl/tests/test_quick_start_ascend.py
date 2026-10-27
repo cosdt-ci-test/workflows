@@ -200,8 +200,8 @@ assert x.grad is not None and torch.isfinite(x.grad).all().item()
 
     def _verify_training_graph(self, env, cwd):
         # Check the complete training graph against an independent CPU edge count.
-        # Launch blocking orders torch_npu writes before DGL's native kernels;
-        # retain GraphConv's zero-degree guard rather than suppressing it.
+        # Use the same inherited environment as the training command, without
+        # forcing launch blocking; retain GraphConv's zero-degree guard.
         code = """
 from pathlib import Path
 import torch
@@ -235,10 +235,10 @@ print(f'Gowalla NPU degrees match CPU for all {n_nodes} nodes')
 """
         _checked_run(
             [sys.executable, '-c', code],
-            env=dict(env, ASCEND_LAUNCH_BLOCKING='1'), cwd=cwd,
+            env=env, cwd=cwd,
             timeout=self.DEFAULT_COMMAND_TIMEOUT,
         )
-        self.log('Full Gowalla graph degrees match CPU in synchronous NPU mode')
+        self.log('Full Gowalla graph degrees match CPU in the training environment')
 
     def run_command(self, cmd, env, cwd, timeout, language='shell'):
         rc, output, error = super().run_command(cmd, env, cwd, timeout, language)

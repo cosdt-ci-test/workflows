@@ -43,8 +43,8 @@ concurrency:
 on:
   # Run every 3 hours: '45 */3 * * *' fires at minute 45 of every
   # 3rd hour (00:45, 03:45, 06:45, ..., 21:45). Same cadence as peft.
-  schedule:
-    - cron: '45 */3 * * *'
+  # schedule:
+  #   - cron: '45 */3 * * *'
   workflow_dispatch:
 
 permissions:

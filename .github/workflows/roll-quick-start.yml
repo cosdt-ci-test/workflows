@@ -19,8 +19,8 @@ concurrency:
   cancel-in-progress: false
 
 on:
-  schedule:
-    - cron: '35 */6 * * *'
+  # schedule:
+  #   - cron: '35 */6 * * *'
   workflow_dispatch:
 
 permissions:

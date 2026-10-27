@@ -40,12 +40,12 @@ concurrency:
   cancel-in-progress: false
 
 on:
-  schedule:
-    # Daily: '30 4 * * *' fires at 04:30 UTC (12:30 北京时间). FunASR
-    # releases on its own schedule (not per-commit), so a once-a-day
-    # audit matches transformers (the other daily quick-start) and is
-    # enough for doc fixes to propagate within a day.
-    - cron: '30 4 * * *'
+  # schedule:
+  # Daily: '30 4 * * *' fires at 04:30 UTC (12:30 北京时间). FunASR
+  # releases on its own schedule (not per-commit), so a once-a-day
+  # audit matches transformers (the other daily quick-start) and is
+  # enough for doc fixes to propagate within a day.
+  #   - cron: '30 4 * * *'
   workflow_dispatch:
 
 permissions:

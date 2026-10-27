@@ -33,13 +33,13 @@ concurrency:
   cancel-in-progress: false
 
 on:
-  schedule:
-    # Every 6 hours, same cadence as the main opencv guard. The
-    # monitored doc pins OpenCV 4.14.0 (fixed_ref below), so the
-    # upstream-change trigger is not the interesting signal - the
-    # doc-hash trigger is: any edit to the doc re-runs the whole
-    # build + inference chain.
-    - cron: '0 */6 * * *'
+  # schedule:
+  # Every 6 hours, same cadence as the main opencv guard. The
+  # monitored doc pins OpenCV 4.14.0 (fixed_ref below), so the
+  # upstream-change trigger is not the interesting signal - the
+  # doc-hash trigger is: any edit to the doc re-runs the whole
+  # build + inference chain.
+  #   - cron: '0 */6 * * *'
   workflow_dispatch:
 
 permissions:

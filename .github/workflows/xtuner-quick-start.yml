@@ -46,13 +46,13 @@ concurrency:
   cancel-in-progress: false
 
 on:
-  schedule:
-    # Run every 6 hours: '30 */6 * * *' fires at minute 30 of every
-    # 6th hour (00:30, 06:30, 12:30, 18:30). Cadence is loose enough
-    # for an upstream that releases every few months (xtuner: v0.2.0
-    # on the legacy line, v1.0.1 still marked prerelease on the V1
-    # line), but tight enough that doc fixes propagate within a day.
-    - cron: '30 */6 * * *'
+  # schedule:
+  # Run every 6 hours: '30 */6 * * *' fires at minute 30 of every
+  # 6th hour (00:30, 06:30, 12:30, 18:30). Cadence is loose enough
+  # for an upstream that releases every few months (xtuner: v0.2.0
+  # on the legacy line, v1.0.1 still marked prerelease on the V1
+  # line), but tight enough that doc fixes propagate within a day.
+  #   - cron: '30 */6 * * *'
   workflow_dispatch:
 
 permissions:

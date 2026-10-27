@@ -35,14 +35,14 @@ concurrency:
   cancel-in-progress: false
 
 on:
-  schedule:
-    # Every 6 hours, same cadence as the other OpenCV guards. The doc
-    # follows the upstream *latest release* tag via the `<ref>`
-    # placeholder (the engine resolves /releases/latest), so the
-    # upstream-change trigger is meaningful here; the doc-hash trigger
-    # is the other one: any edit to the doc re-runs the whole build +
-    # inference chain.
-    - cron: '0 */6 * * *'
+  # schedule:
+  # Every 6 hours, same cadence as the other OpenCV guards. The doc
+  # follows the upstream *latest release* tag via the `<ref>`
+  # placeholder (the engine resolves /releases/latest), so the
+  # upstream-change trigger is meaningful here; the doc-hash trigger
+  # is the other one: any edit to the doc re-runs the whole build +
+  # inference chain.
+  #   - cron: '0 */6 * * *'
   workflow_dispatch:
 
 permissions:

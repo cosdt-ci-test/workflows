@@ -39,12 +39,12 @@ concurrency:
   cancel-in-progress: false
 
 on:
-  schedule:
-    # Run every 6 hours: '45 */6 * * *' fires at minute 45 of every
-    # 6th hour (00:45, 06:45, 12:45, 18:45). Cadence is loose enough
-    # for a tagless upstream (mirror HEAD as the change key), but
-    # tight enough that doc fixes propagate within a day.
-    - cron: '45 */6 * * *'
+  # schedule:
+  # Run every 6 hours: '45 */6 * * *' fires at minute 45 of every
+  # 6th hour (00:45, 06:45, 12:45, 18:45). Cadence is loose enough
+  # for a tagless upstream (mirror HEAD as the change key), but
+  # tight enough that doc fixes propagate within a day.
+  #   - cron: '45 */6 * * *'
   workflow_dispatch:
 
 permissions:

@@ -32,13 +32,13 @@ concurrency:
   cancel-in-progress: false
 
 on:
-  schedule:
-    # Weekly: '40 3 * * 1' fires at 03:40 UTC every Monday (11:40
-    # 北京时间). MMEngine releases on its own schedule (roughly every
-    # few months), so a weekly audit is more than enough to catch an
-    # upstream release and still leaves the NPU runner free for the
-    # daily projects.
-    - cron: '40 3 * * 1'
+  # schedule:
+  # Weekly: '40 3 * * 1' fires at 03:40 UTC every Monday (11:40
+  # 北京时间). MMEngine releases on its own schedule (roughly every
+  # few months), so a weekly audit is more than enough to catch an
+  # upstream release and still leaves the NPU runner free for the
+  # daily projects.
+  #   - cron: '40 3 * * 1'
   workflow_dispatch:
   # PR trigger: docs/tests changes get a guard run. paths filter avoids
   # burning the self-hosted NPU runner on unrelated PRs. `pull_request`

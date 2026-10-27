@@ -57,16 +57,16 @@ concurrency:
   cancel-in-progress: false
 
 on:
-  schedule:
-    # Run every 6 hours: '30 */6 * * *' fires at minute 30 of every
-    # 6th hour (00:30, 06:30, 12:30, 18:30). Cadence is loose enough
-    # for an upstream that releases a few times a year (Ascend/vision
-    # tracks pytorch/vision's torchvision releases — roughly one per
-    # quarter as of writing), but tight enough that doc fixes
-    # propagate within a day. Minute 30 (not 0) avoids collisions
-    # with torchtune (0 */6) and torchtitan (0 */6), which share the
-    # same a2-1 runner.
-    - cron: '30 */6 * * *'
+  # schedule:
+  # Run every 6 hours: '30 */6 * * *' fires at minute 30 of every
+  # 6th hour (00:30, 06:30, 12:30, 18:30). Cadence is loose enough
+  # for an upstream that releases a few times a year (Ascend/vision
+  # tracks pytorch/vision's torchvision releases — roughly one per
+  # quarter as of writing), but tight enough that doc fixes
+  # propagate within a day. Minute 30 (not 0) avoids collisions
+  # with torchtune (0 */6) and torchtitan (0 */6), which share the
+  # same a2-1 runner.
+  #   - cron: '30 */6 * * *'
   workflow_dispatch:
 
 permissions:

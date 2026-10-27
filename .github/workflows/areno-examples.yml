@@ -15,8 +15,8 @@ concurrency:
 
 on:
   # 每 6 小时轮询上游 release；引擎按最新 release 解析目标并测试该 release。
-  schedule:
-    - cron: '10 */6 * * *'
+  # schedule:
+  #   - cron: '10 */6 * * *'
   workflow_dispatch:
     inputs:
       target_ref:

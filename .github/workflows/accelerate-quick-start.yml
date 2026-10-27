@@ -28,12 +28,12 @@ concurrency:
   cancel-in-progress: false
 
 on:
-  schedule:
-    # Run every 6 hours: '15 */6 * * *' fires at minute 15 of every
-    # 6th hour (00:15, 06:15, 12:15, 18:15). Cadence is loose enough
-    # for an upstream that releases monthly (Accelerate), but tight
-    # enough that doc fixes propagate within a day.
-    - cron: '15 */6 * * *'
+  # schedule:
+  # Run every 6 hours: '15 */6 * * *' fires at minute 15 of every
+  # 6th hour (00:15, 06:15, 12:15, 18:15). Cadence is loose enough
+  # for an upstream that releases monthly (Accelerate), but tight
+  # enough that doc fixes propagate within a day.
+  #   - cron: '15 */6 * * *'
   workflow_dispatch:
   # PR trigger: docs/tests changes get a guard run. paths filter avoids
   # burning the self-hosted NPU runner on unrelated PRs. `pull_request`

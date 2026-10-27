@@ -341,7 +341,78 @@ supported:
       - --dump-folder ${CI_OUTPUT_DIR}/deepseek_v3_debugmodel_mtp
     timeout_minutes: 60
 
-  # 7) muse_glimmer, single card (text path; the multimodal variant needs
+  # 7) Two cards: qwen3_1_7b (1.7B params).  The weights plus the optimizer
+  #    state are ~20 GB, which does not fit one 32 GB card together with the
+  #    activations (measured: OOM), but two cards do.  Same assets as the
+  #    0.6B entry (setup fetches Qwen3-1.7B's tokenizer) and the same
+  #    dataset override.
+  - path: example/run_train_2card.sh
+    source: project
+    profile: torchtitan
+    runner: linux-aarch64-a2-2
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-910b-ubuntu22.04-py3.12
+    npu_devices: '0,1'
+    overlay_args:
+      - --module qwen3
+      - --config qwen3_1_7b
+      - --override.imports npu_compat.npu_attention
+      - --comm.mode default
+      - --dataloader.dataset c4_test
+      - --training.steps 2
+      - --training.local-batch-size 1
+      - --training.seq-len 256
+      - --metrics.log-freq 1
+      - --metrics.disable-color-printing
+      - --dump-folder ${CI_OUTPUT_DIR}/qwen3_1_7b
+    timeout_minutes: 90
+
+  # 8) Eight cards: deepseek_v3_16b, whose recipe asks for expert parallelism
+  #    of 8 (16B x 12 bytes = 192 GB, spread over 8 x 32 GB).  Needs the
+  #    per-family override and the deepseek-moe-16b-base tokenizer asset.
+  - path: example/run_train_8card.sh
+    source: project
+    profile: torchtitan
+    runner: linux-aarch64-a2-8
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-910b-ubuntu22.04-py3.12
+    npu_devices: '0,1,2,3,4,5,6,7'
+    overlay_args:
+      - --module deepseek_v3
+      - --config deepseek_v3_16b
+      - --override.imports npu_compat_deepseek.deepseek_attention
+      - --comm.mode default
+      - --dataloader.dataset c4_test
+      - --training.steps 2
+      - --training.local-batch-size 1
+      - --training.seq-len 256
+      - --metrics.log-freq 1
+      - --metrics.disable-color-printing
+      - --dump-folder ${CI_OUTPUT_DIR}/deepseek_v3_16b
+    timeout_minutes: 120
+
+  # 9) Eight cards: qwen3_14b (14B x 12 bytes = 168 GB).  Same override and
+  #    dataset override as the 0.6B entry; the tokenizer asset is fetched by
+  #    setup_example.sh.
+  - path: example/run_train_8card.sh
+    source: project
+    profile: torchtitan
+    runner: linux-aarch64-a2-8
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-910b-ubuntu22.04-py3.12
+    npu_devices: '0,1,2,3,4,5,6,7'
+    overlay_args:
+      - --module qwen3
+      - --config qwen3_14b
+      - --override.imports npu_compat.npu_attention
+      - --comm.mode default
+      - --dataloader.dataset c4_test
+      - --training.steps 2
+      - --training.local-batch-size 1
+      - --training.seq-len 256
+      - --metrics.log-freq 1
+      - --metrics.disable-color-printing
+      - --dump-folder ${CI_OUTPUT_DIR}/qwen3_14b
+    timeout_minutes: 120
+
+  # 10) muse_glimmer, single card (text path; the multimodal variant needs
   #    an NPU op the vision path does not have yet).
   - path: example/run_train_1card.sh
     source: project
@@ -463,16 +534,14 @@ unsupported_configs:
 
   # --- qwen3 系：RoPE 无墙（CosSinRoPE 纯 cos/sin，无 complex），debugmodel 系已跑通
   # （见 supported 段：debugmodel / non_fused_qkv / moe_param_groups / moe_debug，
-  # 2026-10-27 实测 exit 0）。下面这些是规模档（0.6B 起），不是「跑不了」而是
-  # 「要 tokenzier 资产 + 足够的卡」：真实 config 的 hf_assets_path 指向
-  # ./assets/hf/Qwen3-*（debugmodel 用的是本地 tests/assets/tokenizer），tokenizer 可从
-  # modelscope 拉；数据要 --dataloader.dataset c4_test 覆盖（HF 的 allenai/c4 不可达）；
-  # qwen3_0_6b 实测 1 卡 exit 0，qwen3_1_7b 1 卡 OOM（20 GB 权重+状态 > 32 GB 卡）。
+  # 2026-10-27 实测 exit 0）。规模档也进了 supported（0.6B 1 卡 / 1.7B 2 卡 / 14B 8 卡），
+  # 它们不是「跑不了」而是「要 tokenizer 资产 + 足够的卡」：真实 config 的
+  # hf_assets_path 指向 ./assets/hf/Qwen3-*（debugmodel 用的是本地
+  # tests/assets/tokenizer），tokenizer 由 setup_example.sh 从 modelscope 拉；数据要
+  # --dataloader.dataset c4_test 覆盖（HF 的 allenai/c4 不可达）。
   # debugmodel 规模的 MoE 实测不触发 `torch._grouped_mm`（models/common/moe.py:120，CUDA 专属，
   # torch_npu 只有 npu_grouped_matmul、签名不同）—— supported 段的 moe 两条 exit 0。
   - torchtitan/models/qwen3/config_registry.py:qwen3_0_6b
-  - torchtitan/models/qwen3/config_registry.py:qwen3_1_7b
-  - torchtitan/models/qwen3/config_registry.py:qwen3_14b
   # sft_qwen3_8b_math：attn_backend="varlen"（config_registry.py:464）→ torch.nn.attention.varlen 是 CUDA FA
   # 专属 API，NPU 无实现。
   - torchtitan/models/qwen3/config_registry.py:sft_qwen3_8b_math
@@ -545,8 +614,8 @@ unsupported_configs:
   #   · deepseek_v3_debugmodel_hybridep：过了 EP 校验后下一步要 deep_ep 库
   #     （DeepEP，CUDA-only，需从 GitHub 源码编译）→ NPU 无解；
   #   · deepseek_v3_16b：expert_parallel_degree=8 → 需要 8 卡（CI runner
-  #     linux-aarch64-a2-8 存在），16B×12B=192GB < 8×32GB 可装，但同样要先有
-  #     deepseek 的 per-family override —— 8 卡是必要不充分条件。
+  #     linux-aarch64-a2-8 存在），16B×12B=192GB < 8×32GB 可装 —— 已进 supported
+  #     段（8 卡，per-family override + deepseek-moe-16b-base 的 tokenizer 资产）。
   # 2026-10-26 复测：flex 墙的根因已定位为三层（见上面 llama3 系段落）——除 torch_npu 自身
   # 的 flex lowering 缺口外，torch_npu 2.14.0 的 make_reduction(strict_sum=) 与
   # triton-ascend 3.6.0 的 -std=c++17 也各自独立地卡住编译路径。
@@ -555,7 +624,6 @@ unsupported_configs:
   # （ChunkedLossWrapper 的 meta tensor 泄漏是 torch 2.12 时代的问题，torch 2.14 上
   #  已不复现，故不再列为阻塞项。）
   - torchtitan/models/deepseek_v3/config_registry.py:deepseek_v3_debugmodel_minimal_async_ep
-  - torchtitan/models/deepseek_v3/config_registry.py:deepseek_v3_16b
   - torchtitan/models/deepseek_v3/config_registry.py:deepseek_v3_16b_minimal_async_ep
 
   # Kimi 同上根因（Flex + spmd_types + _grouped_mm），叠加 DistMuon 自定义 optimizer

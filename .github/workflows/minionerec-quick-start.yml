@@ -6,7 +6,7 @@
 #
 # Smoke scope: single-card SFT on NPU (ModelScope Qwen2.5-0.5B base +
 # HF-mirror preprocessed Amazon Industrial_and_Scientific subset +
-# transfer_to_npu patch + 1-epoch HF-Trainer run, sample=600/dataset).
+# repo npu_support shim + 1-epoch HF-Trainer run, sample=600/dataset).
 # RL (GRPO) is pointer-only — its vLLM path is CUDA-only; see
 # projects/minionerec/docs/Quick-start-Ascend.md for rationale.
 #
@@ -53,7 +53,8 @@ jobs:
         --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
         --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
       timeout_minutes: 120
-      upstream_repo: AkaliKong/MiniOneRec
+      upstream_repo: yzeyu71/MiniOneRec
+      fixed_ref: npu-support
       doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/minionerec/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
       doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/minionerec/docs/Quick-start-Ascend.md
       test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1

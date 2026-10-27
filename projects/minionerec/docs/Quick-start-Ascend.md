@@ -49,14 +49,14 @@ python --version
 
 ## 3. 克隆 MiniOneRec
 
-将 `<UPSTREAM_REF>` 换成目标**分支、tag 或 commit**（上游默认分支为 `main`）。
+将 `<UPSTREAM_REF>` 换成目标**分支、tag 或 commit**。本文验证 NPU 适配分支 `npu-support`（仓库已内置 `npu_support.py` 与 `requirements-npu.txt`）。
 
 ```shell #test-setup store="upstream_ref"
 echo "${UPSTREAM_REF}"
 ```
 
 ```shell #test-setup id="clone" load="upstream_ref>>UPSTREAM_REF"
-git clone https://github.com/AkaliKong/MiniOneRec.git
+git clone https://github.com/yzeyu71/MiniOneRec.git
 cd MiniOneRec
 git checkout <UPSTREAM_REF>
 ```
@@ -65,7 +65,7 @@ git checkout <UPSTREAM_REF>
 
 ## 4. 安装 NPU 依赖
 
-**不要**执行 `pip install -r requirements.txt`：其中 `torchrec/fbgemm_gpu/torchsnapshot` 是 CUDA 专属包、`bitsandbytes` 在 aarch64 上 wheel 可用性不确定（本仓库 xtuner 守门已验证 0.45.0 无 aarch64 wheel）、全部 `nvidia-*-cu11/12` 为 CUDA 运行库。SFT 冒烟只需要下列包。
+**不要**执行 `pip install -r requirements.txt`：其中 `torchrec/fbgemm_gpu/torchsnapshot` 是 CUDA 专属包、全部 `nvidia-*-cu11/12` 为 CUDA 运行库。仓库另附 `requirements-npu.txt` 收敛了 NPU 依赖集；SFT 冒烟所需的包如下（入口脚本仍会 `import bitsandbytes`，0.48.1 提供 aarch64 wheel，一并安装）：
 
 torch 栈与 CANN 9.1.0 配套（torch 2.9.0 + torch_npu 2.9.0.post2）：
 
@@ -73,41 +73,32 @@ torch 栈与 CANN 9.1.0 配套（torch 2.9.0 + torch_npu 2.9.0.post2）：
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 pip install torch==2.9.0 torch-npu==2.9.0.post2
 pip install modelscope transformers==4.57.1 accelerate==1.10.1 datasets==4.2.0 \
-    tokenizers==0.22.1 fire==0.7.1 pandas==2.2.2 tqdm
+    tokenizers==0.22.1 fire==0.7.1 pandas==2.2.2 tqdm bitsandbytes==0.48.1
 ```
 
 ---
 
-## 5. 打 NPU 适配补丁
+## 5. 确认 NPU 适配已生效
 
-两个文件（`sft.py` 训练入口、`evaluate.py` 评估入口）做同样的最小改动：(1) 顶部 `import bitsandbytes as bnb` 从未实际使用，剥掉以消除 aarch64 wheel 风险；(2) 注入 `torch_npu` 的 `transfer_to_npu` 转换层，把 `torch.cuda.*`、`device_map` 等透明映射到 NPU。
+仓库已内置 `npu_support.py`：导入时尝试加载 `torch_npu` 的 `transfer_to_npu`，把 `torch.cuda.*`、`device_map` 等透明映射到 NPU；未安装 `torch_npu` 时整段空操作，CUDA/CPU 路径不受影响。各入口脚本顶部已 `import npu_support`，此节只校验改动落位。
 
 ```shell #test id="patch"
 cd MiniOneRec
-python - <<'EOF'
-patch = "import torch_npu\nfrom torch_npu.contrib import transfer_to_npu\n"
-for name in ("sft.py", "evaluate.py"):
-    s = open(name).read()
-    if "transfer_to_npu" not in s:
-        s = s.replace("import bitsandbytes as bnb\n", "")
-        s = s.replace("import torch\n", "import torch\n" + patch, 1)
-        open(name, "w").write(s)
-print("patched")
-EOF
-grep -c "transfer_to_npu" sft.py evaluate.py
-# grep -c exits 1 on zero matches; the pipe keeps the block green while
-# still printing the count for the result assertion below.
-grep -c "bitsandbytes" sft.py evaluate.py || true
+test -f npu_support.py && echo "shim present"
+test -f requirements-npu.txt && echo "requirements present"
+grep -c "^import npu_support$" sft.py evaluate.py
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
+python -c "import npu_support; print('shim import ok')"
 ```
 
-输出结果如下（多文件 `grep -c` 逐文件输出 `文件名:匹配行数`；`transfer_to_npu` 只出现在 `from torch_npu.contrib import transfer_to_npu` 一行——`import torch_npu` 不含该子串，每个文件匹配 1 行；`bitsandbytes` 出现 0 次）：
+输出结果如下（`grep -c` 对多文件逐行输出 `文件名:匹配行数`）：
 
 ```shell #test-result id="patch"
-patched
+shim present
+requirements present
 sft.py:1
 evaluate.py:1
-sft.py:0
-evaluate.py:0
+shim import ok
 ```
 
 ---
@@ -292,5 +283,5 @@ HR...
 | ModelScope 下载慢/失败 | 网络 | 重试（支持断点续传）；数据侧确认 `HF_ENDPOINT=https://hf-mirror.com` 已导出 |
 | `model_type` grep 为空 | `final_checkpoint/config.json` 缺失 | 训练未完成，检查上一块退出码与日志 |
 | 评估报 `FileNotFoundError: [Errno 2] No such file or directory: ''` | 未传 `--result_json_data`，结果文件路径为空 | 补上 `--result_json_data ./eval_result.json` |
-| CC 大于 0 | 约束解码未生效 | 确认第 5 节补丁已注入 `evaluate.py`（`grep -c transfer_to_npu evaluate.py` 应为 1）；基座模型须为 Qwen2.5-**base**（Instruct 版约束解码失效） |
+| CC 大于 0 | 约束解码未生效 | 确认 `evaluate.py` 顶部有 `import npu_support`（第 5 节）；基座模型须为 Qwen2.5-**base**（Instruct 版约束解码失效） |
 | HR/NDCG 与文中示例差异大 | 冒烟训练仅 1 epoch/600 样本，`num_beams` 也降为 20 | 数值仅供参考；CI 只断言 CC=0，HR/NDCG 用占位符匹配 |

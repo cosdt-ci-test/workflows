@@ -203,6 +203,8 @@ master 均已修复但未回合 2.12.0，修复手段全部是 sed 镜像上游 
 
 ### 7.5 覆盖面的扩展（2026-10-27）
 
+supported 从 2 条扩到 17 条：13 条单卡 + 1 条双卡（llama3 debugmodel，FSDP shard=2 + bf16）+ 1 条双卡（qwen3_1_7b，1.7B 的权重+优化器状态 ~20 GB 在 32 GB 单卡上 OOM）+ 2 条八卡（deepseek_v3_16b 的 expert_parallel_degree=8、qwen3_14b 的 14B×12B=168 GB）。八卡两条落在 CI 的 `linux-aarch64-a2-8` runner 上（coder workspace 当时没能拿到 8 卡）。
+
 同一套 override（`npu_compat.npu_attention`，替换 `GQAttention.Config` 节点）在实测中又放行了 9 个组合，supported 从 2 条变 11 条（10 条单卡 + 1 条双卡 FSDP）：
 
 | 组合 | 说明 |
@@ -225,9 +227,9 @@ master 均已修复但未回合 2.12.0，修复手段全部是 sed 镜像上游 
 | qwen3_5 / qwen35_* | 同上（`Qwen35Attention`），另外样本长度普遍 > seq_len（406/418 vs 256）→ 需要更大的 seq-len |
 | deepseek_v3 / *_minimal_async_ep | 上游配置自身不自洽：config 里 expert_parallel_degree=1，而 dispatcher 硬性要求 ep>1；2 卡实测撞 mesh 断言，加 --parallelism.expert-parallel-degree 2 仍是同一个断言 |
 | deepseek_v3 / *_hybridep | 需要 deep_ep 库（DeepEP，CUDA-only） |
-| deepseek_v3 / deepseek_v3_16b | ep=8 → 需 8 卡（CI runner linux-aarch64-a2-8 存在），但仍要先有 deepseek 的 per-family override —— 8 卡是必要不充分条件 |
+| deepseek_v3 / deepseek_v3_16b | ep=8 → 需 8 卡（CI runner linux-aarch64-a2-8 存在），但仍要先有 deepseek 的 per-family override —— 8 卡是必要不充分条件；已进 supported 段（8 卡 + deepseek-moe-16b-base 的 tokenizer 资产），CI 首跑验证 |
 | qwen3 / qwen3_0_6b | **不是硬墙**：只缺真实 tokenizer 资产（modelscope 拉 `Qwen/Qwen3-0.6B` 的 tokenizer 文件到 assets/hf/Qwen3-0.6B）+ `--dataloader.dataset c4_test` 覆盖（HF 的 allenai/c4 不可达）→ 补齐后 1 卡 exit 0 |
-| qwen3 / qwen3_1_7b | 同上，但 1 卡 OOM（权重+优化器状态 ~20 GB vs 32 GB 卡）→ 需 2 卡 |
+| qwen3 / qwen3_1_7b | 同上，但 1 卡 OOM（权重+优化器状态 ~20 GB vs 32 GB 卡）→ 2 卡实测 exit 0，已进 supported 段 |
 | flux_debugmodel | 网络不是瓶颈：tokenizer / random-init / spmd_types 三项都能绕（见 manifest 段），仍缺真 T5-XXL 权重（44.5 GB；换 t5-small 因 d_model 512 vs 4096 实测报 aclnnAddmm k-axis 不匹配）与 ≥2 卡显存；FLUX.1-dev 的 autoencoder 是 gated 仓库 |
 | kimi / muse_glimmer_mm / 量化系（nvfp4 / mxfp8 / float8） | 真实硬墙：CUDA-only 算子或库（DistMuon 要每进程一张 CUDA 卡；mm 路径 aclnnInplaceOne 失败；float8 模拟 aclnnInplaceCopy 失败；nvfp4 需 SM100） |
 

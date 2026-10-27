@@ -295,13 +295,16 @@ projects:
       quick_start: .github/workflows/torchtitan-quick-start.yml
       # Release-only examples guard on the shared engine
       # example-template.yml (design: docs/examples-guard-engine.md).
-      # Supported entries (11) run torchtitan's own trainer entry point
+      # Supported entries (17) run torchtitan's own trainer entry point
       # (`python -m torchtitan.train --module X --config Y`) through
       # project-side launchers (projects/torchtitan/example/run_train_{1,2}card.sh):
-      # 10 single-card (llama3 debugmodel + its varlen / ce_loss / dist_gemm /
-      # sft variants, qwen3 debugmodel + non_fused_qkv + 2 MoE recipes,
-      # muse_glimmer debugmodel) and 1 two-card llama3 debugmodel (FSDP
-      # shard=2 + bf16, cross-rank HCCL). All of them use upstream's default
+      # 13 single-card (llama3 debugmodel + its varlen / ce_loss / dist_gemm /
+      # sft variants, qwen3 debugmodel + non_fused_qkv + 2 MoE recipes +
+      # qwen3_0_6b, deepseek_v3 debugmodel + _mtp, muse_glimmer debugmodel),
+      # 1 two-card llama3 debugmodel (FSDP shard=2 + bf16, cross-rank HCCL),
+      # 1 two-card qwen3_1_7b (one card OOMs on the weights + optimizer
+      # state) and 2 eight-card entries (deepseek_v3_16b with expert
+      # parallelism 8, qwen3_14b) on the a2-8 runner. All of them use upstream's default
       # loss (the 2026-09 ChunkedLossWrapper meta-tensor leak does not
       # reproduce on torch 2.14 / torch_npu 2.14), so no loss detour.
       # The NPU-incompatible attention stack (complex64 RoPE cache, flex

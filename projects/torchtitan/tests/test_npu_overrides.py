@@ -22,7 +22,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 EXAMPLE_DIR = os.path.abspath(os.path.join(HERE, os.pardir, 'example'))
 SCRIPT = os.path.join(EXAMPLE_DIR, 'check_npu_overrides.py')
 
-EXPECTED = 'npu override equivalence: rope OK, mask OK'
+EXPECTED = 'npu override equivalence: rope OK, mask OK, rope selection OK'
 
 
 class NpuOverrideEquivalenceTests(unittest.TestCase):

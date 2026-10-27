@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Two-card llama3 debugmodel smoke on Ascend NPU (FSDP shard=2).
+# Two-card torchtitan smoke on Ascend NPU (FSDP shard=2).
 #
-# Same entry point as the single-card variant; two ranks share one
-# container, so HCCL's per-rank listening socket has to be moved off the
-# default port 16666 or both ranks race for it (EI0020).
+# Same entry point as the single-card variant (module / config come from
+# the manifest's overlay_args); two ranks share one container, so HCCL's
+# per-rank listening socket has to be moved off the default port 16666 or
+# both ranks race for it (EI0020).
 #
 # Env:
 #   TARGET_ROOT     checkout of pytorch/torchtitan (required)

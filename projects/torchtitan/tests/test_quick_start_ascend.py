@@ -235,8 +235,10 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         # 3) DOC_REF: the ref the monitored doc was fetched from. The doc
         #    pulls the NPU override module (npu_compat.py +
         #    check_npu_overrides.py) from this repo with the same ref, so
-        #    the doc and the module never drift apart.
-        os.environ['DOC_REF'] = _doc_ref()
+        #    the doc and the module never drift apart. An explicit DOC_REF
+        #    in the environment wins (useful when the doc is fetched from
+        #    somewhere else, e.g. a local copy in a rehearsal).
+        os.environ.setdefault('DOC_REF', _doc_ref())
         print(f'setup: DOC_REF={os.environ["DOC_REF"]}')
 
         # 3) torchtitan transitive deps (tyro / tokenizers / safetensors /

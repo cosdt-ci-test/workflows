@@ -203,10 +203,15 @@ class NpuGQAttention(GQAttention):
 )
 def npu_attention(cfg: GQAttention.Config) -> NpuGQAttention.Config:
     new = derive(cfg, NpuGQAttention.Config)
-    # complex64 RoPE cache -> same values, gathered in real space
-    new.rope = derive(new.rope, RealGatherComplexRoPE.Config)
-    # flex -> SDPA with a dense block-causal mask.  The config class must
-    # not be a Flex / Varlen config, otherwise the trainer would try to
+    if isinstance(cfg.rope, ComplexRoPE.Config):
+        # complex64 RoPE cache -> gather it in real space.  Only for
+        # ComplexRoPE-based models: a CosSinRoPE cache is real already and
+        # needs no change, and swapping it for the ComplexRoPE convention
+        # would silently change the dim pairing (CosSinRoPE pairs
+        # (d0,d8),(d1,d9)..., ComplexRoPE pairs (d0,d1),(d2,d3)...).
+        new.rope = derive(cfg.rope, RealGatherComplexRoPE.Config)
+    # flex / varlen -> SDPA with a dense block-causal mask.  The config class
+    # must not be a Flex / Varlen config, otherwise the trainer would try to
     # build a BlockMask (that path does not compile on NPU).
     new.inner_attention = BlockCausalSDPA.Config()
     return new

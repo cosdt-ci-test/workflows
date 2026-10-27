@@ -82,6 +82,36 @@ setup_torchtitan() {
     # torchtitan itself, editable, from the checkout under test.
     python -m pip install -e "$TARGET_ROOT"
 
+    # Tokenizer assets for the size-tier recipes (qwen3_0_6b): those configs
+    # point hf_assets_path at ./assets/hf/<Model> instead of the local
+    # tests/assets/tokenizer the debugmodel recipes use.  The cluster cannot
+    # reach huggingface.co, so the files come from modelscope.  They land in
+    # the CI working copy (never committed) and the modelscope cache on the
+    # runner keeps them warm across jobs.
+    python - <<'PY'
+import os
+from modelscope import snapshot_download
+
+ASSETS = os.path.join(os.environ["TARGET_ROOT"], "assets", "hf")
+TOKENIZER_FILES = [
+    "tokenizer.json", "tokenizer_config.json", "vocab.json", "merges.txt",
+    "special_tokens_map.json", "config.json", "generation_config.json",
+]
+for repo, dest in [
+    ("Qwen/Qwen3-0.6B", "Qwen3-0.6B"),
+    ("Qwen/Qwen3-1.7B", "Qwen3-1.7B"),
+]:
+    target = os.path.join(ASSETS, dest)
+    if os.path.isdir(target) and os.listdir(target):
+        print(f"assets: {dest} already present")
+        continue
+    os.makedirs(target, exist_ok=True)
+    snapshot_download(
+        repo, local_dir=target, allow_patterns=TOKENIZER_FILES
+    )
+    print(f"assets: {dest} -> {sorted(os.listdir(target))}")
+PY
+
     # Sanity: NPU visible, stack importable, override module registered.
     python - <<'PY'
 import torch, torch_npu

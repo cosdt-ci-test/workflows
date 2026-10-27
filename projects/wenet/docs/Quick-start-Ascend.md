@@ -1,6 +1,6 @@
 # 快速开始：在昇腾 NPU 上用 WeNet 训练语音识别模型
 
-> **阅读本文前**，请先按 [快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html) 准备好 CANN 与驱动。本文聚焦**第一次跑通**：基于 [aishell-1](https://www.openslr.org/33) 真实数据集，按 WeNet 官方 [NPU 实验脚本](https://github.com/wenet-e2e/wenet/blob/main/examples/aishell/s0/run_npu.sh)（[官方教程](https://wenet.org.cn/wenet/tutorial_aishell.html#)）完成数据下载、数据准备、训练、推理与导出全流程。
+> **阅读本文前**，请先按 [快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html) 准备好 CANN 与驱动。本文聚焦**第一次跑通**：基于 [aishell-1](https://www.openslr.org/33) 真实数据集，按 WeNet 官方 [NPU 实验脚本](https://github.com/wenet-e2e/wenet/blob/main/examples/aishell/s0/run_npu.sh)（[官方教程](https://wenet.org.cn/wenet/tutorial_aishell.html#)）完成数据下载、数据准备、训练、推理与导出全流程。为缩短首次跑通的时间，第 7 节会把三份数据按比例截成子集；想用全量数据把那一节的条数改成 `0` 即可。
 
 [WeNet](https://github.com/wenet-e2e/wenet) 是一个生产级端到端语音识别工具包，支持流式和非流式识别。昇腾侧通过 `torch-npu` 将计算调度到 NPU。
 
@@ -84,24 +84,35 @@ git checkout main
 
 安装 WeNet 及其 NPU 依赖（与官方安装指南一致：`[torch-npu]` extra 已将 torch / torch-npu / torchaudio 钉在推荐版本 2.2.0，并附带 `numpy<2`；`requirements.txt` 只约束 `deepspeed>=0.14.0`，为避免 pip 解析到与 torch 2.2.0 不兼容的 0.16+，安装后显式回钉 0.14.4）：
 
+> **注意**：WeNet 的安装依赖 `openai-whisper` 只发布源码包，其 `setup.py` 仍 `import pkg_resources`，而 setuptools 82 起已移除该模块，直接安装会构建失败并中断整条 `pip` 命令。下面的命令先固定一个较旧的 setuptools、并对需要构建源码包的三条 `pip` 关闭构建隔离。
+
 ```shell #test-setup id="install"
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
+# 块内任一步失败立即中断：pip 的返回码只反映最后一条命令，否则前面的失败会被吞掉
+set -e
 cd wenet
-pip install -e .[torch-npu]
-pip install -r requirements.txt
+# openai-whisper（WeNet 的安装依赖之一）只发布 sdist，其 setup.py 中 import pkg_resources，
+# 而 setuptools 82 起已移除该模块；pip 默认的构建隔离环境总会装最新 setuptools，
+# 于是 sdist 构建失败并中断整条安装（只影响 CLI 转写，与训练无关，故此前一直未被发现）。
+# 预装仍带 pkg_resources 的 setuptools，并对需要构建 sdist 的几条 pip 关闭构建隔离。
+pip install "setuptools<82" wheel
+pip install --no-build-isolation "openai-whisper==20231117"
+pip install --no-build-isolation -e .[torch-npu]
+pip install --no-build-isolation -r requirements.txt
 pip install "deepspeed==0.14.4"
 # train_utils.py 无条件 import tensorboardX；requirements.txt 是开发全量清单
-# （含 flake8/clang-format/openai-whisper 等与训练无关项），aarch64 上任一包
-# 解析失败会导致整张清单未安装，且失败被命令块尾部的 rc 静默吞掉，
-# 故训练核心依赖在安装步骤显式补齐（装失败将在此步骤快速失败）
+# （含 flake8/clang-format 等与训练无关项），故训练核心依赖在此显式补齐
 pip install tensorboardX
+# 安装结果校验：确认 editable 安装已注册、训练必需依赖可导入
+python -c "import deepspeed, tensorboardX, importlib.metadata as m; print('wenet', m.version('wenet'), '| deepspeed', deepspeed.__version__)"
 ```
 
-安装 sox：
+安装 `sox`（`sox` 命令与 `libsox-dev` 头文件）以及 `libgomp1`（`torchaudio` 运行期依赖，`libtorchaudio.so`
+需要系统提供 `libgomp.so.1`；torch 自带的 OpenMP 运行时是带哈希后缀的私有名字，无法替代）：
 
 ```shell #test-setup
 pip install sox
-apt-get update && apt-get install -y sox libsox-dev || true
+apt-get update && apt-get install -y sox libsox-dev libgomp1 || true
 ```
 
 ---
@@ -110,7 +121,7 @@ apt-get update && apt-get install -y sox libsox-dev || true
 
 ```shell #test id="check-npu"
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
-python -c "import torch, torch_npu; print('torch:', torch.__version__); print('torch_npu:', torch_npu.__version__); print('npu available:', torch.npu.is_available()); print('npu count:', torch.npu.device_count())"
+python -c "import torch, torch_npu, torchaudio; print('torch:', torch.__version__); print('torch_npu:', torch_npu.__version__); print('torchaudio:', torchaudio.__version__); print('npu available:', torch.npu.is_available()); print('npu count:', torch.npu.device_count())"
 ```
 
 输出结果如下：
@@ -118,6 +129,7 @@ python -c "import torch, torch_npu; print('torch:', torch.__version__); print('t
 ```shell #test-result id="check-npu" fuzzy='xxx'
 torch: xxx
 torch_npu: xxx
+torchaudio: xxx
 npu available: True
 npu count: 1
 ```
@@ -216,7 +228,68 @@ wc -l data/train/wav.scp data/train/text data/dev/wav.scp data/test/wav.scp | aw
 
 ---
 
-## 7. 生成 CMVN、词典与 data.list（stage 1-3）
+## 7. 截取子集（可选）
+
+aishell-1 完整训练集有 12 万条语音，跑完一轮训练需要数小时。如果只想验证流程能否跑通，没必要等这么久，这一节把三份数据按比例截成子集，后续每一步的耗时都随之下降。
+
+只截 `wav.scp` 与 `text`，不截 `data.list`：下一节的 CMVN、词典与 `data.list` 都由这两个文件推导，截这里它们会自动跟着变小。两个文件都按 utterance id 排序且 id 唯一，`head -n` 取到的是同一批语音，不会出现音频与转写对不上。三个变量改成 `0` 即使用全量数据。
+
+> **注意**：子集只用于缩短首次跑通的时间，样本量不足以训练出可用的识别模型。
+
+```shell #test-setup id="subset-data"
+cd wenet/examples/aishell/s0
+# 每份数据的条数；设为 0 表示保留全量
+train_utts=12000
+dev_utts=1400
+test_utts=700
+truncate_split() {
+  split=$1
+  n=$2
+  if [ "$n" -eq 0 ]; then
+    return 0
+  fi
+  for f in wav.scp text; do
+    head -n "$n" "data/$split/$f" > "data/$split/$f.tmp"
+    mv "data/$split/$f.tmp" "data/$split/$f"
+  done
+}
+truncate_split train "$train_utts"
+truncate_split dev "$dev_utts"
+truncate_split test "$test_utts"
+```
+
+验证截取结果（`wav.scp` 与 `text` 必须条数相同、utterance id 完全一致）：
+
+```shell #test id="verify-subset"
+cd wenet/examples/aishell/s0
+for split in train dev test; do
+  n=$(awk 'END{print NR}' "data/$split/wav.scp")
+  m=$(awk 'END{print NR}' "data/$split/text")
+  if [ "$n" -ne "$m" ]; then
+    echo "$split: wav.scp and text differ in size"
+    exit 1
+  fi
+  awk '{print $1}' "data/$split/wav.scp" > "/tmp/$split.wav.ids"
+  awk '{print $1}' "data/$split/text" > "/tmp/$split.text.ids"
+  if ! diff -q "/tmp/$split.wav.ids" "/tmp/$split.text.ids" > /dev/null; then
+    echo "$split: utterance ids differ between wav.scp and text"
+    exit 1
+  fi
+  echo "$split: $n utterances, wav.scp and text identical"
+done
+```
+
+输出结果如下：
+
+```shell #test-result id="verify-subset"
+train: 12000 utterances, wav.scp and text identical
+dev: 1400 utterances, wav.scp and text identical
+test: 700 utterances, wav.scp and text identical
+```
+
+---
+
+## 8. 生成 CMVN、词典与 data.list（stage 1-3）
 
 stage 1 去除转写文本中的词间空格（普通话字符建模标准做法）并计算全局 CMVN 统计，stage 2 从训练转写生成字符级词典 `data/dict/lang_char.txt`，stage 3 将 `wav.scp`/`text` 组织为训练可读的 `data.list`（raw 格式，每行一条 utterance 的 JSON）。三者均为训练（stage 4）的前置产物，缺少时训练启动即报 `FileNotFoundError: data/dict/lang_char.txt`：
 
@@ -225,13 +298,21 @@ cd wenet/examples/aishell/s0
 bash run_npu.sh --stage 1 --stop_stage 3 --data /root/asr-data/OpenSLR/33
 ```
 
-验证三个前置产物（`data.list` 行数与对应 `wav.scp`/`text` 一致）：
+验证三个前置产物（`data.list` 行数须与对应 `wav.scp` 一致）：
 
 ```shell #test id="verify-stages123"
 cd wenet/examples/aishell/s0
 test -f data/train/global_cmvn && echo "global_cmvn ok"
 test -f data/dict/lang_char.txt && echo "lang_char.txt ok"
-wc -l data/train/data.list data/dev/data.list data/test/data.list | awk '{print $1, $2}'
+for split in train dev test; do
+  a=$(awk 'END{print NR}' "data/$split/data.list")
+  b=$(awk 'END{print NR}' "data/$split/wav.scp")
+  if [ "$a" -ne "$b" ]; then
+    echo "$split: data.list does not match wav.scp"
+    exit 1
+  fi
+  echo "$split: data.list matches wav.scp"
+done
 ```
 
 输出结果如下：
@@ -239,22 +320,23 @@ wc -l data/train/data.list data/dev/data.list data/test/data.list | awk '{print 
 ```shell #test-result id="verify-stages123"
 global_cmvn ok
 lang_char.txt ok
-120098 data/train/data.list
-14326 data/dev/data.list
-7176 data/test/data.list
-141600 total
+train: data.list matches wav.scp
+dev: data.list matches wav.scp
+test: data.list matches wav.scp
 ```
 
 ---
 
-## 8. 模型训练（stage 4）
+## 9. 模型训练（stage 4）
 
 `run_npu.sh` 脚本中实现了 NPU 卡号的自动获取和相关环境变量设置，可直接启动昇腾 NPU 上的模型训练。为控制时长，将 `max_epoch` 从 240 缩短到 1（其余参数全部保持脚本默认值）：
 
-> **注意**：训练产物校验放在命令尾部，快速失败：
+> **注意**：只跑 1 个 epoch 时学习率仍处于 warmup 阶段，模型精度不代表训练收敛后的水平。
 
 ```shell #test-setup id="train"
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
+# 块内任一步失败立即中断：本块以 run_npu.sh 结尾，否则尾部 rc 会吞掉前面的失败
+set -e
 cd wenet/examples/aishell/s0
 cp conf/train_conformer.yaml conf/train_conformer_1ep.yaml
 sed -i 's/max_epoch: .*/max_epoch: 1/' conf/train_conformer_1ep.yaml
@@ -265,10 +347,14 @@ sed -i 's/max_epoch: .*/max_epoch: 1/' conf/train_conformer_1ep.yaml
 sed -i 's/^num_workers=.*/num_workers=0/' run_npu.sh
 sed -i 's/persistent_workers=True/persistent_workers=args.num_workers > 0/g' "$(git rev-parse --show-toplevel)/wenet/utils/train_utils.py"
 sed -i 's/prefetch_factor=args.prefetch/prefetch_factor=args.prefetch if args.num_workers > 0 else None/g' "$(git rev-parse --show-toplevel)/wenet/utils/train_utils.py"
-# 源码改写校验：sed 路径或匹配失败时立即报错，避免被命令块尾部的 rc=0 吞掉
+# 改写校验：sed 匹配失败时静默返回 0，必须显式确认每条都落到了
+grep -q '^max_epoch: 1$' conf/train_conformer_1ep.yaml
 grep -q "persistent_workers=args.num_workers > 0" "$(git rev-parse --show-toplevel)/wenet/utils/train_utils.py"
 grep -q "if args.num_workers > 0 else None" "$(git rev-parse --show-toplevel)/wenet/utils/train_utils.py"
 bash run_npu.sh --stage 4 --stop_stage 4 --train_config conf/train_conformer_1ep.yaml --data /root/asr-data/OpenSLR/33
+# run_npu.sh 最后执行到的是被跳过的 stage 6 分支，整条 if 的退出码恒为 0，
+# 训练崩溃时脚本同样返回 0；在此显式确认 epoch 产物已落盘，避免假成功
+test -f exp/conformer/epoch_0.pt
 ```
 
 训练完成后检查输出：
@@ -288,7 +374,7 @@ exp/conformer/epoch_0.pt
 
 ---
 
-## 9. 测试推理（stage 5）
+## 10. 测试推理（stage 5）
 
 stage 5 为模型测试推理阶段，将测试集中语音文件识别为文本。此外，stage 5 还提供平均模型的功能：当 `${average_checkpoint}` 为 `true`（脚本默认值）时，将交叉验证集上最佳的 `${average_num}` 个模型平均，生成增强模型 `avg_1.pt`，供解码与导出使用：
 
@@ -301,27 +387,34 @@ cd wenet/examples/aishell/s0
 bash run_npu.sh --stage 5 --stop_stage 5 --average_num 1 --data /root/asr-data/OpenSLR/33
 ```
 
-验证推理结果（测试集 7176 条全部识别完成，并抽样打印前两条识别文本）：
+验证推理结果（识别输出须覆盖测试集全部语音，并抽样打印前两条识别文本）：
 
 ```shell #test id="verify-infer"
 cd wenet/examples/aishell/s0
 test -f exp/conformer/avg_1.pt && echo "avg_1.pt ok"
-wc -l exp/conformer/ctc_greedy_search/text | awk '{print $1}'
+n=$(awk 'END{print NR}' exp/conformer/ctc_greedy_search/text)
+m=$(awk 'END{print NR}' data/test/wav.scp)
+if [ "$n" -ne "$m" ]; then
+  echo "recognized $n lines, expected $m"
+  exit 1
+fi
+echo "all test utterances recognized"
+echo "=== sample ==="
 head -2 exp/conformer/ctc_greedy_search/text
 ```
 
-输出结果如下（xxx 为识别文本，随模型收敛情况变化）：
+输出结果如下（识别文本随模型收敛情况变化）：
 
-```shell #test-result id="verify-infer" fuzzy='xxx'
+```shell #test-result id="verify-infer"
 avg_1.pt ok
-7176
-xxx
-xxx
+all test utterances recognized
+=== sample ===
+...
 ```
 
 ---
 
-## 10. 导出训练好的模型（stage 6）
+## 11. 导出训练好的模型（stage 6）
 
 stage 6 为模型导出阶段，`wenet/bin/export_jit.py` 使用 `Libtorch` 导出以上训练好的模型（基于 stage 5 生成的 `avg_1.pt`），导出的模型可用于其他编程语言（如 C++）的推理：
 
@@ -348,7 +441,7 @@ final_quant.zip ok
 
 ---
 
-## 11. 验证完整流程
+## 12. 验证完整流程
 
 确认所有关键文件均已生成：
 

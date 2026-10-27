@@ -83,11 +83,21 @@ pip install -r requirements-npu.txt
 cd MiniOneRec
 test -f npu_support.py && echo "shim present"
 test -f requirements-npu.txt && echo "requirements present"
-test "$(grep -l '^import npu_support$' sft.py evaluate.py sft_gpr.py ts_rec_sft.py \
-    rl.py rl_gpr.py sasrec.py rq/rqvae.py rq/rqkmeans_plus.py rq/generate_indices.py \
-    rq/generate_indices_plus.py rq/text2emb/amazon_text2emb.py \
-    rq/text2emb/amazon_text2emb_gpr.py | wc -l)" -eq 13 \
-    && echo "entry scripts shimmed: 13/13"
+files="sft.py evaluate.py sft_gpr.py ts_rec_sft.py rl.py rl_gpr.py sasrec.py \
+rq/rqvae.py rq/rqkmeans_plus.py rq/generate_indices.py rq/generate_indices_plus.py \
+rq/text2emb/amazon_text2emb.py rq/text2emb/amazon_text2emb_gpr.py"
+shimmed=0
+missing=
+# rq/generate_indices.py 的仓库副本是 CRLF（上游遗留），先去掉 \r 再匹配
+for f in $files; do
+    if tr -d '\r' < "$f" | grep -qx 'import npu_support'; then
+        shimmed=$((shimmed + 1))
+    else
+        missing="$missing $f"
+    fi
+done
+echo "entry scripts shimmed: ${shimmed}/13"
+for f in $missing; do echo "missing shim: $f"; done
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 python -c "import npu_support; print('shim import ok')"
 ```

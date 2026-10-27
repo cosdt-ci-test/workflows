@@ -266,6 +266,7 @@ override 模块是本仓（cosdt-ci-test/workflows）里的两个普通 Python �
 | 文件 | 作用 |
 | --- | --- |
 | `projects/torchtitan/example/npu_compat.py` | override 模块本身：注册一个 `npu_attention` 工厂，替换 `GQAttention.Config` 节点 |
+| `projects/torchtitan/example/npu_compat_deepseek.py` | deepseek_v3 专用的 override（它自己的 attention 类不是 `GQAttention`） |
 | `projects/torchtitan/example/check_npu_overrides.py` | 等价性自检脚本（CPU）：断言替换进去的组件与上游组件数值等价 |
 
 `@override(target=...)` 按 Config 类型匹配、按节点 FQN 替换。因为上游框架**禁止嵌套 override**（一个 override 声明了另一个 override 节点的祖先就会报错），RoPE 与 inner attention 两处替换折进同一个 `GQAttention.Config` override 里 —— 对 debugmodel 会精确命中全部 6 层的 `model_spec.model.layers.*.attention` 节点（每个节点内部再换 rope / inner_attention）：
@@ -276,7 +277,7 @@ BASE="https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/tor
 REF="${DOC_REF:-main}"
 AUTH=()
 [ -n "${GH_TOKEN:-}" ] && AUTH+=(-H "Authorization: Bearer $GH_TOKEN")
-for f in npu_compat.py check_npu_overrides.py; do
+for f in npu_compat.py npu_compat_deepseek.py check_npu_overrides.py; do
   curl -fsSL --retry 3 --retry-connrefused --retry-delay 2 \
     -H "Accept: application/vnd.github.raw" "${AUTH[@]}" \
     "$BASE/$f?ref=$REF" -o "$HOME/tt-npu-overrides/$f"

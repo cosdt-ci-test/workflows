@@ -65,15 +65,12 @@ git checkout <UPSTREAM_REF>
 
 ## 4. 安装 NPU 依赖
 
-**不要**执行 `pip install -r requirements.txt`：其中 `torchrec/fbgemm_gpu/torchsnapshot` 是 CUDA 专属包、全部 `nvidia-*-cu11/12` 为 CUDA 运行库。仓库另附 `requirements-npu.txt` 收敛了 NPU 依赖集；SFT 冒烟所需的包如下（入口脚本仍会 `import bitsandbytes`，0.48.1 提供 aarch64 wheel，一并安装）：
-
-torch 栈与 CANN 9.1.0 配套（torch 2.9.0 + torch_npu 2.9.0.post2）：
+**不要**执行 `pip install -r requirements.txt`：其中 `torchrec/fbgemm_gpu/torchsnapshot` 是 CUDA 专属包、全部 `nvidia-*-cu11/12` 为 CUDA 运行库。改用仓库内的 `requirements-npu.txt`，它按 CANN 9.1.0 固定 torch 2.9.0 + torch_npu 2.9.0.post2，并保留 SFT 与评估所需的其余包（入口脚本仍会 `import bitsandbytes`，0.48.1 提供 aarch64 wheel）。
 
 ```shell #test-setup id="install"
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
-pip install torch==2.9.0 torch-npu==2.9.0.post2
-pip install modelscope transformers==4.57.1 accelerate==1.10.1 datasets==4.2.0 \
-    tokenizers==0.22.1 fire==0.7.1 pandas==2.2.2 tqdm bitsandbytes==0.48.1
+cd MiniOneRec
+pip install -r requirements-npu.txt
 ```
 
 ---

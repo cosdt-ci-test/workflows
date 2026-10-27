@@ -33,14 +33,13 @@ git checkout <UPSTREAM_REF>
 
 ## 3. 安装依赖
 
-在 `Quick-start-Ascend.md` 的冒烟依赖之外，补上 RL（`trl`、`scikit-learn`）与 RQ 预处理（`polars`、`openai`、`aiohttp`）所需的包，使每个入口脚本都能被导入。
+与 `Quick-start-Ascend.md` 用同一份 `requirements-npu.txt`，再补上它注释里标为可选的 RL（`trl`、`scikit-learn`、`wandb`）与 SID 构建（`polars`、`openai`、`aiohttp`）包，使每个入口脚本都能被导入。
 
 ```shell #test-setup id="install"
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
-pip install torch==2.9.0 torch-npu==2.9.0.post2
-pip install modelscope transformers==4.57.1 accelerate==1.10.1 datasets==4.2.0 \
-    tokenizers==0.22.1 fire==0.7.1 pandas==2.2.2 tqdm bitsandbytes==0.48.1 \
-    trl==0.24.0 scikit-learn wandb==0.22.2 polars openai requests aiohttp
+cd MiniOneRec
+pip install -r requirements-npu.txt
+pip install trl==0.24.0 scikit-learn wandb==0.22.2 polars openai requests aiohttp
 ```
 
 ---
@@ -141,6 +140,20 @@ device selected by evaluate.py: cuda
 `device selected by evaluate.py: cuda` 是端到端证据：`evaluate.py` 在模块级写的是 `if torch.cuda.is_available(): device = "cuda"`，只有 `transfer_to_npu` 真的把 `torch.cuda` 接口重映射到 NPU，这一行才会取到 `cuda` 而不是 `cpu`。
 
 ---
+
+## README Quickstart 步骤覆盖
+
+上游 `README.md` 的 Quickstart 是 5 步，其中三步是**带占位符的模板脚本**（`--base_model your_model_path`、`exp_name="xxx"`、写死 8 卡），任何机器上都不能原样执行：
+
+| README Quickstart | 本次如何处理 |
+| --- | --- |
+| 1. `conda create -n MiniOneRec python=3.11` | 不适用：容器内为 Python 3.12，不建 conda 环境 |
+| 2. `pip install -r requirements.txt` | 换成 `requirements-npu.txt`，由 `Quick-start-Ascend.md` 第 4 节实际安装 |
+| 3. `bash sft.sh` | 占位符 + `--nproc_per_node 8`；等价路径为 `python sft.py` 单卡冒烟 |
+| 4. `bash rl.sh` | 未跑：`accelerate launch --num_processes 8`，且 GRPO 的 vLLM 路径为 CUDA-only |
+| 5. `bash evaluate.sh` | 占位符 + 8 卡分片 + `merge.py`；等价路径为 `python evaluate.py` 单卡 |
+
+可执行的等价序列见 `Quick-start-Ascend.md`（9 节，逐块由 CI 执行）。
 
 ## README 脚本覆盖对照
 

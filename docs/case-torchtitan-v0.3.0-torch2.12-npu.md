@@ -220,8 +220,8 @@ master 均已修复但未回合 2.12.0，修复手段全部是 sed 镜像上游 
 
 | 组合 | 根因 |
 |---|---|
-| gpt_oss / gpt_oss_debugmodel(_flex) | gpt_oss 的 attention 类是自己的 `Attention(BaseAttention)`（models/gpt_oss/model.py:43），不是 GQAttention 的子类 → override 命中不到 → flex/varlen 未被替换 → 撞 make_reduction(strict_sum) |
-| deepseek_v3 / deepseek_v3_debugmodel(_mtp) | 同上（models/deepseek_v3/model.py:28） |
+| gpt_oss / gpt_oss_debugmodel(_flex) | gpt_oss 的 attention 类是自己的 `Attention(BaseAttention)`（models/gpt_oss/model.py:43），不是 GQAttention 的子类 → override 命中不到 → flex/varlen 未被替换 → 撞 make_reduction(strict_sum)；而且即使写了 per-family override 也做不出等价 attention：① 它的 attention sink 需要 LSE（out_transform(out, lse)），而 NPU 上三个能返回 LSE 的 SDPA 变体（aten::_scaled_dot_product_flash_attention / _cudnn_attention / _efficient_attention）全部 fallback 到 CPU；② 它是 GQA（64/8 头），而 aclnnFlashAttention 不支持 enable_gqa + attn_mask 同给（实测 aclnnFlashAttention failed），而 dense block-causal 掩码正是要走 attn_mask |
+| deepseek_v3 / deepseek_v3_debugmodel(_mtp) | 同上（models/deepseek_v3/model.py:28）—— 但已解：per-family override 落地（example/npu_compat_deepseek.py），两条实测 exit 0，已进 supported |
 | qwen3_5 / qwen35_* | 同上（`Qwen35Attention`），另外样本长度普遍 > seq_len（406/418 vs 256）→ 需要更大的 seq-len |
 | deepseek_v3 / *_minimal_async_ep | 上游配置自身不自洽：config 里 expert_parallel_degree=1，而 dispatcher 硬性要求 ep>1；2 卡实测撞 mesh 断言，加 --parallelism.expert-parallel-degree 2 仍是同一个断言 |
 | deepseek_v3 / *_hybridep | 需要 deep_ep 库（DeepEP，CUDA-only） |

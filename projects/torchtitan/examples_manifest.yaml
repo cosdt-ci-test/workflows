@@ -488,11 +488,19 @@ unsupported_configs:
   - torchtitan/models/qwen3_5/config_registry.py:qwen35_4b
   - torchtitan/models/qwen3_5/config_registry.py:qwen35_9b
 
-  # --- gpt_oss 系：CosSinRoPE(yarn) 无 complex 墙，但需要 per-family override ---
+  # --- gpt_oss 系：CosSinRoPE(yarn) 无 complex 墙，但 NPU 上做不出等价的 attention ---
   # gpt_oss 的 attention 类是自己的 `Attention(BaseAttention)`（models/gpt_oss/model.py:43），
   # 不是 GQAttention 的子类 → npu_compat.npu_attention 命中不到 → flex/varlen 没被替换
-  # → 撞 torch_npu 的 make_reduction(strict_sum) 墙。要跑需要再写一条针对该类的 override
-  # （同 llama3 的做法：换 inner_attention + 把 positions 透传进去）。
+  # → 撞 torch_npu 的 make_reduction(strict_sum) 墙。要跑需要再写一条针对该类的 override，
+  # 但 2026-10-27 在 hdc-stable-npu-2 上测出两个更硬的约束（实测）：
+  #   (1) attention sinks：gpt_oss 的注意力带 sink（out_transform(out, lse)），需要 attention
+  #       的 LSE，而 NPU 上三个能返回 LSE 的 SDPA 变体（aten::_scaled_dot_product_
+  #       flash_attention / _cudnn_attention / _efficient_attention）全部 fallback 到 CPU
+  #       → 拿不到 LSE → sink 无法实现（强行忽略就是静默改语义）；
+  #   (2) GQA + mask：gpt_oss 是 GQA（n_heads=64 / n_kv_heads=8），而 aclnnFlashAttention
+  #       不支持 enable_gqa 与 attn_mask 同时给（实测 aclnnFlashAttention failed），
+  #       而 dense block-causal 掩码正是要走 attn_mask。
+  # → 结论：gpt_oss 在 NPU 上需要上游补 SDPA 的 LSE 出口（或者 NPU 支持 GQA+mask）才能等价。
   # gpt_oss 默认 attn_backend="varlen"（models/gpt_oss/__init__.py:391，已单列 CUDA-only 段）。
   - torchtitan/models/gpt_oss/config_registry.py:gpt_oss_debugmodel_flex
 

@@ -89,6 +89,7 @@ rq/text2emb/amazon_text2emb.py rq/text2emb/amazon_text2emb_gpr.py"
 shimmed=0
 missing=
 # rq/generate_indices.py 的仓库副本是 CRLF（上游遗留），先去掉 \r 再匹配
+# rq/generate_indices.py 的仓库副本是 CRLF（上游遗留），先去掉 \r 再匹配
 for f in $files; do
     if tr -d '\r' < "$f" | grep -qx 'import npu_support'; then
         shimmed=$((shimmed + 1))

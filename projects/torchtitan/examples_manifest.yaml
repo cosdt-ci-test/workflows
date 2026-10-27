@@ -366,31 +366,7 @@ supported:
       - --dump-folder ${CI_OUTPUT_DIR}/qwen3_1_7b
     timeout_minutes: 90
 
-  # 8) Four cards: sft_qwen3_8b_math -- the SFT recipe on an 8B model
-  #    (8B x 12 bytes = 96 GB, so three cards would not do).  The recipe's
-  #    dataset is HF's openai/gsm8k (7473 train rows, ~2.3 MB of parquet),
-  #    which the CI runners can reach; nothing to stage.  Its tokenizer asset
-  #    (Qwen3-8B) comes from modelscope like the other size tiers.
-  - path: example/run_train_4card.sh
-    source: project
-    profile: torchtitan
-    runner: linux-aarch64-a2-4
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-910b-ubuntu22.04-py3.12
-    npu_devices: '0,1,2,3'
-    overlay_args:
-      - --module qwen3
-      - --config sft_qwen3_8b_math
-      - --override.imports npu_compat.npu_attention
-      - --comm.mode default
-      - --training.steps 2
-      - --training.local-batch-size 1
-      - --training.seq-len 256
-      - --metrics.log-freq 1
-      - --metrics.disable-color-printing
-      - --dump-folder ${CI_OUTPUT_DIR}/sft_qwen3_8b_math
-    timeout_minutes: 120
-
-  # 9) Eight cards: deepseek_v3_16b, whose recipe asks for expert parallelism
+  # 8) Eight cards: deepseek_v3_16b, whose recipe asks for expert parallelism
   #    of 8 (16B x 12 bytes = 192 GB, spread over 8 x 32 GB).  Needs the
   #    per-family override and the deepseek-moe-16b-base tokenizer asset.
   - path: example/run_train_8card.sh
@@ -404,6 +380,14 @@ supported:
       - --config deepseek_v3_16b
       - --override.imports npu_compat_deepseek.deepseek_attention
       - --comm.mode default
+      # the recipe compiles its loss component (compile=CompileConfig(enable=True,
+      # components=["loss"])) and torch_npu 2.14.0 cannot lower ANY compiled
+      # reduction: its lowering.make_reduction lacks the strict_sum keyword that
+      # torch 2.14's inductor sum_ lowering always passes
+      # ("TypeError: make_reduction() got an unexpected keyword argument
+      # 'strict_sum'").  The compiled-loss path is therefore skipped here; the
+      # same wall blocks every compiled recipe (graph_trainer and friends).
+      - --compile.no-enable
       - --dataloader.dataset c4_test
       - --training.steps 2
       - --training.local-batch-size 1
@@ -413,30 +397,7 @@ supported:
       - --dump-folder ${CI_OUTPUT_DIR}/deepseek_v3_16b
     timeout_minutes: 120
 
-  # 10) Eight cards: qwen3_14b (14B x 12 bytes = 168 GB).  Same override and
-  #    dataset override as the 0.6B entry; the tokenizer asset is fetched by
-  #    setup_example.sh.
-  - path: example/run_train_8card.sh
-    source: project
-    profile: torchtitan
-    runner: linux-aarch64-a2-8
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-910b-ubuntu22.04-py3.12
-    npu_devices: '0,1,2,3,4,5,6,7'
-    overlay_args:
-      - --module qwen3
-      - --config qwen3_14b
-      - --override.imports npu_compat.npu_attention
-      - --comm.mode default
-      - --dataloader.dataset c4_test
-      - --training.steps 2
-      - --training.local-batch-size 1
-      - --training.seq-len 256
-      - --metrics.log-freq 1
-      - --metrics.disable-color-printing
-      - --dump-folder ${CI_OUTPUT_DIR}/qwen3_14b
-    timeout_minutes: 120
-
-  # 11) muse_glimmer, single card (text path; the multimodal variant needs
+  # 9) muse_glimmer, single card (text path; the multimodal variant needs
   #    an NPU op the vision path does not have yet).
   - path: example/run_train_1card.sh
     source: project
@@ -555,6 +516,24 @@ unsupported_configs:
   - torchtitan/models/llama3/config_registry.py:llama3_debugmodel_float8
   # emulate=True 能过 float8 check（float8.py:88），但仍依赖 torchao 且 flex + ComplexRoPE 两墙未解。
   - torchtitan/models/llama3/config_registry.py:llama3_debugmodel_float8_emulate_lora
+
+  # sft_qwen3_8b_math（4 卡档）：不是 NPU 问题，是**权重**问题 —— SFT recipe 从
+  # hf_assets_path 加载 8B 预训练权重（CI 首跑实测：assets/hf/Qwen3-8B 里只有
+  # tokenizer 时，报 "Missing key in checkpoint state_dict: lm_head.weight"）。
+  # 而 examples 的 setup 是**按 profile** 跑的（18 个 entry 共用一次 setup），把 16 GB
+  # 权重每个 job 都拉一遍不现实（该 workflow 没有模型缓存卷）→ 留在 unsupported，
+  # 等有 entry 级资产缓存再说。数据侧没有障碍：gsm8k 只有 7473 行 / 约 2.3 MB parquet
+  # （modelscope 的 AI-ModelScope/gsm8k 有同一份），且 CI 机器能直连 huggingface.co。
+  # 另注：recipe 里 load_dataset(..., name="main") 的 "main" 配置名**无法从 CLI 改**
+  # （tyro 拒绝 --dataloader.load-dataset-kwargs.name 的三种写法），本地目录只暴露
+  # "default" → 想用本地替身数据必须改上游配置。
+
+  # qwen3_14b：dense 14B 的权重 + AdamW 状态放不进 8 张 32GB 卡 —— CI 实测
+  # （run 40478193658）：step 1 就到 28.09 GiB/卡（95.27%），下一个 1.45 GiB 的
+  # 分配直接 NPU OOM（8 卡全红）。算得过来：14B x (2 权重 + 2 梯度 + 8 AdamW fp32)
+  # = 168 GB / 8 卡 = 21 GB/卡，再加激活就满。8 卡这一档只有 MoE 能用
+  # （deepseek_v3_16b 的 ep=8 绿了）。要跑 14B dense 需要更多卡或 8-bit 优化器。
+  - torchtitan/models/qwen3/config_registry.py:qwen3_14b
 
   # --- qwen3 系：RoPE 无墙（CosSinRoPE 纯 cos/sin，无 complex），debugmodel 系已跑通
   # （见 supported 段：debugmodel / non_fused_qkv / moe_param_groups / moe_debug，

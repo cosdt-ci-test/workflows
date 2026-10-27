@@ -295,28 +295,34 @@ projects:
       quick_start: .github/workflows/torchtitan-quick-start.yml
       # Release-only examples guard on the shared engine
       # example-template.yml (design: docs/examples-guard-engine.md).
-      # Supported entries (2) run torchtitan's own trainer entry point
-      # (`python -m torchtitan.train --module llama3 --config ...`) through
-      # project-side launchers (projects/torchtitan/example/): 1-card and
-      # 2-card llama3 debugmodel (upstream's default config, ~6 M params —
-      # fits a single 30 GB card, FSDP shard=2 splits cleanly on 2 cards;
-      # the default ChunkedLossWrapper loss runs on torch 2.14 / torch_npu
-      # 2.14, so no loss detour). The NPU-incompatible attention stack
-      # (complex64 RoPE cache, flex attention) is swapped through
-      # torchtitan's official override mechanism (--override.imports), so
-      # the upstream checkout is never patched. The replacement components
-      # are numerically equivalent to the upstream ones they stand in for
-      # (rope bit-identical, mask within 3.6e-07) and that is asserted on
-      # every quick-start run by projects/torchtitan/example/
-      # check_npu_overrides.py. Smoke = 2 steps, ~3 min each.
+      # Supported entries (11) run torchtitan's own trainer entry point
+      # (`python -m torchtitan.train --module X --config Y`) through
+      # project-side launchers (projects/torchtitan/example/run_train_{1,2}card.sh):
+      # 10 single-card (llama3 debugmodel + its varlen / ce_loss / dist_gemm /
+      # sft variants, qwen3 debugmodel + non_fused_qkv + 2 MoE recipes,
+      # muse_glimmer debugmodel) and 1 two-card llama3 debugmodel (FSDP
+      # shard=2 + bf16, cross-rank HCCL). All of them use upstream's default
+      # loss (the 2026-09 ChunkedLossWrapper meta-tensor leak does not
+      # reproduce on torch 2.14 / torch_npu 2.14), so no loss detour.
+      # The NPU-incompatible attention stack (complex64 RoPE cache, flex
+      # attention) is swapped through torchtitan's official override
+      # mechanism (--override.imports), so the upstream checkout is never
+      # patched. The replacement components are numerically equivalent to the
+      # upstream ones they stand in for (rope bit-identical, mask within
+      # 3.6e-07) and that is asserted on every quick-start run by
+      # projects/torchtitan/example/check_npu_overrides.py.
       # Stack: CANN 9.2.0 / torch 2.14.0 / torch_npu 2.14.0 /
       # triton-ascend 3.6.0. The (module, config) ledger of everything
       # NOT run lives in projects/torchtitan/examples_manifest.yaml
-      # (unsupported_configs), e.g. 8B and larger (cpu-offload init
-      # livelock, pytorch/pytorch#180088), float8/MXFP8/NVFP4 variants
-      # (no NPU backend), and the other model families (they mostly need
-      # the same override applied to their own family - flex wall, see the
-      # manifest).
+      # (unsupported_configs): the size tiers (0.6B and up — they need the
+      # real tokenizer assets plus enough cards; qwen3_0_6b measured exit 0 on
+      # one card), the per-family attention classes (gpt_oss / deepseek_v3 /
+      # qwen3_5 have their own Attention class, not GQAttention, so they need
+      # their own override), the quantization families (nvfp4 / mxfp8 /
+      # float8 are CUDA-only), the EP variants (one upstream config is
+      # self-inconsistent, the other needs the CUDA-only DeepEP), and flux
+      # (gated FLUX.1-dev autoencoder + 44.5 GB of T5-XXL weights + more
+      # than one card's memory).
       # Note: on this stack torch_npu 2.14.0 cannot lower ANY compiled
       # reduction (make_reduction lacks strict_sum), so torchtitan's
       # compile feature and the graph_trainer recipes are out of reach

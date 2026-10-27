@@ -73,7 +73,7 @@ supported:
   #    backward, optimizer step, metrics, checkpoint write.
   #    Config is upstream's default `llama3_debugmodel` (ChunkedLossWrapper) -
   #    no loss override, no config detour.
-  - path: example/run_llama3_debugmodel_1card.sh
+  - path: example/run_train_1card.sh
     source: project
     profile: torchtitan
     runner: linux-aarch64-a2-1
@@ -96,7 +96,7 @@ supported:
   #    cross-rank HCCL collectives, DTensor parameter distribution and the
   #    default spmd backend (torch >= 2.13 translates the FSDP annotations,
   #    so no --parallelism.spmd-backend override is needed).
-  - path: example/run_llama3_debugmodel_2card.sh
+  - path: example/run_train_2card.sh
     source: project
     profile: torchtitan
     runner: linux-aarch64-a2-2
@@ -116,6 +116,183 @@ supported:
       - --dump-folder ${CI_OUTPUT_DIR}/llama3_debugmodel_2card
     timeout_minutes: 90
 
+  # 3) One more llama3 recipe, single card. All the entries below share
+  #    the same launcher and the same override; only --module / --config
+  #    change. Measured exit 0 on hdc-stable-npu-2 / -3 (2026-10-27):
+  #    varlen attention backend, the ce_loss recipe (kept for coverage even
+  #    though the default recipe now runs), the dist_gemm TP backend, and the
+  #    SFT recipe with its chat dataset.
+  - path: example/run_train_1card.sh
+    source: project
+    profile: torchtitan
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-910b-ubuntu22.04-py3.12
+    npu_devices: '0'
+    overlay_args:
+      - --module llama3
+      - --config llama3_debugmodel_varlen_attn
+      - --override.imports npu_compat.npu_attention
+      - --comm.mode default
+      - --training.steps 2
+      - --training.local-batch-size 1
+      - --training.seq-len 256
+      - --metrics.log-freq 1
+      - --metrics.disable-color-printing
+      - --dump-folder ${CI_OUTPUT_DIR}/llama3_debugmodel_varlen_attn
+    timeout_minutes: 60
+  - path: example/run_train_1card.sh
+    source: project
+    profile: torchtitan
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-910b-ubuntu22.04-py3.12
+    npu_devices: '0'
+    overlay_args:
+      - --module llama3
+      - --config llama3_debugmodel_ce_loss
+      - --override.imports npu_compat.npu_attention
+      - --comm.mode default
+      - --training.steps 2
+      - --training.local-batch-size 1
+      - --training.seq-len 256
+      - --metrics.log-freq 1
+      - --metrics.disable-color-printing
+      - --dump-folder ${CI_OUTPUT_DIR}/llama3_debugmodel_ce_loss
+    timeout_minutes: 60
+  - path: example/run_train_1card.sh
+    source: project
+    profile: torchtitan
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-910b-ubuntu22.04-py3.12
+    npu_devices: '0'
+    overlay_args:
+      - --module llama3
+      - --config llama3_debugmodel_dist_gemm
+      - --override.imports npu_compat.npu_attention
+      - --comm.mode default
+      - --training.steps 2
+      - --training.local-batch-size 1
+      - --training.seq-len 256
+      - --metrics.log-freq 1
+      - --metrics.disable-color-printing
+      - --dump-folder ${CI_OUTPUT_DIR}/llama3_debugmodel_dist_gemm
+    timeout_minutes: 60
+  - path: example/run_train_1card.sh
+    source: project
+    profile: torchtitan
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-910b-ubuntu22.04-py3.12
+    npu_devices: '0'
+    overlay_args:
+      - --module llama3
+      - --config sft_debugmodel
+      - --override.imports npu_compat.npu_attention
+      - --comm.mode default
+      - --training.steps 2
+      - --training.local-batch-size 1
+      - --training.seq-len 256
+      - --metrics.log-freq 1
+      - --metrics.disable-color-printing
+      - --dump-folder ${CI_OUTPUT_DIR}/llama3_sft_debugmodel
+    timeout_minutes: 60
+
+  # 4) qwen3 family, single card. The rope is upstream's CosSinRoPE (a real
+  #    cache, no complex64 problem) so the override leaves it alone; only the
+  #    attention backend is swapped. Covers the dense model, the separate-QKV
+  #    path and the two MoE recipes.
+  - path: example/run_train_1card.sh
+    source: project
+    profile: torchtitan
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-910b-ubuntu22.04-py3.12
+    npu_devices: '0'
+    overlay_args:
+      - --module qwen3
+      - --config qwen3_debugmodel
+      - --override.imports npu_compat.npu_attention
+      - --comm.mode default
+      - --training.steps 2
+      - --training.local-batch-size 1
+      - --training.seq-len 256
+      - --metrics.log-freq 1
+      - --metrics.disable-color-printing
+      - --dump-folder ${CI_OUTPUT_DIR}/qwen3_debugmodel
+    timeout_minutes: 60
+  - path: example/run_train_1card.sh
+    source: project
+    profile: torchtitan
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-910b-ubuntu22.04-py3.12
+    npu_devices: '0'
+    overlay_args:
+      - --module qwen3
+      - --config qwen3_debugmodel_non_fused_qkv
+      - --override.imports npu_compat.npu_attention
+      - --comm.mode default
+      - --training.steps 2
+      - --training.local-batch-size 1
+      - --training.seq-len 256
+      - --metrics.log-freq 1
+      - --metrics.disable-color-printing
+      - --dump-folder ${CI_OUTPUT_DIR}/qwen3_debugmodel_non_fused_qkv
+    timeout_minutes: 60
+  - path: example/run_train_1card.sh
+    source: project
+    profile: torchtitan
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-910b-ubuntu22.04-py3.12
+    npu_devices: '0'
+    overlay_args:
+      - --module qwen3
+      - --config qwen3_debugmodel_moe_param_groups
+      - --override.imports npu_compat.npu_attention
+      - --comm.mode default
+      - --training.steps 2
+      - --training.local-batch-size 1
+      - --training.seq-len 256
+      - --metrics.log-freq 1
+      - --metrics.disable-color-printing
+      - --dump-folder ${CI_OUTPUT_DIR}/qwen3_debugmodel_moe_param_groups
+    timeout_minutes: 60
+  - path: example/run_train_1card.sh
+    source: project
+    profile: torchtitan
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-910b-ubuntu22.04-py3.12
+    npu_devices: '0'
+    overlay_args:
+      - --module qwen3
+      - --config qwen3_moe_debug
+      - --override.imports npu_compat.npu_attention
+      - --comm.mode default
+      - --training.steps 2
+      - --training.local-batch-size 1
+      - --training.seq-len 256
+      - --metrics.log-freq 1
+      - --metrics.disable-color-printing
+      - --dump-folder ${CI_OUTPUT_DIR}/qwen3_moe_debug
+    timeout_minutes: 60
+
+  # 5) muse_glimmer, single card (text path; the multimodal variant needs
+  #    an NPU op the vision path does not have yet).
+  - path: example/run_train_1card.sh
+    source: project
+    profile: torchtitan
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-910b-ubuntu22.04-py3.12
+    npu_devices: '0'
+    overlay_args:
+      - --module muse_glimmer
+      - --config muse_glimmer_debugmodel
+      - --override.imports npu_compat.npu_attention
+      - --comm.mode default
+      - --training.steps 2
+      - --training.local-batch-size 1
+      - --training.seq-len 256
+      - --metrics.log-freq 1
+      - --metrics.disable-color-printing
+      - --dump-folder ${CI_OUTPUT_DIR}/muse_glimmer_debugmodel
+    timeout_minutes: 60
+
 # No upstream file is an example on its own: torchtitan's examples are
 # (module, config) combinations, recorded in `unsupported_configs` below.
 # The upstream library tree is declared as "not an example" via
@@ -127,35 +304,33 @@ unsupported: []
 # these compound entries are not machine-checked - they are the human
 # record of what was tried and why it is out of scope.
 unsupported_configs:
-  # flux_debugmodel：源 scan 看起来可上，但实证 1 卡 full_dtensor 路径连撞
-  # 五道墙，全部不是"NPU 缺算子"，是 v0.3.0 source-level + 离线 pod 缺网络
-  # 共同叠加：(1) flux/parallelize.py:70 `assert dp_mesh is not None` —— 1 卡
-  # full_dtensor 下 get_activated_mesh(["dp_replicate", "fsdp"]) 返回 None
-  # （full_dtensor single_axis_meshes 只有 "dp_shard" 没有 "fsdp"；1 卡
-  # dp_replicate=1/fsdp=1 都走 None 分支），CUDA 同卡同死，非 NPU 专属。
-  # 需 monkey-patch parallelize_flux 改走 llama3 的 resolve_fsdp_mesh 路径
-  # + model.parallelize(parallel_dims) 分发参数 + annotate_dp_cp_params_as_r
-  # 仅在 spmd_types 下调（full_dtensor 没 spmd_dense_mesh）；(2) FluxTrainer
-  # 仍要从 huggingface.co 拉 google/t5-v1_1-xxl + openai/clip-vit-large-patch14
-  # tokenizer（FluxTokenizerContainer.__init__），离线 coder pod 直连 HF 超时，
-  # 需 monkey-patch from_pretrained 或 setup 阶段 curl 预下（已有
-  # [[xet-bridge-416-hf-mirror-curl-bypass]] 流程但本例未串入）；
-  # (3) load_ae 即便 random_init=True 跳 ae.safetensors 加载，T5Tokenizer
-  # 仍要 sentencepiece + protobuf，setup_example.sh 已 pip install 这俩；
-  # (4) sitecustomize 还要 strip create_block_mask separate_full_blocks kwarg
-  # （同 llama3 shim）；(5) 即便过完上面四条，FluxTrainer 的 validation
-  # cfg freq=5 steps=48 走 FluxValidator 拉 coco-validation 等本地缺的
-  # 资产（config_registry.py:69 设 dataset="cc12m-test" + img_size=256，
-  # 但 freq=5 触发 validator 在 step 5 即尝试，没 cc12m 本地素材就 FileNotFound）。
-  # 任一 `overlay=CLI` 都绕不开 flux 自身 source bug：flux 的 parallelize_flux
-  # 1-card 写死 key "fsdp"、FluxTrainer 写死走 HF network，double-source-patch
-  # 性质；按 [[no-source-patch-policy]] 应继续留 unsupported，注释归档实证结论。
+  # flux_debugmodel：**网络不是瓶颈**，缺的是 gated 资产 + 显存。2026-10-27 在
+  # hdc-stable-npu-2（1 卡）用 modelscope 本地资产实测（集群到 modelscope 通、到
+  # huggingface.co 不通），可绕开的都绕开了：
+  # (1) tokenizer 资产可解 —— modelscope 有 google/t5-v1_1-small 与
+  #     AI-ModelScope/CLIP-vit-large-patch14，CLI 覆盖 --tokenizer.t5-tokenizer-path /
+  #     --tokenizer.clip-tokenizer-path / --encoder.t5-encoder / --encoder.clip-encoder
+  #     指向本地目录即可（实测生效）；
+  # (2) --encoder.random-init 生效，可跳过 gated 的 black-forest-labs/FLUX.1-dev
+  #     ae.safetensors（该仓库 401 gated）；顺带 transformers>=4.51.1 +
+  #     sentencepiece 可从 pypi 装；
+  # (3) --parallelism.spmd-backend spmd_types 生效，绕开 1 卡的
+  #     flux/parallelize.py:70 `assert dp_mesh is not None`（该 assert 只在非
+  #     spmd_types 分支；CUDA 同卡同死，非 NPU 专属）；实测模型能建、FSDP 能上；
+  # (4) 数据用本地 tests/assets/cc12m_test —— FluxDataLoader.Config.dataset 默认
+  #     就是 cc12m-test，不需要 HF 的 pixparse/cc12m-wds（后者同样 401 gated）；
+  # 仍然不通的是两件：
+  # (5) 文本编码器必须是真 T5-XXL —— flux 的投影层按 d_model=4096 建的，换
+  #     t5-v1_1-small（512）实测报 aclnnAddmm "The k-axis of the two inputs are
+  #     different"；google/t5-v1_1-xxl 非 gated 可下，但 pytorch_model.bin 44.5 GB；
+  # (6) 显存 —— T5-XXL fp32 19 GB + CLIP + 主干 + 优化器状态 > 1 卡 32 GB。
+  # → 网络通了之后仍缺 44.5 GB 权重与多卡，故仍留 unsupported。
   - torchtitan/models/flux/config_registry.py:flux_debugmodel
 
-  # --- llama3 系：debugmodel 系现在是通过 project 侧 launcher 跑的（见 supported 段，
-  # --config llama3_debugmodel），所以下面这些 upstream config_registry 入口按
-  # 「不是 example 文件」的语义留在 unsupported 段（reconciliation 按路径字面匹配，
-  # 会按设计报 stale；per-config 理由见本段注释）。
+  # --- llama3 系：debugmodel 系（+ varlen/ce_loss/dist_gemm/sft 变体）现在是通过
+  # project 侧 launcher 跑的（见 supported 段），所以下面这些 upstream config_registry
+  # 入口按「不是 example 文件」的语义留在 unsupported 段（reconciliation 按路径字面
+  # 匹配，会按设计报 stale；per-config 理由见本段注释）。
   # 2026-10-26 复测（hdc-stable-npu-3，CANN 9.1.0 / torch 2.14.0 / torch_npu 2.14.0 /
   # triton-ascend 3.6.0，torchtitan v0.3.0 干净 checkout）修正了原来的「三墙」结论：
   #   · ComplexRoPE 复数墙 —— 仍然成立。rope.py:233,261 用 torch.polar/view_as_complex
@@ -185,10 +360,6 @@ unsupported_configs:
   # qwen3_debugmodel / qwen3_debugmodel_non_fused_qkv / qwen3_debugmodel_moe_param_groups
   # （只加 flex→SDPA override）与 gpt_oss_debugmodel_flex（再加 varlen→SDPA）均 exit 0，
   # 即这些条目多数只是「还没给该族配 override」，不是硬墙。
-  - torchtitan/models/llama3/config_registry.py:llama3_debugmodel
-  - torchtitan/models/llama3/config_registry.py:llama3_debugmodel_ce_loss
-  - torchtitan/models/llama3/config_registry.py:llama3_debugmodel_dist_gemm
-  - torchtitan/models/llama3/config_registry.py:sft_debugmodel
 
   # llama3_8b：两重阻塞（与 debugmodel 的 flex / ComplexRoPE 两墙同源；ChunkedLoss 墙
   # 在 torch 2.14 上已不成立，见上面 llama3 系段落）——
@@ -221,13 +392,15 @@ unsupported_configs:
   # emulate=True 能过 float8 check（float8.py:88），但仍依赖 torchao 且 flex + ComplexRoPE 两墙未解。
   - torchtitan/models/llama3/config_registry.py:llama3_debugmodel_float8_emulate_lora
 
-  # --- qwen3 系：RoPE 无墙（CosSinRoPE 纯 cos/sin，无 complex），但 flex 墙 ---
-  - torchtitan/models/qwen3/config_registry.py:qwen3_debugmodel
-  - torchtitan/models/qwen3/config_registry.py:qwen3_debugmodel_moe_param_groups
-  - torchtitan/models/qwen3/config_registry.py:qwen3_debugmodel_non_fused_qkv
-  # qwen3_moe_debug / moe_param_groups：两墙之上再加 MoE `torch._grouped_mm`（models/common/moe.py:120，
-  # CUDA 专属，torch_npu 只有 npu_grouped_matmul、签名不同）。
-  - torchtitan/models/qwen3/config_registry.py:qwen3_moe_debug
+  # --- qwen3 系：RoPE 无墙（CosSinRoPE 纯 cos/sin，无 complex），debugmodel 系已跑通
+  # （见 supported 段：debugmodel / non_fused_qkv / moe_param_groups / moe_debug，
+  # 2026-10-27 实测 exit 0）。下面这些是规模档（0.6B 起），不是「跑不了」而是
+  # 「要 tokenzier 资产 + 足够的卡」：真实 config 的 hf_assets_path 指向
+  # ./assets/hf/Qwen3-*（debugmodel 用的是本地 tests/assets/tokenizer），tokenizer 可从
+  # modelscope 拉；数据要 --dataloader.dataset c4_test 覆盖（HF 的 allenai/c4 不可达）；
+  # qwen3_0_6b 实测 1 卡 exit 0，qwen3_1_7b 1 卡 OOM（20 GB 权重+状态 > 32 GB 卡）。
+  # debugmodel 规模的 MoE 实测不触发 `torch._grouped_mm`（models/common/moe.py:120，CUDA 专属，
+  # torch_npu 只有 npu_grouped_matmul、签名不同）—— supported 段的 moe 两条 exit 0。
   - torchtitan/models/qwen3/config_registry.py:qwen3_0_6b
   - torchtitan/models/qwen3/config_registry.py:qwen3_1_7b
   - torchtitan/models/qwen3/config_registry.py:qwen3_14b
@@ -246,9 +419,12 @@ unsupported_configs:
   - torchtitan/models/qwen3_5/config_registry.py:qwen35_4b
   - torchtitan/models/qwen3_5/config_registry.py:qwen35_9b
 
-  # --- gpt_oss 系：CosSinRoPE(yarn) 无 complex 墙，但 flex 墙 ---
-  # 注意 gpt_oss 默认 attn_backend="varlen"（models/gpt_oss/__init__.py:391，已单列 CUDA-only 段）；
-  # 本 flex 变体只换掉 varlen，flex 墙仍在。
+  # --- gpt_oss 系：CosSinRoPE(yarn) 无 complex 墙，但需要 per-family override ---
+  # gpt_oss 的 attention 类是自己的 `Attention(BaseAttention)`（models/gpt_oss/model.py:43），
+  # 不是 GQAttention 的子类 → npu_compat.npu_attention 命中不到 → flex/varlen 没被替换
+  # → 撞 torch_npu 的 make_reduction(strict_sum) 墙。要跑需要再写一条针对该类的 override
+  # （同 llama3 的做法：换 inner_attention + 把 positions 透传进去）。
+  # gpt_oss 默认 attn_backend="varlen"（models/gpt_oss/__init__.py:391，已单列 CUDA-only 段）。
   - torchtitan/models/gpt_oss/config_registry.py:gpt_oss_debugmodel_flex
 
   # --- transformers_modeling_backend 系：loss 用 CrossEntropyLoss 直连，
@@ -278,6 +454,20 @@ unsupported_configs:
 
   # ===== LM 类：FlexAttention CANN 编译墙（triton-ascend 编不出 flex 模板 kernel，
   # BiShengIR 内部 hivm.hir.store / scf.for 报 vector loop tiling）—— no-patch 无解。
+  # 2026-10-27 复测：deepseek_v3 的 attention 类也是自己的 `Attention(BaseAttention)`
+  # （models/deepseek_v3/model.py:28），不是 GQAttention 的子类 → 同样需要 per-family
+  # override。EP 变体另有硬约束（实测，hdc-stable-npu-2）：
+  #   · deepseek_v3_debugmodel_minimal_async_ep：上游配置自身不自洽 —— config 里
+  #     expert_parallel_degree=1，而 MinimalAsyncEPTokenDispatcher 硬性要求 ep>1
+  #     （token_dispatcher.py:1059 "ep_mesh must be set"）；2 卡实测撞 mesh 断言
+  #     dp_replicate(1)*dp_shard(1)*cp(1)*tp(1)*pp(1) != WORLD_SIZE(2)，加
+  #     --parallelism.expert-parallel-degree 2 仍是同一个断言（EP 从 dp/tp 借 rank，
+  #     得同时给 dp_shard）→ 给多少卡都不行；
+  #   · deepseek_v3_debugmodel_hybridep：过了 EP 校验后下一步要 deep_ep 库
+  #     （DeepEP，CUDA-only，需从 GitHub 源码编译）→ NPU 无解；
+  #   · deepseek_v3_16b：expert_parallel_degree=8 → 需要 8 卡（CI runner
+  #     linux-aarch64-a2-8 存在），16B×12B=192GB < 8×32GB 可装，但同样要先有
+  #     deepseek 的 per-family override —— 8 卡是必要不充分条件。
   # 2026-10-26 复测：flex 墙的根因已定位为三层（见上面 llama3 系段落）——除 torch_npu 自身
   # 的 flex lowering 缺口外，torch_npu 2.14.0 的 make_reduction(strict_sum=) 与
   # triton-ascend 3.6.0 的 -std=c++17 也各自独立地卡住编译路径。
@@ -301,9 +491,9 @@ unsupported_configs:
   - torchtitan/models/flux/config_registry.py:flux_dev
   - torchtitan/models/flux/config_registry.py:flux_schnell
 
-  # Muse Glimmer 同 LM 类根因；debugmodel_mm 额外是视觉路径
-  # VisionAttention.inner_attention = FlexAttention.Config 默认，CANN 墙 hit 两次。
-  - torchtitan/models/muse_glimmer/config_registry.py:muse_glimmer_debugmodel
+  # Muse Glimmer 的 debugmodel 文本路径已跑通（见 supported 段）。剩下的
+  # debugmodel_mm 是视觉路径，实测卡在 NPU 算子：aclnnInplaceOne failed
+  #（muse_glimmer_debugmodel_mm.log）→ 属真实算子缺口。
   - torchtitan/models/muse_glimmer/config_registry.py:muse_glimmer_debugmodel_mm
 
   # 纯 dataclass + `__init_subclass__` 强制 `@dataclass(kw_only=True, slots=True)`,零 torch.* 调用。
@@ -390,7 +580,6 @@ unsupported_configs:
 
   # varlen：torch.nn.attention.varlen.varlen_attn 是 CUDA FA 专属 API，NPU 无实现。
   # gpt_oss_debugmodel 默认 attn_backend="varlen"（config_registry.py:21）。
-  - torchtitan/models/llama3/config_registry.py:llama3_debugmodel_varlen_attn
   - torchtitan/models/qwen3_5/config_registry.py:qwen35_debugmodel_varlen_attn
   - torchtitan/models/gpt_oss/config_registry.py:gpt_oss_debugmodel
 

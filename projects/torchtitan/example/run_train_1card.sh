@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Single-card llama3 debugmodel smoke on Ascend NPU.
+# Single-card torchtitan smoke on Ascend NPU.
 #
 # Runs torchtitan's own trainer entry point:
-#   python -m torchtitan.train --module llama3 --config <config> ...
-# The NPU-incompatible model components (complex64 RoPE cache, flex
-# attention) are swapped through torchtitan's official override
+#   python -m torchtitan.train --module <module> --config <config> ...
+# (the module / config come from the manifest's overlay_args).
+# The NPU-incompatible attention stack (complex64 RoPE cache, flex
+# attention) is swapped through torchtitan's official override
 # mechanism (--override.imports), so no upstream source file is touched.
 #
 # Env:

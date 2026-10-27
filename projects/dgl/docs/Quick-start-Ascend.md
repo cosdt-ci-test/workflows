@@ -1,4 +1,4 @@
-# DGL (Ascend NPU)
+# DGL (Huawei Ascend NPU)
 
 DGL 提供图数据结构、消息传递和图神经网络模块。DGL-Ascend 为这些接口增加昇腾 NPU 后端，让图结构和模型参数在 NPU 上参与计算。本文完成源码安装，并用 LightGCN 训练一个图推荐模型。
 
@@ -14,11 +14,10 @@ Atlas 900 A2 训练系列产品（Ascend 910B4），并按需完成物理机或�
 
 - 可用的 Python 环境
 - 可用的 CANN（参考[快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html)）
-- 用于源码编译的 Git、CMake 3.18 及以上版本、GCC/G++、Make 和 Python 开发头文件
 
-本文档示例使用 Python 3.12、CANN 9.1.0。
+本文档示例使用 Python 3.10、CANN 9.1.0。
 
-本文档配套镜像：`swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12`
+本文档配套镜像：`swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10`
 
 ## 加载 CANN 环境
 
@@ -35,20 +34,21 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 ```shell #test id="install-ascend-deps"
 pip install torch==2.9.0 --index-url https://download.pytorch.org/whl/cpu
 pip install torch_npu==2.9.0.post2 --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi
+
 python -c "import torch, torch_npu; print('torch version:', torch.__version__); print('torch_npu version:', torch_npu.__version__)"
 ```
 
 输出结果如下：
 
-```shell #test-result id="install-ascend-deps" fuzzy='...' fuzzy='xxx'
+```shell #test-result id="install-ascend-deps" fuzzy='...'
 ...
-torch version: 2.9.0xxx
+torch version: 2.9.0+cpu
 torch_npu version: 2.9.0.post2
 ```
 
 ## 安装 DGL
 
-**获取源码。** DGL-Ascend 包含昇腾图计算算子，需要编译源码后安装：
+**获取源码。** DGL-Ascend 使深度图学习库（[DGL](https://github.com/dmlc/dgl)）能够在昇腾 NPU 上运行，由 BUPT-GAMMA 团队开发。
 
 ```shell #test-setup
 git clone https://github.com/BUPT-GAMMA/dgl-ascend.git
@@ -60,23 +60,22 @@ git clone https://github.com/BUPT-GAMMA/dgl-ascend.git
 git -C dgl-ascend submodule update --init --recursive
 ```
 
-**编译昇腾后端。** 将 PyTorch 随包提供的依赖库加入搜索路径，再构建支持昇腾 NPU 的 DGL 原生库：
+**编译昇腾后端。** 构建支持昇腾 NPU 的 DGL 原生库：
 
 ```shell #test-setup
-export LD_LIBRARY_PATH="$(python -c 'import torch; from pathlib import Path; print(Path(torch.__file__).resolve().parent.parent / "torch.libs")'):${LD_LIBRARY_PATH}"
 bash dgl-ascend/script/build_dgl_ascend.sh
 ```
 
-**安装 Python 绑定。** 使用兼容上游代码的 Cython 版本，将编译好的 DGL 原生库接入 Python 的 `dgl` 接口，并构建扩展：
+**安装 Python 绑定。** 安装兼容上游代码的 Cython 版本和 Python 运行依赖，再将编译好的 DGL 原生库接入 Python 的 `dgl` 接口并构建扩展：
 
 ```shell #test-setup
-pip install "Cython==3.0.12"
+pip install "Cython==3.0.12" packaging pandas "pydantic>=2.0" tqdm
 ```
 
 ```shell #test-setup
-cd dgl-ascend/python &&
-python setup.py install &&
-python setup.py build_ext --inplace &&
+cd dgl-ascend/python
+python setup.py install
+python setup.py build_ext --inplace
 cd ../..
 ```
 
@@ -90,6 +89,11 @@ python -c "import torch, torch_npu, dgl; print('dgl version:', dgl.__version__)"
 
 ```shell #test-result id="install-dgl" fuzzy='xxx'
 dgl version: xxx
+```
+
+```{admonition} Note
+:class: note
+`xxx` 表示实际安装的 DGL 版本号。
 ```
 
 ## 用法示例
@@ -112,11 +116,11 @@ with ZipFile(archive) as dataset:
     dataset.extractall(example_dir)
 ```
 
-使用同步模式运行 NPU 算子，避免 PyTorch 与 DGL 异步执行时的数据竞争；该模式会降低训练速度。运行训练后查看设备和每轮的平均 BPR 损失，BPR 损失用于学习用户对已交互物品与未交互物品的相对偏好：
+运行训练，查看设备和每轮的平均 BPR 损失。BPR 损失用于学习用户对已交互物品与未交互物品的相对偏好：
 
 ```shell #test id="lightgcn-train"
 cd dgl-ascend/examples/pytorch/lightgcn
-ASCEND_LAUNCH_BLOCKING=1 python main.py --dataset gowalla --batch 2048 --recdim 64 --epochs 1 --device npu
+python main.py --dataset gowalla --batch 2048 --recdim 64 --epochs 1 --device npu
 ```
 
 输出结果如下：
@@ -126,6 +130,11 @@ ASCEND_LAUNCH_BLOCKING=1 python main.py --dataset gowalla --batch 2048 --recdim 
 device: npu
 ...
 Average BPR Loss: xxx
+```
+
+```{admonition} Note
+:class: note
+`xxx` 表示本轮训练的平均 BPR 损失，以实际运行结果为准。
 ```
 
 ## 外部链接

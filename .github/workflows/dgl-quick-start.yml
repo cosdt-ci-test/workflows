@@ -22,7 +22,7 @@ jobs:
     with:
       project: dgl
       test_runner: '["linux-aarch64-a2-2"]'
-      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
       # Source and the official Gowalla archive are recreated in a temporary cwd.
       container_options: ''
       # Includes dependency installation, a source build, and one training epoch.

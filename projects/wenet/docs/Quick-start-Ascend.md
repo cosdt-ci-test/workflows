@@ -86,15 +86,23 @@ git checkout main
 
 ```shell #test-setup id="install"
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
+# 块内任一步失败立即中断：pip 的返回码只反映最后一条命令，否则前面的失败会被吞掉
+set -e
 cd wenet
-pip install -e .[torch-npu]
-pip install -r requirements.txt
+# openai-whisper（WeNet 的安装依赖之一）只发布 sdist，其 setup.py 中 import pkg_resources，
+# 而 setuptools 82 起已移除该模块；pip 默认的构建隔离环境总会装最新 setuptools，
+# 于是 sdist 构建失败并中断整条安装（只影响 CLI 转写，与训练无关，故此前一直未被发现）。
+# 预装仍带 pkg_resources 的 setuptools，并对需要构建 sdist 的几条 pip 关闭构建隔离。
+pip install "setuptools<82" wheel
+pip install --no-build-isolation "openai-whisper==20231117"
+pip install --no-build-isolation -e .[torch-npu]
+pip install --no-build-isolation -r requirements.txt
 pip install "deepspeed==0.14.4"
 # train_utils.py 无条件 import tensorboardX；requirements.txt 是开发全量清单
-# （含 flake8/clang-format/openai-whisper 等与训练无关项），aarch64 上任一包
-# 解析失败会导致整张清单未安装，且失败被命令块尾部的 rc 静默吞掉，
-# 故训练核心依赖在安装步骤显式补齐（装失败将在此步骤快速失败）
+# （含 flake8/clang-format 等与训练无关项），故训练核心依赖在此显式补齐
 pip install tensorboardX
+# 安装结果校验：确认 editable 安装已注册、torchaudio 没被 requirements 升级走样
+python -c "import deepspeed, tensorboardX, torchaudio, importlib.metadata as m; print('wenet', m.version('wenet'), '| torchaudio', torchaudio.__version__, '| deepspeed', deepspeed.__version__)"
 ```
 
 安装 sox：

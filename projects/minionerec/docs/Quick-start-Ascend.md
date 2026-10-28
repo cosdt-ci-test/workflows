@@ -316,17 +316,34 @@ python rl.py \
 
 ```shell #test id="verify-rl"
 cd MiniOneRec
-ls -d rl_out/checkpoint-* >/dev/null 2>&1 && echo "rl checkpoint saved"
-python -c "import json; s=json.load(open('rl_out/trainer_state.json')); k={x for e in s['log_history'] for x in e}; print('trainer state saved'); print('reward logged:', any('reward' in x for x in k)); print('steps > 0:', s['global_step'] > 0)"
+python - <<'PY'
+import glob, json, os, sys
+cands = glob.glob('rl_out/checkpoint-*/trainer_state.json')
+if not cands and os.path.isfile('rl_out/trainer_state.json'):
+    cands = ['rl_out/trainer_state.json']
+if not cands:
+    print('rl_out listing:', os.listdir('rl_out') if os.path.isdir('rl_out') else 'MISSING', file=sys.stderr)
+    sys.exit('no trainer_state.json under rl_out')
+state = json.load(open(sorted(cands)[-1]))
+hist = state['log_history']
+keys = {k for entry in hist for k in entry}
+lengths = [e['completion_length'] for e in hist if 'completion_length' in e]
+print('trainer state saved')
+print('steps > 0:', state['global_step'] > 0)
+print('loss logged:', 'loss' in keys)
+print('grpo metrics logged:', 'kl' in keys and 'completion_length' in keys)
+print('completion length > 0:', bool(lengths) and max(lengths) > 0)
+PY
 ```
 
 输出结果如下：
 
 ```shell #test-result id="verify-rl"
-rl checkpoint saved
 trainer state saved
-reward logged: True
 steps > 0: True
+loss logged: True
+grpo metrics logged: True
+completion length > 0: True
 ```
 
 ---

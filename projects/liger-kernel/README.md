@@ -33,27 +33,17 @@ new_name="processing_class")` 让 transformers 5 的 Trainer/ORPOTrainer 也接�
 但装出来的 import 名仍是 `triton`（Ascend 版替换 PyPI 同名包），所以安装前先卸载
 PyPI triton，幂等判断用 `pip show triton-ascend`。
 
-## supported 清单（8 条）
+## supported 清单（2 条）
 
-前 3 条是在新栈上已验证 API 兼容的核心入口；后 5 条是首轮取证用的实验条目，
-按上游原样规模跑（不压规模），跑红即按 manifest 注释里的原因退回 unsupported。
+2026-10-27 的 NPU 实跑（run `40506606117`）确认这两条在新栈上通过：
 
-| example | 说明 |
-|---|---|
-| `examples/huggingface/training.py` | 单卡 SFT：`AutoLigerKernelForCausalLM` 一行 monkey-patch 应用 Liger 内核，trl `SFTTrainer` 训练 |
-| `examples/huggingface/run_qwen.sh` | 上述 SFT 的两卡 FSDP 配方，验证 torchrun、HCCL 与 full shard |
-| `examples/huggingface/training_multimodal.py` | Qwen2-VL 图文 SFT：monkey-patch 多模态 RoPE / RMSNorm / SwiGLU / FLCE |
-| `examples/alignment/run_orpo.py`（实验） | ORPO 偏好对齐：`LigerORPOTrainer` 的 chunked ORPO loss |
-| `examples/huggingface/run_gemma.sh`（实验） | 上游四卡 Gemma-7B FSDP 启动包装 |
-| `examples/huggingface/run_llama.sh`（实验） | 上游四卡 Llama-3-8B FSDP 启动包装 |
-| `examples/huggingface/run_qwen2_vl.sh`（实验） | 上游四卡 Qwen2-VL-7B FSDP 启动包装 |
-| `examples/huggingface/run_benchmarks.sh`（实验） | 30 次复跑（use_liger×batch×5 次）的基准脚本 |
+| example | 说明 | 压规模方式 |
+|---|---|---|
+| `examples/huggingface/training.py` | `AutoLigerKernelForCausalLM` 一行 monkey-patch 应用 Liger 内核，trl `SFTTrainer` 做 SFT | `--max_steps 3`、batch 2、seq 256，不开 FSDP |
+| `examples/huggingface/run_qwen.sh` | 上述 SFT 的两卡 FSDP 配方，验证 torchrun、HCCL 和 full shard | 复刻上游 launcher；改用 ModelScope 0.5B、2 卡、2 步、每卡 batch 1、本地 8 行数据 |
 
-三条核心条目的规模压缩方式：单卡 SFT 用 `--max_steps 3`、batch 2、seq 256；两卡
-FSDP 复刻上游 launcher 但改 2 卡、ModelScope 0.5B、2 步、每卡 batch 1、本地 8 行
-数据；多模态例 `--max_steps 1`、batch 1、数据换 4 行本地 fixture。文本与多模态
-模型走 ModelScope 的 `Qwen/Qwen2.5-0.5B-Instruct` 与 `Qwen/Qwen2-VL-2B-Instruct`，
-设备由 `infer_device()` 与 accelerate 自动落到 NPU。前两条带 upstream 的
+两条都不改源码。模型走 ModelScope 的 `Qwen/Qwen2.5-0.5B-Instruct`，设备由
+`infer_device()` 与 accelerate 自动落到 NPU。两条都带 upstream 自带的
 `EfficiencyCallback`，其 `on_init_end` 强制要求 `--include_num_input_tokens_seen`
 与 `--logging_steps 1`，overlay 必须带这两个。
 
@@ -67,64 +57,59 @@ fixture 全部由 setup 现生成，不往仓库塞二进制：
 
 - hf 例的 `--dataset` 走 `datasets.load_dataset(path)`，需要一个**目录**（内含 `train.jsonl`），
   文件名不影响 split 名（都是 `train`）；
-- 多模态例的 `--dataset` 同理需要目录，且必须自带 dataset card 声明配置名，否则
-  `load_dataset(dir, "ai2d")` 抛 `BuilderConfig not found`。图片列用 `Sequence(Image())`，
-  文本列声明成**单元素 list** 的 dict schema（写成 `Sequence({...})` 会在编码时抛
-  `'list' object has no attribute 'get'`）。setup 在
-  `$TARGET_ROOT/fixtures/cauldron_ai2d/` 下生成 4 行 112x112 合成图文。
+- 多模态例的同名参数同理（该条当前 unsupported，配方保留在 setup 里以便上游修复后复测）。
 
-多模态那条额外装 `torchvision==0.24.0`：`AutoProcessor` 走 torchvision 图像后端，
-纯文本栈里没有它，缺了会抛 `AutoVideoProcessor requires the Torchvision library`。
+## 首轮实跑结论（run 40506606117，8 条探针）
 
-实验条目的额外准备：
+| 条目 | 结果 | 原因 |
+|---|---|---|
+| `training.py` | 通过 | 3 步训练，loss 0.52，峰值 4596 MB |
+| `run_qwen.sh` | 通过 | 两卡 FSDP 2 步，loss 0.85 |
+| `training_multimodal.py` | 失败 | `Qwen2VLForConditionalGeneration.__init__() got an unexpected keyword argument 'use_cache'`：transformers 5 把 `use_cache` 移入 GenerationConfig，不再作为模型 config 属性被 `from_pretrained` 吸收 |
+| `run_orpo.py` | 失败 | `liger_kernel/transformers/fsdp.py` 的 `_FSDPForwardRedirection` 断言模型必须被 FSDP 包装；该 example 是单进程 Trainer，必 `AssertionError`（上游代码问题） |
+| `run_gemma.sh` | 失败 | `GatedRepoError: 403`，`google/gemma-7b-it` 是 gated 模型 |
+| `run_llama.sh` | 失败 | `GatedRepoError: 403`，`meta-llama/Meta-Llama-3-8B` 是 gated 模型 |
+| `run_qwen2_vl.sh` | 超时 | 脚本未覆盖数据集参数，会去拉 `the_cauldron` 整库（168 GB），90 分钟超时 |
+| `run_benchmarks.sh` | 超时 | 30 次 × 20 步复跑（4 卡 7B，模型/数据本身公开），2 小时超时 |
 
-- ORPO 的 example 写死 gated 模型 `meta-llama/Llama-3.2-1B-Instruct`、数据集
-  `trl-lib/tldr-preference`、batch 32 / 100 步，且没有 CLI 开关。setup 用 ModelScope
-  的 `LLM-Research/Llama-3.2-1B-Instruct` 把权重镜像进 HF hub cache
-  （`models--meta-llama--…/refs/main` + `snapshots/` 布局），并预缓存偏好数据集，
-  run 步以 `HF_HUB_OFFLINE/TRANSFORMERS_OFFLINE/HF_DATASETS_OFFLINE` 离线解析。
-  该例历史记录（Run #9，v0.8.3 栈）是首步在 `fused_linear_preference.py` 的
-  `torch.func.grad_and_value` 内调 `F.logsigmoid` 报
-  `NotImplementedError: Cannot access storage of TensorWrapper`；首轮实跑就是要判定
-  它在 transformers 5.3.0 + trl 0.12.1 栈上是否仍然存在。
-- 三个上游启动包装与基准脚本自带 torchrun、模型和数据集，没有 CLI 可压规模：
-  gemma/llama/mistral 都是 gated 模型，`run_qwen2_vl.sh` 未覆盖数据集参数、会去拉
-  gated 的 `the_cauldron`（168 GB），仓库侧没有 HF token，预计首轮在下载处失败。
-  按结果决定保留或退回 unsupported。
+失败条目已按上表原因逐条登记为 `unsupported`。ORPO 那轮验证了 ModelScope→HF cache
+镜像可用：setup 把 `LLM-Research/Llama-3.2-1B-Instruct` 拷进
+`models--meta-llama--…/snapshots/`，预缓存 `trl-lib/tldr-preference`（92858 行），
+run 步离线解析成功，失败点确实在训练代码而非资产。
 
-## unsupported（9 条）
+## unsupported（15 条）
 
-- `examples/medusa/train.py`：`Trainer(tokenizer=...)` 在 transformers 5.0 被移除，
-  当前栈（liger 硬性要求 >=5.0.0）下必然 `TypeError`，需上游迁移到
-  `processing_class`。
-- `examples/lightning/training.py`：示例传 `pl.Trainer(accelerator="npu")`，但
-  lightning 主线（2.6.6 实测）的 accelerator 注册表只有 cpu/cuda/mps/tpu，直接
-  `ValueError: You selected an invalid accelerator name`。能注册 `"npu"` 的插件包
-  在 PyPI（42 万+ 包索引里无 lightning+npu 组合）、昇腾 pypi 镜像和 Gitee 上都不
-  存在，环境侧无解。
-- 两条 Megatron：源码固定 `torch.cuda.set_device`、`.cuda()` 和 NCCL，增加卡数
-  无法改变设备后端。
-- `launch_on_modal.py`、`medusa/scripts/llama3_8b_medusa.sh` 及 3 个配套模块
-  （`hf/callback.py`、`medusa/callback.py`、`medusa_util.py`）：Modal 云 GPU / nvidia-smi
-  数卡，或非独立入口。
+- **transformers 5 删掉的示例 API**：`medusa/train.py` 用 `Trainer(tokenizer=...)`
+  （5.0 起改为 `processing_class`）；`training_multimodal.py` 传
+  `from_pretrained(use_cache=False)`（5.x 的 `use_cache` 只在 GenerationConfig 里）。
+- **上游代码缺陷**：`alignment/run_orpo.py` 的 `LigerORPOTrainer` 假定 FSDP 包装，
+  单进程示例必触发断言。
+- **依赖装不上**：`lightning/training.py` 传 `accelerator="npu"`，而 lightning 主线
+  2.6.6 的 accelerator 注册表只有 cpu/cuda/mps/tpu；能注册 `"npu"` 的插件包在 PyPI、
+  昇腾 pypi 镜像和 Gitee 上都不存在。
+- **上游原样规模**：`run_gemma.sh` / `run_llama.sh` 拉 gated 模型（无 HF token 即 403）；
+  `run_qwen2_vl.sh` 会去拉 168 GB 的 `the_cauldron` 整库；`run_benchmarks.sh` 30 次复跑
+  超出 runner 预算。三者都没有 CLI 可压规模。
+- **CUDA/NCCL 硬编码**：两条 Megatron 固定 `torch.cuda.set_device`、`.cuda()` 和
+  NCCL，增加卡数无法改变设备后端。
+- **非昇腾路径/非独立入口**：`launch_on_modal.py`（Modal 云 GPU）、
+  `medusa/scripts/llama3_8b_medusa.sh`（nvidia-smi 数卡），以及 3 个配套模块。
 
 ## 依赖版本窗口（关键约束）
 
-- 数据栈仍由 `constraints-npu.txt` 统一锁定 NumPy 1.26.4 / PyArrow 20.0.0 /
+- 数据栈由 `constraints-npu.txt` 统一锁定 NumPy 1.26.4 / PyArrow 20.0.0 /
   pandas 2.2.3 / datasets 3.6.0（Triton-Ascend 3.2.2 要求 NumPy 1.26），与
   transformers 5.3.0 + trl 0.12.1 不冲突。
 - transformers 5.3.0 会把 huggingface-hub 拉到 1.x（`<2.0,>=1.3`）；datasets 3.6
-  与 modelscope 1.37 在该组合下已本地验证可 import，模型下载仍走 ModelScope。
-- 已用逐字节相同的 `training.py`、`training_multimodal.py` 在 CPU 上以
-  5.3.0 + 0.12.1 跑通训练步（覆盖 `DataCollatorForCompletionOnlyLM`、
-  `SFTTrainer(max_seq_length=)`、`tokenizer=` 别名与 EfficiencyCallback）；
-  上卡由手动 workflow 完成。
+  与 modelscope 1.37 在该组合下已实测可 import，模型下载仍走 ModelScope。
+- `transformers==4.57.1 + trl==0.12.1` 是 v0.8.3 时代的窗口，v0.8.5 的
+  `transformers>=5.0.0` 硬校验后不再可用。
 
 ## 已知边界
 
-- transformers 5 的 FSDP/HCCL 路径与 Qwen2-VL（5.2 起新增 `Qwen2VLRMSNorm`）在
-  NPU 上的行为需要在实机确认——这两条以前只在 4.57.1 上验证过。
-- medusa 的 `max_steps` 必须为 1 的旧边界随条目一起失效（现已 unsupported）。
+- transformers 5 的 FSDP/HCCL 路径已经在两卡 Qwen 配方上实测通过；单卡 SFT 也通过。
+- 多模态、ORPO 与四个上游启动包装的 setup/run 分支仍保留在脚本里（不调度），
+  上游修复对应问题后可直接把条目移回 supported 复测。
 - artifact 由公共引擎命名为 `liger-kernel-examples-<run_id>-<job_index>`。
 
 ## 文件结构
@@ -132,7 +117,7 @@ fixture 全部由 setup 现生成，不往仓库塞二进制：
 入口集中在 `scripts/setup_example.sh`（`install_hf_stack` 统一装 transformers/trl
 栈，各 profile 负责模型与数据准备）与 `scripts/run_example.sh`（按入口区分单卡/
 两卡/四卡，并校验各自的训练后产物），依赖约束在 `constraints-npu.txt`，本地数据在
-`fixtures/`。本项目不再使用 `scan.exclude`：所有被扫描单元都显式登记为 supported
-或 unsupported，让 `examples-check` 的新增/失效差异更直观。
+`fixtures/`。本项目不使用 `scan.exclude`：所有被扫描单元都显式登记为 supported 或
+unsupported，让 `examples-check` 的新增/失效差异更直观。
 项目不保留 `tests/` 目录；独立 quick-start workflow 使用
 `scripts/test_quick_start_ascend.py` 做文档验证，不影响 examples 启动契约。

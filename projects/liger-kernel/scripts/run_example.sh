@@ -1,11 +1,6 @@
 #!/usr/bin/env bash
 # Run one supported Liger-Kernel example, unmodified.
-#
 # $1 is the manifest entry path (relative to EXAMPLES_ROOT/TARGET_ROOT).
-# Python entries run from their example directory for sibling imports. The
-# shell launchers run as-is (they build their own torchrun command); only
-# run_qwen.sh is reproduced with the CI-sized overlay on two NPU devices
-# instead of its upstream 4-process 7B recipe.
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
@@ -44,8 +39,7 @@ fi
 
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 
-# NPU budget per entry: the shell launchers hardcode four torchrun workers,
-# run_qwen.sh is reproduced on two devices, every other entry is single-card.
+# NPU budget per entry: shell launchers need 4 devices, run_qwen.sh 2, the rest 1.
 case "$EXAMPLE_REL" in
   examples/huggingface/run_qwen.sh)
     default_devices="0,1"
@@ -69,7 +63,7 @@ else
   PYTHON=python
 fi
 
-# Expand OVERLAY_ARGS (JSON array of CLI strings) with env vars applied.
+# Expand OVERLAY_ARGS (JSON array of CLI strings).
 expand_overlay() {
   "$PYTHON" - <<'PY'
 import json
@@ -102,8 +96,7 @@ if ((${#EXTRA_ARGS[@]})); then
   printf 'overlay arg: %q\n' "${EXTRA_ARGS[@]}"
 fi
 
-# Fail before the run if the stack cannot see enough NPUs; a silent CPU run
-# would still "pass" the example's own asserts.
+# Fail before the run if the stack cannot see enough NPUs.
 REQUIRED_NPUS="$required_npus" "$PYTHON" - <<'PY'
 import os
 
@@ -122,16 +115,12 @@ cd "$entry_dir"
 
 export PYTHONPATH="$entry_dir:${PYTHONPATH:-}"
 
-# run_orpo.py hardcodes a gated HF repo id; setup mirrored that snapshot and
-# the preference dataset into the caches, so the run resolves both offline.
+# run_orpo.py hardcodes a gated HF repo id; setup mirrored it into the caches.
 if [[ "$EXAMPLE_REL" == examples/alignment/run_orpo.py ]]; then
   export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1
 fi
 
-# Capture the example's own output to a file we own and replay it to stdout.
-# The engine's outer tee writes train.log through a block-buffered pipe, so
-# reading train.log from inside this script would race; a redirect closes
-# the file before we inspect it.
+# Capture the example's output to a file, then replay it to stdout.
 run_log="$CI_OUTPUT_DIR/example_run.log"
 case "$EXAMPLE_REL" in
   examples/huggingface/run_qwen.sh)
@@ -154,9 +143,7 @@ if [[ $run_status -ne 0 ]]; then
   exit $run_status
 fi
 
-# Post-run proof that the example really trained instead of exiting early:
-# the trainer must have created its output directory and, unless the entry
-# writes its own per-run logs, the captured output must contain a loss line.
+# Post-run proof: the output directory exists and a loss line was logged.
 case "$EXAMPLE_REL" in
   examples/huggingface/training.py)
     out_root_kind=ci; out_name=hf_trainer; need_loss=1 ;;
@@ -173,8 +160,7 @@ case "$EXAMPLE_REL" in
   examples/huggingface/run_qwen2_vl.sh)
     out_root_kind=example; out_name=multimodal_finetuning; need_loss=1 ;;
   examples/huggingface/run_benchmarks.sh)
-    # The benchmark launcher writes each run's log under results/, so only the
-    # output directory is checked here.
+    # The benchmark launcher logs each run under results/, so only the output dir is checked.
     out_root_kind=example; out_name=model_output_dir; need_loss=0 ;;
 esac
 OUT_ROOT_KIND="$out_root_kind" OUT_NAME="$out_name" NEED_LOSS="$need_loss" ENTRY_DIR="$entry_dir" "$PYTHON" - "$EXAMPLE_REL" "$run_log" <<'PY'

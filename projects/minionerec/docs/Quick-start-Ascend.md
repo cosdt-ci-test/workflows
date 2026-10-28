@@ -2,7 +2,7 @@
 
 > **阅读本文前**，请先按 [快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html) 准备好 CANN 与驱动。本文聚焦**第一次跑通**：在单卡 NPU 上完成 MiniOneRec 的 SID 监督微调（SFT）冒烟训练。
 
-[MiniOneRec](https://github.com/AkaliKong/MiniOneRec) 是一个全开源的**生成式推荐**框架，覆盖 SID 构建、SFT 与推荐导向 RL 全流程。本文只验证 SFT 主路径（RL 阶段的 GRPO 依赖 vLLM/CUDA 或低吞吐的 transformers 原生生成，暂不纳入冒烟范围）。
+[MiniOneRec](https://github.com/AkaliKong/MiniOneRec) 是一个全开源的**生成式推荐**框架，覆盖 SID 构建、SFT 与推荐导向 RL 全流程。本文验证 SFT 与约束解码评估主路径，并在最后一节附一条 RL（GRPO）冒烟（vLLM 分支为 CUDA-only，冒烟走 transformers 原生生成）。
 
 ---
 
@@ -276,6 +276,51 @@ python calc.py \
 NDCG:...
 HR...
 0
+```
+
+---
+
+## 10. RL（GRPO）冒烟训练
+
+`rl.py` 不做词表扩展（`add_tokens` 只在 `sft.py` 里），`--model_path` 必须指向带 SID 词表的 SFT 产物，这里直接复用第 8 节的 `smoke_out/final_checkpoint`。`--sample` 是本分支新增的开关（上游把 `sample = -1` 写死，数据量无法从命令行缩小）；`optim` 在 NPU 上切到 `adamw_torch`——bitsandbytes 的 paged 优化器只有 CUDA 实现。
+
+冒烟规模取每类 100 条、`num_generations` 4、关闭 beam search 与训练中测试。`--eval_step` 传 0.9999，是因为 `GRPOConfig` 里的 `save_steps`（0.1）与 `eval_steps` 都按**比例**解释，小样本上默认值等于每几步存一次 checkpoint。
+
+```shell #test-setup id="rl-run"
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
+export ASCEND_RT_VISIBLE_DEVICES=0
+cd MiniOneRec
+python rl.py \
+    --model_path ./smoke_out/final_checkpoint \
+    --train_file ./data/Amazon/train/Industrial_and_Scientific_5_2016-10-2018-11.csv \
+    --eval_file ./data/Amazon/valid/Industrial_and_Scientific_5_2016-10-2018-11.csv \
+    --info_file ./data/Amazon/info/Industrial_and_Scientific_5_2016-10-2018-11.txt \
+    --category Industrial_and_Scientific \
+    --sid_index_path ./data/Amazon/index/Industrial_and_Scientific.index.json \
+    --item_meta_path ./data/Amazon/index/Industrial_and_Scientific.item.json \
+    --sample 100 \
+    --train_batch_size 16 --eval_batch_size 16 --num_generations 4 \
+    --gradient_accumulation_steps 1 --num_train_epochs 1 \
+    --reward_type rule --beam_search False --test_during_training False \
+    --eval_step 0.9999 \
+    --output_dir ./rl_out
+```
+
+校验 checkpoint 与训练日志：
+
+```shell #test id="verify-rl"
+cd MiniOneRec
+ls -d rl_out/checkpoint-* >/dev/null 2>&1 && echo "rl checkpoint saved"
+python -c "import json; s=json.load(open('rl_out/trainer_state.json')); k={x for e in s['log_history'] for x in e}; print('trainer state saved'); print('reward logged:', any('reward' in x for x in k)); print('steps > 0:', s['global_step'] > 0)"
+```
+
+输出结果如下：
+
+```shell #test-result id="verify-rl"
+rl checkpoint saved
+trainer state saved
+reward logged: True
+steps > 0: True
 ```
 
 ---

@@ -282,9 +282,15 @@ HR...
 
 ## 10. RL（GRPO）冒烟训练
 
-`rl.py` 不做词表扩展（`add_tokens` 只在 `sft.py` 里），`--model_path` 必须指向带 SID 词表的 SFT 产物，这里直接复用第 8 节的 `smoke_out/final_checkpoint`。`--sample` 是本分支新增的开关（上游把 `sample = -1` 写死，数据量无法从命令行缩小）；`optim` 在 NPU 上切到 `adamw_torch`——bitsandbytes 的 paged 优化器只有 CUDA 实现。
+`rl.py` 依赖的 `trl`、`scikit-learn`、`wandb` 在 `requirements-npu.txt` 里是可选的注释行，先单独装上。`rl.py` 也不做词表扩展（`add_tokens` 只在 `sft.py` 里），`--model_path` 必须指向带 SID 词表的 SFT 产物，这里直接复用第 8 节的 `smoke_out/final_checkpoint`。`--sample` 是本分支新增的开关（上游把 `sample = -1` 写死，数据量无法从命令行缩小）；`optim` 在 NPU 上切到 `adamw_torch`——bitsandbytes 的 paged 优化器只有 CUDA 实现。
 
 冒烟规模取每类 100 条、`num_generations` 4、关闭 beam search 与训练中测试。`--eval_step` 传 0.9999，是因为 `GRPOConfig` 里的 `save_steps`（0.1）与 `eval_steps` 都按**比例**解释，小样本上默认值等于每几步存一次 checkpoint。
+
+```shell #test-setup id="rl-deps"
+cd MiniOneRec
+pip install trl==0.24.0 scikit-learn wandb==0.22.2 polars
+python -c "import trl, sklearn, wandb; print('rl deps ok')"
+```
 
 ```shell #test-setup id="rl-run"
 source /usr/local/Ascend/ascend-toolkit/set_env.sh

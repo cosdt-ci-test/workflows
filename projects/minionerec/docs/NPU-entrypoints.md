@@ -201,8 +201,10 @@ README Quickstart 本身也**不完整**：它没有 `git clone`，也没有预�
 | --- | --- | --- |
 | `bash sft.sh` 的 8 卡 DDP | 当前用单卡 runner | **可以，零改动**：换 `linux-aarch64-a2-8`、`container_options` 补挂 `davinci2..7`，命令保留 `torchrun --nproc_per_node 8`；样本仍要限 `--sample`（全量 36 259 行 × 3 个子数据集 × `sft.sh` 没传的默认 10 epoch） |
 | `bash evaluate.sh` 的多卡分片 | `CUDA_VISIBLE_DEVICES` 在 NPU 上不生效——`transfer_to_npu` 全文不处理可见设备环境变量，8 个进程都会落到 `npu:0`（`evaluate.py:54` 自己设的那次也在 torch 初始化之后，同样是空操作） | **可以，但要改脚本**：`CUDA_VISIBLE_DEVICES=$i` → `ASCEND_RT_VISIBLE_DEVICES=$i`；或只留单分片，覆盖 `split.py` → `evaluate.py` → `merge.py` → `calc.py` 链路 |
-| RL / GRPO 实际训练 | 四个独立阻塞：`GRPOConfig(optim="paged_adamw_32bit")` 落到 bitsandbytes 的 CUDA kernel 与 paged 分配器；`report_to="wandb"` 写死；`rl.py:85` 里 `sample = -1` 写死，命令行无法缩小数据；`config/zero2_opt.yaml` 是 DEEPSPEED 类型、需要 deepspeed | **不建议**：前三个都要改上游代码（`optim` / `report_to` / `sample`），属于改行为而非 NPU 适配 |
+| RL / GRPO 全量训练 | 单卡冒烟已跑通（`Quick-start-Ascend.md` 第 10 节，261 s / rc=0，checkpoint 与 `loss`/`kl`/`completion_length` 均有记录）；剩下未验的是多卡、`config/zero2_opt.yaml` 的 DeepSpeed 路径和全量数据 | **不建议补全量**：全量 36 259 行 × 2 epoch × 每步 16 次 rollout，单卡吞吐不足；多卡 RL 需要先解决 DeepSpeed 或 `accelerate` 的 NPU 分布式配置 |
 | `rq/` 预处理的业务输出 | 需要 RQ-VAE checkpoint 与 `.npy` 嵌入，属数据准备 | 不补（与 NPU 无关） |
 | 训练/推理行为本身 | — | 由 `Quick-start-Ascend.md` 的 SFT + 评估覆盖 |
+
+RL 冒烟能跑起来依赖三处改动（MiniOneRec `fa647df`，默认行为在 CUDA 上不变）：`npu_support.IS_NPU`、`rl.py` 的 `optim` 按平台切到 `adamw_torch`、`sample` 从写死的 `-1` 变成参数。`report_to="wandb"` 无需改动——`rl.py:19` 已经设了 `WANDB_MODE=disabled`，`wandb.init` 是空操作。
 
 补充：`minionerec_trainer.py:426` 读的是 `self.args.vllm_device`，而 pin 的 `trl==0.24.0` 的 `GRPOConfig` 已没有该字段（改为 `vllm_mode`）。`rl.py` 从不传 `use_vllm`，默认 `False`，所以这条分支目前走不到——也就是说 RL 留在 `use_vllm=False` 是**版本决定的硬约束**，不是可选优化。

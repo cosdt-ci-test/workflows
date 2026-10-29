@@ -182,12 +182,15 @@ def export(name: str, path: str) -> None:
 def corrupt_weights(root: Path) -> list[Path]:
     # snapshot_download trusts files that already exist, so a truncated one is
     # never re-fetched on its own: detect and delete the bad files here so the
-    # retry loop re-downloads them.
+    # retry loop re-downloads them (appended JSON is repaired in place).
     #   * .safetensors -> safe_open fails on a half-written header
     #     ("incomplete metadata, file not fully covered");
     #   * .bin -> diffusers' .bin checkpoints are torch zip archives, so a
     #     truncated file is no longer a readable zip (stable-diffusion-inpainting
-    #     ships .bin only, and a partial download broke `from_pretrained`).
+    #     ships .bin only, and a partial download broke `from_pretrained`);
+    #   * .json -> a truncated or appended config breaks from_pretrained
+    #     ("Extra data" / JSONDecodeError).
+    import json
     import zipfile
 
     from safetensors import safe_open
@@ -209,6 +212,27 @@ def corrupt_weights(root: Path) -> list[Path]:
             pass
         print(f"corrupt {path}: zip archive is unreadable or has bad entries", flush=True)
         bad.append(path)
+    for path in sorted(root.rglob("*.json")):
+        try:
+            text = path.read_text(encoding="utf-8-sig")
+            if not text.strip():
+                continue
+            json.loads(text)
+        except json.JSONDecodeError as exc:
+            if exc.msg == "Extra data":
+                try:
+                    value, _ = json.JSONDecoder().raw_decode(text.lstrip())
+                    path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+                    print(f"repaired {path}: stripped trailing data", flush=True)
+                    continue
+                except Exception as repair_exc:  # noqa: BLE001
+                    print(f"corrupt {path}: {repair_exc}", flush=True)
+            else:
+                print(f"corrupt {path}: {exc}", flush=True)
+            bad.append(path)
+        except Exception as exc:  # noqa: BLE001
+            print(f"corrupt {path}: {exc}", flush=True)
+            bad.append(path)
     return bad
 
 

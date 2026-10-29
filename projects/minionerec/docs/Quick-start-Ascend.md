@@ -72,7 +72,29 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 cd MiniOneRec
 set -eo pipefail
 pip install -r requirements-npu.txt
-python -c "import numpy, safetensors, transformers; print('numpy', numpy.__version__, '| safetensors', safetensors.__version__, '| transformers', transformers.__version__)"
+```
+
+依赖装好后确认实际解析到的版本——`requirements-npu.txt` 对 numpy 与 safetensors 给的是区间而不是精确锁，这里把落地的版本记下来：
+
+```shell #test id="deps"
+cd MiniOneRec
+python - <<'PY'
+from packaging.version import Version
+import numpy, safetensors, transformers
+print('numpy', numpy.__version__)
+print('safetensors', safetensors.__version__)
+print('transformers', transformers.__version__)
+print('safetensors >= 0.4.3:', Version(safetensors.__version__) >= Version('0.4.3'))
+PY
+```
+
+输出结果如下：
+
+```shell #test-result id="deps"
+numpy ...
+safetensors ...
+transformers 4.57.1
+safetensors >= 0.4.3: True
 ```
 
 ---
@@ -90,7 +112,6 @@ rq/rqvae.py rq/rqkmeans_plus.py rq/generate_indices.py rq/generate_indices_plus.
 rq/text2emb/amazon_text2emb.py rq/text2emb/amazon_text2emb_gpr.py"
 shimmed=0
 missing=
-# rq/generate_indices.py 的仓库副本是 CRLF（上游遗留），先去掉 \r 再匹配
 # rq/generate_indices.py 的仓库副本是 CRLF（上游遗留），先去掉 \r 再匹配
 for f in $files; do
     if tr -d '\r' < "$f" | grep -qx 'import npu_support'; then

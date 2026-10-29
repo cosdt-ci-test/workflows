@@ -1013,9 +1013,7 @@ unsupported:
   - examples/dreambooth/train_dreambooth_lora_flux3_klein_img2img.py
   - examples/dreambooth/train_dreambooth_lora_ideogram4.py
   - examples/cosmos/eval_cosmos_predict25_lora.py
-  - examples/cosmos/eval_lora.sh
   - examples/cosmos/train_cosmos_predict25_lora.py
-  - examples/cosmos/train_lora.sh
   # ==== CUDA硬编码类 =======================================================
   - examples/cogview4-control/train_control_cogview4.py
   - examples/community/tiled_upscaling.py
@@ -1025,7 +1023,6 @@ unsupported:
   - examples/research_projects/control_lora/control_lora.py
   - examples/cosmos3/inference_cosmos3.py
   - examples/profiling/profiling_pipelines.py
-  - examples/profiling/run_profiling.sh
   - examples/research_projects/flux_lora_quantization/compute_embeddings.py # GATED_MODEL
   - examples/research_projects/flux_lora_quantization/train_dreambooth_lora_flux_miniature.py # GATED_MODEL
   - examples/research_projects/realfill/infer.py
@@ -1197,6 +1194,9 @@ unsupported:
   - examples/dreambooth/convert_to_imagefolder.py
   - examples/research_projects/promptdiffusion/convert_original_promptdiffusion_to_diffusers.py
   - examples/research_projects/sana/train_sana_sprint_diffusers.sh
+  - examples/cosmos/eval_lora.sh
+  - examples/cosmos/train_lora.sh
+  - examples/profiling/run_profiling.sh
   # 外部服务 / 废弃 shim / 库模块 / HTTP 客户端：不可独立执行
   # （retrieve 需 knn.laion.ai；inference 两条是无 __main__ 的废弃 shim；
   # pipeline_easy 是查 civitai API 的库模块；server-async/test.py 需常驻服务）。

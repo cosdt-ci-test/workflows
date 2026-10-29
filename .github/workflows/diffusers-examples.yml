@@ -45,4 +45,4 @@ jobs:
       target_ref: ${{ inputs.target_ref }}
       # 52 supported entries: cap parallel legs at 4 so cold-cache model
       # downloads don't contend for runner bandwidth.
-      max_parallel: 4
+      max_parallel: 1

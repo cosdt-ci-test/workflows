@@ -1,6 +1,7 @@
-# DGL-Ascend quick start: build the engine-selected GitHub commit,
-# verify installed NPU graph operations, and train LightGCN for one epoch.
-# The fixture aligns the checkout with UPSTREAM_REF before submodule setup.
+# DGL-Ascend quick start: build the engine-selected GitHub commit on
+# Atlas 900 A2 and A3, verify installed NPU graph operations, and train
+# LightGCN for one epoch. The two machine legs run in parallel and their
+# result.json files are merged into one artifact.
 name: dgl-quick-start
 
 concurrency:
@@ -17,10 +18,11 @@ permissions:
   contents: read
 
 jobs:
-  dgl-quick-start:
+  qs-a2:
     uses: ./.github/workflows/quick-start-template.yml
     with:
       project: dgl
+      machine_type: a2
       test_runner: '["linux-aarch64-a2-2"]'
       image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
       # Source and the official Gowalla archive are recreated in a temporary cwd.
@@ -32,3 +34,35 @@ jobs:
       doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/dgl/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
       doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/dgl/docs/Quick-start-Ascend.md
       test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1
+
+  qs-a3:
+    uses: ./.github/workflows/quick-start-template.yml
+    with:
+      project: dgl
+      machine_type: a3
+      # Atlas 900 A3 (Ascend 910C) leg. The build script auto-detects the
+      # A3 SoC, and DGL only uses one of the runner's two cards.
+      test_runner: '["linux-aarch64-a3-2"]'
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-a3-ubuntu22.04-py3.10
+      container_options: ''
+      timeout_minutes: 240
+      upstream_repo: BUPT-GAMMA/dgl-ascend
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/dgl/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/dgl/docs/Quick-start-Ascend.md
+      test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1
+
+  merge:
+    needs: [qs-a2, qs-a3]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout workflows (provides the merge action)
+        uses: actions/checkout@v6
+      - name: Merge per-machine results into one artifact
+        uses: ./.github/actions/merge-quick-start-results
+        with:
+          project: dgl
+          result_a2: ${{ needs.qs-a2.outputs.result_json }}
+          result_a3: ${{ needs.qs-a3.outputs.result_json }}
+          name_a2: qs-a2
+          name_a3: qs-a3

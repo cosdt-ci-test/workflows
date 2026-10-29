@@ -145,8 +145,8 @@ projects:
   # default-branch SHA (no releases/tags), using torch 2.9.0 and
   # torch_npu 2.9.0.post2. Install with setup.py, verify NPU graph
   # operations and backward, then train LightGCN for one epoch with
-  # the official Gowalla archive. No model source patch is needed.
-  # timeout_minutes=240 includes the cold source build; manual trigger only.
+  # the official Gowalla archive on A2 and A3 legs. No model source patch
+  # is needed. timeout_minutes=240 per leg; manual trigger only.
   - name: dgl
     category: 训练加速
     support_level: 新兴适配

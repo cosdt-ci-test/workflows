@@ -70,7 +70,9 @@ git checkout <UPSTREAM_REF>
 ```shell #test-setup id="install"
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 cd MiniOneRec
+set -eo pipefail
 pip install -r requirements-npu.txt
+python -c "import numpy, safetensors, transformers; print('numpy', numpy.__version__, '| safetensors', safetensors.__version__, '| transformers', transformers.__version__)"
 ```
 
 ---

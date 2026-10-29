@@ -28,7 +28,7 @@ SUPPORTED_PROFILES=(
   diffusers-controlnet-sdxl diffusers-llada2 diffusers-gligen diffusers-controlnet-wds
   diffusers-orpo-wds diffusers-sdxl-full
   diffusers-kandinsky-prior diffusers-multi-subject-inpaint diffusers-pixart
-  diffusers-realfill diffusers-flux2-klein
+  diffusers-realfill diffusers-flux2-klein diffusers-bria-fibo2
 )
 profile_known=0
 for _p in "${SUPPORTED_PROFILES[@]}"; do
@@ -139,7 +139,7 @@ install_example_stack() {
 }
 
 # download_assets <what>: comma-separated tokens from
-# {sd15, sd15-inpaint, 3d-icon, cogvideo, cogvideo-dataset, sana-sprint}. Each
+# {sd15, sd15-inpaint, 3d-icon, cogvideo, cogvideo-dataset, sana-sprint, bria-fibo2}. Each
 # token exports a path to GITHUB_ENV under the name overlay_args reference:
 #   sd15         -> SD15_MODEL_PATH     (AI-ModelScope/stable-diffusion-v1-5)
 #   sd15-inpaint -> SD15_INPAINT_PATH   (AI-ModelScope/stable-diffusion-inpainting)
@@ -147,6 +147,7 @@ install_example_stack() {
 #   cogvideo     -> COGVIDEOX_MODEL_PATH + COGVIDEOX_DATASET_DIR
 #   cogvideo-dataset -> COGVIDEOX_DATASET_DIR
 #   sana-sprint  -> SANA_SPRINT_TEACHER_PATH (HF)
+#   bria-fibo2   -> BRIA_FIBO2_MODEL_PATH (briaai/Fibo-2.0-dev)
 download_assets() {
   DIFFUSERS_DOWNLOAD="$1" python - <<'PY'
 import os
@@ -282,6 +283,19 @@ if "sd15-inpaint" in WANT:
         # This repo ships only .bin + *.fp16.safetensors (no full-precision
         # safetensors), so keep .bin and drop only the fp16 duplicates.
         ignore_file_pattern=["*.fp16.*"],
+    )
+
+# bria fibo-2: model_index + processor/scheduler + text_encoder/transformer/vae.
+# The ModelScope mirror is accessible; the HF repo is gated.
+if "bria-fibo2" in WANT:
+    snapshot(
+        "BRIA_FIBO2_MODEL_PATH",
+        "briaai/Fibo-2.0-dev",
+        allow_file_pattern=[
+            "model_index.json", "scheduler/*", "processor/*",
+            "text_encoder/*", "transformer/*", "vae/*",
+        ],
+        ignore_file_pattern=["*.bin", "*.fp16.*"],
     )
 
 # CogVideoX-2b (transformer + T5 text_encoder + VAE). The ModelScope repo
@@ -423,6 +437,7 @@ declare -A PROFILE_ASSETS=(
   [diffusers-sana]="sana-sprint"
   [diffusers-multi-subject-inpaint]="sd15-inpaint"
   [diffusers-realfill]="sd15-inpaint"
+  [diffusers-bria-fibo2]="bria-fibo2"
 )
 
 # fusing/fill50k is a script-based dataset, so the controlnet examples need it.
@@ -800,6 +815,46 @@ ds.to_parquet(str(data_dir / "train-00000-of-00001.parquet"))
 
 with open(os.environ["GITHUB_ENV"], "a") as fh:
     fh.write(f"FLUX2_KLEIN_DATASET={data_dir}\n")
+print(f"prepared img2img dataset at {data_dir}", flush=True)
+PY
+}
+
+setup_diffusers_bria_fibo2() {
+  python -m pip install "transformers>=5.20.1"
+  python3 - <<'PY'
+import os
+from pathlib import Path
+
+from datasets import Dataset, Features, Image as ImageFeature, Value
+from PIL import Image, ImageDraw
+
+size = 512
+images, conds, captions = [], [], []
+for i in range(8):
+    img = Image.new("RGB", (size, size), (60 + i % 180, 120, 160))
+    ImageDraw.Draw(img).rectangle([64, 64, size - 64, size - 64], outline=(240, 240, 240), width=6)
+    cond = Image.new("RGB", (size, size), (30, 30, 30))
+    ImageDraw.Draw(cond).line([0, (i * 61) % size, size, (i * 97) % size], fill=(255, 255, 255), width=8)
+    images.append(img)
+    conds.append(cond)
+    captions.append(f"a synthetic line drawing scene {i}")
+
+features = Features(
+    {
+        "image": ImageFeature(),
+        "cond_image": ImageFeature(),
+        "text": Value("string"),
+    }
+)
+ds = Dataset.from_dict(
+    {"image": images, "cond_image": conds, "text": captions}, features=features
+)
+data_dir = Path(os.environ["GITHUB_WORKSPACE"]) / "bria_fibo2_img2img_dataset"
+data_dir.mkdir(parents=True, exist_ok=True)
+ds.to_parquet(str(data_dir / "train-00000-of-00001.parquet"))
+
+with open(os.environ["GITHUB_ENV"], "a") as fh:
+    fh.write(f"BRIA_FIBO2_DATASET={data_dir}\n")
 print(f"prepared img2img dataset at {data_dir}", flush=True)
 PY
 }

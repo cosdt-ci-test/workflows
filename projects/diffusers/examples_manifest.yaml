@@ -14,6 +14,38 @@ scan:
 # transformers>=5.x，任何 transformers<5.x 的用例都无法跑通
 
 supported:
+  - path: examples/dreambooth/train_dreambooth_lora_bria_fibo2.py
+    profile: diffusers-bria-fibo2
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --pretrained_model_name_or_path ${BRIA_FIBO2_MODEL_PATH}
+      - --instance_data_dir ${FIXTURE_DIR}/images
+      - --instance_prompt "a photo of sks dog"
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --train_batch_size 1
+      - --gradient_checkpointing
+      - --offload
+      - --mixed_precision bf16
+      - --max_train_steps 1
+    timeout_minutes: 600
+
+  - path: examples/dreambooth/train_dreambooth_lora_bria_fibo2_img2img.py
+    profile: diffusers-bria-fibo2
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --pretrained_model_name_or_path ${BRIA_FIBO2_MODEL_PATH}
+      - --dataset_name ${BRIA_FIBO2_DATASET}
+      - --cond_image_column cond_image
+      - --instance_prompt "a photo of sks dog"
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --train_batch_size 1
+      - --gradient_checkpointing
+      - --offload
+      - --mixed_precision bf16
+      - --max_train_steps 1
+    timeout_minutes: 300
   # # ${...} 由 setup_example.sh 预下后写入 GITHUB_ENV：
   # #   ${SD15_MODEL_PATH} / ${THREE_D_ICON_PATH} <- profile diffusers-sd15
   # # SDXL 模型直接走 stabilityai/stable-diffusion-xl-base-1.0 在线加载。
@@ -977,6 +1009,8 @@ unsupported:
   - examples/dreambooth/train_dreambooth_lora_flux_kontext.py
   - examples/dreambooth/train_dreambooth_lora_flux2.py
   - examples/dreambooth/train_dreambooth_lora_flux2_img2img.py
+  - examples/dreambooth/train_dreambooth_lora_flux3_klein.py
+  - examples/dreambooth/train_dreambooth_lora_flux3_klein_img2img.py
   - examples/dreambooth/train_dreambooth_lora_ideogram4.py
   - examples/cosmos/eval_cosmos_predict25_lora.py
   - examples/cosmos/eval_lora.sh
@@ -1095,11 +1129,15 @@ unsupported:
   - examples/dreambooth/test_dreambooth.py
   - examples/dreambooth/test_dreambooth_flux.py
   - examples/dreambooth/test_dreambooth_lora.py
+  - examples/dreambooth/test_dreambooth_lora_bria_fibo2.py
+  - examples/dreambooth/test_dreambooth_lora_bria_fibo2_img2img.py
   - examples/dreambooth/test_dreambooth_lora_edm.py
   - examples/dreambooth/test_dreambooth_lora_flux.py
   - examples/dreambooth/test_dreambooth_lora_flux_kontext.py
   - examples/dreambooth/test_dreambooth_lora_flux2.py
   - examples/dreambooth/test_dreambooth_lora_flux2_klein.py
+  - examples/dreambooth/test_dreambooth_lora_flux3_klein.py
+  - examples/dreambooth/test_dreambooth_lora_flux3_klein_img2img.py
   - examples/dreambooth/test_dreambooth_lora_hidream.py
   - examples/dreambooth/test_dreambooth_lora_lumina2.py
   - examples/dreambooth/test_dreambooth_lora_qwenimage.py

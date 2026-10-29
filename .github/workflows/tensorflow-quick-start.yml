@@ -17,10 +17,11 @@ permissions:
   contents: read
 
 jobs:
-  tensorflow-quick-start:
+  qs-a2:
     uses: ./.github/workflows/quick-start-template.yml
     with:
       project: tensorflow
+      machine_type: a2
       # The official add example is single-device; the runner supplies
       # one configured NPU without caller-side --device/driver mounts.
       test_runner: '["linux-aarch64-a2-1"]'
@@ -33,3 +34,35 @@ jobs:
       doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/tensorflow/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
       doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/tensorflow/docs/Quick-start-Ascend.md
       test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1
+
+  qs-a3:
+    uses: ./.github/workflows/quick-start-template.yml
+    with:
+      project: tensorflow
+      machine_type: a3
+      # Atlas 900 A3 (Ascend 910C) leg. The add example is single-device;
+      # A3's smallest runner pool starts at two.
+      test_runner: '["linux-aarch64-a3-800i-2"]'
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-a3-ubuntu22.04-py3.12-devel
+      container_options: ''
+      timeout_minutes: 120
+      upstream_repo: tensorflow/tensorflow
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/tensorflow/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/tensorflow/docs/Quick-start-Ascend.md
+      test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1
+
+  merge:
+    needs: [qs-a2, qs-a3]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout workflows (provides the merge action)
+        uses: actions/checkout@v6
+      - name: Merge per-machine results into one artifact
+        uses: ./.github/actions/merge-quick-start-results
+        with:
+          project: tensorflow
+          result_a2: ${{ needs.qs-a2.outputs.result_json }}
+          result_a3: ${{ needs.qs-a3.outputs.result_json }}
+          name_a2: qs-a2
+          name_a3: qs-a3

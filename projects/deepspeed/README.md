@@ -117,6 +117,8 @@ Run #26 的 latest-release 查询返回 HTTP 403，旧触发器未声明 `defaul
 
 `deepspeed-quick-start.yml` 看护本仓 [docs/Quick-start-Ascend.md](docs/Quick-start-Ascend.md)。该文档描述了在昇腾 NPU 上安装 DeepSpeed、验证加速器、单卡跑通 CIFAR10 示例并双卡体验分布式训练的完整流程。
 
+workflow 同时调度 `qs-a2` 和 `qs-a3` 两条并行双卡机器腿；缓存键和 artifact 名按 `machine_type` 隔离，最终由 `merge-quick-start-results` 将两份 `result.json` 合并为一个 artifact。A2 使用 `cann:9.1.0-910b-ubuntu22.04-py3.12`，A3 使用 `cann:9.1.0-a3-ubuntu22.04-py3.12`。
+
 - 监控信号：doc 哈希、上游 latest release、master HEAD SHA。按 doc > release > commit 优先级，任一变化触发测试。
 - 测试内容：pip 安装 DeepSpeed → 安装配套 torchvision → `get_accelerator()._name == 'npu'` → CIFAR10 内联示例（ZeRO-1 + BF16，1 个 epoch）→ 双卡分布式训练（`--num_gpus 2`，HCCL 通信）。
 - **当前为节约 NPU 资源，`schedule` 已注释，只保留手动 `workflow_dispatch`。**

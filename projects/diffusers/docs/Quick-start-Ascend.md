@@ -1,6 +1,10 @@
-# Quick Start (Ascend NPU)
+# Diffusers
 
-在单卡昇腾 NPU 上跑通 Diffusers 文生图全链路：SD 1.5 生成 / 换调度器，SD 3.5 Large Turbo（8B MMDiT）的 LoRA 风格加载，以及显存优化（cpu offload vs 全量加载实测对比）。
+在单卡昇腾 NPU 上跑通 [Diffusers](https://github.com/huggingface/diffusers) 文生图全链路：
+
+- **文生图**：SD 1.5「生成 → 更换调度器」整条链路。
+- **LoRA 风格加载**：SD 3.5 Large Turbo（8B MMDiT）加载 LoRA 适配器切换生成风格。
+- **显存优化**：`enable_model_cpu_offload` 与全量加载的 NPU 显存峰值实测对比。
 
 参考 [Diffusers Quicktour](https://huggingface.co/docs/diffusers/quicktour)：用 `DiffusionPipeline.from_pretrained` 实现文生图，`UniPCMultistepScheduler` 等调度器控制生成速度与质量，`load_lora_weights` 切换生成风格，`enable_model_cpu_offload` 降低显存峰值。
 
@@ -22,7 +26,7 @@ Atlas 900 A2 / A3 训练系列产品或者 Ascend 950 系列产品，并按需�
 
 **配套机器**：
 
-- **机器类型**：Atlas 900 A2 PODc（Ascend 910B4，64 GB × 1）
+- **机器类型**：Atlas 900 A2 PODc（Ascend 910B4，64 GB × 2）
 - **操作系统**：Ubuntu 22.04
 
 **配套镜像**：
@@ -44,7 +48,8 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | diffusers | 最新 release 的源码/二进制 |
 | 模型 | [AI-ModelScope/stable-diffusion-v1-5](https://www.modelscope.cn/models/AI-ModelScope/stable-diffusion-v1-5)；显存优化小节用 [stabilityai/stable-diffusion-3.5-large-turbo](https://www.modelscope.cn/models/stabilityai/stable-diffusion-3.5-large-turbo)（8B MMDiT + 三 text encoder，bf16 全量 ~29 GB）+ LoRA [prithivMLmods/SD3.5-Large-Turbo-HyperRealistic-LoRA](https://www.modelscope.cn/models/prithivMLmods/SD3.5-Large-Turbo-HyperRealistic-LoRA) |
 
-### 前置安装
+## 前置安装
+
 确认能看到 NPU 设备：
 
 ```shell
@@ -53,52 +58,67 @@ npu-smi info
 
 输出类似：
 
-```
+```text
 +------------------------------------------------------------------------------------------------+
 | npu-smi 25.5.2                   Version: 25.5.2                                               |
 +---------------------------+---------------+----------------------------------------------------+
 | NPU   Name                | Health        | Power(W)    Temp(C)           Hugepages-Usage(page)|
 | Chip                      | Bus-Id        | AICore(%)   Memory-Usage(MB)  HBM-Usage(MB)        |
 +===========================+===============+====================================================+
-| 5     910B4               | OK            | 89.9        39                0    / 0             |
+| 0     910B4               | OK            | 89.9        39                0    / 0             |
 | 0                         | 0000:41:00.0  | 0           0    / 0          2922 / 32768         |
++===========================+===============+====================================================+
+| 1     910B4               | OK            | 89.9        39                0    / 0             |
+| 1                         | 0000:42:00.0  | 0           0    / 0          2922 / 32768         |
 +===========================+===============+====================================================+
 +---------------------------+---------------+----------------------------------------------------+
 | NPU     Chip              | Process id    | Process name             | Process memory(MB)      |
 +===========================+===============+====================================================+
-| No running processes found in NPU 5                                                            |
+| No running processes found in NPU 0                                                            |
+| No running processes found in NPU 1                                                            |
 +===========================+===============+====================================================+
 ```
 
-> 如果 `npu-smi` 不存在，请回到 [Ascend 官方快速安装指南](https://ascend.github.io/docs/sources/ascend/quick_install.html) 补装驱动。
+```{admonition} Note
+:class: note
+如果 `npu-smi` 不存在，请回到 [Ascend 官方快速安装指南](https://ascend.github.io/docs/sources/ascend/quick_install.html) 补装驱动。
+```
 
 检查 Python 版本：
 
 ```shell #test id="check-py"
 python --version
 ```
+
 输出结果如下：
+
 ```shell #test-result id="check-py" fuzzy='xxx'
 Python 3.12.xxx
 ```
 
-检查 torch / torch_npu 是否装好且 NPU 设备可用：
+检查 torch / torch_npu 是否装好且 NPU 设备可用(下面的命令用 Python 执行)：
 
-```shell #test id="check-torch"
-python -c "import torch, torch_npu; print('torch=', torch.__version__); print('torch_npu=', torch_npu.__version__); print('is_available:', torch.npu.is_available()); print('count:', torch.npu.device_count())"
+```python #test id="check-torch"
+import torch, torch_npu
+print('torch=', torch.__version__)
+print('torch_npu=', torch_npu.__version__)
+print('is_available:', torch.npu.is_available())
+print('count:', torch.npu.device_count())
 ```
 
 输出结果如下：
 
-```shell #test-result id="check-torch" fuzzy='xxx'
+```shell #test-result id="check-torch"
 torch= 2.9.0+cpu
 torch_npu= 2.9.0.post2
 is_available: True
-count: xxx
+count: 2
 ```
-- xxx 表示容器内可见的 NPU 数量（本文档所有示例只用 1 张卡，即 device `npu:0`）
 
-> 如果 `import torch_npu` 失败，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查 torch / torch_npu / CANN 三方兼容矩阵。
+```{admonition} Note
+:class: note
+如果 `import torch_npu` 失败，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查 torch / torch_npu / CANN 三方兼容矩阵。
+```
 
 安装 `transformers` / `accelerate` / `peft` / `modelscope`：
 
@@ -106,9 +126,14 @@ count: xxx
 uv pip install 'transformers>=5.0,<6.0' 'accelerate>=1.0,<2.0' 'peft>=0.6' 'modelscope==1.37.0'
 ```
 
-打印安装版本：
-```shell #test id="install-deps"
-python -c "import transformers, accelerate, peft, modelscope; print('transformers', transformers.__version__); print('accelerate', accelerate.__version__); print('peft', peft.__version__); print('modelscope', modelscope.__version__)"
+打印安装版本(下面的命令用 Python 执行)：
+
+```python #test id="install-deps"
+import transformers, accelerate, peft, modelscope
+print('transformers', transformers.__version__)
+print('accelerate', accelerate.__version__)
+print('peft', peft.__version__)
+print('modelscope', modelscope.__version__)
 ```
 
 输出结果如下：
@@ -120,13 +145,26 @@ peft xxx
 modelscope 1.37.0
 ```
 
+```{admonition} Note
+:class: note
+`xxx` 表示实际安装的版本号。
+```
+
 ## 安装 Diffusers
 
 ### 使用 uv 进行安装
 
-```shell #test id="diffusers-install-binary"
+通过 PyPI 镜像直接装最新 release 的二进制 wheel：
+
+```shell #test-setup
 uv pip install --index-url https://mirrors.aliyun.com/pypi/simple diffusers
-python -c "import diffusers; print('diffusers', diffusers.__version__)"
+```
+
+验证装上的版本(下面的命令用 Python 执行)：
+
+```python #test id="diffusers-install-binary"
+import diffusers
+print('diffusers', diffusers.__version__)
 ```
 
 输出结果类似如下：
@@ -134,7 +172,12 @@ python -c "import diffusers; print('diffusers', diffusers.__version__)"
 ```shell #test-result id="diffusers-install-binary" fuzzy='xxx'
 diffusers xxx
 ```
-- xxx 表示最新的版本号
+
+```{admonition} Note
+:class: note
+xxx 表示最新的版本号。
+```
+
 <!--
 ```shell #test-setup
 uv pip uninstall diffusers -y
@@ -142,40 +185,66 @@ uv pip uninstall diffusers -y
 -->
 
 ### 从源码安装
+
+<!-- 工作流注入的 UPSTREAM_REF（最新 release tag）通过这个隐藏的 #test-setup 捕获并注入到下方 install 命令中-->
 <!--
 ```shell #test-setup store="upstream_ref"
 echo "${UPSTREAM_REF}"
 ```
 -->
 
-克隆上游仓库并 checkout 到工作流注入的最新 release tag，安装并且验证
+克隆上游仓库并 checkout 到当前 diffusers 的最新 release tag，安装：
 
-```shell #test id="diffusers-install-source" load="upstream_ref>>ref"
+```shell #test-setup load="upstream_ref>>ref"
 git clone --depth 1 --branch <ref> https://github.com/huggingface/diffusers.git
 cd diffusers
 uv pip install -e .
-python -c "import diffusers; print('diffusers', diffusers.__version__)"
 ```
-\<ref> 为安装的最新的 release tag
+
+```{admonition} Note
+:class: note
+`<ref>` 替换为 diffusers 当前的最新 release 版本。
+```
+
+验证装上的版本(下面的命令用 Python 执行)：
+
+```python #test id="diffusers-install-source"
+import diffusers
+print('diffusers', diffusers.__version__)
+```
 
 输出结果类似如下：
 
 ```shell #test-result id="diffusers-install-source" fuzzy='xxx'
 diffusers xxx
 ```
-- xxx 表示最新release的版本号
+
+```{admonition} Note
+:class: note
+xxx 表示最新 release 的版本号。
+```
 
 ## 使用样例
 
-~5 分钟在单卡昇腾 NPU 上跑通 SD 1.5「文生图 → 更换调度器」整条链路（不含模型下载时间；想调生成效果可修改 `prompt` / `num_inference_steps` / `guidance_scale`，参数含义与官方 Quicktour 完全一致）。SD 3.5 显存优化小节见下文。
+在单卡昇腾 NPU 上跑通 SD 1.5「文生图 → 更换调度器」整条链路（想调生成效果可修改 `prompt` / `num_inference_steps` / `guidance_scale`，参数含义与官方 Quicktour 完全一致）。SD 3.5 显存优化小节见下文。
 
 ### 下载基础模型
 
-默认使用 **ModelScope** 进行模型下载。
+默认使用 **ModelScope** 进行模型下载，只拉 pipeline 需要的组件目录：
 
 ```shell #test-setup store="model_path"
 set -o pipefail
-python -c "from modelscope import snapshot_download; print(snapshot_download('AI-ModelScope/stable-diffusion-v1-5'))" | grep '^/' | tail -n 1
+python -c "
+from modelscope import snapshot_download
+print(snapshot_download(
+    'AI-ModelScope/stable-diffusion-v1-5',
+    allow_file_pattern=[
+        '*.json', '*.txt',
+        'scheduler/*', 'tokenizer/*', 'feature_extractor/*',
+        'text_encoder/*', 'unet/*', 'vae/*',
+    ],
+    ignore_file_pattern=['*.bin', '*.fp16*', 'safety_checker/*', 'v1-5-pruned*'],
+))" | grep '^/' | tail -n 1
 ```
 
 输出类似：
@@ -205,6 +274,11 @@ image.save("output/astronaut_rides_horse.png")
 print("generated:", image.size)
 PY
 ls -l output/astronaut_rides_horse.png | awk '{print $5, $9}'
+```
+
+```{admonition} Note
+:class: note
+`<model_path>` 在运行时指向「下载基础模型」一节下载的 SD 1.5 模型缓存路径。
 ```
 
 输出结果如下（`...` 吞掉加载进度等前导日志，`xxx` 为实际文件字节数）：
@@ -239,6 +313,11 @@ PY
 ls -l output/astronaut_unipc.png | awk '{print $5, $9}'
 ```
 
+```{admonition} Note
+:class: note
+`<model_path>` 在运行时指向「下载基础模型」一节下载的 SD 1.5 模型缓存路径。
+```
+
 输出结果如下（`xxx` 为实际文件字节数）：
 
 ```shell #test-result id="swap-scheduler" fuzzy='xxx' fuzzy='...'
@@ -249,11 +328,13 @@ xxx output/astronaut_unipc.png
 
 ## 大模型显存优化（SD 3.5 Large Turbo）
 
-上面 SD1.5 的所有组件加起来 ~2 GB，单卡显存放得下，不需要任何优化。但现代扩散模型（SD 3.5 Large Turbo：8B MMDiT + 三个 text encoder，含 T5-XXL，bf16 权重合计 ~29 GB）在 32 GB 显存的卡上全量加载已经放不下或贴着上限，`enable_model_cpu_offload()` 让组件**逐个上下场**——text encoder 编码完搬回 CPU 内存，再请 MMDiT 上 NPU 去噪，最后 VAE 解码——显存峰值从「所有组件之和」降到「最大单个组件」（transformer bf16 ~16 GB）。
+上面 SD1.5 的所有组件加起来 ~2 GB，单卡显存放得下，不需要任何优化。但现代扩散模型在 32 GB 显存的卡上全量加载已经放不下，`enable_model_cpu_offload()` 让组件**逐个上下场**——text encoder 编码完搬回 CPU 内存，再请 MMDiT 上 NPU 去噪，最后 VAE 解码——显存峰值从「所有组件之和」降到「最大单个组件」。
 
 本节用 SD 3.5 Large Turbo 实测两种加载方式的 NPU 显存峰值对比。
 
 ### 下载 SD 3.5 Large Turbo
+
+只下载 diffusers 布局需要的文件。
 
 ```shell #test-setup store="sd35_path"
 set -o pipefail
@@ -267,14 +348,9 @@ print(snapshot_download(
         'text_encoder/*', 'text_encoder_2/*', 'text_encoder_3/*',
         'tokenizer/*', 'tokenizer_2/*', 'tokenizer_3/*',
     ],
-    ignore_file_pattern=['*.fp16.*', '*.png', '*.jpg', '*.webp'],
+    ignore_file_pattern=['*.fp16*', '*.png', '*.jpg', '*.webp'],
 ))" | grep '^/' | tail -n 1
 ```
-
-说明：
-
-- **仓库冗余**：ModelScope 仓库 71.6 GB 里只有 ~39 GB 是 diffusers 布局需要的——`sd3.5_large_turbo.safetensors`（16.5 GB，ComfyUI 用的单文件全量权重）和 `text_encoders/`（16.3 GB，ComfyUI 版 T5/CLIP）对 `StableDiffusion3Pipeline` 完全无用，靠 `allow_file_pattern` 只下组件目录。
-- **fp16 重复**：`text_encoder_3/` 等目录同时存有 fp32（`model-*.safetensors`，from_pretrained 默认）和 fp16（`model.fp16-*.safetensors`）两套权重，`ignore_file_pattern=['*.fp16.*']` 再省 ~11 GB——加载时 `dtype=torch.bfloat16` 会从 fp32 转换，不需要 fp16 文件。净下载量 ~28 GB。
 
 输出类似：
 
@@ -284,7 +360,7 @@ print(snapshot_download(
 
 ### 加载 LoRA
 
-LoRA 适配器只往基础模型插入少量可训练参数（本例 ~270 MB 对 8B 的 MMDiT），推理时把 LoRA 权重加载/合并进 transformer 即可切换生成风格。对应 Quicktour 的 LoRA 一节：使用 `load_lora_weights` 加载适配器，prompt 里带上触发词激活风格。
+LoRA 适配器只往基础模型插入少量可训练参数，推理时把 LoRA 权重加载/合并进 transformer 即可切换生成风格。对应 Quicktour 的 LoRA 一节：使用 `load_lora_weights` 加载适配器，prompt 里带上触发词激活风格。
 
 先下载 LoRA 权重（同样走 ModelScope，落入持久缓存）：
 
@@ -328,6 +404,11 @@ PY
 ls -l output/sd35_lora.png | awk '{print $5, $9}'
 ```
 
+```{admonition} Note
+:class: note
+`<sd35_path>` / `<lora_path>` 在运行时分别指向「下载 SD 3.5 Large Turbo」「加载 LoRA」两节下载的基础模型与 LoRA 缓存路径。
+```
+
 输出结果类似（`xxx` 为实际文件字节数）：
 
 ```shell #test-result id="sd35-lora" fuzzy='xxx' fuzzy='...'
@@ -364,7 +445,12 @@ PY
 ls -l output/sd35_offload.png | awk '{print $5, $9}'
 ```
 
-输出结果类似（offload 峰值应接近最大的单个组件 transformer bf16 ~16 GB，远低于全部权重 ~29 GB；`...` 吞掉前导日志，`xxx` 为实际文件字节数 / 显存峰值）：
+```{admonition} Note
+:class: note
+`<sd35_path>` 在运行时指向「下载 SD 3.5 Large Turbo」一节下载的模型缓存路径。
+```
+
+输出结果类似：
 
 ```shell #test-result id="sd35-offload" fuzzy='xxx' fuzzy='...'
 ...
@@ -375,7 +461,7 @@ xxx output/sd35_offload.png
 
 ### 全量加载对比
 
-同一模型不带 offload 直接 `.to("npu:0")` 全量驻留显存（三个 text encoder + MMDiT 合计 ~29 GB bf16，32 GB 显存放得下但已接近上限）：
+同一模型不带 offload 直接 `.to("npu:0")` 全量驻留显存：
 
 ```shell #test id="sd35-full" load="sd35_path>>sd35_path"
 mkdir -p output
@@ -404,7 +490,12 @@ PY
 ls -l output/sd35_full.png | awk '{print $5, $9}'
 ```
 
-输出结果类似（全量峰值 ≈ 全部权重 ~29 GB 驻留 + 激活；`xxx` 为实际文件字节数 / 显存峰值）：
+```{admonition} Note
+:class: note
+`<sd35_path>` 在运行时指向「下载 SD 3.5 Large Turbo」一节下载的模型缓存路径。
+```
+
+输出结果类似：
 
 ```shell #test-result id="sd35-full" fuzzy='xxx' fuzzy='...'
 ...
@@ -412,3 +503,8 @@ generated: (768, 768)
 full-load peak NPU memory: xxx GB
 xxx output/sd35_full.png
 ```
+
+## 外部链接
+
+- GitHub：[huggingface/diffusers](https://github.com/huggingface/diffusers)
+- 文档中心：[Diffusers Docs](https://huggingface.co/docs/diffusers)

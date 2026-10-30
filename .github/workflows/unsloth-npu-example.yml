@@ -1,0 +1,90 @@
+name: unsloth-npu-example
+
+on:
+  push:
+    branches: [feat/unsloth-adapt]
+    paths:
+      - .github/workflows/unsloth-npu-example.yml
+      - projects/unsloth/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: unsloth-npu-example-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  qwen3-lora:
+    runs-on: linux-aarch64-a2-1
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    container:
+      image: swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/cann:9.1.0-910b-ubuntu22.04-py3.12
+      options: >-
+        --privileged --shm-size=16g
+        --device=/dev/davinci0
+        --device=/dev/davinci_manager --device=/dev/devmm_svm --device=/dev/hisi_hdc
+        --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
+        --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
+        --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
+        --volume=/data/ci-cache/pip:/root/.cache/pip
+        --volume=/data/ci-cache/modelscope/unsloth:/root/.cache/modelscope
+    env:
+      ASCEND_RT_VISIBLE_DEVICES: '0'
+      PIP_INDEX_URL: https://pypi.tuna.tsinghua.edu.cn/simple
+      PIP_DEFAULT_TIMEOUT: '120'
+      HF_ENDPOINT: https://hf-mirror.com
+      HF_HUB_DISABLE_XET: '1'
+      MODELSCOPE_CACHE: /root/.cache/modelscope
+      TOKENIZERS_PARALLELISM: 'false'
+      PYTHONUNBUFFERED: '1'
+      UNSLOTH_REF: 4089c57a82c13fcb96c4b9d71b67e32a75808763
+      ZOO_REF: 97153adb58d7f703aca65b44e86b289b58516cbf
+    steps:
+      - uses: actions/checkout@v6
+      - name: Checkout Unsloth
+        uses: actions/checkout@v6
+        with:
+          repository: unslothai/unsloth
+          ref: ${{ env.UNSLOTH_REF }}
+          path: upstream/unsloth
+      - name: Checkout Unsloth Zoo
+        uses: actions/checkout@v6
+        with:
+          repository: unslothai/unsloth-zoo
+          ref: ${{ env.ZOO_REF }}
+          path: upstream/unsloth-zoo
+      - name: Install NPU stack and example dependencies
+        run: |
+          set -eo pipefail
+          source /usr/local/Ascend/ascend-toolkit/set_env.sh
+          mkdir -p output
+          exec > >(tee output/install.log) 2>&1
+          npu-smi info
+          python -m pip install torch==2.9.0 torch_npu==2.9.0.post2 --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi
+          python -m pip install triton-ascend==3.2.2 --extra-index-url https://triton-ascend.osinfra.cn/pypi/simple
+          python -m pip install packaging
+          python projects/unsloth/install_dependencies.py
+          python -m pip install --no-deps ./upstream/unsloth-zoo ./upstream/unsloth
+          python -m pip freeze > output/packages.txt
+          cat output/packages.txt
+          python -c "import torch, torch_npu, triton.backends.ascend; assert torch.npu.is_available(); print(torch.__version__, torch_npu.__version__, torch.npu.get_device_name(0))"
+      - name: Run BF16 LoRA training, save, reload and inference
+        run: |
+          set -eo pipefail
+          source /usr/local/Ascend/ascend-toolkit/set_env.sh
+          python projects/unsloth/qwen3_lora_smoke.py 2>&1 | tee output/example.log
+      - name: Record exact outcome
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          mkdir -p output
+          python projects/unsloth/report.py
+          # Raw install/example logs remain in the Actions log. These runners
+          # cannot reliably reach artifact blob storage; print the result too.
+          cat output/result.json

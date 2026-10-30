@@ -62,13 +62,14 @@ permissions:
   contents: read
 
 jobs:
-  lm-evaluation-harness-quick-start:
+  qs-a2:
     uses: ./.github/workflows/quick-start-template.yml
     with:
       # Namespaces cache keys (quick-start-monitor-state-lm-evaluation-harness_*),
       # artifacts (lm-evaluation-harness-quick-start-<run_id>) and the
       # test working dir (workflows/projects/lm-evaluation-harness).
       project: lm-evaluation-harness
+      machine_type: a2
       # Self-hosted NPU runner for the test job only; the engine pins
       # the cache I/O jobs (restore-cache / publish-and-persist) to
       # GitHub-hosted ubuntu-latest.
@@ -99,3 +100,37 @@ jobs:
       # project env prep (CANN / CUDA constraints / NPU card pin / torch
       # stack) lives in the test subclass's prepare_environment hook.
       test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1
+
+  qs-a3:
+    uses: ./.github/workflows/quick-start-template.yml
+    with:
+      project: lm-evaluation-harness
+      machine_type: a3
+      # Atlas 900 A3 (Ascend 910C) leg.
+      test_runner: '["linux-aarch64-a3-800i-2"]'
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-a3-ubuntu22.04-py3.12
+      container_options: >-
+        --volume=/data/ci-cache/modelscope/lm-evaluation-harness:/root/.cache/modelscope
+        --volume=/data/ci-cache/pip:/root/.cache/pip
+        --volume=/data/ci-cache/hf/lm-evaluation-harness:/root/.cache/huggingface
+      timeout_minutes: 120
+      upstream_repo: EleutherAI/lm-evaluation-harness
+      doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/lm-evaluation-harness/docs/Quick-start-Ascend.md
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/lm-evaluation-harness/docs/Quick-start-Ascend.md
+      test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1
+
+  merge:
+    needs: [qs-a2, qs-a3]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout workflows (provides the merge action)
+        uses: actions/checkout@v6
+      - name: Merge per-machine results into one artifact
+        uses: ./.github/actions/merge-quick-start-results
+        with:
+          project: lm-evaluation-harness
+          result_a2: ${{ needs.qs-a2.outputs.result_json }}
+          result_a3: ${{ needs.qs-a3.outputs.result_json }}
+          name_a2: qs-a2
+          name_a3: qs-a3

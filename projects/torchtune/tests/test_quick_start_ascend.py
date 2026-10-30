@@ -1,13 +1,11 @@
-"""Quick-start-Ascend documentation test: end-to-end case built on top
-of the ``MarkdownDocTestBase`` contract.
+"""Quick-start test: doc under test is ``projects/torchtune/docs/Quick-start-Ascend.md``.
 
-Document under test: ``projects/torchtune/docs/Quick-start-Ascend.md``
-(follows the ``docs/markdown_doc_test_label.md`` contract: every
-``shell`` code block carries one of the ``#test`` / ``#test-setup`` /
-``#test-result`` labels plus ``id=`` / ``store=`` / ``load='x>>y'`` /
-``fuzzy='xxx'`` parameters).
+End-to-end case built on top of the ``MarkdownDocTestBase`` contract:
+every ``shell`` / ``python`` code block carries one of the ``#test`` /
+``#test-setup`` / ``#test-result`` labels plus ``id=`` / ``store=`` /
+``load='x>>y'`` / ``fuzzy='xxx'`` parameters.
 
-Run: ``python -m unittest tests.test_quick_start_ascend -v 2>&1``
+Run: ``python -m unittest tests.torchtune.test_quick_start_ascend -v 2>&1``
 
 Environment variables (injected by the ``quick-start-template.yml``
 engine that ``torchtune-quick-start.yml`` delegates to):
@@ -30,9 +28,14 @@ from __future__ import annotations
 import os
 import subprocess
 import unittest
-from pathlib import Path
 
 from workflows.markdown_doc_test_base import MarkdownDocTestBase
+from workflows.model_cache import (
+    ensure_safetensors,
+    purge_huggingface_corrupt,
+    report_huggingface_state,
+    resolve_huggingface_cache,
+)
 
 
 def _is_truthy(value: str | None) -> bool:
@@ -48,18 +51,23 @@ def _e2e_enabled() -> bool:
 
 
 class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
-    """``Quick-start-Ascend.md`` end-to-end test: fetch doc -> validate
+    """``quick_start.md`` end-to-end test: fetch doc -> validate
     contract -> run ``#test-setup`` / ``#test`` in order -> compare against
     ``#test-result``.
+
+    Scope: single-card LoRA finetune of Qwen2.5-0.5B-Instruct - install
+    torchtune (binary + source paths), ``tune run lora_finetune_single_device``
+    for 3 steps, then verify the LoRA adapter checkpoint on disk. The base
+    model is downloaded from HuggingFace Hub by the doc's own
+    ``snapshot_download`` block.
 
     The test subclass itself does not own any ``test_*`` method beyond the
     template-method entry; the doc body is the spec. ``prepare_environment``
     makes sure ``torch_npu`` is importable + the cluster ``pip`` mirror is
     bound before the framework starts executing doc commands (the doc
-    body itself does ``uv pip install torchtune`` and ``uv pip install -e .``
-    on a ``<ref>`` checkout, but the baseline ``torch`` / ``torch_npu`` /
-    ``modelscope`` deps still need to be on the runner for the doc to do
-    anything useful).
+    body itself pins ``torch`` / ``torch_npu`` and runs ``uv pip install
+    torchtune`` on a ``<ref>`` checkout, but the baseline stack still
+    needs to be on the runner for the doc to do anything useful).
     """
 
     # 60 min per command: long enough for the ~1 GB Qwen2.5-0.5B
@@ -67,13 +75,6 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     # compile); short enough to fail fast on hangs.
     DEFAULT_COMMAND_TIMEOUT = 3600
 
-    # Monitored source is the cosdt-ci-test/workflows fork (this repo):
-    # the doc lives at projects/torchtune/docs/Quick-start-Ascend.md and
-    # the engine sets MONITORED_DOC_URL to the raw.githubusercontent.com
-    # URL for the same path. Upstream torchtune's first finetune tutorial
-    # lives at meta-pytorch.org/torchtune/0.6/tutorials/first_finetune_tutorial.html
-    # and is referenced from inside the doc body, but it is NOT the file
-    # under test.
     USER_AGENT = 'cosdt-ci-test/quick-start'
 
     # Extend the base ERROR_MARKERS with CANN's typo + sentinel so a CANN
@@ -136,8 +137,12 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     _CLUSTER_INDEX = 'http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple'
     _ASCEND_EXTRA = 'https://repo.huaweicloud.com/ascend/repos/pypi'
 
+    # Base model pulled by the doc's snapshot_download block.
+    _MODEL_ID = 'Qwen/Qwen2.5-0.5B-Instruct'
+
     # CANN toolkit: source once to get ASCEND_HOME / LD_LIBRARY_PATH etc.
-    # Path is hard-coded, tied to the GitHub workflow container image.
+    # Path is hard-coded, tied to the container image pinned by the
+    # ``image:`` input of ``torchtune-quick-start.yml``.
     _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
 
     # ----------------------------------------------------------
@@ -150,7 +155,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
         torchtune itself is intentionally NOT pre-installed here: the doc
         body runs ``uv pip install torchtune`` (binary path) and
-        ``uv pip install -e .`` (source path) against the upstream release
+        ``uv pip install .`` (source path) against the upstream release
         tag injected by the workflow, so the test exercises the exact
         install path users get.
 
@@ -159,7 +164,10 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             * CUDA exclusion list (so an accidental ``nvidia-cudnn`` pull
               doesn't shadow the NPU build);
             * torch / torch_npu, only if the image's pre-installed wheels
-              don't already match the version matrix.
+              don't already match the version matrix (the doc's own
+              ``#test-setup`` blocks then pin the versions it needs);
+            * HF hub cache sanity: report + purge corrupt safetensors so a
+              dirty leftover cache self-heals instead of failing the run.
         """
         # 0) CANN env: source set_env.sh and merge the env stream into
         # os.environ
@@ -193,11 +201,10 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         # always have a fresh torchtune wheel on release day), so the
         # ``PIP_INDEX_URL`` / ``UV_INDEX_URL`` job-level env in
         # ``quick-start-template.yml`` is overridden for that command and
-        # doesn't apply here. The source install path (``uv pip install -e .``)
-        # has no explicit index-url and picks up the cluster env. uv's
-        # output is also cleaner than pip's "Obtaining/Installing
-        # collected packages" preamble so the #test-result fuzzy match
-        # against ``torchtune xxx`` isn't polluted.
+        # doesn't apply here. uv's output is also cleaner than pip's
+        # "Obtaining/Installing collected packages" preamble so the
+        # #test-result fuzzy match against ``torchtune xxx`` isn't
+        # polluted.
         subprocess.run(
             ['python', '-m', 'pip', 'install', 'uv'],
             check=True,
@@ -205,7 +212,8 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
         # 3) torch stack probe: when version matches the image's
         # pre-installed wheels, reuse them to avoid the cluster cache
-        # triggering ``+cpu`` resolution.
+        # triggering ``+cpu`` resolution. The doc's own #test-setup
+        # blocks pin the final torch / torch_npu versions it needs.
         _PROBE_SCRIPT = (
             'import torch, torch_npu\n'
             "raise SystemExit(0 if "
@@ -240,26 +248,26 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 check=True,
             )
 
-        # 4) ``modelscope`` is NOT pre-installed here: the doc's
-        # ``check-ml-deps`` block installs it via the doc body itself,
-        # so a broken install block surfaces here as a fuzzy mismatch
-        # against ``modelscope xxx`` rather than being masked by a
-        # pre-installed copy.
-        #
-        # ``torchtune`` is also NOT pre-installed: it's the subject of
-        # the test and gets installed by the doc's ``## 安装 torchtune``
-        # blocks (``torchtune-install-binary`` / ``torchtune-install-source``)
-        # which exercise both binary and source install paths.
+        # 4) ``huggingface_hub`` / ``torchao`` / ``torchtune`` are NOT
+        # pre-installed here: the doc's own labeled blocks install them in
+        # document order (``install-deps`` for the hub + torchao,
+        # ``torchtune-install-binary`` / ``torchtune-install-source`` for
+        # torchtune itself), so a broken install block fails loudly as a
+        # fuzzy mismatch instead of being masked by a pre-installed copy.
 
-        # Modelscope cache: pinned to a test-scoped subdir outside the
-        # bind-mount. The host-side /data/ci-cache/modelscope persists
-        # across CI runs and accumulates stale files (incomplete downloads,
-        # model revision drift, cross-project leftovers) that would
-        # otherwise surface here as hash mismatches. This keeps each run's
-        # cache isolated in the container's local fs.
-        os.environ.setdefault(
-            'MODELSCOPE_CACHE', str(Path.home() / '.cache' / 'modelscope_quick_start_test'),
+        # tqdm: required by huggingface_hub's download progress bars.
+        subprocess.run(
+            ['python', '-m', 'pip', 'install', 'tqdm'],
+            check=True,
         )
+
+        # 5) HF hub cache sanity: the doc downloads Qwen2.5-0.5B-Instruct
+        # via ``huggingface_hub.snapshot_download`` into the default HF
+        # cache. Report what's already there and purge model dirs holding
+        # corrupt safetensors shards so the download self-heals.
+        ensure_safetensors()
+        report_huggingface_state(cls._MODEL_ID)
+        purge_huggingface_corrupt(resolve_huggingface_cache())
 
     # ----------------------------------------------------------
     # test entry
@@ -269,9 +277,9 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     def setUpClass(cls) -> None:
         """Run env setup once per test class: CANN env + CUDA constraints + uv + torch stack.
 
-        ``modelscope`` / ``torchtune`` are NOT installed here — the doc's
-        own labeled blocks install them in document order, so a broken
-        install block fails loudly instead of being masked.
+        ``huggingface_hub`` / ``torchao`` / ``torchtune`` are NOT installed
+        here — the doc's own labeled blocks install them in document order,
+        so a broken install block fails loudly instead of being masked.
 
         ``@unittest.skipIf`` only skips the test *method* — ``setUpClass``
         itself always runs. The ``if _e2e_enabled()`` body guard below is

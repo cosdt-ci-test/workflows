@@ -1,22 +1,16 @@
-"""Quick-start-Ascend documentation test: end-to-end case built on top
-of the ``MarkdownDocTestBase`` contract.
+"""Quick-start test: doc under test is ``projects/comfyui/docs/Quick-start-Ascend.md``.
 
-Document under test: ``projects/comfyui/docs/Quick-start-Ascend.md``
-(follows the ``docs/markdown_doc_test_label.md`` contract: every ``shell``
-code block carries one of the ``#test`` / ``#test-setup`` /
-``#test-result`` labels plus ``id=`` / ``store=`` / ``load='x>>y'`` /
-``fuzzy='xxx'`` parameters).
+End-to-end case built on top of the ``MarkdownDocTestBase`` contract:
+env check + ComfyUI clone/install + SD 1.5 checkpoint download
+(Hugging Face Hub) + headless ComfyUI server on NPU + the upstream API
+example ``script_examples/basic_api_example.py`` producing a PNG.
 
-Run: ``python -m unittest tests.test_quick_start_ascend -v 2>&1``
+Run: ``python -m unittest tests.comfyui.test_quick_start_ascend -v 2>&1``
 
 Environment variables (injected by GitHub workflow
 ``comfyui-quick-start.yml``):
-    ``MONITORED_DOC_URL``         Used by the engine's monitor step (ubuntu,
-                                  not the NPU runner) for doc hash checking.
-                                  The test's ``pre_process`` reads the doc
-                                  from the local checkout instead, because
-                                  ``raw.githubusercontent.com`` is not
-                                  reachable from the NPU runner's cluster.
+    ``MONITORED_DOC_URL``         doc to fetch and execute
+    ``UPSTREAM_REF``              release tag substituted into the doc's <ref>
     ``NPU_READY=true``            Required, otherwise the class is skipped.
                                   End-to-end tests only run on the NPU runner:
                                   local dev machines / normal ubuntu runners
@@ -29,56 +23,42 @@ from __future__ import annotations
 import os
 import subprocess
 import unittest
-from pathlib import Path
 
 from workflows.markdown_doc_test_base import MarkdownDocTestBase
 from workflows.model_cache import (
+    diagnose_mount_environment,
     ensure_safetensors,
-    purge_modelscope_corrupt,
-    resolve_modelscope_cache,
+    purge_huggingface_corrupt,
+    report_huggingface_state,
+    resolve_huggingface_cache,
 )
 
 
 def _is_truthy(value: str | None) -> bool:
-    """``'true'`` -> True (case-insensitive); anything else (including unset) -> False."""
     if not value:
         return False
     return value.strip().lower() == 'true'
 
 
 def _e2e_enabled() -> bool:
-    """Return True when ``NPU_READY=true`` is set, releasing the skip."""
     return _is_truthy(os.environ.get('NPU_READY'))
 
 
 class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
-    """``Quick-start-Ascend.md`` end-to-end test: fetch doc -> validate
-    contract -> run ``#test-setup`` / ``#test`` in order -> compare against
-    ``#test-result``.
-
-    Scope: env check + ComfyUI clone/install + SD 1.5 checkpoint download
-    (ModelScope) + headless ComfyUI server on NPU + the upstream API
-    example ``script_examples/basic_api_example.py`` producing a PNG.
-    """
-
     # 60 min per command: long enough for the ~4.3 GB SD 1.5
     # v1-5-pruned-emaonly.safetensors snapshot_download on the first run
     # plus the pip install of ComfyUI requirements, which needs longer
     # than the 20 min default of the smaller projects.
     DEFAULT_COMMAND_TIMEOUT = 3600
 
-    # Monitored source is the cosdt-ci-test/workflows fork (this repo):
-    # the doc lives at projects/comfyui/docs/Quick-start-Ascend.md
-    # and the engine sets MONITORED_DOC_URL to the raw.githubusercontent.com
-    # URL for the same path.
-    USER_AGENT = 'cosdt-ci-test/quick-start'
+    USER_AGENT = 'cosdt-ci-test/quick-start'  # monitored source lives under this org
 
     # Extend the base ERROR_MARKERS with CANN's typo + sentinel so a CANN
     # failure surfaces a full stderr dump (head/tail by default would hide
     # the line that names the failure).
     ERROR_MARKERS = (
-        *MarkdownDocTestBase.ERROR_MARKERS,
-        'applicaiton exception',  # CANN toolkit emits this typo (sic)
+        *MarkdownDocTestBase.ERROR_MARKERS,  # generic [ERROR] + Traceback
+        'applicaiton exception',  # typo in CANN's Python driver (sic)
         'ERR99999',  # CANN sentinel for unrecoverable runtime failure
     )
 
@@ -88,7 +68,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     # dep tree itself doesn't pull CUDA, but bare ``torch`` / ``torchvision``
     # wheels from the default PyPI index depend on nvidia-* packages; the
     # constraints keep any accidental re-resolution of the torch stack
-    # from dragging them in.
+    # from dragging them in and breaking the torch_npu pairing.
     _CUDA_CONSTRAINTS = (
         'cuda-toolkit<0',
         'cuda-python<0',
@@ -135,62 +115,27 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     _CLUSTER_INDEX = 'http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple'
     _ASCEND_EXTRA = 'https://repo.huaweicloud.com/ascend/repos/pypi'
 
+    # HF repo carrying the v1-5-pruned-emaonly.safetensors checkpoint
+    # referenced by basic_api_example.py (replaces the former ModelScope
+    # AI-ModelScope/stable-diffusion-v1-5 download used on the workflows
+    # side - docs CI standardizes on Hugging Face).
+    _MODEL_ID = 'stable-diffusion-v1-5/stable-diffusion-v1-5'
+
     # CANN toolkit: source once to get ASCEND_HOME / LD_LIBRARY_PATH etc.
     # Path is hard-coded, tied to the container image pinned by the
     # ``image:`` input of ``comfyui-quick-start.yml``.
     _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
 
-    # ----------------------------------------------------------
-    # pre_process: read doc from local checkout instead of fetching
-    # raw.githubusercontent.com — the NPU runner sits behind a cluster
-    # firewall that cannot reach it (known limitation, see
-    # quick-start-template.yml). The checkout step always has the
-    # latest doc for the branch under test, so there is no stale drift.
-    # ----------------------------------------------------------
-
-    def pre_process(self) -> str:
-        """Read ``Quick-start-Ascend.md`` from the local checkout.
-
-        Overrides the base ``MarkdownDocTestBase.pre_process`` which
-        fetches ``MONITORED_DOC_URL`` via ``urllib`` — that endpoint
-        (``raw.githubusercontent.com``) is not reachable from the NPU
-        runner's cluster network. The workflow checkout already places
-        the doc at
-        ``projects/comfyui/docs/Quick-start-Ascend.md``
-        relative to this file, so reading it locally is both reliable
-        and always in sync with the branch under test.
-        """
-        doc_path = (
-            Path(__file__).resolve().parent.parent
-            / 'docs'
-            / 'Quick-start-Ascend.md'
-        )
-        if not doc_path.is_file():
-            raise RuntimeError(
-                f'doc not found in local checkout: {doc_path}'
-            )
-        return doc_path.read_text(encoding='utf-8')
-
-    # ----------------------------------------------------------
-    # prepare_environment: CANN env + CUDA constraints + uv +
-    # torch stack probe + safetensors + modelscope cache validation
-    # ----------------------------------------------------------
-
     @classmethod
     def prepare_environment(cls) -> None:
         """Source CANN env + write CUDA exclusion list + install uv +
-        torch stack probe + safetensors + modelscope cache validation.
+        torch stack probe + safetensors + HF cache validation.
 
         The doc's ``## 安装依赖`` block is the single source of truth for
         which ComfyUI deps get installed; this class only handles
         ``torch`` / ``torch_npu`` here (via the cluster cache + Huawei
         ascend dual-source). Everything else installs in document order
         via the ``#test`` machinery.
-
-        Class-level setup: run once per test class, triggered by
-        ``setUpClass``. Not the same as ``unittest.TestCase.setUp`` —
-        that lifecycle hook fires before every test method, which is
-        wrong for a one-shot install.
         """
         # 0) CANN env: source set_env.sh and merge the env stream into
         # os.environ
@@ -220,8 +165,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         os.environ['UV_CONSTRAINT'] = cls._CONSTRAINTS_FILE
 
         # 2) uv: the doc's install blocks call ``pip``; keep uv installed
-        # for parity with the other projects' setup (the workflow may
-        # later switch the install block to ``uv pip install``). Inherit
+        # for parity with the other projects' setup. Inherit
         # ``PIP_INDEX_URL`` + ``PIP_TRUSTED_HOST`` from the yml job-level
         # env (cluster cache path + trusted-host).
         subprocess.run(
@@ -271,29 +215,29 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         # install defensively in case the CANN base ships without it.
         ensure_safetensors()
 
-        # 5) Cache validation: the doc downloads the SD 1.5 checkpoint
-        # (AI-ModelScope/stable-diffusion-v1-5) via ModelScope on the
-        # first run. A persistent host-side bind mount can hold truncated
-        # safetensors from interrupted runs; walk every shard under each
-        # model dir and purge it on failure. modelscope will re-download
-        # cleanly on next access. Implementation lives in
-        # workflows.modelscope_cache; see that module's docstring for the
-        # full rationale.
-        purge_modelscope_corrupt(resolve_modelscope_cache())
+        # 5) tqdm: required by huggingface_hub download progress bars.
+        subprocess.run(
+            ['python', '-m', 'pip', 'install', 'tqdm'],
+            check=True,
+        )
 
-    # ----------------------------------------------------------
-    # test entry
-    # ----------------------------------------------------------
+        # 6) HF cache validation: the doc downloads the SD 1.5 checkpoint
+        # (stable-diffusion-v1-5/stable-diffusion-v1-5) via Hugging Face
+        # Hub on the first run. A persistent host-side cache can hold
+        # truncated safetensors from interrupted runs; report the current
+        # state, then walk every shard under each model dir and purge it
+        # on failure so the next access re-downloads cleanly.
+        diagnose_mount_environment(model_id=cls._MODEL_ID)
+
+        report_huggingface_state(cls._MODEL_ID)
+        purge_huggingface_corrupt(resolve_huggingface_cache())
 
     @classmethod
     def setUpClass(cls) -> None:
-        """Run env setup once per test class: CANN env + CUDA constraints +
-        uv + torch stack + safetensors + modelscope cache validation.
-
-        ``@unittest.skipIf`` only skips the test *method* — ``setUpClass``
-        itself always runs. The ``if _e2e_enabled()`` body guard below is
-        what actually keeps heavy setup from firing when ``NPU_READY`` is
-        unset.
+        """Run env setup once per class. ``@unittest.skipIf`` only skips
+        the test *method* — ``setUpClass`` itself always runs, so the
+        ``if _e2e_enabled()`` guard keeps heavy setup from firing on
+        non-NPU runners.
         """
         if _e2e_enabled():
             cls.prepare_environment()
@@ -303,10 +247,9 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         'end-to-end requires NPU runner; set NPU_READY=true',
     )
     def test_runs_doc(self) -> None:
-        """Template-method entry point. The base class
-        ``run_template()`` runs the full ``pre_process`` -> ``parse`` ->
-        ``execute`` -> ``post_process`` flow. ``prepare_environment`` is
-        triggered by ``setUpClass`` once, not from ``run_template``."""
+        """Template-method entry point. The base class ``run_template()``
+        runs the full ``pre_process`` -> ``parse`` -> ``execute`` ->
+        ``post_process`` flow."""
 
         self.run_template()
 

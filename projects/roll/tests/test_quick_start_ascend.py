@@ -1,4 +1,5 @@
-"""Guard projects/roll/docs/Quick-start-Ascend.md on an NPU runner."""
+"""Quick-start-Ascend test: doc under test is ``projects/roll/docs/Quick-start-Ascend.md``.
+"""
 
 from __future__ import annotations
 
@@ -61,22 +62,13 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         )
 
     def pre_process(self) -> str:
-        doc_path = (
-            Path(__file__).resolve().parent.parent
-            / 'docs'
-            / 'Quick-start-Ascend.md'
+        doc = (
+            Path(__file__).resolve().parent.parent / 'docs' / 'Quick-start-Ascend.md'
         )
-        if not doc_path.is_file():
-            raise RuntimeError(
-                f'doc not found in local checkout: {doc_path}'
-            )
-        return doc_path.read_text(encoding='utf-8')
+        return doc.read_text(encoding='utf-8')
 
     @classmethod
     def prepare_environment(cls) -> None:
-        """CANN env merge, card pin, PYTHONNOUSERSITE, PATH prefix, and
-        model-cache sanity. Dependency installs live in the doc itself
-        (that is the user path); only CI-side hygiene happens here."""
         os.environ['PYTHONNOUSERSITE'] = '1'
         os.environ.setdefault('ASCEND_RT_VISIBLE_DEVICES', '0')
 
@@ -100,6 +92,10 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         venv_bin = os.path.dirname(sys.executable)
         os.environ['PATH'] = f'{venv_bin}:{path_dirs}:{os.environ.get("PATH", "")}'
         print('setup: sourced CANN environment')
+
+        project_root = Path(__file__).resolve().parent.parent
+        os.chdir(str(project_root))
+        print(f'setup: cwd -> {project_root}')
 
         ensure_safetensors()
         purge_modelscope_corrupt(resolve_modelscope_cache())

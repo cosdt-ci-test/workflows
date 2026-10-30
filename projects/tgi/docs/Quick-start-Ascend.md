@@ -1,28 +1,29 @@
-# Quick Start (Ascend NPU)
+## 快速开始
 
 在昇腾 NPU 上从源码构建并部署 Text Generation Inference（TGI）推理服务，
 对 Qwen3-0.6B 完成端到端文本生成：单卡基线 + 双卡 HCCL 张量并行（`--num-shard 2`）。
 
 本文档覆盖上游官方 release 中**尚未包含**的 Ascend NPU 支持：构建、安装、
 启动与推理验证使用
-[VenusTZZ/text-generation-inference](https://github.com/VenusTZZ/text-generation-inference)
-（TGI 官方仓库的 fork，NPU 适配以 release 形式发布在该 fork 上）。
+[cosdt/text-generation-inference](https://github.com/cosdt/text-generation-inference)
+（TGI 官方仓库的 fork，Ascend 适配以 release 形式发布在该 fork 上；release
+不含预编译产物，因此按本文档从源码构建）。
 
-## 前置条件
+### 前置条件
 
-### 硬件
+#### 硬件
 
 Atlas 900 A2 PODc（Ascend 910B × 2），并按需完成物理机或容器内的设备挂载。
 
-### 基础软件
+#### 基础软件
 
 在跑本文档**之前**，你的机器上需要已经装好并可用：
 
-- 可用的 Python 3.12 环境
-- 可用的 CANN 9.1.0（参考[快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html)）
-- Rust 工具链（本文档「安装 Rust 工具链」小节会通过 rustup 安装，无需提前准备）
+- 可用的 Python 环境
+- 可用的 CANN（参考[快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html)）
+- Rust 工具链（由本文档「安装 Rust 工具链」小节通过 rustup 安装）
 
-### 本文档示例使用的版本
+#### 本文档示例使用的环境
 
 **配套机器**：
 
@@ -33,29 +34,17 @@ Atlas 900 A2 PODc（Ascend 910B × 2），并按需完成物理机或容器内�
 
 swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 
-**软件版本**：
+### 1. 检查环境
 
-| 组件 | 版本 |
-| --- | --- |
-| Python | 3.12 |
-| CANN | 9.1.0 |
-| torch | 2.9.0 |
-| torch_npu | 2.9.0.post2 |
-| transformers | 4.57.6 |
-| kernels | 0.5.0 |
-| 模型 | [Qwen/Qwen3-0.6B](https://www.modelscope.cn/models/Qwen/Qwen3-0.6B) |
+#### 确认 NPU 设备
 
-## 1. 检查环境
-
-### 确认 NPU 设备
-
-```shell
+```shell #test-setup
 npu-smi info
 ```
 
 输出类似：
 
-```
+```text
 +------------------------------------------------------------------------------------------------+
 | npu-smi 25.5.2                   Version: 25.5.2                                               |
 +---------------------------+---------------+----------------------------------------------------+
@@ -74,101 +63,38 @@ npu-smi info
 +---------------------------+---------------+----------------------------------------------------+
 ```
 
-> 如果 `npu-smi` 不存在，请回到 [Ascend 官方快速安装指南](https://ascend.github.io/docs/sources/ascend/quick_install.html) 补装驱动。
-> 本文档的双卡验证需要**至少两张卡**可见。
+如果 `npu-smi` 不存在，请回到 [Ascend 官方快速安装指南](https://ascend.github.io/docs/sources/ascend/quick_install.html) 补装驱动。
+本文档的双卡验证需要**至少两张卡**可见。
 
-### 检查 Python 版本
+### 2. 准备环境
 
-```shell #test id="check-python"
-python --version
-```
-
-输出结果如下：
-
-```shell #test-result id="check-python" fuzzy='xxx'
-Python 3.12.xxx
-```
-
-### 检查 NPU 设备运行时可用
-
-```shell #test id="check-npu-runtime"
-python -c "import torch, torch_npu; print(f'torch={torch.__version__}'); print(f'torch_npu={torch_npu.__version__}'); print('is_available:', torch.npu.is_available()); print('count:', torch.npu.device_count())"
-```
-
-输出结果如下：
-
-```shell #test-result id="check-npu-runtime" fuzzy='xxx'
-torch=xxx
-torch_npu=xxx
-is_available: True
-count: 2
-```
-
-> 如果 `import torch_npu` 失败，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查 torch / torch_npu / CANN 三方兼容矩阵。
-
-## 2. 安装依赖与工具链
-
-### 系统依赖
+#### 系统依赖
 
 TGI 是 Rust + Python 双栈项目：Rust 侧编译需要 C/C++ 工具链与 protobuf 编译器，
 PyO3 嵌入 Python 需要开发头文件：
 
 ```shell #test-setup
 apt-get update -qq
-apt-get install -y -qq build-essential protobuf-compiler pkg-config libssl-dev curl git python3-dev
+apt-get install -y -qq build-essential protobuf-compiler pkg-config libssl-dev curl python3-dev
 ```
 
-### Python 依赖
+确认编译必需的工具已可用：
 
-torch / torch_npu 从华为昇腾源安装（与 CANN 9.1.0 匹配的 2.9 系列），其余
-Python 依赖用 uv 安装：
-
-```shell #test-setup
-python -m pip install -q uv
-uv pip install \
-  --index-url https://repo.huaweicloud.com/ascend/repos/pypi/simple \
-  "torch==2.9.0" "torch_npu==2.9.0.post2"
-uv pip install \
-  "transformers==4.57.6" "accelerate==1.15.0" "modelscope==1.37.0" \
-  "kernels==0.5.0" "grpcio-tools>=1.69.0" "mypy-protobuf>=3.6.0"
+```shell #test id="check-system-deps"
+protoc --version
 ```
 
-> `kernels` 必须固定 0.5.0：它是 TGI Python server 的构建后端，0.5.0 自带
-> `kernels.lockfile`，构建时不会去下载 CUDA 专属内核；更新的版本缺该文件，
-> 在无 CUDA 的 aarch64 昇腾机器上会构建失败。
+输出结果如下：
 
-### 安装 Rust 工具链
-
-```shell #test-setup
-export RUSTUP_DIST_SERVER=https://rsproxy.cn
-export RUSTUP_UPDATE_ROOT=https://rsproxy.cn/rustup
-curl -fsSL https://rsproxy.cn/rustup-init.sh -o /tmp/rustup-init.sh
-sh /tmp/rustup-init.sh -y --default-toolchain 1.85.1 --profile minimal
-mkdir -p "$HOME/.cargo"
-printf '[source.crates-io]\nreplace-with = "rsproxy-sparse"\n[source.rsproxy-sparse]\nregistry = "sparse+https://rsproxy.cn/index/"\n' \
-  > "$HOME/.cargo/config.toml"
-export PATH="$HOME/.cargo/bin:$PATH"
+```shell #test-result id="check-system-deps"
+libprotoc 3.12.4
 ```
 
-> 使用 rsproxy.cn（字节跳动 Rust 社区镜像）拉取工具链与 crates.io 依赖，规避
-> 国内网络访问 static.rust-lang.org / crates.io 的不稳定。TGI 仓库根目录的
-> `rust-toolchain.toml` 固定 1.85.1，因此这里直接安装该版本。
+版本随发行版而异（示例为 Ubuntu 20.04；Ubuntu 22.04/24.04 为 3.21.12），3.x 均可。
 
-## 3. 下载基础模型
+#### 获取源码
 
-默认使用 **ModelScope** 下载 Qwen3-0.6B（约 1.2 GB，落到默认缓存
-`~/.cache/modelscope`）：
-
-```shell #test-setup store="model_path"
-python -c "from modelscope import snapshot_download; print(snapshot_download('Qwen/Qwen3-0.6B'))" | tail -n 1
-```
-
-## 4. 构建并安装 TGI
-
-### 获取源码
-
-克隆 fork 并 checkout 到本次看护的 release tag（工作流注入 `UPSTREAM_REF`，
-`<ref>` 为该 tag）：
+从 [Releases 页面](https://github.com/cosdt/text-generation-inference/releases)下载最新 release tag 对应的源码包并解压到 `tgi/`（`<ref>` 为要安装的 tag）：
 
 <!--
 ```shell #test-setup store="upstream_ref"
@@ -177,135 +103,337 @@ echo "${UPSTREAM_REF}"
 -->
 
 ```shell #test-setup load="upstream_ref>>ref"
-git clone --depth 1 --branch "<ref>" \
-  https://github.com/VenusTZZ/text-generation-inference.git tgi \
-  || { git clone --depth 1 \
-         https://github.com/VenusTZZ/text-generation-inference.git tgi \
-       && git -C tgi fetch --depth 1 origin "<ref>" \
-       && git -C tgi checkout -q FETCH_HEAD; }
+mkdir -p tgi && curl -fsSL "https://github.com/cosdt/text-generation-inference/archive/refs/tags/<ref>.tar.gz" | tar -xzf - -C tgi --strip-components=1
 ```
 
-> `<ref>` 为要安装的 release tag（也可替换为任意分支名或 commit SHA）。
-> 手工执行时无需 `UPSTREAM_REF`，直接把 `<ref>` 换成 tag，如 `v3.3.7-npu`。
+解压完成后确认关键文件齐全（`server/requirements_ascend.txt` 是 fork 的
+NPU 依赖锁定文件，上游仓库没有它，可据此确认拿到的是昇腾适配源码）：
 
-### 编译 Rust 二进制
+```shell #test id="check-source"
+TGI_DIR=$PWD/tgi
+[ -d "$TGI_DIR" ] || TGI_DIR=$PWD
+for f in Cargo.toml start-tgi.sh server/requirements_ascend.txt; do [ -f "$TGI_DIR/$f" ] && echo "$f ok"; done
+```
+
+输出结果如下：
+
+```shell #test-result id="check-source"
+Cargo.toml ok
+start-tgi.sh ok
+server/requirements_ascend.txt ok
+```
+
+`<ref>` 为要安装的 release tag。直接把 `<ref>` 换成
+[Releases 页面](https://github.com/cosdt/text-generation-inference/releases)上最新的 tag。
+
+#### Python 依赖
+
+从华为昇腾源安装官方当前推荐的 `torch_npu`（`torch` 作为其依赖一并安装，
+与 CANN 的配套关系见 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch)），
+`modelscope` 用于第 3 节下载模型：
+
+```shell #test-setup
+python -m pip install --index-url https://repo.huaweicloud.com/ascend/repos/pypi/simple torch_npu
+python -m pip install modelscope
+```
+
+#### 检查 NPU 设备运行时可用
+
+```shell #test id="check-npu-runtime"
+python -c "import torch, torch_npu; print(f'torch={torch.__version__}'); print(f'torch_npu={torch_npu.__version__}'); print('is_available:', torch.npu.is_available()); print('count:', torch.npu.device_count())"
+```
+
+输出结果如下：
+
+```shell #test-result id="check-npu-runtime"
+torch=2.10.0+cpu
+torch_npu=2.10.0.post6
+is_available: True
+count: 2
+```
+
+版本为昇腾源当前推荐版本（`torch` 随 `torch_npu` 一并安装），随源上
+版本更新而变化，与示例不一致时以实际输出为准。
+
+如果 `import torch_npu` 失败，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查 torch / torch_npu / CANN 三方兼容矩阵。
+
+#### 安装 Rust 工具链
+
+```shell #test-setup
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.85.1 --profile minimal
+export PATH="$HOME/.cargo/bin:$PATH"
+```
+
+确认工具链可用：
+
+```shell #test id="check-toolchain"
+export PATH="$HOME/.cargo/bin:$PATH"
+rustc --version
+```
+
+输出结果如下：
+
+```shell #test-result id="check-toolchain"
+rustc 1.85.1 (4eb161250 2025-03-15)
+```
+
+TGI 仓库根目录的 `rust-toolchain.toml` 固定 1.85.1，因此这里直接安装该版本。
+
+### 3. 下载基础模型
+
+默认使用 **ModelScope** 下载 Qwen3-0.6B（约 1.2 GB，落到默认缓存
+`~/.cache/modelscope`），下载后自动检查关键文件齐全
+（`model.safetensors` 为权重文件，约 1.2 GB），缺文件直接报错退出：
+
+```shell #test-setup store="model_path"
+MODEL_DIR=$(python -c "from modelscope import snapshot_download; print(snapshot_download('Qwen/Qwen3-0.6B'))" | tail -n 1)
+for f in config.json model.safetensors tokenizer.json; do
+  [ -f "$MODEL_DIR/$f" ] && echo "$f ok" >&2 || { echo "missing: $f" >&2; exit 1; }
+done
+echo "$MODEL_DIR"
+```
+
+输出结果如下（`ok` 提示行在 stderr，最后一行 stdout 是模型目录）：
+
+```text
+config.json ok
+model.safetensors ok
+tokenizer.json ok
+~/.cache/modelscope/models/Qwen--Qwen3-0.6B/snapshots/master
+```
+
+### 4. 构建并安装 TGI
+
+#### 编译 Rust 二进制
 
 编译 launcher 与 router（`--profile release-opt` 为上游提供的发布优化 profile）。
-PyO3 嵌入 Python 需要 `PYO3_PYTHON` 指向环境里的 Python，protobuf 代码生成
-需要 `PROTOC`：
+PyO3 嵌入 Python 需要 `PYO3_PYTHON` 指向环境里的 Python，
+protobuf 代码生成需要 `PROTOC`：
 
 ```shell #test-setup
 cd tgi
 export PYO3_PYTHON="$(command -v python)"
 export PROTOC="$(command -v protoc)"
-cargo build --profile release-opt \
-  -p text-generation-launcher -p text-generation-router-v3
+cargo build --profile release-opt -p text-generation-launcher -p text-generation-router-v3
 ```
 
-### 安装 Python server
+#### 安装 Python server
+
+`server/` 是 TGI 的 Python 侧模型实现层（`text_generation_server` 包），
+router 运行时加载它。fork 为 Ascend 维护了依赖锁定文件
+`server/requirements_ascend.txt`（验证栈对应的完整依赖列表，含 kernels、
+transformers、accelerate 等），安装使用 uv（上游 TGI 的构建流程同样使用
+uv）：
 
 ```shell #test-setup
 cd tgi
-uv pip install --no-build-isolation -e server
+python -m pip install -q uv
+uv pip install --no-build-isolation -r server/requirements_ascend.txt
+uv pip install --no-build-isolation --no-deps -e server
+uv pip install --no-build-isolation "grpcio-tools==1.84.0" "mypy-protobuf==3.6.0"
 make -C server gen-server-raw
 ```
 
-### 检查构建产物
+`-e server` 加 `--no-deps`：依赖一律以锁定文件为准，避免按 pyproject 的
+宽松版本范围重新解析引入漂移。proto 代码生成用 `gen-server-raw`（只做
+编译）：`gen-server` 目标会额外按过期的 `requirements_gen.txt` 安装依赖，
+覆盖锁定文件的版本（例如把 `typing_extensions` 降级到 4.13，与
+`pydantic-core` 不兼容，server 启动即崩溃）。`grpcio-tools` 固定
+`1.84.0`，与锁定文件的 `grpcio` 版本一致。
+
+锁定文件里 kernels 固定 0.5.0：它是 server 的构建插件，0.5.0 自带
+`kernels.lockfile`，构建时不会去下载 CUDA 专属内核；更新的版本缺该文件，
+在无 CUDA 的 aarch64 昇腾机器上会构建失败。
+
+#### 检查构建产物
+
+Rust 侧产物为两个可执行文件，都在 `tgi/target/release-opt/` 下：
+`text-generation-launcher` 与 `text-generation-router`（注意
+`-p text-generation-router-v3` 是包名，产出的二进制叫
+`text-generation-router`，launcher 运行时按这个名字拉起它）。
+`--version` 输出编译期写入的版本号（版本号随 fork 的 workspace 版本
+变化，未随 tag 固定，以实际输出为准），`import text_generation_server`
+验证 Python server 已装进当前环境：
 
 ```shell #test id="check-build"
-$PWD/tgi/target/release-opt/text-generation-launcher --version
+TGI_DIR=$PWD/tgi
+[ -d "$TGI_DIR" ] || TGI_DIR=$PWD
+"$TGI_DIR/target/release-opt/text-generation-launcher" --version
+"$TGI_DIR/target/release-opt/text-generation-router" --version
 python -c "import text_generation_server; print('server import ok')"
 ```
 
 输出结果如下：
 
-```shell #test-result id="check-build" fuzzy='xxx'
-text-generation-launcher xxx
+```shell #test-result id="check-build"
+text-generation-launcher 3.3.6-dev0
+text-generation-router-v3 3.3.6-dev0
 server import ok
 ```
 
-## 5. 启动服务并验证推理
+### 5. 启动服务并验证推理
 
-### 单卡基线
+服务生命周期由 fork 仓库自带的 `start-tgi.sh` / `stop-tgi.sh` 脚本管理。
+下面分单卡与双卡两节阐述，每步给出命令与可验证的输出结果。
+以下命令均在「获取源码」解压出的 `tgi` 目录下执行。
 
-启动 TGI（单卡、bfloat16、贪心解码），轮询就绪后调用 `/generate` 做一次真实
-推理，输出作为双卡验证的基线（此块为标准输出捕获块，回复存入
-`reply_single`，不参与输出比对）：
+#### 5.1 单卡
 
-```shell #test-setup store="reply_single" load="model_path>>model_path"
-set -e
+##### 启动服务
+
+`start-tgi.sh` 负责后台启动、就绪轮询与日志落盘（默认 `/tmp/tgi.log`），
+脚本返回 `[READY]` 即服务可用：
+
+```shell #test-setup
 cd tgi
-export PATH="$PWD/target/release-opt:$PATH"
-export ATTENTION=flashdecoding-npu PREFIX_CACHING=0 CUDA_GRAPHS=0
-export ASCEND_VISIBLE_DEVICES=0
-export PYTORCH_NPU_ALLOC_CONF=max_split_size_mb:256
+./start-tgi.sh --num-shard 1 --devices 0
+```
 
-text-generation-launcher \
-  --model-id "<model_path>" \
-  --num-shard 1 --port 8080 \
-  --max-total-tokens 128 --max-input-tokens 100 \
-  > tgi-launcher-single.log 2>&1 &
-LID=$!
-cleanup() {
-  kill "$LID" 2>/dev/null || true
-  for _ in $(seq 1 15); do kill -0 "$LID" 2>/dev/null || break; sleep 2; done
-  pkill -TERM -f "text-generation[-]server" 2>/dev/null || true
-  sleep 3
-}
-trap cleanup EXIT
+不传 `--model-id` 时默认使用 Qwen/Qwen3-0.6B，首次启动自动经 ModelScope
+下载（缓存于 `~/.cache/modelscope`，之后直接命中）；也可用
+`--model-id /path/to/model` 指定本地路径。
 
-for i in $(seq 1 60); do
-  curl -4fs http://127.0.0.1:8080/info >/dev/null 2>&1 && break
-  kill -0 "$LID" 2>/dev/null || { echo "launcher exited early"; tail -50 tgi-launcher-single.log; exit 1; }
-  sleep 5
-done
-curl -4fs http://127.0.0.1:8080/info >/dev/null || { echo "server not ready"; tail -50 tgi-launcher-single.log; exit 1; }
+启动成功的输出：
 
+```text
+[START] model_id=/path/to/model
+[START] num_shard=1  devices=0  port=8080
+[START] launcher pid 12345
+[READY] TGI is serving on http://127.0.0.1:8080 after ~130s
+[READY] stop with: ./stop-tgi.sh
+```
+
+**冷启动约 2-3 分钟是正常现象**，`[READY]` 出现前服务不可访问，耗时主要在：
+
+- 模型权重加载并搬运到 NPU 显存（Qwen3-0.6B 约 1.2 GB）；
+- KV cache 分配与模型预热（`Warming up model` 阶段）。
+
+期间可另开终端观察 `tail -f /tmp/tgi.log`——依次出现 `Warming up model`、
+`KV-cache blocks`、`Connected` 即服务就绪（时间戳与数值随机器而异）：
+
+```text
+...  INFO text_generation_router_v3: Warming up model
+...  INFO text_generation_launcher: KV-cache blocks: ..., size: ...
+...  INFO text_generation_router::server: Connected
+```
+
+随后 `start-tgi.sh` 的就绪轮询打印 `[READY] TGI is serving on
+http://127.0.0.1:8080 after ~130s`——~130s 为 910B 实测冷启动时长，
+不同机器略有差异，属正常范围。
+
+##### 确认服务就绪
+
+返回模型信息 JSON 即就绪。取其中与本文档固定相关的关键字段
+（`router` 为路由二进制名、`version` 为编译期版本，
+`max_input_tokens` / `max_total_tokens` 来自 `start-tgi.sh` 默认值）：
+
+```shell #test id="check-info"
+curl -4s http://127.0.0.1:8080/info | python -c 'import json,sys; d=json.load(sys.stdin); print("router:", d["router"]); print("version:", d["version"]); print("max_input_tokens:", d["max_input_tokens"]); print("max_total_tokens:", d["max_total_tokens"])'
+```
+
+输出结果如下：
+
+```shell #test-result id="check-info"
+router: text-generation-router
+version: 3.3.6-dev0
+max_input_tokens: 100
+max_total_tokens: 128
+```
+
+为空则说明服务尚未就绪或已退出，用 `tail -50 /tmp/tgi.log` 查看原因。
+
+##### 发起推理
+
+```shell #test-setup store="reply_single"
 curl -4fs http://127.0.0.1:8080/generate \
   -H 'Content-Type: application/json' \
   -d '{"inputs":"What is 1+1? Answer:","parameters":{"max_new_tokens":16,"do_sample":false}}' \
   | python -c 'import json, sys; print(json.load(sys.stdin)["generated_text"].strip().replace("\n", " "))'
 ```
 
-### 双卡张量并行验证
+`do_sample=false` 为贪心解码，相同输入输出确定。示例输出（该回复同时
+被保存为基线，供双卡一节对比）：
 
-用两张卡（`--num-shard 2`，HCCL 张量并行）再跑一次相同请求，验证回复非空、
-且与单卡基线**逐字一致**（贪心解码下张量并行不改变输出）：
+```text
+2  The question is: What is the sum of the numbers 1
+```
 
-```shell #test id="smoke-tp2" load="model_path>>model_path" load="reply_single>>reply_single"
-set -e
+基线回复的断言（非空、以 `2` 开头——`do_sample=false` 贪心解码下，
+1+1 的输出确定以答案 `2` 开头）：
+
+```shell #test id="smoke-tp1" load="reply_single>>reply_single"
+REPLY="<reply_single>"
+[ -n "$REPLY" ] || { echo "empty reply"; exit 1; }
+[ "${REPLY:0:1}" = "2" ] || { echo "unexpected reply: $REPLY"; exit 1; }
+echo "TGI-TP1-OK: $REPLY"
+```
+
+输出结果如下（`...` 为模型回复内容）：
+
+```shell #test-result id="smoke-tp1"
+TGI-TP1-OK: 2  The question is: ...
+```
+
+OpenAI 兼容接口：`curl -4 http://127.0.0.1:8080/v1/chat/completions`。
+
+##### 停止服务
+
+```shell #test-setup
 cd tgi
-export PATH="$PWD/target/release-opt:$PATH"
-export ATTENTION=flashdecoding-npu PREFIX_CACHING=0 CUDA_GRAPHS=0
-export ASCEND_VISIBLE_DEVICES=0,1
-export PYTORCH_NPU_ALLOC_CONF=max_split_size_mb:256
+./stop-tgi.sh
+```
 
-# wait until the single-card service above has fully released port 8080
+脚本输出 `[STOP] done.`（无实例在跑则为 `[STOP] nothing was running.`），
+内部已核对 NPU 并等待进程退出。确认进程数应为 `0`：
+
+```shell #test id="check-residual-tp1"
+npu-smi info 2>/dev/null | grep -c text-generation || true
+```
+
+输出结果如下（`0` 表示无残留进程）：
+
+```shell #test-result id="check-residual-tp1"
+0
+```
+
+若输出非 `0`（残留进程会占用 NPU 与端口，导致新实例报
+`EJ0003 Failed to bind the IP port`），用 `./stop-tgi.sh --force` 清理。
+
+#### 5.2 双卡 HCCL 张量并行
+
+##### 启动服务
+
+双卡 HCCL 张量并行（多一步 HCCL 组网初始化；启动前先等单卡服务
+完全释放端口）：
+
+```shell #test-setup
+cd tgi
 for i in $(seq 1 30); do
   curl -4fs http://127.0.0.1:8080/info >/dev/null 2>&1 || break
   sleep 2
 done
+./start-tgi.sh --num-shard 2 --devices 0,1
+```
 
-text-generation-launcher \
-  --model-id "<model_path>" \
-  --num-shard 2 --port 8080 \
-  --max-total-tokens 128 --max-input-tokens 100 \
-  > tgi-launcher-tp2.log 2>&1 &
-LID=$!
-cleanup() {
-  kill "$LID" 2>/dev/null || true
-  sleep 3
-  pkill -TERM -f "text-generation[-]server" 2>/dev/null || true
-}
-trap cleanup EXIT
+启动成功的输出（`num_shard=2  devices=0,1`；`[READY]` 行与单卡一致，
+`after ~150s` 为示例值，不同机器略有差异）：
 
-for i in $(seq 1 90); do
-  curl -4fs http://127.0.0.1:8080/info >/dev/null 2>&1 && break
-  kill -0 "$LID" 2>/dev/null || { echo "launcher exited early"; tail -50 tgi-launcher-tp2.log; exit 1; }
-  sleep 5
-done
-curl -4fs http://127.0.0.1:8080/info >/dev/null || { echo "server not ready"; tail -50 tgi-launcher-tp2.log; exit 1; }
+```text
+[START] model_id=/path/to/model
+[START] num_shard=2  devices=0,1  port=8080
+[START] launcher pid 12345
+[READY] TGI is serving on http://127.0.0.1:8080 after ~150s
+[READY] stop with: ./stop-tgi.sh
+```
 
+##### 验证（与单卡基线对比）
+
+用两张卡（`--num-shard 2`，HCCL 张量并行）跑一次相同请求，先校验
+`/info` 的关键字段，再验证回复非空、且与单卡基线**逐字一致**
+（贪心解码下张量并行不改变输出）：
+
+```shell #test id="smoke-tp2" load="reply_single>>reply_single"
+curl -4fs http://127.0.0.1:8080/info | python -c 'import json,sys; d=json.load(sys.stdin); print("info:", d["router"], d["version"], d["max_input_tokens"], d["max_total_tokens"])'
 REPLY=$(curl -4fs http://127.0.0.1:8080/generate \
   -H 'Content-Type: application/json' \
   -d '{"inputs":"What is 1+1? Answer:","parameters":{"max_new_tokens":16,"do_sample":false}}' \
@@ -318,25 +446,28 @@ echo "TGI-TP2-OK: $REPLY"
 输出结果如下（`...` 为模型回复内容，与单卡基线一致）：
 
 ```shell #test-result id="smoke-tp2"
-TGI-TP2-OK: ...
+info: text-generation-router 3.3.6-dev0 100 128
+TGI-TP2-OK: 2  The question is: ...
 ```
 
-## 6. 停止服务
+##### 停止服务
 
-```shell
-kill "$(pgrep -f text-generation-launcher)"
+```shell #test-setup
+cd tgi
+./stop-tgi.sh
 ```
 
-> 若 `npu-smi info` 里仍有残留的 `text-generation-server` 进程，用
-> `pkill -f text-generation-server` 清理后再重新启动（残留进程会占用 NPU 与
-> 端口，导致新实例报 `EJ0003 Failed to bind the IP port`）。
+输出 `[STOP] done.`（无实例在跑则为 `[STOP] nothing was running.`），
+内部已核对 NPU 并等待进程退出。确认两张卡上均无残留进程：
 
-## 小贴士
+```shell #test id="check-residual-tp2"
+npu-smi info 2>/dev/null | grep -c text-generation || true
+```
 
-- **更多卡**：`--num-shard N` 配合 `ASCEND_VISIBLE_DEVICES=0,1,...,N-1` 即可
-  做 N 卡 HCCL 张量并行（双卡为本文档看护范围；实现细节见 TGI NPU 适配设计
-  文档 `docs/npu/hccl-multicard-design.md`）。
-- **输出一致性对比**：`do_sample=false` 贪心解码下，相同模型与参数的输出是
-  确定的——双卡验证正是用它断言张量并行不改变输出。
-- **常用查询**：`curl -4 http://127.0.0.1:8080/info` 查看服务信息，
-  `curl -4 http://127.0.0.1:8080/v1/chat/completions` 走 OpenAI 兼容接口。
+输出结果如下（`0` 表示无残留进程）：
+
+```shell #test-result id="check-residual-tp2"
+0
+```
+
+若输出非 `0`，用 `./stop-tgi.sh --force` 清理。

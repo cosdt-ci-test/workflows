@@ -1,12 +1,12 @@
 """Quick-start-Ascend doc test: end-to-end case built on the ``MarkdownDocTestBase`` contract.
 
 Document under test: ``projects/areno/docs/Quick-start-Ascend.md``
-(follows the ``docs/markdown_doc_test_label.md`` contract: every ``shell`` /
-``python`` code block carries one of the ``#test`` / ``#test-setup`` /
-``#test-result`` labels, plus ``id=`` / ``store=`` / ``load='x>>y'`` /
-``fuzzy='xxx'`` parameters).
+(follows the label contract implemented by ``tests/doc_test/base.py``:
+every ``shell`` / ``python`` code block carries one of the ``#test`` /
+``#test-setup`` / ``#test-result`` labels, plus ``id=`` / ``store=`` /
+``load='x>>y'`` / ``fuzzy='xxx'`` parameters).
 
-Run: ``python -m unittest tests.test_quick_start_ascend -v 2>&1``
+Run: ``python -m unittest tests.areno.test_quick_start_ascend -v 2>&1``
 
 Environment variables (injected by the quick-start engine workflow
 ``quick-start-template.yml``, triggered by ``areno-quick-start.yml``):
@@ -45,18 +45,18 @@ def _e2e_enabled() -> bool:
 
 
 class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
-    """``Quick-start-Ascend.md`` end-to-end test: fetch the doc -> validate the
-    contract -> run the ``#test-setup`` / ``#test`` blocks in order -> compare
-    against ``#test-result``.
+    """``projects/areno/docs/Quick-start-Ascend.md`` end-to-end test: fetch the doc ->
+    validate the contract -> run the ``#test-setup`` / ``#test`` blocks in
+    order -> compare against ``#test-result``.
 
     Scope: NPU stack check (torch / torch_npu / device count) + source
-    install of the latest release resolved by the engine (the installer
-    detects ``torch_npu``, takes the ``requirements/npu.txt`` branch and
-    compiles ``areno.accel._areno_accel_npu`` with no fallback, so the build
-    must succeed on the CANN 9.0.0 image) + CLI entry smoke + a 1-step
-    GSPO-on-GSM8K RLVR smoke (Qwen3-0.6B, ModelScope: rollout + reward +
-    train + checkpoint save) + OpenAI-compatible serving of that checkpoint
-    (background start, /health polling, /v1/models and
+    install of the engine-resolved latest release (the installer detects
+    ``torch_npu``, takes the ``requirements/npu.txt`` branch and compiles
+    ``areno.accel._areno_accel_npu`` with no fallback, so the build must
+    succeed on the CANN 9.0.0 image) + CLI entry smoke + a 1-step
+    GSPO-on-GSM8K RLVR smoke (Qwen3-0.6B via HuggingFace Hub: rollout +
+    reward + train + checkpoint save) + OpenAI-compatible serving of that
+    checkpoint (background start, /health polling, /v1/models and
     /v1/chat/completions checks, teardown).
     """
 
@@ -65,7 +65,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     # smoke afterwards (0.6B, 8 x 256-token rollouts) adds a few more minutes
     # after the cold model/dataset download.
     DEFAULT_COMMAND_TIMEOUT = 3600
-    USER_AGENT = 'cosdt-ci-test/quick-start'  # guarded source is a fork under cosdt-ci-test
+    USER_AGENT = 'cosdt-ci-test/quick-start'  # monitored source is a fork under cosdt-ci-test
     ERROR_MARKERS = (
         *MarkdownDocTestBase.ERROR_MARKERS,  # generic [ERROR] + Traceback
         'applicaiton exception',  # CANN driver spelling (sic)

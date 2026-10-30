@@ -1,6 +1,10 @@
-"""Quick-start-Ascend documentation test for llm-d.
+"""Quick-start test: doc under test is ``projects/llm-d/docs/Quick-start-Ascend.md``.
 
-Document under test: ``projects/llm-d/docs/Quick-start-Ascend.md``.
+Run: ``python -m unittest tests.llm_d.test_quick_start_ascend -v 2>&1``
+
+Env (injected by the engine ``quick-start-template.yml``, triggered by
+``llm_d-quick-start.yml``): ``MONITORED_DOC_URL``, ``UPSTREAM_REF``,
+``NPU_READY=true`` (otherwise the class is skipped).
 """
 
 from __future__ import annotations
@@ -13,10 +17,12 @@ import unittest
 from pathlib import Path
 
 from workflows.markdown_doc_test_base import MarkdownDocTestBase
-from workflows.modelscope_cache import (
+from workflows.model_cache import (
+    diagnose_mount_environment,
     ensure_safetensors,
-    purge_corrupt_models,
-    resolve_modelscope_cache,
+    purge_huggingface_corrupt,
+    report_huggingface_state,
+    resolve_huggingface_cache,
 )
 
 
@@ -85,13 +91,15 @@ def _stop_pid_file(pid_file: Path, needle: str, wait_s: float = 15.0) -> None:
 
 
 class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
-    DEFAULT_COMMAND_TIMEOUT = 3600
-    USER_AGENT = 'cosdt-ci-test/quick-start'
+    DEFAULT_COMMAND_TIMEOUT = 7200
+    USER_AGENT = 'ascend-docs/quick-start'
     ERROR_MARKERS = (
         *MarkdownDocTestBase.ERROR_MARKERS,
-        'applicaiton exception',
-        'ERR99999',
+        'applicaiton exception',  # typo in CANN's Python driver (sic)
+        'ERR99999',  # CANN sentinel for unrecoverable runtime failure
     )
+
+    _MODEL_ID = 'Qwen/Qwen3-0.6B'
     _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
     _NNAL_SET_ENV = '/usr/local/Ascend/nnal/atb/set_env.sh'
 
@@ -128,20 +136,22 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             os.environ[key] = value
         print('setup: sourced CANN and NNAL env')
 
-        # Header check uses framework='numpy' and should not import torch.
-        # Keep autoload off around the purge so an unexpected torch import
-        # cannot dlopen torch_npu in this already-running process.
-        # Child bash blocks inherit the merged env and load the plugin.
+        # huggingface_hub 1.x defaults to Xet. That data plane talks to
+        # cas-server.xethub.hf.co and is not covered by HF_ENDPOINT.
+        os.environ.setdefault('HF_HUB_DISABLE_XET', '1')
+
         prev_autoload = os.environ.get('TORCH_DEVICE_BACKEND_AUTOLOAD')
         os.environ['TORCH_DEVICE_BACKEND_AUTOLOAD'] = '0'
         try:
             ensure_safetensors()
+            diagnose_mount_environment(
+                cache_root=resolve_huggingface_cache(),
+                model_id=cls._MODEL_ID,
+            )
+            report_huggingface_state(cls._MODEL_ID)
             try:
-                purge_corrupt_models(resolve_modelscope_cache())
+                purge_huggingface_corrupt(resolve_huggingface_cache())
             except ModuleNotFoundError as exc:
-                # safetensors.safe_open(..., framework='numpy') imports numpy.
-                # The install #test has not run yet. A warm ModelScope
-                # volume would otherwise crash setUpClass.
                 print(f'setup: skip model cache purge ({exc})')
         finally:
             if prev_autoload is None:
@@ -155,6 +165,11 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
+        """Run env setup once per class. ``@unittest.skipIf`` only skips
+        the test *method* — ``setUpClass`` itself always runs, so the
+        ``if _e2e_enabled()`` guard keeps heavy setup from firing when
+        ``NPU_READY`` is unset.
+        """
         if _e2e_enabled():
             cls.prepare_environment()
 
@@ -163,6 +178,8 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         'end-to-end requires NPU runner; set NPU_READY=true',
     )
     def test_runs_doc(self) -> None:
+        """Run the full pre_process -> parse -> execute -> post_process flow."""
+
         self.run_template()
 
 

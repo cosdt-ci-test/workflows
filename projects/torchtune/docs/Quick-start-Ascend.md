@@ -1,7 +1,10 @@
-# Quick Start (Ascend NPU)
+# torchtune
 
-在单卡昇腾 NPU 上跑通 [torchtune](https://github.com/meta-pytorch/torchtune) 的最小 LoRA 微调链路：`uv pip install torchtune` 拿到 `tune` CLI + 内置 recipes / configs，从 ModelScope 拉 `Qwen/Qwen2.5-0.5B-Instruct`作为底座，用 `tune run lora_finetune_single_device` 配 `qwen2_5/0.5B_lora_single_device` 配置跑 3 步 LoRA 微调。
+在单卡昇腾 NPU 上跑通 [torchtune](https://github.com/meta-pytorch/torchtune) 的最小 LoRA 微调链路：
 
+- **安装**：`uv pip install torchtune`（二进制）与源码安装两条路径，拿到 `tune` CLI + 内置 recipes / configs。
+- **LoRA 微调**：从 HuggingFace Hub 拉 `Qwen/Qwen2.5-0.5B-Instruct` 作为底座，用 `tune run lora_finetune_single_device` 配 `qwen2_5/0.5B_lora_single_device` 配置跑 3 步 LoRA 微调。
+- **产物验证**：检查 LoRA 适配器（`adapter_config.json` + `adapter_model.pt`）落盘与 LoRA 矩阵配置。
 
 ## 前置条件
 
@@ -37,11 +40,12 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | torch | 2.11.0+cpu |
 | torch_npu | 2.11.0 |
 | torchtune | 最新 release 的源码/二进制 |
-| modelscope | 1.37.0 |
-| 模型 | [Qwen/Qwen2.5-0.5B-Instruct](https://www.modelscope.cn/models/Qwen/Qwen2.5-0.5B-Instruct) |
-| 数据集 | 本文 doc 自带的 2 条 alpaca 格式样例（写入 `data.json`，通过 `dataset=torchtune.datasets.alpaca_dataset` 切换到本地 JSON loader） |
+| huggingface_hub | 最新稳定版 |
+| torchao | `<0.16` |
+| 模型 | [Qwen/Qwen2.5-0.5B-Instruct](https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct) |
+| 数据集 | 本文自带的 50 条 alpaca 格式样例（写入 `data.json`，通过 `dataset=torchtune.datasets.alpaca_dataset` 切换到本地 JSON loader） |
 
-### 前置安装
+## 前置安装
 
 确认能看到 NPU 设备：
 
@@ -51,31 +55,36 @@ npu-smi info
 
 输出类似：
 
-```
+```text
 +------------------------------------------------------------------------------------------------+
 | npu-smi 25.5.2                   Version: 25.5.2                                               |
 +---------------------------+---------------+----------------------------------------------------+
 | NPU   Name                | Health        | Power(W)    Temp(C)           Hugepages-Usage(page)|
 | Chip                      | Bus-Id        | AICore(%)   Memory-Usage(MB)  HBM-Usage(MB)        |
 +===========================+===============+====================================================+
-| 5     910B4               | OK            | 89.9        39                0    / 0             |
-| 0                         | 0000:41:00.0  | 0           0    / 70         2922 / 32768         |
+| 0     910B4               | OK            | 89.9        39                0    / 0             |
+| 0                         | 0000:41:00.0  | 0           0    / 0          2922 / 32768         |
 +===========================+===============+====================================================+
 +---------------------------+---------------+----------------------------------------------------+
 | NPU     Chip              | Process id    | Process name             | Process memory(MB)      |
 +===========================+===============+====================================================+
-| No running processes found in NPU 5                                                            |
+| No running processes found in NPU 0                                                            |
 +===========================+===============+====================================================+
 ```
 
-> 如果 `npu-smi` 不存在，请回到 [Ascend 官方快速安装指南](https://ascend.github.io/docs/sources/ascend/quick_install.html) 补装驱动。
+```{admonition} Note
+:class: note
+如果 `npu-smi` 不存在，请回到 [Ascend 官方快速安装指南](https://ascend.github.io/docs/sources/ascend/quick_install.html) 补装驱动。
+```
 
 检查 Python 版本：
 
 ```shell #test id="check-py"
 python --version
 ```
+
 输出结果如下：
+
 ```shell #test-result id="check-py" fuzzy='xxx'
 Python 3.12.xxx
 ```
@@ -87,24 +96,31 @@ uv pip install -f https://mirrors.aliyun.com/pytorch-wheels/cpu torch==2.11.0
 uv pip install --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi torch_npu==2.11.0
 ```
 
-检查 torch / torch_npu 是否装好且 NPU 设备可用：
+检查 torch / torch_npu 是否装好且 NPU 设备可用(下面的命令用 Python 执行)：
 
-```shell #test id="check-torch"
-python -c "import torch, torch_npu; print('torch=', torch.__version__); print('torch_npu=', torch_npu.__version__); print('is_available:', torch.npu.is_available()); print('count:', torch.npu.device_count())"
+```python #test id="check-torch"
+import torch, torch_npu
+print('torch=', torch.__version__)
+print('torch_npu=', torch_npu.__version__)
+print('is_available:', torch.npu.is_available())
+print('count:', torch.npu.device_count())
 ```
 
 输出结果如下：
 
-```shell #test-result id="check-torch" fuzzy='xxx'
+```shell #test-result id="check-torch"
 torch= 2.11.0+cpu
 torch_npu= 2.11.0
 is_available: True
 count: 1
 ```
 
-> 如果 `import torch_npu` 失败，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查 torch / torch_npu / CANN 三方兼容矩阵。
+```{admonition} Note
+:class: note
+如果 `import torch_npu` 失败，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查 torch / torch_npu / CANN 三方兼容矩阵。
+```
 
-安装 `modelscope`（用于走 ModelScope 镜像下载底座模型）+ `torchao`：
+安装 `huggingface_hub`（用于从 HuggingFace Hub 下载底座模型）+ `torchao`：
 
 <!-- torchao 两个 API 在新版都改了位置/签名，torchtune v0.6.1 都没跟上：
   * 0.18 起 NF4Tensor 挪到 torchao.prototype.dtypes，
@@ -112,26 +128,35 @@ count: 1
   * 0.16 起 `int4_weight_only()` 函数被 class-based 的 `Int4WeightOnlyConfig` 取代，
      `torchtune` 内部还在用老 API。所以 pin 在最后一个两个 import 都 OK 的 0.15 系列。 -->
 ```shell #test-setup
-uv pip install 'modelscope==1.37.0'
+uv pip install huggingface_hub
 uv pip install 'torchao<0.16'
 ```
 
-打印安装版本：
+打印安装版本(下面的命令用 Python 执行)：
 
-```shell #test id="install-deps"
-python -c "import modelscope, torchao; print('modelscope', modelscope.__version__); print('torchao', torchao.__version__)"
+```python #test id="install-deps"
+import huggingface_hub, torchao
+print('huggingface_hub', huggingface_hub.__version__)
+print('torchao', torchao.__version__)
 ```
 
 输出结果如下：
 
 ```shell #test-result id="install-deps" fuzzy='xxx'
-modelscope xxx
+huggingface_hub xxx
 torchao xxx
+```
+
+```{admonition} Note
+:class: note
+xxx 表示实际安装的版本号。
 ```
 
 ## 安装 torchtune
 
 ### 使用 uv 进行安装
+
+通过 PyPI 镜像直接装最新 release 的二进制 wheel：
 
 ```shell #test id="torchtune-install-binary"
 uv pip install --index-url https://mirrors.aliyun.com/pypi/simple torchtune
@@ -143,7 +168,11 @@ python -c "import torchtune; print('torchtune', torchtune.__version__)"
 ```shell #test-result id="torchtune-install-binary" fuzzy='xxx'
 torchtune xxx
 ```
-- xxx 表示最新的版本号
+
+```{admonition} Note
+:class: note
+xxx 表示最新的版本号。
+```
 
 <!--
 ```shell #test-setup
@@ -153,18 +182,19 @@ uv pip uninstall torchtune -y
 
 ### 从源码安装
 
+<!-- 工作流注入的 UPSTREAM_REF（最新 release tag）通过这个隐藏的 #test-setup 捕获并注入到下方 install 命令中-->
 <!--
 ```shell #test-setup store="upstream_ref"
 echo "${UPSTREAM_REF}"
 ```
 -->
 
-克隆上游仓库并 checkout 到工作流注入的最新 release tag，安装并且验证：
+克隆上游仓库并 checkout 到当前 torchtune 的最新 release tag，安装并且验证：
 
 <!--  非 editable 安装：uv 的 `pip install -e .` (PEP 660) 会把 torchtune 当
- namespace package 加载，导致 `torchtune.__file__` 为 None，进而使
- torchtune/_cli/cp.py:15 的 `Path(torchtune.__file__).parent.parent` 抛
- TypeError，`tune --help` 等所有 CLI 调用都炸。新手 quick-start 不需要 hot-reload。 -->
+  namespace package 加载，导致 `torchtune.__file__` 为 None，进而使
+  torchtune/_cli/cp.py:15 的 `Path(torchtune.__file__).parent.parent` 抛
+  TypeError，`tune --help` 等所有 CLI 调用都炸。新手 quick-start 不需要 hot-reload。 -->
 ```shell #test id="torchtune-install-source" load="upstream_ref>>ref"
 git clone --depth 1 --branch <ref> https://github.com/meta-pytorch/torchtune.git
 cd torchtune
@@ -172,14 +202,21 @@ uv pip install .
 python -c "import torchtune; print('torchtune', torchtune.__version__)"
 ```
 
-\<ref> 为安装的最新的 release tag。
+```{admonition} Note
+:class: note
+`<ref>` 替换为 torchtune 当前的最新 release 版本。
+```
 
 输出结果类似如下：
 
 ```shell #test-result id="torchtune-install-source" fuzzy='xxx'
 torchtune xxx
 ```
-- xxx 表示最新的版本号
+
+```{admonition} Note
+:class: note
+xxx 表示最新的版本号。
+```
 
 ## CLI 自检
 
@@ -203,20 +240,20 @@ options:
 
 ## 使用样例：单卡 LoRA 微调 Qwen2.5-0.5B
 
-对应上游 [First Finetune Tutorial](https://meta-pytorch.org/torchtune/0.6/tutorials/first_finetune_tutorial.html)，在单卡昇腾 NPU 上跑通 3 步 LoRA 微调。
+对应上游 [First Finetune Tutorial](https://pytorch.org/torchtune/0.6/tutorials/first_finetune_tutorial.html)，在单卡昇腾 NPU 上跑通 3 步 LoRA 微调。
 
 ### 下载基础模型
 
-默认使用 **ModelScope** 进行模型下载。
+默认使用 **HuggingFace Hub** 进行模型下载：
 
 ```shell #test-setup store="model_path"
-python -c "from modelscope import snapshot_download; print(snapshot_download('Qwen/Qwen2.5-0.5B-Instruct'))" | tail -n 1
+python -c "from huggingface_hub import snapshot_download; print(snapshot_download('Qwen/Qwen2.5-0.5B-Instruct'))" | tail -n 1
 ```
 
 输出类似：
 
-```
-/root/.cache/modelscope/hub/Qwen/Qwen2.5-0.5B-Instruct
+```text
+/root/.cache/huggingface/hub/models--Qwen--Qwen2.5-0.5B-Instruct/snapshots/xxxxxxxx
 ```
 
 ### 准备本地样例数据
@@ -275,8 +312,7 @@ cat > data.json <<'JSON'
   {"instruction": "List three common programming languages.", "input": "", "output": "Python, JavaScript, C++"},
   {"instruction": "What's the currency of Japan?", "input": "", "output": "Japanese yen (JPY)"},
   {"instruction": "Name the process by which liquid becomes gas.", "input": "", "output": "Evaporation (or vaporization)"},
-  {"instruction": "Translate 'sun' into Russian (transliterated).", "input": "", "output": "Solntse (солнце)"},
-  {"instruction": "What is DNA short for?", "input": "", "output": "Deoxyribonucleic acid"}
+  {"instruction": "Translate 'sun' into Russian (transliterated).", "input": "", "output": "Solntse (солнце)"}
 ]
 JSON
 echo "${PWD}/data.json"
@@ -284,8 +320,8 @@ echo "${PWD}/data.json"
 
 输出结果类似：
 
-```
-/path/to/workflows/projects/torchtune/data.json
+```text
+/path/to/ascend_docs/data.json
 ```
 
 ### 跑 3 步 LoRA 微调
@@ -309,6 +345,11 @@ ASCEND_RT_VISIBLE_DEVICES=0 tune run lora_finetune_single_device \
   log_every_n_steps=1
 ```
 
+```{admonition} Note
+:class: note
+`<model_path>` 在运行时指向「下载基础模型」一节 `snapshot_download` 命令打印的模型缓存路径；`<data_path>` 在运行时指向「准备本地样例数据」一节生成的 `data.json` 路径。
+```
+
 输出结果如下：
 
 ```shell #test-result id="torchtune-train" fuzzy='xxx' fuzzy='...'
@@ -318,7 +359,7 @@ Step 3 | loss:xxx lr:xxx tokens_per_second_per_gpu:xxx
 ...
 ```
 
-捕获 LoRA checkpoint 目录路径供下一步验证（与 train 块的 `<ckpt>` 占位符对应）：
+捕获 LoRA checkpoint 目录路径供下一步验证：
 
 ```shell #test-setup store="checkpoint"
 ls -dt ${PWD}/output/*/ | head -n 1
@@ -326,8 +367,8 @@ ls -dt ${PWD}/output/*/ | head -n 1
 
 输出类似：
 
-```
-/path/to/workflows/projects/torchtune/output/epoch_0/
+```text
+/path/to/ascend_docs/output/epoch_0/
 ```
 
 ### 验证 LoRA 适配器落盘
@@ -344,14 +385,26 @@ test -f "<ckpt>/adapter_config.json" && test -f "<ckpt>/adapter_model.pt" && ech
 adapter files present
 ```
 
-捕获 checkpoint 里 LoRA 矩阵的统计信息：
+```{admonition} Note
+:class: note
+`<ckpt>` 在运行时替换为「跑 3 步 LoRA 微调」小节落盘的 LoRA checkpoint 目录。
+```
 
-```shell #test id="torchtune-trainable" load="checkpoint>>ckpt"
-python -c "import json; cfg=json.load(open('<ckpt>/adapter_config.json')); print('rank', cfg['r'], 'lora_alpha', cfg['lora_alpha'], 'targets', cfg['target_modules'])"
+捕获 checkpoint 里 LoRA 矩阵的统计信息(下面的命令用 Python 执行)：
+
+```python #test id="torchtune-trainable" load="checkpoint>>ckpt"
+import json
+cfg = json.load(open('<ckpt>/adapter_config.json'))
+print('rank', cfg['r'], 'lora_alpha', cfg['lora_alpha'], 'targets', cfg['target_modules'])
 ```
 
 输出结果如下：
 
-```shell #test-result id="torchtune-trainable" fuzzy='xxx'
-rank xxx lora_alpha xxx targets xxx
+```shell #test-result id="torchtune-trainable"
+rank ... lora_alpha ... targets ...
 ```
+
+## 外部链接
+
+- GitHub：[meta-pytorch/torchtune](https://github.com/meta-pytorch/torchtune)
+- 文档中心：[torchtune Docs](https://pytorch.org/torchtune/)

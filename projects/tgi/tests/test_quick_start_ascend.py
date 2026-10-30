@@ -2,12 +2,11 @@
 of the ``MarkdownDocTestBase`` contract.
 
 Document under test: ``projects/tgi/docs/Quick-start-Ascend.md``
-(follows the ``docs/markdown_doc_test_label.md`` contract: every
-``shell`` code block carries one of the ``#test`` / ``#test-setup`` /
-``#test-result`` labels plus ``id=`` / ``store=`` / ``load='x>>y'`` /
-``fuzzy='xxx'`` parameters).
+(follows the label contract: every ``shell`` code block carries one of
+the ``#test`` / ``#test-setup`` / ``#test-result`` labels plus ``id=`` /
+``store=`` / ``load='x>>y'`` / ``fuzzy='xxx'`` parameters).
 
-Run: ``python -m unittest tests.test_quick_start_ascend -v 2>&1``
+Run: ``python -m unittest tests.tgi.test_quick_start_ascend -v 2>&1``
 
 Environment variables (injected by the quick-start engine workflow
 ``quick-start-template.yml``, triggered by ``tgi-quick-start.yml``):
@@ -52,7 +51,7 @@ def _e2e_enabled() -> bool:
 
 
 class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
-    """``Quick-start-Ascend.md`` end-to-end test: fetch doc -> validate
+    """``quick_start.md`` end-to-end test: fetch doc -> validate
     contract -> run ``#test-setup`` / ``#test`` in order -> compare against
     ``#test-result``."""
 
@@ -60,7 +59,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     # on aarch64), which dominates the wall clock; every subprocess shares
     # this timeout. 60 min is the ceiling for the build block.
     DEFAULT_COMMAND_TIMEOUT = 3600
-    USER_AGENT = 'cosdt-ci-test/quick-start'  # monitored source is the VenusTZZ fork
+    USER_AGENT = 'cosdt-ci-test/quick-start'  # monitored source is the cosdt fork
     ERROR_MARKERS = (
         *MarkdownDocTestBase.ERROR_MARKERS,  # generic [ERROR] + Traceback
         'applicaiton exception',  # CANN toolkit emits this typo (sic) in its Python driver
@@ -143,11 +142,11 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
         The doc's ``### Python 依赖`` / ``### 安装 Rust 工具链`` /
         ``## 4. 构建并安装 TGI`` sections are the single source of truth
-        for which packages + versions get installed; this class only
-        handles ``torch`` / ``torch_npu`` here (probe the image stack,
-        install when it doesn't match), the defensive ``safetensors``
-        install, the modelscope cache purge, and PATH plumbing for the
-        Rust toolchain installed by the doc itself.
+        for which packages get installed; this class only handles
+        ``torch_npu`` here (probe the image stack, install when absent),
+        the defensive ``safetensors`` install, the modelscope cache
+        purge, and PATH plumbing for the Rust toolchain installed by the
+        doc itself.
 
         Class-level setup: run once per test class, triggered by
         ``setUpClass``. Not the same as ``unittest.TestCase.setUp`` —
@@ -195,17 +194,11 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             check=True,
         )
 
-        # 3) torch stack probe + install: when version matches the image's
-        # pre-installed wheels, reuse them; otherwise install the pinned
-        # 2.9 pair (the doc's own block re-installs the same versions
-        # from the ascend source, which is a no-op audit when satisfied).
-        _PROBE_SCRIPT = (
-            'import torch, torch_npu\n'
-            "raise SystemExit(0 if "
-            "torch.__version__.startswith('2.9.0') "
-            "and torch_npu.__version__.startswith('2.9.0') "
-            "else 1)"
-        )
+        # 3) torch stack probe + install: reuse the image's pre-installed
+        # torch_npu when importable; otherwise install the official
+        # current recommended pair from the Ascend source (the doc's own
+        # block installs torch_npu the same way, unpinned).
+        _PROBE_SCRIPT = 'import torch, torch_npu'
         probe = subprocess.run(
             ['python', '-c', _PROBE_SCRIPT],
             capture_output=True,
@@ -222,13 +215,13 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             )
             print(f'setup: reusing image torch stack ({versions.stdout.strip()})')
         else:
-            print('setup: installing torch==2.9.0 torch_npu==2.9.0.post2')
+            print('setup: installing torch_npu from the Ascend source')
             subprocess.run(
                 [
                     'python', '-m', 'pip', 'install',
                     '--index-url', cls._CLUSTER_INDEX,
                     '--extra-index-url', cls._ASCEND_EXTRA,
-                    'torch==2.9.0', 'torch_npu==2.9.0.post2',
+                    'torch_npu',
                 ],
                 check=True,
             )
@@ -242,7 +235,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         # truncated safetensors from interrupted runs. Walk every shard
         # under each model dir and purge it on failure; modelscope
         # will re-download cleanly on next access. Implementation
-        # lives in workflows.model_cache; see that module's
+        # lives in doc_test.model_cache; see that module's
         # docstring for the full rationale.
         purge_modelscope_corrupt(resolve_modelscope_cache())
 
@@ -255,9 +248,10 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         if cargo_bin not in os.environ.get('PATH', ''):
             os.environ['PATH'] = f"{cargo_bin}:{os.environ.get('PATH', '')}"
 
-        # 7) transformers / accelerate / modelscope / kernels /
-        # grpcio-tools / mypy-protobuf are NOT installed here — the doc's
-        # own blocks install them in document order.
+        # 7) modelscope / transformers / accelerate / kernels are NOT
+        # installed here — the doc's own blocks install them in document
+        # order (modelscope in §2; the rest via the fork's
+        # server/requirements_ascend.txt in §4).
 
     # ----------------------------------------------------------
     # test entry

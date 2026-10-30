@@ -1,6 +1,10 @@
-"""Quick-start-Ascend documentation test for OpenCompass.
+"""Quick-start test: doc under test is ``projects/opencompass/docs/Quick-start-Ascend.md``.
 
-Document under test: ``projects/opencompass/docs/Quick-start-Ascend.md``.
+Run: ``python -m unittest tests.opencompass.test_quick_start_ascend -v 2>&1``
+
+Env (injected by the engine ``quick-start-template.yml``, triggered by
+``opencompass-quick-start.yml``): ``MONITORED_DOC_URL``, ``UPSTREAM_REF``,
+``NPU_READY=true`` (otherwise the class is skipped).
 """
 
 from __future__ import annotations
@@ -10,10 +14,12 @@ import subprocess
 import unittest
 
 from workflows.markdown_doc_test_base import MarkdownDocTestBase
-from workflows.modelscope_cache import (
+from workflows.model_cache import (
+    diagnose_mount_environment,
     ensure_safetensors,
-    purge_corrupt_models,
-    resolve_modelscope_cache,
+    purge_huggingface_corrupt,
+    report_huggingface_state,
+    resolve_huggingface_cache,
 )
 
 
@@ -29,13 +35,15 @@ def _e2e_enabled() -> bool:
 
 class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     DEFAULT_COMMAND_TIMEOUT = 3600
-    USER_AGENT = 'cosdt-ci-test/quick-start'
+    USER_AGENT = 'ascend-docs/quick-start'
     ERROR_MARKERS = (
         *MarkdownDocTestBase.ERROR_MARKERS,
-        'applicaiton exception',
-        'ERR99999',
+        'applicaiton exception',  # typo in CANN's Python driver (sic)
+        'ERR99999',  # CANN sentinel for unrecoverable runtime failure
         'HostRegisterError',
     )
+
+    _MODEL_ID = 'Qwen/Qwen2-0.5B-Instruct'
     _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
 
     @classmethod
@@ -61,17 +69,14 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 f'setup: skipping CANN env source ({cls._CANN_SET_ENV} not present)'
             )
 
-        os.environ['PYTHONNOUSERSITE'] = '1'
-        os.environ['DATASET_SOURCE'] = 'ModelScope'
         os.environ.setdefault('ASCEND_RT_VISIBLE_DEVICES', '0')
-
-        upstream = os.environ.get('UPSTREAM_REF', '').strip()
-        if upstream:
-            os.environ['OPENCOMPASS_REF'] = upstream
-        os.environ.setdefault('OPENCOMPASS_REF', '0.5.4')
+        if not os.environ.get('UPSTREAM_REF', '').strip():
+            os.environ['UPSTREAM_REF'] = '0.5.4'
 
         ensure_safetensors()
-        purge_corrupt_models(resolve_modelscope_cache())
+        diagnose_mount_environment(model_id=cls._MODEL_ID)
+        report_huggingface_state(cls._MODEL_ID)
+        purge_huggingface_corrupt(resolve_huggingface_cache())
 
     @classmethod
     def setUpClass(cls) -> None:

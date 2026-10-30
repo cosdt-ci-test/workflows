@@ -27,9 +27,22 @@ constraints = pathlib.Path("output/constraints.txt")
 constraints.write_text(
     "torch==2.9.0\ntorch_npu==2.9.0.post2\ntransformers==4.57.6\n"
     "trl==0.22.2\npeft==0.18.0\ndatasets==4.3.0\n"
+    # Triton-Ascend 3.2.2 requires NumPy 1.26.4. Arrow 21 satisfies
+    # datasets 4.3.0's >=21 floor while retaining NumPy 1.x support.
+    "numpy==1.26.4\npyarrow==21.0.0\n"
 )
 subprocess.run(
     [sys.executable, "-m", "pip", "install", "-c", str(constraints),
      *sorted(set(selected)), "modelscope==1.37.0"],
+    check=True,
+)
+# A successful pip exit does not prove binary imports work together.
+subprocess.run(
+    [sys.executable, "-c",
+     "import numpy, pyarrow, datasets; "
+     "assert numpy.__version__ == '1.26.4'; "
+     "assert pyarrow.__version__ == '21.0.0'; "
+     "assert datasets.Dataset.from_dict({'text': ['dependency check']})[0]['text'] == 'dependency check'; "
+     "print('Data dependencies OK:', numpy.__version__, pyarrow.__version__, datasets.__version__)"],
     check=True,
 )

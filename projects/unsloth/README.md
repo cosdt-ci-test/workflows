@@ -19,6 +19,10 @@ get_peft_model → SFTTrainer.train → save → generate API sequence, with:
 The workflow pins Unsloth and Zoo commits, uses the repository's CANN 9.1.0
 A2 image and torch 2.9.0 / torch_npu 2.9.0.post2 / triton-ascend 3.2.2 stack.
 Transformers 4.57.6 and TRL 0.22.2 follow the upstream example's install cell.
+NumPy is pinned to 1.26.4 as required by Triton-Ascend 3.2.2, and PyArrow
+to 21.0.0 to satisfy datasets 4.3.0 without requiring NumPy 2.x.
+Installation checks the three data-library imports and creates a small Dataset
+before proceeding to Unsloth.
 This combination has not yet been validated with Unsloth on our hardware.
 Declared non-CUDA dependencies are installed from the pinned source metadata;
 CUDA Triton, torchao, cut-cross-entropy and bitsandbytes are omitted for this

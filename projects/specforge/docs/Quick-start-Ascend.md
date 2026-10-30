@@ -1,28 +1,85 @@
-# Quick Start (Ascend NPU)
+# SpecForge
 
-在 4 卡昇腾 NPU 上端到端跑通 [SpecForge](https://github.com/sgl-project/SpecForge)：安装依赖 → 从 ModelScope 拉 Qwen3.5-4B → 起 SGLang capture server → 完成 1 步训练。
+在 4 卡昇腾 NPU 上端到端跑通 [SpecForge](https://github.com/sgl-project/SpecForge) 的投机解码草稿模型训练链路：
+
+- **安装**：huggingface_hub + mooncake（NPU prebuilt wheel）+ specforge（源码），CLI 自检。
+- **端到端 smoke**：从 HuggingFace Hub 拉 Qwen3.5-4B → 打 SGLang spec-capture 补丁 → 起 mooncake_master + SGLang capture server → 完成 1 步训练。
 
 ## 前置条件
 
-**机器**：Atlas 900 A2 / A3 训练系列 或 Ascend 950 系列，**≥ 4 卡**（capture server 用卡 0、trainer 用卡 1，卡 2/3 留给 HCCL 通信 buffer）。
+### 硬件
 
-**镜像**：`swr.cn-southwest-2.myhuaweicloud.com/base_image/dockerhub/lmsysorg/sglang:v0.5.18-cann9.0.0-910b`。
+Atlas 900 A2 / A3 训练系列产品或者 Ascend 950 系列产品，**≥ 4 卡**（capture server 用卡 0、trainer 用卡 1，卡 2/3 留给 HCCL 通信 buffer）。
+
+### 基础软件
+
+- 可用的 Python 环境
+- 可用的 CANN（参考[快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html)）
+- 与 CANN 匹配、预装 `torch` / `torch_npu` / `sglang` 的镜像（本文用下方的 SGLang 专用镜像）
+
+### 本文档示例使用的版本
+
+**配套镜像**：
+
+swr.cn-southwest-2.myhuaweicloud.com/base_image/dockerhub/lmsysorg/sglang:v0.5.18-cann9.0.0-910b
+
+**软件版本**：
 
 | 组件 | 版本 |
 | --- | --- |
-| Python | 3.11.15 |
+| Python | 3.11 |
 | CANN | 9.0.0 |
 | torch / torch_npu | 2.10.0+cpu / 2.10.0 |
 | sglang | 0.5.18 |
-| specforge | 上游 main 源码 |
-| modelscope | 1.37.0 |
-| mooncake-transfer-engine | 0.3.13 |
-| 模型 | [Qwen/Qwen3.5-4B](https://www.modelscope.cn/Qwen/Qwen3.5-4B) |
-| 参考样例 | `examples/configs/online/disaggregated/external/qwen3.5-4b-dflash-online-npu.yaml` |
+| huggingface_hub | 最新稳定版 |
+| mooncake-transfer-engine | 0.3.13.post1（NPU prebuilt wheel） |
+| specforge | 最新 release 的源码 |
+| 模型 | [Qwen/Qwen3.5-4B](https://huggingface.co/Qwen/Qwen3.5-4B) |
+| 参考样例 | `examples/configs/online/disaggregated/external/qwen3.5-4b-dflash-npu.yaml` |
 
-## 前置检查
+## 前置安装
 
-先确认 NPU 和镜像基础环境就绪。`npu-smi info` 应至少列出 4 张 `910B4` 且状态 OK，否则回 [官方快速安装指南](https://ascend.github.io/docs/sources/ascend/quick_install.html) 补装驱动。
+确认能看到 NPU 设备（应至少列出 4 张 `910B4` 且状态 OK）：
+
+```shell
+npu-smi info
+```
+
+输出类似：
+
+```text
++------------------------------------------------------------------------------------------------+
+| npu-smi 25.5.2                   Version: 25.5.2                                               |
++---------------------------+---------------+----------------------------------------------------+
+| NPU   Name                | Health        | Power(W)    Temp(C)           Hugepages-Usage(page)|
+| Chip                      | Bus-Id        | AICore(%)   Memory-Usage(MB)  HBM-Usage(MB)        |
++===========================+===============+====================================================+
+| 0     910B4               | OK            | 89.9        39                0    / 0             |
+| 0                         | 0000:41:00.0  | 0           0    / 0          2922 / 32768         |
++===========================+===============+====================================================+
+| 1     910B4               | OK            | 89.9        39                0    / 0             |
+| 1                         | 0000:42:00.0  | 0           0    / 0          2922 / 32768         |
++===========================+===============+====================================================+
+| 2     910B4               | OK            | 89.9        39                0    / 0             |
+| 2                         | 0000:43:00.0  | 0           0    / 0          2922 / 32768         |
++===========================+===============+====================================================+
+| 3     910B4               | OK            | 89.9        39                0    / 0             |
+| 3                         | 0000:44:00.0  | 0           0    / 0          2922 / 32768         |
++===========================+===============+====================================================+
++---------------------------+---------------+----------------------------------------------------+
+| NPU     Chip              | Process id    | Process name             | Process memory(MB)      |
++===========================+===============+====================================================+
+| No running processes found in NPU 0                                                            |
+| No running processes found in NPU 1                                                            |
+| No running processes found in NPU 2                                                            |
+| No running processes found in NPU 3                                                            |
++===========================+===============+====================================================+
+```
+
+```{admonition} Note
+:class: note
+如果 `npu-smi` 不存在，请回到 [Ascend 官方快速安装指南](https://ascend.github.io/docs/sources/ascend/quick_install.html) 补装驱动。
+```
 
 确认 Python 版本：
 
@@ -34,6 +91,11 @@ python --version
 
 ```shell #test-result id="check-py" fuzzy='xxx'
 Python 3.11.xxx
+```
+
+```{admonition} Note
+:class: note
+xxx 表示 Python 的补丁版本号。
 ```
 
 确认 CANN 版本：
@@ -50,7 +112,7 @@ test -f /usr/local/Ascend/ascend-toolkit/latest/$(uname -m)-linux/ascend_toolkit
 version=9.0.0
 ```
 
-确认 torch / torch_npu / sglang 都能 import 且能看到 4 张卡：
+确认 torch / torch_npu / sglang 都能 import 且能看到 4 张卡(下面的命令用 Python 执行)：
 
 ```python #test id="check-torch"
 import torch, torch_npu
@@ -64,7 +126,7 @@ print('count:', torch.npu.device_count())
 
 输出结果如下：
 
-```shell #test-result id="check-torch" fuzzy='xxx'
+```shell #test-result id="check-torch"
 torch= 2.10.0+cpu
 torch_npu= 2.10.0
 sglang 0.5.18
@@ -72,36 +134,12 @@ is_available: True
 count: 4
 ```
 
-汇总镜像信息：
+## 安装 huggingface_hub
 
-```python #test id="image-probe"
-import sys, torch, torch_npu
-from importlib.metadata import version
-print('python', sys.version.split()[0])
-print('torch', torch.__version__)
-print('torch_npu', torch_npu.__version__)
-print('sglang', version('sglang'))
-print('npu_available', torch.npu.is_available())
-print('npu_count', torch.npu.device_count())
-```
-
-输出结果如下：
-
-```shell #test-result id="image-probe" fuzzy='xxx'
-python 3.11.xxx
-torch xxx
-torch_npu xxx
-sglang xxx
-npu_available True
-npu_count 4
-```
-
-## 安装 modelscope
-
-用 uv 安装 modelscope（后面从 ModelScope 下载模型用）：
+用 uv 安装 huggingface_hub（后面从 HuggingFace Hub 下载模型用）：
 
 ```shell #test-setup
-uv pip install 'modelscope==1.37.0'
+uv pip install huggingface_hub
 ```
 
 ## 安装 mooncake
@@ -126,24 +164,25 @@ INSTALLED=$(python -c "from importlib.metadata import version; print(version('mo
 echo "build-mooncake: installed mooncake-transfer-engine-npu==${INSTALLED}"
 ```
 
-验证两个包都装好了（mooncake 能 import、mooncake_master 可执行文件存在）：
+验证两个包都装好了：
 
 ```shell #test id="install-deps"
-python -c "import modelscope; print('modelscope', modelscope.__version__)"
-if python -c "import mooncake.store" 2>/dev/null; then
-    echo "mooncake.store imports clean"
-else
-    echo "mooncake.store NOT importable"
-fi
+python -c "import huggingface_hub; print('huggingface_hub', huggingface_hub.__version__)"
+python -c "import mooncake.store; print('mooncake.store imports clean')"
 test -x "$(command -v mooncake_master)" && echo "mooncake_master binary present" || echo "mooncake_master binary MISSING"
 ```
 
 输出结果如下：
 
 ```shell #test-result id="install-deps" fuzzy='xxx'
-modelscope xxx
-xxx
+huggingface_hub xxx
+mooncake.store imports clean
 mooncake_master binary present
+```
+
+```{admonition} Note
+:class: note
+xxx 表示实际安装的版本号。
 ```
 
 ## 安装 specforge
@@ -167,13 +206,16 @@ fi
 cd SpecForge
 uv pip install --no-deps .
 # specforge/_train() lazy-import accelerate.utils.set_seed（仅 import 不触发，
-# 真正训练才暴露 ModuleNotFoundError——run 33578505226 复现）；CLI 的 click 依赖
-# 镜像已自带（--no-deps 不会安装它）。
+# 真正训练才暴露 ModuleNotFoundError）；CLI 的 click 依赖镜像已自带
+# （--no-deps 不会安装它）。
 uv pip install --no-deps accelerate
 python -c "from importlib.metadata import version; print('specforge, version', version('specforge'))"
 ```
 
-`<ref>` 是要验证的上游版本（release tag / 分支名 / commit SHA，由监控自动注入）。
+```{admonition} Note
+:class: note
+`<ref>` 替换为 SpecForge 当前的最新 release 版本。
+```
 
 确认安装成功，输出结果如下：
 
@@ -181,9 +223,14 @@ python -c "from importlib.metadata import version; print('specforge, version', v
 specforge, version xxx
 ```
 
+```{admonition} Note
+:class: note
+xxx 表示实际安装的版本号。
+```
+
 ## CLI 自检
 
-确认 specforge 能在 NPU 环境里正常 import：
+确认 specforge 能在 NPU 环境里正常 import(下面的命令用 Python 执行)：
 
 ```python #test id="specforge-import"
 import specforge, torch, torch_npu
@@ -198,6 +245,11 @@ print('torch.npu.is_available', torch.npu.is_available())
 specforge xxx
 torch 2.10.0+cpu
 torch.npu.is_available True
+```
+
+```{admonition} Note
+:class: note
+xxx 表示 specforge 的实际版本号。
 ```
 
 查看 CLI 帮助（三个子命令：train / export / benchmark）：
@@ -255,41 +307,31 @@ Options:
 
 按顺序把 `mooncake_master` → SGLang capture server → `specforge train` 拉起来跑 1 步训练，每小节一个阶段，失败可定位到具体环节。`SPECFORGE_*` 环境变量可覆盖各段默认值。
 
-> 每段入口先 `pkill` 清掉自己上次残留的进程，避免端口被占；上一段拉起的健康服务直接复用，不重启。
-
 ### 预下载模型
 
-从 ModelScope 把 Qwen3.5-4B（约 8 GB）拉到本地缓存，路径供后面起 server 和训练用：
+从 HuggingFace Hub 把 Qwen3.5-4B（约 8 GB）拉到本地缓存，路径供后面起 server 和训练用：
 
 ```shell #test-setup id="smoke-download-model" store="model_path"
 set -euo pipefail
 MODEL_ID="${SPECFORGE_MODEL_ID:-Qwen/Qwen3.5-4B}"
-# 本段 stdout 会被框架捕获、供下方 `<MODEL_PATH>` 占位符替换，所以 modelscope 进度
-# 重定向到 stderr，stdout 只留一行模型路径（run 33507844975 复现）。
-echo "smoke: downloading model $MODEL_ID from ModelScope" >&2
+# 本段 stdout 会被框架捕获、供下方 `<MODEL_PATH>` 占位符替换，所以下载进度
+# 重定向到 stderr，stdout 只留一行模型路径。
+echo "smoke: downloading model $MODEL_ID from HuggingFace Hub" >&2
 python - "$MODEL_ID" <<'PY'
 import sys, contextlib
 MODEL_ID = sys.argv[1]
 with contextlib.redirect_stdout(sys.stderr):
-    from modelscope import snapshot_download
+    from huggingface_hub import snapshot_download
     path = snapshot_download(MODEL_ID)
 print(path)
 PY
 ```
 
-输出结果如下（一行本地缓存路径）：
-
-```shell #test-result id="smoke-download-model" load="model_path>>MODEL_PATH"
-<MODEL_PATH>
-```
+输出的模型缓存目录路径，供「起 SGLang capture server」（`--model-path`）和「跑 specforge 训练」（`model.target_model_path`）两节使用。
 
 ### 打补丁 + apt 依赖
 
-SGLang 需要打 spec-capture 补丁才能在推理时导出训练所需的 hidden states。SpecForge 仓库自带补丁和 apply 脚本，对镜像里的 sglang 0.5.18 直接执行。
-
-> 2026-09-28 起此块只保留官方 patch 流程。原先还有两段本仓 Python 改写，均已删除：
-> ① mooncake 挂载段改写（`segment_to_mount` / `allocate_and_mount_segment`，即上游 `spec-capture-ascend-mount.patch` 的锚点重实现）——它是给 8 月底清华源**非 NPU 版** `mooncake-transfer-engine==0.3.13` 准备的（该构建在 Ascend 上注册不了 wildcard segment），换 `mooncake-transfer-engine-npu==0.3.13.post1` 后从未 ablate；examples 的 online 腿在同 runner/镜像/wheel、同样 `MOONCAKE_GLOBAL_SEGMENT_SIZE=32<<30` 下不打改写一直绿，证明当前 stack 走官方 patch 的 wildcard 注册即可。若后续 smoke 在 mooncake setup 阶段报 wildcard segment 注册失败，说明存在 examples 未覆盖的场景，届时从上游取现行版 `spec-capture-ascend-mount.patch` 重加。
-> ② `server_args.py` 三字段兜底插入——只防 git apply 假成功（run 33493594121 复现过一次）；上游 apply 脚本现已用 `GIT_CEILING_DIRECTORIES` 修复非 git 安装路径静默 skip 的根因，且下方 sink 存在性检查（`class SpecCaptureSink` grep + git apply 重放）仍保留为假成功的显式护栏。
+SGLang 需要打 spec-capture 补丁才能在推理时导出训练所需的 hidden states。SpecForge 仓库自带补丁和 apply 脚本，对镜像里的 sglang 0.5.18 直接执行：
 
 ```shell #test id="smoke-apply-patches"
 set -euo pipefail
@@ -392,6 +434,11 @@ exit 1
 smoke: mooncake ready (rpc 35551, pid=xxx)
 ```
 
+```{admonition} Note
+:class: note
+xxx 为 mooncake_master 的进程号。
+```
+
 ### 起 SGLang capture server
 
 后台拉起打好补丁的 SGLang server（卡 0），开启 dflash spec-capture，等 `/health` 就绪。首次启动含 NPU graph 编译，等 5-10 分钟属正常：
@@ -457,6 +504,11 @@ smoke: waiting for SGLang /health (up to 600s)
 smoke: sglang ready (pid=xxx)
 ```
 
+```{admonition} Note
+:class: note
+`<MODEL_PATH>` 在运行时替换为「预下载模型」一节 `snapshot_download` 命令打印的模型缓存路径；xxx 为 server 进程号。
+```
+
 ### 准备训练数据
 
 写一条 user→assistant 对话的 JSONL 作为训练数据（smoke 只跑 1 步，不追求数据质量；assistant 段够长即可满足 dflash 采样 32 个 anchor 的要求）。正式训练可用上游的 `scripts/regenerate_train_data.py` 重新生成对齐分布的数据：
@@ -501,15 +553,12 @@ echo "smoke: prepare-data OK ($SHAREGPT_PATH)" >&2
 echo "$SHAREGPT_PATH"
 ```
 
-输出结果如下（一行数据文件绝对路径）：
-
-```shell #test-result id="smoke-prepare-data" load="sharegpt_path>>SHAREGPT_PATH"
-<SHAREGPT_PATH>
-```
+输出的训练数据文件的绝对路径，供「跑 specforge 训练」（`data.train_data_path`）一节使用。
 
 ### 跑 specforge 训练（1 步）
 
-CI 框架逐段执行本文命令块，单段 stdout/stderr 整段缓冲，只在段结束时才输出到日志。所以 `specforge train` 运行期间日志长时间没有新输出是正常现象，不是卡死。
+看护框架逐段执行本文命令块，单段 stdout/stderr 整段缓冲，只在段结束时才输出到日志。所以 `specforge train` 运行期间日志长时间没有新输出是正常现象，不是卡死。
+
 因此训练拆成"启动 + 监控"两段：启动段是 ≤30s 的短任务，跑完立刻能看到启动确认和 pid；监控段每 60s 打一行进度，训练完成后收尾。
 
 #### 启动 specforge train（后台）
@@ -520,17 +569,16 @@ CI 框架逐段执行本文命令块，单段 stdout/stderr 整段缓冲，只�
 set -euo pipefail
 SPECFORGE_ROOT="${SPECFORGE_ROOT:-SpecForge}"
 TRAINER_DEVICE="${SPECFORGE_TRAINER_DEVICE:-1}"
-RECIPE="${SPECFORGE_RECIPE:-examples/configs/online/disaggregated/external/qwen3.5-4b-dflash-online-npu.yaml}"
+RECIPE="${SPECFORGE_RECIPE:-examples/configs/online/disaggregated/external/qwen3.5-4b-dflash-npu.yaml}"
 pushd "$SPECFORGE_ROOT" >/dev/null
 # 配方 output_dir 残留的 producer_claim / failed 标记会让 _claim_fresh_control_path 拒绝继续。
 rm -rf outputs/qwen3.5-4b-dflash-npu-online
 # 上游 38970f6d（2026-09-15 合入）把 deployment.disaggregated.receive_buffers 默认值从
 # pageable 改成 pinned：NPU 上 ReceiveBufferPool._new_slot 的 pin = torch.cuda.is_available()
 # 恒为 False，pageable host buffer register_buffer 返回 -600，且 f22bd36c 把该返回码变成硬
-# RuntimeError——trainer 第一个 feature fetch 就崩（run 35225016001）。显式回退 pageable：
-# pool=None 走 _store_get_tensor 老路径，register 失败被忽略、TCP get_into 正常工作（9/4
-# 成功 run 33872042104 即此语义）。上游给 pinned 补上 NPU 适配（同文件已有
-# _ascend_runtime_available()，一行 OR 的事）后可去掉此 override。
+# RuntimeError——trainer 第一个 feature fetch 就崩。显式回退 pageable：pool=None 走
+# _store_get_tensor 老路径，register 失败被忽略、TCP get_into 正常工作。上游给 pinned
+# 补上 NPU 适配（同文件已有 _ascend_runtime_available()，一行 OR 的事）后可去掉此 override。
 # PYTHONUNBUFFERED=1 让 specforge train 的 stdout 无缓冲写 /tmp/smoke-train.log；
 # 即使外层框架缓冲整段命令输出，日志文件里也是行粒度（出问题后能 tail 看到断点位置）。
 PYTHONUNBUFFERED=1 \
@@ -574,6 +622,11 @@ popd >/dev/null
 smoke: specforge train alive after 30s, pid=xxx, log=/tmp/smoke-train.log
 ```
 
+```{admonition} Note
+:class: note
+`<MODEL_PATH>` / `<SHAREGPT_PATH>` 分别来自「预下载模型」「准备训练数据」两节保存的路径；xxx 为训练进程号。
+```
+
 #### 监控直到退出
 
 轮询等待训练完成：日志出现 step/loss 指标即训练成功，正常情况下进程随后自行退出。注意容器环境下进程退出后可能停留在僵尸状态（容器 PID 1 不回收孤儿，`kill -0` 仍返回成功），本段已按"僵尸即退出"处理。若进程确认活着但 300s 内不退出，杀掉进程树并按训练成功收尾，同时把各进程的 `/proc` 状态和 py-spy 线程栈写到日志（供定位）。若始终没有 step/loss 指标，则等到 80 min 上限判失败：
@@ -582,13 +635,13 @@ smoke: specforge train alive after 30s, pid=xxx, log=/tmp/smoke-train.log
 set -euo pipefail
 LOG_FILE=/tmp/smoke-train.log
 TRAIN_PID=$(cat /tmp/smoke-train.pid)
-WAIT_TIMEOUT="${SPECFORGE_TRAIN_TIMEOUT:-4800}"     # 总等待上限；单段命令的框架超时为 5400s
+WAIT_TIMEOUT="${SPECFORGE_TRAIN_TIMEOUT:-4800}"     # 总等待上限；单段命令的框架超时为 10800s
 GRACE_AFTER_DONE="${SPECFORGE_TRAIN_GRACE:-300}"   # step/loss 出现后，等进程退出的宽限
 WAIT_START=$(date +%s)
 DONE_AT=""
 # 存活判定不能只看 kill -0：它对僵尸进程也返回成功。GH Actions 容器的 PID 1 不回收
-# 孤儿——specforge train 正常退出后停在 zombie 状态、kill -0 恒真，看起来像"卡死"
-#（CI 3/3 复现；coder 的 PID 1 会收尸所以从不复现）。State 为 Z 即视为已退出。
+# 孤儿——specforge train 正常退出后停在 zombie 状态、kill -0 恒真，看起来像"卡死"。
+# State 为 Z 即视为已退出。
 trainer_alive() {
     kill -0 "$TRAIN_PID" 2>/dev/null || return 1
     if grep -q 'State:[[:space:]]*Z' "/proc/$TRAIN_PID/status" 2>/dev/null; then
@@ -609,7 +662,7 @@ while trainer_alive; do
         DONE_AT=$ELAPSED
         echo "smoke: step/loss markers present at elapsed=${ELAPSED}s; giving the process ${GRACE_AFTER_DONE}s to exit"
     fi
-    # 训练已产出 step/loss 但进程活着迟迟不退（非僵尸）——尚未在实测中出现过，留作兜底。
+    # 训练已产出 step/loss 但进程活着迟迟不退（非僵尸）——留作兜底。
     # 杀进程树前先取证（父+子进程各一份），全部写 stderr 并带 [ERROR] 前缀——框架对含
     # [ERROR] 的 stderr 即使 rc=0 也整段 print 到 job log（≤256KB 不截断），GitHub 上可直接
     # 复制。三层证据：/proc 状态+内核栈（D=不可中断等驱动、wchan=等待点）→ py-spy
@@ -671,4 +724,12 @@ smoke: specforge train process exited, elapsed=xxx
 smoke: OK - 1-step training completed
 ```
 
-> 卡 0 capture server、卡 1 trainer、卡 2/3 留空给 HCCL buffer。`--context-length 1024 --mem-fraction-static 0.5` 压住 SGLang KV 池；`training.max_steps=1 training.batch_size=1 data.max_length=512 training.num_anchors=32 deployment.trainer.nproc_per_node=1` 把训练侧压到 1 步最小数据。
+```{admonition} Note
+:class: note
+xxx 为监控期间的实际输出（进度行、进程号、耗时等，内容每次运行不同）。
+```
+
+## 外部链接
+
+- GitHub：[sgl-project/SpecForge](https://github.com/sgl-project/SpecForge)
+- 文档中心：[SpecForge Docs](https://github.com/sgl-project/SpecForge#readme)

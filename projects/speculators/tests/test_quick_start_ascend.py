@@ -1,16 +1,14 @@
-"""Quick-start-Ascend documentation test: end-to-end case built on top
-of the ``MarkdownDocTestBase`` contract.
+"""Quick-start test: doc under test is ``projects/speculators/docs/Quick-start-Ascend.md``.
 
-Document under test: ``projects/speculators/docs/Quick-start-Ascend.md``
-(follows the ``docs/markdown_doc_test_label.md`` contract: every
-``shell`` code block carries one of the ``#test`` / ``#test-setup`` /
+End-to-end case built on top of the ``MarkdownDocTestBase`` contract:
+every ``shell`` code block carries one of the ``#test`` / ``#test-setup`` /
 ``#test-result`` labels plus ``id=`` / ``store=`` / ``load='x>>y'`` /
-``fuzzy='xxx'`` parameters).
+``fuzzy='xxx'`` parameters.
 
-Run: ``python -m unittest tests.test_quick_start_ascend -v 2>&1``
+Run: ``python -m unittest tests.speculators.test_quick_start_ascend -v 2>&1``
 
-Environment variables (injected by GitHub workflow
-``speculators-quick-start.yml``):
+Environment variables (injected by the quick-start engine workflow
+``quick-start-template.yml``, triggered by ``speculators-quick-start.yml``):
     ``MONITORED_DOC_URL``         Required; raw URL of the document under test.
     ``UPSTREAM_REF``              Required; bash reads ``$UPSTREAM_REF`` to get
                                   the latest release tag. The value is
@@ -52,43 +50,45 @@ def _e2e_enabled() -> bool:
 
 
 class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
-    """``Quick-start-Ascend.md`` end-to-end test: fetch doc -> validate
+    """``quick_start.md`` end-to-end test: fetch doc -> validate
     contract -> run ``#test-setup`` / ``#test`` in order -> compare against
-    ``#test-result``."""
+    ``#test-result``.
 
-    # 30 min per command: long enough for the ~17 GB combined
-    # z-lab/Qwen3-8B-DFlash-b16 (~1 GB) + Qwen/Qwen3-8B verifier
-    # (~16 GB) ModelScope downloads on first run + speculators convert
-    # pipeline (weight remap + CPU from_pretrained + NaN check); short
-    # enough to fail fast on hangs. Smaller than the originally considered
-    # EAGLE-3 + Llama-3.1 pair (~32 GB) which we dropped because the
-    # verifier is gated on HF Hub and not on ModelScope.
-    DEFAULT_COMMAND_TIMEOUT = 1800
-    USER_AGENT = 'cosdt-ci-test/quick-start'  # monitored source is the fork under cosdt-ci-test org
+    Scope: image pre-flight (vllm-ascend stack version probe) ->
+    modelscope install -> speculators source install -> the 4-step
+    pipeline: DFlash convert, hidden-states extraction (vllm offline
+    generate) + torchrun 1-epoch draft training, vllm-ascend serve with
+    the trained draft + chat completion smoke, config import check.
+    """
+
+    # 2h per command: the cold-cache verifier download (Qwen/Qwen3-8B,
+    # 5 shards ~16.4 GB at observed ~3.1 MB/s per shard ≈ 90 min) is the
+    # long pole; the draft (~1 GB) pulls in ~84 s. The runner's
+    # NFS-backed modelscope cache makes both one-time (hot runs skip
+    # straight to the pipeline). Short enough that the workflow budget
+    # (240 min) still caps a full cold run end-to-end.
+    DEFAULT_COMMAND_TIMEOUT = 7200
+
+    USER_AGENT = 'cosdt-ci-test/quick-start'
+
+    # Extend the base ERROR_MARKERS with CANN's typo + sentinel so a CANN
+    # failure surfaces a full stderr dump (head/tail by default would hide
+    # the line that names the failure).
     ERROR_MARKERS = (
         *MarkdownDocTestBase.ERROR_MARKERS,  # generic [ERROR] + Traceback
         'applicaiton exception',  # CANN toolkit emits this typo (sic) in its Python driver
         'ERR99999',  # CANN sentinel for unrecoverable runtime failure
     )
 
-    # Cluster-internal nginx PyPI cache + Huawei Cloud ascend dual-source.
-    # Both URLs are exposed as env vars (``PIP_INDEX_URL`` /
-    # ``UV_INDEX_URL`` + ``UV_EXTRA_INDEX_URL``) by the engine template
-    # at .github/workflows/quick-start-template.yml, so individual
-    # ``#test`` blocks don't need to repeat them on the command line —
-    # bare ``pip install`` / ``uv pip install`` already routes through
-    # the cluster cache and falls back to huawei ascend for uv.
-
     # CANN toolkit: source once to get ASCEND_HOME / LD_LIBRARY_PATH etc.
-    # Path is hard-coded, tied to the GitHub workflow container image
-    # (CI_IMAGE).
+    # Path is hard-coded, tied to the container image pinned by the
+    # ``image:`` input of ``speculators-quick-start.yml``.
     _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
 
     # ----------------------------------------------------------
     # prepare_environment: CANN env + uv + safetensors + modelscope cache purge
     #  (transformers / speculators are installed by the doc's
-    #  `### 前置安装` / `## 安装 Speculators` blocks; HF cache is left at
-    #  the container default so the workflow's bind mount applies)
+    #  `### 前置安装` / `## 安装 Speculators` blocks)
     # ----------------------------------------------------------
 
     @classmethod
@@ -98,32 +98,19 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
         The doc's ``### 前置安装`` and ``## 安装 Speculators`` sections are
         the single source of truth for which packages + versions get
-        installed — ``torch`` + ``torch_npu`` (the doc's
-        ``install-torch`` #test-setup), ``modelscope`` (via ``install-deps``),
-        and ``speculators`` (via ``speculators-install-binary`` /
-        ``speculators-install-source``) all install themselves in document
-        order via the ``#test`` machinery. This class no longer touches
-        the torch stack — putting it here would mean a torch mismatch
-        (bare CANN image vs doc's pinned 2.10.0+cpu) shows up in
-        ``prepare_environment`` log rather than in the doc's
-        ``check-npu-runtime`` #test where it actually belongs.
-
-        The defensive ``safetensors`` install (speculators depends on
-        it for weight IO and may not be on the CANN base image) and the
-        modelscope cache purge are still done here.
+        installed — the vllm-ascend stack ships in the pinned image,
+        ``modelscope`` installs via ``install-deps`` and ``speculators``
+        via ``speculators-install-source``, all in document order via the
+        ``#test`` machinery.
 
         ModelScope cache (``$MODELSCOPE_CACHE`` or its default
-        ``~/.cache/modelscope``) is left at its default — the workflow's
-        bind mount targets ``/root/.cache/modelscope`` directly so the
-        cache survives across runs. Same pattern as peft / diffusers.
-
-        Class-level setup: run once per test class, triggered by
-        ``setUpClass``. Not the same as ``unittest.TestCase.setUp`` —
-        that lifecycle hook fires before every test method, which is
-        wrong for a one-shot install.
+        ``~/.cache/modelscope``) is left at its default — the runner's
+        NFS-backed ``/root/.cache/modelscope`` persists across runs.
+        Same pattern as peft / diffusers.
         """
         # 0) CANN env: source set_env.sh and merge the env stream into
-        # os.environ
+        # os.environ. Don't overwrite envs explicitly injected by the
+        # workflow; only fill in CANN keys that are missing.
         if os.path.isfile(cls._CANN_SET_ENV):
             merged = subprocess.run(
                 ['bash', '-c', f'source {cls._CANN_SET_ENV} >/dev/null 2>&1; env'],
@@ -133,9 +120,6 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 if '=' not in line:
                     continue
                 key, _, value = line.partition('=')
-                # Don't overwrite envs explicitly injected by the
-                # workflow (jobs.env / steps.env); only fill in CANN
-                # keys that are missing, to avoid conflicts.
                 os.environ.setdefault(key, value)
             print('setup: sourced CANN env from set_env.sh')
         else:
@@ -145,51 +129,27 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
         # 1) uv: the doc's ``speculators-install-source`` block calls
         # ``uv pip install -e .`` which handles PEP 517 build deps more
-        # reliably than pip. Inherit ``PIP_INDEX_URL`` + ``PIP_TRUSTED_HOST``
+        # reliably than pip. Inherits ``PIP_INDEX_URL`` + ``PIP_TRUSTED_HOST``
         # from the yml job-level env (cluster cache path + trusted-host).
         subprocess.run(
             ['python', '-m', 'pip', 'install', 'uv'],
             check=True,
         )
 
-        # 3) torch stack: NOT installed here. Lives in the doc's
-        # ``### 前置安装`` #test-setup ``install-torch`` block — putting
-        # the install in this hook would mean a torch version mismatch
-        # shows up in prepare_environment log rather than in the doc's
-        # ``check-npu-runtime`` #test where the mismatch actually matters.
-        #
-        # 4) safetensors: speculators reads model weights via
+        # 2) safetensors: speculators reads model weights via
         # safetensors. It's a base dep of speculators (its pyproject
         # lists ``safetensors`` as required), so it ships in once
-        # ``speculators-install-*`` runs in the doc; this defensive
-        # install catches the case where CANN base image lacks it
-        # before any speculators code touches weight files.
+        # ``speculators-install-source`` runs in the doc; this defensive
+        # install catches the case where the base image lacks it before
+        # any speculators code touches weight files.
         ensure_safetensors()
 
-        # 5) Cache validation: persistent host-side bind mount can hold
+        # 3) Cache validation: the persistent NFS-backed cache can hold
         # truncated safetensors from interrupted runs. Walk every shard
         # under each model dir and purge it on failure; modelscope will
         # re-download cleanly on next access. Implementation lives in
-        # workflows.model_cache; see that module's docstring for
-        # the full rationale.
+        # doc_test.model_cache.
         purge_modelscope_corrupt(resolve_modelscope_cache())
-
-        # 6) modelscope / speculators / torch / torch_npu are installed
-        # by the doc's ``### 前置安装`` block ``install-deps`` (it carries
-        # the install + verify pair itself). This class no longer
-        # installs them — keeping install here on top would just be
-        # redundant ``uv pip install``-idempotent noise.
-        #
-        # ``transformers`` is NOT installed here either: it's a base
-        # dep of speculators (speculators' pyproject pins
-        # ``transformers>=4.56.1,<5.15.0``) and gets pulled in
-        # transitively by ``speculators-install-binary`` /
-        # ``speculators-install-source`` in the doc.
-        #
-        # ``speculators`` is also NOT installed here: it's the subject
-        # of the test and gets installed by the doc's ``## 安装
-        # Speculators`` blocks, which exercise both binary and source
-        # install paths.
 
     # ----------------------------------------------------------
     # test entry
@@ -200,14 +160,10 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         """Run env setup once per test class: CANN env + uv + safetensors
         + modelscope cache purge.
 
-        ``torch`` / ``torch_npu`` / ``modelscope`` / ``speculators`` are
-        NOT installed here: the doc's own labeled blocks install them in
-        document order, so a broken install block fails loudly instead of
-        being masked by a pre-installed copy.
-
-        ModelScope cache is left at its container default so the
-        workflow's bind mount at ``/root/.cache/modelscope`` applies.
-        See ``prepare_environment`` for the full rationale.
+        ``modelscope`` / ``speculators`` are NOT installed here: the doc's
+        own labeled blocks install them in document order, so a broken
+        install block fails loudly instead of being masked by a
+        pre-installed copy.
 
         ``@unittest.skipIf`` only skips the test *method* — ``setUpClass``
         itself always runs. The ``if _e2e_enabled()`` body guard below is

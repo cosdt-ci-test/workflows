@@ -1,8 +1,14 @@
 # wenet quick start guard - project thin trigger.
 #
-# The shared quick-start template owns monitoring, cache state, result
-# validation, and artifact publishing. Project-specific environment setup
-# and document execution live in projects/wenet/tests.
+# Calls the common engine .github/workflows/quick-start-template.yml; this
+# file only declares what varies per project: concurrency, runner, container
+# image + options, upstream repo, monitored doc, and the test entry command.
+# The guard loop, cache I/O, state relay and publishing all live in the engine.
+#
+# Two machine legs run the same doc and test:
+#   qs-a2  Atlas 900 A2 (Ascend 910B)
+#   qs-a3  Atlas 900 A3 (Ascend 910C)
+# The merge job folds both result.json files into one artifact.
 
 name: wenet-quick-start
 
@@ -20,10 +26,11 @@ permissions:
   contents: read
 
 jobs:
-  wenet-quick-start:
+  qs-a2:
     uses: ./.github/workflows/quick-start-template.yml
     with:
       project: wenet
+      machine_type: a2
       test_runner: '["linux-aarch64-a2-1"]'
       image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:8.0.0-910b-ubuntu22.04-py3.10
       container_options: >-
@@ -36,13 +43,40 @@ jobs:
         --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
         --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
         --volume=/data/ci-cache/modelscope/wenet:/root/.cache/modelscope
-      # The doc runs 1 conformer epoch on a subset (12k / 1.4k / 700 utts)
-      # instead of the full 120k split, so a complete run lands around
-      # 45 min on a single 910B4 (the full split measured ~4 h 16 m in
-      # runs 39725354549 and 39821223193). 720 min stays as headroom for
-      # the one-off 15.6 GB dataset download when the cache volume is cold.
       timeout_minutes: 720
       upstream_repo: wenet-e2e/wenet
       doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/wenet/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
       doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/wenet/docs/Quick-start-Ascend.md
       test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1
+
+  qs-a3:
+    uses: ./.github/workflows/quick-start-template.yml
+    with:
+      project: wenet
+      machine_type: a3
+      test_runner: '["linux-aarch64-a3-800i-2"]'
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-a3-ubuntu22.04-py3.12
+      container_options: >-
+        --shm-size=64g
+        --volume=/data/ci-cache/modelscope/wenet:/root/.cache/modelscope
+      timeout_minutes: 720
+      upstream_repo: wenet-e2e/wenet
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/wenet/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/wenet/docs/Quick-start-Ascend.md
+      test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1
+
+  merge:
+    needs: [qs-a2, qs-a3]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout workflows (provides the merge action)
+        uses: actions/checkout@v6
+      - name: Merge per-machine results into one artifact
+        uses: ./.github/actions/merge-quick-start-results
+        with:
+          project: wenet
+          result_a2: ${{ needs.qs-a2.outputs.result_json }}
+          result_a3: ${{ needs.qs-a3.outputs.result_json }}
+          name_a2: qs-a2
+          name_a3: qs-a3

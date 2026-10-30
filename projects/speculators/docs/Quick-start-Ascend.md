@@ -1,18 +1,22 @@
-# 快速开始
+# Speculators
 
-在单卡昇腾 NPU 上跑 [Speculators](https://github.com/vllm-project/speculators) 端到端：转换 DFlash draft → 抽训练数据 → torchrun 训 draft → `vllm serve` 挂载 draft 做推理 smoke。
+在单卡昇腾 NPU 上跑通 [Speculators](https://github.com/vllm-project/speculators) 投机解码草稿模型的端到端链路：
+
+- **安装**：源码安装 speculators（镜像预装 vllm-ascend 全栈，无需编译）。
+- **convert**：把 DFlash draft + verifier 按 DFlash 算法重映射权重。
+- **训练**：verifier 抽 hidden states → `torchrun` 单卡训 1 epoch。
+- **部署**：`vllm serve` 挂载训好的 draft 做 chat completion smoke。
 
 ## 前置条件
 
 ### 硬件
 
-Atlas 900 A2 / A3 或 Ascend 950 系列 NPU，至少 1 卡。
+Atlas 900 A2 / A3 训练系列产品或者 Ascend 950 系列产品，至少 1 卡。
 
 ### 基础软件
 
-- Python 3.12 环境
-- [CANN 9.1.0](https://ascend.github.io/docs/sources/ascend/quick_install.html)
-- [`uv`](https://docs.astral.sh/uv/getting-started/installation/)
+- 可用的 Python 环境
+- 可用的 CANN（参考[快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html)）
 
 ### 本文档示例使用的版本
 
@@ -44,7 +48,7 @@ swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/vllm-ascend/vllm-ascen
 | draft 模型 | z-lab/Qwen3-8B-DFlash-b16 |
 | verifier | Qwen/Qwen3-8B |
 
-### 前置安装
+## 前置安装
 
 确认 NPU 设备可见：
 
@@ -52,9 +56,31 @@ swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/vllm-ascend/vllm-ascen
 npu-smi info
 ```
 
-> `npu-smi` 不存在就回到 [Ascend 官方快速安装指南](https://ascend.github.io/docs/sources/ascend/quick_install.html) 装驱动。
+输出类似：
 
-检查 Python 版本（应输出 3.12.x）：
+```text
++------------------------------------------------------------------------------------------------+
+| npu-smi 25.5.2                   Version: 25.5.2                                               |
++---------------------------+---------------+----------------------------------------------------+
+| NPU   Name                | Health        | Power(W)    Temp(C)           Hugepages-Usage(page)|
+| Chip                      | Bus-Id        | AICore(%)   Memory-Usage(MB)  HBM-Usage(MB)        |
++===========================+===============+====================================================+
+| 0     910B4               | OK            | 89.9        39                0    / 0             |
+| 0                         | 0000:41:00.0  | 0           0    / 0          2922 / 32768         |
++===========================+===============+====================================================+
++---------------------------+---------------+----------------------------------------------------+
+| NPU     Chip              | Process id    | Process name             | Process memory(MB)      |
++===========================+===============+====================================================+
+| No running processes found in NPU 0                                                            |
++===========================+===============+====================================================+
+```
+
+```{admonition} Note
+:class: note
+如果 `npu-smi` 不存在，请回到 [Ascend 官方快速安装指南](https://ascend.github.io/docs/sources/ascend/quick_install.html) 补装驱动。
+```
+
+检查 Python 版本：
 
 ```shell #test id="check-py"
 python --version
@@ -64,6 +90,11 @@ python --version
 
 ```shell #test-result id="check-py" fuzzy='xxx'
 Python 3.12.xxx
+```
+
+```{admonition} Note
+:class: note
+xxx 表示 Python 的补丁版本号。
 ```
 
 检查 CANN env 并验证镜像预装的 vllm-ascend 栈（含 torch / torch_npu / torchvision / torchaudio / transformers / vllm / vllm-ascend / triton*）：
@@ -90,21 +121,21 @@ python -c "import importlib.metadata; print(f'triton={importlib.metadata.version
 
 输出结果如下：
 
-```shell #test-result id="verify-vllm-stack" fuzzy='xxx'
+```shell #test-result id="verify-vllm-stack"
 torch=2.10.0+cpu
 torch_npu=2.10.0.post4
 torchvision=0.25.0+cpu
 torchaudio=2.10.0+cpu
-transformers=xxx
+transformers=5.5.4
 is_available: True
-npu_count: xxx
+npu_count: 1
 vllm=0.23.0+empty
 vllm_ascend=0.23.0
 triton_ascend=3.2.2
 triton=3.5.0
 ```
 
-装 modelscope：
+装 modelscope（用于从 ModelScope 下载模型）：
 
 ```shell #test id="install-deps"
 uv pip install 'modelscope==1.37.0'
@@ -127,7 +158,7 @@ echo "${UPSTREAM_REF}"
 ```
 -->
 
-克隆 speculators 上游 release tag 源码到 `/root/speculators/` 并 editable 安装（`<ref>` 由工作流注入最新 release tag）：
+克隆 speculators 上游 release tag 源码到 `/root/speculators/` 并 editable 安装：
 
 ```shell #test id="speculators-install-source" load="upstream_ref>>ref"
 git clone --depth 1 --branch <ref> https://github.com/vllm-project/speculators.git /root/speculators
@@ -144,59 +175,55 @@ speculators version: xxx
 speculators xxx
 ```
 
+```{admonition} Note
+:class: note
+`<ref>` 替换为 Speculators 当前的最新 release 版本；xxx 表示实际安装的 speculators 版本号。
+```
+
 ## 端到端：convert → 训练数据生成 → 训练 → 部署
 
 ### 前置：下载 draft 与 verifier
 
-`#test-setup` 块 stdout 的末行会被捕获为 `store=` 指定的变量，供后续命令里 `<draft_path>` / `<verifier_path>` 占位符替换——所以下载命令用 `| tail -n 1` 只留路径行，后续各 setup 块末尾的 `echo` 同理。
+从 ModelScope 拉 draft 模型 z-lab/Qwen3-8B-DFlash-b16 与 verifier 模型 Qwen/Qwen3-8B(下面的命令用 Python 执行)：
 
-从 ModelScope 拉 draft 模型 z-lab/Qwen3-8B-DFlash-b16：
+```python #test-setup
+from modelscope import snapshot_download
 
-```shell #test-setup store="draft_path"
-python -c "from modelscope import snapshot_download; print(snapshot_download('z-lab/Qwen3-8B-DFlash-b16'))" | tail -n 1
-```
-
-从 ModelScope 拉 verifier 模型 Qwen/Qwen3-8B：
-
-```shell #test-setup store="verifier_path"
-python -c "from modelscope import snapshot_download; print(snapshot_download('Qwen/Qwen3-8B'))" | tail -n 1
+snapshot_download('z-lab/Qwen3-8B-DFlash-b16')
+snapshot_download('Qwen/Qwen3-8B')
 ```
 
 确认两个模型快照已就位（`config.json` + 权重文件）：
 
-```shell #test id="model-download-check" load="draft_path>>draft_path" load="verifier_path>>verifier_path"
-ls -1 <draft_path>/config.json <draft_path>/model.safetensors
-ls -1 <verifier_path>/config.json <verifier_path>/model.safetensors.index.json
+```shell #test id="model-download-check"
+ls -1 /root/.cache/modelscope/hub/models/z-lab/Qwen3-8B-DFlash-b16/config.json /root/.cache/modelscope/hub/models/z-lab/Qwen3-8B-DFlash-b16/model.safetensors
+ls -1 /root/.cache/modelscope/hub/models/Qwen/Qwen3-8B/config.json /root/.cache/modelscope/hub/models/Qwen/Qwen3-8B/model.safetensors.index.json
 ```
 
 输出结果如下：
 
-```shell #test-result id="model-download-check" load="draft_path>>draft_path" load="verifier_path>>verifier_path"
-<draft_path>/config.json
-<draft_path>/model.safetensors
-<verifier_path>/config.json
-<verifier_path>/model.safetensors.index.json
+```shell #test-result id="model-download-check"
+/root/.cache/modelscope/hub/models/z-lab/Qwen3-8B-DFlash-b16/config.json
+/root/.cache/modelscope/hub/models/z-lab/Qwen3-8B-DFlash-b16/model.safetensors
+/root/.cache/modelscope/hub/models/Qwen/Qwen3-8B/config.json
+/root/.cache/modelscope/hub/models/Qwen/Qwen3-8B/model.safetensors.index.json
 ```
 
 ### convert（DFlash 算法）
 
-`speculators convert` 把本地 draft + verifier 读进来按 DFlash 算法重映射权重、写到 `/root/dflash-qwen3-8b-converted/`。CLI 的 `--algorithm` 不支持 `dflash`，走 Python API：
+`speculators convert` 把本地 draft + verifier 读进来按 DFlash 算法重映射权重、写到 `/root/dflash-qwen3-8b-converted/`。CLI 的 `--algorithm` 不支持 `dflash`，走 Python API(下面的命令用 Python 执行)：
 
-```shell #test-setup store="dflash_path" load="draft_path>>draft_path" load="verifier_path>>verifier_path"
-python << 'PY'
+```python #test-setup store="dflash_path"
 from speculators.convert import convert_model
 
+OUTPUT = '/root/dflash-qwen3-8b-converted'
 convert_model(
-    model="<draft_path>",
-    verifier="<verifier_path>",
+    model='/root/.cache/modelscope/hub/models/z-lab/Qwen3-8B-DFlash-b16',
+    verifier='/root/.cache/modelscope/hub/models/Qwen/Qwen3-8B',
     algorithm="dflash",
-    output_path="/root/dflash-qwen3-8b-converted",
+    output_path=OUTPUT,
 )
-PY
-test -f /root/dflash-qwen3-8b-converted/config.json
-test -f /root/dflash-qwen3-8b-converted/model.safetensors
-# 末行路径供 store 捕获（后续块 <dflash_path> 的替换源）；上面两行 test -f 保证它真实存在
-echo "/root/dflash-qwen3-8b-converted"
+print(OUTPUT)
 ```
 
 确认 convert 产物存在（`config.json` + `model.safetensors`）：
@@ -214,11 +241,16 @@ echo <dflash_path>
 /root/dflash-qwen3-8b-converted
 ```
 
+```{admonition} Note
+:class: note
+`<dflash_path>` 在运行时替换为「convert（DFlash 算法）」一节 `print(OUTPUT)` 命令输出的产物目录路径。
+```
+
 ### 训练数据预处理
 
 把 10 条 chat 用 verifier tokenizer 跑 chat template 得到 `input_ids`/`loss_mask`，写到 `/tmp/prompts.jsonl`（speculator-format），再交给上游 `prepare-data`。
 
-```shell #test-setup store="data_path" load="verifier_path>>verifier_path"
+```shell #test-setup store="data_path"
 set -euo pipefail
 DATA_DIR=/root/dflash-train-data
 rm -rf "$DATA_DIR"
@@ -228,7 +260,7 @@ python << 'PY'
 import json
 from transformers import AutoTokenizer
 
-tokenizer = AutoTokenizer.from_pretrained("<verifier_path>")
+tokenizer = AutoTokenizer.from_pretrained("/root/.cache/modelscope/hub/models/Qwen/Qwen3-8B")
 
 def _ids(encoded):
     # transformers 4.x: list[int] ; 5.x: BatchEncoding with .input_ids
@@ -253,7 +285,7 @@ with open("/tmp/prompts.jsonl", "w") as f:
 PY
 
 speculators prepare-data \
-  --model "<verifier_path>" \
+  --model "/root/.cache/modelscope/hub/models/Qwen/Qwen3-8B" \
   --data /tmp/prompts.jsonl \
   --output "$DATA_DIR" \
   --max-samples 10 \
@@ -264,20 +296,21 @@ speculators prepare-data \
 echo "$DATA_DIR"
 ```
 
-确认数据集已落盘（行数 + `token_freq.pt` 存在）：
+确认数据集已落盘（行数 + `token_freq.pt` 存在）(下面的命令用 Python 执行)：
 
-```shell #test id="pipeline-step2-extract" load="data_path>>data_path"
-echo <data_path>
-python -c "from datasets import load_from_disk; print(len(load_from_disk('<data_path>')))"
-python -c "
+```python #test id="pipeline-step2-extract" load="data_path>>data_path"
+from datasets import load_from_disk
 import torch
 from pathlib import Path
-p = Path('<data_path>') / 'token_freq.pt'
+
+data_path = '<data_path>'
+print(data_path)
+print(len(load_from_disk(data_path)))
+p = Path(data_path) / 'token_freq.pt'
 print('exists:', p.exists(), 'size:', p.stat().st_size if p.exists() else 0)
 freq = torch.load(p, weights_only=True)
 print('token_freq keys:', list(freq.keys()) if isinstance(freq, dict) else type(freq).__name__)
 print('len:', len(freq))
-"
 ```
 
 输出结果如下：
@@ -290,11 +323,16 @@ token_freq keys: xxx
 len: xxx
 ```
 
+```{admonition} Note
+:class: note
+xxx 分别为 `token_freq.pt` 的文件大小（字节）、token 表的键列表与条目数；`<data_path>` 在运行时替换为「训练数据预处理」一节 `echo "$DATA_DIR"` 命令输出的数据目录路径。
+```
+
 ### 训练
 
-先生成 hidden_states 缓存，再离线训。起 vllm 一次性 generate 10 条 hidden_states 写到 `/tmp/hs-train/`（train 的 FileBackend 直接读这个目录；生成完杀 vllm 释放全部 NPU 给后续 train 留 64 GB 完整空间）。v0.8.0 的 `launch_vllm.py` 有两处行为变化需要留意：按宿主机 CPU 数自动推导 `--api-server-count`（render 大批量吞吐优化，大机器上起多个 API server 前端进程），以及不再自动追加 `--no-enable-chunked-prefill`——镜像 vllm 0.23.0 默认开 chunked prefill 而 `ExampleHiddenStatesConnector` 不支持，必须显式关掉。这里 10 条 smoke 数据顺便钉 1 个前端：
+先生成 hidden_states 缓存，再离线训。起 vllm 一次性 generate 10 条 hidden_states 写到 `/tmp/hs-train/`。v0.8.0 的 `launch_vllm.py` 有两处行为变化需要留意：按宿主机 CPU 数自动推导 `--api-server-count`，以及不再自动追加 `--no-enable-chunked-prefill`——镜像 vllm 0.23.0 默认开 chunked prefill 而 `ExampleHiddenStatesConnector` 不支持，必须显式关掉。这里 10 条 smoke 数据量很小，固定用 1 个 API server 前端（`--api-server-count 1`）：
 
-```shell #test-setup store="hs_dir" load="data_path>>data_path" load="verifier_path>>verifier_path"
+```shell #test-setup store="hs_dir" load="data_path>>data_path"
 set -euo pipefail
 
 cd /root/speculators
@@ -311,7 +349,7 @@ export ZSH_VERSION="${ZSH_VERSION:-}"
 source /usr/local/Ascend/nnal/atb/set_env.sh
 set -u
 
-setsid nohup python scripts/launch_vllm.py "<verifier_path>" \
+setsid nohup python scripts/launch_vllm.py "/root/.cache/modelscope/hub/models/Qwen/Qwen3-8B" \
   --target-layer-ids 2 18 34 \
   --hidden-states-path "$HS_DIR" \
   -- \
@@ -349,14 +387,14 @@ if [ "$VLLM_READY" != "1" ]; then
 fi
 
 speculators generate-offline-data \
-  --model "<verifier_path>" \
+  --model "/root/.cache/modelscope/hub/models/Qwen/Qwen3-8B" \
   --preprocessed-data "<data_path>" \
   --output "$HS_DIR" \
   --max-samples 10 \
   --concurrency 4 \
   --validate-outputs >/tmp/hs-gen.log 2>&1 || HS_RC=$?
 HS_RC=${HS_RC:-0}
-# 日志走 stderr，避免污染 store 捕获的 stdout（store 把最后一行的值当变量）
+# 日志走 stderr，stdout 只留末行路径（供后续 <hs_dir> 引用）
 tail -30 /tmp/hs-gen.log >&2
 
 HS_COUNT=$(ls -1 "$HS_DIR"/hs_*.safetensors 2>/dev/null | wc -l)
@@ -373,23 +411,27 @@ sleep 5
 echo "$HS_DIR"
 ```
 
-确认 hidden states 已落盘（10 个 `hs_*.safetensors`）：
+确认 hidden states 已落盘（10 个 `hs_*.safetensors`）(下面的命令用 Python 执行)：
 
-```shell #test id="pipeline-step2b-hs" load="hs_dir>>hs_dir"
-echo <hs_dir>
-python -c "from pathlib import Path; print(len(list(Path('<hs_dir>').glob('hs_*.safetensors'))))"
+```python #test id="pipeline-step2b-hs" load="hs_dir>>hs_dir"
+from pathlib import Path
+print(len(list(Path('<hs_dir>').glob('hs_*.safetensors'))))
 ```
 
 输出结果如下：
 
-```shell #test-result id="pipeline-step2b-hs" load="hs_dir>>hs_dir"
-<hs_dir>
+```shell #test-result id="pipeline-step2b-hs"
 10
+```
+
+```{admonition} Note
+:class: note
+`<hs_dir>` 在运行时替换为「训练」一节 `echo "$HS_DIR"` 命令输出的 hidden states 目录路径。
 ```
 
 用 `torchrun -m speculators.train` 单卡训 1 epoch × 10 sample（smoke 验证管线通，不指望 loss 真下降）：
 
-```shell #test-setup store="checkpoint_path" load="hs_dir>>hs_dir" load="data_path>>data_path" load="verifier_path>>verifier_path"
+```shell #test-setup store="checkpoint_path" load="hs_dir>>hs_dir" load="data_path>>data_path"
 set -euo pipefail
 CHECKPOINT_DIR=/root/dflash-trained
 rm -rf "$CHECKPOINT_DIR"
@@ -405,7 +447,7 @@ source /usr/local/Ascend/nnal/atb/set_env.sh
 set -u
 
 torchrun --standalone --nproc_per_node=1 -m speculators.train \
-  --verifier-name-or-path "<verifier_path>" \
+  --verifier-name-or-path "/root/.cache/modelscope/hub/models/Qwen/Qwen3-8B" \
   --data-path "<data_path>" \
   --hidden-states-path "<hs_dir>" \
   --hidden-states-dtype float32 \
@@ -455,7 +497,6 @@ echo "$CHECKPOINT_DIR"
 确认训练产物与训练真跑完（checkpoint 文件 + 从 train.log 提取 val loss）：
 
 ```shell #test id="pipeline-step3-train" load="checkpoint_path>>checkpoint_path"
-echo <checkpoint_path>
 ls -1 <checkpoint_path>
 grep -oE 'val/loss_epoch=[0-9.]+' /tmp/train.log | head -1
 ```
@@ -463,17 +504,21 @@ grep -oE 'val/loss_epoch=[0-9.]+' /tmp/train.log | head -1
 输出结果如下：
 
 ```shell #test-result id="pipeline-step3-train" fuzzy='xxx'
-/root/dflash-trained
 config.json
 model.safetensors
 val/loss_epoch=xxx
+```
+
+```{admonition} Note
+:class: note
+xxx 为训练日志里的验证 loss 数值；`<checkpoint_path>` 在运行时替换为「训练」一节 `echo "$CHECKPOINT_DIR"` 命令输出的 checkpoint 目录路径。
 ```
 
 ### `vllm serve` 挂 draft 做推理
 
 起 vllm-ascend serve 把训好的 draft 挂上做 chat completion smoke（8 token completion）：
 
-```shell #test id="pipeline-step4-serve" load="checkpoint_path>>draft_model" load="verifier_path>>verifier_path"
+```shell #test id="pipeline-step4-serve" load="checkpoint_path>>draft_model"
 
 export TORCHDYNAMO_DISABLE=1
 rm -rf /root/.cache/vllm/torch_compile_cache 2>/dev/null || true
@@ -483,7 +528,7 @@ source /usr/local/Ascend/nnal/atb/set_env.sh
 set -u
 
 # num_speculative_tokens=5：vllm-ascend 限制 (num_speculative_tokens + 1) ≤ 15
-nohup vllm serve "<verifier_path>" \
+nohup vllm serve "/root/.cache/modelscope/hub/models/Qwen/Qwen3-8B" \
   --host 127.0.0.1 --port 8000 \
   --served-model-name Qwen/Qwen3-8B \
   --gpu-memory-utilization 0.85 \
@@ -524,17 +569,21 @@ completion_tokens: xxx
 finish_reason: length
 ```
 
+```{admonition} Note
+:class: note
+xxx 分别为模型生成的内容与生成的 token 数（`max_tokens=8` 截断，`finish_reason` 为 length）；`<draft_model>` 在运行时替换为「训练」一节 `echo "$CHECKPOINT_DIR"` 命令输出的 checkpoint 目录路径。
+```
+
 ### 编程式入口：SpeculatorsConfig / TokenProposalConfig
 
-验证 `SpeculatorsConfig` / `TokenProposalConfig` 可以在 NPU 环境 import + 实例化（不依赖 GPU 计算）：
+验证 `SpeculatorsConfig` / `TokenProposalConfig` 可以在 NPU 环境 import + 实例化（不依赖 GPU 计算）(下面的命令用 Python 执行)：
 
-```shell #test id="config-import" load="verifier_path>>verifier_path"
-python << 'PY'
+```python #test id="config-import"
 from speculators import VerifierConfig
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 
 verifier = VerifierConfig(
-    name_or_path="<verifier_path>",
+    name_or_path="/root/.cache/modelscope/hub/models/Qwen/Qwen3-8B",
     architectures=["Qwen3ForCausalLM"],
 )
 proposal = GreedyTokenProposalConfig(
@@ -547,13 +596,18 @@ print("verifier:", verifier.name_or_path)
 print("verifier architectures:", verifier.architectures)
 print("proposal type:", proposal.proposal_type)
 print("proposal speculative_tokens:", proposal.speculative_tokens)
-PY
 ```
 
 输出结果如下：
+
 ```shell #test-result id="config-import"
 verifier: /root/.cache/modelscope/hub/models/Qwen/Qwen3-8B
 verifier architectures: ['Qwen3ForCausalLM']
 proposal type: greedy
 proposal speculative_tokens: 5
 ```
+
+## 外部链接
+
+- GitHub：[vllm-project/speculators](https://github.com/vllm-project/speculators)
+- 文档中心：[Speculators Docs](https://vllm-project.github.io/speculators/)

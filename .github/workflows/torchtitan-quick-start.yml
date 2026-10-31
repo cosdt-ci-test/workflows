@@ -26,8 +26,8 @@ jobs:
         --volume=/data/ci-cache/modelscope/torchtitan:/root/.cache/modelscope
       timeout_minutes: 180
       upstream_repo: pytorch/torchtitan
-      doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/torchtitan/docs/Quick-start-Ascend.md
-      doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/torchtitan/docs/Quick-start-Ascend.md
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/torchtitan/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/torchtitan/docs/Quick-start-Ascend.md
       # The doc test first (it installs torchtitan into the environment), then
       # the override equivalence checks -- unittest runs the named modules in
       # the given order, so the second module sees the installed torchtitan.
@@ -45,8 +45,8 @@ jobs:
         --volume=/data/ci-cache/modelscope/torchtitan:/root/.cache/modelscope
       timeout_minutes: 180
       upstream_repo: pytorch/torchtitan
-      doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/torchtitan/docs/Quick-start-Ascend.md
-      doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/torchtitan/docs/Quick-start-Ascend.md
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/torchtitan/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/torchtitan/docs/Quick-start-Ascend.md
       test_command: python -m unittest tests.test_quick_start_ascend tests.test_npu_overrides -v 2>&1
 
   merge:

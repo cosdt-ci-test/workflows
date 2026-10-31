@@ -1,102 +1,82 @@
-# 快速开始：在昇腾 NPU 上用 llm-compressor 做一次 GPTQ 量化
+# llm-compressor
 
-> **阅读本文前**，请先按 [快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html) 准备好 CANN 与驱动。本文介绍如何在单卡 NPU 上安装 [llm-compressor](https://github.com/vllm-project/llm-compressor)，对公开小模型做一次 W4A16 GPTQ，再保存、重载并做一次前向。
-
----
+在单卡昇腾上安装 llm-compressor，对公开小模型做一次 W4A16 RTN 量化，再保存、重载并完成一次前向。
 
 ## 前置条件
 
 ### 硬件
 
-Atlas **800T** / **900 A2** 训练系列（Ascend **910B**）。本文示例为**单卡**。
+Atlas **800T** / **900 A2** 训练系列（Ascend **910B**）。本文示例为单卡。
 
 ### 软件
 
+| 类别 | 要求 |
+| --- | --- |
+| CANN | toolkit 与驱动已安装，并能 `source set_env.sh`。版本按 [昇腾软件配套清单](https://www.hiascend.com/developer/download/compatibility) 选择 |
+| Python | 落在官方配套表给出的范围内，并满足 llm-compressor 下限；当前正式版要求 `>=3.10` |
+| PyTorch | 安装官方当前推荐的 `torch` 与 `torch_npu`，见 [CANN 与 PyTorch 配套表](https://github.com/Ascend/pytorch/blob/master/COMPATIBILITY.md) 和 [PyTorch 安装包](https://www.hiascend.com/developer/software/ai-frameworks/pytorch/download) |
+| 模型 | [nm-testing/tinysmokeqwen3](https://huggingface.co/nm-testing/tinysmokeqwen3)（约 10 MB） |
 
-| 类别             | 要求                                                                                     |
-| -------------- | -------------------------------------------------------------------------------------- |
-| CANN           | toolkit + 驱动固件已安装并可 `source set_env.sh`                                                |
-| Python         | 3.12                                                                                   |
-| PyTorch        | `torch==2.10.0` 与 `torch_npu==2.10.0.post4`                                            |
-| llm-compressor | 从 PyPI 安装发布版                                                                           |
-| 模型             | [nm-testing/tinysmokeqwen3](https://huggingface.co/nm-testing/tinysmokeqwen3)（约 10 MB） |
-
-
-**配套镜像**：`swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12`。
-
----
-
-
+阅读本文前，请先按 [快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html) 准备好 CANN 与驱动。
 
 ## 1. 加载 CANN 环境
+
+常见容器里 `npu-smi` 在 `/usr/local/sbin`，需要把该目录加入 `PATH`。
 
 ```shell
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 export PATH=/usr/local/sbin:$PATH
 ```
 
----
-
-
-
 ## 2. 检查环境是否就绪
+
+### 2.1 确认 NPU 在线
 
 ```shell
 npu-smi info
 ```
 
-命令退出码应为 0，并打印设备列表。
+如果 `npu-smi` 找不到，回到 [快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html) 检查驱动与设备挂载。
 
-```shell #test-setup
+### 2.2 确认工具可用
+
+下面确认 CANN 已加载，并且 `npu-smi` 与 `python` 都在 `PATH` 里。
+
+```shell #test id="check-tools"
 test -n "$ASCEND_HOME_PATH"
 command -v npu-smi
-```
-
-检查 Python 版本：
-
-```shell #test id="check-py"
 python --version
 ```
 
-输出结果如下：
+输出路径和版本号随环境而变化，格式如下：
 
-```shell #test-result id="check-py" fuzzy="xxx"
-Python 3.12.xxx
+```text #test-result id="check-tools"
+.../npu-smi
+Python ...
 ```
-
----
-
-
 
 ## 3. 安装 PyTorch NPU 栈
 
-`torch_npu` 从华为 PyPI 额外索引安装，并与 CANN 9.1.0 配对。`numpy` 和 `pyyaml` 也要一起装，缺了会在 `import torch_npu` 之前失败。
-
 ```shell #test id="install-torch"
-python -m pip install --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi/variant \
-  --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
-  torch==2.10.0 torch_npu==2.10.0.post4 numpy pyyaml
+python -m pip install \
+  --index-url https://download.pytorch.org/whl/cpu \
+  --extra-index-url https://pypi.org/simple \
+  torch_npu numpy pyyaml
 python -c "import numpy, yaml, torch, torch_npu; print('torch', torch.__version__); print('torch_npu', torch_npu.__version__); print('npu_available', torch.npu.is_available())"
 ```
 
-输出结果如下：
+完整安装日志较长，其中应包含：
 
-```shell #test-result id="install-torch"
+```text #test-result id="install-torch"
 ...
-torch 2.10.0...
-torch_npu 2.10.0.post4
+torch ...+cpu
+torch_npu ...
 npu_available True
 ```
 
-`npu_available` 必须是 `True`。`torch` 版本串可能带 `+cpu` 后缀，以 `npu_available True` 为准。
-
----
-
-
-
 ## 4. 安装 llm-compressor
 
-将 `<UPSTREAM_REF>` 换成目标 **PyPI 版本号**（撰写时最新正式版是 `0.13.0`）。
+NPU 栈就绪后，用 `--no-build-isolation` 安装当前正式版，让构建对着已装的 torch。
 
 <!--
 ```shell #test-setup store="upstream_ref"
@@ -105,62 +85,53 @@ echo "${UPSTREAM_REF}"
 -->
 
 ```shell #test id="install-llmcompressor" load="upstream_ref>>UPSTREAM_REF"
-python -m pip install --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi/variant \
-  --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
-  llmcompressor==<UPSTREAM_REF> torch==2.10.0 torch_npu==2.10.0.post4
+python -m pip install --no-build-isolation "llmcompressor==<UPSTREAM_REF>"
 python -c "import llmcompressor; print('llmcompressor', llmcompressor.__version__)"
 ```
 
-输出结果如下：
 
-```shell #test-result id="install-llmcompressor"
+完整安装日志较长，其中应包含：
+
+```text #test-result id="install-llmcompressor" load="upstream_ref>>UPSTREAM_REF"
 ...
-llmcompressor ...
+llmcompressor <UPSTREAM_REF>
 ```
 
----
+```{admonition} Note
+:class: note
+将 `<UPSTREAM_REF>` 换成最新的 release 版本号。
+```
 
+## 5. 在 NPU 上做一次 W4A16 RTN 量化
 
+下面从 Hugging Face 下载公开小模型 `nm-testing/tinysmokeqwen3`，用 RTN 将全部 `Linear` 层的权重量化到 4 位，并跳过 `lm_head`。`oneshot` 把压缩后的模型写到本机 `~/llm-compressor-work/compressed`，随后从该目录重载并做一次前向。
 
-## 5. 在 NPU 上做一次单层 W4A16 GPTQ
+保存为 `oneshot_forward.py`：
 
-下面用公开小模型 `nm-testing/tinysmokeqwen3`、8 条本地校准文本，只量化第 3 层的 `q_proj`。这个模型隐藏维度是 64，分组大小要用 32 才能整除；`oneshot` 收尾会读 `torch.accelerator` 显存，当前 torch_npu 还不支持，先换成空实现。
-
-```shell #test id="oneshot-forward"
-python - <<'PY'
+```python
 from pathlib import Path
 
 import torch
 import torch_npu
 from compressed_tensors.quantization import QuantizationArgs, QuantizationScheme
-from datasets import Dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from llmcompressor import oneshot
-from llmcompressor.modifiers.gptq import GPTQModifier
+from llmcompressor.modifiers.quantization import QuantizationModifier
 
 model_id = "nm-testing/tinysmokeqwen3"
 device = "npu:0"
-out_dir = Path.home() / "llm-compressor-work" / "compressed"
+compressed_dir = Path.home() / "llm-compressor-work" / "compressed"
 
-model = AutoModelForCausalLM.from_pretrained(model_id).to(device)
+model = AutoModelForCausalLM.from_pretrained(
+    model_id, dtype=torch.float16
+).to(device)
 tokenizer = AutoTokenizer.from_pretrained(model_id)
-ds = Dataset.from_dict(
-    {
-        "text": [
-            "The quick brown fox jumps over the lazy dog.",
-            "Quantization maps weights to fewer bits.",
-            "Ascend NPU runs this oneshot calibration.",
-            "A short sentence is enough for a smoke test.",
-        ]
-        * 2
-    }
-)
-recipe = GPTQModifier(
+recipe = QuantizationModifier(
     ignore=["lm_head"],
     config_groups={
         "group_0": QuantizationScheme(
-            targets=["re:.*model.layers.2.self_attn.q_proj$"],
+            targets=["Linear"],
             weights=QuantizationArgs(num_bits=4, strategy="group", group_size=32),
         )
     },
@@ -169,53 +140,99 @@ torch.accelerator.max_memory_allocated = lambda device=None: 0
 torch.accelerator.get_memory_info = lambda device=None: (0, 1)
 oneshot(
     model=model,
-    dataset=ds,
     recipe=recipe,
-    num_calibration_samples=8,
-    max_seq_length=64,
-    output_dir=str(out_dir),
+    output_dir=str(compressed_dir),
 )
 
-reloaded = AutoModelForCausalLM.from_pretrained(out_dir).to(device)
+reloaded = AutoModelForCausalLM.from_pretrained(
+    compressed_dir, dtype=torch.float16
+).to(device)
 inputs = tokenizer("hello", return_tensors="pt").to(device)
 logits = reloaded(**inputs).logits
 qc = reloaded.config.quantization_config
 inner = getattr(qc, "quantization_config", qc)
 group0 = inner.config_groups["group_0"]
-print("LLM_COMPRESSOR_WORKLOAD_DEVICE=npu:0")
 print("weight_num_bits", group0.weights.num_bits)
-print("targeted", hasattr(reloaded.model.layers[2].self_attn.q_proj, "quantization_scheme"))
+print("q_proj_quantized", hasattr(reloaded.model.layers[2].self_attn.q_proj, "quantization_scheme"))
 print("lm_head_quantized", hasattr(reloaded.lm_head, "quantization_scheme"))
+print("logits.dtype", logits.dtype)
+print("logits.device", logits.device)
+```
+
+<!--
+```shell #test-setup
+cat > oneshot_forward.py <<'PY'
+from pathlib import Path
+
+import torch
+import torch_npu
+from compressed_tensors.quantization import QuantizationArgs, QuantizationScheme
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+from llmcompressor import oneshot
+from llmcompressor.modifiers.quantization import QuantizationModifier
+
+model_id = "nm-testing/tinysmokeqwen3"
+device = "npu:0"
+compressed_dir = Path.home() / "llm-compressor-work" / "compressed"
+
+model = AutoModelForCausalLM.from_pretrained(
+    model_id, dtype=torch.float16
+).to(device)
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+recipe = QuantizationModifier(
+    ignore=["lm_head"],
+    config_groups={
+        "group_0": QuantizationScheme(
+            targets=["Linear"],
+            weights=QuantizationArgs(num_bits=4, strategy="group", group_size=32),
+        )
+    },
+)
+torch.accelerator.max_memory_allocated = lambda device=None: 0
+torch.accelerator.get_memory_info = lambda device=None: (0, 1)
+oneshot(
+    model=model,
+    recipe=recipe,
+    output_dir=str(compressed_dir),
+)
+
+reloaded = AutoModelForCausalLM.from_pretrained(
+    compressed_dir, dtype=torch.float16
+).to(device)
+inputs = tokenizer("hello", return_tensors="pt").to(device)
+logits = reloaded(**inputs).logits
+qc = reloaded.config.quantization_config
+inner = getattr(qc, "quantization_config", qc)
+group0 = inner.config_groups["group_0"]
+print("weight_num_bits", group0.weights.num_bits)
+print("q_proj_quantized", hasattr(reloaded.model.layers[2].self_attn.q_proj, "quantization_scheme"))
+print("lm_head_quantized", hasattr(reloaded.lm_head, "quantization_scheme"))
+print("logits.dtype", logits.dtype)
 print("logits.device", logits.device)
 PY
 ```
+-->
 
-输出结果如下：
+运行：
+
+```shell #test id="oneshot-forward"
+python oneshot_forward.py
+```
+
+完整输出较长，其中应包含：
 
 ```shell #test-result id="oneshot-forward"
 ...
-LLM_COMPRESSOR_WORKLOAD_DEVICE=npu:0
 weight_num_bits 4
-targeted True
+q_proj_quantized True
 lm_head_quantized False
+logits.dtype torch.float16
 logits.device npu:0
 ```
 
----
+## 6. 官方文档
 
-
-
-## 故障排查
-
-
-| 现象                                                         | 可能原因                                      | 建议                                                                   |
-| ---------------------------------------------------------- | ----------------------------------------- | -------------------------------------------------------------------- |
-| `import torch` 报缺 `numpy` 或 `yaml`                         | `torch_npu` 未声明这两项依赖                      | 与 torch 栈一起安装 `numpy` `pyyaml`                                       |
-| `torch.npu.is_available()` 为 `False`                       | 未 `source set_env.sh`，或设备未挂进容器            | 重做第 1–2 节                                                            |
-| `logits.device` 为 `cpu` 但退出码 0                             | 静默 CPU 回退                                 | 检查 `.to("npu:0")` 与可见设备                                              |
-| 下载 `tinysmokeqwen3` 超时                                     | 直连 Hugging Face 慢                         | 设置 `HF_ENDPOINT=https://hf-mirror.com` 后重跑第 5 节                      |
-| pip 找不到 `torch_npu==2.10.0.post4`                          | 没用华为 extra-index                          | 用第 3 节的 `--extra-index-url`                                          |
-| pip 下载 `torch` wheel 很慢                                    | 直连 pypi.org                               | 设置 `PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple` 后重跑第 3 节 |
-| oneshot 量化完后报 `Allocator for npu is not a DeviceAllocator` | torch_npu 还不支持 `torch.accelerator` 显存 API | 用第 5 节里那两行空实现                                                        |
-
-
+- 上游仓库：[vllm-project/llm-compressor](https://github.com/vllm-project/llm-compressor)
+- 文档中心：[LLM Compressor Docs](https://docs.vllm.ai/projects/llm-compressor/en/latest/)
+- oneshot 与 RTN：[oneshot](https://docs.vllm.ai/projects/llm-compressor/en/latest/guides/entrypoints/oneshot)

@@ -1,4 +1,4 @@
-# Quick Start (Ascend NPU)
+# Diffusers
 
 在单卡昇腾 NPU 上跑通 [Diffusers](https://github.com/huggingface/diffusers) 文生图全链路：
 
@@ -26,7 +26,7 @@ Atlas 900 A2 / A3 训练系列产品或者 Ascend 950 系列产品，并按需�
 
 **配套机器**：
 
-- **机器类型**：Atlas 900 A2 PODc（Ascend 910B4，64 GB × 1）
+- **机器类型**：Atlas 900 A2 PODc（Ascend 910B4，64 GB × 2）
 - **操作系统**：Ubuntu 22.04
 
 **配套镜像**：
@@ -58,7 +58,7 @@ npu-smi info
 
 输出类似：
 
-```
+```text
 +------------------------------------------------------------------------------------------------+
 | npu-smi 25.5.2                   Version: 25.5.2                                               |
 +---------------------------+---------------+----------------------------------------------------+
@@ -68,14 +68,21 @@ npu-smi info
 | 0     910B4               | OK            | 89.9        39                0    / 0             |
 | 0                         | 0000:41:00.0  | 0           0    / 0          2922 / 32768         |
 +===========================+===============+====================================================+
+| 1     910B4               | OK            | 89.9        39                0    / 0             |
+| 1                         | 0000:42:00.0  | 0           0    / 0          2922 / 32768         |
++===========================+===============+====================================================+
 +---------------------------+---------------+----------------------------------------------------+
 | NPU     Chip              | Process id    | Process name             | Process memory(MB)      |
 +===========================+===============+====================================================+
 | No running processes found in NPU 0                                                            |
+| No running processes found in NPU 1                                                            |
 +===========================+===============+====================================================+
 ```
 
-> 如果 `npu-smi` 不存在，请回到 [Ascend 官方快速安装指南](https://ascend.github.io/docs/sources/ascend/quick_install.html) 补装驱动。
+```{admonition} Note
+:class: note
+如果 `npu-smi` 不存在，请回到 [Ascend 官方快速安装指南](https://ascend.github.io/docs/sources/ascend/quick_install.html) 补装驱动。
+```
 
 检查 Python 版本：
 
@@ -101,16 +108,17 @@ print('count:', torch.npu.device_count())
 
 输出结果如下：
 
-```shell #test-result id="check-torch" fuzzy='xxx'
+```shell #test-result id="check-torch"
 torch= 2.9.0+cpu
 torch_npu= 2.9.0.post2
 is_available: True
-count: xxx
+count: 2
 ```
 
-> xxx 表示容器内可见的 NPU 数量（本文档所有示例只用 1 张卡，即 device `npu:0`）
-
-> 如果 `import torch_npu` 失败，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查 torch / torch_npu / CANN 三方兼容矩阵。
+```{admonition} Note
+:class: note
+如果 `import torch_npu` 失败，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查 torch / torch_npu / CANN 三方兼容矩阵。
+```
 
 安装 `transformers` / `accelerate` / `peft` / `modelscope`：
 
@@ -137,7 +145,10 @@ peft xxx
 modelscope 1.37.0
 ```
 
-> `xxx` 表示实际安装的版本号。
+```{admonition} Note
+:class: note
+`xxx` 表示实际安装的版本号。
+```
 
 ## 安装 Diffusers
 
@@ -162,7 +173,10 @@ print('diffusers', diffusers.__version__)
 diffusers xxx
 ```
 
-> xxx 表示最新的版本号。
+```{admonition} Note
+:class: note
+xxx 表示最新的版本号。
+```
 
 <!--
 ```shell #test-setup
@@ -187,7 +201,10 @@ cd diffusers
 uv pip install -e .
 ```
 
-> `<ref>` 替换为 diffusers 当前的最新 release 版本。
+```{admonition} Note
+:class: note
+`<ref>` 替换为 diffusers 当前的最新 release 版本。
+```
 
 验证装上的版本(下面的命令用 Python 执行)：
 
@@ -202,7 +219,10 @@ print('diffusers', diffusers.__version__)
 diffusers xxx
 ```
 
-> xxx 表示最新 release 的版本号。
+```{admonition} Note
+:class: note
+xxx 表示最新 release 的版本号。
+```
 
 ## 使用样例
 
@@ -256,7 +276,10 @@ PY
 ls -l output/astronaut_rides_horse.png | awk '{print $5, $9}'
 ```
 
-> `<model_path>` 在运行时指向「下载基础模型」一节下载的 SD 1.5 模型缓存路径。
+```{admonition} Note
+:class: note
+`<model_path>` 在运行时指向「下载基础模型」一节下载的 SD 1.5 模型缓存路径。
+```
 
 输出结果如下（`...` 吞掉加载进度等前导日志，`xxx` 为实际文件字节数）：
 
@@ -290,7 +313,10 @@ PY
 ls -l output/astronaut_unipc.png | awk '{print $5, $9}'
 ```
 
-> `<model_path>` 在运行时指向「下载基础模型」一节下载的 SD 1.5 模型缓存路径。
+```{admonition} Note
+:class: note
+`<model_path>` 在运行时指向「下载基础模型」一节下载的 SD 1.5 模型缓存路径。
+```
 
 输出结果如下（`xxx` 为实际文件字节数）：
 
@@ -378,7 +404,10 @@ PY
 ls -l output/sd35_lora.png | awk '{print $5, $9}'
 ```
 
-> `<sd35_path>` / `<lora_path>` 在运行时分别指向「下载 SD 3.5 Large Turbo」「加载 LoRA」两节下载的基础模型与 LoRA 缓存路径。
+```{admonition} Note
+:class: note
+`<sd35_path>` / `<lora_path>` 在运行时分别指向「下载 SD 3.5 Large Turbo」「加载 LoRA」两节下载的基础模型与 LoRA 缓存路径。
+```
 
 输出结果类似（`xxx` 为实际文件字节数）：
 
@@ -416,7 +445,10 @@ PY
 ls -l output/sd35_offload.png | awk '{print $5, $9}'
 ```
 
-> `<sd35_path>` 在运行时指向「下载 SD 3.5 Large Turbo」一节下载的模型缓存路径。
+```{admonition} Note
+:class: note
+`<sd35_path>` 在运行时指向「下载 SD 3.5 Large Turbo」一节下载的模型缓存路径。
+```
 
 输出结果类似：
 
@@ -458,7 +490,10 @@ PY
 ls -l output/sd35_full.png | awk '{print $5, $9}'
 ```
 
-> `<sd35_path>` 在运行时指向「下载 SD 3.5 Large Turbo」一节下载的模型缓存路径。
+```{admonition} Note
+:class: note
+`<sd35_path>` 在运行时指向「下载 SD 3.5 Large Turbo」一节下载的模型缓存路径。
+```
 
 输出结果类似：
 

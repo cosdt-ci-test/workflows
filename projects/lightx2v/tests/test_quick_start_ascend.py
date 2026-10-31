@@ -1,4 +1,4 @@
-"""Quick-start-Ascend doc test for lightx2v (MarkdownDocTestBase contract)."""
+"""Quick-start-Ascend test: doc under test is projects/lightx2v/docs/Quick-start-Ascend.md."""
 
 from __future__ import annotations
 
@@ -12,10 +12,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
 
-from workflows.markdown_doc_test_base import (
-    MarkdownDocTestBase,
-    TestCommand,
-)
+from workflows.markdown_doc_test_base import MarkdownDocTestBase, TestCommand
 from workflows.model_cache import (
     ensure_safetensors,
     purge_modelscope_corrupt,
@@ -137,7 +134,6 @@ def _prepare_model_cache(cache_root: Path, download, log) -> None:
 
 
 class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
-
     DEFAULT_COMMAND_TIMEOUT = 3600
     USER_AGENT = 'cosdt-ci-test/quick-start'
     ERROR_MARKERS = (
@@ -241,6 +237,10 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 self._verify_output_video()
             return
         return super()._run_one(cmd, results, env, cwd, timeout, idx)
+
+    def pre_process(self) -> str:
+        doc = Path(__file__).resolve().parent.parent / 'docs' / 'Quick-start-Ascend.md'
+        return doc.read_text(encoding='utf-8')
 
     @classmethod
     def prepare_environment(cls) -> None:
@@ -461,4 +461,3 @@ class TestModelCacheGuard(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
-

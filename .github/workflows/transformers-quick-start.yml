@@ -20,7 +20,7 @@ permissions:
 
 env:
   UPSTREAM_REPO: huggingface/transformers
-  MONITORED_DOC_URL: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/transformers/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
+  MONITORED_DOC_URL: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/transformers/docs/Quick-start-Ascend.md
   GH_API: https://api.github.com
   CI_IMAGE: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 
@@ -87,7 +87,7 @@ jobs:
             exit 0
           fi
           release_json=$(curl -fsSL --retry 3 "$GH_API/repos/$UPSTREAM_REPO/releases/latest")
-          doc=$(curl -fsSL --retry 3 -H "Accept: application/vnd.github.raw" "$MONITORED_DOC_URL" | sha256sum | cut -d' ' -f1)
+          doc=$(curl -fsSL --retry 3 "$MONITORED_DOC_URL" | sha256sum | cut -d' ' -f1)
           release=$(echo "$release_json" | jq -r '.id // empty')
           release_tag=$(echo "$release_json" | jq -r '.tag_name // empty')
           changed=false; reason=; ref="$release_tag"

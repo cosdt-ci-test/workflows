@@ -40,7 +40,7 @@ on:
         type: string
         default: ''
       doc_url:
-        description: URL of the monitored quick-start doc at the triggering commit; the monitor hashes it and the test fetches the same URL. An optional {0} placeholder is filled with github.sha.
+        description: URL of the monitored quick-start doc; the monitor hashes it and the test fetches the same URL. Use {0} as placeholder for the upstream ref / PR head SHA (filled by the engine).
         type: string
         required: true
       doc_path:
@@ -151,9 +151,9 @@ jobs:
       # caller's inputs (caller env does not cross the `uses:` boundary).
       UPSTREAM_REPO: ${{ inputs.upstream_repo }}
       FIXED_REF: ${{ inputs.fixed_ref }}
-      # Resolve an optional {0} to the triggering commit, matching checkout.
-      # Explicit github.sha URLs in callers already select that same commit.
-      MONITORED_DOC_URL: ${{ format(inputs.doc_url, github.sha) }}
+      # {0} in doc_url is filled by the engine: PR head SHA on PR runs,
+      # 'main' otherwise.
+      MONITORED_DOC_URL: ${{ format(inputs.doc_url, github.event_name == 'pull_request' && github.event.pull_request.head.sha || 'main') }}
       GH_TOKEN: ${{ github.token }}
       GH_API: https://api.github.com
       UV_INDEX_URL: "http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple"

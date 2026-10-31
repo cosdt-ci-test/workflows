@@ -14,38 +14,6 @@ scan:
 # transformers>=5.x，任何 transformers<5.x 的用例都无法跑通
 
 supported:
-  - path: examples/dreambooth/train_dreambooth_lora_bria_fibo2.py
-    profile: diffusers-bria-fibo2
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --pretrained_model_name_or_path ${BRIA_FIBO2_MODEL_PATH}
-      - --instance_data_dir ${FIXTURE_DIR}/images
-      - --instance_prompt "a photo of sks dog"
-      - --output_dir ${CI_OUTPUT_DIR}
-      - --train_batch_size 1
-      - --gradient_checkpointing
-      - --offload
-      - --mixed_precision bf16
-      - --max_train_steps 1
-    timeout_minutes: 600
-
-  - path: examples/dreambooth/train_dreambooth_lora_bria_fibo2_img2img.py
-    profile: diffusers-bria-fibo2
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --pretrained_model_name_or_path ${BRIA_FIBO2_MODEL_PATH}
-      - --dataset_name ${BRIA_FIBO2_DATASET}
-      - --cond_image_column cond_image
-      - --instance_prompt "a photo of sks dog"
-      - --output_dir ${CI_OUTPUT_DIR}
-      - --train_batch_size 1
-      - --gradient_checkpointing
-      - --offload
-      - --mixed_precision bf16
-      - --max_train_steps 1
-    timeout_minutes: 300
   # # ${...} 由 setup_example.sh 预下后写入 GITHUB_ENV：
   # #   ${SD15_MODEL_PATH} / ${THREE_D_ICON_PATH} <- profile diffusers-sd15
   # # SDXL 模型直接走 stabilityai/stable-diffusion-xl-base-1.0 在线加载。
@@ -1084,6 +1052,9 @@ unsupported:
   # 而 NPU 的 matmul(linear) 未实现前向 AD → NotImplementedError
   # 回归条件：torch_npu 补 matmul 的前向 AD，或上游提供非 jvp 的蒸馏实现
   - examples/research_projects/sana/train_sana_sprint_diffusers.py
+  # bria fibo-2：RoPE 的 complex64 索引在 NPU 未实现（aclnnIndex 不支持 DT_COMPLEX64）
+  - examples/dreambooth/train_dreambooth_lora_bria_fibo2.py
+  - examples/dreambooth/train_dreambooth_lora_bria_fibo2_img2img.py
   # ===== 代码BUG ==========================================================
   # 这些用例存在明确的代码缺陷，修复后可恢复：
   # autoencoderkl：final validation 用 AutoencoderKL.from_pretrained(output_dir)

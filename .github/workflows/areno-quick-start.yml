@@ -18,8 +18,9 @@
 # kvcache 在 NPU graph capture 下做同步 aclrtMemcpy，报 CANN 107030 杀掉
 # rollout worker）；serve 另限 --max-running-prompts 2（默认 16 × 32k KV 池
 # 约 60 GB 会 OOM）。
-# 两条腿都只挂 davinci0：文档是单卡示例，check-torch 预期 count: 1；a3 池
-# 没有 1 卡机（最小 a3-800i-2），靠容器裁剪把可见卡数固定为 1。
+# 两条腿都只挂 davinci0 控制设备访问；可见卡数由测试侧
+# ASCEND_RT_VISIBLE_DEVICES=0 固定为 1（a3 上容器 /dev 裁剪不影响驱动级
+# 枚举，a3-800i-2 会数出 2 张卡），对齐文档 check-torch 的 count: 1。
 name: areno-quick-start
 
 concurrency:
@@ -79,8 +80,9 @@ jobs:
     with:
       project: areno
       machine_type: a3
-      # Atlas 900 A3（Ascend 910C）。池内最小 2 卡机（没有 1 卡 a3），靠
-      # container_options 只挂 davinci0 把容器裁成单卡，对齐文档 count: 1。
+      # Atlas 900 A3（Ascend 910C）。池内最小 2 卡机（没有 1 卡 a3）；容器
+      # /dev 裁剪不影响驱动级卡数枚举，单卡可见性由测试侧
+      # ASCEND_RT_VISIBLE_DEVICES=0 保证（对齐文档 count: 1）。
       test_runner: '["linux-aarch64-a3-800i-2"]'
       # 与 a2 腿同 CANN 9.0.0 + py3.11，只换机型。
       image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-a3-ubuntu22.04-py3.11

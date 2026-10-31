@@ -114,7 +114,17 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 f'setup: skipping CANN env source ({cls._CANN_SET_ENV} not present)'
             )
 
-        # 1) HF hub via hf-mirror: the doc's ``areno train`` resolves
+        # 1) Single-card visibility: the doc is single-card and check-torch
+        # expects ``count: 1``. Mounting only /dev/davinci0 into the
+        # container does not change device_count() on the a3 runners -
+        # aclrt enumerates through the host driver, which sees every card
+        # (a3-800i-2 -> count: 2). ASCEND_RT_VISIBLE_DEVICES is the
+        # runtime-level filter that holds on every machine generation; the
+        # doc's train/serve blocks already set it to 0 explicitly, this
+        # extends the same visibility to the whole test process.
+        os.environ.setdefault('ASCEND_RT_VISIBLE_DEVICES', '0')
+
+        # 2) HF hub via hf-mirror: the doc's ``areno train`` resolves
         # Qwen/Qwen3-0.6B and openai/gsm8k through huggingface_hub, which
         # defaults to huggingface.co - unreachable from the runners (503).
         # Xet disabled: hf-mirror 302s Xet-backed files to
@@ -122,7 +132,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         os.environ.setdefault('HF_ENDPOINT', 'https://hf-mirror.com')
         os.environ.setdefault('HF_HUB_DISABLE_XET', '1')
 
-        # 2) uv: the doc's install blocks use ``uv pip install -e .``, which
+        # 3) uv: the doc's install blocks use ``uv pip install -e .``, which
         # handles PEP 517 build deps (and flash-linear-attention's git
         # direct reference) more reliably than pip. Inherits
         # ``PIP_INDEX_URL`` + ``PIP_TRUSTED_HOST`` from the yml job-level env

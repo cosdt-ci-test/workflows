@@ -221,7 +221,75 @@ gmake: *** [Makefile:576: opencv_dnn] Error 2
 
 > 同一份 5.0.0 + 窄 op 头源码在 **Debug（-O0）** 下 `.text` = 31,641,392 B（≈30.2 MiB）、库文件 252,232,064 B —— Debug 的 `.text` 更大、调试信息更多，但**仍在 ±128 MiB 窗口内**。窄 op 头是 5.0 唯一能过链接这一关的路子，与优化级别无关。
 
-## 4. 最小补丁集（两段脚本）
+## 4. 前置条件
+
+### 硬件
+
+Atlas 900 A2 / A3 训练系列产品或 Ascend 950 系列，已挂载 `/dev/davinci*`。
+
+### 软件（必须已就绪）
+
+- Python 3.12
+- CANN toolkit（参见 [Ascend 官方快速安装](https://ascend.github.io/docs/sources/ascend/quick_install.html)），`npu-smi info` 能列出设备
+- 可访问 GitHub（clone + 下载模型）
+
+> `opencv-python`（pip wheel）**不带** CANN 后端，必须从源码构建，`cv2.dnn.DNN_BACKEND_CANN` 才会链到真后端。
+
+### 本文示例使用的版本
+
+| 项目 | 值 |
+| --- | --- |
+| 机器 | Atlas 900 A2 PODc（910B4） |
+| OS | Ubuntu 22.04.5 arm64 |
+| CANN toolkit | **9.2.0**（`/usr/local/Ascend/ascend-toolkit/latest`）；CI 镜像里是 9.1.0，两者的库目录布局差异见「桥接 CANN 的库目录」 |
+| Python / CMake / GCC | 3.12.15 / 3.22.1 / 11.4.0 |
+| OpenCV | **5.0.0**（源码，`WITH_CANN=ON`，`CMAKE_BUILD_TYPE=Release`，**2 组补丁**） |
+| opencv_contrib | **不编**（本文不覆盖 `cv2.cann`）|
+
+### 前置安装
+
+确认能看到 NPU 设备：
+
+```shell
+npu-smi info
+```
+
+> 如果 `npu-smi` 不存在，按官方快速安装指南补装驱动。
+
+检查 Python / CMake：
+
+```shell #test id="ocv5m-check-toolchain"
+python --version
+cmake --version | head -n 1
+```
+
+输出结果如下：
+```shell #test-result id="ocv5m-check-toolchain" fuzzy='xxx'
+Python 3.12.xxx
+cmake version xxx
+```
+
+加载 CANN 环境变量（每个用到 CANN 变量的块都要自己 `source`）：
+
+```shell #test-setup
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
+export PATH=/usr/local/sbin:$PATH
+```
+
+## 5. 装编译依赖 + clone 源码
+
+```shell #test-setup
+sed -i 's|http://ports.ubuntu.com/ubuntu-ports/|https://mirrors.aliyun.com/ubuntu-ports/|g' /etc/apt/sources.list
+apt-get update -qq && apt-get install -y -qq git build-essential cmake pkg-config zlib1g-dev libjpeg-dev libpng-dev libtiff-dev
+```
+
+```shell #test-setup
+git clone --depth 1 --branch 5.0.0 https://github.com/opencv/opencv.git
+```
+
+## 6. 最小补丁集（两段脚本）
+
+> 打补丁的前提是**已经 clone 出源码树**（§5 刚做完的事）—— 两段脚本都按相对路径 `opencv/modules/dnn/src/...` 定位文件，跑在源码树根目录。
 
 两段都是**幂等**的：重复跑会打印 `already patched` 并跳过，中途失败可以直接重跑。
 
@@ -374,69 +442,6 @@ grep -rl "built-in/op_proto/inc/" opencv/modules/dnn/src/layers/ | wc -l
 
 > `grep -c "cv::MatShape"` 是 **1**：上游的 `std::vector<int>` 声明不动，只多一行重载声明。
 
-## 5. 前置条件
-
-### 硬件
-
-Atlas 900 A2 / A3 训练系列产品或 Ascend 950 系列，已挂载 `/dev/davinci*`。
-
-### 软件（必须已就绪）
-
-- Python 3.12
-- CANN toolkit（参见 [Ascend 官方快速安装](https://ascend.github.io/docs/sources/ascend/quick_install.html)），`npu-smi info` 能列出设备
-- 可访问 GitHub（clone + 下载模型）
-
-> `opencv-python`（pip wheel）**不带** CANN 后端，必须从源码构建，`cv2.dnn.DNN_BACKEND_CANN` 才会链到真后端。
-
-### 本文示例使用的版本
-
-| 项目 | 值 |
-| --- | --- |
-| 机器 | Atlas 900 A2 PODc（910B4） |
-| OS | Ubuntu 22.04.5 arm64 |
-| CANN toolkit | **9.2.0**（`/usr/local/Ascend/ascend-toolkit/latest`）；CI 镜像里是 9.1.0，两者的库目录布局差异见「桥接 CANN 的库目录」 |
-| Python / CMake / GCC | 3.12.15 / 3.22.1 / 11.4.0 |
-| OpenCV | **5.0.0**（源码，`WITH_CANN=ON`，`CMAKE_BUILD_TYPE=Release`，**2 组补丁**） |
-| opencv_contrib | **不编**（本文不覆盖 `cv2.cann`）|
-
-### 前置安装
-
-确认能看到 NPU 设备：
-
-```shell
-npu-smi info
-```
-
-> 如果 `npu-smi` 不存在，按官方快速安装指南补装驱动。
-
-检查 Python / CMake：
-
-```shell #test id="ocv5m-check-toolchain"
-python --version
-cmake --version | head -n 1
-```
-
-输出结果如下：
-```shell #test-result id="ocv5m-check-toolchain" fuzzy='xxx'
-Python 3.12.xxx
-cmake version xxx
-```
-
-加载 CANN 环境变量（每个用到 CANN 变量的块都要自己 `source`）：
-
-```shell #test-setup
-source /usr/local/Ascend/ascend-toolkit/set_env.sh
-export PATH=/usr/local/sbin:$PATH
-```
-
-## 6. 装编译依赖 + clone 源码
-
-```shell #test-setup
-sed -i 's|http://ports.ubuntu.com/ubuntu-ports/|https://mirrors.aliyun.com/ubuntu-ports/|g' /etc/apt/sources.list
-apt-get update -qq && apt-get install -y -qq git build-essential cmake pkg-config zlib1g-dev libjpeg-dev libpng-dev libtiff-dev
-git clone --depth 1 --branch 5.0.0 https://github.com/opencv/opencv.git
-```
-
 ## 7. 桥接 CANN 的库目录
 
 OpenCV 的 `OpenCVFindCANN.cmake` 在 `${CANN_INSTALL_DIR}/{acllib,lib64,compiler/lib64}/` 下找 ACL 库：
@@ -449,8 +454,8 @@ OpenCV 的 `OpenCVFindCANN.cmake` 在 `${CANN_INSTALL_DIR}/{acllib,lib64,compile
 
 这三个位置在 CANN 里都不叫这三个名字，所以要补软链。**统一指向「完整版 CANN 库目录」**：
 
-- CANN 9.1.x：`<CANN>/lib64` 不存在，完整库目录是 `<CANN>/aarch64-linux/lib64`；
-- CANN 9.2.x：`<CANN>/lib64` 已经是指向 `aarch64-linux/lib64` 的软链（同一批库）。
+- `<CANN>/lib64` **就是**完整版库目录（`libascendcl.so` / `libgraph.so` / `libacl_op_compiler.so` 都在里面）。它的**形态**随版本和安装方式不同：CI 镜像的 CANN 9.1.0 里是真实目录，npu-4 上的 CANN 9.2.0 里是指向 `aarch64-linux/lib64` 的软链 —— 两种形态下都是同一批库；
+- 万一某个安装形态里连 `<CANN>/lib64` 都没有，完整库目录在 `<CANN>/aarch64-linux/lib64`，下面的 setup 会补一条软链。
 
 注意 **不要**指向 `<CANN>/aarch64-linux/devlib/linux/aarch64/` —— 那是裁剪过的设备侧运行时（`libgraph.so` 只有 198 KB，少了 `ge::AscendString` 的比较运算符，链接期报 `undefined reference to 'ge::AscendString::operator<(...)'`）。
 
@@ -473,8 +478,9 @@ xxx
 
 ```shell #test-setup
 CANN_DIR=/usr/local/Ascend/ascend-toolkit/latest
-# CANN 9.1 没有 <CANN>/lib64，补一条指向 aarch64-linux/lib64 的软链；
-# CANN 9.2 已经有了（本身就是 aarch64-linux/lib64 的软链），不动它。
+# <CANN>/lib64 已经是完整版库目录时不动它（CI 镜像的 CANN 9.1.0 是真实目录，
+# npu-4 的 CANN 9.2.0 是指向 aarch64-linux/lib64 的软链）；
+# 万一某个形态里没有，补一条指向 aarch64-linux/lib64 的软链。
 [ -e "$CANN_DIR/lib64" ] || ln -sfn "$CANN_DIR/aarch64-linux/lib64" "$CANN_DIR/lib64"
 mkdir -p "$CANN_DIR/acllib" "$CANN_DIR/compiler"
 ln -sfn "$CANN_DIR/lib64" "$CANN_DIR/acllib/lib64"
@@ -819,7 +825,7 @@ NPU 与 CPU 的 score 末位差 ~5e-4 —— 同一张图、同一份权重在�
 - **经典引擎 + CANN 后端的能力边界**（与 4.x 相同，不是 5.0 引入的）：只吃 **fp32**（连 fp16 都不行）、**拒绝 int8 量化网**（5.0 还把 `Net quantize` 入口删了）、**不支持的层回落 CPU 而不是报错**（所以「上了 NPU」≠「全图在 NPU」）、后端/目标不可再切（`DNN: Can't switch backend from CANN to other`）。
 - **本文不编 contrib**：`cv2.cann.*` 那 23 个经典算子（`cvtColor` / `threshold` / 算术 / `resize` / `crop` …）在本文的路线里**不存在**。要用它们请走主文档（3 组补丁）。
 - **`all_ops.h` 链接窗口是硬约束**：aarch64 的 `R_AARCH64_CALL26/JUMP26` 只有 ±128 MiB 跨度，缩 `.text` 只是缓解、不是保证；5.0 上过这一关只有窄 op 头一条路。
-- **补丁只对 5.0.x 成立**：`cv::MatShape` 是 5.0 引入的类型，4.x 源码树里根本没有它；上游一旦出 5.1/6.0，§4 的脚本会断言失败（这是设计好的失败方式，不是 bug）。
-- **别等上游修 5.x 的 CANN**：上游 CI 里 CANN 只挂在 `opencv_contrib` 的 4.x 分支上，而且是 `category: cann` 标签门控的 opt-in 通道；`opencv/opencv` 自己的 4.x / 5.x PR CI **都没有 CANN 那一格**（§1.4 ②）。所以 5.x 的 CANN 后端在上游是**既不编译、也不报错**的状态 —— §4 这套补丁得自己维护。
+- **补丁只对 5.0.x 成立**：`cv::MatShape` 是 5.0 引入的类型，4.x 源码树里根本没有它；上游一旦出 5.1/6.0，§6 的脚本会断言失败（这是设计好的失败方式，不是 bug）。
+- **别等上游修 5.x 的 CANN**：上游 CI 里 CANN 只挂在 `opencv_contrib` 的 4.x 分支上，而且是 `category: cann` 标签门控的 opt-in 通道；`opencv/opencv` 自己的 4.x / 5.x PR CI **都没有 CANN 那一格**（§1.4 ②）。所以 5.x 的 CANN 后端在上游是**既不编译、也不报错**的状态 —— §6 这套补丁得自己维护。
 - **CANN 9.2 的裁剪版 `libgraph.so`**：把 CANN 软链指向 `<CANN>/lib64` 而不是 `<CANN>/aarch64-linux/devlib/linux/aarch64/`，否则链接期报 `undefined reference to 'ge::AscendString::operator<(...)'`。这条与 OpenCV 版本无关。
 - **`videoio` 编了但没有编解码器**：源码构建默认不带 FFmpeg/GStreamer；本文未把视频写入列为必过项。

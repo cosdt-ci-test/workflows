@@ -40,15 +40,17 @@
 
 ## 1. 结论一：原始 5.0.0 零补丁 = 编译失败（实测）
 
-### 1.1 根因：上游 CANN 后端的 shape 签名在 4.11 → 5.0.0 之间一行没改
+### 1.1 根因：`cv::dnn::MatShape` 从「`std::vector<int>` 的别名」变成了 core 里的独立 class
 
 | | 4.14.0 | 5.0.0 |
 | --- | --- | --- |
-| `modules/dnn/src/op_cann.hpp` 的 md5 | `4034857fe5da06aad27b8ae264a04fc7` | `4034857fe5da06aad27b8ae264a04fc7` |
-| 字节数 | 4446 | 4446 |
+| `cv::dnn::MatShape` 是什么 | `typedef std::vector<int>;`（`modules/dnn/include/opencv2/dnn/dnn.hpp:64`） | **这行 typedef 没了** —— `cv::dnn::MatShape` 于是解析到 core 的新 class `cv::MatShape` |
+| `cv::MatShape`（core） | **不存在** | `modules/core/include/opencv2/core/mat.hpp` 里的新 struct |
+| `shape(mat)` 返回什么 | `MatShape` = `std::vector<int>`（`dnn/shape_utils.hpp:126`） | `cv::MatShape`（同一个文件，同一行） |
+| `modules/dnn/src/op_cann.hpp` 的 md5 | `4034857fe5da06aad27b8ae264a04fc7` | `4034857fe5da06aad27b8ae264a04fc7`（**逐字节相同**） |
 | `CannConstOp` 构造函数签名 | `CannConstOp(const uint8_t* data, const int dtype, const std::vector<int>& shape, const std::string& name)` | **完全相同** |
 
-**逐字节相同**（上游 CANN 后端这 5 个版本没动过一行）。而 OpenCV 5.0 把 dnn 层的 shape 换成了 `cv::MatShape`：
+5.0 的 core 里新增了这个 class：
 
 ```cpp
 // modules/core/include/opencv2/core/mat.hpp（5.0.0）
@@ -63,9 +65,11 @@ struct CV_EXPORTS_W_SIMPLE MatShape
 };
 ```
 
-`cv::MatShape` 是 **`explicit`** 构造、**没有 `front()`**、也不能从 `std::vector<int>` 赋值 —— 于是 5.0 的 dnn 层代码（`shape(mat)` 现在返回 `cv::MatShape`）与上游 CANN 后端的 `std::vector<int>` 构造**接不上**。
+这个 class 是 **`explicit`** 构造、**不能**隐式转成 `std::vector<int>`、**没有 `front()`** —— 而 4.x 的 `MatShape` 因为本来就是 `std::vector<int>`，三样全有（`front()` 是 vector 的，`std::vector<int>` → `const std::vector<int>&` 是免费的）。
 
-> 4.14.0 也有 `cv::MatShape`（4.x 就有），但 4.x 的 dnn 层代码里 `shape(mat)` 返回的还是 `std::vector<int>`，所以两边正好错开、编译得过。**这不是 5.0 引入的 bug，是上游 CANN 后端从 4.11 起就没跟上 OpenCV 的类型演进。**
+所以 4.x 那句 `CannConstOp(B.data, B.type(), shape(B), ...)` 传的是 `std::vector<int>`，**天然匹配**；5.0 的同一句传的是 `cv::MatShape`，与上游 2023 年就冻结的 `const std::vector<int>&` 签名**接不上**。
+
+> **这不是 5.0 引入的 bug，是上游 CANN 后端在类型演进掉队了。** `modules/dnn/src/op_cann.hpp` 上游最后一次改动是 **2023-07-27**（`ab6bffc6f`）；等到 2024-10 的 5.0 DNN 重写（PR #26056 `new_dnn_engine`，合并于 `3cd57ea09`）把 `typedef std::vector<int> MatShape;` 从 `dnn.hpp` 里删掉时，CANN 那侧一个字都没跟着改。
 
 ### 1.2 编译错误原文（实测）
 
@@ -105,6 +109,38 @@ gmake: *** [Makefile:576: opencv_dnn] Error 2
 其余 34 个 TU 不受影响 —— 它们要么不碰 `CannConstOp`，要么只用 `std::vector<int>` 的路径。
 
 **所以第 1 组补丁只需要改 4 个文件**：`op_cann.hpp`（加重载声明）、`op_cann.cpp`（加重载转发）、`gemm_layer.cpp` / `matmul_layer.cpp`（修 2 处 `std::vector<int>` 赋值 + 2 处 `.front()`）。
+
+### 1.4 上游为什么没发现：4→5 迁移指南没写这段，5.x 也没有 CANN CI
+
+两件事叠加，导致「5.0 + `WITH_CANN=ON` 编不过」这件事**上游至今没有一条 issue**（`gh api search/issues -f q='repo:opencv/opencv CANN 5.0 build'` 只命中 1 条无关的 "Introducing non-CPU HAL for OpenCV 5+"）。
+
+**① 上游有 4.x→5.x 迁移指南，但它没覆盖这件事。**
+
+`https://raw.githubusercontent.com/wiki/opencv/opencv/OpenCV-4-to-5-migration.md`（553 行）里 **`cann` / `ascend` / `npu` 零命中**（唯一一条 "npu" 命中是 "i**npu**tArray"）。它的 "MatShape replaces MatSize" 一节讲的是 **core 里 `MatSize` → `MatShape`**，并且明确安抚：
+
+> `MatSize` has been replaced by `MatShape` … The legacy `m.size` accessor continues to work as before; `MatSize` is available as an alias for source compatibility.
+
+它**从头到尾没提 `cv::dnn::MatShape` 那个 `typedef std::vector<int>` 被删了** —— 而真正炸掉 CANN 后端的正是这一刀。这份指南是写给「用 OpenCV API 的人」的，不是写给「后端适配层」的。
+
+**② 上游的 CANN CI 只挂在 4.x 上。**
+
+`opencv/ci-gha-workflow` 仓库里带 CANN 的 workflow **只有一个**：
+
+```
+OCV-Contrib-PR-4.x-O22-CANN.yaml     # extra_cmake_options: -DWITH_CANN=ON
+```
+
+5.x 一个都没有（`gh api repos/opencv/ci-gha-workflow/contents/.github/workflows | jq '.[].name' | grep -i cann` 只有上面这一条）。而 `#ifdef HAVE_CANN` 那段代码**只有 `-DWITH_CANN=ON` 才会被编译** —— 上游 5.0 的 CI 从不打开这个开关，那 39 个 TU 在上游的 CI 里**根本没被编译过**。
+
+> 同一个坑在 4.x 也踩过：#26175「CANN build is broken」、#26630/#26631「code compile error with CANN on」，都是 `WITH_CANN=ON` 才暴露的编译错误，最后由 #26632 修掉。**CANN 后端在上游是「不参与 CI 的二等公民」** —— 它能活下来靠的是华为工程师手把手提 PR，不是一条 CI。
+
+**③ 迁移指南确实说对了一件事。**
+
+它 §5 DNN 的 "New default engine" 写着：
+
+> The new engine currently runs on **CPU only**. If you rely on GPU inference, force the classic engine …
+
+以及 `OPENCV_FORCE_DNN_ENGINE=1` 就是经典引擎（本文 §10.1 用的就是这个）。但它把话说成 **GPU** —— 对昇腾用户来说，5.0 的新图引擎不是「慢一点」，而是 `setPreferableBackend(DNN_BACKEND_CANN)` **静默失效**（只打 2 条 WARN 就把模型留在 CPU，见 §10.1）。这一点迁移指南里没有任何提示。
 
 ## 2. 结论二：只打第 1 组（MatShape 适配）还不够
 

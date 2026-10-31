@@ -687,7 +687,7 @@ def _fail(msg):
 
 
 # 「这次真的上了 NPU」的硬证据 —— top-1=372 证明不了：同一份构建走默认
-# CPU 引擎也是 372。层数也一起数：5.0 经典引擎实测 103 层转 CANN 算子。
+# CPU 引擎也是 372。层数也一起数：5.0 经典引擎实测 124 层转 CANN 算子。
 CANN_MARKERS = (
     'DNN/CANN: converting ge::Graph to OM buffer',  # 逐层转完，开始编 OM
     'Compile success, model size = ',               # GE 图编译成功

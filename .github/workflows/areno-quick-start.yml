@@ -1,19 +1,25 @@
 # areno quick start 看护 - 项目薄触发器。
-# 调用公共引擎 quick-start-template.yml；这里只声明项目差异（并发、runner、
+# 调用公共引擎 quick-start-template.yml（a2/a3 各一腿，结果用
+# merge-quick-start-results 合并）；这里只声明项目差异（并发、runner、
 # 镜像、容器选项、upstream、被看护文档、测试命令）。
 #
 # AReno（inclusionAI）：单机 RL post-training 工具包（SFT/DPO/GRPO/GSPO/PPO +
 # OpenAI 兼容 serving）。NPU 栈：CANN 9.0.0 + torch 2.10.0+cpu + torch_npu
-# 2.10.0.post2，故用 9.0.0 镜像（非多数项目用的 9.1.0）。文档从引擎解析到的最新
-# release（v0.9.0 已带 NPU）源码安装：安装器检测到 torch_npu 后走
-# requirements/npu.txt，并现场编译 areno.accel._areno_accel_npu（Ascend C，无
-# Python 回退），timeout 覆盖整次源码构建。
-# 文档内容：单卡 GSPO-on-GSM8K 1 步 RLVR（Qwen3-0.6B，ModelScope）落 checkpoint，
-# 再 areno serve --backend npu 该 checkpoint，检查 /health + /v1/models +
-# /v1/chat/completions。Qwen3-0.6B bf16 约 1.2 GB，单卡 a2-1 足够。训练与推理都
-# 用 --attn-backend native（flash-attn-npu 0.3.0 的 kvcache 在 NPU graph capture
-# 下做同步 aclrtMemcpy，报 CANN 107030 杀掉 rollout worker）；serve 另限
-# --max-running-prompts 2（默认 16 × 32k KV 池约 60 GB 会 OOM）。
+# 2.10.0.post2，故用 9.0.0 镜像（非多数项目用的 9.1.0）；a3 腿用同 CANN 同
+# Python 的 a3 镜像，只换机型。文档从引擎解析到的最新 release（v0.9.0 已带
+# NPU）源码安装：安装器检测到 torch_npu 后走 requirements/npu.txt，并现场编译
+# areno.accel._areno_accel_npu（Ascend C，无 Python 回退），timeout 覆盖整次
+# 源码构建。
+# 文档内容：单卡 GSPO-on-GSM8K 1 步 RLVR（Qwen3-0.6B，HuggingFace Hub；runner
+# 直连 huggingface.co 会 503，测试侧 prepare_environment 设 HF_ENDPOINT 走
+# hf-mirror）落 checkpoint，再 areno serve --backend npu 该 checkpoint，检查
+# /health + /v1/models + /v1/chat/completions。Qwen3-0.6B bf16 约 1.2 GB，
+# 单卡足够。训练与推理都用 --attn-backend native（flash-attn-npu 0.3.0 的
+# kvcache 在 NPU graph capture 下做同步 aclrtMemcpy，报 CANN 107030 杀掉
+# rollout worker）；serve 另限 --max-running-prompts 2（默认 16 × 32k KV 池
+# 约 60 GB 会 OOM）。
+# 两条腿都只挂 davinci0：文档是单卡示例，check-torch 预期 count: 1；a3 池
+# 没有 1 卡机（最小 a3-800i-2），靠容器裁剪把可见卡数固定为 1。
 name: areno-quick-start
 
 concurrency:
@@ -32,12 +38,13 @@ permissions:
   contents: read
 
 jobs:
-  areno-quick-start:
+  qs-a2:
     uses: ./.github/workflows/quick-start-template.yml
     with:
-      # 命名 cache key（quick-start-monitor-state-areno_*）、artifact
-      # （areno-quick-start-<run_id>）与测试工作目录（workflows/projects/areno）。
+      # 命名 cache key（quick-start-monitor-state-areno-a2_*）、artifact
+      # （areno-quick-start-<run_id>-a2）与测试工作目录（workflows/projects/areno）。
       project: areno
+      machine_type: a2
       # 测试 job 用自托管 NPU runner；cache I/O job 由引擎固定在 ubuntu-latest。
       # 单卡即可：文档冒烟是 Qwen3-0.6B、--tp-size 1 --world-size 1。
       test_runner: '["linux-aarch64-a2-1"]'
@@ -53,7 +60,7 @@ jobs:
         --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
         --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
         --volume=/data/ci-cache/modelscope/areno:/root/.cache/modelscope
-      # 整次源码构建 + 首次 ModelScope 下载（Qwen3-0.6B ~1.2 GB + gsm8k）+
+      # 整次源码构建 + 首次模型/数据集下载（Qwen3-0.6B ~1.2 GB + gsm8k）+
       # 1 步 RLVR 冒烟 + serve 启停/对话。
       timeout_minutes: 240
       upstream_repo: inclusionAI/AReno
@@ -64,5 +71,47 @@ jobs:
       doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/areno/docs/Quick-start-Ascend.md
       # cwd 是 workflows/projects/areno；环境契约（MONITORED_DOC_URL / UPSTREAM_REF
       # / NPU_READY）由引擎注入。项目侧的环境与安装都写在文档块里，测试类只搭 CANN
-      # 环境 + uv。
+      # 环境 + hf-mirror + uv。
       test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1
+
+  qs-a3:
+    uses: ./.github/workflows/quick-start-template.yml
+    with:
+      project: areno
+      machine_type: a3
+      # Atlas 900 A3（Ascend 910C）。池内最小 2 卡机（没有 1 卡 a3），靠
+      # container_options 只挂 davinci0 把容器裁成单卡，对齐文档 count: 1。
+      test_runner: '["linux-aarch64-a3-800i-2"]'
+      # 与 a2 腿同 CANN 9.0.0 + py3.11，只换机型。
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-a3-ubuntu22.04-py3.11
+      container_options: >-
+        --shm-size=64g
+        --device=/dev/davinci0
+        --device=/dev/davinci_manager
+        --device=/dev/devmm_svm
+        --device=/dev/hisi_hdc
+        --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
+        --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
+        --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
+        --volume=/data/ci-cache/modelscope/areno:/root/.cache/modelscope
+      timeout_minutes: 240
+      upstream_repo: inclusionAI/AReno
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/areno/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/areno/docs/Quick-start-Ascend.md
+      test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1
+
+  merge:
+    needs: [qs-a2, qs-a3]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout workflows (provides the merge action)
+        uses: actions/checkout@v6
+      - name: Merge per-machine results into one artifact
+        uses: ./.github/actions/merge-quick-start-results
+        with:
+          project: areno
+          result_a2: ${{ needs.qs-a2.outputs.result_json }}
+          result_a3: ${{ needs.qs-a3.outputs.result_json }}
+          name_a2: qs-a2
+          name_a3: qs-a3

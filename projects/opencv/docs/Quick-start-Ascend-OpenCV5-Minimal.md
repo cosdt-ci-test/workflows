@@ -122,17 +122,33 @@ gmake: *** [Makefile:576: opencv_dnn] Error 2
 
 它**从头到尾没提 `cv::dnn::MatShape` 那个 `typedef std::vector<int>` 被删了** —— 而真正炸掉 CANN 后端的正是这一刀。这份指南是写给「用 OpenCV API 的人」的，不是写给「后端适配层」的。
 
-**② 上游的 CANN CI 只挂在 4.x 上。**
+**② 上游的 CANN CI 只挂在 4.x 上，而且是「标签门控」的 opt-in 通道。**
 
-`opencv/ci-gha-workflow` 仓库里带 CANN 的 workflow **只有一个**：
+先把 CI 的调用关系摊开（2026-10-31 实测，`opencv/ci-gha-workflow` 共 71 个 workflow）：
+
+| 仓库 / 分支 | PR CI 里有没有 CANN |
+| --- | --- |
+| `opencv/opencv` **4.x**（`PR-4.x.yaml`，12 个 job） | **没有** |
+| `opencv/opencv` **5.x**（`PR-5.x.yaml`，12 个 job） | **没有** |
+| `opencv/opencv_contrib` **4.x**（`PR-4.x.yaml`） | 有，但 **`if: contains(github.event.pull_request.labels.*.name, 'category: cann')`** —— 只有打了 `category: cann` 标签的 PR 才跑 |
+| `opencv/opencv_contrib` **5.x**（`PR-5.x.yaml`） | **没有** |
+
+`opencv/ci-gha-workflow` 里带 CANN 的 workflow **只有一个**：
 
 ```
 OCV-Contrib-PR-4.x-O22-CANN.yaml     # extra_cmake_options: -DWITH_CANN=ON
+                                        runs-on: opencv-cn-openeuler-ascend310-x86-64
 ```
 
-5.x 一个都没有（`gh api repos/opencv/ci-gha-workflow/contents/.github/workflows | jq '.[].name' | grep -i cann` 只有上面这一条）。而 `#ifdef HAVE_CANN` 那段代码**只有 `-DWITH_CANN=ON` 才会被编译** —— 上游 5.0 的 CI 从不打开这个开关，那 39 个 TU 在上游的 CI 里**根本没被编译过**。
+它自己的 `on:` 只有 `pull_request`（且 `paths:` 限死为「这个文件自己」）+ `workflow_call`，而**全仓唯一调用它的是 `opencv/opencv_contrib` 的 `PR-4.x.yaml`** —— 也就是说 `opencv/opencv` 自己的 PR（4.x、5.x 都算）**结构上就不编译 CANN 后端**。
 
-> 同一个坑在 4.x 也踩过：#26175「CANN build is broken」、#26630/#26631「code compile error with CANN on」，都是 `WITH_CANN=ON` 才暴露的编译错误，最后由 #26632 修掉。**CANN 后端在上游是「不参与 CI 的二等公民」** —— 它能活下来靠的是华为工程师手把手提 PR，不是一条 CI。
+那条 CANN job 的实际状态也不乐观：抽样最近 6 个 `opencv/opencv_contrib` 的 `PR:4.x` run，`openEuler2203-x64` **全部是 `skipped`**（普通 PR 没有 `category: cann` 标签）。
+
+**所以逻辑链是闭合的**：打断 CANN 的是 **`opencv/opencv` 的 PR #26056**（2024-10 删掉 `typedef std::vector<int> MatShape;`），而 `opencv/opencv` 的 PR CI **从来没有 CANN 这一格** —— 这个 PR 在结构上就**不可能**被 CANN CI 抓到。而 `#ifdef HAVE_CANN` 那段代码**只有 `-DWITH_CANN=ON` 才会被编译**，于是那 39 个 TU 在上游 5.0 的任何一条流水线里**一次都没被编过**。
+
+> 同一类坑在 4.x 也踩过两轮：#26175「CANN build is broken」、#26630/#26631「code compile error with CANN on」—— 报告者全是华为侧用户（报错路径是 `/home/HwHiAiUser/code/opencv_cann/...`），最后由华为工程师的 #26632 修掉。**CANN 后端在上游是「有人修、没人守」的状态**：能活下来靠的是华为工程师手把手提 PR，不是一条 CI。
+
+> 顺带一提，这不是昇腾一家的问题。CUDA 有 NVIDIA 出机器、OpenVINO 有 Intel 出机器、timvx（_VERiSilicon 的 NPU 后端）是 `if: contains(labels, 'category:dnn_timvx')` 门控 —— **每家 NPU 后端在上游的覆盖深度，就等于该厂商愿意投多少自托管 runner**。华为投了 4.x 那台，5.x 没投。
 
 **③ 迁移指南确实说对了一件事。**
 
@@ -804,5 +820,6 @@ NPU 与 CPU 的 score 末位差 ~5e-4 —— 同一张图、同一份权重在�
 - **本文不编 contrib**：`cv2.cann.*` 那 23 个经典算子（`cvtColor` / `threshold` / 算术 / `resize` / `crop` …）在本文的路线里**不存在**。要用它们请走主文档（3 组补丁）。
 - **`all_ops.h` 链接窗口是硬约束**：aarch64 的 `R_AARCH64_CALL26/JUMP26` 只有 ±128 MiB 跨度，缩 `.text` 只是缓解、不是保证；5.0 上过这一关只有窄 op 头一条路。
 - **补丁只对 5.0.x 成立**：`cv::MatShape` 是 5.0 引入的类型，4.x 源码树里根本没有它；上游一旦出 5.1/6.0，§4 的脚本会断言失败（这是设计好的失败方式，不是 bug）。
+- **别等上游修 5.x 的 CANN**：上游 CI 里 CANN 只挂在 `opencv_contrib` 的 4.x 分支上，而且是 `category: cann` 标签门控的 opt-in 通道；`opencv/opencv` 自己的 4.x / 5.x PR CI **都没有 CANN 那一格**（§1.4 ②）。所以 5.x 的 CANN 后端在上游是**既不编译、也不报错**的状态 —— §4 这套补丁得自己维护。
 - **CANN 9.2 的裁剪版 `libgraph.so`**：把 CANN 软链指向 `<CANN>/lib64` 而不是 `<CANN>/aarch64-linux/devlib/linux/aarch64/`，否则链接期报 `undefined reference to 'ge::AscendString::operator<(...)'`。这条与 OpenCV 版本无关。
 - **`videoio` 编了但没有编解码器**：源码构建默认不带 FFmpeg/GStreamer；本文未把视频写入列为必过项。

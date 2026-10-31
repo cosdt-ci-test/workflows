@@ -85,11 +85,11 @@ jobs:
       #    modelscope, pip only unpacks.
       timeout_minutes: 120
       upstream_repo: comfyanonymous/ComfyUI
-      # Raw URL the engine's monitor hashes and the test fetches;
+      # Contents API URL the engine's monitor hashes and the test fetches;
       # doc-hash state lives under the quick-start-monitor-state-comfyui_ cache
       # prefix.
-      doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/comfyui/docs/Quick-start-Ascend.md
-      doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/comfyui/docs/Quick-start-Ascend.md
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/comfyui/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/comfyui/docs/Quick-start-Ascend.md
       # cwd is workflows/projects/comfyui; env contract
       # (MONITORED_DOC_URL / NPU_READY) is injected by the engine. All
       # project env prep (CANN / torch stack) lives in the test

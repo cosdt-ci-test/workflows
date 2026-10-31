@@ -87,11 +87,11 @@ jobs:
       # 180 min covers the cold build with headroom.
       timeout_minutes: 180
       upstream_repo: tile-ai/tilelang-ascend
-      # Raw URL the engine's monitor hashes and the test fetches;
+      # Contents API URL the engine's monitor hashes and the test fetches;
       # doc-hash state lives under the quick-start-monitor-state-tilelang_ cache
       # prefix.
-      doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/tilelang/docs/Quick-start-Ascend.md
-      doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/tilelang/docs/Quick-start-Ascend.md
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/tilelang/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/tilelang/docs/Quick-start-Ascend.md
       # cwd is workflows/projects/tilelang; env contract (MONITORED_DOC_URL /
       # NPU_READY) is injected by the engine. All project env prep and
       # installs live in the test subclass's prepare_environment hook.

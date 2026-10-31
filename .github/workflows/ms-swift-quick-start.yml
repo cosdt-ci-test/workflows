@@ -59,8 +59,8 @@ jobs:
       # Same URL the legacy workflow monitored. Cache keys were hardened to
       # the strict quick-start-monitor-state-ms-swift_* format (2026-09-11);
       # old-prefix state was intentionally dropped (one cold round).
-      doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/ms-swift/docs/Quick-start-Ascend.md
-      doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/ms-swift/docs/Quick-start-Ascend.md
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/ms-swift/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/ms-swift/docs/Quick-start-Ascend.md
       # cwd is workflows/projects/ms-swift; env contract (MONITORED_DOC_URL /
       # UPSTREAM_REF / NPU_READY) is injected by the engine. All project
       # env prep and installs live in the test subclass's

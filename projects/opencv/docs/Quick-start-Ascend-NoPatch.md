@@ -252,19 +252,6 @@ ls -l "$CANN_DIR/acllib/lib64/libascendcl.so" "$CANN_DIR/lib64/libacl_op_compile
 > `libgraph_base.so` 是 CANN ≥ 6.3.RC1 之后 `OpenCVFindCANN.cmake` 才会去找的库（找不到只 WARN 不报错），但它是 `ge::AscendString` 那组符号的另一个来源，务必确认它在 `compiler/lib64/` 里。
 > **不想往 CANN 安装目录里写东西**（只读挂载 / 无 root）时，等价做法是直接把路径喂给 cmake：`-Dfound_lib_ascendcl=... -Dfound_lib_acl_op_compiler=... -Dfound_libacldvppmpi=... -Dfound_lib_graph=... -Dfound_lib_ge_compiler=... -Dfound_libgraph_base=...`（`find_library` 命中已存在的 cache 变量就不再搜目录）。本文的验证构建走的就是这条路线。
 
-确认 cmake 找到了 CANN 库（configure 输出里的 `CANN: lib... is found at ...`）：
-
-```shell #test id="np-cann-cmake-libs"
-grep "CANN: libascendcl.so is found" /tmp/opencv-configure.log
-grep "CANN: libgraph.so is found" /tmp/opencv-configure.log
-```
-
-输出结果如下：
-```shell #test-result id="np-cann-cmake-libs" fuzzy='xxx'
--- CANN: libascendcl.so is found at xxx
--- CANN: libgraph.so is found at xxx
-```
-
 ## 配置并编译
 
 CANN 后端开关 `WITH_CANN=ON`（不是 `BUILD_CANN`）；`-DOPENCV_DOWNLOAD_MIRROR_ID=gitcode` 让 cmake configure 阶段走 gitcode 镜像拉 ADE / IPPICV / TBB。
@@ -311,6 +298,21 @@ cmake -DCMAKE_BUILD_TYPE=Release \
 -- Generating done
 -- Build files have been written to: xxx/build
 ```
+
+确认 cmake 找到了 CANN 库（configure 输出里的 `CANN: lib... is found at ...`）：
+
+```shell #test id="np-cann-cmake-libs"
+grep "CANN: libascendcl.so is found" /tmp/opencv-configure.log
+grep "CANN: libgraph.so is found" /tmp/opencv-configure.log
+```
+
+输出结果如下：
+```shell #test-result id="np-cann-cmake-libs" fuzzy='xxx'
+-- CANN: libascendcl.so is found at xxx
+-- CANN: libgraph.so is found at xxx
+```
+
+> 这段必须排在 configure 块**之后**：doc-test 的执行顺序 = 文档顺序，而 `/tmp/opencv-configure.log` 是上面那个 configure 块用 `tee` 写出来的。放在前面会得到 `grep: /tmp/opencv-configure.log: No such file or directory`（CI run 40993445956 就是这么挂的）。
 
 编译 + 安装一体（`--target install`）。**并行度别开高**：`all_ops.h` 那几个 TU 每个要吃掉 3GB 上下内存，容器内存配额（cgroup limit）只有 32GB 时，`-j` 超过 6 会被 OOM killer 直接干掉 `cc1plus`（表现为编译日志里出现 `c++: fatal error: Killed signal terminated program cc1plus`）。所以并行度做成可覆盖的环境变量：默认 `--parallel 2`（保守），CI 机器内存更富裕时可以调高。
 

@@ -13,6 +13,7 @@ on:
           - baseline
           - standard-gc
           - unsloth-gc
+          - checkpoint-resume
 
 permissions:
   contents: read
@@ -80,11 +81,16 @@ jobs:
           python -m pip freeze > output/packages.txt
           cat output/packages.txt
           python -c "import torch, torch_npu, triton.backends.ascend; assert torch.npu.is_available(); print(torch.__version__, torch_npu.__version__, torch.npu.get_device_name(0))"
-      - name: Run BF16 LoRA training, save, reload and inference
+      - name: Run selected BF16 LoRA scenario
         run: |
           set -eo pipefail
           source /usr/local/Ascend/ascend-toolkit/set_env.sh
-          python projects/unsloth/qwen3_lora_smoke.py 2>&1 | tee output/example.log
+          if [[ "$TEST_SCENARIO" == "checkpoint-resume" ]]; then
+            python projects/unsloth/qwen3_checkpoint_resume.py --phase train 2>&1 | tee output/resume-train.log
+            python projects/unsloth/qwen3_checkpoint_resume.py --phase resume 2>&1 | tee output/resume.log
+          else
+            python projects/unsloth/qwen3_lora_smoke.py 2>&1 | tee output/example.log
+          fi
       - name: Record exact outcome
         if: always()
         env:

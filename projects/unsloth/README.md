@@ -54,6 +54,7 @@ Select a scenario when dispatching the same workflow:
 | `baseline` (default) | Checkpointing disabled, matching the run #4 training configuration | Passed in run #4; added scenario/state checks still need a run |
 | `standard-gc` | Standard checkpointing (`True`) in loading, LoRA setup and SFTConfig | Passed functionally in run #5 |
 | `unsloth-gc` | Unsloth checkpointing (`"unsloth"`) with 512-token input and Trainer's standard flag left off | Awaiting NPU validation |
+| `checkpoint-resume` | Train one step, save full Trainer state, exit, then resume to step 3 in a new process | Awaiting NPU validation |
 
 All scenarios run the full three-step LoRA training, adapter save/reload and
 inference checks. The `unsloth-gc` dataset reaches the 512-token cap, and its
@@ -62,6 +63,14 @@ than a silent fallback to standard checkpointing. Its `SFTConfig` standard
 checkpointing flag remains off, following the official Qwen3 example, so the
 Trainer does not replace the custom checkpoint function. Unsupported scenario values
 fail before importing the NPU stack.
+
+The `checkpoint-resume` scenario runs two separate Python processes. The first
+saves `checkpoint-1` with trainer, optimizer, scheduler, RNG and PEFT adapter
+state. The second loads that checkpoint, asserts training restarts at step 2,
+continues to step 3, checks restored optimizer and scheduler state, confirms
+checkpoint LoRA tensors changed, then saves and reloads the final adapter. This
+scenario keeps gradient checkpointing disabled so the resume check has one
+variable.
 The selected scenario appears in the Actions run title, result.json and job summary,
 including when environment setup fails. The `"unsloth"` checkpointing mode uses
 upstream's long-context threshold and is not treated as a performance claim.
@@ -76,4 +85,8 @@ gh workflow run unsloth-npu-example.yml --repo cosdt-ci-test/workflows --ref fea
 
 ```shell
 gh workflow run unsloth-npu-example.yml --repo cosdt-ci-test/workflows --ref feat/unsloth-adapt -f scenario=unsloth-gc
+```
+
+```shell
+gh workflow run unsloth-npu-example.yml --repo cosdt-ci-test/workflows --ref feat/unsloth-adapt -f scenario=checkpoint-resume
 ```

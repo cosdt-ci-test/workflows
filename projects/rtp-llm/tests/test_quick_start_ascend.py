@@ -115,8 +115,17 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         'Miniconda3-py310_25.1.1-2-Linux-aarch64.sh'
     )
 
+    # Ubuntu's ca-certificates-java regenerates this JVM truststore from
+    # /etc/ssl/certs on every CA update, i.e. it trusts exactly what curl
+    # trusts. Bazel's downloader runs inside a JVM and only reads the JDK's
+    # own cacerts, so on a network whose TLS is intercepted by a proxy the
+    # very first external archive fetch dies with `PKIX path building
+    # failed` while curl on the same host succeeds.
+    _JVM_TRUSTSTORE = '/etc/ssl/certs/java/cacerts'
+
     # ----------------------------------------------------------
-    # prepare_environment: CANN env + python 3.10 + build tools + cwd
+    # prepare_environment: CANN env + python 3.10 + build tools
+    #                      + JVM truststore + cwd
     # ----------------------------------------------------------
 
     @classmethod
@@ -171,8 +180,57 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         print('setup: Miniconda ready')
 
     @classmethod
+    def _ensure_jvm_truststore(cls) -> None:
+        """Point the JVM at a truststore derived from the system CA bundle.
+
+        ``bazelisk build`` fetches ~40 external archives with Bazel's Java
+        downloader. That downloader validates TLS against the JDK's bundled
+        cacerts only, so on a runner whose egress goes through a
+        TLS-intercepting proxy every fetch fails with ``PKIX path building
+        failed: unable to find valid certification path`` — while ``curl``
+        in the same container downloads fine, because curl reads the system
+        bundle that has the proxy's root CA.
+
+        ``ca-certificates-java`` generates ``/etc/ssl/certs/java/cacerts``
+        from that same system bundle, and ``JAVA_TOOL_OPTIONS`` makes every
+        JVM Bazel spawns pick it up (the build block runs unchanged).
+        """
+        truststore = cls._JVM_TRUSTSTORE
+        if not os.path.isfile(truststore):
+            print(f'setup: {truststore} missing, installing ca-certificates-java')
+            subprocess.run(['apt-get', 'update', '-qq'], check=False)
+            subprocess.run(
+                ['apt-get', 'install', '-y', '-qq', 'ca-certificates-java'],
+                check=False,
+            )
+        if not os.path.isfile(truststore):
+            print(
+                f'setup: {truststore} still missing - if the build dies with '
+                'PKIX path building failed, the JVM cannot see the proxy CA'
+            )
+            probe = subprocess.run(
+                [
+                    'bash', '-c',
+                    'echo | openssl s_client -connect github.com:443 '
+                    '-servername github.com 2>/dev/null '
+                    "| grep -m3 -E 'Verify return code|^ *i:|^ *s:'",
+                ],
+                capture_output=True, text=True, check=False,
+            )
+            for line in probe.stdout.splitlines():
+                print(f'setup:   tls probe: {line.strip()}')
+            return
+        opts = (
+            f'-Djavax.net.ssl.trustStore={truststore} '
+            '-Djavax.net.ssl.trustStorePassword=changeit'
+        )
+        existing = os.environ.get('JAVA_TOOL_OPTIONS', '').strip()
+        os.environ['JAVA_TOOL_OPTIONS'] = f'{existing} {opts}'.strip()
+        print(f'setup: JAVA_TOOL_OPTIONS={os.environ["JAVA_TOOL_OPTIONS"]}')
+
+    @classmethod
     def prepare_environment(cls) -> None:
-        """CANN env + Python 3.10 + build tools + working directory.
+        """CANN env + Python 3.10 + build tools + JVM truststore + cwd.
 
         Everything business-facing (the aarch64 build-input adaptation,
         the dependency install, ``bazelisk build``, the wheel install,
@@ -227,7 +285,10 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 check=True,
             )
 
-        # 4) Working directory: pinned before run_template() so the doc's
+        # 4) JVM truststore for Bazel's Java downloader.
+        cls._ensure_jvm_truststore()
+
+        # 5) Working directory: pinned before run_template() so the doc's
         # cwd-relative clone/build never lands in the guard checkout.
         os.makedirs(cls._WORK_DIR, exist_ok=True)
         os.chdir(cls._WORK_DIR)

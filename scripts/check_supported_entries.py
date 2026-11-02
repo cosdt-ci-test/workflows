@@ -13,6 +13,12 @@ discovering unclassified new upstream examples is a separate
 workflow's concern - this check only validates what the engine
 schedules. Exit 1 after listing every problem found.
 
+``--machine-types`` expands every supported entry into one matrix row
+per requested machine generation. ``a2`` keeps the historical row and
+job name; other values inherit ``machine_defaults[<type>]`` (or the
+per-entry ``<type>_runner`` / ``<type>_image`` / ``<type>_timeout_minutes``
+override) and carry a ``[<type>]`` job-name suffix.
+
 Requires PyYAML (preinstalled on ubuntu-latest runners).
 """
 from __future__ import annotations
@@ -29,7 +35,11 @@ REQUIRED_FIELDS = ('path', 'profile', 'runner', 'image', 'timeout_minutes')
 
 
 def validate(
-    supported: list[dict], target_root: Path, project_root: Path | None = None
+    supported: list[dict],
+    target_root: Path,
+    project_root: Path | None = None,
+    machine_types: list[str] | None = None,
+    machine_defaults: dict[str, dict] | None = None,
 ) -> tuple[list[dict], list[str]]:
     """Return (valid matrix entries, error messages) for the manifest."""
     entries: list[dict] = []
@@ -100,8 +110,33 @@ def validate(
         # unique - same-named scripts in different directories get
         # distinct labels (peft's five */train_dreambooth.py used to
         # collapse to a single "train_dreambooth").
-        entry['name'] = str(relative_path.with_suffix(''))
-        entries.append(entry)
+        base_name = str(relative_path.with_suffix(''))
+        defaults = machine_defaults or {}
+        for machine in machine_types or ['a2']:
+            row = dict(entry)
+            row['machine_type'] = machine
+            if machine != 'a2':
+                # Per-entry <machine>_field wins over the manifest-level
+                # machine_defaults block; the a2 value is the fallback
+                # when neither is present.
+                for field in ('runner', 'image', 'timeout_minutes'):
+                    value = item.get(f'{machine}_{field}')
+                    if value is None:
+                        value = (defaults.get(machine) or {}).get(field)
+                    if value is not None:
+                        row[field] = value
+                missing = [
+                    field for field in REQUIRED_FIELDS if not row.get(field)
+                ]
+                if missing:
+                    errors.append(
+                        f'{path}: machine {machine} missing required '
+                        f'field(s): {missing}')
+                    continue
+                row['name'] = f'{base_name} [{machine}]'
+            else:
+                row['name'] = base_name
+            entries.append(row)
     return entries, errors
 
 
@@ -125,14 +160,24 @@ def main() -> None:
     parser.add_argument(
         '--manifest', required=True,
         help='Path to projects/<project>/examples_manifest.yaml')
+    parser.add_argument(
+        '--machine-types', default='a2',
+        help='Comma-separated machine generations to schedule; a2 keeps '
+             'the historical single-leg matrix, extra values expand every '
+             'supported entry with <manifest>.machine_defaults[<type>]')
     args = parser.parse_args()
     manifest = yaml.safe_load(
         Path(args.manifest).read_text(encoding='utf-8')) or {}
     supported = manifest.get('supported') or []
+    machine_types = [
+        token.strip() for token in args.machine_types.split(',') if token.strip()
+    ] or ['a2']
     entries, errors = validate(
         supported,
         Path(args.target_root),
         Path(args.manifest).resolve().parent,
+        machine_types,
+        manifest.get('machine_defaults') or {},
     )
     write_github_output(entries)
     if errors:
@@ -141,7 +186,9 @@ def main() -> None:
         print('fix the supported section of the manifest before this '
               'pipeline can schedule examples', file=sys.stderr)
         raise SystemExit(1)
-    print(f'manifest ok: {len(entries)} supported entry(ies)')
+    machines = ', '.join(machine_types)
+    print(f'manifest ok: {len(entries)} supported entry(ies) '
+          f'on machine(s) {machines}')
 
 
 if __name__ == '__main__':

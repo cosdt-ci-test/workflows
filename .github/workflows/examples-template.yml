@@ -34,6 +34,14 @@ on:
         description: Max parallel run-example matrix legs
         type: number
         default: 4
+      machine_types:
+        description: >-
+          Comma-separated machine generations to schedule. The default a2
+          keeps the historical single-leg matrix; extra values (a3) expand
+          every supported entry using the manifest's machine_defaults block
+          or per-entry <machine>_runner / <machine>_image overrides.
+        type: string
+        default: a2
 
 permissions:
   actions: read
@@ -314,7 +322,8 @@ jobs:
           python3 -m pip install -q pyyaml
           python3 workflows/scripts/check_supported_entries.py \
             --target-root "$EXAMPLES_ROOT" \
-            --manifest "workflows/projects/${{ inputs.project }}/examples_manifest.yaml"
+            --manifest "workflows/projects/${{ inputs.project }}/examples_manifest.yaml" \
+            --machine-types "${{ inputs.machine_types }}"
 
   run-example:
     name: ${{ matrix.example.name }}

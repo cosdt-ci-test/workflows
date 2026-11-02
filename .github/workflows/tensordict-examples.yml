@@ -12,6 +12,11 @@ on:
         required: false
         default: ''
         type: string
+      machine_types:
+        description: Comma-separated machine generations to schedule (a2,a3 by default)
+        required: false
+        default: 'a2,a3'
+        type: string
 
 concurrency:
   group: ${{ github.event_name == 'schedule' && 'tensordict-examples-schedule' || format('manual-{0}', github.run_id) }}
@@ -28,4 +33,5 @@ jobs:
       project: tensordict
       upstream_repo: pytorch/tensordict
       target_ref: ${{ inputs.target_ref }}
+      machine_types: ${{ inputs.machine_types }}
       max_parallel: 4

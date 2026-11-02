@@ -55,6 +55,7 @@ Select a scenario when dispatching the same workflow:
 | `standard-gc` | Standard checkpointing (`True`) in loading, LoRA setup and SFTConfig | Passed functionally in run #5 |
 | `unsloth-gc` | Unsloth checkpointing (`"unsloth"`) with 512-token input and Trainer's standard flag left off | Awaiting NPU validation |
 | `checkpoint-resume` | Train one step, save full Trainer state, exit, then resume to step 3 in a new process | Awaiting NPU validation |
+| `merge-16bit` | Train three steps, merge into BF16 weights, then reload with Transformers | Awaiting NPU validation |
 
 All scenarios run the full three-step LoRA training, adapter save/reload and
 inference checks. The `unsloth-gc` dataset reaches the 512-token cap, and its
@@ -72,6 +73,12 @@ checkpoint LoRA tensors changed, then saves and reloads the final adapter. This
 scenario keeps gradient checkpointing disabled so the resume check has one
 variable. The continuation check compares PEFT's serialized adapter state, which
 omits the default adapter name, with the same format produced after resume.
+
+The `merge-16bit` scenario trains the same three-step LoRA, calls
+`save_pretrained_merged(..., save_method="merged_16bit", dtype=torch.bfloat16)`,
+checks the serialized floating tensors are BF16, then reloads the merged
+directory through standard `AutoModelForCausalLM` and generates without the
+original adapter. The export is local and does not push to Hugging Face.
 The selected scenario appears in the Actions run title, result.json and job summary,
 including when environment setup fails. The `"unsloth"` checkpointing mode uses
 upstream's long-context threshold and is not treated as a performance claim.
@@ -90,4 +97,8 @@ gh workflow run unsloth-npu-example.yml --repo cosdt-ci-test/workflows --ref fea
 
 ```shell
 gh workflow run unsloth-npu-example.yml --repo cosdt-ci-test/workflows --ref feat/unsloth-adapt -f scenario=checkpoint-resume
+```
+
+```shell
+gh workflow run unsloth-npu-example.yml --repo cosdt-ci-test/workflows --ref feat/unsloth-adapt -f scenario=merge-16bit
 ```

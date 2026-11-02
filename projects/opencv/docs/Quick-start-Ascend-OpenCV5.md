@@ -233,7 +233,7 @@ OpenCV 5.0 mainline 与 CANN 9.x / aarch64 有 2 处不兼容：一处是 §2.2 
 
 | 组 | 上游哪里坏了 | 改法 |
 | --- | --- | --- |
-| 1 | OpenCV 5.0 把 shape 类型换成 `cv::MatShape`（`explicit` 构造、**没有** `front()`），上游 CANN 后端还停在 4.x 的 `std::vector<int>` 写法 | 新增 1 个 `cv::MatShape` 重载转发给上游构造 + 修 3 处赋值 |
+| 1 | OpenCV 5.0 把 shape 类型换成 `cv::MatShape`（`explicit` 构造、**没有** `front()`），上游 CANN 后端还停在 4.x 的 `std::vector<int>` 写法 | 新增 1 个 `cv::MatShape` 重载转发给上游构造 + 修 3 处赋值（**两个重载都要留**，理由见组 1 末尾） |
 | 2 | `all_ops.h` 的 ~1500 个 op 把 dnn `.text` 撑破 aarch64 ±128 MiB 链接窗口 | per-TU 窄 op 头 |
 
 > 曾经还有第 3 组（contrib `cannops` 的 NULL 流兜底）。**本文不编 `opencv_contrib`**，所以不需要它：那条 NULL 流断言只在算子级 API `aclopCompileAndExecute` 上触发，而本文走的是模型级 `aclmdlExecute`（经典引擎 + CANN 后端），不经过它。要 `cv2.cann` 那条通路请走 [主文档](Quick-start-Ascend.md)。
@@ -295,6 +295,19 @@ PY
 ```
 
 预期：`(a)`/`(b)` 各 1 行打印，`(c)(d)` 打印 3 行（gemm 1 + matmul 2）。
+
+> **为什么是「加一个重载」而不是「把上游签名直接换成 `cv::MatShape`」？**
+>
+> 上游 5.x 的 CANN 后端在形状类型上是**两个世界混用**的：
+>
+> | 来源 | 例子 | 类型 |
+> | --- | --- | --- |
+> | dnn 新引擎的 `shape()` | `gemm_layer.cpp:668` `shape(B)`、`convolution_layer.cpp:703` `shape(w_mat)`、`matmul_layer.cpp:717` `shape(B)` | `cv::MatShape` |
+> | CANN 后端自己造的局部变量 | `batch_norm_layer.cpp:394` `std::vector<int> shape_{channel};`、`elementwise_layers.cpp:850` `shape_{1}`、`slice_layer.cpp:691` `shape_size_splits`、`padding_layer.cpp:235` `pads_shape`、`reduce_layer.cpp:546` `axes_shape`、`resize_layer.cpp:453` `shape_of_size_mat`、`reshape_layer.cpp:402` `shape_of_shape`、`convolution_layer.cpp:712` `bias_shape`、`deconvolution_layer.cpp:1143` `shape_b`、`fully_connected_layer.cpp:755` `bias_shape`、`matmul_layer.cpp:701` 内联的 `std::vector<int>{1}` | **`std::vector<int>`** |
+>
+> 第二类**不是「漏改的旧写法」**：`cv::Mat` 在 5.0 core 里仍然只收 `std::vector<int>`（`mat.hpp:1150` `Mat(const std::vector<int>& sizes, int type, void* data, ...)`），而 CANN 后端正是拿这些 `vector<int>` 去构造 Mat（`reduce_layer.cpp:547` `Mat axes_mat(axes_shape, CV_32S, &axes[0]);`）。
+>
+> ⇒ 只保留 `const cv::MatShape&` 一个签名的话，上表第二行那 **15 处声明 / 20 处调用点**会集体编译失败；**两个重载都得留着**。这也是上游自己迟迟没修的原因之一。
 
 ### 组 2. 缩小 CANN op 头（避免 aarch64 链接炸）
 
@@ -375,7 +388,9 @@ PY
 ### 补丁是否真的落到位
 
 ```shell #test id="ocv5-patches-applied"
-grep -c "cv::MatShape" opencv/modules/dnn/src/op_cann.hpp
+grep -c "const cv::MatShape& shape" opencv/modules/dnn/src/op_cann.hpp
+grep -c "const std::vector<int>& shape" opencv/modules/dnn/src/op_cann.hpp
+grep -c "cv::MatShape" opencv/modules/dnn/src/op_cann.cpp
 grep -c "array_ops.h" opencv/modules/dnn/src/op_cann.hpp
 grep -rl "built-in/op_proto/inc/" opencv/modules/dnn/src/layers/ | wc -l
 ```
@@ -383,9 +398,13 @@ grep -rl "built-in/op_proto/inc/" opencv/modules/dnn/src/layers/ | wc -l
 输出结果如下：
 ```shell #test-result id="ocv5-patches-applied"
 1
+1
+1
 2
 23
 ```
+
+> 前三行是这个守卫的**关键**：它们同时断言「`cv::MatShape` 重载在」**和**「上游的 `std::vector<int>` 声明还在」。只看 `grep -c "cv::MatShape"` 区分不了「加桥」和「把上游签名换掉」两种形态——后者会让上游 15 处 `std::vector<int>` 调用点集体编译失败（见组 1 末尾的说明）。
 
 ## 6. 桥接 CANN 的库目录
 

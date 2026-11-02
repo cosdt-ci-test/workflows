@@ -100,7 +100,7 @@ OpenCV mainline 与 CANN 9.1.0 / aarch64 有 3 处不兼容（3 个 patch 脚本
 
 | 组 | 上游哪里坏了 | 改法 |
 | --- | --- | --- |
-| 4a | OpenCV 5.0 把 shape 类型换成 `cv::MatShape`（`explicit` 构造、**没有** `front()`） | 新增 1 个 `cv::MatShape` 重载转发给上游构造 + 修 3 处赋值 |
+| 4a | OpenCV 5.0 把 shape 类型换成 `cv::MatShape`（`explicit` 构造、**没有** `front()`） | 新增 1 个 `cv::MatShape` 重载转发给上游构造 + 修 3 处赋值（**两个重载都要留**，理由见 4a 末尾） |
 | 4b | `all_ops.h` 的 ~1500 个 op 把 dnn `.text` 撑破 aarch64 ±128 MiB 链接窗口 | per-TU 窄 op 头 |
 | 4c | CANN 9.x 拒绝 NULL 流（EH0008） | `OperatorRunner::run` 回落到 ctx 默认流 |
 
@@ -165,6 +165,19 @@ PY
 ```
 
 预期：`(a)`/`(b)` 各 1 行打印，`(c)(d)` 打印 3 行（gemm 1 + matmul 2）；`grep 'cv::MatShape' opencv/modules/dnn/src/layers/{gemm,matmul}_layer.cpp` 各命中 1 处。
+
+> **为什么是「加一个重载」而不是「把上游签名直接换成 `cv::MatShape`」？**
+>
+> 上游 5.x 的 CANN 后端在形状类型上是**两个世界混用**的：
+>
+> | 来源 | 例子 | 类型 |
+> | --- | --- | --- |
+> | dnn 新引擎的 `shape()` | `gemm_layer.cpp:668` `shape(B)`、`convolution_layer.cpp:703` `shape(w_mat)`、`matmul_layer.cpp:717` `shape(B)` | `cv::MatShape` |
+> | CANN 后端自己造的局部变量 | `batch_norm_layer.cpp:394` `std::vector<int> shape_{channel};`、`elementwise_layers.cpp:850` `shape_{1}`、`slice_layer.cpp:691` `shape_size_splits`、`padding_layer.cpp:235` `pads_shape`、`reduce_layer.cpp:546` `axes_shape`、`resize_layer.cpp:453` `shape_of_size_mat`、`reshape_layer.cpp:402` `shape_of_shape`、`convolution_layer.cpp:712` `bias_shape`、`deconvolution_layer.cpp:1143` `shape_b`、`fully_connected_layer.cpp:755` `bias_shape`、`matmul_layer.cpp:701` 内联的 `std::vector<int>{1}` | **`std::vector<int>`** |
+>
+> 第二类**不是「漏改的旧写法」**：`cv::Mat` 在 5.0 core 里仍然只收 `std::vector<int>`（`mat.hpp:1150` `Mat(const std::vector<int>& sizes, int type, void* data, ...)`），而 CANN 后端正是拿这些 `vector<int>` 去构造 Mat（`reduce_layer.cpp:547` `Mat axes_mat(axes_shape, CV_32S, &axes[0]);`）。
+>
+> ⇒ 只保留 `const cv::MatShape&` 一个签名的话，上表第二行那 **15 处声明 / 20 处调用点**会集体编译失败；**两个重载都得留着**。这也是上游自己迟迟没修的原因之一。
 
 ### 4b. 缩小 CANN op 头（避免 aarch64 链接炸）
 

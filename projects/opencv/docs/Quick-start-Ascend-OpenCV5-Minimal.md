@@ -22,9 +22,10 @@
 | --- | --- | --- | --- | --- |
 | [Quick-start-Ascend-NoPatch.md](Quick-start-Ascend-NoPatch.md) | 4.14.0 | **0 组** | 否 | 只有 `cv2.dnn` 的 CANN 后端 |
 | **本文** | **5.0.0** | **2 组** | 否 | 同上（但**必须强制经典引擎**，见 §10.1） |
-| [Quick-start-Ascend.md](Quick-start-Ascend.md) / [Quick-start-Ascend-OpenCV5.md](Quick-start-Ascend-OpenCV5.md) | 5.0.0 | 3 组 | 是 | DNN + `cv2.cann.*` 经典算子（23 个算子） |
+| [Quick-start-Ascend-OpenCV5.md](Quick-start-Ascend-OpenCV5.md) | 5.0.0（跟随 latest release） | 2 组 | 否 | 同上 + 5.0 的特性导览（哪条通路能上卡） |
+| [Quick-start-Ascend.md](Quick-start-Ascend.md) | 5.0.0（跟随 latest release） | 3 组 | 是 | DNN + `cv2.cann.*` 经典算子（23 个算子） |
 
-本文比主文档少的**那一组**补丁（`OperatorRunner` 的 NULL 流 fallback）在 `opencv_contrib/modules/cannops/` 里 —— 本文**不编 contrib**，所以那一组用不上。换句话说：
+本文比主文档少的**那一组**补丁（`OperatorRunner` 的 NULL 流 fallback）在 `opencv_contrib/modules/cannops/` 里 —— 本文**不编 contrib**，所以那一组用不上（[特性巡览那篇](Quick-start-Ascend-OpenCV5.md) 同样不编 contrib，也是 2 组）。换句话说：
 
 > **5.x 只要不上 `cv2.cann` 经典算子，最小补丁就是 2 组；要上 `cv2.cann` 就是 3 组。**
 

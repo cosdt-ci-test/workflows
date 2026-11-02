@@ -8,6 +8,7 @@ result = json.loads(path.read_text()) if path.exists() else {
     "status": "failed", "stage": "environment_setup", "completed": []
 }
 result.update(job_status=os.environ["JOB_STATUS"],
+              scenario=os.environ.get("TEST_SCENARIO", "baseline"),
               workflow_sha=os.environ["GITHUB_SHA"],
               unsloth_ref=os.environ["UNSLOTH_REF"], zoo_ref=os.environ["ZOO_REF"])
 path.write_text(json.dumps(result, indent=2))

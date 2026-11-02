@@ -13,7 +13,7 @@ get_peft_model → SFTTrainer.train → save → generate API sequence, with:
 - Qwen/Qwen3-0.6B from ModelScope rather than the 4B Instruct model;
 - BF16 non-quantized LoRA, rank 8, ordinary AdamW instead of bitsandbytes;
 - 12 local chat samples, 256 tokens, 3 steps, batch size 1;
-- checkpointing disabled for this small workload;
+- checkpointing selected by the workflow's `scenario` input;
 - NPU placement and parameter-update assertions, adapter reload before generation.
 
 The workflow pins Unsloth and Zoo commits, uses the repository's CANN 9.1.0
@@ -23,7 +23,11 @@ NumPy is pinned to 1.26.4 as required by Triton-Ascend 3.2.2, and PyArrow
 to 21.0.0 to satisfy datasets 4.3.0 without requiring NumPy 2.x.
 Installation checks the three data-library imports and creates a small Dataset
 before proceeding to Unsloth.
-This combination has not yet been validated with Unsloth on our hardware.
+The checkpointing-disabled baseline passed on Ascend910B1 in
+[run #4](https://github.com/cosdt-ci-test/workflows/actions/runs/41382865054).
+A Trainer callback checks that the actual checkpointing state matches the selected
+scenario at training start and records enabled modules in result.json. Standard
+checkpointing still requires a real NPU run; no memory or speed claim is made.
 Declared non-CUDA dependencies are installed from the pinned source metadata;
 CUDA Triton, torchao and cut-cross-entropy are omitted for this non-quantized
 path. bitsandbytes 0.50.2 is installed with `--no-deps` because the upstream
@@ -40,5 +44,26 @@ and puts the result in the job summary, including on failure. Success requires
 three optimizer steps, finite training loss, actual LoRA parameter changes,
 adapter save/reload and NPU generation. It does not measure model quality.
 
-The initial branch push triggers this workflow without adding it to main.
-No schedule, PR trigger or automatic rerun is configured.
+The workflow runs only through manual workflow_dispatch after a branch push.
+No push trigger, schedule, PR trigger or automatic rerun is configured.
+
+Select a scenario when dispatching the same workflow:
+
+| scenario | Flow | Status |
+| --- | --- | --- |
+| `baseline` (default) | Checkpointing disabled, matching the run #4 training configuration | Passed in run #4; added scenario/state checks still need a run |
+| `standard-gc` | Standard checkpointing (`True`) in loading, LoRA setup and SFTConfig | Awaiting NPU validation |
+
+Both scenarios run the full three-step LoRA training, adapter save/reload and
+inference checks. Unsupported scenario values fail before importing the NPU stack.
+The selected scenario appears in the Actions run title, result.json and job summary,
+including when environment setup fails. The `"unsloth"` checkpointing mode is not
+offered yet.
+
+```shell
+gh workflow run unsloth-npu-example.yml --repo cosdt-ci-test/workflows --ref feat/unsloth-adapt -f scenario=baseline
+```
+
+```shell
+gh workflow run unsloth-npu-example.yml --repo cosdt-ci-test/workflows --ref feat/unsloth-adapt -f scenario=standard-gc
+```

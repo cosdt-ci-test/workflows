@@ -11,9 +11,11 @@ import traceback
 
 OUTPUT = Path("output")
 OUTPUT.mkdir(exist_ok=True)
+scenario = os.environ.get("TEST_SCENARIO", "baseline")
 result = {"status": "running", "stage": "import", "completed": [],
           "unsloth_ref": os.environ.get("UNSLOTH_REF"),
-          "zoo_ref": os.environ.get("ZOO_REF"), "model": "Qwen/Qwen3-0.6B"}
+          "zoo_ref": os.environ.get("ZOO_REF"), "model": "Qwen/Qwen3-0.6B",
+          "scenario": scenario}
 
 
 def record(stage, completed=False):
@@ -24,7 +26,17 @@ def record(stage, completed=False):
     print(json.dumps({"stage": stage, "completed": completed}), flush=True)
 
 
+def checkpointing_for_scenario(value):
+    if value not in ("baseline", "standard-gc"):
+        raise ValueError(f"Unknown test scenario: {value!r}")
+    return value == "standard-gc"
+
+
 try:
+    record("scenario_setup")
+    gradient_checkpointing = checkpointing_for_scenario(scenario)
+    result["gradient_checkpointing_mode"] = "standard" if gradient_checkpointing else "disabled"
+    print("Test scenario:", scenario)
     record("import")
     # torch_npu registers the NPU backend; Unsloth precedes HF/TRL imports.
     import torch
@@ -33,7 +45,26 @@ try:
     from unsloth.device_type import DEVICE_TYPE
     from datasets import Dataset
     from modelscope import snapshot_download
+    from transformers import TrainerCallback
     from trl import SFTConfig, SFTTrainer
+
+    class CheckGradientCheckpointing(TrainerCallback):
+        def on_train_begin(self, args, state, control, model=None, **kwargs):
+            # Trainer enables checkpointing inside train(), before this event.
+            enabled_modules = [
+                name for name, module in model.named_modules()
+                if getattr(module, "gradient_checkpointing", False)
+            ]
+            enabled = bool(getattr(model, "is_gradient_checkpointing", False))
+            result["gradient_checkpointing_enabled"] = enabled
+            result["gradient_checkpointing_modules"] = enabled_modules
+            record("training")
+            assert bool(args.gradient_checkpointing) == gradient_checkpointing, "Trainer checkpointing disagrees with scenario"
+            if gradient_checkpointing:
+                assert enabled and enabled_modules, "Model checkpointing is not enabled"
+            else:
+                assert not enabled and not enabled_modules, "Baseline unexpectedly enabled checkpointing"
+            print("Checkpointing state:", scenario, enabled, enabled_modules)
 
     assert DEVICE_TYPE == "npu", DEVICE_TYPE
     assert torch.npu.is_available()
@@ -48,10 +79,13 @@ try:
     record("model_download", True)
 
     record("model_load")
+    # Keep the baseline loader call equivalent to successful run #4.
+    load_kwargs = {"use_gradient_checkpointing": True} if gradient_checkpointing else {}
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=model_path, max_seq_length=256, dtype=torch.bfloat16,
         load_in_4bit=False, load_in_8bit=False, load_in_16bit=True,
         full_finetuning=False, fast_inference=False, device_map={"": "npu:0"},
+        **load_kwargs,
     )
     assert all(p.device.type == "npu" for p in model.parameters())
     record("model_load", True)
@@ -61,7 +95,7 @@ try:
         model, r=8, target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
                                     "gate_proj", "up_proj", "down_proj"],
         lora_alpha=16, lora_dropout=0, bias="none",
-        use_gradient_checkpointing=False, random_state=3407,
+        use_gradient_checkpointing=gradient_checkpointing, random_state=3407,
     )
     trainable = {n: p for n, p in model.named_parameters() if p.requires_grad}
     assert trainable and all("lora_" in n for n in trainable)
@@ -83,12 +117,13 @@ try:
     trainer = SFTTrainer(
         model=model, processing_class=tokenizer,
         train_dataset=Dataset.from_dict({"text": texts}),
+        callbacks=[CheckGradientCheckpointing()],
         args=SFTConfig(
             output_dir=str(OUTPUT / "trainer"), dataset_text_field="text",
             max_length=256, packing=False, per_device_train_batch_size=1,
             gradient_accumulation_steps=1, max_steps=3, learning_rate=2e-4,
             logging_steps=1, optim="adamw_torch", bf16=True, fp16=False,
-            gradient_checkpointing=False, save_strategy="no", report_to="none",
+            gradient_checkpointing=gradient_checkpointing, save_strategy="no", report_to="none",
             seed=3407, dataloader_num_workers=0,
         ),
     )

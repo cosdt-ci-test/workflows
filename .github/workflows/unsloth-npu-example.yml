@@ -1,12 +1,17 @@
 name: unsloth-npu-example
+run-name: Unsloth NPU / ${{ inputs.scenario }}
 
 on:
-  push:
-    branches: [feat/unsloth-adapt]
-    paths:
-      - .github/workflows/unsloth-npu-example.yml
-      - projects/unsloth/**
   workflow_dispatch:
+    inputs:
+      scenario:
+        description: Test scenario
+        required: true
+        default: baseline
+        type: choice
+        options:
+          - baseline
+          - standard-gc
 
 permissions:
   contents: read
@@ -34,6 +39,7 @@ jobs:
         --volume=/data/ci-cache/pip:/root/.cache/pip
         --volume=/data/ci-cache/modelscope/unsloth:/root/.cache/modelscope
     env:
+      TEST_SCENARIO: ${{ inputs.scenario }}
       ASCEND_RT_VISIBLE_DEVICES: '0'
       PIP_INDEX_URL: https://pypi.tuna.tsinghua.edu.cn/simple
       PIP_DEFAULT_TIMEOUT: '120'

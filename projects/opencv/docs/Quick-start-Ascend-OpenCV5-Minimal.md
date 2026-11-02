@@ -566,17 +566,32 @@ xxx
 
 看一眼 dnn 库的 `.text` —— 这是「窄 op 头」那组补丁的成果：
 
-> 实测（5.0.0 + CANN 9.2.0 / 910B4 / gcc 11.4 / Release -O3，2 组补丁）：`libopencv_dnn.so.5.0.0` 的 `.text` = **15,455,920 B（≈14.7 MiB）**。对照 4.14.0 零补丁（`all_ops.h`）的 56,123,568 B（53.5 MiB）—— **窄 op 头让 5.0 的 `.text` 只有 4.14 零补丁的 1/3.6**，离 ±128 MiB 的链接窗口有 ~113 MiB 余量。
+> 实测（5.0.0 + CANN 9.2.0 / 910B4 / gcc 11.4 / Release -O3，2 组补丁）：`libopencv_dnn.so.5.0.0` 的 `.text` = **15,455,920 B（≈14.7 MiB）**，全库 `Total` = 21,872,036 B。对照 4.14.0 零补丁（`all_ops.h`）的 56,123,568 B（53.5 MiB）—— **窄 op 头让 5.0 的 `.text` 只有 4.14 零补丁的 1/3.6**，离 ±128 MiB 的链接窗口有 ~113 MiB 余量。
 
 ```shell #test id="ocv5m-opencv-dnn-text-size"
-size -A /usr/local/opencv-cann-50/lib/libopencv_dnn.so.5.0.0 | grep -E '^\.text|^Total'
+size -A /usr/local/opencv-cann-50/lib/libopencv_dnn.so.5.0.0 | awk '$1==".text" || $1=="Total"'
 ```
 
 输出结果如下：
-```shell #test-result id="ocv5m-opencv-dnn-text-size" fuzzy='xxx' fuzzy='...'
+```shell #test-result id="ocv5m-opencv-dnn-text-size" fuzzy='xxx'
 .text xxx
-...
 Total xxx
+```
+
+> 这里用 `awk '$1==".text" || $1=="Total"'` 而不是 `grep -E '^\.text|^Total'`：前者**恒定输出 2 行**（`.text` 段 + `Total` 行），后者会把 `.text.hot` / `.text._Z...` 这类同前缀的段一起捞进来，段数随构建配置浮动。
+> 另外，期望结果里**不能**再留一行单独的 `...`：doc-test 的 fuzzy 占位符是**通配符**而不是「可省略若干行」—— 写成独立一行就等于强制要求 `.text` 与 `Total` 之间**至少隔一行**。而 Release 构建的 `libopencv_dnn.so` 里 `.text` 与 `Total` 是**紧挨着的两行**，所以带那行 `...` 的期望值永远匹配不上（npu-4 实测：`.text` / `Total` 两行，匹配失败）。
+
+再加一条**上界断言**，让这个守卫真的守住「窄 op 头」的收益（`all_ops.h` 版本的 `.text` 是 53.5 MiB，30 MiB 的阈值把 14.7 和 53.5 干净地分开）：
+
+```shell #test id="ocv5m-opencv-dnn-text-size-bound"
+TEXT=$(size -A /usr/local/opencv-cann-50/lib/libopencv_dnn.so.5.0.0 | awk '$1==".text"{print $2}')
+echo "text bytes: $TEXT"
+test "$TEXT" -gt 0 && test "$TEXT" -lt 31457280
+```
+
+输出结果如下：
+```shell #test-result id="ocv5m-opencv-dnn-text-size-bound" fuzzy='xxx'
+text bytes: xxx
 ```
 
 ## 10. NPU 上跑一次 DNN 推理（**必须强制经典引擎**）

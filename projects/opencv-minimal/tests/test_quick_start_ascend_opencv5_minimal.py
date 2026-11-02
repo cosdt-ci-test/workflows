@@ -15,10 +15,13 @@ What makes this guard different from the other OpenCV guards:
   that OpenCV 5.0.0 needs exactly **two** patch groups (the
   ``cv::MatShape`` overload + the narrow CANN op headers) and that the
   result is byte-identical to the known-good 5.x tree.  The
-  ``ocv5m-patches-applied`` block asserts all three markers landed
-  (1 ``cv::MatShape`` overload decl, ``array_ops.h`` in place, 23 layer
-  TUs carrying a narrow op header), so a doc edit that breaks the patch
-  scripts fails here rather than silently shipping an unpatched tree;
+  ``ocv5m-patches-applied`` block asserts all five markers landed
+  (the ``cv::MatShape`` overload decl **and** the upstream
+  ``std::vector<int>`` decl both still present -- the bridge form, not
+  the replacement form -- the forwarding ctor in ``op_cann.cpp``,
+  ``array_ops.h`` in place, and 23 layer TUs carrying a narrow op
+  header), so a doc edit that breaks the patch scripts fails here
+  rather than silently shipping an unpatched tree;
 * the doc is the **only** one of the four OpenCV docs that builds 5.0.0
   with ``BUILD_opencv_apps=OFF``.  ``apps/model-diagnostics`` is an
   executable and links CANN's ``libge_compiler.so`` / ``libgraph.so``

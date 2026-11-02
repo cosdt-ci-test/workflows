@@ -1,0 +1,270 @@
+"""Quick-start-Ascend documentation test: end-to-end case built on top
+of the ``MarkdownDocTestBase`` contract.
+
+Document under test: ``projects/rtp-llm/docs/Quick-start-Ascend.md``
+(follows the ``docs/markdown_doc_test_label.md`` contract: every
+``shell`` code block carries one of the ``#test`` / ``#test-setup`` /
+``#test-result`` labels plus ``id=`` / ``store=`` / ``load='x>>y'`` /
+``fuzzy='xxx'`` parameters).
+
+Scope (single card, Ascend 910B): clone the upstream ``feature/ascend``
+branch -> adapt the aarch64 build inputs (upstream pins x86_64 torches /
+x86 lock direct links / a bare ``torch_npu`` wheel metadata) -> install
+the runtime dependency set -> ``bazelisk build //rtp_llm:rtp_llm_whl``
+-> install the wheel -> load the C++ engine ops -> download
+Qwen3-0.6B -> start the HTTP server and issue one generation request.
+
+The Ascend adaptation currently lives on ``feature/ascend`` (upstream
+PR #1481, merged into that feature branch only — ``main`` has no Ascend
+code yet). The workflow pins it via ``fixed_ref``, so the monitor fires
+whenever that branch's tip moves.
+
+Run: ``python -m unittest tests.test_quick_start_ascend -v 2>&1``
+
+Environment variables (injected by GitHub workflow
+``rtp-llm-quick-start.yml`` via the shared engine
+``quick-start-template.yml``):
+    ``MONITORED_DOC_URL``         Required; GitHub Contents API URL of the
+                                  document under test (the engine's monitor
+                                  hashes the same URL).
+    ``UPSTREAM_REF``              Required; the doc's hidden
+                                  ``#test-setup store="upstream_ref"`` block
+                                  captures ``$UPSTREAM_REF`` (the pinned
+                                  branch name) into ``captures``, then
+                                  substitutes it into the clone command
+                                  where ``<ref>`` appears.
+    ``NPU_READY=true``            Required, otherwise the class is skipped.
+                                  End-to-end tests only run on the NPU
+                                  runner: local dev machines / normal ubuntu
+                                  runners have no ``/dev/davinci*`` device.
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import unittest
+
+from workflows.markdown_doc_test_base import MarkdownDocTestBase
+
+
+def _is_truthy(value: str | None) -> bool:
+    """``'true'`` -> True (case-insensitive); anything else (including unset) -> False."""
+    if not value:
+        return False
+    return value.strip().lower() == 'true'
+
+
+def _e2e_enabled() -> bool:
+    """Return True when ``NPU_READY=true`` is set, releasing the skip."""
+    return _is_truthy(os.environ.get('NPU_READY'))
+
+
+class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
+    """``Quick-start-Ascend.md`` end-to-end test: fetch doc -> validate
+    contract -> run ``#test-setup`` / ``#test`` in order -> compare against
+    ``#test-result``.
+
+    Working directory is pinned to ``/root/rtp-llm-test``: the doc is
+    cwd-relative (clones to ``./rtp-llm``, model lands in
+    ``/root/rtp-llm-test/models``), so the clone tree must not collide
+    with the guard checkout (``workflows/projects/rtp-llm``).
+    """
+
+    # The bazel build is the dominant cost (external repo fetch + ~12k
+    # actions). 4h per command leaves headroom for a cold build; the
+    # workflow timeout_minutes (240) matches this ceiling.
+    DEFAULT_COMMAND_TIMEOUT = 14400
+
+    USER_AGENT = 'cosdt-ci-test/quick-start'
+
+    # Extend the base ERROR_MARKERS with CANN's typo + sentinel so a
+    # CANN runtime failure surfaces a full stderr dump instead of a
+    # head/tail window that hides the failing line.
+    ERROR_MARKERS = (
+        *MarkdownDocTestBase.ERROR_MARKERS,
+        'applicaiton exception',  # CANN toolkit emits this typo (sic)
+        'ERR99999',  # CANN sentinel for unrecoverable runtime failure
+    )
+
+    _CANN_SET_ENV_CANDIDATES = (
+        '/usr/local/Ascend/ascend-toolkit/set_env.sh',
+        '/usr/local/Ascend/cann/set_env.sh',
+    )
+
+    # Upstream hardcodes this interpreter path in deps/pip.bzl and in the
+    # bazel `ascend` config, and every lock entry is a cp310 wheel, so the
+    # doc's `python` must resolve here.
+    _PYTHON_PREFIX = '/opt/conda310'
+
+    # Build tools the bazel build needs; the engine only bootstraps
+    # curl / jq / git.
+    _BUILD_TOOLS: dict[str, str] = {
+        'gcc': 'gcc',
+        'g++': 'g++',
+        'make': 'make',
+        'git': 'git',
+        'curl': 'curl',
+    }
+
+    _WORK_DIR = '/root/rtp-llm-test'
+
+    _MINICONDA_URL = (
+        'https://mirrors.tuna.tsinghua.edu.cn/anaconda/miniconda/'
+        'Miniconda3-py310_25.1.1-2-Linux-aarch64.sh'
+    )
+
+    # ----------------------------------------------------------
+    # prepare_environment: CANN env + python 3.10 + build tools + cwd
+    # ----------------------------------------------------------
+
+    @classmethod
+    def _ensure_python310(cls) -> None:
+        """Make ``/opt/conda310/bin/python3`` a working Python 3.10.
+
+        Preference order: already present -> venv over the system
+        ``python3.10`` (Ubuntu 22.04 ships it, no download) -> Miniconda
+        from the Tsinghua mirror. A venv is enough: the build only needs
+        an interpreter, its headers (pybind11 / torch extensions) and pip.
+        """
+        target = f'{cls._PYTHON_PREFIX}/bin/python3'
+        if os.path.isfile(target):
+            print(f'setup: reusing {target}')
+            return
+
+        system_py = shutil.which('python3.10') or (
+            '/usr/bin/python3.10' if os.path.isfile('/usr/bin/python3.10') else None
+        )
+        if system_py:
+            print(f'setup: creating venv at {cls._PYTHON_PREFIX} from {system_py}')
+            # python3.10-venv provides ensurepip; without it `-m venv`
+            # fails with "ensurepip is not available".
+            probe = subprocess.run(
+                [system_py, '-c', 'import ensurepip'],
+                capture_output=True, check=False,
+            )
+            if probe.returncode != 0:
+                subprocess.run(['apt-get', 'update', '-qq'], check=True)
+                subprocess.run(
+                    ['apt-get', 'install', '-y', '-qq', 'python3.10-venv'],
+                    check=True,
+                )
+            subprocess.run([system_py, '-m', 'venv', cls._PYTHON_PREFIX], check=True)
+            subprocess.run(
+                [target, '-m', 'pip', 'install', '-q', '--upgrade', 'pip'],
+                check=True,
+            )
+            print('setup: venv ready')
+            return
+
+        print(f'setup: installing Miniconda to {cls._PYTHON_PREFIX}')
+        installer = '/tmp/miniconda.sh'
+        subprocess.run(
+            ['curl', '-fsSL', '--retry', '3', '-o', installer, cls._MINICONDA_URL],
+            check=True,
+        )
+        subprocess.run(
+            ['bash', installer, '-b', '-p', cls._PYTHON_PREFIX],
+            check=True,
+        )
+        print('setup: Miniconda ready')
+
+    @classmethod
+    def prepare_environment(cls) -> None:
+        """CANN env + Python 3.10 + build tools + working directory.
+
+        Everything business-facing (the aarch64 build-input adaptation,
+        the dependency install, ``bazelisk build``, the wheel install,
+        the model download, the server) is in the document itself: those
+        are the steps a reader follows.
+        """
+        # 0) PATH: /opt/conda310/bin first so the doc's bare `python`
+        # resolves to 3.10; /usr/local/sbin for npu-smi.
+        current_path = os.environ.get('PATH', '')
+        prefix_dirs = f'{cls._PYTHON_PREFIX}/bin:/usr/local/sbin:/usr/local/bin'
+        if not current_path.startswith(prefix_dirs):
+            os.environ['PATH'] = f'{prefix_dirs}:{current_path}'
+
+        # 1) CANN env: source set_env.sh and merge the env stream into
+        # os.environ so every doc block's subprocess inherits
+        # LD_LIBRARY_PATH / ASCEND_* without re-sourcing.
+        sourced = False
+        for set_env in cls._CANN_SET_ENV_CANDIDATES:
+            if os.path.isfile(set_env):
+                merged = subprocess.run(
+                    ['bash', '-c', f'source {set_env} >/dev/null 2>&1; env'],
+                    capture_output=True, text=True, check=True,
+                )
+                for line in merged.stdout.splitlines():
+                    if '=' not in line:
+                        continue
+                    key, _, value = line.partition('=')
+                    # Don't overwrite what the workflow injected.
+                    os.environ.setdefault(key, value)
+                print(f'setup: sourced CANN env from {set_env}')
+                sourced = True
+                break
+        if not sourced:
+            print(
+                'setup: no CANN set_env.sh found (expected '
+                f'{cls._CANN_SET_ENV_CANDIDATES}) - build will fail'
+            )
+
+        # 2) Python 3.10 at the hardcoded prefix.
+        cls._ensure_python310()
+
+        # 3) Build tools.
+        missing_pkgs = [
+            pkg for tool, pkg in cls._BUILD_TOOLS.items()
+            if shutil.which(tool) is None
+        ]
+        if missing_pkgs:
+            print(f'setup: installing build tools: {missing_pkgs}')
+            subprocess.run(['apt-get', 'update', '-qq'], check=True)
+            subprocess.run(
+                ['apt-get', 'install', '-y', '-qq', *missing_pkgs],
+                check=True,
+            )
+
+        # 4) Working directory: pinned before run_template() so the doc's
+        # cwd-relative clone/build never lands in the guard checkout.
+        os.makedirs(cls._WORK_DIR, exist_ok=True)
+        os.chdir(cls._WORK_DIR)
+        versions = subprocess.run(
+            [f'{cls._PYTHON_PREFIX}/bin/python3', '--version'],
+            capture_output=True, text=True, check=False,
+        )
+        print(f'setup: working dir {cls._WORK_DIR} | {versions.stdout.strip()}')
+
+    # ----------------------------------------------------------
+    # test entry
+    # ----------------------------------------------------------
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Run env setup once per test class.
+
+        ``@unittest.skipIf`` only skips the test *method* — ``setUpClass``
+        itself always runs. The ``if _e2e_enabled()`` body guard below is
+        what actually keeps heavy setup from firing when ``NPU_READY`` is
+        unset.
+        """
+        if _e2e_enabled():
+            cls.prepare_environment()
+
+    @unittest.skipIf(
+        not _e2e_enabled(),
+        'end-to-end requires NPU runner; set NPU_READY=true',
+    )
+    def test_runs_doc(self) -> None:
+        """Template-method entry point. The base class
+        ``run_template()`` runs the full ``pre_process`` -> ``parse`` ->
+        ``execute`` -> ``post_process`` flow. ``prepare_environment`` is
+        triggered by ``setUpClass`` once, not from ``run_template``."""
+
+        self.run_template()
+
+
+if __name__ == '__main__':
+    unittest.main()

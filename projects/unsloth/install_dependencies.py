@@ -36,6 +36,20 @@ subprocess.run(
      *sorted(set(selected)), "modelscope==1.37.0"],
     check=True,
 )
+# The non-quantized loader still imports Linear4bit for type checks.
+# Its base dependencies are already installed; preserve the NPU torch stack.
+subprocess.run(
+    [sys.executable, "-m", "pip", "install", "--no-deps", "bitsandbytes==0.50.2"],
+    check=True,
+)
+subprocess.run(
+    [sys.executable, "-c",
+     "from bitsandbytes.nn import Linear4bit; "
+     "from peft.tuners.lora import Linear4bit as PeftLinear4bit; "
+     "from importlib.metadata import version; "
+     "print('Quantization type imports OK:', version('bitsandbytes'), version('peft'))"],
+    check=True,
+)
 # A successful pip exit does not prove binary imports work together.
 subprocess.run(
     [sys.executable, "-c",

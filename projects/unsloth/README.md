@@ -25,8 +25,12 @@ Installation checks the three data-library imports and creates a small Dataset
 before proceeding to Unsloth.
 This combination has not yet been validated with Unsloth on our hardware.
 Declared non-CUDA dependencies are installed from the pinned source metadata;
-CUDA Triton, torchao, cut-cross-entropy and bitsandbytes are omitted for this
-non-quantized path. No source/backend patches or CPU substitutes are applied.
+CUDA Triton, torchao and cut-cross-entropy are omitted for this non-quantized
+path. bitsandbytes 0.50.2 is installed with `--no-deps` because the upstream
+loader unconditionally imports its Linear4bit type, even for BF16 models.
+Installation verifies both bitsandbytes and PEFT Linear4bit imports. This does
+not enable bitsandbytes quantization or its optimizers on the NPU.
+No source/backend patches or CPU substitutes are applied.
 Other dependency versions and the resolved ModelScope cache path appear in logs;
 the model and all transitive dependencies are not fully locked.
 

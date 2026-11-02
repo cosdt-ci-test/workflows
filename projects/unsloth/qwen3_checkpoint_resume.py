@@ -64,6 +64,7 @@ def main():
         from unsloth.device_type import DEVICE_TYPE
         from datasets import Dataset
         from modelscope import snapshot_download
+        from peft.utils.save_and_load import get_peft_model_state_dict
         from safetensors.torch import load_file
         from transformers import TrainerCallback
         from trl import SFTConfig, SFTTrainer
@@ -165,7 +166,7 @@ def main():
                 per_device_train_batch_size=1, gradient_accumulation_steps=1,
                 max_steps=3, learning_rate=2e-4, logging_steps=1,
                 optim="adamw_torch", bf16=True, fp16=False,
-                gradient_checkpointing=False, save_strategy="no",
+                gradient_checkpointing=False, save_strategy="no", save_steps=1,
                 report_to="none", seed=3407, dataloader_num_workers=0,
             ),
         )
@@ -177,19 +178,28 @@ def main():
         scheduler_state = trainer.lr_scheduler.state_dict()
         assert optimizer_state, "Optimizer state was not restored"
         assert scheduler_state, "Scheduler state was not restored"
+        result.update(
+            resumed_metrics=metrics, optimizer_state_entries=len(optimizer_state),
+            scheduler_state_keys=sorted(scheduler_state),
+            scheduler_last_epoch=scheduler_state.get("last_epoch"), steps=3,
+        )
+        save(result, "resume_state_verified", True)
 
-        current_weights = model.state_dict()
+        # PEFT removes the default adapter name when serializing its state.
+        # Compare in that same format instead of the raw model.state_dict().
+        current_weights = get_peft_model_state_dict(model)
         common_keys = checkpoint_weights.keys() & current_weights.keys()
         changed = sum(
             not torch.equal(checkpoint_weights[key].cpu(), current_weights[key].detach().cpu())
             for key in common_keys
         )
-        assert changed, "No LoRA weights changed after resumed training"
         result.update(
-            resumed_metrics=metrics, optimizer_state_entries=len(optimizer_state),
-            scheduler_state=scheduler_state, changed_lora_tensors=changed,
-            steps=3,
+            checkpoint_lora_tensors=len(checkpoint_weights),
+            common_lora_tensors=len(common_keys), changed_lora_tensors=changed,
         )
+        save(result, "lora_continuation_check")
+        assert common_keys, "Checkpoint and PEFT state have no common LoRA tensors"
+        assert changed, "No LoRA weights changed after resumed training"
         save(result, "resume_verified", True)
 
         ADAPTER.mkdir(parents=True, exist_ok=True)

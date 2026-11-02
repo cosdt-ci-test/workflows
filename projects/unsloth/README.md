@@ -70,7 +70,8 @@ state. The second loads that checkpoint, asserts training restarts at step 2,
 continues to step 3, checks restored optimizer and scheduler state, confirms
 checkpoint LoRA tensors changed, then saves and reloads the final adapter. This
 scenario keeps gradient checkpointing disabled so the resume check has one
-variable.
+variable. The continuation check compares PEFT's serialized adapter state, which
+omits the default adapter name, with the same format produced after resume.
 The selected scenario appears in the Actions run title, result.json and job summary,
 including when environment setup fails. The `"unsloth"` checkpointing mode uses
 upstream's long-context threshold and is not treated as a performance claim.

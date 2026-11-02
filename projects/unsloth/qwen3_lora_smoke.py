@@ -27,15 +27,28 @@ def record(stage, completed=False):
 
 
 def checkpointing_for_scenario(value):
-    if value not in ("baseline", "standard-gc"):
+    mode = {
+        "baseline": False,
+        "standard-gc": True,
+        "unsloth-gc": "unsloth",
+    }.get(value)
+    if mode is None and value != "baseline":
         raise ValueError(f"Unknown test scenario: {value!r}")
-    return value == "standard-gc"
+    return mode
 
 
 try:
     record("scenario_setup")
-    gradient_checkpointing = checkpointing_for_scenario(scenario)
-    result["gradient_checkpointing_mode"] = "standard" if gradient_checkpointing else "disabled"
+    checkpointing = checkpointing_for_scenario(scenario)
+    gradient_checkpointing = bool(checkpointing)
+    trainer_checkpointing = checkpointing is True
+    # Unsloth falls back to standard checkpointing below 512 tokens.
+    max_seq_length = 512 if checkpointing == "unsloth" else 256
+    result["gradient_checkpointing_mode"] = (
+        "disabled" if checkpointing is False else
+        "standard" if checkpointing is True else checkpointing
+    )
+    result["max_seq_length"] = max_seq_length
     print("Test scenario:", scenario)
     record("import")
     # torch_npu registers the NPU backend; Unsloth precedes HF/TRL imports.
@@ -56,14 +69,24 @@ try:
                 if getattr(module, "gradient_checkpointing", False)
             ]
             enabled = bool(getattr(model, "is_gradient_checkpointing", False))
+            effective_mode = getattr(model, "_unsloth_gradient_checkpointing", None)
+            checkpoint_function = torch.utils.checkpoint.CheckpointFunction.__name__
             result["gradient_checkpointing_enabled"] = enabled
+            result["trainer_gradient_checkpointing"] = bool(args.gradient_checkpointing)
             result["gradient_checkpointing_modules"] = enabled_modules
+            result["effective_checkpointing_mode"] = effective_mode
+            result["checkpoint_function"] = checkpoint_function
             record("training")
-            assert bool(args.gradient_checkpointing) == gradient_checkpointing, "Trainer checkpointing disagrees with scenario"
+            assert bool(args.gradient_checkpointing) == trainer_checkpointing, "Trainer checkpointing disagrees with scenario"
+            assert effective_mode == checkpointing, (
+                f"Effective checkpointing mode {effective_mode!r} != {checkpointing!r}"
+            )
             if gradient_checkpointing:
                 assert enabled and enabled_modules, "Model checkpointing is not enabled"
             else:
                 assert not enabled and not enabled_modules, "Baseline unexpectedly enabled checkpointing"
+            if checkpointing == "unsloth":
+                assert checkpoint_function == "UnslothCheckpointFunction", checkpoint_function
             print("Checkpointing state:", scenario, enabled, enabled_modules)
 
     assert DEVICE_TYPE == "npu", DEVICE_TYPE
@@ -80,9 +103,9 @@ try:
 
     record("model_load")
     # Keep the baseline loader call equivalent to successful run #4.
-    load_kwargs = {"use_gradient_checkpointing": True} if gradient_checkpointing else {}
+    load_kwargs = {"use_gradient_checkpointing": checkpointing} if gradient_checkpointing else {}
     model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name=model_path, max_seq_length=256, dtype=torch.bfloat16,
+        model_name=model_path, max_seq_length=max_seq_length, dtype=torch.bfloat16,
         load_in_4bit=False, load_in_8bit=False, load_in_16bit=True,
         full_finetuning=False, fast_inference=False, device_map={"": "npu:0"},
         **load_kwargs,
@@ -95,7 +118,7 @@ try:
         model, r=8, target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
                                     "gate_proj", "up_proj", "down_proj"],
         lora_alpha=16, lora_dropout=0, bias="none",
-        use_gradient_checkpointing=gradient_checkpointing, random_state=3407,
+        use_gradient_checkpointing=checkpointing, random_state=3407,
     )
     trainable = {n: p for n, p in model.named_parameters() if p.requires_grad}
     assert trainable and all("lora_" in n for n in trainable)
@@ -103,27 +126,43 @@ try:
     record("lora_setup", True)
 
     # Local conversations keep dataset downloads out of the training trial.
-    conversations = [
+    base_conversations = [
         [{"role": "user", "content": "What is the capital of France?"},
          {"role": "assistant", "content": "The capital of France is Paris."}],
         [{"role": "user", "content": "What is two plus two?"},
          {"role": "assistant", "content": "Two plus two equals four."}],
         [{"role": "user", "content": "Name a primary color."},
          {"role": "assistant", "content": "Red is a primary color."}],
-    ] * 4
+    ]
+    if checkpointing == "unsloth":
+        long_context = (
+            "This sentence is repeated to exercise long-context activation "
+            "recomputation under Unsloth checkpointing. " * 50
+        )
+        conversations = [
+            [{"role": "user", "content": long_context + c[0]["content"]}, c[1]]
+            for c in base_conversations
+        ] * 4
+    else:
+        conversations = base_conversations * 4
     texts = [tokenizer.apply_chat_template(
         c, tokenize=False, add_generation_prompt=False, enable_thinking=False
     ) for c in conversations]
+    token_lengths = [len(tokenizer(text, truncation=True, max_length=max_seq_length)["input_ids"])
+                     for text in texts]
+    result["max_training_tokens"] = max(token_lengths)
+    if checkpointing == "unsloth":
+        assert result["max_training_tokens"] == max_seq_length, result["max_training_tokens"]
     trainer = SFTTrainer(
         model=model, processing_class=tokenizer,
         train_dataset=Dataset.from_dict({"text": texts}),
         callbacks=[CheckGradientCheckpointing()],
         args=SFTConfig(
             output_dir=str(OUTPUT / "trainer"), dataset_text_field="text",
-            max_length=256, packing=False, per_device_train_batch_size=1,
+            max_length=max_seq_length, packing=False, per_device_train_batch_size=1,
             gradient_accumulation_steps=1, max_steps=3, learning_rate=2e-4,
             logging_steps=1, optim="adamw_torch", bf16=True, fp16=False,
-            gradient_checkpointing=gradient_checkpointing, save_strategy="no", report_to="none",
+            gradient_checkpointing=trainer_checkpointing, save_strategy="no", report_to="none",
             seed=3407, dataloader_num_workers=0,
         ),
     )
@@ -153,7 +192,7 @@ try:
     gc.collect()
     torch.npu.empty_cache()
     model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name=str(adapter), max_seq_length=256, dtype=torch.bfloat16,
+        model_name=str(adapter), max_seq_length=max_seq_length, dtype=torch.bfloat16,
         load_in_4bit=False, load_in_8bit=False, load_in_16bit=True,
         fast_inference=False, device_map={"": "npu:0"},
     )

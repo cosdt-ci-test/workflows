@@ -12,6 +12,7 @@ on:
         options:
           - baseline
           - standard-gc
+          - unsloth-gc
 
 permissions:
   contents: read

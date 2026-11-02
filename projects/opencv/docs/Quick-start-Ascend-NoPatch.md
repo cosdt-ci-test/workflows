@@ -346,15 +346,36 @@ xxx
 > 换 CANN 9.2.0 复测（npu-4 / 910B4 / gcc 11.4 / Release -O3，同一份 4.14.0 源码、零补丁）：`.text` = **56,123,568 B（≈53.5 MiB）**、`Total` = 77,331,307 B、库文件 98,304,552 B —— 与 9.1.0 相差 ~0.2 MiB（CANN 头文件版本差异），离 128 MiB 窗口的余量不变。
 
 ```shell #test id="np-opencv-dnn-text-size"
-size -A /usr/local/opencv-cann-414/lib/libopencv_dnn.so.4.14.0 | grep -E '^\.text|^Total'
+size -A /usr/local/opencv-cann-414/lib/libopencv_dnn.so.4.14.0 | awk '$1==".text" || $1=="Total"'
 ```
 
 输出结果如下：
-```shell #test-result id="np-opencv-dnn-text-size" fuzzy='xxx' fuzzy='...'
+```shell #test-result id="np-opencv-dnn-text-size" fuzzy='xxx'
 .text xxx
-...
 Total xxx
 ```
+
+> 这条断言**必须只输出两行**：`awk` 把 `.text` 与 `Total` 钉死，中间不留任何别的段。
+> 原因是 doc-test 契约里 placeholder 是**通配符**而不是行省略 —— expected 里如果写一行
+> 独占的 `...`，正则会强要「一个换行 + 至少一个字符」，而过滤后的输出里 `.text` 与
+> `Total` 是**紧挨着**的 ⇒ 永远 MISMATCH。（`grep -E '^\.text|^Total'` 还有一个副作用：
+> 它会连带捞进 `.text.hot` / `.text._Z...` 之类的段，行数随构建配置浮动。）
+
+再加一条上界，把「Release 不是 Debug」这件事也钉住：
+
+```shell #test id="np-opencv-dnn-text-size-bound"
+TEXT=$(size -A /usr/local/opencv-cann-414/lib/libopencv_dnn.so.4.14.0 | awk '$1==".text"{print $2}')
+echo "text bytes: $TEXT"
+test "$TEXT" -gt 0 && test "$TEXT" -lt 67108864
+```
+
+输出结果如下：
+```shell #test-result id="np-opencv-dnn-text-size-bound" fuzzy='xxx'
+text bytes: xxx
+```
+
+> 上界取 64 MiB：Release 实测 56,123,568 B（CANN 9.2.0）/ 55,920,432 B（CANN 9.1.0），
+> 留 ~8 MiB 余量；而 Debug(-O0) 是 516 MB，一秒就被这条断言拦下。
 
 ## OpenCV Python quickstart
 

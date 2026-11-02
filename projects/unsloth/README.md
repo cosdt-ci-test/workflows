@@ -95,6 +95,10 @@ parameter is trainable, and performs three BF16 optimizer steps. It compares
 sampled parameters across the model, saves a complete BF16 model, then reloads
 it in a separate process that does not import Unsloth. This is the first half of
 item 07; continued pretraining will use a separate data and objective check.
+BF16 full fine-tuning in Unsloth intentionally keeps normalization weights in
+FP32 for numerical stability. The export check therefore requires all non-norm
+floating weights to be BF16 and permits FP32 only for tensors whose names contain
+`norm`; the exact FP32 tensor names are recorded in result.json.
 The selected scenario appears in the Actions run title, result.json and job summary,
 including when environment setup fails. The `"unsloth"` checkpointing mode uses
 upstream's long-context threshold and is not treated as a performance claim.

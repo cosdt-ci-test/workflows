@@ -48,6 +48,21 @@ def weight_files():
     return files
 
 
+def validate_float_dtypes(dtypes_by_key):
+    float_dtypes = set(dtypes_by_key.values())
+    fp32_tensors = sorted(
+        key for key, dtype in dtypes_by_key.items() if dtype == "F32"
+    )
+    non_norm_dtypes = {
+        dtype for key, dtype in dtypes_by_key.items()
+        if "norm" not in key.lower()
+    }
+    assert "BF16" in float_dtypes, float_dtypes
+    assert non_norm_dtypes == {"BF16"}, non_norm_dtypes
+    assert all("norm" in key.lower() for key in fp32_tensors), fp32_tensors
+    return sorted(float_dtypes), fp32_tensors
+
+
 def sample_parameters(model):
     wanted = {
         "model.embed_tokens.weight": 128,
@@ -153,18 +168,19 @@ def train_and_save():
     assert files, "No full-model safetensors files were written"
     config = json.loads((MODEL_DIR / "config.json").read_text())
     configured_dtype = config.get("dtype", config.get("torch_dtype"))
-    float_dtypes = set()
+    float_dtypes_by_key = {}
     for path in files:
         with safe_open(str(path), framework="pt", device="cpu") as data:
             for key in data.keys():
                 dtype = data.get_slice(key).get_dtype()
                 if dtype in ("F16", "F32", "BF16"):
-                    float_dtypes.add(dtype)
-    assert float_dtypes == {"BF16"}, float_dtypes
+                    float_dtypes_by_key[key] = dtype
+    float_dtypes, fp32_tensors = validate_float_dtypes(float_dtypes_by_key)
     assert configured_dtype == "bfloat16", configured_dtype
     result.update(model_directory=str(MODEL_DIR),
                   model_weight_files=[path.name for path in files],
-                  model_float_dtypes=sorted(float_dtypes),
+                  model_float_dtypes=float_dtypes,
+                  fp32_norm_tensors=fp32_tensors,
                   configured_dtype=configured_dtype,
                   model_size_bytes=sum(path.stat().st_size for path in files),
                   status="full_model_ready")

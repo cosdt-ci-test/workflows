@@ -55,11 +55,15 @@ try:
         device_map={"": "npu:0"}, use_gradient_checkpointing=False,
     )
     assert all(parameter.device.type == "npu" for parameter in model.parameters())
+    tied_word_embeddings = bool(model.config.tie_word_embeddings)
+    tied_parameter_identity = (
+        model.get_input_embeddings().weight is model.get_output_embeddings().weight
+    )
     model = FastLanguageModel.get_peft_model(
         model, r=8,
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
-                        "gate_proj", "up_proj", "down_proj",
-                        "embed_tokens", "lm_head"],
+                        "gate_proj", "up_proj", "down_proj"],
+        modules_to_save=["embed_tokens", "lm_head"],
         lora_alpha=16, lora_dropout=0, bias="none",
         use_gradient_checkpointing=False, random_state=3407,
         use_rslora=True,
@@ -68,11 +72,16 @@ try:
                  if parameter.requires_grad}
     assert trainable, "No trainable CPT parameters"
     assert any("embed_tokens" in name for name in trainable), sorted(trainable)[:10]
-    assert any("lm_head" in name for name in trainable), sorted(trainable)[-10:]
+    assert any("modules_to_save" in name for name in trainable), sorted(trainable)[-10:]
     before = {name: parameter.detach().cpu().clone()
               for name, parameter in trainable.items()}
     result["trainable_parameters"] = sum(
         parameter.numel() for parameter in trainable.values()
+    )
+    result["tied_word_embeddings"] = tied_word_embeddings
+    result["tied_parameter_identity"] = tied_parameter_identity
+    result["separate_lm_head_trainable"] = any(
+        "lm_head" in name for name in trainable
     )
     save("continued_pretrain_lora_setup", True)
 

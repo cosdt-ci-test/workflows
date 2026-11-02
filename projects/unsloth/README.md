@@ -102,8 +102,10 @@ floating weights to be BF16 and permits FP32 only for tensors whose names contai
 `norm`; the exact FP32 tensor names are recorded in result.json.
 
 The `continued-pretrain` scenario follows the official CPT pattern: raw local
-documents with EOS appended, rank-8 LoRA on the transformer projections plus
-`embed_tokens` and `lm_head`, and loss over every token. It does not apply the
+documents with EOS appended, rank-8 LoRA on the transformer projections, and
+`embed_tokens`/`lm_head` in `modules_to_save`, with loss over every token. Qwen3
+ties the output head to the input embedding, so Unsloth drops the duplicate tied
+output module while training the shared embedding weight. It does not apply the
 chat template or assistant-only response masking. Three optimizer steps must
 change LoRA weights before the CPT adapter is saved, reloaded and used for a
 generation smoke check.

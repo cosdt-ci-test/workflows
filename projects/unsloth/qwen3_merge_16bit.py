@@ -1,19 +1,30 @@
-"""Train LoRA, merge into BF16 weights, then reload without Unsloth."""
+"""Train LoRA and export BF16, then reload in a clean Transformers process."""
+import argparse
 import gc
 import json
 import math
 from pathlib import Path
+import sys
 import traceback
 
 OUTPUT = Path("output")
 OUTPUT.mkdir(exist_ok=True)
 RESULT_PATH = OUTPUT / "result.json"
 MERGED = OUTPUT / "merged_16bit"
-result = {
-    "status": "running", "stage": "merge_setup", "completed": [],
-    "scenario": "merge-16bit", "gradient_checkpointing_mode": "disabled",
-    "model": "Qwen/Qwen3-0.6B",
-}
+result = {}
+
+
+def load_result(phase):
+    if RESULT_PATH.exists():
+        data = json.loads(RESULT_PATH.read_text())
+    else:
+        data = {
+            "status": "running", "stage": "merge_setup", "completed": [],
+            "scenario": "merge-16bit", "gradient_checkpointing_mode": "disabled",
+            "model": "Qwen/Qwen3-0.6B",
+        }
+    data["phase"] = phase
+    return data
 
 
 def save(stage, completed=False):
@@ -21,7 +32,8 @@ def save(stage, completed=False):
     if completed and stage not in result["completed"]:
         result["completed"].append(stage)
     RESULT_PATH.write_text(json.dumps(result, indent=2))
-    print(json.dumps({"stage": stage, "completed": completed}), flush=True)
+    print(json.dumps({"phase": result["phase"], "stage": stage,
+                      "completed": completed}), flush=True)
 
 
 def merged_weight_files():
@@ -36,8 +48,7 @@ def merged_weight_files():
     return files
 
 
-try:
-    save("scenario_setup", True)
+def train_and_export():
     import torch
     import torch_npu
     from unsloth import FastLanguageModel
@@ -45,7 +56,6 @@ try:
     from datasets import Dataset
     from modelscope import snapshot_download
     from safetensors import safe_open
-    from transformers import AutoModelForCausalLM, AutoTokenizer
     from trl import SFTConfig, SFTTrainer
 
     assert DEVICE_TYPE == "npu", DEVICE_TYPE
@@ -140,6 +150,7 @@ try:
         merged_float_dtypes=sorted(float_dtypes),
         configured_dtype=configured_dtype,
         merged_size_bytes=sum(path.stat().st_size for path in weight_files),
+        status="merge_ready",
     )
     save("merge_export", True)
 
@@ -147,20 +158,48 @@ try:
     gc.collect()
     torch.npu.empty_cache()
 
-    save("independent_reload")
+
+def reload_and_inference():
+    import torch
+    import torch_npu
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    assert "unsloth" not in sys.modules, "Unsloth was imported in clean reload process"
+    assert "unsloth_zoo" not in sys.modules, "Unsloth Zoo was imported in clean reload process"
+    assert result.get("status") == "merge_ready", result.get("status")
+    assert torch.npu.is_available()
+    torch.npu.set_device(0)
+    result["device"] = torch.npu.get_device_name(0)
+    result["unsloth_imported"] = False
+    save("clean_reload_environment", True)
+
+    weight_files = merged_weight_files()
+    assert weight_files, "Merged weights are missing"
+    assert (MERGED / "config.json").is_file()
+    save("merged_files_verified", True)
+
     reloaded_tokenizer = AutoTokenizer.from_pretrained(str(MERGED))
     reloaded = AutoModelForCausalLM.from_pretrained(
         str(MERGED), dtype=torch.bfloat16,
     ).to("npu").eval()
+    model_module = type(reloaded).__module__
+    assert model_module.startswith("transformers."), model_module
     assert all(parameter.device.type == "npu" for parameter in reloaded.parameters())
+    result["reloaded_class"] = type(reloaded).__name__
+    result["reloaded_module"] = model_module
+
     prompt = reloaded_tokenizer.apply_chat_template(
         [{"role": "user", "content": "What is two plus two?"}],
         tokenize=False, add_generation_prompt=True, enable_thinking=False,
     )
     batch = reloaded_tokenizer(prompt, return_tensors="pt").to("npu")
+    position_ids = torch.arange(
+        batch.input_ids.shape[1], dtype=torch.long, device="npu",
+    ).unsqueeze(0)
     with torch.inference_mode():
         tokens = reloaded.generate(
-            **batch, max_new_tokens=32, do_sample=False,
+            **batch, position_ids=position_ids,
+            max_new_tokens=32, do_sample=False,
         )
     torch.npu.synchronize()
     generated = tokens[0, batch.input_ids.shape[1]:]
@@ -172,8 +211,26 @@ try:
     save("independent_reload", True)
     result["status"] = "passed"
     save("complete")
-except Exception as exc:
-    result.update(status="failed", error=f"{type(exc).__name__}: {exc}")
-    save(result["stage"])
-    traceback.print_exc()
-    raise
+
+
+def main():
+    global result
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--phase", choices=["train", "reload"], required=True)
+    args = parser.parse_args()
+    result = load_result(args.phase)
+    try:
+        save("scenario_setup", True)
+        if args.phase == "train":
+            train_and_export()
+        else:
+            reload_and_inference()
+    except Exception as exc:
+        result.update(status="failed", error=f"{type(exc).__name__}: {exc}")
+        save(result["stage"])
+        traceback.print_exc()
+        raise
+
+
+if __name__ == "__main__":
+    main()

@@ -90,7 +90,8 @@ jobs:
             python projects/unsloth/qwen3_checkpoint_resume.py --phase train 2>&1 | tee output/resume-train.log
             python projects/unsloth/qwen3_checkpoint_resume.py --phase resume 2>&1 | tee output/resume.log
           elif [[ "$TEST_SCENARIO" == "merge-16bit" ]]; then
-            python projects/unsloth/qwen3_merge_16bit.py 2>&1 | tee output/merge-16bit.log
+            python projects/unsloth/qwen3_merge_16bit.py --phase train 2>&1 | tee output/merge-16bit-train.log
+            python projects/unsloth/qwen3_merge_16bit.py --phase reload 2>&1 | tee output/merge-16bit-reload.log
           else
             python projects/unsloth/qwen3_lora_smoke.py 2>&1 | tee output/example.log
           fi

@@ -11,14 +11,15 @@
 
 | 文档 | OpenCV 版本 | 源码补丁 | 定位 |
 | --- | --- | --- | --- |
-| **本文** | 5.0（跟随上游 latest release） | 3 组 | 5.0 的**昇腾视角**特性导览（非 CPU 通路 + 影响） + 跑通路径 |
-| [Quick-start-Ascend.md](Quick-start-Ascend.md) | 5.0（跟随上游 latest release） | 3 组 | 同一配方，偏「补丁逐行说明 + cannops 单测证据」 |
+| **本文** | 5.0（跟随上游 latest release） | 2 组 | 5.0 的**昇腾视角**特性导览（非 CPU 通路 + 影响） + 跑通路径；**不编 `opencv_contrib`** |
+| [Quick-start-Ascend.md](Quick-start-Ascend.md) | 5.0（跟随上游 latest release） | 3 组 | 同一配方，偏「补丁逐行说明 + cannops 单测证据」——**`cv2.cann` 只在那篇有** |
 | [Quick-start-Ascend-NoPatch.md](Quick-start-Ascend-NoPatch.md) | 4.11.0（钉死） | 0 组 | 不想维护本地补丁时的退路（放弃 5.x 特性） |
 
 三条路线的取舍：
 
 - 要 5.0 的新能力（新 DNN 图引擎、原生 LLM/VLM、新 dtype、1D/0D Mat、STB 新字体、USAC 默认后端）→ 走 5.0，**必须打补丁**（原因见 §5：5.0 把 shape 类型换成了 `cv::MatShape`，而上游 CANN 后端没跟上）；
 - 不想维护任何本地补丁 → 走 4.11 零补丁路线，但只能停在 4.x。
+- 要 `cv2.cann`（contrib 的经典算子加速 API）→ 走 [主文档](Quick-start-Ascend.md)。**本文不编 `opencv_contrib`**：contrib 的 `cannops` 在 CANN 9.x 上还得额外打第 3 组补丁（NULL 流兜底，见 §5 末尾的说明），而它对本文要回答的问题（5.0 相对 4.x 变了什么、哪条通路能上卡）没有增量。
 
 > **版本口径**：本文的 `<ref>` 由 CI 注入，解析自上游 GitHub `releases/latest`。截至 2026-10-23，上游把它标成 **5.0.0**（4.14.0 是 4.x 维护线，发布更晚但**不是** latest）。§5 的补丁脚本只对 **5.0.x** 成立（`cv::MatShape` 是 5.0 引入的，4.x 里根本没有这个类型），上游一旦出 5.1/6.0，需要人工复核补丁。
 
@@ -33,13 +34,13 @@
 | 通路 | 5.0 状态 | 本文实测（910B4 / CANN 9.2.0 / OpenCV 5.0.0） |
 | --- | --- | --- |
 | **DNN 经典引擎 + CANN 后端** | ✅ **唯一能上卡的 DNN 通路**（4.x 时代那条，5.0 原样保留） | 103 层转 CANN 算子、GE 图编译 1 次、top-1 372、score 0.9142662（§2.3 台账 / §10.2） |
-| **contrib `cannops`（`cv2.cann`）** | ✅ 用 CANN 算子加速经典图像算子 | 单测 **53/53** 通过（§8.1） |
+| **contrib `cannops`（`cv2.cann`）** | ✅ 用 CANN 算子加速经典图像算子 | ❌ **本文不编 contrib**，这条通路不覆盖；单测证据在 [主文档](Quick-start-Ascend.md) |
 | **DNN 新图引擎**（5.0 的招牌） | ❌ **上游写死 CPU only** | 默认 `ENGINE_AUTO` 会落到它 → 推理成功但**完全不上卡**：请求 CANN 后端只打 2 条 WARN、**0** 次 GE 图编译（§2.3 台账 P5 / §10.1） |
 | **ONNX Runtime 后端** | ❌ 不是 NPU 路径；本文也没编（要 `-DWITH_ONNXRUNTIME=ON`） | — |
 | **非 CPU HAL 2.0**（厂商加速接口 + UMat 通用异构容器） | ❌ **5.0.0 未落地**（上游标 "5.0, 5.x: expected"，issue #25019 / #25025） | — |
 | NPU 视频解码 / NPU 图像处理（`cannops` 之外） | ❌ OpenCV 5.0 主仓没有这类通路 | — |
 
-**一句话结论**：5.0 给昇腾带来的**不是新能力，而是风险**——新特性大多与 NPU 无关，而唯一那条能上卡的通路（经典引擎 + CANN 后端）在 5.0 源码树上还得先打 3 组补丁才编得过（§5），默认引擎还会把你悄悄甩到不上卡的新引擎上（§10.1）。
+**一句话结论**：5.0 给昇腾带来的**不是新能力，而是风险**——新特性大多与 NPU 无关，而唯一那条能上卡的通路（经典引擎 + CANN 后端）在 5.0 源码树上还得先打 2 组补丁才编得过（§5），默认引擎还会把你悄悄甩到不上卡的新引擎上（§10.1）。
 
 ### 2.2 5.0 的改动里，真正影响 NPU 通路的那几条
 
@@ -112,7 +113,7 @@
 | `calib3d` → `geometry`/`calib`/`stereo`/`ptcloud` | `[5.0 行为变化]` | **4 个**模块（迁移指南正文写 "three" 是笔误）；Python 透明 | 纯 CPU |
 | imgproc 计算几何 → `geometry` | `[5.0 行为变化]` | `convexHull` / `Delaunay` / `Subdiv2D` 等 | 纯 CPU |
 | `features2d` → `features` + ALIKED / DISK / LightGlue / Annoy | `[5.0 新增]` | **FLANN 模块没有被移除**（5.0.0 仍有 `modules/flann/src/flann.cpp`） | 纯 CPU |
-| G-API / 经典 ml / Haar-HOG → contrib | `[5.0 行为变化]` | 需编 `opencv_contrib` | 本文只编了 `cannops` |
+| G-API / 经典 ml / Haar-HOG → contrib | `[5.0 行为变化]` | 需编 `opencv_contrib` | 本文**不编 contrib** |
 | 移除遗留 C API / OpenVX | `[5.0 移除]` | 只保留 `CV_*` 这类宏 | 与后端无关 |
 | USAC 成默认后端 / 多目标定 / `ptcloud` | `[5.0 新增]` | PROSAC·MAGSAC++·GC-RANSAC·SPRT；TSDF·ICP·`.ply`·`.obj` | 纯 CPU |
 | C++17 / Python 3 | `[5.0 新增]` | Python 2 移除；编译器下限 GCC 8 | 环境约束（镜像 GCC 11.4 满足） |
@@ -122,9 +123,9 @@
 
 ### 2.5 本文覆盖边界（明确没覆盖什么）
 
-- **本文没编的**：`onnxruntime` 后端、`opencv_contrib` 里除 `cannops` 外的模块（`xobjdetect` / `xfeatures2d` / `ml` / `gapi` / `rgbd`…）、Java / JS / ObjC 绑定、OpenCL 路径。
-- **本文编了但不逐条验证的**：`core, imgproc, imgcodecs, videoio, dnn, python3, cannops, ts`（见 §7 的 `BUILD_LIST`）。§2.4 里凡是纯 CPU 的特性，本文**只保证「API 存在、能 import」，不保证逐个跑过**，本文也没在 NPU 上验证它们。
-- **真正跑过的只有三处**：§9 的 CPU quickstart、§10 的 NPU 推理（经典引擎 + 新引擎各一遍）、§8.1 的 `cannops` gtest。
+- **本文没编的**：`onnxruntime` 后端、**整个 `opencv_contrib`**（含 `cannops` / `xobjdetect` / `xfeatures2d` / `ml` / `gapi` / `rgbd`…）、Java / JS / ObjC 绑定、OpenCL 路径。
+- **本文编了但不逐条验证的**：`core, imgproc, imgcodecs, videoio, dnn, python3, ts`（见 §7 的 `BUILD_LIST`）。§2.4 里凡是纯 CPU 的特性，本文**只保证「API 存在、能 import」，不保证逐个跑过**，本文也没在 NPU 上验证它们。
+- **真正跑过的只有两处**：§9 的 CPU quickstart、§10 的 NPU 推理（经典引擎 + 新引擎各一遍）。
 - **本文没有覆盖的上游能力**：C++ API 的完整迁移面、Java 绑定的 import 变更、samples 集合、`docs.opencv.org` 新文档站。
 - **§2.2 / §2.3 的判定方法**：上游 wiki + 迁移指南 + Change Log 三份文档，与 `5.0.0` / `4.14.0` 两个 tag 的源码树逐条比对；带「实测」标记的是本文在 910B4 上跑出来的——§2.3 末尾的 P1–P7 探针台账就是这些实测的原始记录。**纯 CPU 特性不在验证范围内**：§2.4 表里的东西本文只做源码级判定。
 
@@ -151,7 +152,6 @@ Atlas 900 A2 / A3 训练系列产品或 Ascend 950 系列，已挂载 `/dev/davi
 | 镜像 | `swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12`（CI）/ CANN 9.2.0（本地验证机） |
 | Python / CMake / GCC | 3.12 / ≥ 3.18 / 11 |
 | OpenCV | 5.0.0（源码，`WITH_CANN=ON`，`CMAKE_BUILD_TYPE=Debug`）|
-| opencv_contrib | 5.0.0（同 tag，只用其中的 `cannops` 模块）|
 | 安装前缀 | `/usr/local/opencv-cann-5`（与同仓另两条路线的 `/usr/local/opencv-cann`、`/usr/local/opencv-cann-411` 互不覆盖）|
 
 ### 前置安装
@@ -212,33 +212,31 @@ echo "${UPSTREAM_REF}"
 
 ```shell #test-setup load="upstream_ref>>ref"
 git clone --depth 1 --branch <ref> https://github.com/opencv/opencv.git
-git clone --depth 1 --branch <ref> https://github.com/opencv/opencv_contrib.git
 ```
 
 确认 clone 到的是 5.0：
 
 ```shell #test id="ocv5-opencv-ref"
 cd opencv && git describe --tags
-cd ../opencv_contrib && git describe --tags
 ```
 
 输出结果如下：
 ```shell #test-result id="ocv5-opencv-ref" fuzzy='xxx'
 5.0.xxx
-5.0.xxx
 ```
 
 > 这一步是 §1「补丁只对 5.0.x 成立」的守门人：如果上游把 `releases/latest` 换成 5.1/6.0，`git describe` 会打出别的 tag，此时 §5 的补丁脚本会**断言失败**（而不是悄悄编出一个错的东西），提示人工复核。
 
-## 5. 打 3 组源码补丁
+## 5. 打 2 组源码补丁
 
-OpenCV 5.0 mainline 与 CANN 9.x / aarch64 有 3 处不兼容（对应 §2.2 里的两行）。按顺序跑这 3 段脚本。**三段都是幂等的**：重复跑会打印 `already patched` 并跳过，所以中途失败可以直接重跑。
+OpenCV 5.0 mainline 与 CANN 9.x / aarch64 有 2 处不兼容：一处是 §2.2 的 `cv::MatShape` 断裂（**编不过**），一处是 aarch64 的 ±128 MiB 链接窗口（**链接不过**）。按顺序跑这 2 段脚本。**两段都是幂等的**：重复跑会打印 `already patched` 并跳过，所以中途失败可以直接重跑。
 
 | 组 | 上游哪里坏了 | 改法 |
 | --- | --- | --- |
 | 1 | OpenCV 5.0 把 shape 类型换成 `cv::MatShape`（`explicit` 构造、**没有** `front()`），上游 CANN 后端还停在 4.x 的 `std::vector<int>` 写法 | 新增 1 个 `cv::MatShape` 重载转发给上游构造 + 修 3 处赋值 |
 | 2 | `all_ops.h` 的 ~1500 个 op 把 dnn `.text` 撑破 aarch64 ±128 MiB 链接窗口 | per-TU 窄 op 头 |
-| 3 | CANN 9.x 拒绝 NULL 流（EH0008） | `OperatorRunner::run` 回落到 ctx 默认流 |
+
+> 曾经还有第 3 组（contrib `cannops` 的 NULL 流兜底）。**本文不编 `opencv_contrib`**，所以不需要它：那条 NULL 流断言只在算子级 API `aclopCompileAndExecute` 上触发，而本文走的是模型级 `aclmdlExecute`（经典引擎 + CANN 后端），不经过它。要 `cv2.cann` 那条通路请走 [主文档](Quick-start-Ascend.md)。
 
 ### 组 1. `cv::MatShape` 改了类型
 
@@ -374,66 +372,11 @@ PY
 
 预期：`(e)` 1 行打印，`(f)` 23 个文件被改。
 
-### 组 3. `OperatorRunner` 的 NULL 流 fallback
-
-CANN 9.x 的 `aclopCompileAndExecute` 拒绝 NULL 流（报 `EH0008`）。NULL 时换成 `aclrtCtxGetCurrentDefaultStream`。
-
-```shell #test-setup
-python3 - <<'PY'
-import pathlib
-p = pathlib.Path('opencv_contrib/modules/cannops/src/cann_call.cpp')
-s = p.read_text()
-old = '''OperatorRunner& OperatorRunner::run(AscendStream& stream)
-{
-    aclrtStream rawStream = AscendStreamAccessor::getStream(stream);
-    CV_ACL_SAFE_CALL(aclopCompileAndExecute(op.c_str(), inputDesc_.size(), inputDesc_.data(),
-                                            inputBuffers_.data(), outputDesc_.size(),
-                                            outputDesc_.data(), outputBuffers_.data(), opAttr_,
-                                            ACL_ENGINE_SYS, ACL_COMPILE_SYS, NULL, rawStream));
-    if (rawStream == nullptr)
-        CV_ACL_SAFE_CALL(aclrtSynchronizeStream(rawStream));
-    else
-    {
-        for (const auto& ptr : holder)
-            stream.addTensorHolder(ptr);
-    }
-    return *this;
-}'''
-new = '''OperatorRunner& OperatorRunner::run(AscendStream& stream)
-{
-    aclrtStream rawStream = AscendStreamAccessor::getStream(stream);
-    aclrtStream execStream = rawStream;
-    if (execStream == nullptr)
-        CV_ACL_SAFE_CALL(aclrtCtxGetCurrentDefaultStream(&execStream));
-    CV_ACL_SAFE_CALL(aclopCompileAndExecute(op.c_str(), inputDesc_.size(), inputDesc_.data(),
-                                            inputBuffers_.data(), outputDesc_.size(),
-                                            outputDesc_.data(), outputBuffers_.data(), opAttr_,
-                                            ACL_ENGINE_SYS, ACL_COMPILE_SYS, NULL, execStream));
-    CV_ACL_SAFE_CALL(aclrtSynchronizeStream(execStream));
-    if (rawStream != nullptr)
-    {
-        for (const auto& ptr : holder)
-            stream.addTensorHolder(ptr);
-    }
-    return *this;
-}'''
-if new in s:
-    print('(g) cann_call.cpp: NULL-stream fallback already patched')
-else:
-    assert old in s, 'cann_call.cpp: OperatorRunner::run body not found'
-    p.write_text(s.replace(old, new, 1))
-    print('(g) cann_call.cpp: NULL-stream fallback patched')
-PY
-```
-
-预期：打印 `(g) cann_call.cpp: NULL-stream fallback patched`。
-
 ### 补丁是否真的落到位
 
 ```shell #test id="ocv5-patches-applied"
 grep -c "cv::MatShape" opencv/modules/dnn/src/op_cann.hpp
 grep -c "array_ops.h" opencv/modules/dnn/src/op_cann.hpp
-grep -c "aclrtCtxGetCurrentDefaultStream" opencv_contrib/modules/cannops/src/cann_call.cpp
 grep -rl "built-in/op_proto/inc/" opencv/modules/dnn/src/layers/ | wc -l
 ```
 
@@ -441,7 +384,6 @@ grep -rl "built-in/op_proto/inc/" opencv/modules/dnn/src/layers/ | wc -l
 ```shell #test-result id="ocv5-patches-applied"
 1
 2
-1
 23
 ```
 
@@ -500,7 +442,7 @@ ls -l "$CANN_DIR/acllib/lib64/libascendcl.so" "$CANN_DIR/lib64/libacl_op_compile
 
 CANN 后端开关 `WITH_CANN=ON`（不是 `BUILD_CANN`）；`-DOPENCV_DOWNLOAD_MIRROR_ID=gitcode` 让 cmake configure 阶段走 gitcode 镜像拉 ADE / IPPICV / TBB。
 
-`BUILD_LIST` 里的模块决定了编出来有哪些能力：`core` / `imgproc` / `imgcodecs` / `videoio` / `dnn`（CANN 后端在这里）/ `python3` / `cannops`（`cv2.cann` 经典算子）/ `ts`。
+`BUILD_LIST` 里的模块决定了编出来有哪些能力：`core` / `imgproc` / `imgcodecs` / `videoio` / `dnn`（CANN 后端在这里）/ `python3` / `ts`。**不编 `opencv_contrib`** ⇒ 没有 `cv2.cann` 那套经典算子加速 API（见 §1）。
 
 ```shell #test id="ocv5-cmake-configure"
 cd opencv
@@ -516,10 +458,9 @@ cmake -DCMAKE_BUILD_TYPE=Debug \
       -DBUILD_opencv_world=OFF \
       -DBUILD_EXAMPLES=OFF \
       -DBUILD_TESTS=ON \
-      -DOPENCV_BUILD_TEST_MODULES_LIST=cannops \
       -DINSTALL_TESTS=ON \
       -DBUILD_PERF_TESTS=OFF \
-      -DBUILD_LIST=core,imgproc,imgcodecs,videoio,dnn,python3,cannops,ts \
+      -DBUILD_LIST=core,imgproc,imgcodecs,videoio,dnn,python3,ts \
       -DSOC_VERSION=ascend910b1 \
       -DBUILD_opencv_python3=ON \
       -DBUILD_opencv_python_bindings_generator=ON \
@@ -527,7 +468,6 @@ cmake -DCMAKE_BUILD_TYPE=Debug \
       -DPYTHON_LIBRARY="$PY_LIB" \
       -DOPENCV_ENABLE_NONFREE=OFF \
       -DOPENCV_DOWNLOAD_MIRROR_ID=gitcode \
-      -DOPENCV_EXTRA_MODULES_PATH=../../opencv_contrib/modules \
       .. | tee /tmp/opencv5-configure.log
 ```
 
@@ -556,50 +496,13 @@ cmake --build . --target install --parallel "${OPENCV_BUILD_JOBS:-2}"
 ```shell #test id="ocv5-verify-build"
 /usr/local/opencv-cann-5/bin/opencv_version
 ls -l /usr/local/opencv-cann-5/lib/libopencv_dnn.so.5.0*
-ls -l /usr/local/opencv-cann-5/bin/opencv_test_cannops
 ```
 
 输出结果如下：
 ```shell #test-result id="ocv5-verify-build" fuzzy='xxx'
 5.0.0
 xxx
-xxx
 ```
-
-### 8.1 跑 CANN 单元测试（`cv2.cann` 算子层）
-
-`opencv_test_cannops` 是 `opencv_contrib/modules/cannops` 的 gtest：78 个用例直接测 CANN 算子（cvtColor / elementwise / copy_make_border / reduce / AscendMat 封装）。
-
-**25 个用例被排除**（CANN 9.x + 910B 上的已知缺陷或数值抖动，910B1 CI 与 910B4 实测失败集一致）：
-
-- `CVT_COLOR` 的 XYZ / YCrCb / YUV 系 18 个 + threshold 系 3 个（`MAT_THRESHOLD` / `MAT_THRESHOLD_ASCENDC` / `ASCENDC_KERNEL.THRESHOLD`）共 21 个同根因：cvtColor 对非 32F 输入用两次 threshold 截断饱和中间结果（color.cpp 的 `THRESH_TRUNC` + `THRESH_TO_ZERO`），与 threshold 系用例落在同一个 AscendC kernel 上，该 kernel 在 910B 上 AI Core 越界（VEC 指令 UB 地址越界，kernel 源码 bug）；纯 32F 融合算术路径实测全过。
-- resize 系 4 个：`CORE.RESIZE` 是 ResizeArea 算子 GE shape 推断失败（稳定挂）；`CORE.CROP_RESIZE` 与 CPU 参考稳定差 2 超容差 1；`CORE.RESIZE_NEW` / `CORE.CROP_RESIZE_MAKE_BORDER` 是数值抖动 flaky（后者容差 1e-10 近似逐位比较，910B4 上稳定挂）。
-
-剩 **53 个**应全过。**5.0.0 + CANN 9.2.0 / 910B4 实测 53/53 通过**（45.8 秒）。
-
-```shell #test id="ocv5-cann-run-tests"
-set -o pipefail
-/usr/local/opencv-cann-5/bin/opencv_test_cannops --gtest_color=no \
-  --gtest_filter=-CORE.RESIZE:CORE.RESIZE_NEW:CORE.CROP_RESIZE:CORE.CROP_RESIZE_MAKE_BORDER:CVT_COLOR.RGB2XYZ:CVT_COLOR.BGR2XYZ:CVT_COLOR.XYZ2BGR:CVT_COLOR.XYZ2RGB:CVT_COLOR.XYZ2BGR_DC4:CVT_COLOR.XYZ2RGB_DC4:CVT_COLOR.BGR2YCrCb:CVT_COLOR.RGB2YCrCb:CVT_COLOR.YCrCb2BGR:CVT_COLOR.YCrCb2RGB:CVT_COLOR.YCrCb2BGR_DC4:CVT_COLOR.YCrCb2RGB_DC4:CVT_COLOR.BGR2YUV:CVT_COLOR.RGB2YUV:CVT_COLOR.YUV2BGR:CVT_COLOR.YUV2RGB:CVT_COLOR.BGR2YUV_DC4:CVT_COLOR.RGB2YUV_DC4:CVT_COLOR.YUV2BGR_DC4:CVT_COLOR.YUV2RGB_DC4:ELEMENTWISE_OP.MAT_THRESHOLD:ELEMENTWISE_OP.MAT_THRESHOLD_ASCENDC:ASCENDC_KERNEL.THRESHOLD \
-  > /tmp/cannops_gtest.log 2>&1; rc=$?
-tail -n 25 /tmp/cannops_gtest.log
-if [ $rc -ne 0 ]; then
-  echo '--- per-test failure summary:'
-  grep -E '^\[ RUN|unknown file: Failure|C\+\+ exception|op\[[A-Za-z0-9_]+\]|E[0-9]{5}' /tmp/cannops_gtest.log | head -80
-fi
-exit $rc
-```
-
-输出结果如下：
-```shell #test-result id="ocv5-cann-run-tests" fuzzy='xxx' fuzzy='...'
-...
-[==========]xxx
-[  PASSED  ] 53 tests.
-```
-
-> 不要加 `--gtest_brief`：OpenCV vendored gtest 没实现这个 flag，加上后零用例执行但 rc=0，假绿。
->
-> 本节的排除清单与 [Quick-start-Ascend.md](Quick-start-Ascend.md) 完全一致（同一套 3 组补丁、同一套源码），差异只在 CANN 版本与卡的型号。
 
 ## 9. OpenCV Python quickstart
 
@@ -891,6 +794,6 @@ top class score: xxx
 - **Python 绑定不支持真正的 N 维 Mat**：numpy 的三维数组会被当成「二维 + 通道」，`transposeND` 因此要求单通道输入（§9e）。
 - **`PYTHONPATH` 必须 prepend 不能覆盖**：覆盖掉 CANN 的 `tbe` 路径 → `CANN graph check failed, ret = 4294967295`，且日志里没有 `tbe` 字样（§9）。
 - **`all_ops.h` 链接窗口是硬约束**：aarch64 的 `R_AARCH64_CALL26/JUMP26` 只有 ±128 MiB 跨度，缩 `.text` 只是缓解、不是保证；5.0 上过这一关只有窄 op 头一条路。
-- **`cv2.cann` 的 contrib 单测**：本文编了 `opencv_contrib` 的 `cannops` 模块并跑了它的 gtest（§8.1，53/53 通过）；25 个被排除的用例及原因见那一节。
+- **本文没有 `cv2.cann`**：不编 `opencv_contrib` ⇒ contrib 那套经典算子加速 API（`cv2.cann.cvtColor` / `cv2.cann.resize` …）不可用，连带它的 gtest 证据也没有。要这条通路请走 [主文档](Quick-start-Ascend.md)（那边编 contrib、跑 53 个用例）。
 - **`videoio` 编了但没有编解码器**：源码构建默认不带 FFmpeg/GStreamer，`cv2.VideoWriter` 会打一堆 INFO/WARN 但仍能落盘；本文未把视频写入列为必过项。
 - **补丁只对 5.0.x 成立**：`cv::MatShape` 是 5.0 引入的类型，4.x 源码树里根本没有它；上游一旦出 5.1/6.0，§5 的脚本会断言失败（这是设计好的失败方式，不是 bug）。

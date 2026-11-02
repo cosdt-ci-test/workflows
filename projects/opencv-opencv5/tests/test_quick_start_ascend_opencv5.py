@@ -20,9 +20,11 @@ What makes this guard different from the other two OpenCV guards:
   ``ocv5-cann-infer`` asserts the classic engine *does* compile the graph
   and converts >= 100 layers. If a future OpenCV release flips the
   default, this guard fails loudly instead of silently going CPU-only;
-* it also builds the ``cannops`` gtest target and runs it
-  (``ocv5-cann-run-tests``: 78 cases, 25 excluded by the known
-  CANN 9.x / 910B defect list, 53 expected to pass);
+* it does **not** build ``opencv_contrib``: the doc dropped the
+  ``cannops`` module (and with it the NULL-stream patch group that
+  module needs on CANN 9.x), so the ``cv2.cann`` classic-operator API
+  is out of scope for this doc — the main OpenCV guard still covers
+  that route;
 * the install prefix is **``/usr/local/opencv-cann-5``**, distinct from
   the other two guards' prefixes (``/usr/local/opencv-cann`` for the
   patched 5.x doc, ``/usr/local/opencv-cann-411`` for the 4.11.0
@@ -75,18 +77,17 @@ class TestQuickStartAscendOpenCV5(MarkdownDocTestBase, unittest.TestCase):
     The doc's heaviest steps are:
         1. ``apt-get install`` build deps (cmake / gcc / libjpeg / libpng /
            libtiff / zlib);
-        2. ``git clone --depth 1 --branch <ref>`` opencv + opencv_contrib;
-        3. three source patches (``cv::MatShape`` forwarding, narrow CANN
-           op headers for the aarch64 +-128 MiB branch-range limit, NULL
-           stream fallback);
+        2. ``git clone --depth 1 --branch <ref>`` opencv (no
+           ``opencv_contrib``);
+        3. two source patches (``cv::MatShape`` forwarding, narrow CANN
+           op headers for the aarch64 +-128 MiB branch-range limit);
         4. CANN library layout bridge (3 symlinks into ``<CANN>/lib64``);
         5. ``cmake -DWITH_CANN=ON -DCMAKE_BUILD_TYPE=Debug`` configure;
         6. ``cmake --build . --target install`` (Debug -O0 with the
            narrow-header patch; every ``all_ops.h`` TU is heavy: ~3 GB RSS);
-        7. ``opencv_test_cannops`` gtest (53 of 78 cases expected to pass);
-        8. Python binding smoke + the 5.0-only ``transposeND`` / ``flipND``
+        7. Python binding smoke + the 5.0-only ``transposeND`` / ``flipND``
            core ops;
-        9. MobileNetV2 ONNX forward twice: once with 5.0's default
+        8. MobileNetV2 ONNX forward twice: once with 5.0's default
            (new) graph engine — asserted to *not* reach the NPU — and once
            with the classic engine (``OPENCV_FORCE_DNN_ENGINE=1``) —
            asserted to compile the GE graph and return top-1 = 372.

@@ -77,19 +77,19 @@ jobs:
         --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
         --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
       # Doc body does: apt-get install build deps (aliyun mirror) +
-      # git clone opencv + opencv_contrib @ <ref> (upstream latest
-      # release) + 3 source patches (cv::MatShape forwarding / narrow
-      # CANN op headers for the aarch64 +-128 MiB branch-range limit /
-      # NULL-stream fallback) + CANN library bridge (3 symlinks into
+      # git clone opencv @ <ref> (upstream latest release; NO
+      # opencv_contrib - the doc dropped the contrib cannops module, so
+      # cv2.cann is out of scope here) + 2 source patches (cv::MatShape
+      # forwarding / narrow CANN op headers for the aarch64 +-128 MiB
+      # branch-range limit) + CANN library bridge (3 symlinks into
       # <CANN>/lib64) + cmake -DWITH_CANN=ON configure (Debug -O0,
-      # BUILD_LIST = 8 modules incl. cannops + its gtest target) +
-      # cmake --build --target install + opencv_version smoke +
-      # opencv_test_cannops gtest (53 of 78 cases expected to pass) +
-      # Python binding smoke + the 5.0-only transposeND / flipND core
-      # ops + MobileNetV2 ONNX forward TWICE: once with 5.0's default
-      # (new) graph engine - asserted NOT to reach the NPU - and once
-      # with the classic engine (OPENCV_FORCE_DNN_ENGINE=1) - asserted
-      # to compile the GE graph and convert >= 100 layers (top-1 = 372).
+      # BUILD_LIST = 7 modules) + cmake --build --target install +
+      # opencv_version smoke + Python binding smoke + the 5.0-only
+      # transposeND / flipND core ops + MobileNetV2 ONNX forward TWICE:
+      # once with 5.0's default (new) graph engine - asserted NOT to
+      # reach the NPU - and once with the classic engine
+      # (OPENCV_FORCE_DNN_ENGINE=1) - asserted to compile the GE graph
+      # and convert >= 100 layers (top-1 = 372).
       # 240 min leaves room for the build chain + first-time IPPICV /
       # ADE / ACL graph cache pulls.
       timeout_minutes: 240

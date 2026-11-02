@@ -352,6 +352,19 @@ PY
 
 预期：`(a)`/`(b)` 各 1 行打印，`(c)(d)` 打印 3 行（gemm 1 + matmul 2）。
 
+> **为什么是「加一个重载」而不是「把上游签名直接换成 `cv::MatShape`」？**
+>
+> 上游 5.x 的 CANN 后端在形状类型上是**两个世界混用**的：
+>
+> | 来源 | 例子 | 类型 |
+> | --- | --- | --- |
+> | dnn 新引擎的 `shape()` | `gemm_layer.cpp:668` `shape(B)`、`convolution_layer.cpp:703` `shape(w_mat)`、`matmul_layer.cpp:717` `shape(B)` | `cv::MatShape` |
+> | CANN 后端自己造的局部变量 | `batch_norm_layer.cpp:394` `std::vector<int> shape_{channel};`、`elementwise_layers.cpp:850` `shape_{1}`、`slice_layer.cpp:691` `shape_size_splits`、`padding_layer.cpp:235` `pads_shape`、`reduce_layer.cpp:546` `axes_shape`、`resize_layer.cpp:453` `shape_of_size_mat`、`reshape_layer.cpp:402` `shape_of_shape`、`convolution_layer.cpp:712` `bias_shape`、`deconvolution_layer.cpp:1143` `shape_b`、`fully_connected_layer.cpp:755` `bias_shape`、`matmul_layer.cpp:701` 内联的 `std::vector<int>{1}` | **`std::vector<int>`** |
+>
+> 第二类**不是「漏改的旧写法」**：`cv::Mat` 在 5.0 core 里仍然只收 `std::vector<int>`（`mat.hpp:1150` `Mat(const std::vector<int>& sizes, int type, void* data, ...)`），而 CANN 后端正是拿这些 `vector<int>` 去构造 Mat（`reduce_layer.cpp:547` `Mat axes_mat(axes_shape, CV_32S, &axes[0]);`）。
+>
+> ⇒ 只保留 `const cv::MatShape&` 一个签名的话，上表第二行那 **15 处声明 / 20 处调用点**会集体编译失败；**两个重载都得留着**。这也是上游自己迟迟没修的原因之一。
+
 ### 组 2. 缩小 CANN op 头（避免 aarch64 链接炸）
 
 `op_cann.hpp` 换成窄头 `array_ops.h`，再给每个 layer TU 插它**实际用到**的那个窄 op 头。
@@ -429,7 +442,9 @@ PY
 ### 补丁是否真的落到位
 
 ```shell #test id="ocv5m-patches-applied"
-grep -c "cv::MatShape" opencv/modules/dnn/src/op_cann.hpp
+grep -c "const cv::MatShape& shape" opencv/modules/dnn/src/op_cann.hpp
+grep -c "const std::vector<int>& shape" opencv/modules/dnn/src/op_cann.hpp
+grep -c "cv::MatShape" opencv/modules/dnn/src/op_cann.cpp
 grep -c "array_ops.h" opencv/modules/dnn/src/op_cann.hpp
 grep -rl "built-in/op_proto/inc/" opencv/modules/dnn/src/layers/ | wc -l
 ```
@@ -437,11 +452,13 @@ grep -rl "built-in/op_proto/inc/" opencv/modules/dnn/src/layers/ | wc -l
 输出结果如下：
 ```shell #test-result id="ocv5m-patches-applied"
 1
+1
+1
 2
 23
 ```
 
-> `grep -c "cv::MatShape"` 是 **1**：上游的 `std::vector<int>` 声明不动，只多一行重载声明。
+> 前三行是这个守卫的**关键**：它们同时断言「`cv::MatShape` 重载在」**和**「上游的 `std::vector<int>` 声明还在」。只看 `grep -c "cv::MatShape"` 区分不了「加桥」和「把上游签名换掉」两种形态——后者会让上游 15 处 `std::vector<int>` 调用点集体编译失败（见组 1 末尾的说明）。
 
 ## 7. 桥接 CANN 的库目录
 

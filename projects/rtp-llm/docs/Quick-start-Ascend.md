@@ -17,7 +17,6 @@ Atlas 900 A2 单卡（Ascend 910B），并按需完成物理机或容器内的�
 - Python 3.10 环境（本仓 lock 全部按 `cp310` 生成），且解释器位于 `/opt/conda310/bin/python3`（上游 `deps/pip.bzl` 与该仓的 bazel 配置都写死了这个路径）
 - 可用的 CANN ≥ 9.1.0（参考[快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html)）
 - 基本编译工具：`git`、`curl`、`gcc/g++` 11、`make`
-- `bazelisk`（本文固定用 Bazel 6.4.0，由 `USE_BAZEL_VERSION` 指定）
 
 ### 本文档示例使用的版本
 
@@ -68,6 +67,35 @@ npu-smi info
 ```
 
 输出为设备列表（型号与数量因机器而异），只要能看到 `910B` 且 `Health` 为 `OK` 即可。
+
+### 安装 bazelisk
+
+构建由 `bazelisk` 拉起，本文固定用 Bazel 6.4.0。镜像里没有预装，先装到 `/usr/local/bin`：
+
+```shell #test id="install-bazelisk"
+case $(uname -m) in
+  x86_64)  bazelisk_arch=amd64 ;;
+  aarch64) bazelisk_arch=arm64 ;;
+  *)       echo "unsupported arch: $(uname -m)"; exit 1 ;;
+esac
+if [ ! -x /usr/local/bin/bazelisk ]; then
+  curl -fL --connect-timeout 20 --retry 8 --retry-all-errors --retry-delay 3 \
+    -o /usr/local/bin/bazelisk \
+    "https://github.com/bazelbuild/bazelisk/releases/download/v1.19.0/bazelisk-linux-${bazelisk_arch}"
+  chmod +x /usr/local/bin/bazelisk
+fi
+export USE_BAZEL_VERSION=6.4.0
+export BAZELISK_BASE_URL=https://mirrors.huaweicloud.com/bazel/
+bazelisk version | grep -m1 'Build label'
+```
+
+输出结果如下：
+
+```shell #test-result id="install-bazelisk"
+Build label: 6.4.0
+```
+
+> 两个变量必须和 `bazelisk` 命令在同一个 shell 里：不指定版本时 `bazelisk` 会去 `www.googleapis.com` 查 `latest`，没外网的机器上直接超时；仓里的 `.bazeliskrc` 只在 `rtp-llm/` 目录内生效。`BAZELISK_BASE_URL` 指向华为云镜像，Bazel 本体（约 60MB）从这里取。
 
 ## 获取代码
 
@@ -258,10 +286,20 @@ engine ops ok
 ```shell #test-setup
 cd /tmp
 python -m pip install -q modelscope > /dev/null 2>&1
-python - <<'PY'
+# modelscope 收尾时会 import torch，在 torch_npu 环境下析构可能报 Segmentation fault（rc=139），
+# 而下载本身已经完成，所以这里不看 rc，改为校验产物。
+python - <<'PY' > /tmp/model-dl.log 2>&1 || true
 from modelscope import snapshot_download
 snapshot_download('Qwen/Qwen3-0.6B', local_dir='/root/rtp-llm-test/models/Qwen3-0.6B')
 print('model ready')
+PY
+ls /root/rtp-llm-test/models/Qwen3-0.6B/config.json \
+  /root/rtp-llm-test/models/Qwen3-0.6B/*.safetensors > /dev/null
+python - <<'PY'
+from importlib.metadata import version
+
+assert version('torch-npu') == '2.9.0.post2'
+assert version('torchvision') == '0.24.0'
 PY
 ```
 

@@ -45,6 +45,19 @@ on:
   # schedule:
   #   - cron: '15 */12 * * *'
   workflow_dispatch:
+  # PR trigger: doc/test changes get a guard run before merge. Without
+  # it this workflow cannot be validated pre-merge at all — the Actions
+  # API resolves workflow ids from the default branch, so
+  # `workflow_dispatch` on a PR branch 404s until the file lands on main.
+  # paths filter keeps unrelated PRs off the self-hosted NPU runner.
+  # `pull_request` (not `pull_request_target`): contents: read is enough,
+  # no write-token risk. doc_url uses github.sha to match the workflow
+  # checkout, which on pull_request runs is the merge commit.
+  pull_request:
+    branches: [main]
+    paths:
+      - 'projects/rtp-llm/**'
+      - '.github/workflows/rtp-llm-quick-start.yml'
 
 permissions:
   contents: read

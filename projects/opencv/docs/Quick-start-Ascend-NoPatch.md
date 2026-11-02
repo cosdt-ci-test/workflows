@@ -268,6 +268,10 @@ CANN 后端开关 `WITH_CANN=ON`（不是 `BUILD_CANN`）；`-DOPENCV_DOWNLOAD_M
 cd opencv
 mkdir -p build && cd build
 set -o pipefail
+PY_INC=$(python3 -c 'import sysconfig; print(sysconfig.get_paths()["include"])')
+PY_LIB=$(python3 -c 'import sysconfig,os,sys; print(os.path.join(sysconfig.get_config_var("LIBDIR"), "libpython%d.%d.so" % sys.version_info[:2]))')
+test -f "$PY_INC/Python.h" || { echo "Python.h not found under $PY_INC"; exit 1; }
+test -f "$PY_LIB" || { echo "libpython not found at $PY_LIB"; exit 1; }
 cmake -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_INSTALL_PREFIX=/usr/local/opencv-cann-414 \
       -DWITH_CANN=ON \
@@ -281,12 +285,15 @@ cmake -DCMAKE_BUILD_TYPE=Release \
       -DSOC_VERSION=ascend910b1 \
       -DBUILD_opencv_python3=ON \
       -DBUILD_opencv_python_bindings_generator=ON \
-      -DPYTHON_INCLUDE_DIR=/usr/local/python3.12.13/include/python3.12 \
-      -DPYTHON_LIBRARY=/usr/local/python3.12.13/lib/libpython3.12.so \
+      -DPYTHON_INCLUDE_DIR="$PY_INC" \
+      -DPYTHON_LIBRARY="$PY_LIB" \
       -DOPENCV_ENABLE_NONFREE=OFF \
       -DOPENCV_DOWNLOAD_MIRROR_ID=gitcode \
       .. | tee /tmp/opencv-configure.log
 ```
+
+> Python 路径用 `sysconfig` 现场取，不写死版本号目录：CI 镜像是 `/usr/local/python3.12.13`，验证机是 `/usr/local/python3.12.15`，两条路径都由 `sysconfig` 给出。
+> 写死的后果不是 configure 期报错，而是**编译期**才炸：`PYTHON_INCLUDE_DIR` 指向不存在的目录时 cmake 不会校验，`make` 编 `modules/python/src2/cv2.cpp` 时才报 `fatal error: Python.h: No such file or directory`（npu-4 实测）。前面两条 `test -f` 把这个失败提前到 configure 之前并打印出实际路径。
 
 输出结果如下：
 ```shell #test-result id="np-opencv-cmake-configure" fuzzy='xxx' fuzzy='...'

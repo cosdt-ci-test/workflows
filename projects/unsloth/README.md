@@ -53,11 +53,12 @@ Select a scenario when dispatching the same workflow:
 | --- | --- | --- |
 | `baseline` (default) | Checkpointing disabled, matching the run #4 training configuration | Passed in run #4; added scenario/state checks still need a run |
 | `standard-gc` | Standard checkpointing (`True`) in loading, LoRA setup and SFTConfig | Passed functionally in run #5 |
-| `unsloth-gc` | Unsloth checkpointing (`"unsloth"`) with 512-token input and Trainer's standard flag left off | Awaiting NPU validation |
-| `checkpoint-resume` | Train one step, save full Trainer state, exit, then resume to step 3 in a new process | Awaiting NPU validation |
-| `merge-16bit` | Train and merge in one process, then reload with Transformers in a clean second process | Awaiting NPU validation |
-| `dpo` | Train LoRA with local preference pairs, then save, reload and generate | Awaiting NPU validation |
-| `full-finetune` | Train every model parameter in BF16, then reload the saved model in a clean process | Awaiting NPU validation |
+| `unsloth-gc` | Unsloth checkpointing (`"unsloth"`) with 512-token input and Trainer's standard flag left off | Passed in run #6 |
+| `checkpoint-resume` | Train one step, save full Trainer state, exit, then resume to step 3 in a new process | Passed in run #8 |
+| `merge-16bit` | Train and merge in one process, then reload with Transformers in a clean second process | Passed in run #10 |
+| `dpo` | Train LoRA with local preference pairs, then save, reload and generate | Passed in run #11 |
+| `full-finetune` | Train every model parameter in BF16, then reload the saved model in a clean process | Passed in run #13 |
+| `continued-pretrain` | Train raw text across the full sequence with LoRA on model and embedding outputs | Awaiting NPU validation |
 
 All scenarios run the full three-step LoRA training, adapter save/reload and
 inference checks. The `unsloth-gc` dataset reaches the 512-token cap, and its
@@ -99,6 +100,13 @@ BF16 full fine-tuning in Unsloth intentionally keeps normalization weights in
 FP32 for numerical stability. The export check therefore requires all non-norm
 floating weights to be BF16 and permits FP32 only for tensors whose names contain
 `norm`; the exact FP32 tensor names are recorded in result.json.
+
+The `continued-pretrain` scenario follows the official CPT pattern: raw local
+documents with EOS appended, rank-8 LoRA on the transformer projections plus
+`embed_tokens` and `lm_head`, and loss over every token. It does not apply the
+chat template or assistant-only response masking. Three optimizer steps must
+change LoRA weights before the CPT adapter is saved, reloaded and used for a
+generation smoke check.
 The selected scenario appears in the Actions run title, result.json and job summary,
 including when environment setup fails. The `"unsloth"` checkpointing mode uses
 upstream's long-context threshold and is not treated as a performance claim.
@@ -129,4 +137,8 @@ gh workflow run unsloth-npu-example.yml --repo cosdt-ci-test/workflows --ref fea
 
 ```shell
 gh workflow run unsloth-npu-example.yml --repo cosdt-ci-test/workflows --ref feat/unsloth-adapt -f scenario=full-finetune
+```
+
+```shell
+gh workflow run unsloth-npu-example.yml --repo cosdt-ci-test/workflows --ref feat/unsloth-adapt -f scenario=continued-pretrain
 ```

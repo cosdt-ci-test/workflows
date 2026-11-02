@@ -17,6 +17,7 @@ on:
           - merge-16bit
           - dpo
           - full-finetune
+          - continued-pretrain
 
 permissions:
   contents: read
@@ -99,6 +100,8 @@ jobs:
           elif [[ "$TEST_SCENARIO" == "full-finetune" ]]; then
             python projects/unsloth/qwen3_full_finetune.py --phase train 2>&1 | tee output/full-finetune-train.log
             python projects/unsloth/qwen3_full_finetune.py --phase reload 2>&1 | tee output/full-finetune-reload.log
+          elif [[ "$TEST_SCENARIO" == "continued-pretrain" ]]; then
+            python projects/unsloth/qwen3_continued_pretrain.py 2>&1 | tee output/continued-pretrain.log
           else
             python projects/unsloth/qwen3_lora_smoke.py 2>&1 | tee output/example.log
           fi

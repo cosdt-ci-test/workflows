@@ -15,6 +15,7 @@ on:
           - unsloth-gc
           - checkpoint-resume
           - merge-16bit
+          - dpo
 
 permissions:
   contents: read
@@ -92,6 +93,8 @@ jobs:
           elif [[ "$TEST_SCENARIO" == "merge-16bit" ]]; then
             python projects/unsloth/qwen3_merge_16bit.py --phase train 2>&1 | tee output/merge-16bit-train.log
             python projects/unsloth/qwen3_merge_16bit.py --phase reload 2>&1 | tee output/merge-16bit-reload.log
+          elif [[ "$TEST_SCENARIO" == "dpo" ]]; then
+            python projects/unsloth/qwen3_dpo_smoke.py 2>&1 | tee output/dpo.log
           else
             python projects/unsloth/qwen3_lora_smoke.py 2>&1 | tee output/example.log
           fi

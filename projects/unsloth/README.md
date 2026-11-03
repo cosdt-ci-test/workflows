@@ -59,6 +59,7 @@ Select a scenario when dispatching the same workflow:
 | `dpo` | Train LoRA with local preference pairs, then save, reload and generate | Passed in run #11 |
 | `full-finetune` | Train every model parameter in BF16, then reload the saved model in a clean process | Passed in run #13 |
 | `continued-pretrain` | Train raw text across the full sequence with LoRA on model and embedding outputs | Awaiting NPU validation |
+| `inference-extended` | Run mixed-length padded batches and a custom stopping criterion | Awaiting NPU validation |
 
 All scenarios run the full three-step LoRA training, adapter save/reload and
 inference checks. The `unsloth-gc` dataset reaches the 512-token cap, and its
@@ -109,6 +110,12 @@ output module while training the shared embedding weight. It does not apply the
 chat template or assistant-only response masking. Three optimizer steps must
 change LoRA weights before the CPT adapter is saved, reloaded and used for a
 generation smoke check.
+
+The `inference-extended` scenario loads the base BF16 Qwen3 model through
+Unsloth, runs one three-prompt batch with left padding and different prompt
+lengths, then runs a single prompt with a custom three-token stopping criterion.
+It records token lengths, outputs and EOS observations. This verifies inference
+plumbing only, not answer quality.
 The selected scenario appears in the Actions run title, result.json and job summary,
 including when environment setup fails. The `"unsloth"` checkpointing mode uses
 upstream's long-context threshold and is not treated as a performance claim.
@@ -143,4 +150,8 @@ gh workflow run unsloth-npu-example.yml --repo cosdt-ci-test/workflows --ref fea
 
 ```shell
 gh workflow run unsloth-npu-example.yml --repo cosdt-ci-test/workflows --ref feat/unsloth-adapt -f scenario=continued-pretrain
+```
+
+```shell
+gh workflow run unsloth-npu-example.yml --repo cosdt-ci-test/workflows --ref feat/unsloth-adapt -f scenario=inference-extended
 ```

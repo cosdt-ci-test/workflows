@@ -18,6 +18,7 @@ on:
           - dpo
           - full-finetune
           - continued-pretrain
+          - inference-extended
 
 permissions:
   contents: read
@@ -102,6 +103,8 @@ jobs:
             python projects/unsloth/qwen3_full_finetune.py --phase reload 2>&1 | tee output/full-finetune-reload.log
           elif [[ "$TEST_SCENARIO" == "continued-pretrain" ]]; then
             python projects/unsloth/qwen3_continued_pretrain.py 2>&1 | tee output/continued-pretrain.log
+          elif [[ "$TEST_SCENARIO" == "inference-extended" ]]; then
+            python projects/unsloth/qwen3_inference_extended.py 2>&1 | tee output/inference-extended.log
           else
             python projects/unsloth/qwen3_lora_smoke.py 2>&1 | tee output/example.log
           fi

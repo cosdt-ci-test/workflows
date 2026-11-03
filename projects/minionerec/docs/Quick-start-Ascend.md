@@ -106,39 +106,32 @@ trainer device: npu:0
 
 ---
 
-## 6. 只在评估命令里启用 NPU 映射
+## 6. 完全不注入：评估会被钉在 CPU
 
-SFT 不需要任何注入；评估需要 `torch.cuda` 有值。为了让注入只作用于评估这一条命令，把 `sitecustomize.py` 放进独立目录、通过 `PYTHONPATH` 挂到命令上——不写进 site-packages，其他进程不受影响。
+本实验**不做任何注入**：不写 `sitecustomize`、不挂 `PYTHONPATH`、不改仓库源码。第 5 节已证明 SFT 仍由 transformers 选到 `npu:0`；下面在完全不注入的进程里复现 `evaluate.py` 的设备判定与张量落点——它会落在 CPU，因为 `device = "cpu"` 在模块导入时就固化，之后没有任何环节再问一次「有没有 NPU」：
 
-```shell #test-setup id="npu-shim"
-mkdir -p /tmp/minionerec-npu-shim
-cat > /tmp/minionerec-npu-shim/sitecustomize.py <<'INS'
-import torch_npu.contrib.transfer_to_npu  # noqa: F401
-INS
-```
-
-确认作用域只覆盖挂了 `PYTHONPATH` 的那条命令：
-
-```shell #test id="check-scoped"
+```shell #test id="probe-no-inject"
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 cd MiniOneRec
-python -c "import torch; print('default process:', 'cuda' if torch.cuda.is_available() else 'cpu')"
-PYTHONPATH=/tmp/minionerec-npu-shim python -c "
-import torch
-print('with shim:', 'cuda' if torch.cuda.is_available() else 'cpu')
+python -c "
+import torch, torch_npu
+print('npu available:', torch.npu.is_available())
+print('cuda mapped:', torch.cuda.is_available())
+print('evaluate.py device:', 'cuda' if torch.cuda.is_available() else 'cpu')
 print('tensor landed on:', torch.zeros(1, device='cuda').device.type)
 "
 ```
 
-输出结果如下（代码里写的是 `cuda`，张量实际落在 NPU）：
+输出结果如下：
 
-```shell #test-result id="check-scoped"
-default process: cpu
-with shim: cuda
-tensor landed on: npu
+```shell #test-result id="probe-no-inject"
+npu available: True
+cuda mapped: False
+evaluate.py device: cpu
+tensor landed on: cpu
 ```
 
-确认仓库源码没被动过（此前的探针与注入都不落在仓库里）：
+确认仓库源码没被动过（本实验全程没有任何注入，仓库应始终是干净的）：
 
 ```shell #test id="no-source-change"
 cd MiniOneRec
@@ -247,13 +240,27 @@ head -n 200 data/Amazon/test/Industrial_and_Scientific_5_2016-10-2018-11.csv > t
 wc -l test_small.csv
 ```
 
-运行评估（进度条与 transformers 警告走 stderr，stdout 只有 category 名）：
+运行评估前先确认这个进程的设备（完全不注入，预期落在 cpu——前一步的探针已预示）：
+
+```shell #test id="probe-eval-device"
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
+cd MiniOneRec
+python -c "import torch; print('eval process device (no injection):', torch.zeros(1, device='cuda').device.type)"
+```
+
+输出结果如下：
+
+```shell #test-result id="probe-eval-device"
+eval process device (no injection): cpu
+```
+
+运行评估（进度条与 transformers 警告走 stderr，stdout 只有 category 名）。**完全不注入**，看它是否会在 CPU 上跑通或卡住：
 
 ```shell #test id="run-eval"
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 export ASCEND_RT_VISIBLE_DEVICES=0
 cd MiniOneRec
-PYTHONPATH=/tmp/minionerec-npu-shim python evaluate.py \
+python evaluate.py \
     --base_model ./smoke_out/final_checkpoint \
     --info_file ./data/Amazon/info/Industrial_and_Scientific_5_2016-10-2018-11.txt \
     --test_data_path test_small.csv \
@@ -317,5 +324,5 @@ HR...
 | ModelScope 下载慢/失败 | 网络 | 重试（支持断点续传）；数据侧确认 `HF_ENDPOINT=https://hf-mirror.com` 已导出 |
 | `model_type` grep 为空 | `final_checkpoint/config.json` 缺失 | 训练未完成，检查上一块退出码与日志 |
 | 评估报 `FileNotFoundError: [Errno 2] No such file or directory: ''` | 未传 `--result_json_data`，结果文件路径为空 | 补上 `--result_json_data ./eval_result.json` |
-| CC 大于 0 | 约束解码未生效 | 确认 `run-eval` 命令带上了 `PYTHONPATH=/tmp/minionerec-npu-shim`（`check-scoped` 应输出 `with shim: cuda` / `tensor landed on: npu`）；基座模型须为 Qwen2.5-**base**（Instruct 版约束解码失效） |
+| 评估卡死 / CC 异常 | 未注入导致评估落 CPU | 完全不注入时 `evaluate.py` 被钉在 CPU（`probe-no-inject` / `probe-eval-device` 应输出 `tensor landed on: cpu` / `eval process device (no injection): cpu`），需注入 `transfer_to_npu` 才能上 NPU；基座模型须为 Qwen2.5-**base**（Instruct 版约束解码失效） |
 | HR/NDCG 与文中示例差异大 | 冒烟训练仅 1 epoch/600 样本，`num_beams` 也降为 20 | 数值仅供参考；CI 只断言 CC=0，HR/NDCG 用占位符匹配 |

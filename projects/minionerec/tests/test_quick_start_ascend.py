@@ -7,18 +7,15 @@ Document under test: ``projects/minionerec/docs/Quick-start-Ascend.md``
 ``#test-result`` labels plus ``id=`` / ``store=`` / ``load='x>>y'`` /
 ``fuzzy='xxx'`` parameters).
 
-Smoke scope (see the doc): single-card MiniOneRec SFT + constrained-
-decoding evaluation on Ascend NPU with the upstream source untouched —
-no shim PR, no in-repo patch. The two entry points need different
-treatment: ``sft.py`` reaches ``npu:0`` natively because transformers'
-device chain tries NPU before CUDA, while ``evaluate.py`` freezes
-``device = "cpu"`` at import time and needs ``torch.cuda`` to be mapped.
-So ``transfer_to_npu`` is injected through a ``sitecustomize.py`` in a
-standalone directory that only the evaluation command sees via
-``PYTHONPATH`` (no site-packages write, no process-wide side effect);
-sft.py / evaluate.py stay byte-identical, asserted by a ``git status
---porcelain`` check. ``bitsandbytes==0.48.1`` is installed because the
-unused top-level import cannot be stripped without editing the source.
+Smoke scope (see the doc): NEGATIVE CONTROL — single-card MiniOneRec SFT
++ constrained-decoding evaluation on Ascend NPU with the upstream source
+untouched AND ZERO transfer_to_npu injection (no shim PR, no in-repo
+patch, no sitecustomize, no PYTHONPATH). The point is to show WHICH
+entry point breaks without injection: ``sft.py`` still reaches ``npu:0``
+natively (transformers' device chain tries NPU before CUDA), while
+``evaluate.py`` freezes ``device = "cpu"`` at import time and stays on
+CPU. ``bitsandbytes==0.48.1`` is installed because the unused top-level
+import cannot be stripped without editing the source.
 ModelScope base model (Qwen2.5-0.5B) + HF-mirror preprocessed Amazon
 Industrial_and_Scientific subset (incl. the info/ SID-item list txt for
 evaluation) + 1-epoch HF-Trainer SFT (sample=600/dataset, cutoff 256) +

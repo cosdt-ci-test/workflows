@@ -4,12 +4,13 @@
 # validation, and artifact publishing. Project-specific environment setup
 # and document execution live in projects/minionerec/tests.
 #
-# Smoke scope: single-card SFT on NPU (ModelScope Qwen2.5-0.5B base +
-# HF-mirror preprocessed Amazon Industrial_and_Scientific subset +
-# upstream source untouched + 1-epoch HF-Trainer run, sample=600/dataset).
-# SFT needs no injection (transformers picks npu:0 by itself); only the
-# evaluation command gets transfer_to_npu, via a PYTHONPATH-scoped
-# sitecustomize directory.
+# NEGATIVE CONTROL: single-card SFT + eval on NPU with upstream source
+# untouched AND ZERO transfer_to_npu injection (no shim PR, no in-repo
+# patch, no sitecustomize, no PYTHONPATH). Purpose: show which entry
+# point breaks without injection. SFT still reaches npu:0 natively
+# (transformers picks NPU before CUDA); evaluate.py freezes to cpu and
+# is expected to stall/slow on CPU. 1-epoch HF-Trainer run,
+# sample=600/dataset.
 # RL (GRPO) is pointer-only — its vLLM path is CUDA-only; see
 # projects/minionerec/docs/Quick-start-Ascend.md for rationale.
 #

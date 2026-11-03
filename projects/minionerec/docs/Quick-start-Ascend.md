@@ -65,7 +65,7 @@ git checkout <UPSTREAM_REF>
 
 ## 4. 安装 NPU 依赖
 
-**不要**执行 `pip install -r requirements.txt`：其中 `torchrec/fbgemm_gpu/torchsnapshot` 是 CUDA 专属包、`bitsandbytes` 在 aarch64 上 wheel 可用性不确定（本仓库 xtuner 守门已验证 0.45.0 无 aarch64 wheel）、全部 `nvidia-*-cu11/12` 为 CUDA 运行库。SFT 冒烟只需要下列包。
+**不要**执行 `pip install -r requirements.txt`：其中 `torchrec/fbgemm_gpu/torchsnapshot` 是 CUDA 专属包、全部 `nvidia-*-cu11/12` 为 CUDA 运行库。SFT 冒烟只需要下列包。`bitsandbytes` 单独钉在 aarch64 有 wheel 的 0.48.1：`sft.py` / `evaluate.py` 顶部的 `import bitsandbytes as bnb` 从未被实际使用，但不改源码就绕不开这行 import，必须让它能导入。
 
 torch 栈与 CANN 9.1.0 配套（torch 2.9.0 + torch_npu 2.9.0.post2）：
 
@@ -73,46 +73,94 @@ torch 栈与 CANN 9.1.0 配套（torch 2.9.0 + torch_npu 2.9.0.post2）：
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 pip install torch==2.9.0 torch-npu==2.9.0.post2
 pip install modelscope transformers==4.57.1 accelerate==1.10.1 datasets==4.2.0 \
-    tokenizers==0.22.1 fire==0.7.1 pandas==2.2.2 tqdm
+    tokenizers==0.22.1 fire==0.7.1 pandas==2.2.2 tqdm bitsandbytes==0.48.1
 ```
 
 ---
 
-## 5. 打 NPU 适配补丁
+## 5. 观察默认行为：不改源码会落到 CPU
 
-两个文件（`sft.py` 训练入口、`evaluate.py` 评估入口）做同样的最小改动：(1) 顶部 `import bitsandbytes as bnb` 从未实际使用，剥掉以消除 aarch64 wheel 风险；(2) 注入 `torch_npu` 的 `transfer_to_npu` 转换层，把 `torch.cuda.*`、`device_map` 等透明映射到 NPU。
+MiniOneRec 的脚本靠 `torch.cuda.is_available()` 选设备：`evaluate.py` 在模块级就写成 `device = "cuda" if ... else "cpu"`，`sft.py` 则把选设备的活交给 `TrainingArguments` 按 CUDA 探测。只 `import torch_npu` 不会改写 `torch.cuda` 这一面，所以下面这段探针（等价于 `evaluate.py` 第 17-20 行的判定）在未做任何注入时一定落到 CPU：
 
-```shell #test id="patch"
+```shell #test id="probe-default"
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
 cd MiniOneRec
-python - <<'EOF'
-patch = "import torch_npu\nfrom torch_npu.contrib import transfer_to_npu\n"
-for name in ("sft.py", "evaluate.py"):
-    s = open(name).read()
-    if "transfer_to_npu" not in s:
-        s = s.replace("import bitsandbytes as bnb\n", "")
-        s = s.replace("import torch\n", "import torch\n" + patch, 1)
-        open(name, "w").write(s)
-print("patched")
-EOF
-grep -c "transfer_to_npu" sft.py evaluate.py
-# grep -c exits 1 on zero matches; the pipe keeps the block green while
-# still printing the count for the result assertion below.
-grep -c "bitsandbytes" sft.py evaluate.py || true
+python -c "
+import torch, torch_npu
+print('npu available:', torch.npu.is_available())
+print('cuda mapped:', torch.cuda.is_available())
+print('evaluate.py device:', 'cuda' if torch.cuda.is_available() else 'cpu')
+"
 ```
 
-输出结果如下（多文件 `grep -c` 逐文件输出 `文件名:匹配行数`；`transfer_to_npu` 只出现在 `from torch_npu.contrib import transfer_to_npu` 一行——`import torch_npu` 不含该子串，每个文件匹配 1 行；`bitsandbytes` 出现 0 次）：
+输出结果如下：
 
-```shell #test-result id="patch"
-patched
-sft.py:1
-evaluate.py:1
-sft.py:0
-evaluate.py:0
+```shell #test-result id="probe-default"
+npu available: True
+cuda mapped: False
+evaluate.py device: cpu
 ```
 
 ---
 
-## 6. 下载基座模型与预处理数据
+## 6. 在环境层启用 NPU 映射
+
+不改仓库任何源码：把 `torch_npu.contrib.transfer_to_npu` 放进 Python 启动时自动加载的 `sitecustomize.py`，等价于给每个进程补一行 import，把 `torch.cuda.*` 与 `"cuda"` 设备字符串透明映射到 NPU。只在 `ASCEND_HOME_PATH` 非空时生效，避免污染 `pip` 这类不碰 torch 的进程。
+
+```shell #test-setup id="inject-npu"
+SITE_PACKAGES=$(python -c "import sysconfig; print(sysconfig.get_paths()['purelib'])")
+cat > "$SITE_PACKAGES/sitecustomize.py" <<'INS'
+# minionerec-npu-mapping
+import os
+
+if os.environ.get("ASCEND_HOME_PATH"):
+    try:
+        import torch_npu.contrib.transfer_to_npu  # noqa: F401
+    except Exception:
+        pass
+INS
+ls -l "$SITE_PACKAGES/sitecustomize.py"
+```
+
+确认映射生效（代码里写的是 `cuda`，张量实际落在 NPU）：
+
+```shell #test id="check-npu"
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
+cd MiniOneRec
+python -c "
+import torch, torch_npu
+print('npu available:', torch.npu.is_available())
+print('cuda mapped:', torch.cuda.is_available())
+print('evaluate.py device:', 'cuda' if torch.cuda.is_available() else 'cpu')
+print('tensor landed on:', torch.zeros(1, device='cuda').device.type)
+"
+```
+
+输出结果如下：
+
+```shell #test-result id="check-npu"
+npu available: True
+cuda mapped: True
+evaluate.py device: cuda
+tensor landed on: npu
+```
+
+再确认仓库源码没被动过（此时还没产生任何输出目录，工作区应是干净的）：
+
+```shell #test id="no-source-change"
+cd MiniOneRec
+test -z "$(git status --porcelain)" && echo "source untouched"
+```
+
+输出结果如下：
+
+```shell #test-result id="no-source-change"
+source untouched
+```
+
+---
+
+## 7. 下载基座模型与预处理数据
 
 基座模型走 ModelScope（Qwen2.5-**base**，规避 README 公告的 Instruct 模型约束解码失效问题）；官方预处理的 Amazon Industrial_and_Scientific 数据只在 HuggingFace 侧，经 hf-mirror 拉取（约 27 MB，排除 .npy 嵌入文件——仅 RQ/SID 构建阶段需要）。`info/` 下的 SID-条目清单 txt 是评估阶段构建约束 trie 与对齐评测目标的输入，一并拉取。
 
@@ -144,23 +192,6 @@ item meta ok
 train csv ok
 valid csv ok
 info txt ok
-```
-
----
-
-## 7. 验证 torch_npu 与 CUDA-API 映射
-
-```shell #test id="check-npu"
-source /usr/local/Ascend/ascend-toolkit/set_env.sh
-python -c "import torch, torch_npu; from torch_npu.contrib import transfer_to_npu; print('npu available:', torch.npu.is_available()); print('npu count:', torch.npu.device_count()); print('cuda-mapped available:', torch.cuda.is_available())"
-```
-
-输出结果如下：
-
-```shell #test-result id="check-npu"
-npu available: True
-npu count: 1
-cuda-mapped available: True
 ```
 
 ---
@@ -287,10 +318,11 @@ HR...
 | `npu-smi` 找不到 | 未 `source set_env.sh`，或 `npu-smi` 不在 `PATH` | 重做第 1-2 节 |
 | `import torch_npu` 失败 | torch/torch_npu 版本不匹配 | 检查[兼容矩阵](https://gitcode.com/Ascend/pytorch)，确认 torch 2.9.0 ↔ torch_npu 2.9.0.post2 |
 | `npu available: False` | NPU 设备未挂载或驱动问题 | 检查 `/dev/davinci0` 是否存在 |
+| `import bitsandbytes` 报 ImportError | aarch64 上没有可用 wheel | 按第 4 节钉 `bitsandbytes==0.48.1` |
 | DataLoader worker 段错误 | torch_npu/CANN 与 fork 的兼容性问题 | 在 `TrainingArguments` 加 `dataloader_num_workers=0`（默认即为 0；仅在改过该参数后出现时回退） |
 | bf16 相关报错 | 硬件为 910A（不支持 bf16） | 更换 910B 系列硬件 |
 | ModelScope 下载慢/失败 | 网络 | 重试（支持断点续传）；数据侧确认 `HF_ENDPOINT=https://hf-mirror.com` 已导出 |
 | `model_type` grep 为空 | `final_checkpoint/config.json` 缺失 | 训练未完成，检查上一块退出码与日志 |
 | 评估报 `FileNotFoundError: [Errno 2] No such file or directory: ''` | 未传 `--result_json_data`，结果文件路径为空 | 补上 `--result_json_data ./eval_result.json` |
-| CC 大于 0 | 约束解码未生效 | 确认第 5 节补丁已注入 `evaluate.py`（`grep -c transfer_to_npu evaluate.py` 应为 1）；基座模型须为 Qwen2.5-**base**（Instruct 版约束解码失效） |
+| CC 大于 0 | 约束解码未生效 | 确认第 6 节注入已生效（`cuda mapped: True`、`tensor landed on: npu`）；注入依赖进程内 `ASCEND_HOME_PATH` 非空，命令块首行须 `source set_env.sh`；基座模型须为 Qwen2.5-**base**（Instruct 版约束解码失效） |
 | HR/NDCG 与文中示例差异大 | 冒烟训练仅 1 epoch/600 样本，`num_beams` 也降为 20 | 数值仅供参考；CI 只断言 CC=0，HR/NDCG 用占位符匹配 |

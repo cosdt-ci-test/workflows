@@ -8,15 +8,20 @@ Document under test: ``projects/minionerec/docs/Quick-start-Ascend.md``
 ``fuzzy='xxx'`` parameters).
 
 Smoke scope (see the doc): single-card MiniOneRec SFT + constrained-
-decoding evaluation on Ascend NPU — ModelScope base model (Qwen2.5-0.5B)
-+ HF-mirror preprocessed Amazon Industrial_and_Scientific subset (incl.
-the info/ SID-item list txt for evaluation) + ``transfer_to_npu`` patch
-on both sft.py and evaluate.py (unused ``bitsandbytes`` import stripped;
-aarch64 wheel availability is uncertain) + 1-epoch HF-Trainer SFT
-(sample=600/dataset, cutoff 256) + beam-20 evaluation over a 200-line
-test slice; calc.py asserts the tail CC is 0 (every generated SID is a
-legal trie path — the key NPU-correctness signal). HR/NDCG magnitudes
-float with training state and are matched with ``...`` placeholders.
+decoding evaluation on Ascend NPU with the upstream source untouched —
+no shim PR, no in-repo patch. ``transfer_to_npu`` is injected at the
+environment level through a ``sitecustomize.py`` written into
+site-packages, so ``torch.cuda.*`` is mapped for every process while
+sft.py / evaluate.py stay byte-identical (asserted by a ``git status
+--porcelain`` check). ``bitsandbytes==0.48.1`` is installed because the
+unused top-level import cannot be stripped without editing the source.
+ModelScope base model (Qwen2.5-0.5B) + HF-mirror preprocessed Amazon
+Industrial_and_Scientific subset (incl. the info/ SID-item list txt for
+evaluation) + 1-epoch HF-Trainer SFT (sample=600/dataset, cutoff 256) +
+beam-20 evaluation over a 200-line test slice; calc.py asserts the tail
+CC is 0 (every generated SID is a legal trie path — the key
+NPU-correctness signal). HR/NDCG magnitudes float with training state
+and are matched with ``...`` placeholders.
 RL (GRPO) is pointer-only: its vLLM path is CUDA-only and the
 transformers-native fallback is too slow for a smoke.
 

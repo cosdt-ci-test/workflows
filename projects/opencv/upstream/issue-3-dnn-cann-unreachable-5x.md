@@ -181,6 +181,84 @@ CPU.
 byte-identical between 5.0.0 and 5.x -- the backend itself did not change, only
 the way a network is built.
 
+### Why the backend cannot simply be re-wired
+
+The CANN backend is a `Net::Impl` subclass (`NetImplCann`) whose entire
+integration consists of two hooks:
+
+* `NetImplCann::initBackend()` (`modules/dnn/src/net_cann.cpp:101`) walks the
+  layers, builds the CANN GE graph, compiles it into one OM buffer
+  (`compileCannGraph()`, `net_cann.cpp:292`) and attaches a `CannBackendNode`
+  to every layer;
+* `NetImplCann::forwardLayer()` (`net_cann.cpp:254`) does not execute any layer
+  arithmetic -- it calls `cannNode->net->forward()` once, launching the whole
+  compiled OM graph. The per-layer hook is only used as a trigger.
+
+In 5.x both hooks are called only from the classic engine:
+
+```
+modules/dnn/src/net_impl.cpp:267:        initBackend(blobsToKeep_);
+modules/dnn/src/net_impl.cpp:921:                    forwardLayer(ld);
+modules/dnn/src/net_impl.cpp:987:        forwardLayer(ld);
+modules/dnn/src/net_impl.cpp:991:    forwardLayer(ld);
+```
+
+The new engine's `Net::Impl::forwardMainGraph()` (`modules/dnn/src/net_impl2.cpp:917`)
+never calls them: it calls `finalize()` (which selects a per-op executor) and
+then `forwardGraph(mainGraph, inputs, outputs, true)`.
+
+`NetImplOpenVINO` (`modules/dnn/src/net_openvino.cpp`) has exactly the same
+shape -- `initBackend()` + `forwardLayer()` -- which is why the OpenVINO
+back-end is dead on 5.x as well (measured below: `OPENVINO + MYRIAD` is
+rejected and all 120 operators run on the CPU).
+
+### A whole-model offload already exists on the new engine
+
+The good news is that the new engine already has the shape a CANN port would
+need. `forwardMainGraph()` starts with an ONNX Runtime whole-model bypass:
+
+```cpp
+void Net::Impl::forwardMainGraph(InputArrayOfArrays inputs, OutputArrayOfArrays outputs)
+{
+#ifdef HAVE_ONNXRUNTIME
+    if (useOrtEngine && mainGraph && modelFormat == DNN_MODEL_ONNX && !modelFileName.empty())
+        finalizeOrt();
+    if (this->ort_session)
+    {
+        ...
+        std::vector<Mat> ortOuts = runOrtSession(netInputLayer->blobs, std::vector<int>());
+        ...
+        return;
+    }
+#endif
+    ...
+    finalize();  // select per-op executors for the chosen backend/target (idempotent)
+    ...
+    forwardGraph(mainGraph, inputs, outputs, true);
+```
+
+The open PR #29726 ("dnn: add AMD MIGraphX (ROCm) backend for ONNX models")
+states that it mirrors this bypass:
+
+> The hook lives in the new graph engine's forwardMainGraph(), mirroring the
+> ONNX Runtime whole-model bypass; inputs are read from the main graph tensors
+> and bound to the program's own parameter names. On any parse/compile failure
+> it falls back to the default engine, so results stay correct.
+
+The CANN backend's semantics already are a whole-model offload (compile the
+graph once into an OM buffer, launch it once), so the same shape would fit it:
+build the OM once, run it as a single program, fall back to the default engine
+on failure.
+
+### Related work
+
+* #25025 "Introducing non-CPU HAL for OpenCV 5+" -- the umbrella design
+  discussion about non-CPU acceleration in 5.x (still open).
+* #29726 "dnn: add AMD MIGraphX (ROCm) backend for ONNX models" -- a new
+  back-end being added *to the new engine*, by mirroring the ORT bypass.
+* #30439 "dnn(cuda): transformer layer coverage and CUDA Graph replay on the
+  new engine" -- CUDA being ported to the new engine.
+
 ### Questions
 
 1. Should the CANN backend be ported to the new graph engine, or dropped from
@@ -188,6 +266,11 @@ the way a network is built.
 2. If it is kept: building 5.x with `WITH_CANN=ON` currently fails to compile
    (a separate issue, the CANN sources still use the pre-5.0 shape type), so
    today a CANN build of 5.x is not possible at all.
+3. If it is ported: would a whole-model offload (the compiled OM launched as a
+   single program from `forwardMainGraph()`, following the ONNX Runtime /
+   MIGraphX pattern) be acceptable, or is a per-operator implementation in the
+   new engine's executor model expected? The former reuses `op_cann.cpp`
+   almost as is; the latter is a rewrite.
 ```
 
 ---
@@ -218,5 +301,23 @@ the way a network is built.
       4.x 那次断裂只是 GELU 少了个 `initCannOp`，#26632 用 9 行桩修掉
 - [x] 5.0.0 → 5.x 的时间线（#26056 → #26334 → darknet/caffe 清理 →
       5.0.0 tag → **#29341 删掉经典引擎** → #29474 删 TF importer）
+- [x] 查清**为什么不能只是把线重新接上**：`NetImplCann` 只有
+      `initBackend()` + `forwardLayer()` 两个钩子，而这两个在 5.x 里
+      **只被经典引擎调用**（`net_impl.cpp:267 / 921 / 987 / 991`）；
+      新引擎的 `forwardMainGraph()`（`net_impl2.cpp:917`）走的是
+      `finalize()` + `forwardGraph()`，完全不碰这两个钩子。
+      `NetImplOpenVINO` 结构相同 ⇒ OpenVINO 后端在 5.x 上同样失效
+      （实测 `OPENVINO + MYRIAD` 被拒、120 个 op 全在 CPU）。
+- [x] 找到**移植的现成模板**：新引擎的 `forwardMainGraph()` 开头就有
+      ONNX Runtime 的整模型旁路（`runOrtSession()` + `return`），
+      进行中的 PR #29726（MIGraphX 后端）明说是「mirroring the ONNX Runtime
+      whole-model bypass」；而 CANN 后端本身已经是整模型语义
+      （`initBackend()` 编译出一个 OM，`forwardLayer()` 只调一次
+      `cannNode->net->forward()`），形态吻合。
+- [x] 查过上游**没有重复 issue**：`api.github.com/search/issues` 搜
+      `repo:opencv/opencv` 的 title 含 CANN 的 25 条，最新一条是 2025-06 的
+      #27402，没有任何一条讲 5.x 的 CANN 编译失败或后端不可达；
+      搜 `disable_engine_classic` / `DNN_BACKEND_CANN` / `5.x accelerator`
+      也都没有命中。
 - [ ] 上游是否接受「CANN 后端在 5.x 上不可达」这个结论（属于设计决策，
       本 issue 只陈述事实 + 提问，不带补丁）

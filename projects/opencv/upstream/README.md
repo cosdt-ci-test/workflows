@@ -8,7 +8,7 @@
 |---|---|---|---|
 | 现象 | `WITH_CANN=ON` 时 CANN TU **编译不过**（`no matching function for call to CannConstOp::CannConstOp`），共 6 个 TU | 编译过了，但 aarch64 **链接**爆 `relocation truncated to fit: R_AARCH64_CALL26/JUMP26` | 编译链接都过了，但 `setPreferableBackend(DNN_BACKEND_CANN)` **被无视**，模型全跑 CPU |
 | 根因 | `cv::MatShape` 在 5.0.0 从 `std::vector<int>` 的别名变成了独立结构体（#26056 "New dnn engine"），`CannConstOp` 的形参还是 `const std::vector<int>&` | CANN 的 `all_ops.h` 声明约 1500 个算子类，被 `#include` 进每个 TU，C++ 头文件是编译期文本展开 ⇒ aarch64 `BL` 的 26 位立即数（±128 MiB）装不下 | 5.x 所有模型都建在新图引擎上（`mainGraph` 非空），而新图引擎明确拒绝非 CPU 后端；经典引擎在 **#29341**（commit `49b8f7c03f`，2026-06-18）之后已被删除 |
-| 修法 | `CannConstOp` 改收 `const MatShape&`，喂它的 15 个 shape 局部量一并改成 `MatShape`，`front()` → `[0]` | 把 `all_ops.h` 换成窄头（`array_ops.h` + 每个 TU 各自的算子头） | 上游决策：把 CANN 后端移植到新图引擎，或从 5.x 移除。本仓只出 issue，不出补丁 |
+| 修法 | `CannConstOp` 改收 `const MatShape&`，喂它的 15 个 shape 局部量一并改成 `MatShape`，`front()` → `[0]` | 把 `all_ops.h` 换成窄头（`array_ops.h` + 每个 TU 各自的算子头） | 上游决策：把 CANN 后端移植到新图引擎（形态见下方 ORT 整模型旁路模板），或从 5.x 移除。本仓只出 issue，不出补丁 |
 | 规模 | 15 文件 / +21 / −21 | 26 文件 / +27 / −2 | 0（无补丁） |
 | 本仓对应物 | `projects/opencv/scripts/patch_opencv_cann.py` 的 (a)(b)(c)(d) | 同脚本的 (e)(f) | 无 |
 | 上游状态 | 分支 `dnn_cann_matshape` 已提交并推送；issue + PR 草稿在本目录 | **未做**（用户指示「先做组 1」） | issue 草稿在本目录，**待提交** |
@@ -71,6 +71,62 @@ CANN 后端是挂在**经典引擎**上的，而经典引擎正是 5.x 主线重
 | **5.0.0 tag** | **2026-06-05** | 经典引擎还在，CANN 可达 |
 | **#29341「disable_engine_classic」**（`49b8f7c03f`） | **2026-06-18** | 删掉 `ENGINE_CLASSIC` 与经典 ONNX importer ⇒ 经典引擎消失，CANN 失去唯一挂载点 |
 | #29474「extra_parsers」 | 2026-10-22 | TF importer 删除；只剩 ONNX + TFLite，且都建新引擎 |
+
+### 为什么「接回去」不是改一行代码
+
+`NetImplCann` 这个 `Net::Impl` 子类与新引擎的全部接口就两个钩子，而两个钩子
+在 5.x 里**只被经典引擎调用**：
+
+| 钩子 | 作用 | 5.x 里的调用点 |
+|---|---|---|
+| `NetImplCann::initBackend()`（`net_cann.cpp:101`） | 逐层搭 CANN GE 图，编成一个 OM buffer（`compileCannGraph()`，`net_cann.cpp:292`），给每层挂 `CannBackendNode` | `net_impl.cpp:267`（经典引擎） |
+| `NetImplCann::forwardLayer()`（`net_cann.cpp:254`） | **不做任何逐层计算**，只调一次 `cannNode->net->forward()` 启动整个 OM 图 | `net_impl.cpp:921 / 987 / 991`（经典引擎） |
+
+新引擎的 `Net::Impl::forwardMainGraph()`（`net_impl2.cpp:917`）走的是
+`finalize()`（选每 op 的执行器）+ `forwardGraph()`，**完全不碰这两个钩子**。
+`NetImplOpenVINO`（`net_openvino.cpp`）结构一模一样 —— 所以 OpenVINO 后端
+在 5.x 上同样失效（实测 `OPENVINO + MYRIAD` 被拒，120 个 op 全在 CPU）。
+
+⇒ CANN 后端在 5.x 上不是「忘了打开一个开关」，而是**执行模型换代后没人接**。
+
+### 但移植的模板已经存在
+
+新引擎的 `forwardMainGraph()` 开头就有 ONNX Runtime 的**整模型旁路**：
+
+```cpp
+#ifdef HAVE_ONNXRUNTIME
+    if (useOrtEngine && mainGraph && modelFormat == DNN_MODEL_ONNX && !modelFileName.empty())
+        finalizeOrt();
+    if (this->ort_session)
+    {
+        std::vector<Mat> ortOuts = runOrtSession(netInputLayer->blobs, std::vector<int>());
+        ...
+        return;
+    }
+#endif
+```
+
+进行中的 PR #29726「dnn: add AMD MIGraphX (ROCm) backend for ONNX models」
+明说是「mirroring the ONNX Runtime whole-model bypass」。
+
+而 CANN 后端**本身就已经是整模型语义**（编一次 OM、整体启动一次），
+所以它天然适配这条旁路：编一次 OM → 当成一个 program 跑 → 失败回落默认引擎。
+
+## 上游现状（2026-11-03 核对）
+
+- **没有重复 issue**：GitHub 搜索 `repo:opencv/opencv` 标题含 CANN 的共 25 条，
+  最新一条是 2025-06 的 #27402；搜 `disable_engine_classic` /
+  `DNN_BACKEND_CANN` / 5.x 加速器相关关键词均无命中。
+- 相关工作：
+  - **#25025**「Introducing non-CPU HAL for OpenCV 5+」（2024-02 起，仍 open）
+    —— 5.x 非 CPU 加速的总设计讨论
+  - **#29726**「dnn: add AMD MIGraphX (ROCm) backend for ONNX models」（open）
+    —— 在新引擎里加后端，抄的就是 ORT 整模型旁路
+  - **#30439**「dnn(cuda): transformer layer coverage and CUDA Graph replay on
+    the new engine」—— CUDA 正在被移植到新引擎
+
+⇒ 上游的方向是**「把后端移植到新引擎」**，不是「保留经典引擎」。
+CANN 要跟上，形态大概率是 #29726 那种整模型旁路。
 
 ## 文件
 

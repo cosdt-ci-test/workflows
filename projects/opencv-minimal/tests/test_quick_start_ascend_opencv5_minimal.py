@@ -13,15 +13,17 @@ What makes this guard different from the other OpenCV guards:
 
 * it watches the **5.0.0 minimal-patch** doc: the claim under test is
   that OpenCV 5.0.0 needs exactly **two** patch groups (the
-  ``cv::MatShape`` overload + the narrow CANN op headers) and that the
+  ``cv::MatShape`` type fix + the narrow CANN op headers) and that the
   result is byte-identical to the known-good 5.x tree.  The
-  ``ocv5m-patches-applied`` block asserts all five markers landed
-  (the ``cv::MatShape`` overload decl **and** the upstream
-  ``std::vector<int>`` decl both still present -- the bridge form, not
-  the replacement form -- the forwarding ctor in ``op_cann.cpp``,
-  ``array_ops.h`` in place, and 23 layer TUs carrying a narrow op
-  header), so a doc edit that breaks the patch scripts fails here
-  rather than silently shipping an unpatched tree;
+  ``ocv5m-patches-applied`` block asserts the **replacement form**
+  landed, not the bridge form: exactly **one** ``CannConstOp``
+  declaration in ``op_cann.hpp`` and exactly **one** definition in
+  ``op_cann.cpp``, both carrying ``const cv::MatShape&`` (the
+  forwarding-overload variant would show up as ``2 / 2 / 2``),
+  ``array_ops.h`` in place, 23 layer TUs carrying a narrow op header,
+  and 13 layer TUs now speaking ``cv::MatShape``.  A doc edit that
+  breaks the patch scripts fails here rather than silently shipping an
+  unpatched tree;
 * the doc is the **only** one of the four OpenCV docs that builds 5.0.0
   with ``BUILD_opencv_apps=OFF``.  ``apps/model-diagnostics`` is an
   executable and links CANN's ``libge_compiler.so`` / ``libgraph.so``
@@ -86,7 +88,7 @@ class TestQuickStartAscendOpenCV5Minimal(MarkdownDocTestBase, unittest.TestCase)
         1. ``apt-get install`` build deps (cmake / gcc / libjpeg / libpng /
            libtiff / zlib);
         2. ``git clone --depth 1 --branch 5.0.0`` opencv;
-        3. the two patch groups (MatShape overload + narrow CANN op
+        3. the two patch groups (MatShape type fix + narrow CANN op
            headers -- the narrow headers are what keeps ``libopencv_dnn``
            inside the aarch64 +-128 MiB branch-range window: 14.7 MiB of
            ``.text`` instead of 53.5 MiB with ``all_ops.h``);

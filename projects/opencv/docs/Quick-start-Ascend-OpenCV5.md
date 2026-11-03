@@ -233,81 +233,103 @@ OpenCV 5.0 mainline 与 CANN 9.x / aarch64 有 2 处不兼容：一处是 §2.2 
 
 | 组 | 上游哪里坏了 | 改法 |
 | --- | --- | --- |
-| 1 | OpenCV 5.0 把 shape 类型换成 `cv::MatShape`（`explicit` 构造、**没有** `front()`），上游 CANN 后端还停在 4.x 的 `std::vector<int>` 写法 | 新增 1 个 `cv::MatShape` 重载转发给上游构造 + 修 3 处赋值（**两个重载都要留**，理由见组 1 末尾） |
+| 1 | OpenCV 5.0 把 shape 类型换成 `cv::MatShape`（`explicit` 构造、**没有** `front()`），上游 CANN 后端还停在 4.x 的 `std::vector<int>` 写法 | 把 `CannConstOp` 的 shape 参数换成 `const cv::MatShape&` + 15 处局部量改类型 + 修 3 处赋值（**不留**转发重载，理由见组 1 末尾） |
 | 2 | `all_ops.h` 的 ~1500 个 op 把 dnn `.text` 撑破 aarch64 ±128 MiB 链接窗口 | per-TU 窄 op 头 |
 
 > 曾经还有第 3 组（contrib `cannops` 的 NULL 流兜底）。**本文不编 `opencv_contrib`**，所以不需要它：那条 NULL 流断言只在算子级 API `aclopCompileAndExecute` 上触发，而本文走的是模型级 `aclmdlExecute`（经典引擎 + CANN 后端），不经过它。要 `cv2.cann` 那条通路请走 [主文档](Quick-start-Ascend.md)。
 
 ### 组 1. `cv::MatShape` 改了类型
 
-改法保持最小：**上游的 `std::vector<int>` 构造函数原样保留**，只**新增**一个 `cv::MatShape` 重载转发给它；再修 3 处已经编译不过的赋值。
+**跟上游写法对齐**：把 `CannConstOp` 的 shape 参数从 `const std::vector<int>&` **换成** `const cv::MatShape&`（**不留**转发重载），CANN 后端从此和其它 dnn 代码一样只说 `cv::MatShape`；再把 15 处形状局部量从 `std::vector<int>` 改成 `cv::MatShape`，以及修 3 处已经编译不过的赋值。
 
 ```shell #test-setup
 python3 - <<'PY'
 import pathlib
 
-# (a) op_cann.hpp: 新增 cv::MatShape 重载声明（上游 vector<int> 主构造不动）
-hp = pathlib.Path('opencv/modules/dnn/src/op_cann.hpp')
-hs = hp.read_text()
-decl_v = 'CannConstOp(const uint8_t* data, const int dtype, const std::vector<int>& shape, const std::string& name);'
-decl_m = 'CannConstOp(const uint8_t* data, const int dtype, const cv::MatShape& shape, const std::string& name);'
-assert decl_v in hs, 'hpp: upstream std::vector<int> decl not found'
-if decl_m in hs:
-    print('(a) op_cann.hpp: MatShape overload decl already present')
-else:
-    hp.write_text(hs.replace(decl_v, decl_v + '\n        ' + decl_m, 1))
-    print('(a) op_cann.hpp: +1 cv::MatShape overload decl')
+ROOT = pathlib.Path('opencv/modules/dnn/src')
 
-# (b) op_cann.cpp: MatShape 重载转发给上游 vector<int> 构造（上游函数体不改）
-cp = pathlib.Path('opencv/modules/dnn/src/op_cann.cpp')
-cs = cp.read_text()
-deleg = ('\nCannConstOp::CannConstOp(const uint8_t* data, const int dtype, const cv::MatShape& shape, const std::string& name)\n'
-         '    : CannConstOp(data, dtype, std::vector<int>(shape.begin(), shape.end()), name) {}\n')
-anchor = 'op_ = std::make_shared<ge::op::Const>(name);\n    op_->set_attr_value(*ge_tensor);\n}\n'
-if deleg.strip() in cs:
-    print('(b) op_cann.cpp: MatShape forwarding ctor already present')
-else:
-    assert anchor in cs, 'cpp: anchor not found'
-    cp.write_text(cs.replace(anchor, anchor + deleg, 1))
-    print('(b) op_cann.cpp: +1 MatShape forwarding ctor')
+def sub(rel, old, new, tag):
+    p = ROOT / rel
+    s = p.read_text()
+    if new in s:
+        print(f'{tag} {rel}: already patched')
+        return
+    assert old in s, f'{rel}: pattern not found -> {old[:70]}'
+    p.write_text(s.replace(old, new, 1))
+    print(f'{tag} {rel}: patched')
 
-# (c)(d) cv::MatShape 没有 front()、也不能从 std::vector<int> 赋值 -> 修 3 处
-fixes = [
-    ('opencv/modules/dnn/src/layers/gemm_layer.cpp',
-     '            shape_C = std::vector<int>{dim};',
-     '            shape_C = cv::MatShape(1, dim);'),
-    ('opencv/modules/dnn/src/layers/matmul_layer.cpp',
-     '                if (real_ndims_C == 1 && bias_shape.front() != 1) {',
-     '                if (real_ndims_C == 1 && bias_shape[0] != 1) {'),
-    ('opencv/modules/dnn/src/layers/matmul_layer.cpp',
-     '                    bias_shape = std::vector<int>{bias_shape.front()};',
-     '                    bias_shape = cv::MatShape(1, bias_shape[0]);'),
+# (a) op_cann.hpp: 把上游的 vector<int> 签名换成 cv::MatShape（不留转发重载）
+sub('op_cann.hpp',
+    'CannConstOp(const uint8_t* data, const int dtype, const std::vector<int>& shape, const std::string& name);',
+    'CannConstOp(const uint8_t* data, const int dtype, const cv::MatShape& shape, const std::string& name);',
+    '(a)')
+
+# (b) op_cann.cpp: 同步改定义签名；函数体一个字都不用动（它只用 shape.begin()/shape.end()）
+sub('op_cann.cpp',
+    'CannConstOp::CannConstOp(const uint8_t* data, const int dtype, const std::vector<int>& shape, const std::string& name)',
+    'CannConstOp::CannConstOp(const uint8_t* data, const int dtype, const cv::MatShape& shape, const std::string& name)',
+    '(b)')
+
+# (c) 15 处形状局部量: std::vector<int> -> cv::MatShape
+#     (cv::MatShape 的 vector<int> 构造是 explicit, std::vector<int> 不能隐式变过去)
+shapes = [
+    ('layers/batch_norm_layer.cpp',      'std::vector<int> shape_{channel};'),
+    ('layers/elementwise_layers.cpp',    'std::vector<int> shape_{1};'),
+    ('layers/elementwise_layers.cpp',    'std::vector<int> shape_{scale.size[0]};'),
+    ('layers/slice_layer.cpp',           'std::vector<int> shape_size_splits{(int)size_splits.size()};'),
+    ('layers/slice_layer.cpp',           'std::vector<int> split_dim_shape{1};'),
+    ('layers/slice_layer.cpp',           'std::vector<int> shape_{dims};'),
+    ('layers/padding_layer.cpp',         'std::vector<int> pads_shape{(int)pads.size()};'),
+    ('layers/padding_layer.cpp',         'std::vector<int> constant_values_shape{1};'),
+    ('layers/reduce_layer.cpp',          'std::vector<int> axes_shape{(int)axes.size()};'),
+    ('layers/resize_layer.cpp',          'std::vector<int> shape_of_size_mat{2};'),
+    ('layers/resize2_layer.cpp',         'std::vector<int> shape_of_size_mat{2};'),
+    ('layers/reshape_layer.cpp',         'std::vector<int> shape_of_shape{(int)newShapeDesc.size()};'),
+    ('layers/convolution_layer.cpp',     'std::vector<int> bias_shape{out_channel};'),
+    ('layers/deconvolution_layer.cpp',   'std::vector<int> shape_b{out_channel};'),
+    ('layers/fully_connected_layer.cpp', 'std::vector<int> bias_shape{weightsMat.size[0]};'),
 ]
-for rel, o, n in fixes:
-    p = pathlib.Path(rel); s = p.read_text()
-    if n in s:
-        print(f'(c)(d) {rel}: already patched')
-        continue
-    assert o in s, f'{rel}: pattern not found'
-    p.write_text(s.replace(o, n, 1))
-    print(f'(c)(d) {rel}: 1 assignment fixed')
+for rel, old in shapes:
+    sub(rel, old, old.replace('std::vector<int> ', 'cv::MatShape '), '(c)')
+
+# (d) cv::MatShape 没有 front()、也不能从 std::vector<int> 赋值 -> 修 3 处
+sub('layers/gemm_layer.cpp',
+    'shape_C = std::vector<int>{dim};',
+    'shape_C = cv::MatShape(1, dim);', '(d)')
+sub('layers/matmul_layer.cpp',
+    'if (real_ndims_C == 1 && bias_shape.front() != 1) {',
+    'if (real_ndims_C == 1 && bias_shape[0] != 1) {', '(d)')
+sub('layers/matmul_layer.cpp',
+    'bias_shape = std::vector<int>{bias_shape.front()};',
+    'bias_shape = cv::MatShape(1, bias_shape[0]);', '(d)')
 PY
 ```
 
-预期：`(a)`/`(b)` 各 1 行打印，`(c)(d)` 打印 3 行（gemm 1 + matmul 2）。
+预期：`(a)`/`(b)` 各 1 行、`(c)` 15 行、`(d)` 3 行（gemm 1 + matmul 2），共 **20 处**，落在 **15 个文件**上。
 
-> **为什么是「加一个重载」而不是「把上游签名直接换成 `cv::MatShape`」？**
+> **为什么是「把上游签名换成 `cv::MatShape`」而不是「再加一个转发重载」？**
 >
 > 上游 5.x 的 CANN 后端在形状类型上是**两个世界混用**的：
 >
 > | 来源 | 例子 | 类型 |
 > | --- | --- | --- |
-> | dnn 新引擎的 `shape()` | `gemm_layer.cpp:668` `shape(B)`、`convolution_layer.cpp:703` `shape(w_mat)`、`matmul_layer.cpp:717` `shape(B)` | `cv::MatShape` |
-> | CANN 后端自己造的局部变量 | `batch_norm_layer.cpp:394` `std::vector<int> shape_{channel};`、`elementwise_layers.cpp:850` `shape_{1}`、`slice_layer.cpp:691` `shape_size_splits`、`padding_layer.cpp:235` `pads_shape`、`reduce_layer.cpp:546` `axes_shape`、`resize_layer.cpp:453` `shape_of_size_mat`、`reshape_layer.cpp:402` `shape_of_shape`、`convolution_layer.cpp:712` `bias_shape`、`deconvolution_layer.cpp:1143` `shape_b`、`fully_connected_layer.cpp:755` `bias_shape`、`matmul_layer.cpp:701` 内联的 `std::vector<int>{1}` | **`std::vector<int>`** |
+> | dnn 其它地方的 `shape()` | `gemm_layer.cpp:531` `shape(mat_C)`、`convolution_layer.cpp:703` `shape(w_mat)`、`matmul_layer.cpp:512` `shape(bias_mat)` | `cv::MatShape` |
+> | CANN 后端自己造的局部变量 | `batch_norm_layer.cpp:383` `std::vector<int> shape_{channel};`、`elementwise_layers.cpp:652` `shape_{1}`、`slice_layer.cpp:691` `shape_size_splits`、`padding_layer.cpp:235` `pads_shape`、`reduce_layer.cpp:546` `axes_shape`、`resize_layer.cpp:453` `shape_of_size_mat`、`reshape_layer.cpp:402` `shape_of_shape`、`convolution_layer.cpp:712` `bias_shape`、`deconvolution_layer.cpp:1021` `shape_b`、`fully_connected_layer.cpp:755` `bias_shape` | **`std::vector<int>`** |
 >
-> 第二类**不是「漏改的旧写法」**：`cv::Mat` 在 5.0 core 里仍然只收 `std::vector<int>`（`mat.hpp:1150` `Mat(const std::vector<int>& sizes, int type, void* data, ...)`），而 CANN 后端正是拿这些 `vector<int>` 去构造 Mat（`reduce_layer.cpp:547` `Mat axes_mat(axes_shape, CV_32S, &axes[0]);`）。
+> 第二类**不是「漏改的旧写法」**：`cv::MatShape` 的 `vector<int>` 构造是 `explicit`（`mat.hpp:114` `explicit MatShape(const std::vector<int>& shape, ...)`），`std::vector<int>` **不能**隐式变过去。所以「只留 `const cv::MatShape&` 一个签名」时，上表第二行那 15 处声明必须一起改成 `cv::MatShape` —— 这正是本组补丁干的事。
 >
-> ⇒ 只保留 `const cv::MatShape&` 一个签名的话，上表第二行那 **15 处声明 / 20 处调用点**会集体编译失败；**两个重载都得留着**。这也是上游自己迟迟没修的原因之一。
+> 两种改法对比：
+>
+> | | 加转发重载 | **替换签名（本文）** |
+> | --- | --- | --- |
+> | `op_cann.hpp` 里 `CannConstOp` 的声明数 | 2（`vector<int>` + `MatShape`） | **1** |
+> | 类型转换次数 | 每次调用 1 次 `std::vector<int>(shape.begin(), shape.end())` | **0** |
+> | 上游以后自己修好时 | 转发重载变成**没人调用的死代码**，删不干净 | 补丁 1:1 退场，`git revert` 干净 |
+> | 改动量 | 4 文件 / 5 处 | 15 文件 / 20 处 |
+>
+> 代价是**改动量更大**（要动 15 个 layer TU 的局部量声明），换来的是「上游修好后整块补丁能干净退场」。补丁的唯一目的是让 5.x 能编译，等上游修好就该整块消失 —— 所以本文选替换。
+>
+> 顺带一提，替换之后**一次类型转换都不需要**：`cv::Mat` 在 5.0 core 里本来就收 `cv::MatShape`（`mat.hpp:1164` `Mat(const MatShape& shape, int type, void* data, const size_t* steps=0)`，实现见 `matrix.cpp:1303`，和 `vector<int>` 那版一样走 `setSize()`），所以像 `reduce_layer.cpp:547` `Mat axes_mat(axes_shape, CV_32S, &axes[0]);` 这种地方**不用** `.vec()`。实测 dnn `.text` 从转发重载版的 15,455,920 B 降到 **15,426,704 B**。
 
 ### 组 2. 缩小 CANN op 头（避免 aarch64 链接炸）
 
@@ -389,10 +411,11 @@ PY
 
 ```shell #test id="ocv5-patches-applied"
 grep -c "const cv::MatShape& shape" opencv/modules/dnn/src/op_cann.hpp
-grep -c "const std::vector<int>& shape" opencv/modules/dnn/src/op_cann.hpp
-grep -c "cv::MatShape" opencv/modules/dnn/src/op_cann.cpp
+grep -c "CannConstOp(const uint8_t" opencv/modules/dnn/src/op_cann.hpp
+grep -c "CannConstOp::CannConstOp" opencv/modules/dnn/src/op_cann.cpp
 grep -c "array_ops.h" opencv/modules/dnn/src/op_cann.hpp
 grep -rl "built-in/op_proto/inc/" opencv/modules/dnn/src/layers/ | wc -l
+grep -rl "cv::MatShape" opencv/modules/dnn/src/layers/ | wc -l
 ```
 
 输出结果如下：
@@ -402,9 +425,14 @@ grep -rl "built-in/op_proto/inc/" opencv/modules/dnn/src/layers/ | wc -l
 1
 2
 23
+13
 ```
 
-> 前三行是这个守卫的**关键**：它们同时断言「`cv::MatShape` 重载在」**和**「上游的 `std::vector<int>` 声明还在」。只看 `grep -c "cv::MatShape"` 区分不了「加桥」和「把上游签名换掉」两种形态——后者会让上游 15 处 `std::vector<int>` 调用点集体编译失败（见组 1 末尾的说明）。
+> 前三行是这个守卫的**关键**：它们断言的是**替换形态**——`op_cann.hpp` 里 `CannConstOp` 的声明**总共只有 1 条**、`op_cann.cpp` 里的定义**总共只有 1 条**，而且那条就是 `const cv::MatShape&`。
+>
+> 换成「加转发重载」的形态，六行会变成 `1 / 2 / 2 / 2 / 23 / 2`（`vector<int>` 那条声明还在 ⇒ 第 2、3 行各多 1；第 6 行只有 gemm / matmul 两处提到 `cv::MatShape`）—— **第 2、3 行就足以区分两种形态**，守卫不会把「加桥」误判成「替换」。
+>
+> 六行都**必须 ≥ 1**：`grep -c` 命中 0 次时退出码是 1，而守卫的判定是「退出码非 0 或 stderr 出现 error ⇒ 整块失败」，所以不能直接 grep 一个「期望为 0」的东西。
 
 ## 6. 桥接 CANN 的库目录
 

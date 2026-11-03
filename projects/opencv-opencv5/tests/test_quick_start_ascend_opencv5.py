@@ -79,7 +79,7 @@ class TestQuickStartAscendOpenCV5(MarkdownDocTestBase, unittest.TestCase):
            libtiff / zlib);
         2. ``git clone --depth 1 --branch <ref>`` opencv (no
            ``opencv_contrib``);
-        3. two source patches (``cv::MatShape`` forwarding, narrow CANN
+        3. two source patches (``cv::MatShape`` type fix, narrow CANN
            op headers for the aarch64 +-128 MiB branch-range limit);
         4. CANN library layout bridge (3 symlinks into ``<CANN>/lib64``);
         5. ``cmake -DWITH_CANN=ON -DCMAKE_BUILD_TYPE=Debug`` configure;

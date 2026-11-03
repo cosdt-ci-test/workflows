@@ -212,6 +212,53 @@ shape -- `initBackend()` + `forwardLayer()` -- which is why the OpenVINO
 back-end is dead on 5.x as well (measured below: `OPENVINO + MYRIAD` is
 rejected and all 120 operators run on the CPU).
 
+### The per-operator layer is intact -- it is the bridge that is missing
+
+The Ascend-side operator knowledge does **not** have to be written again.
+5.x renamed the hook from 4.x's `initCannOp` to `initCann`
+(`modules/dnn/include/opencv2/dnn/dnn.hpp:474`) and 28 layer classes implement
+it (convolution, deconvolution, gemm, matmul, fully connected, pooling,
+softmax, concat, batch norm, elementwise, reduce, resize, slice, ...).
+`net_cann.cpp:205` still calls it:
+
+```cpp
+auto backendNode = layer->initCann(ld.inputBlobsWrappers, ld.outputBlobsWrappers, layerInputNodes);
+```
+
+`op_cann.cpp` (329 lines, the CANN GE operator builders) and `net_cann.cpp`'s
+graph builder / OM compiler / `CannNet` launcher are all present as well.
+
+What is missing is the bridge to the new engine's data model. The hook speaks
+`BackendWrapper` -- the classic engine's device-blob abstraction
+(`getHostMat()`, `copyToHost()`, `setHostDirty()`) -- while the new engine
+passes `Arg` / `Tensor` / `UMat` around. And `net_cann.cpp`'s `initBackend()`
+walks the classic engine's `Net::Impl::layers` and its `LayerData`
+(`ld.inputBlobsWrappers`, `ld.backendNodes`, `ld.skip`), none of which exists
+in the new engine.
+
+There is no generic slot to plug into either. CUDA got a new-engine-specific
+overload -- `Layer::forwardCUDA()` and the `UMat`-based `initCUDA(context,
+inputs, outputs)` -- with an explicit note in `modules/dnn/src/layer.cpp`:
+
+```cpp
+    // new graph engine only need to override initCUDA(context, inputs, outputs) with UMat.
+```
+
+Every other back-end (TimVX, VkCom, WebNN, OpenVINO) is still on the
+`BackendWrapper` API and is therefore dead on 5.x as well.
+
+### Two possible routes, and they differ by an order of magnitude
+
+* **Per-operator port, like CUDA.** Give CANN a `UMat`-based `initCann`
+  overload and a CANN branch in `finalizeGraph()` / `forwardGraph()`, then
+  re-express the 28 operators in the new engine's `Arg`/`Tensor` semantics.
+  This is what upstream did for CUDA: `modules/dnn/src/cuda4dnn/` is **103
+  files, 46 of them primitives** -- i.e. every operator rewritten.
+* **Whole-model offload, like ONNX Runtime.** Hand the whole model to CANN,
+  compile it once and run it as a single program. The new engine already has
+  this shape (see below), and the CANN back-end already has whole-model
+  semantics (compile once into an OM buffer, launch once).
+
 ### A whole-model offload already exists on the new engine
 
 The good news is that the new engine already has the shape a CANN port would
@@ -269,8 +316,9 @@ on failure.
 3. If it is ported: would a whole-model offload (the compiled OM launched as a
    single program from `forwardMainGraph()`, following the ONNX Runtime /
    MIGraphX pattern) be acceptable, or is a per-operator implementation in the
-   new engine's executor model expected? The former reuses `op_cann.cpp`
-   almost as is; the latter is a rewrite.
+   new engine's executor model expected? The former can reuse `op_cann.cpp` and
+   the 28 `initCann()` implementations; the latter is a rewrite of every
+   operator, of the size of `modules/dnn/src/cuda4dnn/` (103 files).
 ```
 
 ---
@@ -301,6 +349,28 @@ on failure.
       4.x 那次断裂只是 GELU 少了个 `initCannOp`，#26632 用 9 行桩修掉
 - [x] 5.0.0 → 5.x 的时间线（#26056 → #26334 → darknet/caffe 清理 →
       5.0.0 tag → **#29341 删掉经典引擎** → #29474 删 TF importer）
+- [x] 查清**逐算子那一层还在不在** —— 在：5.x 把钩子从 4.x 的
+      `initCannOp` 改名成 `initCann`（`dnn.hpp:474`），**28 个 layer 类
+      都实现了**（convolution / deconvolution / gemm / matmul / fc / pooling /
+      softmax / concat / batch_norm / elementwise / reduce / resize / slice …），
+      `net_cann.cpp:205` 仍在调用；`op_cann.cpp`（329 行 GE 算子构造）与
+      `net_cann.cpp` 的建图 / 编 OM / 启动全在
+      ⇒ **昇腾侧的算子知识不用重写**，缺的是到新引擎数据模型的桥
+- [x] 查清**桥缺在哪**：钩子用的是经典引擎的设备 blob 抽象
+      `BackendWrapper`（`getHostMat()` / `copyToHost()` / `setHostDirty()`），
+      新引擎传的是 `Arg`/`Tensor`/`UMat`；`net_cann.cpp` 遍历的是经典引擎的
+      `Net::Impl::layers` + `LayerData`，新引擎里不存在。
+      没有通用插槽：CUDA 是靠新增 UMat 版 `initCUDA` 重载 +
+      `Layer::forwardCUDA()` 接上的（`layer.cpp:67-73` 有明确注释），
+      TimVX / VkCom / WebNN / OpenVINO 都还停在 `BackendWrapper` 形态
+      ⇒ 在 5.x 上一起失效
+- [x] 量化两条移植路线的差距：
+      **A 逐算子**（跟 CUDA 一样）—— 上游给 CUDA 做了
+      `modules/dnn/src/cuda4dnn/`：**103 个文件、其中 46 个 primitive**，
+      等于每个算子重写一遍；CANN 28 个算子同量级
+      **B 整模型旁路**（跟 ORT / PR #29726 一样）—— CANN 本来就是整模型语义，
+      可保留 `op_cann.cpp` 与 28 个 `initCann`，只换「谁遍历图、谁喂 blob、
+      谁启动」⇒ 大概是 `net_cann.cpp`（373 行）量级的改造
 - [x] 查清**为什么不能只是把线重新接上**：`NetImplCann` 只有
       `initBackend()` + `forwardLayer()` 两个钩子，而这两个在 5.x 里
       **只被经典引擎调用**（`net_impl.cpp:267 / 921 / 987 / 991`）；

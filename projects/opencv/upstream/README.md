@@ -89,6 +89,35 @@ CANN 后端是挂在**经典引擎**上的，而经典引擎正是 5.x 主线重
 
 ⇒ CANN 后端在 5.x 上不是「忘了打开一个开关」，而是**执行模型换代后没人接**。
 
+### 但逐算子那一层是活的（重要更正）
+
+5.x 把逐层钩子从 4.x 的 `initCannOp` 改名成 `initCann`
+（`modules/dnn/include/opencv2/dnn/dnn.hpp:474`），**28 个 layer 类都实现了它**
+（convolution / deconvolution / gemm / matmul / fc / pooling / softmax /
+concat / batch_norm / elementwise / reduce / resize / slice …），
+`net_cann.cpp:205` 仍在调用 `layer->initCann(...)`。
+`op_cann.cpp`（329 行 GE 算子构造）与 `net_cann.cpp` 的建图 / 编 OM / 启动也都在。
+
+⇒ **昇腾侧的算子知识不用重写**，缺的是**桥**：
+
+| | 经典引擎（现在的 CANN 代码） | 新引擎 |
+|---|---|---|
+| blob 抽象 | `BackendWrapper`（`getHostMat()` / `copyToHost()` / `setHostDirty()`） | `Arg` / `Tensor` / `UMat` |
+| 图遍历 | `Net::Impl::layers` + `LayerData`（`ld.inputBlobsWrappers` / `ld.backendNodes` / `ld.skip`） | `mainGraph->prog_` / `exec_` |
+
+而且**没有通用插槽**：CUDA 是靠新增 UMat 版 `initCUDA` 重载 +
+`Layer::forwardCUDA()` 接上的（`layer.cpp:67-73` 写着「new graph engine only
+need to override initCUDA(context, inputs, outputs) with UMat」）。
+TimVX / VkCom / WebNN / OpenVINO 都还停在 `BackendWrapper` 形态
+⇒ 在 5.x 上一起失效。
+
+### 两条移植路线，差一个量级
+
+| 路线 | 形态 | 工作量参照 |
+|---|---|---|
+| **A 逐算子**（跟 CUDA 一样） | 加 UMat 版 `initCann` 重载 + 在 `finalizeGraph()` / `forwardGraph()` 里加 CANN 分支，28 个算子逐个改成新引擎语义 | 上游给 CUDA 做了 `modules/dnn/src/cuda4dnn/`：**103 个文件、46 个 primitive** —— 等于每个算子重写一遍。CANN 28 个算子同量级，**大工程** |
+| **B 整模型旁路**（跟 ORT / PR #29726 一样） | `forwardMainGraph()` 开头整模型交给 CANN，编一次 OM、整体启动一次 | CANN 本来就是整模型语义，`op_cann.cpp` 与 28 个 `initCann` 的算子逻辑可保留，只换「谁遍历图、谁喂 blob、谁启动」⇒ 大概 `net_cann.cpp`（373 行）量级 |
+
 ### 但移植的模板已经存在
 
 新引擎的 `forwardMainGraph()` 开头就有 ONNX Runtime 的**整模型旁路**：

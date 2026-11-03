@@ -60,6 +60,7 @@ Select a scenario when dispatching the same workflow:
 | `full-finetune` | Train every model parameter in BF16, then reload the saved model in a clean process | Passed in run #13 |
 | `continued-pretrain` | Train raw text across the full sequence with LoRA on model and embedding outputs | Awaiting NPU validation |
 | `inference-extended` | Run mixed-length padded batches and a custom stopping criterion | Awaiting NPU validation |
+| `ddp-2` | Run two ranks with explicit HCCL, synchronized LoRA updates and rank-0 adapter save | Awaiting NPU validation |
 
 All scenarios run the full three-step LoRA training, adapter save/reload and
 inference checks. The `unsloth-gc` dataset reaches the 512-token cap, and its
@@ -116,6 +117,12 @@ Unsloth, runs one three-prompt batch with left padding and different prompt
 lengths, then runs a single prompt with a custom three-token stopping criterion.
 It records token lengths, outputs and EOS observations. This verifies inference
 plumbing only, not answer quality.
+
+The `ddp-2` scenario selects the `linux-aarch64-a2-2` runner and mounts both
+DAVINCI devices. It starts two processes with `torch.distributed.run`, creates
+an explicit HCCL process group, trains rank-specific text batches for three DDP
+steps, and gathers parameter checksums from both ranks after DDP synchronization.
+Only rank 0 saves the adapter, and the other slices continue to FSDP2 later.
 The selected scenario appears in the Actions run title, result.json and job summary,
 including when environment setup fails. The `"unsloth"` checkpointing mode uses
 upstream's long-context threshold and is not treated as a performance claim.
@@ -154,4 +161,8 @@ gh workflow run unsloth-npu-example.yml --repo cosdt-ci-test/workflows --ref fea
 
 ```shell
 gh workflow run unsloth-npu-example.yml --repo cosdt-ci-test/workflows --ref feat/unsloth-adapt -f scenario=inference-extended
+```
+
+```shell
+gh workflow run unsloth-npu-example.yml --repo cosdt-ci-test/workflows --ref feat/unsloth-adapt -f scenario=ddp-2
 ```

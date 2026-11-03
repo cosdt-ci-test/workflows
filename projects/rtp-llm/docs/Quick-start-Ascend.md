@@ -154,21 +154,39 @@ sed -i "s|bd2a257e670ede9fc01c6d76dccdc473040913b8e9328169bf177dbdc38e2484|$SHA_
 sed -i "s|https://gitcode.com/Ascend/pytorch/releases/download/v26.1.0-beta.1-pytorch2.9.0/torch_npu-2.9.0.post3-cp310-cp310-manylinux_2_28_x86_64.whl|https://mirrors.aliyun.com/pypi/packages/97/d8/685fc488350ba63e158620d3ea04367c908456f03a01f9a9cc158fec380b/torch_npu-2.9.0.post2-cp310-cp310-manylinux_2_28_aarch64.whl|" deps/requirements_lock_ascend_x86.txt
 sed -i "s|3d436f74af70089b4320e6dae374641ddfb76712cdd593e67763ded33cf31a2a|727d97f5436161a94035ae00002d657369664e1dd397141db9d8fd54912f346b|" deps/requirements_lock_ascend_x86.txt
 
-# 3) wheel 元数据里的 torch_npu 版本（漏了这处，装 wheel 时会把 post2 降级）
+# 3) bazel 自己的两个 http_archive（deps/http.bzl）里同样是 x86 直链：
+#    这条漏掉时 pip 阶段全绿，一直到链接阶段才报 `cannot find -ltorch_npu`
+curl -fsSL -o /opt/rtp_wheels/torch_npu-2.9.0.post2-cp310-cp310-manylinux_2_28_aarch64.whl \
+  "https://mirrors.aliyun.com/pypi/packages/97/d8/685fc488350ba63e158620d3ea04367c908456f03a01f9a9cc158fec380b/torch_npu-2.9.0.post2-cp310-cp310-manylinux_2_28_aarch64.whl"
+SHA_N=$(sha256sum /opt/rtp_wheels/torch_npu-2.9.0.post2-*.whl | awk '{print $1}')
+test "$SHA_N" = 727d97f5436161a94035ae00002d657369664e1dd397141db9d8fd54912f346b
+sed -i "s|torch-2\.9\.0%2Bcpu-cp310-cp310-manylinux_2_28_x86_64\.whl|torch-2.9.0%2Bcpu-cp310-cp310-manylinux_2_28_aarch64.whl|g" deps/http.bzl
+sed -i -E 's#https://[^"]*torch_npu-2\.9\.0[^"]*manylinux_2_28_x86_64\.whl#https://mirrors.aliyun.com/pypi/packages/97/d8/685fc488350ba63e158620d3ea04367c908456f03a01f9a9cc158fec380b/torch_npu-2.9.0.post2-cp310-cp310-manylinux_2_28_aarch64.whl#g' deps/http.bzl
+#    两个 sha256 不写死：上游改过（torch_npu 那条从 3d436f74 变成 dcdcddbc），改成把当前值读出来当锚点
+SHA_OLD_T=$(grep -A1 'name = "torch_cpu_ascend"' deps/http.bzl | sed -n 's/.*sha256 = "\([0-9a-f]\{64\}\)".*/\1/p')
+SHA_OLD_N=$(grep -A1 'name = "torch_npu_ascend"' deps/http.bzl | sed -n 's/.*sha256 = "\([0-9a-f]\{64\}\)".*/\1/p')
+test -n "$SHA_OLD_T" -a -n "$SHA_OLD_N"
+sed -i "s|$SHA_OLD_T|$SHA_T|g" deps/http.bzl
+sed -i "s|$SHA_OLD_N|$SHA_N|g" deps/http.bzl
+
+# 4) wheel 元数据里的 torch_npu 版本（漏了这处，装 wheel 时会把 post2 降级）
 sed -i 's/"torch_npu==2\.9\.0"/"torch_npu==2.9.0.post2"/' arch_config/arch_select.bzl
 
-# 4) 上游依赖死结：transformers==5.2.0 与 xgrammar==0.2.5（要求 transformers<5）无法同时满足
+# 5) 上游依赖死结：transformers==5.2.0 与 xgrammar==0.2.5（要求 transformers<5）无法同时满足
 sed -i 's/^xgrammar==0\.2\.5$/xgrammar==0.2.8/' deps/requirements_base.txt
 
-# 5) 校验：aarch64 直链 2 条、x86 直链 0 条、gitcode 0 条、旧 hash 0 条
+# 6) 校验：lock 里 aarch64 直链 2 条、x86 直链 0 条、gitcode 0 条、旧 hash 0 条；
+#    http.bzl 里两个 ascend archive 各 1 条 aarch64 直链
 test "$(grep -c 'manylinux_2_28_aarch64.whl' deps/requirements_lock_ascend_x86.txt)" = 2
 test "$(grep -c 'manylinux_2_28_x86_64.whl' deps/requirements_lock_ascend_x86.txt)" = 0
 test "$(grep -c 'gitcode.com' deps/requirements_lock_ascend_x86.txt)" = 0
 test "$(grep -c '3d436f74' deps/requirements_lock_ascend_x86.txt)" = 0
+test "$(grep -A6 'name = "torch_cpu_ascend"' deps/http.bzl | grep -c 'manylinux_2_28_aarch64.whl')" = 1
+test "$(grep -A6 'name = "torch_npu_ascend"' deps/http.bzl | grep -c 'manylinux_2_28_aarch64.whl')" = 1
 echo "aarch64 build inputs patched"
 ```
 
-> 第 5 步的四条 `test` 就是判据：`2 / 0 / 0 / 0`。若第一条不是 2，说明直链没替换成功；若 `$SHA_T` 为空（轮子没下载到），`sed` 会把 hash 替换成空串，第 4 条校验会拦住。
+> 第 6 步的六条 `test` 就是判据：`2 / 0 / 0 / 0` 加两条 `1`。若前四条不对，说明 lock 的直链没替换成功；若最后两条不是 `1`，说明 `deps/http.bzl` 还是 x86 直链——这处不影响 pip，只会让 `bazel build` 编译完 1 万多个动作、在链接 `libth_transformer.so` 时才报 `skipping incompatible ... cannot find -ltorch_npu`。`$SHA_T` / `$SHA_N` 为空（轮子没下载到）时 `sed` 会把 hash 替换成空串，第 4 条校验与 `$SHA_N` 那条断言都会拦住。
 
 ### 放宽 Ubuntu 默认开启的警告
 

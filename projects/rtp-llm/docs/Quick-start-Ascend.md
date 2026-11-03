@@ -275,6 +275,27 @@ whl installed
 
 > `--no-deps` 是必须的：依赖已在上一步按 lock 装好，让 pip 再解析一遍依赖树很可能把 torch 或 torch_npu 换成别的版本。
 
+### 对齐 libstdc++
+
+`libth_transformer.so` 的 RUNPATH 是 `$ORIGIN/../..`，加载器会先命中 `/opt/conda310/lib/libstdc++.so.6`，而 conda 自带的这份只到 `GLIBCXX_3.4.29`，编译产物要 `3.4.30`。换成系统那份（系统库向后兼容，conda 里的 python / pip 不受影响）：
+
+```shell #test-setup
+if [ -e /opt/conda310/lib/libstdc++.so.6 ]; then
+  echo "before: $(strings /opt/conda310/lib/libstdc++.so.6 | grep '^GLIBCXX_' | sort -V | tail -1)"
+  cp -a /opt/conda310/lib/libstdc++.so.6 /opt/conda310/lib/libstdc++.so.6.orig
+  ln -sf /usr/lib/aarch64-linux-gnu/libstdc++.so.6 /opt/conda310/lib/libstdc++.so.6
+  grep -qa 'GLIBCXX_3.4.30' /opt/conda310/lib/libstdc++.so.6 \
+    || { echo "system libstdc++ lacks GLIBCXX_3.4.30"; exit 1; }
+  echo "libstdc++ -> system"
+else
+  echo "/opt/conda310 is not a conda env, libstdc++ untouched"
+fi
+```
+
+> `/opt/conda310/lib/libstdc++.so.6` 是 conda 包 `libstdcxx-ng` 装的，Miniconda 安装器把它钉得比较保守（aarch64 上是 11.2.x，最高只到 `GLIBCXX_3.4.29`），为的是这套环境能在老发行版上跑；而 Ubuntu 22.04 的 `libstdc++6` 来自 GCC 12，有 `3.4.30`。`before:` 那行会把 conda 这份的最高版本打出来。
+>
+> 若 `/opt/conda310` 是用系统 `python3.10` 建的 venv，这一步自动跳过——venv 不复制 libstdc++，本来用的就是系统那份。
+
 自检 C++ 算子是否能加载（注意 `libth_transformer` 必须由 `_load_engine_ops()` 按 `librtp_compute_ops` → `libth_transformer` 的顺序加载，直接 `import libth_transformer` 会在进程退出时崩）：
 
 ```shell #test id="ops-load"

@@ -15,9 +15,13 @@ reproduced and justified in docs/Quick-start-Ascend.md §4:
 
   1. (a-d) OpenCV 5.0 renamed the shape type to cv::MatShape and dropped
      vector<int>::front().  Upstream's CANN backend still uses the 4.x
-     spelling, so it does not compile.  Fix = ONE added cv::MatShape
-     overload (upstream's vector<int> constructor is left untouched) plus
-     the 3 assignments that no longer type-check.
+     spelling, so it does not compile.  Fix = the upstream signature is
+     REPLACED by `const cv::MatShape&` (not extended with a second
+     overload), the 15 shape locals that feed it become cv::MatShape, and
+     the 3 assignments that no longer type-check are fixed.  Same form as
+     the quick-start docs' inline patch blocks -- keeping one form across
+     the repo is the point: when upstream adopts the same change, the whole
+     group reverts 1:1 instead of leaving a dead vector<int> overload behind.
   2. (e-f) CANN's all_ops.h declares ~1500 ops; pulling it into every dnn
      TU (op_cann.hpp -> net_impl.hpp -> everything) pushes libopencv_dnn's
      .text past the aarch64 R_AARCH64_CALL26/JUMP26 +/-128 MiB window and
@@ -63,33 +67,43 @@ def patch(rel, old, new, *, expect_present=True, count=1):
 
 
 def main() -> None:
-    # (a) op_cann.hpp: add a cv::MatShape overload declaration.  The upstream
-    #     std::vector<int> constructor stays exactly as it is.
+    # (a) op_cann.hpp: REPLACE the upstream shape parameter with cv::MatShape.
+    #     No forwarding overload is kept -- see the module docstring.
     patch('opencv/modules/dnn/src/op_cann.hpp',
-          '        CannConstOp(const uint8_t* data, const int dtype, const std::vector<int>& shape, const std::string& name);',
-          '        CannConstOp(const uint8_t* data, const int dtype, const std::vector<int>& shape, const std::string& name);\n'
-          '        CannConstOp(const uint8_t* data, const int dtype, const cv::MatShape& shape, const std::string& name);')
+          'CannConstOp(const uint8_t* data, const int dtype, const std::vector<int>& shape, const std::string& name);',
+          'CannConstOp(const uint8_t* data, const int dtype, const cv::MatShape& shape, const std::string& name);')
 
-    # (b) op_cann.cpp: the MatShape overload forwards to the upstream
-    #     std::vector<int> constructor (which keeps upstream's body).
-    cp = pathlib.Path('opencv/modules/dnn/src/op_cann.cpp')
-    cs = cp.read_text()
-    deleg = ('\nCannConstOp::CannConstOp(const uint8_t* data, const int dtype, const cv::MatShape& shape, const std::string& name)\n'
-             '    : CannConstOp(data, dtype, std::vector<int>(shape.begin(), shape.end()), name) {}\n')
-    if deleg.strip() in cs:
-        print('(ok)   op_cann.cpp: MatShape forwarding ctor already patched')
-    elif 'CannConstOp::CannConstOp(const uint8_t* data, const int dtype, const std::vector<int>& shape, const std::string& name)\n{\n' in cs:
-        anchor = ('op_ = std::make_shared<ge::op::Const>(name);\n'
-                  '    op_->set_attr_value(*ge_tensor);\n}\n')
-        if anchor not in cs:
-            raise SystemExit('op_cann.cpp: anchor not found')
-        cp.write_text(cs.replace(anchor, anchor + deleg, 1))
-        print('(patch) op_cann.cpp: +1 MatShape forwarding ctor')
-    else:
-        raise SystemExit('op_cann.cpp: std::vector<int> ctor not found')
+    # (b) op_cann.cpp: the matching definition.  Upstream's body is untouched
+    #     -- it only iterates shape.begin()/shape.end().
+    patch('opencv/modules/dnn/src/op_cann.cpp',
+          'CannConstOp::CannConstOp(const uint8_t* data, const int dtype, const std::vector<int>& shape, const std::string& name)',
+          'CannConstOp::CannConstOp(const uint8_t* data, const int dtype, const cv::MatShape& shape, const std::string& name)')
 
-    # (c)(d) cv::MatShape has no front() and cannot be assigned from a
-    #       std::vector<int> -> fix the 3 assignments that no longer compile.
+    # (c) the 15 shape locals that feed CannConstOp become cv::MatShape:
+    #     MatShape's vector<int> constructor is explicit, so a std::vector<int>
+    #     does not implicitly convert.
+    SHAPE_LOCALS = [
+        ('layers/batch_norm_layer.cpp',      'std::vector<int> shape_{channel};'),
+        ('layers/elementwise_layers.cpp',    'std::vector<int> shape_{1};'),
+        ('layers/elementwise_layers.cpp',    'std::vector<int> shape_{scale.size[0]};'),
+        ('layers/slice_layer.cpp',           'std::vector<int> shape_size_splits{(int)size_splits.size()};'),
+        ('layers/slice_layer.cpp',           'std::vector<int> split_dim_shape{1};'),
+        ('layers/slice_layer.cpp',           'std::vector<int> shape_{dims};'),
+        ('layers/padding_layer.cpp',         'std::vector<int> pads_shape{(int)pads.size()};'),
+        ('layers/padding_layer.cpp',         'std::vector<int> constant_values_shape{1};'),
+        ('layers/reduce_layer.cpp',          'std::vector<int> axes_shape{(int)axes.size()};'),
+        ('layers/resize_layer.cpp',          'std::vector<int> shape_of_size_mat{2};'),
+        ('layers/resize2_layer.cpp',         'std::vector<int> shape_of_size_mat{2};'),
+        ('layers/reshape_layer.cpp',         'std::vector<int> shape_of_shape{(int)newShapeDesc.size()};'),
+        ('layers/convolution_layer.cpp',     'std::vector<int> bias_shape{out_channel};'),
+        ('layers/deconvolution_layer.cpp',   'std::vector<int> shape_b{out_channel};'),
+        ('layers/fully_connected_layer.cpp', 'std::vector<int> bias_shape{weightsMat.size[0]};'),
+    ]
+    for rel, old in SHAPE_LOCALS:
+        patch(f'opencv/modules/dnn/src/{rel}', old, old.replace('std::vector<int> ', 'cv::MatShape '))
+
+    # (d) cv::MatShape has no front() and cannot be assigned from a
+    #     std::vector<int> -> fix the 3 assignments that no longer compile.
     patch('opencv/modules/dnn/src/layers/gemm_layer.cpp',
           '            shape_C = std::vector<int>{dim};',
           '            shape_C = cv::MatShape(1, dim);')
@@ -158,6 +172,11 @@ def main() -> None:
 
     # (g) OperatorRunner NULL stream fallback
     p = pathlib.Path('opencv_contrib/modules/cannops/src/cann_call.cpp')
+    if not p.exists():
+        # opencv_contrib is optional (the 5.x quick-start docs do not build
+        # it); the quick-start guards that need contrib clone it themselves.
+        print('(skip) opencv_contrib/.../cann_call.cpp: file not present')
+        return
     s = p.read_text()
     old_g = '''OperatorRunner& OperatorRunner::run(AscendStream& stream)
 {

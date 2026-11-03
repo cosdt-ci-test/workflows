@@ -21,8 +21,9 @@
 # Upstream samples/ has no CANN-selectable sample (samples/dnn/common.py
 # backend/target maps lack cann/npu; classic DNN samples are GUI-bound),
 # hence the self-hosted legs. setup_example.sh source-builds opencv-cann
-# (~23 min cold) via scripts/patch_opencv_cann.py (8 CANN 9.1.0/aarch64
-# source patches, extracted from build_opencv_cann.sh).
+# (~23 min cold) via scripts/patch_opencv_cann.py (3 CANN 9.1.0/aarch64
+# source patch groups -- MatShape shape type / narrow CANN op headers /
+# contrib NULL-stream fallback).
 # schedule stays DISABLED until the first green manual run:
 #   schedule:
 #     - cron: '0 */6 * * *'

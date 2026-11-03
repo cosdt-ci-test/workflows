@@ -6,8 +6,10 @@
 #
 # Smoke scope: single-card SFT on NPU (ModelScope Qwen2.5-0.5B base +
 # HF-mirror preprocessed Amazon Industrial_and_Scientific subset +
-# env-level transfer_to_npu injection via sitecustomize, upstream source
-# untouched + 1-epoch HF-Trainer run, sample=600/dataset).
+# upstream source untouched + 1-epoch HF-Trainer run, sample=600/dataset).
+# SFT needs no injection (transformers picks npu:0 by itself); only the
+# evaluation command gets transfer_to_npu, via a PYTHONPATH-scoped
+# sitecustomize directory.
 # RL (GRPO) is pointer-only — its vLLM path is CUDA-only; see
 # projects/minionerec/docs/Quick-start-Ascend.md for rationale.
 #

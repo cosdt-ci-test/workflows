@@ -78,18 +78,20 @@ pip install modelscope transformers==4.57.1 accelerate==1.10.1 datasets==4.2.0 \
 
 ---
 
-## 5. 观察默认行为：不改源码会落到 CPU
+## 5. 观察默认行为：两个入口的设备走向不一样
 
-MiniOneRec 的脚本靠 `torch.cuda.is_available()` 选设备：`evaluate.py` 在模块级就写成 `device = "cuda" if ... else "cpu"`，`sft.py` 则把选设备的活交给 `TrainingArguments` 按 CUDA 探测。只 `import torch_npu` 不会改写 `torch.cuda` 这一面，所以下面这段探针（等价于 `evaluate.py` 第 17-20 行的判定）在未做任何注入时一定落到 CPU：
+MiniOneRec 的两个入口对「有没有 GPU」的依赖并不相同。`sft.py` 把设备选择交给 `TrainingArguments`，而 transformers 的设备链里 NPU 分支排在 CUDA 之前，零注入也能拿到 `npu:0`；`evaluate.py` 则在模块级就把 `device` 固化成 `"cpu"`。一段探针能同时看到这两种结果：
 
 ```shell #test id="probe-default"
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 cd MiniOneRec
 python -c "
 import torch, torch_npu
+from transformers import TrainingArguments
 print('npu available:', torch.npu.is_available())
 print('cuda mapped:', torch.cuda.is_available())
 print('evaluate.py device:', 'cuda' if torch.cuda.is_available() else 'cpu')
+print('trainer device:', TrainingArguments(output_dir='/tmp/probe-default').device)
 "
 ```
 
@@ -99,53 +101,44 @@ print('evaluate.py device:', 'cuda' if torch.cuda.is_available() else 'cpu')
 npu available: True
 cuda mapped: False
 evaluate.py device: cpu
+trainer device: npu:0
 ```
 
 ---
 
-## 6. 在环境层启用 NPU 映射
+## 6. 只在评估命令里启用 NPU 映射
 
-不改仓库任何源码：把 `torch_npu.contrib.transfer_to_npu` 放进 Python 启动时自动加载的 `sitecustomize.py`，等价于给每个进程补一行 import，把 `torch.cuda.*` 与 `"cuda"` 设备字符串透明映射到 NPU。只在 `ASCEND_HOME_PATH` 非空时生效，避免污染 `pip` 这类不碰 torch 的进程。
+SFT 不需要任何注入；评估需要 `torch.cuda` 有值。为了让注入只作用于评估这一条命令，把 `sitecustomize.py` 放进独立目录、通过 `PYTHONPATH` 挂到命令上——不写进 site-packages，其他进程不受影响。
 
-```shell #test-setup id="inject-npu"
-SITE_PACKAGES=$(python -c "import sysconfig; print(sysconfig.get_paths()['purelib'])")
-cat > "$SITE_PACKAGES/sitecustomize.py" <<'INS'
-# minionerec-npu-mapping
-import os
-
-if os.environ.get("ASCEND_HOME_PATH"):
-    try:
-        import torch_npu.contrib.transfer_to_npu  # noqa: F401
-    except Exception:
-        pass
+```shell #test-setup id="npu-shim"
+mkdir -p /tmp/minionerec-npu-shim
+cat > /tmp/minionerec-npu-shim/sitecustomize.py <<'INS'
+import torch_npu.contrib.transfer_to_npu  # noqa: F401
 INS
-ls -l "$SITE_PACKAGES/sitecustomize.py"
 ```
 
-确认映射生效（代码里写的是 `cuda`，张量实际落在 NPU）：
+确认作用域只覆盖挂了 `PYTHONPATH` 的那条命令：
 
-```shell #test id="check-npu"
+```shell #test id="check-scoped"
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 cd MiniOneRec
-python -c "
-import torch, torch_npu
-print('npu available:', torch.npu.is_available())
-print('cuda mapped:', torch.cuda.is_available())
-print('evaluate.py device:', 'cuda' if torch.cuda.is_available() else 'cpu')
+python -c "import torch; print('default process:', 'cuda' if torch.cuda.is_available() else 'cpu')"
+PYTHONPATH=/tmp/minionerec-npu-shim python -c "
+import torch
+print('with shim:', 'cuda' if torch.cuda.is_available() else 'cpu')
 print('tensor landed on:', torch.zeros(1, device='cuda').device.type)
 "
 ```
 
-输出结果如下：
+输出结果如下（代码里写的是 `cuda`，张量实际落在 NPU）：
 
-```shell #test-result id="check-npu"
-npu available: True
-cuda mapped: True
-evaluate.py device: cuda
+```shell #test-result id="check-scoped"
+default process: cpu
+with shim: cuda
 tensor landed on: npu
 ```
 
-再确认仓库源码没被动过（此时还没产生任何输出目录，工作区应是干净的）：
+确认仓库源码没被动过（此前的探针与注入都不落在仓库里）：
 
 ```shell #test id="no-source-change"
 cd MiniOneRec
@@ -260,7 +253,7 @@ wc -l test_small.csv
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 export ASCEND_RT_VISIBLE_DEVICES=0
 cd MiniOneRec
-python evaluate.py \
+PYTHONPATH=/tmp/minionerec-npu-shim python evaluate.py \
     --base_model ./smoke_out/final_checkpoint \
     --info_file ./data/Amazon/info/Industrial_and_Scientific_5_2016-10-2018-11.txt \
     --test_data_path test_small.csv \
@@ -324,5 +317,5 @@ HR...
 | ModelScope 下载慢/失败 | 网络 | 重试（支持断点续传）；数据侧确认 `HF_ENDPOINT=https://hf-mirror.com` 已导出 |
 | `model_type` grep 为空 | `final_checkpoint/config.json` 缺失 | 训练未完成，检查上一块退出码与日志 |
 | 评估报 `FileNotFoundError: [Errno 2] No such file or directory: ''` | 未传 `--result_json_data`，结果文件路径为空 | 补上 `--result_json_data ./eval_result.json` |
-| CC 大于 0 | 约束解码未生效 | 确认第 6 节注入已生效（`cuda mapped: True`、`tensor landed on: npu`）；注入依赖进程内 `ASCEND_HOME_PATH` 非空，命令块首行须 `source set_env.sh`；基座模型须为 Qwen2.5-**base**（Instruct 版约束解码失效） |
+| CC 大于 0 | 约束解码未生效 | 确认 `run-eval` 命令带上了 `PYTHONPATH=/tmp/minionerec-npu-shim`（`check-scoped` 应输出 `with shim: cuda` / `tensor landed on: npu`）；基座模型须为 Qwen2.5-**base**（Instruct 版约束解码失效） |
 | HR/NDCG 与文中示例差异大 | 冒烟训练仅 1 epoch/600 样本，`num_beams` 也降为 20 | 数值仅供参考；CI 只断言 CC=0，HR/NDCG 用占位符匹配 |

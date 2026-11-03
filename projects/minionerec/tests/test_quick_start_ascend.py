@@ -9,11 +9,15 @@ Document under test: ``projects/minionerec/docs/Quick-start-Ascend.md``
 
 Smoke scope (see the doc): single-card MiniOneRec SFT + constrained-
 decoding evaluation on Ascend NPU with the upstream source untouched —
-no shim PR, no in-repo patch. ``transfer_to_npu`` is injected at the
-environment level through a ``sitecustomize.py`` written into
-site-packages, so ``torch.cuda.*`` is mapped for every process while
-sft.py / evaluate.py stay byte-identical (asserted by a ``git status
---porcelain`` check). ``bitsandbytes==0.48.1`` is installed because the
+no shim PR, no in-repo patch. The two entry points need different
+treatment: ``sft.py`` reaches ``npu:0`` natively because transformers'
+device chain tries NPU before CUDA, while ``evaluate.py`` freezes
+``device = "cpu"`` at import time and needs ``torch.cuda`` to be mapped.
+So ``transfer_to_npu`` is injected through a ``sitecustomize.py`` in a
+standalone directory that only the evaluation command sees via
+``PYTHONPATH`` (no site-packages write, no process-wide side effect);
+sft.py / evaluate.py stay byte-identical, asserted by a ``git status
+--porcelain`` check. ``bitsandbytes==0.48.1`` is installed because the
 unused top-level import cannot be stripped without editing the source.
 ModelScope base model (Qwen2.5-0.5B) + HF-mirror preprocessed Amazon
 Industrial_and_Scientific subset (incl. the info/ SID-item list txt for

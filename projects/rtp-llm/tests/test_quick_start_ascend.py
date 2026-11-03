@@ -110,10 +110,19 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
     _WORK_DIR = '/root/rtp-llm-test'
 
-    _MINICONDA_URL = (
-        'https://mirrors.tuna.tsinghua.edu.cn/anaconda/miniconda/'
-        'Miniconda3-py310_25.1.1-2-Linux-aarch64.sh'
-    )
+    # The interpreter has to sit exactly at _PYTHON_PREFIX (upstream
+    # hardcodes it in ~30 places), but *how* it gets there is free. A venv
+    # over Ubuntu's own python3.10 is enough and, unlike Miniconda, does not
+    # shadow the system libstdc++ with conda's older copy: libstdcxx-ng 11.2
+    # tops out at GLIBCXX_3.4.29 while libth_transformer.so (linked against
+    # the manylinux_2_28 torch wheel, GCC 12) requires 3.4.30.
+    _SYSTEM_PY = 'python3.10'
+    _APT_PY_PKGS = ('python3.10', 'python3.10-venv', 'python3.10-dev')
+    # `//3rdparty/py:python_import_lib` copies this name out of the
+    # interpreter prefix; a venv has no lib/ of its own, so it is symlinked
+    # to the one python3.10-dev ships.
+    _PY_IMPORT_LIB = 'libpython3.10.so'
+    _SYSTEM_LIBPY = f'/usr/lib/aarch64-linux-gnu/{_PY_IMPORT_LIB}'
 
     # Ubuntu's ca-certificates-java regenerates this JVM truststore from
     # /etc/ssl/certs on every CA update, i.e. it trusts exactly what curl
@@ -130,54 +139,68 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
     @classmethod
     def _ensure_python310(cls) -> None:
-        """Make ``/opt/conda310/bin/python3`` a working Python 3.10.
+        """Make ``/opt/conda310/bin/python3`` a working Python 3.10 venv.
 
-        Preference order: already present -> venv over the system
-        ``python3.10`` (Ubuntu 22.04 ships it, no download) -> Miniconda
-        from the Tsinghua mirror. A venv is enough: the build only needs
-        an interpreter, its headers (pybind11 / torch extensions) and pip.
+        Upstream hardcodes that prefix (``deps/pip.bzl`` x10, ``.bazelrc``
+        x17, ``WORKSPACE``, ``BUILD``, ``3rdparty/py/BUILD.tpl``), so the
+        interpreter must live exactly there — but a venv over Ubuntu's
+        ``python3.10`` satisfies every consumer (``python_interpreter`` for
+        ``pip_parse``, ``py_runtime``, ``PYTHON_BIN_PATH``, the header
+        symlink genrule) and keeps the system libstdc++ in the search path.
+
+        Order: already present -> apt install python3.10 / -venv / -dev ->
+        venv -> upgrade pip -> expose libpython3.10.so at the prefix.
         """
         target = f'{cls._PYTHON_PREFIX}/bin/python3'
         if os.path.isfile(target):
             print(f'setup: reusing {target}')
             return
 
-        system_py = shutil.which('python3.10') or (
-            '/usr/bin/python3.10' if os.path.isfile('/usr/bin/python3.10') else None
+        system_py = shutil.which(cls._SYSTEM_PY) or (
+            f'/usr/bin/{cls._SYSTEM_PY}'
+            if os.path.isfile(f'/usr/bin/{cls._SYSTEM_PY}') else None
         )
+        # `-venv` provides ensurepip (without it `-m venv` fails) and `-dev`
+        # provides both the headers sysconfig reports and libpython3.10.so.
         if system_py:
-            print(f'setup: creating venv at {cls._PYTHON_PREFIX} from {system_py}')
-            # python3.10-venv provides ensurepip; without it `-m venv`
-            # fails with "ensurepip is not available".
             probe = subprocess.run(
                 [system_py, '-c', 'import ensurepip'],
                 capture_output=True, check=False,
             )
             if probe.returncode != 0:
-                subprocess.run(['apt-get', 'update', '-qq'], check=True)
-                subprocess.run(
-                    ['apt-get', 'install', '-y', '-qq', 'python3.10-venv'],
-                    check=True,
-                )
-            subprocess.run([system_py, '-m', 'venv', cls._PYTHON_PREFIX], check=True)
+                system_py = None
+        if not system_py:
+            print(f'setup: installing {list(cls._APT_PY_PKGS)}')
+            subprocess.run(['apt-get', 'update', '-qq'], check=True)
             subprocess.run(
-                [target, '-m', 'pip', 'install', '-q', '--upgrade', 'pip'],
+                ['apt-get', 'install', '-y', '-qq', *cls._APT_PY_PKGS],
                 check=True,
             )
-            print('setup: venv ready')
-            return
+            system_py = shutil.which(cls._SYSTEM_PY)
+        if not system_py:
+            raise RuntimeError(
+                f'{cls._SYSTEM_PY} still missing after apt install'
+            )
 
-        print(f'setup: installing Miniconda to {cls._PYTHON_PREFIX}')
-        installer = '/tmp/miniconda.sh'
+        print(f'setup: creating venv at {cls._PYTHON_PREFIX} from {system_py}')
         subprocess.run(
-            ['curl', '-fsSL', '--retry', '3', '-o', installer, cls._MINICONDA_URL],
-            check=True,
+            [system_py, '-m', 'venv', cls._PYTHON_PREFIX], check=True,
         )
         subprocess.run(
-            ['bash', installer, '-b', '-p', cls._PYTHON_PREFIX],
+            [target, '-m', 'pip', 'install', '-q', '--upgrade', 'pip'],
             check=True,
         )
-        print('setup: Miniconda ready')
+
+        lib_dir = f'{cls._PYTHON_PREFIX}/lib'
+        os.makedirs(lib_dir, exist_ok=True)
+        link = f'{lib_dir}/{cls._PY_IMPORT_LIB}'
+        if not os.path.exists(link):
+            if not os.path.exists(cls._SYSTEM_LIBPY):
+                raise RuntimeError(
+                    f'{cls._SYSTEM_LIBPY} missing: is python3.10-dev installed?'
+                )
+            os.symlink(cls._SYSTEM_LIBPY, link)
+        print('setup: venv ready')
 
     @classmethod
     def _ensure_jvm_truststore(cls) -> None:

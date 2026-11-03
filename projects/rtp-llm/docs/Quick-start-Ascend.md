@@ -79,19 +79,14 @@ bazelisk version | grep -m1 'Build label'
 Build label: 6.4.0
 ```
 
-```{admonition} Note
-:class: note
-`USE_BAZEL_VERSION` 与 `BAZELISK_BASE_URL` 要和 `bazelisk` 在同一次调用里生效：不指定版本时 `bazelisk` 会去查 `latest`，国内直连常超时；镜像地址让它从华为云取 Bazel 本体。仓里的 `.bazeliskrc` 只在 `rtp-llm/` 目录内生效。
-```
-
 ### 2.3 准备 Python 3.10
 
 上游把解释器路径写死成 `/opt/conda310/bin/python3`（`deps/pip.bzl`、`.bazelrc`、`WORKSPACE` 等多处引用），所以 3.10 必须装在这个路径下。用发行版自带的 3.10 建 venv 即可。
 
 ```shell #test id="prepare-python310"
 if [ ! -x /opt/conda310/bin/python3 ]; then
-  apt-get update -qq
-  apt-get install -y -qq python3.10 python3.10-venv python3.10-dev
+  apt-get update -qq >/dev/null
+  apt-get install -y -qq python3.10 python3.10-venv python3.10-dev >/dev/null
   python3.10 -m venv /opt/conda310
   /opt/conda310/bin/python3 -m pip install -q --upgrade pip
   # //3rdparty/py 的 genrule 直接从这个前缀拷 libpython3.10.so，venv 自身不复制
@@ -106,11 +101,6 @@ python --version
 
 ```shell #test-result id="prepare-python310" fuzzy='xxx'
 Python 3.10.xxx
-```
-
-```{admonition} Note
-:class: note
-不要用 conda 建这个环境。conda 自带的 `libstdc++` 最高只到 `GLIBCXX_3.4.29`，而编译产物要求 `3.4.30`，加载时会报 `version GLIBCXX_3.4.30 not found`；venv 直接用系统那份库，没有这个问题。
 ```
 
 ## 3. 获取代码
@@ -197,11 +187,6 @@ echo "aarch64 build inputs patched"
 aarch64 build inputs patched
 ```
 
-```{admonition} Note
-:class: note
-块内末尾六条 `test` 就是判据。前四条管 lock，依次为 `2 / 0 / 0 / 0`；后两条管 `deps/http.bzl`，各为 `1`。少了后两条时 pip 阶段全绿，直到链接 `libth_transformer.so` 才报 `skipping incompatible ... cannot find -ltorch_npu`。
-```
-
 ## 5. 安装运行时依赖
 
 按 lock 装依赖，torch 与 torch_npu 的 aarch64 轮子在这一步落地。
@@ -226,11 +211,6 @@ torch 2.9.0+cpu
 torch_npu 2.9.0.post2
 torchvision 0.24.0
 numpy 1.26.4
-```
-
-```{admonition} Note
-:class: note
-这四行要逐个对上。之后任何一次 `pip install` 漏掉 `--no-deps`，都可能把 `torchvision` 解析到最新版，`import torchvision` 会报 `operator torchvision::nms does not exist`。
 ```
 
 ## 6. 构建 wheel
@@ -271,11 +251,6 @@ bazelisk build //rtp_llm:rtp_llm_whl --config=ascend --jobs=32 > /tmp/build.log 
 build ok
 ```
 
-```{admonition} Note
-:class: note
-首次构建要拉取全部外部依赖并编译上万个动作，几十分钟属正常；日志里成片的 `alibaba-aios-dev.oss-cn-hangzhou.aliyuncs.com ... 403 Forbidden` 是噪声，规则表会回退到真实地址。`--jobs` 别开满，单个编译单元峰值内存不小，被 OOM killer 杀掉时报的是 signal 9 而不是编译错误。
-```
-
 确认产物：
 
 ```shell #test id="verify-whl"
@@ -307,11 +282,6 @@ python -m pip install --no-deps --force-reinstall bazel-bin/rtp_llm/*.whl > /tmp
 whl installed
 ```
 
-```{admonition} Note
-:class: note
-`--no-deps` 是必须的：依赖已按 lock 装好，让 pip 再解析一遍依赖树很可能把 `torch` 或 `torch_npu` 换成别的版本。
-```
-
 ### 7.2 加载 C++ 算子
 
 自检 wheel 里的 C++ 引擎能否加载：
@@ -328,15 +298,10 @@ grep -q 'OPS_LOAD_OK' /tmp/ops-load.log && echo "engine ops ok" \
   || { tail -n 40 /tmp/ops-load.log; exit 1; }
 ```
 
-输出结果如下（`rtp_llm.ops` 导入时会在 stdout 打一行耗时，所以这里用标记串断言，不比对全文）：
+输出结果如下：
 
 ```shell #test-result id="ops-load"
 engine ops ok
-```
-
-```{admonition} Note
-:class: note
-`libth_transformer.so` 依赖 `torch.libs` 里一批带内容 hash 的库（`libarm_compute-*.so`、`libgomp-*.so` 等），不是漏打包。`import torch` 之后这些 SONAME 才进入进程的已加载集合，所以顺序必须是先 `torch`、再 engine ops，`ensure_engine_ops_loaded()` 内部就是这么做的。也不要在源码树里直接 `import libth_transformer`：cwd 里的源码 `rtp_llm` 会抢在 wheel 之前，进程退出时还可能崩。
 ```
 
 ## 8. 下载模型
@@ -412,11 +377,6 @@ health: "ok"
 has_response True
 output_len_positive True
 finished True
-```
-
-```{admonition} Note
-:class: note
-`/health` 返回的是带引号的 JSON 字符串 `"ok"`，不是 `{"status":"ok"}`。`output_len` 取决于采样结果，可能在 `max_new_tokens` 之前遇到 EOS，所以只断言大于 0。服务在这个块内启动并回收，不依赖跨块的常驻进程。
 ```
 
 ## 10. 更多用法

@@ -5,22 +5,20 @@
 # Profile "opencv" (the only one we ship):
 #   1. Source CANN env (toolkit + nnal/atb; the ATB libs are kept in
 #      LD_LIBRARY_PATH for forward-compat with CANN-backend legs — the
-#      opencv_test_cannops gtest example that originally required them
-#      is retired, but the sourced env is harmless and the CANN build
-#      still needs the toolkit).
-#   2. Run a source build of opencv + opencv_contrib with WITH_CANN=ON
+#      sourced env is harmless and the CANN build still needs the
+#      toolkit).
+#   2. Run a source build of opencv with WITH_CANN=ON
 #      if /usr/local/opencv-cann/bin/opencv_version is missing. The
 #      build is heavy (~23 min at -j2) and is fully idempotent; a
 #      pre-built install is left in place across example runs because
 #      the engine's run-example job reuses the same self-hosted
 #      runner (linux-aarch64-a2-1) and the install path
 #      /usr/local/opencv-cann lives in the same image overlay.
-#      The build is the same 3-patch sequence the Quick-start-Ascend
+#      The build is the same 2-patch sequence the Quick-start-Ascend
 #      doc runs (sources: modules/dnn/src/op_cann.{hpp,cpp} + 23 layer
-#      TUs, opencv_contrib/modules/cannops/src/cann_call.cpp); see
-#      docs/Quick-start-Ascend.md §"打 3 组源码补丁" for the rationale
-#      of each patch (OpenCV 5.0 cv::MatShape API drift + the aarch64
-#      link ceiling of CANN's all_ops.h + CANN 9.x NULL-stream rule).
+#      TUs); see docs/Quick-start-Ascend.md §"打 2 组源码补丁" for the
+#      rationale of each patch (OpenCV 5.0 cv::MatShape API drift +
+#      the aarch64 link ceiling of CANN's all_ops.h).
 #   3. Prepend the source-built cv2 site-packages to PYTHONPATH so
 #      example scripts import cv2 with DNN_BACKEND_CANN compiled in.
 #   4. Write the resolved fixtures (baboon.jpg copied from the

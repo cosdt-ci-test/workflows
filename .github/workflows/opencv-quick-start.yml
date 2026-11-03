@@ -64,15 +64,14 @@ jobs:
         --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
         --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
       # Doc body does: apt-get install build deps (aliyun mirror) +
-      # git clone opencv + opencv_contrib + source patches (MatShape
-      # + all_ops.h narrowing + op_cann.cpp host-buffer-clamped memcpy
-      # as defensive hardening; the CI-runner heap corruption is a
+      # git clone opencv + source patches (MatShape + all_ops.h
+      # narrowing; the CI-runner heap corruption is a
       # driver-25.5.2-x-CANN-9.1.0 mismatch tripped in libacl_dvpp_mpi's
       # atexit teardown - the DNN block works around it via os._exit(0))
       # + cmake -DWITH_CANN=ON configure
-      # (BUILD_LIST scoped to 8 modules) + make -j2 (Debug -O0;
+      # (BUILD_LIST scoped to 6 modules) + make -j2 (Debug -O0;
       # ~50-70 min with the narrow-header patch) + make install
-      # + opencv_version / opencv_test_cannops smokes + Python binding
+      # + opencv_version smoke + Python binding
       # smoke + MobileNetV2 ONNX NPU forward (classic DNN engine via
       # OPENCV_FORCE_DNN_ENGINE=1; first GE graph build can take ~1-2 min
       # cold). 240 min leaves room for the

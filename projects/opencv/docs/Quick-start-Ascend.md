@@ -25,7 +25,6 @@ Atlas 900 A2 / A3 训练系列产品或 Ascend 950 系列，已挂载 `/dev/davi
 | 镜像 | swr.cn-south-1.cloud-apeng.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12 |
 | Python / CANN / CMake / GCC | 3.12 / 9.1.0 / ≥ 3.18 / 11 |
 | OpenCV | 最新 release 源码（`WITH_CANN=ON`）|
-| opencv_contrib | 与 OpenCV 同 release tag |
 
 ### 前置安装
 
@@ -75,7 +74,7 @@ sed -i 's|http://ports.ubuntu.com/ubuntu-ports/|https://mirrors.aliyun.com/ubunt
 apt-get update -qq && apt-get install -y -qq git build-essential cmake pkg-config libjpeg-dev libpng-dev libtiff-dev
 ```
 
-## clone OpenCV + opencv_contrib
+## clone OpenCV
 
 把最新 release tag 注入 `<ref>`；手动跑直接填 tag。
 
@@ -87,24 +86,22 @@ echo "${UPSTREAM_REF}"
 
 ```shell #test-setup load="upstream_ref>>ref"
 git clone --depth 1 --branch <ref> https://github.com/opencv/opencv.git
-git clone --depth 1 --branch <ref> https://github.com/opencv/opencv_contrib.git
 ```
 
-## 打 3 组源码补丁
+## 打 2 组源码补丁
 
-OpenCV mainline 与 CANN 9.1.0 / aarch64 有 3 处不兼容（3 个 patch 脚本假设 runner resolve 到 `5.0.0` tag；其它 tag 上 `assert old in s` 会抛错，需要重写 patch 适配）。按顺序跑这 3 段脚本（幂等，已打过会断言跳过）。
+OpenCV mainline 与 CANN 9.1.0 / aarch64 有 2 处不兼容（2 个 patch 脚本假设 runner resolve 到 `5.0.0` tag；其它 tag 上 `assert old in s` 会抛错，需要重写 patch 适配）。按顺序跑这 2 段脚本（幂等，已打过会断言跳过）。
 
-> **不想打补丁？** 走 [Quick-start-Ascend-NoPatch.md](Quick-start-Ascend-NoPatch.md)：版本钉 **4.14.0**（4.x 的末代）+ **Release(-O3)** + 不编 `opencv_contrib`，**零源码补丁**也能得到带 CANN 后端的 `cv2`（实测 dnn `.text` 53.3 MiB，一次链接通过，NPU top-1=372 / 0.9143）。代价是拿不到 OpenCV 5.x 的新 DNN 图引擎，也没有 `cv2.cann`。
+> **不想打补丁？** 走 [Quick-start-Ascend-NoPatch.md](Quick-start-Ascend-NoPatch.md)：版本钉 **4.14.0**（4.x 的末代）+ **Release(-O3)** + **零源码补丁**也能得到带 CANN 后端的 `cv2`（实测 dnn `.text` 53.3 MiB，一次链接通过，NPU top-1=372 / 0.9143）。代价是拿不到 OpenCV 5.x 的新 DNN 图引擎。
 >
-> 为什么 4.x 天然比 5.x 省补丁：`all_ops.h` 是 **CANN 的头**，与 OpenCV 版本无关 ⇒ `.text` 随「引用 `op_cann.hpp` 的 TU 数」线性增长。实测 4.11.0 = 27 个 TU、**4.14.0 = 28 个**、5.0.0 = **39 个**；dnn 源码量 4.11.0 → 4.14.0 只 +2.3%，→ 5.0.0 却 +50.6%。4.14 离 aarch64 的 ±128 MiB 分支窗口还有 ~74 MiB 余量，5.0 撞墙 —— 这就是本文那 3 组补丁里「窄 op 头」那组的由来。
+> 为什么 4.x 天然比 5.x 省补丁：`all_ops.h` 是 **CANN 的头**，与 OpenCV 版本无关 ⇒ `.text` 随「引用 `op_cann.hpp` 的 TU 数」线性增长。实测 4.11.0 = 27 个 TU、**4.14.0 = 28 个**、5.0.0 = **39 个**；dnn 源码量 4.11.0 → 4.14.0 只 +2.3%，→ 5.0.0 却 +50.6%。4.14 离 aarch64 的 ±128 MiB 分支窗口还有 ~74 MiB 余量，5.0 撞墙 —— 这就是本文那 2 组补丁里「窄 op 头」那组的由来。
 
 | 组 | 上游哪里坏了 | 改法 |
 | --- | --- | --- |
 | 4a | OpenCV 5.0 把 shape 类型换成 `cv::MatShape`（`explicit` 构造、**没有** `front()`） | 把 `CannConstOp` 的 shape 参数换成 `const cv::MatShape&` + 15 处局部量改类型 + 修 3 处赋值（**不留**转发重载，理由见 4a 末尾） |
 | 4b | `all_ops.h` 的 ~1500 个 op 把 dnn `.text` 撑破 aarch64 ±128 MiB 链接窗口 | per-TU 窄 op 头 |
-| 4c | CANN 9.x 拒绝 NULL 流（EH0008） | `OperatorRunner::run` 回落到 ctx 默认流 |
 
-> 之前还有第 5 组「H2D/D2H 宿主缓冲收窄」，**已删除**：它防的是"驱动报的 buffer size 比 shape 字节数大"，而实测 `acl_size == host_size == 4000`（无 padding），该路径本来就不是崩溃根因；当时真正的堆损坏是**宿主驱动 25.5.2 × 镜像 CANN 9.1.0 版本错配**导致 `DvppWrapperManager` 析构时 free 到坏块，属宿主环境问题（配套驱动 25.3.rc1.2 上无此现象），不该用源码补丁兜。
+> 之前还有一组「H2D/D2H 宿主缓冲收窄」，**已删除**：它防的是"驱动报的 buffer size 比 shape 字节数大"，而实测 `acl_size == host_size == 4000`（无 padding），该路径本来就不是崩溃根因；当时真正的堆损坏是**宿主驱动 25.5.2 × 镜像 CANN 9.1.0 版本错配**导致 `DvppWrapperManager` 析构时 free 到坏块，属宿主环境问题（配套驱动 25.3.rc1.2 上无此现象），不该用源码补丁兜。
 
 ### 4a. `cv::MatShape` 改了类型
 
@@ -278,80 +275,6 @@ PY
 
 预期：`(e)` 1 行打印，`(f)` 23 个文件被改；`grep` `op_proto/inc/array_ops.h` 在 `op_cann.hpp` 出现 1 次。
 
-### 4c. `OperatorRunner` 的 NULL 流 fallback
-
-CANN 9.1.0 的 `aclopCompileAndExecute` 拒绝 NULL 流（报 `EH0008`）。NULL 时换成 `aclrtCtxGetCurrentDefaultStream`。
-
-```shell #test-setup
-python3 - <<'PY'
-import pathlib
-p = pathlib.Path('opencv_contrib/modules/cannops/src/cann_call.cpp')
-s = p.read_text()
-old = '''OperatorRunner& OperatorRunner::run(AscendStream& stream)
-{
-    aclrtStream rawStream = AscendStreamAccessor::getStream(stream);
-    CV_ACL_SAFE_CALL(aclopCompileAndExecute(op.c_str(), inputDesc_.size(), inputDesc_.data(),
-                                            inputBuffers_.data(), outputDesc_.size(),
-                                            outputDesc_.data(), outputBuffers_.data(), opAttr_,
-                                            ACL_ENGINE_SYS, ACL_COMPILE_SYS, NULL, rawStream));
-    if (rawStream == nullptr)
-        CV_ACL_SAFE_CALL(aclrtSynchronizeStream(rawStream));
-    else
-    {
-        for (const auto& ptr : holder)
-            stream.addTensorHolder(ptr);
-    }
-    return *this;
-}'''
-new = '''OperatorRunner& OperatorRunner::run(AscendStream& stream)
-{
-    aclrtStream rawStream = AscendStreamAccessor::getStream(stream);
-    aclrtStream execStream = rawStream;
-    if (execStream == nullptr)
-        CV_ACL_SAFE_CALL(aclrtCtxGetCurrentDefaultStream(&execStream));
-    CV_ACL_SAFE_CALL(aclopCompileAndExecute(op.c_str(), inputDesc_.size(), inputDesc_.data(),
-                                            inputBuffers_.data(), outputDesc_.size(),
-                                            outputDesc_.data(), outputBuffers_.data(), opAttr_,
-                                            ACL_ENGINE_SYS, ACL_COMPILE_SYS, NULL, execStream));
-    CV_ACL_SAFE_CALL(aclrtSynchronizeStream(execStream));
-    if (rawStream != nullptr)
-    {
-        for (const auto& ptr : holder)
-            stream.addTensorHolder(ptr);
-    }
-    return *this;
-}'''
-assert old in s, 'cann_call.cpp: OperatorRunner::run body not found'
-p.write_text(s.replace(old, new, 1))
-print('(g) cann_call.cpp: NULL-stream fallback patched')
-PY
-```
-
-预期：打印 `(g) patched`。
-
-**这组是必需的（实测）**：把 `(g)` 回退成上游写法后重编，`opencv_test_cannops` 的 53 个用例里 **48 个挂**（只剩 5 个过），报错是
-
-```
-Invalid_Argument_Null_Pointer(EH0008): aclrtAllocatorGetByStream failed because stream cannot be a NULL pointer.
-E29999: Assert ((stream) != nullptr) failed[FUNC:AiCoreLaunchKernelWithHandle]
-```
-
-也就是说 CANN 9.1.0 真的不接 NULL 流（`aclopCompileAndExecute` → `AiCoreLaunchKernel*` 一路断言非空）。上游那行 `if (rawStream == nullptr) aclrtSynchronizeStream(rawStream)` 本身也是错的（同步一个 NULL 流），补丁顺手把它改成同步真正用的那条流。
-
-### 4d. AscendC `kernel_launch` 模板：**不打**这个补丁（实测测不出差别）
-
-上游 `cann_call.hpp` 的 `kernel_launch` 模板有同一个毛病（把 `rawStream` 可能是 `nullptr` 的值直接喂给 `kernel(...)`，并且 `acl_rt.h` 没 include）。我们**实测过**要不要打这个补丁，结论是**不打**：
-
-| 变体 | 53 个 cannops 用例 | 3 个 threshold 用例（CI 排除清单里） |
-| --- | --- | --- |
-| 打了（ctx 默认流 fallback + `acl_rt.h`） | 53/53 过 | 3/3 挂 |
-| 不打（上游原样） | 53/53 过 | 3/3 挂 |
-
-- 53 个用例**根本走不到** `kernel_launch`：CI 的排除清单里的 3 个 threshold 用例就是唯一走 AscendC kernel 的用例，被排除了；
-- 那 3 个用例打不打补丁都挂，但**挂的原因跟流无关**：设备侧 AICore 报 `vector core exception` —— "The address for the VEC instruction to read/write UB is out of bounds"，是上游 AscendC kernel 自己的越界 bug（所以 CI 才排除它们）。两种写法只是把同一个设备侧错误报在不同的同步点上（打了报在 `kernel_launch`，没打报在 `waitForCompletion`）。
-
-所以 quick start 不打这个补丁。**如果将来上游 AscendC kernel 的越界被修好、并且真的用上 NULL 流**，再把同样的 ctx 默认流 fallback 加回去（连同 `acl_rt.h`）——那时它才有可观测的收益。
-
 > **宿主环境的坑（不是源码问题，所以源码里不做缓冲收窄）**：宿主机驱动 25.5.2 × 镜像 CANN 9.1.0 **错配**的组合下，堆在运行期被写坏（HAL 层 `libascend_hal.so` 来自 25.5.2 驱动挂载，ACL/DVPP 用户态来自镜像 9.1.0），到进程 `exit()` 的 atexit 阶段 `libacl_dvpp_mpi.so` 的 `DvppWrapperManager::~DvppWrapperManager()` 才 free 到坏块 → `corrupted double-linked list` + SIGABRT（rc=134）。**推理本身完全正确**（top-1/score 与配套环境逐位一致）。修复见下文 DNN 块末尾的 `os._exit(0)`；驱动与 CANN 配套的正常环境（如 25.3.rc1.2）无此问题。
 >
 > 顺带说明为什么源码里**不**再收窄 H2D/D2H 的拷贝字节数：那处补丁防的是"驱动报的 buffer size 大于 shape 字节数"，而加日志实测 `acl_size == host_size == 4000`（无 padding），该路径本来就不是崩溃根因。
@@ -380,11 +303,9 @@ cmake -DCMAKE_BUILD_TYPE=Debug \
       -DWITH_CANN=ON \
       -DBUILD_opencv_world=OFF \
       -DBUILD_EXAMPLES=OFF \
-      -DBUILD_TESTS=ON \
-      -DOPENCV_BUILD_TEST_MODULES_LIST=cannops \
-      -DINSTALL_TESTS=ON \
+      -DBUILD_TESTS=OFF \
       -DBUILD_PERF_TESTS=OFF \
-      -DBUILD_LIST=core,imgproc,imgcodecs,videoio,dnn,python3,cannops,ts \
+      -DBUILD_LIST=core,imgproc,imgcodecs,videoio,dnn,python3 \
       -DSOC_VERSION=ascend910b1 \
       -DBUILD_opencv_python3=ON \
       -DBUILD_opencv_python_bindings_generator=ON \
@@ -392,7 +313,6 @@ cmake -DCMAKE_BUILD_TYPE=Debug \
       -DPYTHON_LIBRARY=/usr/local/python3.12.13/lib/libpython3.12.so \
       -DOPENCV_ENABLE_NONFREE=OFF \
       -DOPENCV_DOWNLOAD_MIRROR_ID=gitcode \
-      -DOPENCV_EXTRA_MODULES_PATH=../../opencv_contrib/modules \
       ..
 ```
 
@@ -418,7 +338,7 @@ cmake --build . --target install --parallel 2
 
 ```shell #test id="opencv-verify-build"
 /usr/local/opencv-cann/bin/opencv_version
-/usr/local/opencv-cann/bin/opencv_test_cannops --gtest_list_tests 2>&1 | head -n 20
+ls -l /usr/local/opencv-cann/lib/libopencv_dnn.so
 ```
 
 输出结果如下：
@@ -427,36 +347,7 @@ xxx
 xxx
 ```
 
-`opencv_test_cannops` 依赖 CANN runtime `LD_LIBRARY_PATH`，记得先 `source set_env.sh`。
-
-## 跑 CANN 单元测试
-
-`opencv_test_cannops` 共 78 个用例；25 个因 CANN 9.1.0 / 910B 的已知缺陷或数值抖动被排除（910B1 CI 与 910B4 实测失败集一致：23 个稳定失败 + 2 个 flaky）。剩 53 个应全过。
-
-- `CVT_COLOR` 的 XYZ / YCrCb / YUV 系 18 个 + threshold 系 3 个（`MAT_THRESHOLD` / `MAT_THRESHOLD_ASCENDC` / `ASCENDC_KERNEL.THRESHOLD`）共 21 个同根因：cvtColor 对非 32F 输入用两次 threshold 截断饱和中间结果（color.cpp 的 THRESH_TRUNC + THRESH_TO_ZERO），与 threshold 系用例落在同一个 AscendC kernel 上，该 kernel 在 910B 上 AI Core 越界（VEC 指令 UB 地址越界，kernel 源码 bug）；纯 32F 融合算术路径实测全过。
-- resize 系 4 个：`CORE.RESIZE` 是 ResizeArea 算子 GE shape 推断失败（稳定挂）；`CORE.CROP_RESIZE` 与 CPU 参考稳定差 2 超容差 1；`CORE.RESIZE_NEW` / `CORE.CROP_RESIZE_MAKE_BORDER` 是数值抖动 flaky（后者容差 1e-10 近似逐位比较，910B4 上稳定挂）。
-
-```shell #test id="opencv-cann-run-tests"
-set -o pipefail
-/usr/local/opencv-cann/bin/opencv_test_cannops --gtest_color=no \
-  --gtest_filter=-CORE.RESIZE:CORE.RESIZE_NEW:CORE.CROP_RESIZE:CORE.CROP_RESIZE_MAKE_BORDER:CVT_COLOR.RGB2XYZ:CVT_COLOR.BGR2XYZ:CVT_COLOR.XYZ2BGR:CVT_COLOR.XYZ2RGB:CVT_COLOR.XYZ2BGR_DC4:CVT_COLOR.XYZ2RGB_DC4:CVT_COLOR.BGR2YCrCb:CVT_COLOR.RGB2YCrCb:CVT_COLOR.YCrCb2BGR:CVT_COLOR.YCrCb2RGB:CVT_COLOR.YCrCb2BGR_DC4:CVT_COLOR.YCrCb2RGB_DC4:CVT_COLOR.BGR2YUV:CVT_COLOR.RGB2YUV:CVT_COLOR.YUV2BGR:CVT_COLOR.YUV2RGB:CVT_COLOR.YUV2BGR_DC4:CVT_COLOR.YUV2RGB_DC4:ELEMENTWISE_OP.MAT_THRESHOLD:ELEMENTWISE_OP.MAT_THRESHOLD_ASCENDC:ASCENDC_KERNEL.THRESHOLD \
-  > /tmp/cannops_gtest.log 2>&1; rc=$?
-tail -n 25 /tmp/cannops_gtest.log
-if [ $rc -ne 0 ]; then
-  echo '--- per-test failure summary:'
-  grep -E '^\[ RUN|unknown file: Failure|C\+\+ exception|op\[[A-Za-z0-9_]+\]|E[0-9]{5}' /tmp/cannops_gtest.log | head -80
-fi
-exit $rc
-```
-
-输出结果如下：
-```shell #test-result id="opencv-cann-run-tests" fuzzy='xxx' fuzzy='...'
-...
-[==========]xxx
-[  PASSED  ] 53 tests.
-```
-
-> 不要加 `--gtest_brief`：OpenCV vendored gtest 没实现这个 flag，加上后零用例执行但 rc=0，假绿。
+`libopencv_dnn.so` 存在只说明 dnn 模块编出来了；CANN 后端有没有真链进去，由后面 Python 段的 `cv2.dnn.DNN_BACKEND_CANN` 探针判定。
 
 ## OpenCV Python quickstart
 
@@ -674,7 +565,7 @@ cv2.imwrite('/tmp/dnn-result.png', img)
 # 结果不经 python 的缓冲 stdout 输出，而是用原始 syscall 写文件：
 # 1) GE 编译会 fork 子进程，子进程 exit(0) 会把继承的 stdout 缓冲冲到
 #    C++ 日志行的中间（实测 "model bytes" 粘在半截 INFO 行上）；
-# 2) 驱动 25.5.2 × CANN 9.1.0 错配环境堆已损坏（见 §4d 末尾的「宿主环境的坑」），
+# 2) 驱动 25.5.2 × CANN 9.1.0 错配环境堆已损坏（见 §4b 末尾的「宿主环境的坑」），
 #    os.write 不经过 C 堆最稳。bash 的 `echo; cat` 保证锚点行干净。
 result = (
     'model bytes: %d\n'
@@ -715,4 +606,4 @@ top class score: 0.xxx
 
 ![NPU 推理标注结果](images/dnn-result.png)
 
-> 首次 forward 含 GE 图编译（`converting ge::Graph to OM buffer`），约 0.5~1 分钟出 `Compile success, model size = 9759197`；进程内二次 forward 约 1ms。若 graph check 报 `ret = 4294967295` 且日志有 `No module named 'tbe'`，是 `PYTHONPATH` 被**整体覆盖**（见上文 quickstart 开头的 prepend 说明）。块末尾的 `os._exit(0)` 是对驱动/CANN 错配环境 DVPP atexit 堆损坏的规避，详见 §4d 末尾的环境说明。
+> 首次 forward 含 GE 图编译（`converting ge::Graph to OM buffer`），约 0.5~1 分钟出 `Compile success, model size = 9759197`；进程内二次 forward 约 1ms。若 graph check 报 `ret = 4294967295` 且日志有 `No module named 'tbe'`，是 `PYTHONPATH` 被**整体覆盖**（见上文 quickstart 开头的 prepend 说明）。块末尾的 `os._exit(0)` 是对驱动/CANN 错配环境 DVPP atexit 堆损坏的规避，详见 §4b 末尾的环境说明。

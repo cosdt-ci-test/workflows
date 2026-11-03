@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Build opencv + opencv_contrib with WITH_CANN=ON for the runner.
+# Build opencv with WITH_CANN=ON for the runner.
 # Idempotent — re-runs are no-ops if the build is already installed
 # at /usr/local/opencv-cann.
 #
-# This is the build half of the setup. The 3 source patch groups are the
-# same ones Quick-start-Ascend.md §"打 3 组源码补丁" applies; see
+# This is the build half of the setup. The 2 source patch groups are the
+# same ones Quick-start-Ascend.md §"打 2 组源码补丁" applies; see
 # that section for the per-patch rationale. We replicate them here so
 # the example-guard setup is self-contained.
 #
@@ -24,15 +24,15 @@ mkdir -p "$WORK"
 cd "$WORK"
 
 # 1) Clone (idempotent) with retry. CI runners hit transient GitHub
-#    HTTP 500s on the opencv_contrib clone (observed 2026-09-18 on
+#    HTTP 500s on the clone (observed 2026-09-18 on
 #    linux-aarch64-a2-1: "RPC failed; HTTP 500 ... error reading
-#    section header 'shallow-info'" left opencv_contrib/ with a broken
+#    section header 'shallow-info'" left the tree with a broken
 #    .git and no working tree, which propagated to the patch script
-#    as "FileNotFoundError: opencv_contrib/modules/cannops/src/
-#    cann_call.cpp" and then to cmake configure as "Configuring
-#    incomplete, errors occurred!" — surfaced too far downstream to
-#    diagnose). After each clone, verify a sentinel file exists; if
-#    not, nuke .git and retry up to 3 times before giving up.
+#    as a "pattern not found" failure and then to cmake configure
+#    as "Configuring incomplete, errors occurred!" — surfaced too
+#    far downstream to diagnose). After each clone, verify a sentinel
+#    file exists; if not, nuke .git and retry up to 3 times before
+#    giving up.
 clone_repo() {
     local url="$1" dir="$2"
     local tries=0 max=3
@@ -61,12 +61,11 @@ clone_repo() {
     return 1
 }
 
-clone_repo https://github.com/opencv/opencv.git          opencv
-clone_repo https://github.com/opencv/opencv_contrib.git  opencv_contrib
+clone_repo https://github.com/opencv/opencv.git  opencv
 
 # 2) Apply the CANN source patches (each idempotent — checks before
 # patching). Moved to a standalone script so the patch set is reviewable
-# as a unit; it runs from $WORK and expects ./opencv + ./opencv_contrib.
+# as a unit; it runs from $WORK and expects ./opencv.
 python3 "$(dirname "$0")/patch_opencv_cann.py"
 
 # 3) Symlink CANN libs into the locations OpenCVFindCANN.cmake probes
@@ -82,11 +81,9 @@ cmake -DCMAKE_BUILD_TYPE=Debug \
       -DWITH_CANN=ON \
       -DBUILD_opencv_world=OFF \
       -DBUILD_EXAMPLES=OFF \
-      -DBUILD_TESTS=ON \
-      -DOPENCV_BUILD_TEST_MODULES_LIST=cannops \
-      -DINSTALL_TESTS=ON \
+      -DBUILD_TESTS=OFF \
       -DBUILD_PERF_TESTS=OFF \
-      -DBUILD_LIST=core,imgproc,imgcodecs,videoio,dnn,python3,cannops,ts \
+      -DBUILD_LIST=core,imgproc,imgcodecs,videoio,dnn,python3 \
       -DSOC_VERSION=ascend910b1 \
       -DBUILD_opencv_python3=ON \
       -DBUILD_opencv_python_bindings_generator=ON \
@@ -94,7 +91,6 @@ cmake -DCMAKE_BUILD_TYPE=Debug \
       -DPYTHON_LIBRARY=/usr/local/python3.12.13/lib/libpython3.12.so \
       -DOPENCV_ENABLE_NONFREE=OFF \
       -DOPENCV_DOWNLOAD_MIRROR_ID=gitcode \
-      -DOPENCV_EXTRA_MODULES_PATH=../../opencv_contrib/modules \
       .. > cmake.log 2>&1
 CMAKE_RC=$?
 if [[ $CMAKE_RC -ne 0 ]]; then

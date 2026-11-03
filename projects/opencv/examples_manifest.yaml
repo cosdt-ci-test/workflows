@@ -5,12 +5,12 @@ scan:
 supported:
   # ===== self-hosted NPU smoke（projects/opencv/example/，source: project）=====
   # 上游 samples 无一能经 CLI 选 CANN 后端（见 unsupported 各段注释），故
-  # NPU 核心特性用 3 个 self-hosted 脚本看护，覆盖 OpenCV 在 NPU 上的两条
-  # 通路：① cv::dnn 的 CANN 后端（分类 + 超分辨率）；② cannops 经典算子。
+  # NPU 核心特性用 2 个 self-hosted 脚本看护，覆盖 OpenCV 在 NPU 上的
+  # 通路：cv::dnn 的 CANN 后端（分类 + 超分辨率）。
   # 均已在 910B4 + CANN 9.1.0 实测跑通（细节见各 example docstring）。
   # timeout_minutes 统一 60：setup_example.sh 冷启动要源码构建 opencv-cann
-  # （~23 min @-j2），3 腿并行时在共享 runner 上还有争抢；40 以下实测会被
-  # 15m/20m 上限在构建中途 kill（run 35725672646 的 cannops 腿）。
+  # （~23 min @-j2），多腿并行时在共享 runner 上还有争抢；40 以下实测会被
+  # 15m/20m 上限在构建中途 kill。
   #
   # 1) DNN 分类：mobilenetv2-12.onnx（fixtures 入仓 13.9MB），conv/BN/ReLU/
   #    pooling/FC/softmax 全链路 + top-1=372 与 CPU 参考对齐。
@@ -27,21 +27,7 @@ supported:
       - --expected-top1 372
     timeout_minutes: 60
 
-  # 2) cannops 经典算子（cv2.cann.*）：cvtColor/flip/rotate/transpose/
-  #    merge/split/add/subtract/bitwise，全部与 CPU 参考逐元素对齐（910B4
-  #    实测）。跳过已知 broken：resize/crop（DVPP VPC 通道建失败）、
-  #    threshold（AscendC kernel 越界）、uint8 算术（饱和与 CPU 不一致）。
-  - source: project
-    path: example/test_npu_cann_ops.py
-    profile: opencv
-    runner: linux-aarch64-a2-1
-    npu_devices: '0'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --input ${TARGET_ROOT}/samples/data/baboon.jpg
-    timeout_minutes: 60
-
-  # 3) DNN 超分辨率（非分类 layer：Conv/ReLU/Reshape/Transpose=PixelShuffle）。
+  # 2) DNN 超分辨率（非分类 layer：Conv/ReLU/Reshape/Transpose=PixelShuffle）。
   #    super-resolution-10.onnx（SubPixel CNN，240KB 入仓），静态 224x224 单
   #    输出，无 Shape/Gather/Cast——是 fcn-resnet50（动态 H/W + 双输出，CANN
   #    后端 forward 报 ret=100000）的替代，覆盖分类之外的 layer。
@@ -324,7 +310,7 @@ unsupported:
 
   # ---- 纯 CPU 示例（4，headless，与 GPU/NPU 无关）----
   # 这 4 个是真 example 但纯 CPU 路径：要么不走 cv.dnn（标定/里程计/版本打印），
-  # 要么走 cv.dnn 但自定义层是 CPU 注册（cannops 未实现 custom layer 注册）。
+  # 要么走 cv.dnn 但自定义层只在 CPU 注册。
   # 没有任何 backend/target 可暴露到 NPU，headless 化后仍是 CPU，性质不变。
   #   custom_layer.py   headless 纯推理，CPU 自定义层注册路径
   #   calibrate.py      棋盘标定：输入 samples/data/left01-14.jpg 仓内自带，写 ./output

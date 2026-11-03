@@ -9,10 +9,10 @@
 #
 # opencv-specific bits beyond the peft contract:
 #   - Source nnal/atb BEFORE the ascend-toolkit on top of the peft
-#     order, because the opencv_test_cannops gtest binary links
-#     against ATB libs and atb's set_env.sh must come AFTER hdc env
-#     (which already sources atb under set -u, breaking on $ZSH_VERSION
-#     unset). We re-source under set +u explicitly.
+#     order, because the CANN backend links against ATB libs and atb's
+#     set_env.sh must come AFTER hdc env (which already sources atb
+#     under set -u, breaking on $ZSH_VERSION unset). We re-source
+#     under set +u explicitly.
 #   - Inject PYTHONPATH for the source-built cv2 if the script looks
 #     like a Python example (peft only handles torch + datasets shims;
 #     we have no equivalent here, but PYTHONPATH must already be set

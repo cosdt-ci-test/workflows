@@ -53,28 +53,26 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
     The OpenCV quickstart's heaviest steps are:
         1. ``apt-get install`` build deps (cmake / gcc / libjpeg / libpng / libtiff);
-        2. ``git clone`` opencv + opencv_contrib (sparse, --depth 1);
-        3. ``cmake -DWITH_HUAWEI_NPU=ON ...`` configure (DNN samples
-           + opencv_contrib modules);
+        2. ``git clone`` opencv (sparse, --depth 1);
+        3. ``cmake -DWITH_HUAWEI_NPU=ON ...`` configure (DNN samples);
         4. ``make -j$(nproc)`` build (10-20 min on a 32-core runner);
         5. ``make install`` to /usr/local/opencv-cann;
-        6. ``opencv_test_dnn`` + ``opencv_version`` smoke + HUAWEI
-           backend gtest filter;
+        6. ``opencv_version`` smoke;
         7. Python binding smoke (cv2 import + HUAWEI backend enum) +
            MobileNetV2 ONNX forward on NPU (classic DNN engine forced
            via OPENCV_FORCE_DNN_ENGINE=1 inside the doc block).
     """
 
     # 150 min per command: `make -j2` is the long pole — Debug -O0 at
-    # parallelism 2 on the a2-4 runner. With BUILD_LIST (8 modules
-    # instead of main + ~35 contrib) and the all_ops.h -> narrow-header
-    # patch (dnn .text 516MB -> 47MB, per-TU preprocessed size down
-    # ~80%), the full build is ~50-70 min at -j2 (measured locally in
-    # the CANN image on a comparable ARM core). 9000s keeps generous
-    # headroom under the engine's 240-min job budget for install +
-    # cannops gtests + quickstart + first ACL graph build (~30 min
-    # cold AOE cache); a pre-patch build needed 8208s just to die at
-    # the dnn link (CI 33244401262, R_AARCH64_CALL26 overflow).
+    # parallelism 2 on the a2-4 runner. With BUILD_LIST (6 modules)
+    # and the all_ops.h -> narrow-header patch (dnn .text 516MB ->
+    # 47MB, per-TU preprocessed size down ~80%), the full build is
+    # ~50-70 min at -j2 (measured locally in the CANN image on a
+    # comparable ARM core). 9000s keeps generous headroom under the
+    # engine's 240-min job budget for install + quickstart + first ACL
+    # graph build (~30 min cold AOE cache); a pre-patch build needed
+    # 8208s just to die at the dnn link (CI 33244401262,
+    # R_AARCH64_CALL26 overflow).
     DEFAULT_COMMAND_TIMEOUT = 9000
 
     USER_AGENT = 'cosdt-ci-test/quick-start'  # monitored source is the fork under cosdt-ci-test org
@@ -189,7 +187,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
               the doc's ``opencv-cmake-configure`` / ``opencv-build`` /
               ``opencv-install`` blocks install it, so a broken
               install surfaces as a fuzzy mismatch in ``opencv-
-              cmake-configure`` / ``opencv-cann-run-tests`` rather than
+              cmake-configure`` / ``opencv-verify-build`` rather than
               being masked by a pre-installed copy.
         """
         # 1) PYTHONPATH: PREPEND the source-built OpenCV site-packages so

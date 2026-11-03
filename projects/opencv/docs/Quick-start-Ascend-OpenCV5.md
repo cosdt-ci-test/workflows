@@ -11,15 +11,14 @@
 
 | 文档 | OpenCV 版本 | 源码补丁 | 定位 |
 | --- | --- | --- | --- |
-| **本文** | 5.0（跟随上游 latest release） | 2 组 | 5.0 的**昇腾视角**特性导览（非 CPU 通路 + 影响） + 跑通路径；**不编 `opencv_contrib`** |
-| [Quick-start-Ascend.md](Quick-start-Ascend.md) | 5.0（跟随上游 latest release） | 3 组 | 同一配方，偏「补丁逐行说明 + cannops 单测证据」——**`cv2.cann` 只在那篇有** |
+| **本文** | 5.0（跟随上游 latest release） | 2 组 | 5.0 的**昇腾视角**特性导览（非 CPU 通路 + 影响） + 跑通路径 |
+| [Quick-start-Ascend.md](Quick-start-Ascend.md) | 5.0（跟随上游 latest release） | 2 组 | 同一配方，偏「补丁逐行说明」 |
 | [Quick-start-Ascend-NoPatch.md](Quick-start-Ascend-NoPatch.md) | 4.11.0（钉死） | 0 组 | 不想维护本地补丁时的退路（放弃 5.x 特性） |
 
 三条路线的取舍：
 
 - 要 5.0 的新能力（新 DNN 图引擎、原生 LLM/VLM、新 dtype、1D/0D Mat、STB 新字体、USAC 默认后端）→ 走 5.0，**必须打补丁**（原因见 §5：5.0 把 shape 类型换成了 `cv::MatShape`，而上游 CANN 后端没跟上）；
 - 不想维护任何本地补丁 → 走 4.11 零补丁路线，但只能停在 4.x。
-- 要 `cv2.cann`（contrib 的经典算子加速 API）→ 走 [主文档](Quick-start-Ascend.md)。**本文不编 `opencv_contrib`**：contrib 的 `cannops` 在 CANN 9.x 上还得额外打第 3 组补丁（NULL 流兜底，见 §5 末尾的说明），而它对本文要回答的问题（5.0 相对 4.x 变了什么、哪条通路能上卡）没有增量。
 
 > **版本口径**：本文的 `<ref>` 由 CI 注入，解析自上游 GitHub `releases/latest`。截至 2026-10-23，上游把它标成 **5.0.0**（4.14.0 是 4.x 维护线，发布更晚但**不是** latest）。§5 的补丁脚本只对 **5.0.x** 成立（`cv::MatShape` 是 5.0 引入的，4.x 里根本没有这个类型），上游一旦出 5.1/6.0，需要人工复核补丁。
 
@@ -34,11 +33,10 @@
 | 通路 | 5.0 状态 | 本文实测（910B4 / CANN 9.2.0 / OpenCV 5.0.0） |
 | --- | --- | --- |
 | **DNN 经典引擎 + CANN 后端** | ✅ **唯一能上卡的 DNN 通路**（4.x 时代那条，5.0 原样保留） | 103 层转 CANN 算子、GE 图编译 1 次、top-1 372、score 0.9142662（§2.3 台账 / §10.2） |
-| **contrib `cannops`（`cv2.cann`）** | ✅ 用 CANN 算子加速经典图像算子 | ❌ **本文不编 contrib**，这条通路不覆盖；单测证据在 [主文档](Quick-start-Ascend.md) |
 | **DNN 新图引擎**（5.0 的招牌） | ❌ **上游写死 CPU only** | 默认 `ENGINE_AUTO` 会落到它 → 推理成功但**完全不上卡**：请求 CANN 后端只打 2 条 WARN、**0** 次 GE 图编译（§2.3 台账 P5 / §10.1） |
 | **ONNX Runtime 后端** | ❌ 不是 NPU 路径；本文也没编（要 `-DWITH_ONNXRUNTIME=ON`） | — |
 | **非 CPU HAL 2.0**（厂商加速接口 + UMat 通用异构容器） | ❌ **5.0.0 未落地**（上游标 "5.0, 5.x: expected"，issue #25019 / #25025） | — |
-| NPU 视频解码 / NPU 图像处理（`cannops` 之外） | ❌ OpenCV 5.0 主仓没有这类通路 | — |
+| NPU 视频解码 / NPU 图像处理 | ❌ OpenCV 5.0 主仓没有这类通路 | — |
 
 **一句话结论**：5.0 给昇腾带来的**不是新能力，而是风险**——新特性大多与 NPU 无关，而唯一那条能上卡的通路（经典引擎 + CANN 后端）在 5.0 源码树上还得先打 2 组补丁才编得过（§5），默认引擎还会把你悄悄甩到不上卡的新引擎上（§10.1）。
 
@@ -113,7 +111,7 @@
 | `calib3d` → `geometry`/`calib`/`stereo`/`ptcloud` | `[5.0 行为变化]` | **4 个**模块（迁移指南正文写 "three" 是笔误）；Python 透明 | 纯 CPU |
 | imgproc 计算几何 → `geometry` | `[5.0 行为变化]` | `convexHull` / `Delaunay` / `Subdiv2D` 等 | 纯 CPU |
 | `features2d` → `features` + ALIKED / DISK / LightGlue / Annoy | `[5.0 新增]` | **FLANN 模块没有被移除**（5.0.0 仍有 `modules/flann/src/flann.cpp`） | 纯 CPU |
-| G-API / 经典 ml / Haar-HOG → contrib | `[5.0 行为变化]` | 需编 `opencv_contrib` | 本文**不编 contrib** |
+| G-API / 经典 ml / Haar-HOG | `[5.0 行为变化]` | 5.0 主仓里不再有这些模块 | 纯 CPU |
 | 移除遗留 C API / OpenVX | `[5.0 移除]` | 只保留 `CV_*` 这类宏 | 与后端无关 |
 | USAC 成默认后端 / 多目标定 / `ptcloud` | `[5.0 新增]` | PROSAC·MAGSAC++·GC-RANSAC·SPRT；TSDF·ICP·`.ply`·`.obj` | 纯 CPU |
 | C++17 / Python 3 | `[5.0 新增]` | Python 2 移除；编译器下限 GCC 8 | 环境约束（镜像 GCC 11.4 满足） |
@@ -123,7 +121,7 @@
 
 ### 2.5 本文覆盖边界（明确没覆盖什么）
 
-- **本文没编的**：`onnxruntime` 后端、**整个 `opencv_contrib`**（含 `cannops` / `xobjdetect` / `xfeatures2d` / `ml` / `gapi` / `rgbd`…）、Java / JS / ObjC 绑定、OpenCL 路径。
+- **本文没编的**：`onnxruntime` 后端、G-API / 经典 ml / Haar-HOG 这些 5.0 主仓里已迁走的模块、Java / JS / ObjC 绑定、OpenCL 路径。
 - **本文编了但不逐条验证的**：`core, imgproc, imgcodecs, videoio, dnn, python3, ts`（见 §7 的 `BUILD_LIST`）。§2.4 里凡是纯 CPU 的特性，本文**只保证「API 存在、能 import」，不保证逐个跑过**，本文也没在 NPU 上验证它们。
 - **真正跑过的只有两处**：§9 的 CPU quickstart、§10 的 NPU 推理（经典引擎 + 新引擎各一遍）。
 - **本文没有覆盖的上游能力**：C++ API 的完整迁移面、Java 绑定的 import 变更、samples 集合、`docs.opencv.org` 新文档站。
@@ -235,8 +233,6 @@ OpenCV 5.0 mainline 与 CANN 9.x / aarch64 有 2 处不兼容：一处是 §2.2 
 | --- | --- | --- |
 | 1 | OpenCV 5.0 把 shape 类型换成 `cv::MatShape`（`explicit` 构造、**没有** `front()`），上游 CANN 后端还停在 4.x 的 `std::vector<int>` 写法 | 把 `CannConstOp` 的 shape 参数换成 `const cv::MatShape&` + 15 处局部量改类型 + 修 3 处赋值（**不留**转发重载，理由见组 1 末尾） |
 | 2 | `all_ops.h` 的 ~1500 个 op 把 dnn `.text` 撑破 aarch64 ±128 MiB 链接窗口 | per-TU 窄 op 头 |
-
-> 曾经还有第 3 组（contrib `cannops` 的 NULL 流兜底）。**本文不编 `opencv_contrib`**，所以不需要它：那条 NULL 流断言只在算子级 API `aclopCompileAndExecute` 上触发，而本文走的是模型级 `aclmdlExecute`（经典引擎 + CANN 后端），不经过它。要 `cv2.cann` 那条通路请走 [主文档](Quick-start-Ascend.md)。
 
 ### 组 1. `cv::MatShape` 改了类型
 
@@ -489,7 +485,7 @@ ls -l "$CANN_DIR/acllib/lib64/libascendcl.so" "$CANN_DIR/lib64/libacl_op_compile
 
 CANN 后端开关 `WITH_CANN=ON`（不是 `BUILD_CANN`）；`-DOPENCV_DOWNLOAD_MIRROR_ID=gitcode` 让 cmake configure 阶段走 gitcode 镜像拉 ADE / IPPICV / TBB。
 
-`BUILD_LIST` 里的模块决定了编出来有哪些能力：`core` / `imgproc` / `imgcodecs` / `videoio` / `dnn`（CANN 后端在这里）/ `python3` / `ts`。**不编 `opencv_contrib`** ⇒ 没有 `cv2.cann` 那套经典算子加速 API（见 §1）。
+`BUILD_LIST` 里的模块决定了编出来有哪些能力：`core` / `imgproc` / `imgcodecs` / `videoio` / `dnn`（CANN 后端在这里）/ `python3` / `ts`。
 
 ```shell #test id="ocv5-cmake-configure"
 cd opencv
@@ -841,6 +837,5 @@ top class score: xxx
 - **Python 绑定不支持真正的 N 维 Mat**：numpy 的三维数组会被当成「二维 + 通道」，`transposeND` 因此要求单通道输入（§9e）。
 - **`PYTHONPATH` 必须 prepend 不能覆盖**：覆盖掉 CANN 的 `tbe` 路径 → `CANN graph check failed, ret = 4294967295`，且日志里没有 `tbe` 字样（§9）。
 - **`all_ops.h` 链接窗口是硬约束**：aarch64 的 `R_AARCH64_CALL26/JUMP26` 只有 ±128 MiB 跨度，缩 `.text` 只是缓解、不是保证；5.0 上过这一关只有窄 op 头一条路。
-- **本文没有 `cv2.cann`**：不编 `opencv_contrib` ⇒ contrib 那套经典算子加速 API（`cv2.cann.cvtColor` / `cv2.cann.resize` …）不可用，连带它的 gtest 证据也没有。要这条通路请走 [主文档](Quick-start-Ascend.md)（那边编 contrib、跑 53 个用例）。
 - **`videoio` 编了但没有编解码器**：源码构建默认不带 FFmpeg/GStreamer，`cv2.VideoWriter` 会打一堆 INFO/WARN 但仍能落盘；本文未把视频写入列为必过项。
 - **补丁只对 5.0.x 成立**：`cv::MatShape` 是 5.0 引入的类型，4.x 源码树里根本没有它；上游一旦出 5.1/6.0，§5 的脚本会断言失败（这是设计好的失败方式，不是 bug）。

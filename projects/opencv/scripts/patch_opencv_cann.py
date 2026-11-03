@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Apply the CANN source patches to a fresh opencv + opencv_contrib checkout.
+"""Apply the CANN source patches to a fresh opencv checkout.
 
 These patches are what make opencv mainline (5.0.0) compile + link against
 CANN 9.1.0 on aarch64. Each is idempotent (checks before patching), so
 re-running on an already-patched tree is a no-op.
 
-Run from the WORK dir that contains the two checkouts as siblings:
+Run from the WORK dir that contains the checkout:
 
     cd <WORK>                      # e.g. /home/coder/work
-    python3 patch_opencv_cann.py   # expects ./opencv and ./opencv_contrib
+    python3 patch_opencv_cann.py   # expects ./opencv
 
-Only 3 upstream incompatibilities are worked around; every one of them is
+Only 2 upstream incompatibilities are worked around; every one of them is
 reproduced and justified in docs/Quick-start-Ascend.md §4:
 
   1. (a-d) OpenCV 5.0 renamed the shape type to cv::MatShape and dropped
@@ -27,21 +27,6 @@ reproduced and justified in docs/Quick-start-Ascend.md §4:
      .text past the aarch64 R_AARCH64_CALL26/JUMP26 +/-128 MiB window and
      the link dies with "relocation truncated to fit".  Fix = narrow op
      headers, per TU.
-  3. (g) CANN 9.x rejects a NULL stream (EH0008); upstream's CANN ops
-     pass the stream through unchanged and also has the `if (rawStream ==
-     nullptr)` branch inverted.  Fix = fall back to the context's default
-     stream.
-  4. (h) NOT patched any more.  The AscendC kernel_launch template has
-     the same NULL-stream shape, but reverting it changes no test
-     outcome: the 53 cannops cases still pass, and the only AscendC
-     kernel we ship (threshold) faults on device with an upstream UB
-     overflow either way, so that path is covered by neither variant.
-  5. (i-j) NOT patched any more.  The H2D/D2H host-buffer clamp was
-     defensive hardening for a >= 25.5.x driver that was never observed to
-     report a padded size (measured acl_size == host_size == 4000); the
-     crash it was meant to prevent was a driver/toolkit version mismatch
-     (25.5.2 driver x CANN 9.1.0) corrupting the heap at exit, which is
-     fixed on the host side, not in this source.
 """
 from __future__ import annotations
 
@@ -169,60 +154,6 @@ def main() -> None:
             f'#include "built-in/op_proto/inc/{h}.h"' for h in headers)
         p.write_text(s.replace(ANCHOR, block, 1))
         print(f'(patch) {rel}: +{len(headers)} narrow header(s)')
-
-    # (g) OperatorRunner NULL stream fallback
-    p = pathlib.Path('opencv_contrib/modules/cannops/src/cann_call.cpp')
-    if not p.exists():
-        # opencv_contrib is optional (the 5.x quick-start docs do not build
-        # it); the quick-start guards that need contrib clone it themselves.
-        print('(skip) opencv_contrib/.../cann_call.cpp: file not present')
-        return
-    s = p.read_text()
-    old_g = '''OperatorRunner& OperatorRunner::run(AscendStream& stream)
-{
-    aclrtStream rawStream = AscendStreamAccessor::getStream(stream);
-    CV_ACL_SAFE_CALL(aclopCompileAndExecute(op.c_str(), inputDesc_.size(), inputDesc_.data(),
-                                            inputBuffers_.data(), outputDesc_.size(),
-                                            outputDesc_.data(), outputBuffers_.data(), opAttr_,
-                                            ACL_ENGINE_SYS, ACL_COMPILE_SYS, NULL, rawStream));
-    if (rawStream == nullptr)
-        CV_ACL_SAFE_CALL(aclrtSynchronizeStream(rawStream));
-    else
-    {
-        for (const auto& ptr : holder)
-            stream.addTensorHolder(ptr);
-    }
-    return *this;
-}'''
-    new_g = '''OperatorRunner& OperatorRunner::run(AscendStream& stream)
-{
-    aclrtStream rawStream = AscendStreamAccessor::getStream(stream);
-    aclrtStream execStream = rawStream;
-    if (execStream == nullptr)
-        CV_ACL_SAFE_CALL(aclrtCtxGetCurrentDefaultStream(&execStream));
-    CV_ACL_SAFE_CALL(aclopCompileAndExecute(op.c_str(), inputDesc_.size(), inputDesc_.data(),
-                                            inputBuffers_.data(), outputDesc_.size(),
-                                            outputDesc_.data(), outputBuffers_.data(), opAttr_,
-                                            ACL_ENGINE_SYS, ACL_COMPILE_SYS, NULL, execStream));
-    CV_ACL_SAFE_CALL(aclrtSynchronizeStream(execStream));
-    if (rawStream != nullptr)
-    {
-        for (const auto& ptr : holder)
-            stream.addTensorHolder(ptr);
-    }
-    return *this;
-}'''
-    # 已打过补丁的 clone（重跑/复用旧 build 目录）里 fix 已存在但带注释行，
-    # old_g/new_g 锚点都对不上；用 fix 标记判定，避免 SystemExit 中断冷构建。
-    if 'aclrtCtxGetCurrentDefaultStream' in s:
-        print('(ok)   cann_call.cpp: NULL-stream fallback already present (prior patch), skip')
-    else:
-        patch('opencv_contrib/modules/cannops/src/cann_call.cpp', old_g, new_g)
-
-    # (h) 已删除：AscendC kernel_launch 的 NULL 流 fallback 回退后测不出差别
-    #（53 个 cannops 用例仍全过；唯一的 AscendC kernel threshold 因上游
-    #  UB 越界在设备侧崩，两种写法都挂）。详见
-    #  docs/Quick-start-Ascend.md §4c 末尾的说明。
 
 
 if __name__ == '__main__':

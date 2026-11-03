@@ -8,15 +8,14 @@
 
 ## 什么时候用这份文档
 
-主文档 [Quick-start-Ascend.md](Quick-start-Ascend.md) 跟的是「最新 release」（当前 5.0.0），代价是 **三组源码补丁**（`cv::MatShape` 适配 + 窄 op 头 + NULL 流兜底）。本文是另一条路：**版本钉在 4.14.0（4.x 最新），补丁 0 组**。
+主文档 [Quick-start-Ascend.md](Quick-start-Ascend.md) 跟的是「最新 release」（当前 5.0.0），代价是 **两组源码补丁**（`cv::MatShape` 适配 + 窄 op 头）。本文是另一条路：**版本钉在 4.14.0（4.x 最新），补丁 0 组**。
 
 选本文的理由：
 
 - 你要的是「OpenCV 在昇腾上能跑」，不想维护任何本地 patch；
-- 你能接受 4.x（4.14.0 是 4.x 的末代，5.0 之后不再有 4.x 更新）；
-- 你不需要 `cv2.cann` 那套 contrib 经典算子 API（本文不编 `opencv_contrib`）。
+- 你能接受 4.x（4.14.0 是 4.x 的末代，5.0 之后不再有 4.x 更新）。
 
-不选本文的理由：要用 OpenCV 5.x 的新 DNN 图引擎，或要用 `cv2.cann` 加速经典算子 —— 那些请走主文档。
+不选本文的理由：要用 OpenCV 5.x 的新 DNN 图引擎 —— 那个请走主文档。
 
 ## 主文档那组补丁，本文怎么绕
 
@@ -24,10 +23,9 @@
 | --- | --- | --- |
 | `cv::MatShape` 适配 | OpenCV **5.0.0** 把 dnn 层的 shape 换成 `cv::MatShape`，而上游 CANN 后端 `modules/dnn/src/op_cann.hpp` 从 4.11 到 5.0.0 **一个字节都没改**（4.11.0 / 4.12.0 / 4.13.0 / 4.14.0 / 5.0.0 全是 4446 字节，构造函数仍是 `const std::vector<int>&`）→ 5.0 编译不过 | 钉 **4.14.0**：`gemm_layer.cpp` / `matmul_layer.cpp` 在 4.11→4.14 与 CANN 后端同源（仍是 `std::vector<int>`），原样编译通过。**实测**：`op_cann.hpp` 在 4.11.0 与 4.14.0 之间 **md5 逐字节相同**，`op_cann.cpp` 只差 3 处（全是错误文案与注释，零逻辑变化） |
 | 窄 op 头 | `all_ops.h` 一次拉进 ~1500 个 op，每个引用 `op_cann.hpp` 的 TU 都展开一遍；Debug(-O0) 下 dnn `.text` 冲到 516MB，超 aarch64 `R_AARCH64_CALL26` 的 ±128MB 分支范围 → 链接必炸 | 改 **Release(-O3)**：实测**不打**窄 op 头的 4.14.0 Release 构建，dnn `.text` 只有 **53.3 MiB**（55,920,432 B），`libopencv_dnn.so` 一次链接通过（实测环境：Atlas 900 A2 / 910B4、Ubuntu 22.04 arm64、gcc 11.4、CANN 9.1.0、OpenCV 4.14.0）。⚠️ 这条**只在 4.x 成立**：5.0.0 的引用 TU 从 28 个涨到 39 个、dnn 源码量 +50.6%，同样 Release + `all_ops.h` 实测仍然链接失败（`relocation truncated to fit: R_AARCH64_JUMP26`，受害者是 protobuf 的 `AddDescriptorsRunner`）—— Release 不是通用解法，见「已知边界」 |
-| NULL 流兜底 | CANN 9.1.0 的 `aclopCompileAndExecute` 拒绝 NULL 流（EH0008）。根因在 contrib 的 `cann_call.cpp`：`OperatorRunner::run()` 把 `AscendStream::Null()`（`stream == nullptr`）直接喂给 `aclopCompileAndExecute`，**上游还有逻辑反转 bug**（`if (rawStream == nullptr) aclrtSynchronizeStream(rawStream);` —— NULL 时反而去同步 NULL 流） | 本文**不编 `opencv_contrib`**，这段代码不在编译范围。**DNN 那条路不受影响**：它走 `aclmdlExecute`（模型级 API），不经过 `aclopCompileAndExecute` |
 | 缓冲夹紧 | 防御性加固（主文档自己测出 `acl_size == host_size == 4000`，并非崩溃根因） | 不加；驱动与 CANN 版本配套时本就不会触发 |
 
-一句话版本：**「钉 4.14.0 + Release 构建 + 不编 contrib + CANN 库指向 `<CANN>/lib64`」= 零补丁**。
+一句话版本：**「钉 4.14.0 + Release 构建 + CANN 库指向 `<CANN>/lib64`」= 零补丁**。
 
 > 为什么 4.x 天然比 5.x 省补丁：`all_ops.h` 是 **CANN 的头**，与 OpenCV 版本无关 ⇒ 每个引用 TU 展开的体积恒定，`.text` 随 TU 数量线性增长。实测引用 `op_cann.hpp` 的 TU 数：4.11.0 = 27，**4.14.0 = 28**（多的那个是 `layers/reduce_layer.cpp` —— 4.14 给 reduce 层新增了 CANN 后端支持），5.0.0 = 39。dnn 源码量则是 4.11.0 = 2,999,863 B → **4.14.0 = 3,068,750 B（+2.3%）** → 5.0.0 = 4,518,814 B（+50.6%）。4.14 站在「TU 只多 1 个、自身代码只多 2.3%」的位置，离 128 MiB 窗口还有 ~74 MiB 余量；5.0 站在「TU 多 39%、自身代码多 50%」的位置，就撞墙了。
 
@@ -35,33 +33,21 @@
 
 **零补丁 ⇒ NPU 能力只有 DNN 推理这一条。** `imgproc` / `imgcodecs` / `videoio` 在本文这条路线下**全部走 CPU**。
 
-OpenCV 4.x 的 NPU 加速只有两处入口：
+OpenCV 4.x 主仓里的 NPU 加速入口只有一处：
 
 | 入口 | 在哪 | 本文的零补丁路线覆盖到吗 |
 | --- | --- | --- |
 | DNN CANN 后端 | 主仓 `modules/dnn`（`WITH_CANN=ON`） | ✅ **覆盖** —— 本文验证的那条（跑没跑在 NPU 上由 CANN 后端日志坐实，见「怎么证明这次真的跑在 NPU 上」） |
-| `cv2.cann.*` 经典算子 | contrib `modules/cannops` | ❌ **不覆盖** —— 本文不编 contrib |
 
 所以本文那几件 CPU 事情，NPU 归属是这样：
 
 | 本文验证的 CPU 场景 | 能上 NPU 吗 |
 | --- | --- |
 | 读图 / 写图（`imread` / `imwrite`） | ❌ `imgcodecs` 没有 NPU 解码路径 |
-| 颜色空间（`cvtColor`） | ✅ 但要走 `cv2.cann.cvtColor`（见下） |
-| 缩放（`resize`） | ✅ 但要走 `cv2.cann.resize`（见下） |
-| 绘制（`rectangle` / `putText`） | ❌ cannops 没有绘图算子 |
-| 视频读写（`VideoWriter` / `VideoCapture`） | ❌ contrib 的 DVPP 只封装了 `hi_mpi_vpc_*`（resize / crop / border），**没有 vdec / venc**；视频编解码仍是 CPU |
-
-**一个容易误解的点**：`cv2.cann.cvtColor` **不是** `cv2.cvtColor` 的 NPU 加速版 —— 它是签名不同的**并行 API 线**（`AscendMat` 进出、可选 `stream=` 参数）。`cv2.cvtColor` / `cv2.resize` 永远走 CPU。
-
-`cv2.cann` 在 4.14.0 上暴露 23 个算子（`modules/cannops/include/opencv2/cann_interface.hpp`）：
-
-| 后端 | 算子 |
-| --- | --- |
-| ACL 算子编译（GE 图） | `cvtColor` `threshold` `add` `subtract` `multiply` `divide` `addWeighted` `bitwise_and` `bitwise_not` `bitwise_or` `bitwise_xor` `merge` `split` `transpose` `flip` `rotate` |
-| DVPP VPC（硬件） | `resize` `crop` `cropResize` `cropResizeMakeBorder` `copyMakeBorder` |
-
-要拿到它们就得编 contrib，而 contrib 的 `cann_call.cpp` 在 CANN 9.1.0 上有 NULL 流缺陷（见「已知边界」），必须打补丁 —— 那就不是本文这条零补丁路线了。
+| 颜色空间（`cvtColor`） | ❌ `imgproc` 在这条路线下没有 NPU 路径 |
+| 缩放（`resize`） | ❌ 同上 |
+| 绘制（`rectangle` / `putText`） | ❌ 同上 |
+| 视频读写（`VideoWriter` / `VideoCapture`） | ❌ 视频编解码仍是 CPU |
 
 
 ## 另一个坑：CANN 9.2 的裁剪版 `libgraph.so`
@@ -122,7 +108,6 @@ Atlas 900 A2 / A3 训练系列产品或 Ascend 950 系列，已挂载 `/dev/davi
 | CANN toolkit | **9.2.0**（`/usr/local/Ascend/cann-9.2.0`）；CI 镜像里是 9.1.0，两者的库目录布局差异见「桥接 CANN 的库目录」。**本文的链接体积实测是在 CANN 9.1.0 上做的**（aarch64 的 ±128 MiB 分支窗口是架构约束，与 CANN 版本无关） |
 | Python / CMake / GCC | 3.12.15 / 3.22.1 / 11.4.0 |
 | OpenCV | **4.14.0**（源码，`WITH_CANN=ON`，`CMAKE_BUILD_TYPE=Release`）—— 4.x 的末代 |
-| opencv_contrib | **不编**（本文不覆盖 `cv2.cann`）|
 
 ### 前置安装
 
@@ -256,10 +241,9 @@ ls -l "$CANN_DIR/acllib/lib64/libascendcl.so" "$CANN_DIR/lib64/libacl_op_compile
 
 CANN 后端开关 `WITH_CANN=ON`（不是 `BUILD_CANN`）；`-DOPENCV_DOWNLOAD_MIRROR_ID=gitcode` 让 cmake configure 阶段走 gitcode 镜像拉 ADE / IPPICV / TBB。
 
-**三个和主文档不同的地方**：
+**两个和主文档不同的地方**：
 
 - `CMAKE_BUILD_TYPE=Release` 而不是 `Debug` —— 这是绕开窄 op 头补丁的关键（Debug 的 `-O0` 会把 `all_ops.h` 里每个 op 的内联函数都落盘，`.text` 撑爆 aarch64 的分支范围）。**注意这条只对 4.x 成立**：5.0.0 实测 Release + `all_ops.h` 一样链接失败（`R_AARCH64_JUMP26` 越界）；
-- `BUILD_LIST` 里**没有** `cannops` —— 不编 `opencv_contrib`，所以没有 contrib 侧的两处 NULL 流补丁；
 - `-DBUILD_opencv_apps=OFF` —— OpenCV 自带的 `apps/model-diagnostics` 是个**可执行文件**，它要直接链 CANN 的 `libge_compiler.so` / `libgraph.so` / `libgraph_base.so`，而这三个库自身还有一堆没被链进来的依赖（`ge::*`、`ascend_private::protobuf::*`、`absl::*`…）。共享库链接允许留未定义符号（所以 `libopencv_dnn.so` 没事），可执行文件链接不允许 → **链接期报几百条 `undefined reference` 并让整个 `all` 目标失败**（CANN 9.2.0 实测）。关掉 apps 就绕开了。
 
 安装前缀用 `/usr/local/opencv-cann-414`（不是主文档的 `/usr/local/opencv-cann`）：两套 OpenCV（5.x 带补丁 / 4.14 零补丁）可能落在同一台自托管 runner 上，装到同一个前缀会互相覆盖。只想跑本文的话，`/usr/local/opencv-cann` 也行，把下面两处（前缀 / `PYTHONPATH`）一起换掉即可。
@@ -804,11 +788,9 @@ npu/cpu time ratio: xxx
 
 ## 已知边界
 
-- **没有 `cv2.cann`**：本文不编 `opencv_contrib`，所以 `cv2.cann.cvtColor` / `cv2.cann.resize` 这类 contrib 经典算子加速 API 不可用（主文档有）。算子面和「为什么它们不能替换 `cv2.*`」见上一节「这条路线的 NPU 覆盖到哪」。**这不是「本文偷懒」，是 4.x 上源码级确认的死路**：`opencv_contrib/modules/cannops/src/cann_call.cpp` 在 4.11.0 与 4.14.0 之间**逐字节相同**（43 个文件、823,803 B），`OperatorRunner::run()` 把 `AscendStream::Null()`（`stream == nullptr`）直接喂给 `aclopCompileAndExecute`，CANN 9.1.0 断言 `stream != nullptr` ⇒ 实测 53 个 cannops 用例挂 48 个（`E29999: Assert ((stream) != nullptr)` + `Invalid_Argument_Null_Pointer(EH0008)`）。**上游还有逻辑反转 bug**：`if (rawStream == nullptr) aclrtSynchronizeStream(rawStream);` —— NULL 时反而去同步 NULL 流。要跑 `cv2.cann` 就得编 contrib + 打那组 NULL 流兜底补丁。
 - **没有 OpenCV 5.x**：4.14.0 没有 5.0 的新 DNN 图引擎（`onnx_importer2`），也没有 5.0 的其它新特性。反过来 4.14.0 也有 5.0 没有的东西：**reduce 层的 CANN 后端支持**（`layers/reduce_layer.cpp` 从 4.14 起才 include `op_cann.hpp`）。
-- **没有 `opencv_test_cannops` 单测**：那个 gtest 二进制来自 `opencv_contrib` 的 cannops 模块，本文不编 contrib，所以没有那 53 个用例的证据；NPU 正确性由上面的 **MobileNetV2 的 NPU-vs-CPU 数值对照**（top-1 相同 + 分数差 ≤ 0.01 + shape/dtype 相同）+ 三行 `cann marker:`（CANN 后端日志标记）来兜。
 - **编译并行度受内存配额约束**：`all_ops.h` 那几个 TU 每个吃 3GB 上下，cgroup 32GB 的容器里 `--parallel` 别超过 6，否则 OOM killer 会杀掉 `cc1plus`。
-- **「Release 就不用窄 op 头补丁」不是通用解法**：本条只在 **4.x** 上实测成立（4.14.0 的 Release 构建 dnn `.text` 53.3 MiB → 链接通过；4.11.0 是 52.0 MiB）。同样条件下 **5.0.0 实测仍然失败**：Release + `all_ops.h` 链接报 `relocation truncated to fit: R_AARCH64_JUMP26`，受害者是 protobuf 的 `AddDescriptorsRunner::AddDescriptorsRunner`（**报错对象随链接顺序随机变**，5.0.0 的 Debug 构建里同一个坑出现过 `Arena::AllocateAlignedWithCleanup` 版本 —— 所以「链接炸了但报错看着跟 CANN 无关」是常态，别顺着报错对象查根因）。也就是说：**分支范围是 aarch64 的硬约束，缩 `.text` 只是缓解，不是保证**；OpenCV 5.x 要过这一关只有窄 op 头一条路（主文档的 3 组补丁之一）。
+- **「Release 就不用窄 op 头补丁」不是通用解法**：本条只在 **4.x** 上实测成立（4.14.0 的 Release 构建 dnn `.text` 53.3 MiB → 链接通过；4.11.0 是 52.0 MiB）。同样条件下 **5.0.0 实测仍然失败**：Release + `all_ops.h` 链接报 `relocation truncated to fit: R_AARCH64_JUMP26`，受害者是 protobuf 的 `AddDescriptorsRunner::AddDescriptorsRunner`（**报错对象随链接顺序随机变**，5.0.0 的 Debug 构建里同一个坑出现过 `Arena::AllocateAlignedWithCleanup` 版本 —— 所以「链接炸了但报错看着跟 CANN 无关」是常态，别顺着报错对象查根因）。也就是说：**分支范围是 aarch64 的硬约束，缩 `.text` 只是缓解，不是保证**；OpenCV 5.x 要过这一关只有窄 op 头一条路（主文档的 2 组补丁之一）。
 - **没有 `opencv_version` 等命令行工具**：它们属于 `apps/`，而 `apps` 被 `-DBUILD_opencv_apps=OFF` 关掉了（原因见「配置并编译」一节）。
 - **CANN 的「裁剪版运行时」是隐形坑**：`<CANN>/aarch64-linux/devlib/linux/aarch64/` 里有一套同名但被裁剪过的 `.so`（`libgraph.so` 只有 198 KB，少 4 个 `ge::AscendString` 序关系运算符）。symlink 指错目录不会在编译期报错，只会在链接期炸成 `undefined reference to ge::AscendString::operator<`；本文「桥接 CANN 的库目录」一节里的 `nm` 检查就是为了挡住它。
 - **版本钉死 4.14.0，不追 4.x 后续**：`4.14.0` 是 4.x 的末代（`git ls-remote --tags` 确认 4.x 之后就是 5.0.0），所以这个钉不会过期。但如果将来 5.x 的图引擎补上非 CPU 后端支持，主文档那条路会重新变得值得走。

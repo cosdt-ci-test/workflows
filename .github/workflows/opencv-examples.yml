@@ -7,23 +7,18 @@
 # matrix / validate-results / save-monitor-state) lives in the engine.
 #
 # === Status (2026-09-22) ===
-# supported = 3 self-hosted NPU smoke scripts (source: project,
+# supported = 2 self-hosted NPU smoke scripts (source: project,
 # projects/opencv/example/), all verified on 910B4 + CANN 9.1.0:
 #   - test_npu_dnn_classification.py   mobilenetv2-12 ONNX via
 #     DNN_BACKEND_CANN + DNN_TARGET_NPU, top-1=372 vs CPU reference
 #   - test_npu_dnn_superres.py         super-resolution-10 ONNX (static
 #     224x224, single output; fcn-resnet50 segmentation fails on CANN:
 #     dynamic H/W + dual output -> createOutputDataset ret=100000)
-#   - test_npu_cann_ops.py             cv2.cann classic ops vs CPU
-#     reference (cvtColor/flip/rotate/transpose/merge/split/add/subtract/
-#     bitwise; resize/crop are DVPP-VPC-broken on 910B4, threshold is
-#     AscendC-broken, uint8 arithmetic saturation diverges from CPU)
 # Upstream samples/ has no CANN-selectable sample (samples/dnn/common.py
 # backend/target maps lack cann/npu; classic DNN samples are GUI-bound),
 # hence the self-hosted legs. setup_example.sh source-builds opencv-cann
-# (~23 min cold) via scripts/patch_opencv_cann.py (3 CANN 9.1.0/aarch64
-# source patch groups -- MatShape shape type / narrow CANN op headers /
-# contrib NULL-stream fallback).
+# (~23 min cold) via scripts/patch_opencv_cann.py (2 CANN 9.1.0/aarch64
+# source patch groups -- MatShape shape type / narrow CANN op headers).
 # schedule stays DISABLED until the first green manual run:
 #   schedule:
 #     - cron: '0 */6 * * *'
@@ -60,8 +55,8 @@ jobs:
         uses: ./.github/workflows/examples-template.yml
         with:
             project: opencv
-            # supported = 3 self-hosted NPU smoke legs (source: project,
-            # see manifest). max_parallel 4 lets all 3 legs run in
+            # supported = 2 self-hosted NPU smoke legs (source: project,
+            # see manifest). max_parallel 4 lets all legs run in
             # parallel; each leg's setup_example.sh source-builds
             # opencv-cann (~23 min cold @-j2) when the image has no
             # pre-built install, so cold pods serialize on the shared

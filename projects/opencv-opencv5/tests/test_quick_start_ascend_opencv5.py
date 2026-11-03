@@ -20,11 +20,6 @@ What makes this guard different from the other two OpenCV guards:
   ``ocv5-cann-infer`` asserts the classic engine *does* compile the graph
   and converts >= 100 layers. If a future OpenCV release flips the
   default, this guard fails loudly instead of silently going CPU-only;
-* it does **not** build ``opencv_contrib``: the doc dropped the
-  ``cannops`` module (and with it the NULL-stream patch group that
-  module needs on CANN 9.x), so the ``cv2.cann`` classic-operator API
-  is out of scope for this doc — the main OpenCV guard still covers
-  that route;
 * the install prefix is **``/usr/local/opencv-cann-5``**, distinct from
   the other two guards' prefixes (``/usr/local/opencv-cann`` for the
   patched 5.x doc, ``/usr/local/opencv-cann-411`` for the 4.11.0
@@ -77,8 +72,7 @@ class TestQuickStartAscendOpenCV5(MarkdownDocTestBase, unittest.TestCase):
     The doc's heaviest steps are:
         1. ``apt-get install`` build deps (cmake / gcc / libjpeg / libpng /
            libtiff / zlib);
-        2. ``git clone --depth 1 --branch <ref>`` opencv (no
-           ``opencv_contrib``);
+        2. ``git clone --depth 1 --branch <ref>`` opencv;
         3. two source patches (``cv::MatShape`` type fix, narrow CANN
            op headers for the aarch64 +-128 MiB branch-range limit);
         4. CANN library layout bridge (3 symlinks into ``<CANN>/lib64``);

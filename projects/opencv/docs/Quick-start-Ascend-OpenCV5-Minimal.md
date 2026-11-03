@@ -1,12 +1,12 @@
 # 快速开始（OpenCV 5.x 最小补丁版）
 
-一句话结论先摆出来：**OpenCV 5.x 没有「零补丁」路线**。原始 5.0.0 源码在 `WITH_CANN=ON` 下**编译就过不去**；把 `opencv_contrib` 排除掉之后，最小补丁集是 **2 组**（`cv::MatShape` 适配 + 窄 op 头），共 **26 个文件 / +47 行 / -22 行**。本文给出实测证据、两段可直接复制的补丁脚本，以及一套在 910B4 上跑通的 DNN NPU 验证。
+一句话结论先摆出来：**OpenCV 5.x 没有「零补丁」路线**。原始 5.0.0 源码在 `WITH_CANN=ON` 下**编译就过不去**；最小补丁集是 **2 组**（`cv::MatShape` 适配 + 窄 op 头），共 **26 个文件 / +47 行 / -22 行**。本文给出实测证据、两段可直接复制的补丁脚本，以及一套在 910B4 上跑通的 DNN NPU 验证。
 
 本文是 [Quick-start-Ascend-NoPatch.md](Quick-start-Ascend-NoPatch.md)（4.14.0 零补丁）的 **5.x 对照版**：那篇证明「4.x 可以一行补丁都不打」，本文证明「5.x 不行，最少要多少」。
 
 ### 三段实测（同一台机、同一套参数，只有补丁在变）
 
-实测环境：**Atlas 900 A2 PODc（910B4）/ Ubuntu 22.04.5 arm64 / CANN 9.2.0 / gcc 11.4.0 / Python 3.12.15 / CMake 3.22.1**，`CMAKE_BUILD_TYPE=Release`、`WITH_CANN=ON`、`BUILD_LIST=core,imgproc,imgcodecs,videoio,dnn,python3`、**不编 contrib**。
+实测环境：**Atlas 900 A2 PODc（910B4）/ Ubuntu 22.04.5 arm64 / CANN 9.2.0 / gcc 11.4.0 / Python 3.12.15 / CMake 3.22.1**，`CMAKE_BUILD_TYPE=Release`、`WITH_CANN=ON`、`BUILD_LIST=core,imgproc,imgcodecs,videoio,dnn,python3`。
 
 | 阶段 | 源码状态 | 结果 |
 | --- | --- | --- |
@@ -18,26 +18,23 @@
 
 ## 0. 与同仓其它 OpenCV 文档的关系
 
-| 文档 | OpenCV 版本 | 源码补丁 | 编 contrib | NPU 能覆盖到 |
-| --- | --- | --- | --- | --- |
-| [Quick-start-Ascend-NoPatch.md](Quick-start-Ascend-NoPatch.md) | 4.14.0 | **0 组** | 否 | 只有 `cv2.dnn` 的 CANN 后端 |
-| **本文** | **5.0.0** | **2 组** | 否 | 同上（但**必须强制经典引擎**，见 §10.1） |
-| [Quick-start-Ascend-OpenCV5.md](Quick-start-Ascend-OpenCV5.md) | 5.0.0（跟随 latest release） | 2 组 | 否 | 同上 + 5.0 的特性导览（哪条通路能上卡） |
-| [Quick-start-Ascend.md](Quick-start-Ascend.md) | 5.0.0（跟随 latest release） | 3 组 | 是 | DNN + `cv2.cann.*` 经典算子（23 个算子） |
+| 文档 | OpenCV 版本 | 源码补丁 | NPU 能覆盖到 |
+| --- | --- | --- | --- |
+| [Quick-start-Ascend-NoPatch.md](Quick-start-Ascend-NoPatch.md) | 4.14.0 | **0 组** | 只有 `cv2.dnn` 的 CANN 后端 |
+| **本文** | **5.0.0** | **2 组** | 同上（但**必须强制经典引擎**，见 §10.1） |
+| [Quick-start-Ascend-OpenCV5.md](Quick-start-Ascend-OpenCV5.md) | 5.0.0（跟随 latest release） | 2 组 | 同上 + 5.0 的特性导览（哪条通路能上卡） |
+| [Quick-start-Ascend.md](Quick-start-Ascend.md) | 5.0.0（跟随 latest release） | 2 组 | DNN CANN 后端（补丁逐行说明） |
 
-本文比主文档少的**那一组**补丁（`OperatorRunner` 的 NULL 流 fallback）在 `opencv_contrib/modules/cannops/` 里 —— 本文**不编 contrib**，所以那一组用不上（[特性巡览那篇](Quick-start-Ascend-OpenCV5.md) 同样不编 contrib，也是 2 组）。换句话说：
-
-> **5.x 只要不上 `cv2.cann` 经典算子，最小补丁就是 2 组；要上 `cv2.cann` 就是 3 组。**
+> **5.x 的最小补丁集就是 2 组**（`cv::MatShape` 适配 + 窄 op 头），三篇 5.x 文档用的是同一套补丁。
 
 选本文的理由：
 
-- 你要用 **5.x 的 DNN**（新版 ONNX 覆盖、算子融合、经典引擎的行为差异），但不想维护 contrib 那侧的补丁；
+- 你要用 **5.x 的 DNN**（新版 ONNX 覆盖、算子融合、经典引擎的行为差异）；
 - 你能接受「2 组、47 行」的本地改动，并且希望它们是**幂等**的（脚本重复跑会打印 `already patched` 并跳过）。
 
 不选本文的理由：
 
-- 你要的是「一行补丁都不打」→ 去 [4.14.0 那篇](Quick-start-Ascend-NoPatch.md)；
-- 你要用 `cv2.cann.*` 加速经典算子 → 去主文档（3 组补丁 + 编 contrib）。
+- 你要的是「一行补丁都不打」→ 去 [4.14.0 那篇](Quick-start-Ascend-NoPatch.md)。
 
 ## 1. 结论一：原始 5.0.0 零补丁 = 编译失败（实测）
 
@@ -137,19 +134,8 @@ gmake: *** [Makefile:576: opencv_dnn] Error 2
 | --- | --- |
 | `opencv/opencv` **4.x**（`PR-4.x.yaml`，12 个 job） | **没有** |
 | `opencv/opencv` **5.x**（`PR-5.x.yaml`，12 个 job） | **没有** |
-| `opencv/opencv_contrib` **4.x**（`PR-4.x.yaml`） | 有，但 **`if: contains(github.event.pull_request.labels.*.name, 'category: cann')`** —— 只有打了 `category: cann` 标签的 PR 才跑 |
-| `opencv/opencv_contrib` **5.x**（`PR-5.x.yaml`） | **没有** |
 
-`opencv/ci-gha-workflow` 里带 CANN 的 workflow **只有一个**：
-
-```
-OCV-Contrib-PR-4.x-O22-CANN.yaml     # extra_cmake_options: -DWITH_CANN=ON
-                                        runs-on: opencv-cn-openeuler-ascend310-x86-64
-```
-
-它自己的 `on:` 只有 `pull_request`（且 `paths:` 限死为「这个文件自己」）+ `workflow_call`，而**全仓唯一调用它的是 `opencv/opencv_contrib` 的 `PR-4.x.yaml`** —— 也就是说 `opencv/opencv` 自己的 PR（4.x、5.x 都算）**结构上就不编译 CANN 后端**。
-
-那条 CANN job 的实际状态也不乐观：抽样最近 6 个 `opencv/opencv_contrib` 的 `PR:4.x` run，`openEuler2203-x64` **全部是 `skipped`**（普通 PR 没有 `category: cann` 标签）。
+`opencv/ci-gha-workflow` 里带 CANN 的 workflow **只有一个**，且只服务 4.x：它带 `extra_cmake_options: -DWITH_CANN=ON`，跑在 `opencv-cn-openeuler-ascend310-x86-64` 这台自托管 runner 上，而它自己的 `on:` 只有 `pull_request`（且 `paths:` 限死为「这个文件自己」）+ `workflow_call` —— **`opencv/opencv` 自己的 PR（4.x、5.x 都算）结构上就不编译 CANN 后端**。
 
 **所以逻辑链是闭合的**：打断 CANN 的是 **`opencv/opencv` 的 PR #26056**（2024-10 删掉 `typedef std::vector<int> MatShape;`），而 `opencv/opencv` 的 PR CI **从来没有 CANN 这一格** —— 这个 PR 在结构上就**不可能**被 CANN CI 抓到。而 `#ifdef HAVE_CANN` 那段代码**只有 `-DWITH_CANN=ON` 才会被编译**，于是那 39 个 TU 在上游 5.0 的任何一条流水线里**一次都没被编过**。
 
@@ -251,7 +237,6 @@ Atlas 900 A2 / A3 训练系列产品或 Ascend 950 系列，已挂载 `/dev/davi
 | CANN toolkit | **9.2.0**（`/usr/local/Ascend/ascend-toolkit/latest`）；CI 镜像里是 9.1.0，两者的库目录布局差异见「桥接 CANN 的库目录」 |
 | Python / CMake / GCC | 3.12.15 / 3.22.1 / 11.4.0 |
 | OpenCV | **5.0.0**（源码，`WITH_CANN=ON`，`CMAKE_BUILD_TYPE=Release`，**2 组补丁**） |
-| opencv_contrib | **不编**（本文不覆盖 `cv2.cann`）|
 
 ### 前置安装
 
@@ -546,10 +531,9 @@ ls -l "$CANN_DIR/acllib/lib64/libascendcl.so" "$CANN_DIR/lib64/libacl_op_compile
 
 CANN 后端开关 `WITH_CANN=ON`（不是 `BUILD_CANN`）；`-DOPENCV_DOWNLOAD_MIRROR_ID=gitcode` 让 cmake configure 阶段走 gitcode 镜像拉 ADE / IPPICV / TBB。
 
-**三个和 4.14 零补丁版不同的地方**：
+**两个和 4.14 零补丁版不同的地方**：
 
 - `CMAKE_BUILD_TYPE=Release` —— 5.0 用窄 op 头之后 `.text` 已经压到 14.7 MiB，Release 进一步把编译时间也压下来（实测 dnn 模块从 ~50 分钟降到 ~5 分钟）；
-- `BUILD_LIST` 里**没有** `cannops` —— 不编 `opencv_contrib`，所以没有 contrib 侧的 NULL 流补丁（那组补丁是第 3 组，本文用不上）；
 - `-DBUILD_opencv_apps=OFF` —— OpenCV 自带的 `apps/model-diagnostics` 是个**可执行文件**，它要直接链 CANN 的 `libge_compiler.so` / `libgraph.so` / `libgraph_base.so`，而这三个库自身还有一堆没被链进来的依赖（`ge::*`、`ascend_private::protobuf::*`、`absl::*`…）。共享库链接允许留未定义符号（所以 `libopencv_dnn.so` 没事），可执行文件链接不允许 → **链接期报几百条 `undefined reference` 并让整个 `all` 目标失败**。
 
 安装前缀用 `/usr/local/opencv-cann-50`（4.14 零补丁版用 `/usr/local/opencv-cann-414`）：两套 OpenCV 可能落在同一台自托管 runner 上，装到同一个前缀会互相覆盖。
@@ -890,9 +874,8 @@ NPU 与 CPU 的 score 末位差 ~5e-4 —— 同一张图、同一份权重在�
 - **5.x 不存在零补丁路线**：原始 5.0.0 源码在 `WITH_CANN=ON` 下**编译失败**（§1），最少 2 组补丁 / 26 个文件 / +47 行。想要零补丁请用 [4.14.0 那篇](Quick-start-Ascend-NoPatch.md)。
 - **5.0 的招牌特性上不了 NPU**：新图引擎、ONNX Runtime 后端、原生 LLM/VLM 在昇腾上目前都只能 CPU。要用 NPU 推理，必须 `OPENCV_FORCE_DNN_ENGINE=1` 走经典引擎（§10.1）。
 - **经典引擎 + CANN 后端的能力边界**（与 4.x 相同，不是 5.0 引入的）：只吃 **fp32**（连 fp16 都不行）、**拒绝 int8 量化网**（5.0 还把 `Net quantize` 入口删了）、**不支持的层回落 CPU 而不是报错**（所以「上了 NPU」≠「全图在 NPU」）、后端/目标不可再切（`DNN: Can't switch backend from CANN to other`）。
-- **本文不编 contrib**：`cv2.cann.*` 那 23 个经典算子（`cvtColor` / `threshold` / 算术 / `resize` / `crop` …）在本文的路线里**不存在**。要用它们请走主文档（3 组补丁）。
 - **`all_ops.h` 链接窗口是硬约束**：aarch64 的 `R_AARCH64_CALL26/JUMP26` 只有 ±128 MiB 跨度，缩 `.text` 只是缓解、不是保证；5.0 上过这一关只有窄 op 头一条路。
 - **补丁只对 5.0.x 成立**：`cv::MatShape` 是 5.0 引入的类型，4.x 源码树里根本没有它；上游一旦出 5.1/6.0，§6 的脚本会断言失败（这是设计好的失败方式，不是 bug）。
-- **别等上游修 5.x 的 CANN**：上游 CI 里 CANN 只挂在 `opencv_contrib` 的 4.x 分支上，而且是 `category: cann` 标签门控的 opt-in 通道；`opencv/opencv` 自己的 4.x / 5.x PR CI **都没有 CANN 那一格**（§1.4 ②）。所以 5.x 的 CANN 后端在上游是**既不编译、也不报错**的状态 —— §6 这套补丁得自己维护。
+- **别等上游修 5.x 的 CANN**：`opencv/opencv` 自己的 4.x / 5.x PR CI **都没有 CANN 那一格**（§1.4 ②）。所以 5.x 的 CANN 后端在上游是**既不编译、也不报错**的状态 —— §6 这套补丁得自己维护。
 - **CANN 9.2 的裁剪版 `libgraph.so`**：把 CANN 软链指向 `<CANN>/lib64` 而不是 `<CANN>/aarch64-linux/devlib/linux/aarch64/`，否则链接期报 `undefined reference to 'ge::AscendString::operator<(...)'`。这条与 OpenCV 版本无关。
 - **`videoio` 编了但没有编解码器**：源码构建默认不带 FFmpeg/GStreamer；本文未把视频写入列为必过项。

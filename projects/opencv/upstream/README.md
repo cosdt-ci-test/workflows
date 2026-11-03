@@ -16,6 +16,62 @@
 问题 1 与问题 2 互不依赖：1 修编译，2 修链接；2 单独存在时编译仍然是坏的。
 问题 3 与前两个完全正交：即便 1、2 都修好，CANN 后端在 5.x 上也不会被启用。
 
+### 5.x 上 DNN 还能跑到哪些加速器？（读 `net_impl_backend.cpp` 得到的结论）
+
+新图引擎（`mainGraph` 非空，5.x 上恒成立）只放行 **两个后端 + 两个 target**：
+
+| 放行 | 被拒（只打一条 warning，然后按 CPU 处理） |
+|---|---|
+| `DNN_BACKEND_OPENCV`、`DNN_BACKEND_CUDA` | `DNN_BACKEND_CANN`、`DNN_BACKEND_INFERENCE_ENGINE(_NGRAPH)`、`DNN_BACKEND_TIMVX`、`DNN_BACKEND_WEBNN`、`DNN_BACKEND_VKCOM` |
+| `DNN_TARGET_CPU`、`DNN_TARGET_CUDA`/`CUDA_FP16` | `DNN_TARGET_NPU`、`DNN_TARGET_MYRIAD`、`DNN_TARGET_HDDL`、`DNN_TARGET_OPENCL(_FP16)`、`DNN_TARGET_VULKAN`、`DNN_TARGET_FPGA`、`DNN_TARGET_CPU_FP16` |
+
+⇒ **5.x 上只有 CPU 和 CUDA(GPU) 能用**；昇腾 NPU、OpenVINO 的 MYRIAD/HDDL/NPU、
+TimVX、OpenCL、Vulkan 全都进不去。经典引擎是这些后端唯一的挂载点，
+而它在 #29341 之后已被删除。
+
+npu-4 上实测（8 组 backend×target 组合，MobileNetV2 ONNX，120 个 op）：
+
+| 组合 | 引擎实际采用 | 落在 CPU 的 op | 拒绝方 |
+|---|---|---|---|
+| CANN + NPU | b=8 t=0 | 120 | 后端被拒 |
+| CANN + CPU | b=8 t=0 | 120 | 后端被拒 |
+| OPENCV + OPENCL | b=3 t=0 | 120 | target 被拒 |
+| OPENCV + VULKAN | b=3 t=0 | 120 | target 被拒 |
+| OPENCV + CPU_FP16 | b=3 t=0 | 120 | target 被拒 |
+| OPENVINO + MYRIAD | b=1000000 t=0 | 120 | 后端被拒 |
+| CUDA + CUDA | b=5 t=0 | 120 | 后端被拒（本构建无 CUDA） |
+| OPENCV + CPU | b=3 t=0 | 120 | —（正常） |
+
+除纯 CPU 外，**所有加速器组合都塌回 CPU**（`t=0` 即 `DNN_TARGET_CPU`）。
+
+## 为什么 4.x 还有、5.x 没了
+
+CANN 后端是挂在**经典引擎**上的，而经典引擎正是 5.x 主线重构（#26056
+「New dnn engine」起）要换掉的东西：
+
+- **4.x**：只有 `net_impl.cpp`（没有 `net_impl2.cpp`），
+  `net_impl_backend.cpp` 里没有 `if (mainGraph)` 分支 ⇒ `switchToCannBackend()`
+  直接可达；Caffe / Darknet / TF importer 都还在；`op_cann.cpp` 是真实现
+  （329 行，per-layer `initCannOp` 真的在搭 CANN GE 算子）。
+  4.x 那次断裂只是 **GELU 少了个 `initCannOp`**，
+  #26632「dnn/gelu_cann」用 9 行 `CV_Error(StsNotImplemented)` 桩掉。
+  ⇒ 4.x 上 CANN **编译能过、运行时也能用**。
+- **5.0.0**：新旧引擎并存，`EngineType` 还有 `ENGINE_CLASSIC` / `ENGINE_NEW` /
+  `ENGINE_AUTO`，ONNX 仍走经典引擎 ⇒ CANN 可达（实测 124 层 / top-1 372）。
+- **5.x**：经典引擎被整个删掉 ⇒ CANN 悬空。
+
+时间线：
+
+| 变更 | 日期 | 影响 |
+|---|---|---|
+| #26056「New dnn engine」 | 2024-10-16 | 引入新图引擎 + `MatShape` 结构体（组 1 的根因） |
+| #26334「dnn_engine_change」 | 2024-11-08 | 引入 `if (mainGraph)` 分支，拒绝非 CPU 后端 |
+| Darknet cleanup | 2026-04-30 | Darknet importer 删除 |
+| #28678「caffe-importer-cleanup」 | 2026-06-02 | Caffe importer 删除 |
+| **5.0.0 tag** | **2026-06-05** | 经典引擎还在，CANN 可达 |
+| **#29341「disable_engine_classic」**（`49b8f7c03f`） | **2026-06-18** | 删掉 `ENGINE_CLASSIC` 与经典 ONNX importer ⇒ 经典引擎消失，CANN 失去唯一挂载点 |
+| #29474「extra_parsers」 | 2026-10-22 | TF importer 删除；只剩 ONNX + TFLite，且都建新引擎 |
+
 ## 文件
 
 - `issue-1-dnn-cann-matshape.md` —— 问题 1 的上游 issue 草稿
@@ -54,8 +110,14 @@
 ## 历史
 
 - 4.x 时代的同类断裂：issue #26175「CANN build is broken」+ #26631
-  「code compile error with CANN on」，由 PR #26632「dnn: Fix CANN build」修掉
-  （把 `initCannOp` 打成 `CV_Error(Error::StsNotImplemented, "")` 的桩）。
+  「code compile error with CANN on」，由 PR #26632「dnn/gelu_cann」修掉 ——
+  它的改动只有 9 行：给 `GeluFunctor` 补一个 `initCannOp`，里面是
+  `CV_Error(Error::StsNotImplemented, "")`（当时的 CANN toolkit 没有 GELU 算子）。
+  **不是**把整个 CANN 后端打成桩。
+- **4.x 上 CANN 是完整可用的**：4.x 只有经典引擎（没有 `net_impl2.cpp`），
+  `net_impl_backend.cpp` 里也没有 `if (mainGraph)` 分支 ⇒ CANN 直接可达；
+  Caffe / Darknet / TF importer 都还在；`op_cann.cpp` 是真实现（329 行，
+  per-layer `initCannOp` 真的在调 CANN GE 算子）。
 - 上游 5.0.0 到 5.x HEAD 之间，`op_cann.hpp` **一个字节都没改过**
   （4.14.0 与 5.0.0 的 md5 相同）⇒ CANN 被漏掉不是疏忽，是没人碰过。
 - 后端**本身**也没变：`net_cann.cpp` / `op_cann.cpp` / `op_cann.hpp` 在

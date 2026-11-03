@@ -92,6 +92,71 @@ there is no classic engine left to build a network with:
 So every model that can be loaded in 5.x sets `mainGraph`, and the CANN branch
 above is dead code.
 
+### It is not CANN-specific: 5.x has no accelerator left but CUDA
+
+The same two functions gate every other accelerator as well. The new graph
+engine only lets through two back-ends and two targets:
+
+| allowed | rejected (a warning, then the request is treated as CPU) |
+|---|---|
+| `DNN_BACKEND_OPENCV`, `DNN_BACKEND_CUDA` | `DNN_BACKEND_CANN`, `DNN_BACKEND_INFERENCE_ENGINE(_NGRAPH)`, `DNN_BACKEND_TIMVX`, `DNN_BACKEND_WEBNN`, `DNN_BACKEND_VKCOM` |
+| `DNN_TARGET_CPU`, `DNN_TARGET_CUDA` / `CUDA_FP16` | `DNN_TARGET_NPU`, `DNN_TARGET_MYRIAD`, `DNN_TARGET_HDDL`, `DNN_TARGET_OPENCL` / `OPENCL_FP16`, `DNN_TARGET_VULKAN`, `DNN_TARGET_FPGA`, `DNN_TARGET_CPU_FP16` |
+
+Measured on the same build (5.x + the CANN build fix, MobileNetV2 ONNX); the
+"effective" column is the `backend` / `target` the engine finalized with, and
+`cpu ops` is the number of operators that were finalized on the CPU:
+
+```
+combo                | effective      | cpu ops | warning
+---------------------+----------------+---------+--------------------------
+CANN + NPU           | b=8 t=0        | 120     | backend rejected
+CANN + CPU           | b=8 t=0        | 120     | backend rejected
+OPENCV + OPENCL      | b=3 t=0        | 120     | target rejected
+OPENCV + VULKAN      | b=3 t=0        | 120     | target rejected
+OPENCV + CPU_FP16    | b=3 t=0        | 120     | target rejected
+OPENVINO + MYRIAD    | b=1000000 t=0  | 120     | backend rejected
+CUDA + CUDA          | b=5 t=0        | 120     | backend rejected (no CUDA in this build)
+OPENCV + CPU         | b=3 t=0        | 120     | -
+```
+
+Every accelerator combination ends up executing on the CPU. (`t=0` is
+`DNN_TARGET_CPU`.)
+
+### Why 4.x still has a working CANN backend
+
+The CANN backend was hooked onto the *classic* engine, and 4.x was never
+rewritten to the new engine:
+
+* 4.x has only `modules/dnn/src/net_impl.cpp` -- there is no `net_impl2.cpp`,
+  no `mainGraph`, and `net_impl_backend.cpp` has no `if (mainGraph)` branch at
+  all, so `switchToCannBackend()` is reached directly;
+* the Caffe, Darknet and TensorFlow importers are still present in 4.x;
+* `modules/dnn/src/op_cann.cpp` in 4.x is a real implementation (the per-layer
+  `initCannOp()` functions really build CANN GE operators).
+
+The 4.x build break was a much smaller thing: issue #26175 and #26631, fixed
+by #26632 ("dnn/gelu_cann"), whose whole diff is 9 lines -- a
+`GeluFunctor::initCannOp()` that throws `CV_Error(Error::StsNotImplemented, "")`
+because the CANN toolkit had no GELU operator. The CANN backend itself was not
+disabled.
+
+5.0.0 was the last release where both engines coexisted: `EngineType` still
+had `ENGINE_CLASSIC` / `ENGINE_NEW` / `ENGINE_AUTO`, and `readNetFromONNX()`
+still had the classic path. The CANN backend was therefore still reachable
+there (see below).
+
+5.x is where the classic engine disappeared:
+
+| change | date | effect |
+|---|---|---|
+| #26056 "New dnn engine" | 2024-10-16 | the new graph engine and the `MatShape` structure were introduced |
+| #26334 "dnn_engine_change" | 2024-11-08 | the `if (mainGraph)` branch that rejects non-CPU back-ends was added |
+| "Darknet cleanup" | 2026-04-30 | the Darknet importer was removed |
+| #28678 "caffe-importer-cleanup" | 2026-06-02 | the Caffe importer was removed |
+| **5.0.0 tag** | **2026-06-05** | classic engine still present, CANN still reachable |
+| **#29341 "disable_engine_classic"** (`49b8f7c03f`) | **2026-06-18** | `ENGINE_CLASSIC` and the classic ONNX importer were removed -- the classic engine is gone, and with it the only way to reach the CANN backend |
+| #29474 "extra_parsers" | 2026-10-22 | the TensorFlow importer was removed; only ONNX and TFLite remain, and both build the new engine |
+
 ### It used to work
 
 In 5.0.0 the classic engine was still selectable, and the ONNX reader still had
@@ -144,5 +209,14 @@ the way a network is built.
 - [x] 5.0.0 上 CANN 后端可达且真的跑过 NPU（124 层 / top-1 372 /
       NPU 0.91427 vs CPU 0.91480 / 1 ms vs 34 ms）
 - [x] `net_cann.cpp` / `op_cann.cpp` / `op_cann.hpp` 在 5.0.0 与 5.x 之间逐字节相同
+- [x] **不是 CANN 专属**：探针实测 8 组 (backend, target) 组合，除纯 CPU 外
+      全部塌回 CPU（120 个 op 全在 CPU）；5.x 只剩 OPENCV / CUDA 两个后端
+      和 CPU / CUDA 两个 target 可用
+- [x] 4.x 为什么还有：CANN 挂在经典引擎上，而 4.x 从没被新引擎改造过
+      （4.x 没有 `net_impl2.cpp`、`net_impl_backend.cpp` 里没有 `mainGraph`
+      分支、Caffe/Darknet/TF importer 都还在、`op_cann.cpp` 是真实现）；
+      4.x 那次断裂只是 GELU 少了个 `initCannOp`，#26632 用 9 行桩修掉
+- [x] 5.0.0 → 5.x 的时间线（#26056 → #26334 → darknet/caffe 清理 →
+      5.0.0 tag → **#29341 删掉经典引擎** → #29474 删 TF importer）
 - [ ] 上游是否接受「CANN 后端在 5.x 上不可达」这个结论（属于设计决策，
       本 issue 只陈述事实 + 提问，不带补丁）

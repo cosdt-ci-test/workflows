@@ -1,76 +1,60 @@
-# Quick Start（Ascend NPU）
+# RTP-LLM
 
-在单卡 Atlas 900 A2（Ascend 910B）上从源码构建 RTP-LLM 的 Ascend 分支，并用一个 0.6B 稠密模型完成一次端到端推理：源码编译 → wheel 安装 → C++/Python 算子加载 → HTTP 服务 → 一次生成请求。
+RTP-LLM 是阿里云的大模型推理引擎，C++ 引擎加 Python 前端，用 bazel 构建。本文在单张昇腾 NPU 上从源码构建它的 Ascend 分支，安装产出的 wheel，启动 HTTP 服务并完成一次生成请求。
 
-> RTP-LLM 是阿里云的大模型推理引擎（C++ engine + Python 前端，bazel 构建）。本文针对上游 `feature/ascend` 分支——Ascend 适配目前合入在该特性分支上（PR #1481），尚未进入 `main`，官方验证硬件为 Ascend 950。
+Ascend 适配目前在上游的 `feature/ascend` 分支上，`main` 里还没有。本文的命令都在容器内以 root 执行，工作目录统一用 `/root/rtp-llm-test`。
 
 ## 前置条件
 
 ### 硬件
 
-Atlas 900 A2 单卡（Ascend 910B），并按需完成物理机或容器内的设备挂载。
+Atlas **800T** / **900 A2** 训练系列，芯片为 Ascend **910B**。本文示例为单卡。
 
-### 基础软件
+### 软件
 
-在跑本文档**之前**，你的机器上需要已经装好并可用：
-
-- Python 3.10 环境（本仓 lock 全部按 `cp310` 生成），且解释器位于 `/opt/conda310/bin/python3`（上游 `deps/pip.bzl` 与该仓的 bazel 配置都写死了这个路径）
-- 可用的 CANN ≥ 9.1.0（参考[快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html)）
-- 基本编译工具：`git`、`curl`、`gcc/g++` 11、`make`
-
-### 本文档示例使用的版本
-
-**配套机器**：
-
-- **机器类型**：Atlas 900 A2 单卡（Ascend 910B）
-- **操作系统**：Ubuntu 22.04
-
-**配套镜像**：
-
-swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-
-**软件版本**：
-
-| 组件 | 版本 |
+| 类别 | 要求 |
 | --- | --- |
-| Python | 3.10 |
-| CANN | 9.1.0 |
-| PyTorch / torch_npu | 2.9.0+cpu / 2.9.0.post2 |
+| CANN | toolkit 与驱动固件已安装，并可 `source set_env.sh`，9.1.0 或以上 |
+| gcc / g++ | 11 |
+| Python | 3.10，须落在 `/opt/conda310`，见第 2.3 节 |
+| PyTorch | `torch` 2.9.0 的 CPU 构建版 + `torch_npu` 2.9.0.post2，见第 4 节 |
+| Bazel | 6.4.0，由 `bazelisk` 拉起，见第 2.2 节 |
+| 模型 | [Qwen/Qwen3-0.6B](https://huggingface.co/Qwen/Qwen3-0.6B) |
+
+### 本文验证环境
+
+| 项目 | 内容 |
+| --- | --- |
+| 机器 | Atlas 900 A2，Ascend 910B，单卡 |
+| 镜像 | `swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12` |
+| Python | 3.10.12，用发行版自带的 3.10 建 venv 到 `/opt/conda310` |
+| torch / torch_npu | 2.9.0+cpu / 2.9.0.post2 |
 | Bazel | 6.4.0 |
-| RTP-LLM | \<ref>（源码构建） |
-| 模型 | Qwen3-0.6B |
 
-### 检查前置是否满足
+阅读本文前，请先按 [快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html) 准备好 CANN 与驱动。
 
-检查 Python 版本（应指向 `/opt/conda310/bin/python3`）：
+## 1. 加载 CANN 环境
 
-```shell #test id="check-py"
-which python
-python --version
+加载 CANN，并把 `/usr/local/sbin` 和 `/usr/local/bin` 加入 `PATH`。
+
+```shell
+export PATH=/usr/local/sbin:/usr/local/bin:$PATH
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
 ```
 
-输出结果如下：
+## 2. 检查环境是否就绪
 
-```shell #test-result id="check-py" fuzzy='xxx'
-/opt/conda310/bin/pythonxxx
-Python 3.10.xxx
-```
-
-> `xxx` 是版本号与解释器后缀的占位（`python` 或 `python3` 都算通过）。
-
-> 若 `which python` 不是 `/opt/conda310/...`，把该目录放到 `PATH` 最前面：`export PATH=/opt/conda310/bin:$PATH`。路径不能换成别处——bazel 构建阶段取的是写死的 `/opt/conda310/bin/python3`，两者必须一致。
-
-确认能看到 NPU 设备：
+### 2.1 确认 NPU 在线
 
 ```shell
 npu-smi info
 ```
 
-输出为设备列表（型号与数量因机器而异），只要能看到 `910B` 且 `Health` 为 `OK` 即可。
+输出为设备列表，型号与数量因机器而异，至少一张卡且 `Health` 为 `OK` 即可。若提示找不到 `npu-smi`，回到 [快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html) 检查驱动与设备挂载。
 
-### 安装 bazelisk
+### 2.2 安装 bazelisk
 
-构建由 `bazelisk` 拉起，本文固定用 Bazel 6.4.0。镜像里没有预装，先装到 `/usr/local/bin`：
+构建由 `bazelisk` 拉起，Bazel 固定用 6.4.0。发行版通常不带 `bazelisk`，装到 `/usr/local/bin`。
 
 ```shell #test id="install-bazelisk"
 case $(uname -m) in
@@ -95,46 +79,68 @@ bazelisk version | grep -m1 'Build label'
 Build label: 6.4.0
 ```
 
-> 两个变量必须和 `bazelisk` 命令在同一个 shell 里：不指定版本时 `bazelisk` 会去 `www.googleapis.com` 查 `latest`，没外网的机器上直接超时；仓里的 `.bazeliskrc` 只在 `rtp-llm/` 目录内生效。`BAZELISK_BASE_URL` 指向华为云镜像，Bazel 本体（约 60MB）从这里取。
-
-## 获取代码
-
-本文把所有产物放在 `/root/rtp-llm-test` 下（克隆的 `rtp-llm/` 与 `models/`）；换成你自己的目录时，把后文出现的这个前缀一并替换即可。
-
-<!-- 工作流注入的 UPSTREAM_REF（被测分支名）通过这个隐藏的 #test-setup 捕获并注入到下方 clone 命令中 -->
-
-<!--
-```shell #test-setup store="upstream_ref"
-echo "${UPSTREAM_REF}"
+```{admonition} Note
+:class: note
+`USE_BAZEL_VERSION` 与 `BAZELISK_BASE_URL` 要和 `bazelisk` 在同一次调用里生效：不指定版本时 `bazelisk` 会去查 `latest`，国内直连常超时；镜像地址让它从华为云取 Bazel 本体。仓里的 `.bazeliskrc` 只在 `rtp-llm/` 目录内生效。
 ```
--->
 
-克隆 RTP-LLM 并切到被测分支（本仓看护锚定 `feature/ascend`）：
+### 2.3 准备 Python 3.10
 
-```shell #test id="clone-repo" load="upstream_ref>>ref"
-git clone --depth 1 --branch <ref> https://github.com/alibaba/rtp-llm.git
+上游把解释器路径写死成 `/opt/conda310/bin/python3`（`deps/pip.bzl`、`.bazelrc`、`WORKSPACE` 等多处引用），所以 3.10 必须装在这个路径下。用发行版自带的 3.10 建 venv 即可。
+
+```shell #test id="prepare-python310"
+if [ ! -x /opt/conda310/bin/python3 ]; then
+  apt-get update -qq
+  apt-get install -y -qq python3.10 python3.10-venv python3.10-dev
+  python3.10 -m venv /opt/conda310
+  /opt/conda310/bin/python3 -m pip install -q --upgrade pip
+  # //3rdparty/py 的 genrule 直接从这个前缀拷 libpython3.10.so，venv 自身不复制
+  mkdir -p /opt/conda310/lib
+  ln -sf /usr/lib/aarch64-linux-gnu/libpython3.10.so /opt/conda310/lib/libpython3.10.so
+fi
+export PATH=/opt/conda310/bin:$PATH
+python --version
+```
+
+输出结果如下，其中 `xxx` 表示实际的补丁版本号：
+
+```shell #test-result id="prepare-python310" fuzzy='xxx'
+Python 3.10.xxx
+```
+
+```{admonition} Note
+:class: note
+不要用 conda 建这个环境。conda 自带的 `libstdc++` 最高只到 `GLIBCXX_3.4.29`，而编译产物要求 `3.4.30`，加载时会报 `version GLIBCXX_3.4.30 not found`；venv 直接用系统那份库，没有这个问题。
+```
+
+## 3. 获取代码
+
+克隆上游的 `feature/ascend` 分支。
+
+```shell #test id="clone-repo"
+cd /root/rtp-llm-test
+rm -rf rtp-llm
+git clone --depth 1 --branch feature/ascend https://github.com/alibaba/rtp-llm.git
 cd rtp-llm
 echo "branch $(git rev-parse --abbrev-ref HEAD)"
 echo "HEAD $(git log -1 --format=%h)"
 ```
 
-输出结果如下：
+输出结果如下，其中 `xxx` 表示实际 commit 的短哈希：
 
 ```shell #test-result id="clone-repo" fuzzy='xxx'
-branch xxx
+branch feature/ascend
 HEAD xxx
 ```
 
-## 环境准备
+## 4. 适配 aarch64 构建输入
 
-### 适配 aarch64 宿主的构建输入
+上游这套构建输入是按 x86_64 宿主写的：运行时依赖清单、lock 里的直链、bazel 自己的两个 `http_archive` 全都指向 x86 轮子。不改的话 pip 要么直接拒装，要么一路跑到链接阶段才报 `cannot find -ltorch_npu`。**x86 宿主跳过本节。**
 
-上游这份分支的构建输入是按 x86_64 宿主写的，在 aarch64 上直接构建会因为「x86 轮子 + 平台不符」在很靠前的位置失败。下面几处改动把轮子与版本钉到 aarch64 可用的组合；**x86 宿主不需要这一步**。
+```shell #test id="patch-aarch64"
+cd /root/rtp-llm-test/rtp-llm
 
-```shell #test-setup
-cd rtp-llm
-
-# 1) 运行时依赖清单：torch 直链换 aarch64，torch_npu 钉到与本镜像配套的 post2
+# 1) 运行时依赖清单：torch 换 aarch64 直链，torch_npu 钉到与本镜像配套的 post2
 cat > deps/requirements_ascend_x86.txt <<'REQ'
 -r requirements_base.txt
 https://mirrors.aliyun.com/pytorch-wheels/cpu/torch-2.9.0%2Bcpu-cp310-cp310-manylinux_2_28_aarch64.whl
@@ -143,7 +149,7 @@ torchvision==0.24.0
 numpy==1.26.4
 REQ
 
-# 2) lock 里的两条直链同步改写（其余 4400 行是 == + 全平台 hash，aarch64 能命中）
+# 2) lock 里的两条直链同步改写（其余行是版本号 + 全平台 hash，aarch64 能命中）
 mkdir -p /opt/rtp_wheels
 curl -fsSL -o /opt/rtp_wheels/torch-2.9.0+cpu-cp310-cp310-manylinux_2_28_aarch64.whl \
   "https://mirrors.aliyun.com/pytorch-wheels/cpu/torch-2.9.0%2Bcpu-cp310-cp310-manylinux_2_28_aarch64.whl"
@@ -154,28 +160,27 @@ sed -i "s|bd2a257e670ede9fc01c6d76dccdc473040913b8e9328169bf177dbdc38e2484|$SHA_
 sed -i "s|https://gitcode.com/Ascend/pytorch/releases/download/v26.1.0-beta.1-pytorch2.9.0/torch_npu-2.9.0.post3-cp310-cp310-manylinux_2_28_x86_64.whl|https://mirrors.aliyun.com/pypi/packages/97/d8/685fc488350ba63e158620d3ea04367c908456f03a01f9a9cc158fec380b/torch_npu-2.9.0.post2-cp310-cp310-manylinux_2_28_aarch64.whl|" deps/requirements_lock_ascend_x86.txt
 sed -i "s|3d436f74af70089b4320e6dae374641ddfb76712cdd593e67763ded33cf31a2a|727d97f5436161a94035ae00002d657369664e1dd397141db9d8fd54912f346b|" deps/requirements_lock_ascend_x86.txt
 
-# 3) bazel 自己的两个 http_archive（deps/http.bzl）里同样是 x86 直链：
-#    这条漏掉时 pip 阶段全绿，一直到链接阶段才报 `cannot find -ltorch_npu`
+# 3) bazel 自己的两个 http_archive（deps/http.bzl）同样是 x86 直链
 curl -fsSL -o /opt/rtp_wheels/torch_npu-2.9.0.post2-cp310-cp310-manylinux_2_28_aarch64.whl \
   "https://mirrors.aliyun.com/pypi/packages/97/d8/685fc488350ba63e158620d3ea04367c908456f03a01f9a9cc158fec380b/torch_npu-2.9.0.post2-cp310-cp310-manylinux_2_28_aarch64.whl"
 SHA_N=$(sha256sum /opt/rtp_wheels/torch_npu-2.9.0.post2-*.whl | awk '{print $1}')
 test "$SHA_N" = 727d97f5436161a94035ae00002d657369664e1dd397141db9d8fd54912f346b
 sed -i "s|torch-2\.9\.0%2Bcpu-cp310-cp310-manylinux_2_28_x86_64\.whl|torch-2.9.0%2Bcpu-cp310-cp310-manylinux_2_28_aarch64.whl|g" deps/http.bzl
 sed -i -E 's#https://[^"]*torch_npu-2\.9\.0[^"]*manylinux_2_28_x86_64\.whl#https://mirrors.aliyun.com/pypi/packages/97/d8/685fc488350ba63e158620d3ea04367c908456f03a01f9a9cc158fec380b/torch_npu-2.9.0.post2-cp310-cp310-manylinux_2_28_aarch64.whl#g' deps/http.bzl
-#    两个 sha256 不写死：上游改过（torch_npu 那条从 3d436f74 变成 dcdcddbc），改成把当前值读出来当锚点
+#    两个 sha256 不写死：先读出文件里的当前值当锚点，再替换（上游改过这些 hash）
 SHA_OLD_T=$(grep -A1 'name = "torch_cpu_ascend"' deps/http.bzl | sed -n 's/.*sha256 = "\([0-9a-f]\{64\}\)".*/\1/p')
 SHA_OLD_N=$(grep -A1 'name = "torch_npu_ascend"' deps/http.bzl | sed -n 's/.*sha256 = "\([0-9a-f]\{64\}\)".*/\1/p')
 test -n "$SHA_OLD_T" -a -n "$SHA_OLD_N"
 sed -i "s|$SHA_OLD_T|$SHA_T|g" deps/http.bzl
 sed -i "s|$SHA_OLD_N|$SHA_N|g" deps/http.bzl
 
-# 4) wheel 元数据里的 torch_npu 版本（漏了这处，装 wheel 时会把 post2 降级）
+# 4) wheel 元数据里的 torch_npu 版本（漏了这处，装 wheel 时会把 post2 降级成裸 2.9.0）
 sed -i 's/"torch_npu==2\.9\.0"/"torch_npu==2.9.0.post2"/' arch_config/arch_select.bzl
 
-# 5) 上游依赖死结：transformers==5.2.0 与 xgrammar==0.2.5（要求 transformers<5）无法同时满足
+# 5) 上游依赖冲突：transformers==5.2.0 与 xgrammar==0.2.5（要求 transformers<5）无法同时满足
 sed -i 's/^xgrammar==0\.2\.5$/xgrammar==0.2.8/' deps/requirements_base.txt
 
-# 6) 校验：lock 里 aarch64 直链 2 条、x86 直链 0 条、gitcode 0 条、旧 hash 0 条；
+# 6) 校验：lock 里 2 条 aarch64 直链、0 条 x86 直链、0 条 gitcode、0 条旧 hash；
 #    http.bzl 里两个 ascend archive 各 1 条 aarch64 直链
 test "$(grep -c 'manylinux_2_28_aarch64.whl' deps/requirements_lock_ascend_x86.txt)" = 2
 test "$(grep -c 'manylinux_2_28_x86_64.whl' deps/requirements_lock_ascend_x86.txt)" = 0
@@ -186,22 +191,23 @@ test "$(grep -A6 'name = "torch_npu_ascend"' deps/http.bzl | grep -c 'manylinux_
 echo "aarch64 build inputs patched"
 ```
 
-> 第 6 步的六条 `test` 就是判据：`2 / 0 / 0 / 0` 加两条 `1`。若前四条不对，说明 lock 的直链没替换成功；若最后两条不是 `1`，说明 `deps/http.bzl` 还是 x86 直链——这处不影响 pip，只会让 `bazel build` 编译完 1 万多个动作、在链接 `libth_transformer.so` 时才报 `skipping incompatible ... cannot find -ltorch_npu`。`$SHA_T` / `$SHA_N` 为空（轮子没下载到）时 `sed` 会把 hash 替换成空串，第 4 条校验与 `$SHA_N` 那条断言都会拦住。
+输出结果如下：
 
-### 放宽 Ubuntu 默认开启的警告
-
-Ubuntu 的 gcc 默认打开 `-Wformat-security`，叠加仓里的 `-Werror` 会把第三方头文件里的一处 `snprintf` 用法升成硬错误。把它降级为警告（保留提示，不中断构建）：
-
-```shell #test-setup
-cd rtp-llm
-sed -i '/^build:ascend --copt="-D_GLIBCXX_USE_CXX11_ABI=1"$/a build:ascend --copt="-Wno-error=format-security"' .bazelrc
-grep -n "format-security" .bazelrc
+```shell #test-result id="patch-aarch64"
+aarch64 build inputs patched
 ```
 
-### 安装运行时依赖
+```{admonition} Note
+:class: note
+块内末尾六条 `test` 就是判据。前四条管 lock，依次为 `2 / 0 / 0 / 0`；后两条管 `deps/http.bzl`，各为 `1`。少了后两条时 pip 阶段全绿，直到链接 `libth_transformer.so` 才报 `skipping incompatible ... cannot find -ltorch_npu`。
+```
+
+## 5. 安装运行时依赖
+
+按 lock 装依赖，torch 与 torch_npu 的 aarch64 轮子在这一步落地。
 
 ```shell #test id="install-deps"
-cd rtp-llm
+cd /root/rtp-llm-test/rtp-llm
 python -m pip install -r deps/requirements_ascend_x86.txt \
   --index-url https://mirrors.aliyun.com/pypi/simple/ > /tmp/pip-deps.log 2>&1 \
   || { tail -n 60 /tmp/pip-deps.log; exit 1; }
@@ -222,16 +228,39 @@ torchvision 0.24.0
 numpy 1.26.4
 ```
 
-> 装完务必复核这四行：`torch 2.9.0+cpu`、`torch-npu 2.9.0.post2`、`torchvision 0.24.0`、`numpy 1.26.4`。任何一次 `pip install` 漏掉 `--no-deps` 都可能把 `torchvision` 解析到最新版（对应更新的 torch），随后 `import torchvision` 会报 `operator torchvision::nms does not exist`。
+```{admonition} Note
+:class: note
+这四行要逐个对上。之后任何一次 `pip install` 漏掉 `--no-deps`，都可能把 `torchvision` 解析到最新版，`import torchvision` 会报 `operator torchvision::nms does not exist`。
+```
 
-## 构建
+## 6. 构建 wheel
+
+### 6.1 放宽 Ubuntu 默认开启的警告
+
+Ubuntu 的 gcc 默认打开 `-Wformat-security`，叠加仓里的 `-Werror` 会把第三方头文件里的一处 `snprintf` 用法升成硬错误。降级为警告即可，提示保留、构建不中断。
+
+```shell #test id="allow-format-security"
+cd /root/rtp-llm-test/rtp-llm
+if ! grep -q 'Wno-error=format-security' .bazelrc; then
+  sed -i '/^build:ascend --copt="-D_GLIBCXX_USE_CXX11_ABI=1"$/a build:ascend --copt="-Wno-error=format-security"' .bazelrc
+fi
+sed -n '/Wno-error=format-security/p' .bazelrc
+```
+
+输出结果如下：
+
+```shell #test-result id="allow-format-security"
+build:ascend --copt="-Wno-error=format-security"
+```
+
+### 6.2 编译
+
+用 `bazelisk` 构建 wheel，目标 `//rtp_llm:rtp_llm_whl`，`--config=ascend` 选中 Ascend 后端。
 
 ```shell #test id="build"
-cd rtp-llm
+cd /root/rtp-llm-test/rtp-llm
 export USE_BAZEL_VERSION=6.4.0
 export BAZELISK_BASE_URL=https://mirrors.huaweicloud.com/bazel/
-# 钳制并行度：runner 核数高，--jobs=$(nproc) 会因单个 TU 峰值内存过大被 OOM killer 杀掉，
-# 而且报出来的是 signal 9 不是编译错误。本机内存更大可上调。
 bazelisk build //rtp_llm:rtp_llm_whl --config=ascend --jobs=32 > /tmp/build.log 2>&1 \
   && echo "build ok" || { tail -n 80 /tmp/build.log; exit 1; }
 ```
@@ -242,10 +271,15 @@ bazelisk build //rtp_llm:rtp_llm_whl --config=ascend --jobs=32 > /tmp/build.log 
 build ok
 ```
 
-验证 wheel 产物：
+```{admonition} Note
+:class: note
+首次构建要拉取全部外部依赖并编译上万个动作，几十分钟属正常；日志里成片的 `alibaba-aios-dev.oss-cn-hangzhou.aliyuncs.com ... 403 Forbidden` 是噪声，规则表会回退到真实地址。`--jobs` 别开满，单个编译单元峰值内存不小，被 OOM killer 杀掉时报的是 signal 9 而不是编译错误。
+```
+
+确认产物：
 
 ```shell #test id="verify-whl"
-cd rtp-llm
+cd /root/rtp-llm-test/rtp-llm
 ls bazel-bin/rtp_llm/*.whl > /dev/null && echo "whl ok"
 ```
 
@@ -255,14 +289,14 @@ ls bazel-bin/rtp_llm/*.whl > /dev/null && echo "whl ok"
 whl ok
 ```
 
-> - 首次构建要拉取全部 bazel 外部依赖（grpc / abseil / googletest / havenask / protobuf 等）并编译一万多个动作，冷构建 40–90 分钟属正常。
-> - 日志里成片的 `alibaba-aios-dev.oss-cn-hangzhou.aliyuncs.com ... 403 Forbidden` 是**噪声**：仓里的 `bazel/bazel_downloader.cfg` 把所有 github 下载重写到阿里内网 OSS，规则表的第二条会回退到真实地址，下载继续。
-> - 如果 fetch 阶段长时间停在 `Fetching repository @grpc ... (shallow fetch failed, fetching full history)`，是 bazel 的 `--shallow-since` 对很老的 `shallow_since` 退化成全量克隆，见文末「常见问题」。
+## 7. 安装 wheel 并加载算子
 
-## 安装 wheel 并加载算子
+### 7.1 安装 wheel
+
+把产出的 wheel 装进当前解释器。
 
 ```shell #test id="install-whl"
-cd rtp-llm
+cd /root/rtp-llm-test/rtp-llm
 python -m pip install --no-deps --force-reinstall bazel-bin/rtp_llm/*.whl > /tmp/whl-install.log 2>&1 \
   && echo "whl installed" || { tail -n 40 /tmp/whl-install.log; exit 1; }
 ```
@@ -273,30 +307,14 @@ python -m pip install --no-deps --force-reinstall bazel-bin/rtp_llm/*.whl > /tmp
 whl installed
 ```
 
-> `--no-deps` 是必须的：依赖已在上一步按 lock 装好，让 pip 再解析一遍依赖树很可能把 torch 或 torch_npu 换成别的版本。
-
-### 对齐 libstdc++
-
-`libth_transformer.so` 的 RUNPATH 是 `$ORIGIN/../..`，加载器会先命中 `/opt/conda310/lib/libstdc++.so.6`，而 conda 自带的这份只到 `GLIBCXX_3.4.29`，编译产物要 `3.4.30`。换成系统那份（系统库向后兼容，conda 里的 python / pip 不受影响）：
-
-```shell #test-setup
-if [ -e /opt/conda310/lib/libstdc++.so.6 ]; then
-  echo "before: $(strings /opt/conda310/lib/libstdc++.so.6 | grep '^GLIBCXX_' | sort -V | tail -1)"
-  cp -a /opt/conda310/lib/libstdc++.so.6 /opt/conda310/lib/libstdc++.so.6.orig
-  ln -sf /usr/lib/aarch64-linux-gnu/libstdc++.so.6 /opt/conda310/lib/libstdc++.so.6
-  grep -qa 'GLIBCXX_3.4.30' /opt/conda310/lib/libstdc++.so.6 \
-    || { echo "system libstdc++ lacks GLIBCXX_3.4.30"; exit 1; }
-  echo "libstdc++ -> system"
-else
-  echo "/opt/conda310 is not a conda env, libstdc++ untouched"
-fi
+```{admonition} Note
+:class: note
+`--no-deps` 是必须的：依赖已按 lock 装好，让 pip 再解析一遍依赖树很可能把 `torch` 或 `torch_npu` 换成别的版本。
 ```
 
-> `/opt/conda310/lib/libstdc++.so.6` 是 conda 包 `libstdcxx-ng` 装的，Miniconda 安装器把它钉得比较保守（aarch64 上是 11.2.x，最高只到 `GLIBCXX_3.4.29`），为的是这套环境能在老发行版上跑；而 Ubuntu 22.04 的 `libstdc++6` 来自 GCC 12，有 `3.4.30`。`before:` 那行会把 conda 这份的最高版本打出来。
->
-> 若 `/opt/conda310` 是用系统 `python3.10` 建的 venv，这一步自动跳过——venv 不复制 libstdc++，本来用的就是系统那份。
+### 7.2 加载 C++ 算子
 
-自检 C++ 算子是否能加载（注意 `libth_transformer` 必须由 `_load_engine_ops()` 按 `librtp_compute_ops` → `libth_transformer` 的顺序加载，直接 `import libth_transformer` 会在进程退出时崩）：
+自检 wheel 里的 C++ 引擎能否加载：
 
 ```shell #test id="ops-load"
 cd /tmp
@@ -316,15 +334,18 @@ grep -q 'OPS_LOAD_OK' /tmp/ops-load.log && echo "engine ops ok" \
 engine ops ok
 ```
 
-> `libth_transformer.so` 依赖一批带内容 hash 的库（`libarm_compute-*.so`、`libgomp-*.so` 等），它们来自 **torch 自己的 `torch.libs` 目录**，不是漏打包。`import torch` 后这些 SONAME 会进入进程的已加载集合，因此顺序必须是「先 torch、再 engines ops」——`ensure_engine_ops_loaded()` 内部就是这么做的。
+```{admonition} Note
+:class: note
+`libth_transformer.so` 依赖 `torch.libs` 里一批带内容 hash 的库（`libarm_compute-*.so`、`libgomp-*.so` 等），不是漏打包。`import torch` 之后这些 SONAME 才进入进程的已加载集合，所以顺序必须是先 `torch`、再 engine ops，`ensure_engine_ops_loaded()` 内部就是这么做的。也不要在源码树里直接 `import libth_transformer`：cwd 里的源码 `rtp_llm` 会抢在 wheel 之前，进程退出时还可能崩。
+```
 
-## 下载模型
+## 8. 下载模型
 
-本文用一个 0.6B 稠密模型：它是该分支当前唯一声明支持并验证过的模型族（Qwen3）。
+用 0.6B 的稠密模型，Ascend 分支当前声明支持的模型族是 Qwen3。
 
-```shell #test-setup
-cd /tmp
-python -m pip install -q modelscope > /dev/null 2>&1
+```shell #test id="download-model"
+cd /root/rtp-llm-test
+python -m pip install -q modelscope
 # modelscope 收尾时会 import torch，在 torch_npu 环境下析构可能报 Segmentation fault（rc=139），
 # 而下载本身已经完成，所以这里不看 rc，改为校验产物。
 python - <<'PY' > /tmp/model-dl.log 2>&1 || true
@@ -332,17 +353,26 @@ from modelscope import snapshot_download
 snapshot_download('Qwen/Qwen3-0.6B', local_dir='/root/rtp-llm-test/models/Qwen3-0.6B')
 print('model ready')
 PY
-ls /root/rtp-llm-test/models/Qwen3-0.6B/config.json \
-  /root/rtp-llm-test/models/Qwen3-0.6B/*.safetensors > /dev/null
+# modelscope 的依赖解析不能动 torch_npu / torchvision 的版本
 python - <<'PY'
 from importlib.metadata import version
 
-assert version('torch-npu') == '2.9.0.post2'
-assert version('torchvision') == '0.24.0'
+assert version('torch-npu') == '2.9.0.post2', version('torch-npu')
+assert version('torchvision') == '0.24.0', version('torchvision')
 PY
+ls models/Qwen3-0.6B/config.json models/Qwen3-0.6B/*.safetensors > /dev/null
+echo "model ok"
 ```
 
-## 启动服务并调用
+输出结果如下：
+
+```shell #test-result id="download-model"
+model ok
+```
+
+## 9. 启动服务并发一次请求
+
+在 0 号卡上启动 HTTP 服务，端口 `30000`，等 `/health` 就绪后发一条生成请求。
 
 ```shell #test id="serve"
 cd /tmp
@@ -384,17 +414,12 @@ output_len_positive True
 finished True
 ```
 
-> - `/health` 返回的是带引号的 JSON 字符串 `"ok"`，不是 `{"status":"ok"}`。
-> - `output_len` 的具体值取决于采样结果（可能在 `max_new_tokens` 之前遇到 EOS），所以这里只断言「大于 0」，不断言具体 token 数。
-> - 服务在同一个块内启动并回收（`trap ... EXIT`），避免依赖跨块的常驻进程。
+```{admonition} Note
+:class: note
+`/health` 返回的是带引号的 JSON 字符串 `"ok"`，不是 `{"status":"ok"}`。`output_len` 取决于采样结果，可能在 `max_new_tokens` 之前遇到 EOS，所以只断言大于 0。服务在这个块内启动并回收，不依赖跨块的常驻进程。
+```
 
-## 常见问题
+## 10. 更多用法
 
-| 现象 | 原因 | 处理 |
-| --- | --- | --- |
-| `is not a supported wheel on this platform` | 构建输入还是 x86 轮子（未做「适配 aarch64 宿主」一节） | 按该节重写 requirements 与 lock 的两条直链 |
-| fetch 阶段卡在 `@grpc ... full history` | bazel 的 `--shallow-since` 对老时间戳退化成全量克隆 | 等它跑完，或本地预建只含目标 commit 的镜像后按仓 `insteadOf` 指向本地 |
-| `-Werror=format-security` | Ubuntu 默认开启该 warning × 仓里 `-Werror` | 已在「放宽 Ubuntu 默认开启的警告」一节处理；其他 `-Werror=xxx` 同理降级 |
-| `operator torchvision::nms does not exist` | torchvision 版本与 torch 不匹配 | 复核「安装运行时依赖」末尾的四行版本 |
-| `malloc_consolidate(): invalid chunk size` | 绕过顺序直接 `import libth_transformer` | 用 `ensure_engine_ops_loaded()` |
-| `THESE PACKAGES DO NOT MATCH THE HASHES` | lock 里 hash 与下载到的轮子不符 | 重做「适配 aarch64 宿主」第 2 步，确认三个计数为 `2`/`0`/`0` |
+- 上游仓库：[alibaba/rtp-llm](https://github.com/alibaba/rtp-llm)
+- Ascend 分支：[feature/ascend](https://github.com/alibaba/rtp-llm/tree/feature/ascend)

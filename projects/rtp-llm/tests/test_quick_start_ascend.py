@@ -7,17 +7,20 @@ Document under test: ``projects/rtp-llm/docs/Quick-start-Ascend.md``
 ``#test-result`` labels plus ``id=`` / ``store=`` / ``load='x>>y'`` /
 ``fuzzy='xxx'`` parameters).
 
-Scope (single card, Ascend 910B): clone the upstream ``feature/ascend``
-branch -> adapt the aarch64 build inputs (upstream pins x86_64 torches /
-x86 lock direct links / a bare ``torch_npu`` wheel metadata) -> install
-the runtime dependency set -> ``bazelisk build //rtp_llm:rtp_llm_whl``
--> install the wheel -> load the C++ engine ops -> download
-Qwen3-0.6B -> start the HTTP server and issue one generation request.
+Scope (single card, Ascend 910B): install bazelisk and a Python 3.10 venv
+at ``/opt/conda310`` (upstream hardcodes that prefix) -> clone the upstream
+``feature/ascend`` branch -> adapt the aarch64 build inputs (upstream pins
+x86_64 torches / x86 lock direct links / x86 ``http_archive`` entries /
+a bare ``torch_npu`` wheel metadata) -> install the runtime dependency set
+-> ``bazelisk build //rtp_llm:rtp_llm_whl`` -> install the wheel -> load
+the C++ engine ops -> download Qwen3-0.6B -> start the HTTP server and
+issue one generation request.
 
 The Ascend adaptation currently lives on ``feature/ascend`` (upstream
 PR #1481, merged into that feature branch only — ``main`` has no Ascend
 code yet). The workflow pins it via ``fixed_ref``, so the monitor fires
-whenever that branch's tip moves.
+whenever that branch's tip moves; the doc clones the branch by name, so
+the guard and a reader follow the same command.
 
 Run: ``python -m unittest tests.test_quick_start_ascend -v 2>&1``
 
@@ -27,12 +30,6 @@ Environment variables (injected by GitHub workflow
     ``MONITORED_DOC_URL``         Required; GitHub Contents API URL of the
                                   document under test (the engine's monitor
                                   hashes the same URL).
-    ``UPSTREAM_REF``              Required; the doc's hidden
-                                  ``#test-setup store="upstream_ref"`` block
-                                  captures ``$UPSTREAM_REF`` (the pinned
-                                  branch name) into ``captures``, then
-                                  substitutes it into the clone command
-                                  where ``<ref>`` appears.
     ``NPU_READY=true``            Required, otherwise the class is skipped.
                                   End-to-end tests only run on the NPU
                                   runner: local dev machines / normal ubuntu
@@ -110,20 +107,6 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
     _WORK_DIR = '/root/rtp-llm-test'
 
-    # The interpreter has to sit exactly at _PYTHON_PREFIX (upstream
-    # hardcodes it in ~30 places), but *how* it gets there is free. A venv
-    # over Ubuntu's own python3.10 is enough and, unlike Miniconda, does not
-    # shadow the system libstdc++ with conda's older copy: libstdcxx-ng 11.2
-    # tops out at GLIBCXX_3.4.29 while libth_transformer.so (linked against
-    # the manylinux_2_28 torch wheel, GCC 12) requires 3.4.30.
-    _SYSTEM_PY = 'python3.10'
-    _APT_PY_PKGS = ('python3.10', 'python3.10-venv', 'python3.10-dev')
-    # `//3rdparty/py:python_import_lib` copies this name out of the
-    # interpreter prefix; a venv has no lib/ of its own, so it is symlinked
-    # to the one python3.10-dev ships.
-    _PY_IMPORT_LIB = 'libpython3.10.so'
-    _SYSTEM_LIBPY = f'/usr/lib/aarch64-linux-gnu/{_PY_IMPORT_LIB}'
-
     # Ubuntu's ca-certificates-java regenerates this JVM truststore from
     # /etc/ssl/certs on every CA update, i.e. it trusts exactly what curl
     # trusts. Bazel's downloader runs inside a JVM and only reads the JDK's
@@ -133,74 +116,9 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     _JVM_TRUSTSTORE = '/etc/ssl/certs/java/cacerts'
 
     # ----------------------------------------------------------
-    # prepare_environment: CANN env + python 3.10 + build tools
-    #                      + JVM truststore + cwd
+    # prepare_environment: CANN env + build tools + JVM truststore + cwd
+    # (the Python 3.10 venv at _PYTHON_PREFIX is created by the doc itself)
     # ----------------------------------------------------------
-
-    @classmethod
-    def _ensure_python310(cls) -> None:
-        """Make ``/opt/conda310/bin/python3`` a working Python 3.10 venv.
-
-        Upstream hardcodes that prefix (``deps/pip.bzl`` x10, ``.bazelrc``
-        x17, ``WORKSPACE``, ``BUILD``, ``3rdparty/py/BUILD.tpl``), so the
-        interpreter must live exactly there — but a venv over Ubuntu's
-        ``python3.10`` satisfies every consumer (``python_interpreter`` for
-        ``pip_parse``, ``py_runtime``, ``PYTHON_BIN_PATH``, the header
-        symlink genrule) and keeps the system libstdc++ in the search path.
-
-        Order: already present -> apt install python3.10 / -venv / -dev ->
-        venv -> upgrade pip -> expose libpython3.10.so at the prefix.
-        """
-        target = f'{cls._PYTHON_PREFIX}/bin/python3'
-        if os.path.isfile(target):
-            print(f'setup: reusing {target}')
-            return
-
-        system_py = shutil.which(cls._SYSTEM_PY) or (
-            f'/usr/bin/{cls._SYSTEM_PY}'
-            if os.path.isfile(f'/usr/bin/{cls._SYSTEM_PY}') else None
-        )
-        # `-venv` provides ensurepip (without it `-m venv` fails) and `-dev`
-        # provides both the headers sysconfig reports and libpython3.10.so.
-        if system_py:
-            probe = subprocess.run(
-                [system_py, '-c', 'import ensurepip'],
-                capture_output=True, check=False,
-            )
-            if probe.returncode != 0:
-                system_py = None
-        if not system_py:
-            print(f'setup: installing {list(cls._APT_PY_PKGS)}')
-            subprocess.run(['apt-get', 'update', '-qq'], check=True)
-            subprocess.run(
-                ['apt-get', 'install', '-y', '-qq', *cls._APT_PY_PKGS],
-                check=True,
-            )
-            system_py = shutil.which(cls._SYSTEM_PY)
-        if not system_py:
-            raise RuntimeError(
-                f'{cls._SYSTEM_PY} still missing after apt install'
-            )
-
-        print(f'setup: creating venv at {cls._PYTHON_PREFIX} from {system_py}')
-        subprocess.run(
-            [system_py, '-m', 'venv', cls._PYTHON_PREFIX], check=True,
-        )
-        subprocess.run(
-            [target, '-m', 'pip', 'install', '-q', '--upgrade', 'pip'],
-            check=True,
-        )
-
-        lib_dir = f'{cls._PYTHON_PREFIX}/lib'
-        os.makedirs(lib_dir, exist_ok=True)
-        link = f'{lib_dir}/{cls._PY_IMPORT_LIB}'
-        if not os.path.exists(link):
-            if not os.path.exists(cls._SYSTEM_LIBPY):
-                raise RuntimeError(
-                    f'{cls._SYSTEM_LIBPY} missing: is python3.10-dev installed?'
-                )
-            os.symlink(cls._SYSTEM_LIBPY, link)
-        print('setup: venv ready')
 
     @classmethod
     def _ensure_jvm_truststore(cls) -> None:
@@ -253,12 +171,12 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
     @classmethod
     def prepare_environment(cls) -> None:
-        """CANN env + Python 3.10 + build tools + JVM truststore + cwd.
+        """CANN env + build tools + JVM truststore + working directory.
 
-        Everything business-facing (the aarch64 build-input adaptation,
-        the dependency install, ``bazelisk build``, the wheel install,
-        the model download, the server) is in the document itself: those
-        are the steps a reader follows.
+        Everything business-facing is in the document: installing bazelisk
+        and the Python 3.10 venv, the aarch64 build-input adaptation, the
+        dependency install, ``bazelisk build``, the wheel install, the
+        model download and the server are the steps a reader follows.
         """
         # 0) PATH: /opt/conda310/bin first so the doc's bare `python`
         # resolves to 3.10; /usr/local/sbin for npu-smi.
@@ -292,10 +210,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 f'{cls._CANN_SET_ENV_CANDIDATES}) - build will fail'
             )
 
-        # 2) Python 3.10 at the hardcoded prefix.
-        cls._ensure_python310()
-
-        # 3) Build tools.
+        # 2) Build tools.
         missing_pkgs = [
             pkg for tool, pkg in cls._BUILD_TOOLS.items()
             if shutil.which(tool) is None
@@ -308,18 +223,14 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 check=True,
             )
 
-        # 4) JVM truststore for Bazel's Java downloader.
+        # 3) JVM truststore for Bazel's Java downloader.
         cls._ensure_jvm_truststore()
 
-        # 5) Working directory: pinned before run_template() so the doc's
+        # 4) Working directory: pinned before run_template() so the doc's
         # cwd-relative clone/build never lands in the guard checkout.
         os.makedirs(cls._WORK_DIR, exist_ok=True)
         os.chdir(cls._WORK_DIR)
-        versions = subprocess.run(
-            [f'{cls._PYTHON_PREFIX}/bin/python3', '--version'],
-            capture_output=True, text=True, check=False,
-        )
-        print(f'setup: working dir {cls._WORK_DIR} | {versions.stdout.strip()}')
+        print(f'setup: working dir {cls._WORK_DIR}')
 
     # ----------------------------------------------------------
     # test entry

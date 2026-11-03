@@ -34,9 +34,7 @@ def gathered_scalars(torch, device, values):
     local = torch.tensor(values, dtype=torch.float32, device=device)
     gathered = [torch.empty_like(local) for _ in range(world_size)]
     dist.all_gather(gathered, local)
-    if not torch.allclose(gathered[0], gathered[1], rtol=1e-5, atol=1e-6):
-        raise AssertionError(f"HCCL rank mismatch: {[row.tolist() for row in gathered]}")
-    return [row.tolist() for row in gathered]
+    return gathered
 
 
 def parameter_checksum(torch, device, parameters):
@@ -100,7 +98,7 @@ def main():
                      if parameter.requires_grad]
         assert trainable
         ddp_model = DistributedDataParallel(
-            model, device_ids=[local_rank], find_unused_parameters=True,
+            model, device_ids=[local_rank], find_unused_parameters=False,
         )
         ddp_model.train()
         optimizer = torch.optim.AdamW(trainable, lr=2e-4, weight_decay=0.0)
@@ -117,7 +115,10 @@ def main():
         assert rank_texts
         initial = parameter_checksum(torch, device, trainable)
         initial_rows = gathered_scalars(torch, device, list(initial))
-        result["initial_parameter_checksum"] = initial_rows[0]
+        assert torch.allclose(
+            initial_rows[0], initial_rows[1], rtol=1e-5, atol=1e-6
+        ), [row.tolist() for row in initial_rows]
+        result["initial_parameter_checksum"] = initial_rows[0].tolist()
         if rank == 0:
             save("ddp_models_synchronized", True)
 
@@ -140,11 +141,14 @@ def main():
             rows = gathered_scalars(
                 torch, device, [loss.item(), *checksum],
             )
+            assert torch.allclose(
+                rows[0][1:], rows[1][1:], rtol=1e-5, atol=1e-6
+            ), [row.tolist() for row in rows]
             step_metrics.append({
                 "step": step + 1,
-                "rank_local_loss": rows[0][0],
-                "parameters_sum": rows[0][1],
-                "parameters_square_sum": rows[0][2],
+                "rank_local_losses": [row[0].item() for row in rows],
+                "parameters_sum": rows[0][1].item(),
+                "parameters_square_sum": rows[0][2].item(),
             })
             if rank == 0:
                 print("DDP step", step + 1, step_metrics[-1], flush=True)

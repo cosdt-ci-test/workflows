@@ -122,7 +122,9 @@ The `ddp-2` scenario selects the `linux-aarch64-a2-2` runner and mounts both
 DAVINCI devices. It starts two processes with `torch.distributed.run`, creates
 an explicit HCCL process group, trains rank-specific text batches for three DDP
 steps, and gathers parameter checksums from both ranks after DDP synchronization.
-Only rank 0 saves the adapter, and the other slices continue to FSDP2 later.
+Rank-local losses need not match because each rank consumes different text;
+the test requires the post-update parameter checksums to match instead. Only
+rank 0 saves the adapter, and the other slices continue to FSDP2 later.
 The selected scenario appears in the Actions run title, result.json and job summary,
 including when environment setup fails. The `"unsloth"` checkpointing mode uses
 upstream's long-context threshold and is not treated as a performance claim.

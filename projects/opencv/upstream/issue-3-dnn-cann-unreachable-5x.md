@@ -297,6 +297,86 @@ graph once into an OM buffer, launch it once), so the same shape would fit it:
 build the OM once, run it as a single program, fall back to the default engine
 on failure.
 
+### Empirical validation: the classic-engine bridge alone is enough
+
+Before asking upstream to pick a route, we checked whether what is missing is
+the Ascend-side operator knowledge or only the bridge to the new engine's data
+model. It is only the bridge -- and the bridge is one file.
+
+The gate is a single condition. `Net::Impl::setPreferableBackend()`
+(`modules/dnn/src/net_impl_backend.cpp:282`) refuses every non-OpenCV/CUDA
+back-end once the new engine is in use, and reaches the CANN switch only
+otherwise:
+
+```cpp
+    if (mainGraph)
+    {
+        if (backendId == DNN_BACKEND_OPENCV
+    #ifdef HAVE_CUDA
+            || backendId == DNN_BACKEND_CUDA
+    #endif
+            )
+        { ...; return; }
+        CV_LOG_WARNING(NULL, "Back-ends are not supported by the new graph engine for now");
+        preferableBackend = backendId;
+        return;
+    }
+
+    clear();
+    ...
+    else if (backendId == DNN_BACKEND_CANN)
+    {
+    #ifdef HAVE_CANN
+        switchToCannBackend(net);
+```
+
+`mainGraph` is non-null exactly when the model was built by the new graph
+engine's importer. The classic engine's importer -- still in the tree, its
+`Net::Impl` API (`addLayer()`, `connect()`, `registerOutput()`,
+`setInputShape()`) unchanged -- leaves it null. So a PoC that restores only the
+classic importer and the dispatch that selects it, in
+**one file** (`modules/dnn/src/onnx/onnx_importer.cpp`), puts `mainGraph` back
+to null and makes the CANN back-end reachable again. Nothing in `net_cann.cpp`,
+`op_cann.cpp` or any of the 28 `initCann()` implementations has to change.
+
+Measured on an Atlas 900 A2 PODc (Ascend 910B4, CANN 9.2.0, gcc 11.4.0), 5.x
++ the classic-importer PoC, MobileNetV2-12 ONNX (13,964,571 B), both runs
+through the *same* importer and the *same* input:
+
+```
+DNN: switching to CANN backend... (networkID=1)
+DNN/CANN: converting layer Conv_0@Conv2@2 to CANN operator        (x118)
+DNN/CANN: building ge::Graph
+DNN/CANN: converting ge::Graph to OM buffer
+Compile success, model size = 9762434
+DNN/CANN: OM buffer size = 9762434
+Load model to NPU memory
+Create model description
+createInputDataset length = 602112
+```
+
+| | first forward | second forward (pure inference) | top-1 | top-1 probability |
+|---|---|---|---|---|
+| OpenCV CPU | 57.60 ms | 30.97 ms | 549 | 0.051117 |
+| CANN / NPU | 19242 ms (one-off GE -> OM compile + load) | **0.82 ms** | 549 | 0.050227 |
+
+`npu-smi info` during the run:
+
+```
+| NPU | Chip | Process id | Process name | Process memory(MB) |
+| 0   | 0    | 24183      | cann_e2e     | 108                |
+```
+
+Each back-end's second forward is bit-identical to its own first one
+(`rerun_diff = 0`). The residual difference between the two back-ends (max abs
+0.045 on the logits, top-1 probability 0.00089 apart) is the expected
+fp16-vs-fp32 difference of the NPU.
+
+So on 5.x the CANN back-end is not broken, and the Ascend operator layer does
+not have to be rewritten: the whole model still converts into a single OM and
+runs on the NPU in ~0.8 ms -- as long as the CANN hooks stay wired to the
+classic engine's data model, which is what they were written for.
+
 ### Related work
 
 * #25025 "Introducing non-CPU HAL for OpenCV 5+" -- the umbrella design
@@ -319,6 +399,12 @@ on failure.
    new engine's executor model expected? The former can reuse `op_cann.cpp` and
    the 28 `initCann()` implementations; the latter is a rewrite of every
    operator, of the size of `modules/dnn/src/cuda4dnn/` (103 files).
+4. Would re-enabling the classic engine path be acceptable as an interim
+   measure? The classic engine is still in the tree and only the ONNX importer
+   and its dispatch were removed; putting the classic importer back is a
+   one-file change and it makes the CANN back-end work again (measured above:
+   118 layers -> one OM -> 0.82 ms on the NPU). The alternative is to write
+   the whole-model CANN bypass directly into the new engine.
 ```
 
 ---
@@ -389,5 +475,21 @@ on failure.
       #27402，没有任何一条讲 5.x 的 CANN 编译失败或后端不可达；
       搜 `disable_engine_classic` / `DNN_BACKEND_CANN` / `5.x accelerator`
       也都没有命中。
+- [x] **实测验证方案 B 的桥足够**：在 npu-4（910B4 / CANN 9.2.0）上做了
+      「只恢复经典 importer + 调度」的 PoC（**一个文件**
+      `modules/dnn/src/onnx/onnx_importer.cpp`），`net_cann.cpp` /
+      `op_cann.cpp` / 28 个 `initCann` 一行未改 ⇒ CANN 后端重新可达且
+      **真跑在 NPU 上**：
+      - 118 个层转成 CANN 算子 → GE 图 → OM（9,762,434 B）→ 装载上卡 →
+        `createInputDataset` → `aclmdlExecute`
+      - 纯推理 **0.82 ms** vs CPU 30.97 ms（**37.6×**）；首次 forward 的
+        19.2 s 是一次性 GE→OM 编译，不是推理
+      - `npu-smi info` 抓到进程：`NPU 0 | pid 24183 | cann_e2e | 108 MB`
+      - CPU 与 NPU top-1 同为 549，概率差 0.00089（fp16 vs fp32 的正常差），
+        各自二次 forward 逐位相同（`rerun_diff = 0`）
+      ⇒ **缺的确实只是桥（`mainGraph` 非空与否），不是昇腾侧的算子知识**
+- [x] 定位到闸门只有一处：`Net::Impl::setPreferableBackend()`
+      （`net_impl_backend.cpp:316`）的 `if (mainGraph)` —— `mainGraph` 为空
+      （经典 importer 导入）才会走到 `switchToCannBackend()`
 - [ ] 上游是否接受「CANN 后端在 5.x 上不可达」这个结论（属于设计决策，
       本 issue 只陈述事实 + 提问，不带补丁）

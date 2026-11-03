@@ -141,6 +141,37 @@ TimVX / VkCom / WebNN / OpenVINO 都还停在 `BackendWrapper` 形态
 而 CANN 后端**本身就已经是整模型语义**（编一次 OM、整体启动一次），
 所以它天然适配这条旁路：编一次 OM → 当成一个 program 跑 → 失败回落默认引擎。
 
+### 实测：方案 B 的桥修好就能触发 NPU 运行（2026-11-04，npu-4）
+
+在 npu-4 上做了「**只恢复经典 importer + 调度**」的 PoC 来回答
+「补上桥之后是不是真能跑上卡」：
+
+- **只改一个文件**：`modules/dnn/src/onnx/onnx_importer.cpp`
+  （5.0.0 的经典 importer + 一个把 `engine==3` 映射到经典引擎的调度）
+- `net_cann.cpp` / `op_cann.cpp` / 28 个 `initCann` **一行未改**
+- 闸门只有一处：`Net::Impl::setPreferableBackend()`
+  （`net_impl_backend.cpp:316`）的 `if (mainGraph)` ——
+  `mainGraph` 为空（经典 importer 导入的模型）才会走到 `switchToCannBackend()`
+
+结果（MobileNetV2-12 ONNX，5.x + 补丁 + PoC）：
+
+| | 首次 forward | 二次 forward（纯推理） | top-1 | top-1 概率 |
+|---|---|---|---|---|
+| OpenCV CPU | 57.60 ms | 30.97 ms | 549 | 0.051117 |
+| CANN / NPU | 19,242 ms（一次性 GE→OM 编译+装载） | **0.82 ms** | 549 | 0.050227 |
+
+- 118 个层转成 CANN 算子 → GE 图 → OM（9,762,434 B）→ 装载上卡 →
+  `createInputDataset` → `aclmdlExecute`
+- `npu-smi info` 抓到进程：`NPU 0 | pid 24183 | cann_e2e | 108 MB`
+- 两次都走**同一个 importer、同一个输入**；各自二次 forward 逐位相同
+  （`rerun_diff = 0`）；CPU 与 NPU 的 logits 最大绝对差 0.045（fp16 vs fp32）
+
+⇒ **缺的确实只是桥（`mainGraph` 空/非空），不是昇腾侧的算子知识。**
+经典引擎那条路今天就能用，代价是一个文件；把它移植进新引擎是上游的路线选择。
+
+PoC 代码在 fork 的 `poc/classic-bridge` 分支：
+`Devin-DC-Huang/opencv` → `poc/cann_classic_bridge_e2e.cpp`
+
 ## 上游现状（2026-11-03 核对）
 
 - **没有重复 issue**：GitHub 搜索 `repo:opencv/opencv` 标题含 CANN 的共 25 条，
@@ -219,3 +250,4 @@ CANN 要跟上，形态大概率是 #29726 那种整模型旁路。
 | 上游 5.x HEAD + 问题 1 的补丁 | 构建 + 链接成功，`libopencv_dnn.so.5.1.0` 产出，0 编译错 / 0 重定位错 |
 | 5.0.0 + 补丁（经典引擎） | 端到端 NPU 推理通过：124 层转 CANN 算子，top-1 372，NPU 0.91427 vs CPU 0.91480，1 ms vs 34 ms |
 | 5.x + 补丁（ONNX） | 推理能跑，但全部 `-> CPU`，NPU/CPU 耗时比 1.00 ⇒ 后端没被启用（问题 3） |
+| 5.x + 补丁 + **恢复经典 importer 的 PoC**（一个文件） | **端到端 NPU 推理通过**：118 层转 CANN 算子 → OM 9,762,434 B → 装载上卡 → 纯推理 **0.82 ms** vs CPU 30.97 ms（37.6×），top-1 同为 549，`npu-smi` 抓到 `cann_e2e` 进程在 NPU 0（108 MB） |

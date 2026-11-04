@@ -20,6 +20,7 @@ on:
           - continued-pretrain
           - inference-extended
           - grpo
+          - vllm-ascend
           - ddp-2
           - fsdp2-2
 
@@ -32,7 +33,7 @@ concurrency:
 
 jobs:
   qwen3-lora:
-    if: inputs.scenario != 'ddp-2' && inputs.scenario != 'fsdp2-2'
+    if: inputs.scenario != 'ddp-2' && inputs.scenario != 'fsdp2-2' && inputs.scenario != 'vllm-ascend'
     runs-on: linux-aarch64-a2-1
     timeout-minutes: 60
     defaults:
@@ -196,6 +197,76 @@ jobs:
             python -m torch.distributed.run --standalone --nproc_per_node=2 --master_port=29601 projects/unsloth/qwen3_fsdp2_2card.py --phase train 2>&1 | tee output/fsdp2-train.log
             python -m torch.distributed.run --standalone --nproc_per_node=2 --master_port=29601 projects/unsloth/qwen3_fsdp2_2card.py --phase resume 2>&1 | tee output/fsdp2-resume.log
           fi
+      - name: Record exact outcome
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          mkdir -p output
+          python projects/unsloth/report.py
+          cat output/result.json
+
+  qwen3-vllm-ascend:
+    if: inputs.scenario == 'vllm-ascend'
+    runs-on: linux-aarch64-a2-1
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    container:
+      image: swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/vllm-ascend/vllm-ascend:v0.23.0
+      options: >-
+        --privileged --shm-size=16g
+        --device=/dev/davinci0
+        --device=/dev/davinci_manager --device=/dev/devmm_svm --device=/dev/hisi_hdc
+        --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
+        --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
+        --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
+        --volume=/data/ci-cache/pip:/root/.cache/pip
+        --volume=/data/ci-cache/modelscope/unsloth:/root/.cache/modelscope
+    env:
+      TEST_SCENARIO: ${{ inputs.scenario }}
+      ASCEND_RT_VISIBLE_DEVICES: '0'
+      PIP_INDEX_URL: https://pypi.tuna.tsinghua.edu.cn/simple
+      PIP_DEFAULT_TIMEOUT: '120'
+      HF_ENDPOINT: https://hf-mirror.com
+      HF_HUB_DISABLE_XET: '1'
+      MODELSCOPE_CACHE: /root/.cache/modelscope
+      PYTHONUNBUFFERED: '1'
+      TOKENIZERS_PARALLELISM: 'false'
+      UNSLOTH_VLLM_STANDBY: '0'
+      VLLM_WORKER_MULTIPROC_METHOD: spawn
+      UNSLOTH_REF: 4089c57a82c13fcb96c4b9d71b67e32a75808763
+      ZOO_REF: 97153adb58d7f703aca65b44e86b289b58516cbf
+    steps:
+      - uses: actions/checkout@v6
+      - name: Checkout Unsloth
+        uses: actions/checkout@v6
+        with:
+          repository: unslothai/unsloth
+          ref: ${{ env.UNSLOTH_REF }}
+          path: upstream/unsloth
+      - name: Checkout Unsloth Zoo
+        uses: actions/checkout@v6
+        with:
+          repository: unslothai/unsloth-zoo
+          ref: ${{ env.ZOO_REF }}
+          path: upstream/unsloth-zoo
+      - name: Install Unsloth on the vLLM-Ascend image
+        run: |
+          set -eo pipefail
+          source /usr/local/Ascend/ascend-toolkit/set_env.sh
+          mkdir -p output
+          npu-smi info
+          python projects/unsloth/install_dependencies.py --vllm-image
+          python -m pip install --no-deps ./upstream/unsloth-zoo ./upstream/unsloth
+          python -m pip freeze | tee output/packages.txt
+      - name: Compare native and Unsloth vLLM inference
+        run: |
+          set -eo pipefail
+          source /usr/local/Ascend/ascend-toolkit/set_env.sh
+          python projects/unsloth/qwen3_vllm_ascend.py --phase native 2>&1 | tee output/vllm-native.log
+          python projects/unsloth/qwen3_vllm_ascend.py --phase unsloth 2>&1 | tee output/vllm-unsloth.log
       - name: Record exact outcome
         if: always()
         env:

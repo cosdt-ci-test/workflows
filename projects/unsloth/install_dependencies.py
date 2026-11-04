@@ -3,6 +3,7 @@ import pathlib
 import subprocess
 import sys
 import tomllib
+from importlib.metadata import PackageNotFoundError, version
 
 from packaging.requirements import Requirement
 
@@ -24,16 +25,31 @@ for raw in requirements:
     if name not in excluded and (req.marker is None or req.marker.evaluate()):
         selected.append(raw)
 constraints = pathlib.Path("output/constraints.txt")
-constraints.write_text(
-    "torch==2.9.0\ntorch_npu==2.9.0.post2\ntransformers==4.57.6\n"
-    "trl==0.22.2\npeft==0.18.0\ndatasets==4.3.0\n"
+common_pins = "transformers==4.57.6\ntrl==0.22.2\npeft==0.18.0\ndatasets==4.3.0\n"
+if sys.argv[1:] == ["--vllm-image"]:
+    # Keep the matched vLLM image's binary stack, including its NumPy ABI.
+    stack = {name: version(name) for name in (
+        "torch", "torch-npu", "triton-ascend", "numpy", "vllm", "vllm-ascend",
+    )}
+    for name in ("triton", "torchvision", "torchaudio"):
+        try:
+            stack[name] = version(name)
+        except PackageNotFoundError:
+            pass
+    assert stack["vllm"] == stack["vllm-ascend"] == "0.23.0", stack
+    stack_pins = "".join(f"{name}=={installed}\n" for name, installed in stack.items())
+    stack_requirements = ["vllm", "vllm-ascend"]
+elif not sys.argv[1:]:
     # Triton-Ascend 3.2.2 requires NumPy 1.26.4. Arrow 21 satisfies
     # datasets 4.3.0's >=21 floor while retaining NumPy 1.x support.
-    "numpy==1.26.4\npyarrow==21.0.0\n"
-)
+    stack_pins = "torch==2.9.0\ntorch_npu==2.9.0.post2\nnumpy==1.26.4\npyarrow==21.0.0\n"
+    stack_requirements = []
+else:
+    raise SystemExit("Expected no arguments or --vllm-image")
+constraints.write_text(common_pins + stack_pins)
 subprocess.run(
     [sys.executable, "-m", "pip", "install", "-c", str(constraints),
-     *sorted(set(selected)), "modelscope==1.37.0"],
+     *sorted(set(selected)), *stack_requirements, "modelscope==1.37.0"],
     check=True,
 )
 # The non-quantized loader still imports Linear4bit for type checks.
@@ -51,11 +67,15 @@ subprocess.run(
     check=True,
 )
 # A successful pip exit does not prove binary imports work together.
+# The training image needs the exact NumPy/Arrow pair; the vLLM image keeps
+# its own NumPy and still has to import Arrow and construct a Dataset.
+data_version_check = (
+    "assert numpy.__version__ == '1.26.4'; assert pyarrow.__version__ == '21.0.0'; "
+    if not stack_requirements else ""
+)
 subprocess.run(
     [sys.executable, "-c",
-     "import numpy, pyarrow, datasets; "
-     "assert numpy.__version__ == '1.26.4'; "
-     "assert pyarrow.__version__ == '21.0.0'; "
+     "import numpy, pyarrow, datasets; " + data_version_check +
      "assert datasets.Dataset.from_dict({'text': ['dependency check']})[0]['text'] == 'dependency check'; "
      "print('Data dependencies OK:', numpy.__version__, pyarrow.__version__, datasets.__version__)"],
     check=True,

@@ -67,7 +67,8 @@ Select a scenario when dispatching the same workflow:
 | `full-finetune` | Train every model parameter in BF16, then reload the saved model in a clean process | Passed in run #13 |
 | `continued-pretrain` | Train raw text across the full sequence with LoRA on model and embedding outputs | Passed in run #15 |
 | `inference-extended` | Run mixed-length padded batches and a custom stopping criterion | Passed in run #16 |
-| `grpo` | Generate groups, score rewards, update the LoRA policy, then save, reload and infer | Awaiting NPU validation |
+| `grpo` | Generate groups, score rewards, update the LoRA policy, then save, reload and infer | Passed without vLLM in run #22 |
+| `vllm-ascend` | Compare native vLLM-Ascend generation with Unsloth fast generation and a LoRA request | Awaiting NPU validation |
 | `ddp-2` | Run two ranks with explicit HCCL, synchronized LoRA updates and rank-0 adapter save | Passed in run #18 |
 | `fsdp2-2` | Run two-rank Accelerate FSDP2, save step 1, then resume in new processes | Passed in run #20 |
 
@@ -151,6 +152,21 @@ Before backward, it records each completion's EOS status, advantage, and
 active loss-token count, plus how many tokens the old masking rule would keep
 for the same rollout. The non-zero gradient and weight-update checks still apply.
 
+[Run #22](https://github.com/cosdt-ci-test/workflows/actions/runs/41834043814)
+passed on one Ascend910B4. The old mask would have excluded all 128 completion
+tokens in the first batch. With masking off, all three steps produced non-zero
+gradients, 392 LoRA tensors changed, and adapter save, reload and generation passed.
+
+The `vllm-ascend` scenario uses the repository's dedicated vLLM-Ascend 0.23.0
+image and keeps its matched Torch, torch_npu, Triton and NumPy packages.
+One process loads Qwen3-0.6B in BF16 with native vLLM and generates on NPU.
+A separate process loads the same model via Unsloth's `fast_inference=True`,
+generates without an adapter, then saves and reloads a probe LoRA through
+Unsloth and calls `fast_generate` with the LoRA request. It checks the returned
+adapter ID and requires a change in generated tokens or first-token log
+probability. The probe weights are synthetic and this run does not train or
+test GRPO rollouts, standby mode, or throughput.
+
 The `ddp-2` scenario selects the `linux-aarch64-a2-2` runner and mounts both
 DAVINCI devices. It starts two processes with `torch.distributed.run`, creates
 an explicit HCCL process group, trains rank-specific text batches for three DDP
@@ -207,6 +223,10 @@ gh workflow run unsloth-npu-example.yml --repo cosdt-ci-test/workflows --ref fea
 
 ```shell
 gh workflow run unsloth-npu-example.yml --repo cosdt-ci-test/workflows --ref feat/unsloth-adapt -f scenario=grpo
+```
+
+```shell
+gh workflow run unsloth-npu-example.yml --repo cosdt-ci-test/workflows --ref feat/unsloth-adapt -f scenario=vllm-ascend
 ```
 
 ```shell

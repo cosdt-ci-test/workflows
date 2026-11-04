@@ -109,6 +109,8 @@ Atlas 900 A2 / A3 训练系列产品或 Ascend 950 系列，已挂载 `/dev/davi
 | Python / CMake / GCC | 3.12.15 / 3.22.1 / 11.4.0 |
 | OpenCV | **4.14.0**（源码，`WITH_CANN=ON`，`CMAKE_BUILD_TYPE=Release`）—— 4.x 的末代 |
 
+> **本文的验证状态（2026-11-04）**：配套守护脚本 `projects/opencv-nopatch/tests/test_quick_start_ascend_nopatch.py` 在 npu-4 / 910B4 / CANN 9.2.0 上把本文**从头到尾跑了一遍**（22 个步骤：apt-get 依赖 → clone 4.14.0 → 确认零补丁 → CANN 库桥接 → cmake configure → Release 编译安装 → 校验产物与 `.text` → 6 个 CPU quickstart → CANN/NPU 推理），**全部通过**，整轮 1522.6 s。零补丁是真的（`git status --porcelain` 输出 0 行）、推理是真的上卡（三行 CANN 后端标记齐全 + NPU 与 CPU top-1/分数一致）。
+
 ### 前置安装
 
 确认能看到 NPU 设备：
@@ -335,6 +337,8 @@ xxx
 > 对照：4.11.0 同参数是 `.text` = 54,529,328 B（52.0 MiB）—— 4.14.0 多出的 ~1.3 MiB 就是第 28 个 CANN TU（`reduce_layer.cpp`）展开 `all_ops.h` 的代价。
 >
 > 换 CANN 9.2.0 复测（npu-4 / 910B4 / gcc 11.4 / Release -O3，同一份 4.14.0 源码、零补丁）：`.text` = **56,123,568 B（≈53.5 MiB）**、`Total` = 77,331,307 B、库文件 98,304,552 B —— 与 9.1.0 相差 ~0.2 MiB（CANN 头文件版本差异），离 128 MiB 窗口的余量不变。
+>
+> **2026-11-04 在 npu-4 上跑完整份文档的 doc-test（22 个步骤全绿，含零补丁构建 + NPU 推理）再测一遍**：`.text` = **56,123,568 B —— 与上一次逐字节相同**，`Total` = 77,336,380 B、库文件 98,308,672 B（后两个比上一轮大 ~4~5 KB，是链接期符号表 / 节名的抖动，不影响 `.text`）。也就是说「4.14.0 + Release 不用窄 op 头」这条结论在**两次独立构建**上都成立。
 
 ```shell #test id="np-opencv-dnn-text-size"
 size -A /usr/local/opencv-cann-414/lib/libopencv_dnn.so.4.14.0 | awk '$1==".text" || $1=="Total"'
@@ -751,6 +755,8 @@ npu/cpu time ratio: xxx
 > 首次 forward 含 GE 图编译（`converting ge::Graph to OM buffer`），约 0.5~1 分钟出 `Compile success, model size = ...`；进程内二次 forward 约 1ms —— 脚本的 `npu forward ms` 量的就是这一次（第二次 forward 命中 `net_cann.cpp:107-108` 的 `if (netWasConverted && netWasAllocated) return;`，直接复用已编译的 OM，不再重跑后端初始化）。
 >
 > 实测（4.14.0 + CANN 9.2.0 / 910B4 / npu-4）：GE 图编译 **36.2 s**，产出的 OM 模型 **9,763,442 B**；二次 forward **1 ms**，同一份输入的 CPU 对照 **36 ms**（比值 ≈ 48×）。这两个数**只作参考**，脚本不对它们设阈值（CI runner 的 CPU 型号和核数不固定）。
+>
+> 2026-11-04 在 npu-4 上跑完整份文档的 doc-test 又测了一遍（这次是从头 clone + 编译 + 安装，不是复用上一轮的产物）：GE 图编译 **36.458 s**、OM 模型 **9,762,146 B**、二次 forward **1 ms**、CPU 对照 **33 ms**（比值 **45.11×**），top-1 = **372**、NPU 分数 **0.9142661690711975**、CPU 分数 **0.9148015975952148**（分差 0.0005，远小于脚本的 0.01 容差）—— 与上一轮的 0.91427 / 0.91480 一致到小数点后 4 位。整轮 doc-test 耗时 1522.6 s（25.4 min，其中编译占绝大多数）。
 
 ### 怎么证明这次真的跑在 NPU 上
 

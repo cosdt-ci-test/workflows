@@ -36,7 +36,10 @@ if sys.argv[1:] == ["--vllm-image"]:
             stack[name] = version(name)
         except PackageNotFoundError:
             pass
-    assert stack["vllm"] == stack["vllm-ascend"] == "0.23.0", stack
+    # The Ascend image builds vLLM with VLLM_TARGET_DEVICE=empty.
+    # Accept that build but keep its full version in the pip constraints.
+    if stack["vllm"] not in {"0.23.0", "0.23.0+empty"} or stack["vllm-ascend"] != "0.23.0":
+        raise SystemExit(f"Unexpected vLLM-Ascend image versions: {stack}")
     stack_pins = "".join(f"{name}=={installed}\n" for name, installed in stack.items())
     stack_requirements = ["vllm", "vllm-ascend"]
 elif not sys.argv[1:]:

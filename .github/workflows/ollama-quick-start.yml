@@ -1,6 +1,6 @@
 # Ollama quick start guard - project thin trigger.
-# The shared engine resolves the official upstream release and supplies
-# UPSTREAM_REF; the fixture applies the checked-out CANN patch to that ref.
+# Follow the fork's main branch through the shared template's UPSTREAM_REF.
+# The quick-start installs that resolved source directly without a patch.
 name: ollama-quick-start
 
 concurrency:
@@ -26,9 +26,9 @@ jobs:
       container_options: '--volume /data/ci-cache/ollama:/ollama-cache'
       # Shared test-job budget for preparation, native build and inference.
       timeout_minutes: 240
-      upstream_repo: ollama/ollama
+      upstream_repo: lltiaor/ollama
       doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/ollama/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
       doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/ollama/docs/Quick-start-Ascend.md
       # cwd: projects/ollama; foreground service readiness and cleanup live
-      # in the fixture, alongside source/patch SHA and NPU evidence checks.
+      # in the fixture, alongside source SHA, fork provenance and NPU evidence.
       test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1

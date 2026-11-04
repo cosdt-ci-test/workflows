@@ -1,10 +1,11 @@
-"""Build the engine-selected Ollama release with CANN and run the user guide.
+"""Build the pinned Ollama Ascend fork and run the user guide.
 
 MONITORED_DOC_URL fetches the document at the triggering commit through the
-base class. UPSTREAM_REF must be a release tag; the source, embedded version
-and running server must agree with it. NPU_READY=true enables the hardware
-test. Waiting, cache validation and process-group cleanup belong here; the
-guide starts a normal foreground server in a separate terminal.
+base class. UPSTREAM_REF and the cloned source must resolve to the same fork
+commit; the embedded version uses that same ref.
+NPU_READY=true enables the hardware test. Waiting, cache validation and
+process-group cleanup belong here; the guide starts a normal foreground server
+in a separate terminal.
 """
 
 from __future__ import annotations
@@ -28,13 +29,15 @@ from pathlib import Path
 
 from workflows.markdown_doc_test_base import MarkdownDocTestBase, SetupCommand, TestCommand
 
-PROJECT = Path(__file__).resolve().parents[1]
-
 MODEL_FILE = 'qwen2.5-0.5b-instruct-q4_0.gguf'
 MODEL_SHA256 = '7671c0c304e6ce5a7fc577bcb12aba01e2c155cc2efd29b2213c95b18edaf6ed'
 MODEL_SIZE = 428730208
 MODEL_NAME = 'qwen2.5-ascend'
 BASE_URL = 'http://127.0.0.1:11434'
+
+SOURCE_REPO = 'lltiaor/ollama'
+SOURCE_REPO_URL = f'https://github.com/{SOURCE_REPO}.git'
+SOURCE_BRANCH = 'main'
 
 
 def sha256(path: Path) -> str:
@@ -49,12 +52,6 @@ def valid_model(path: Path) -> bool:
         if handle.read(4) != b'GGUF':
             return False
     return sha256(path) == MODEL_SHA256
-
-
-def release_version(ref: str) -> str:
-    if not re.fullmatch(r'v\d+\.\d+\.\d+(?:[-.][A-Za-z0-9.-]+)?', ref):
-        raise AssertionError(f'Expected an official release tag, got {ref!r}')
-    return ref.removeprefix('v')
 
 
 def inference_evidence(response: dict, loaded: dict, log: str) -> dict:
@@ -93,16 +90,17 @@ def inference_evidence(response: dict, loaded: dict, log: str) -> dict:
 
 def ensure_go(cache: Path) -> None:
     """Provision a documented prerequisite in the stripped-down runner image."""
+    version = 'go1.26.10'
+    required = tuple(map(int, version.removeprefix('go').split('.')))
     executable = shutil.which('go')
     if executable:
         result = subprocess.run([executable, 'version'], capture_output=True, text=True, check=True)
-        match = re.search(r'go(\d+)\.(\d+)', result.stdout)
-        if match and tuple(map(int, match.groups())) >= (1, 26):
+        match = re.search(r'go(\d+)\.(\d+)\.(\d+)', result.stdout)
+        if match and tuple(map(int, match.groups())) >= required:
             return
     arch = {'aarch64': 'arm64', 'arm64': 'arm64', 'x86_64': 'amd64'}.get(platform.machine())
     if platform.system() != 'Linux' or not arch:
         raise RuntimeError('The CANN quick start requires Linux arm64 or amd64')
-    version = 'go1.26.9'
     target = cache / 'toolchains' / f'{version}-{arch}'
     if not (target / 'go' / 'bin' / 'go').is_file():
         with urllib.request.urlopen('https://go.dev/dl/?mode=json&include=all', timeout=60) as response:
@@ -140,7 +138,9 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         self.server_log = None
         self.addCleanup(self.post_process)
         self.ref = os.environ.get('UPSTREAM_REF', '')
-        self.version = release_version(self.ref)
+        if not re.fullmatch(r'[A-Za-z0-9._/-]+', self.ref):
+            raise AssertionError(f'Invalid or unset {SOURCE_REPO} ref: {self.ref!r}')
+        self.version = self.ref.removeprefix('v')
         self.cache = Path(os.environ.get('OLLAMA_TEST_CACHE', '/ollama-cache')).resolve()
         for name in ('downloads', 'models', 'toolchains', 'go-build', 'go-mod', 'ccache'):
             (self.cache / name).mkdir(parents=True, exist_ok=True)
@@ -172,9 +172,6 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         for tool in ('git', 'curl', 'gcc', 'g++', 'make'):
             if not shutil.which(tool):
                 raise AssertionError(f'Missing build prerequisite: {tool}')
-        # This performs the guide's explicit manual patch-download step, using
-        # bytes from the triggering checkout rather than a moving branch URL.
-        shutil.copyfile(PROJECT / 'patches' / 'ollama-cann.patch', self.work / 'ollama-cann.patch')
         cached = self.cache / 'downloads' / MODEL_FILE
         if cached.exists() and not valid_model(cached):
             cached.unlink()
@@ -187,32 +184,46 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 self.log(f'cache: removed corrupt Ollama blob {blob.name}')
         (self.work / 'ollama-models').symlink_to(self.cache / 'models', target_is_directory=True)
         (self.work / 'reports').mkdir()
-        self.report = {'upstream_ref': self.ref, 'native_build_verified': False, 'npu_inference_verified': False}
+        self.report = {
+            'source_repo': SOURCE_REPO,
+            'requested_ref': self.ref,
+            'native_build_verified': False,
+            'npu_inference_verified': False,
+        }
         os.chdir(self.work)
 
     def pin_source(self) -> None:
         source = self.work / 'ollama'
-        for args in (
-            ['fetch', '--depth', '1', 'origin', f'refs/tags/{self.ref}'],
-            ['checkout', '--detach', 'FETCH_HEAD'],
-        ):
-            subprocess.run(['git', '-C', str(source), *args], check=True, timeout=120)
+        remote = subprocess.run(
+            ['git', '-C', str(source), 'remote', 'get-url', 'origin'],
+            capture_output=True, text=True, encoding='utf-8', check=True, timeout=120,
+        ).stdout.strip()
+        if remote.rstrip('/') != SOURCE_REPO_URL:
+            raise AssertionError(f'Unexpected Ollama source remote: {remote!r}')
         head = subprocess.run(
             ['git', '-C', str(source), 'rev-parse', 'HEAD'],
             capture_output=True, text=True, encoding='utf-8', check=True, timeout=120,
-        )
-        patch = self.work / 'ollama-cann.patch'
-        checked = subprocess.run(
-            ['git', '-C', str(source), 'apply', '--check', str(patch)],
-            capture_output=True, text=True, encoding='utf-8', timeout=120,
-        )
-        if checked.returncode:
-            raise AssertionError(f'CANN patch incompatible with {self.ref}:\n{checked.stderr}')
+        ).stdout.strip()
+        if head != self.ref:
+            raise AssertionError(f'Checked-out fork commit {head} does not match UPSTREAM_REF {self.ref}')
+        llm_ref = (source / 'LLAMA_CPP_VERSION').read_text(encoding='utf-8').strip()
+        if not llm_ref:
+            raise AssertionError('LLAMA_CPP_VERSION is empty')
+        markers = {
+            'cmake/local.cmake': 'elseif(_backend STREQUAL "cann")',
+            'discover/llama_server.go': 'strings.HasPrefix(strings.ToUpper(name), "CANN")',
+            'discover/runner.go': 'os.Getenv("ASCEND_RT_VISIBLE_DEVICES")',
+            'ml/device.go': 'envVar = "ASCEND_RT_VISIBLE_DEVICES"',
+        }
+        for relative, marker in markers.items():
+            if marker not in (source / relative).read_text(encoding='utf-8'):
+                raise AssertionError(f'Pinned fork is missing CANN integration in {relative}')
         self.report.update({
-            'source_commit': head.stdout.strip(),
-            'patch_sha256': sha256(patch),
-            'llama_cpp_ref': (source / 'LLAMA_CPP_VERSION').read_text(encoding='utf-8').strip(),
-            'patch_applicable': True,
+            'source_commit': head,
+            'source_branch': SOURCE_BRANCH,
+            'source_version': self.ref,
+            'llama_cpp_ref': llm_ref,
+            'fork_source_verified': True,
         })
         self.write_report()
 
@@ -239,7 +250,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             probe.bind(('127.0.0.1', 11434))
         self.server_log = (self.work / 'reports' / 'server.log').open('wb')
         self.server = subprocess.Popen(
-            ['bash', '-c', 'exec env ' + command], env=env, cwd=cwd,
+            ['bash', '-c', command], env=env, cwd=cwd,
             stdout=self.server_log, stderr=subprocess.STDOUT, start_new_session=True,
         )
         deadline = time.monotonic() + 120
@@ -271,21 +282,14 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             return
         try:
             super()._run_one(cmd, results, env, cwd, timeout, idx)
-            if cmd.cmd.startswith('git clone '):
+            if cmd.cmd.startswith('git -C ollama checkout '):
                 self.pin_source()
-            elif cmd.cmd.startswith('git -C ollama apply '):
-                self.report['patch_applied_by_this_run'] = True
-                self.write_report()
             elif cmd.cmd.startswith('cmake --build '):
                 source = self.work / 'ollama'
                 payload = source / 'build' / 'lib' / 'ollama'
                 for path in (source / 'ollama', payload / 'cann' / 'libggml-cann.so', payload / 'llama-server'):
                     if not path.is_file():
                         raise AssertionError(f'Missing build product: {path}')
-                subprocess.run(
-                    ['go', 'test', './discover', './ml', '-run', 'TestCANN', '-count=1', '-v'],
-                    cwd=source, env=env, check=True, timeout=timeout,
-                )
                 self.report['native_build_verified'] = True
                 self.write_report()
                 probe_env = env.copy()

@@ -61,6 +61,7 @@ Select a scenario when dispatching the same workflow:
 | `continued-pretrain` | Train raw text across the full sequence with LoRA on model and embedding outputs | Awaiting NPU validation |
 | `inference-extended` | Run mixed-length padded batches and a custom stopping criterion | Awaiting NPU validation |
 | `ddp-2` | Run two ranks with explicit HCCL, synchronized LoRA updates and rank-0 adapter save | Awaiting NPU validation |
+| `fsdp2-2` | Run two-rank Accelerate FSDP2, save step 1, then resume in new processes | Awaiting NPU validation |
 
 All scenarios run the full three-step LoRA training, adapter save/reload and
 inference checks. The `unsloth-gc` dataset reaches the 512-token cap, and its
@@ -125,6 +126,13 @@ steps, and gathers parameter checksums from both ranks after DDP synchronization
 Rank-local losses need not match because each rank consumes different text;
 the test requires the post-update parameter checksums to match instead. Only
 rank 0 saves the adapter, and the other slices continue to FSDP2 later.
+
+The `fsdp2-2` scenario runs the same `a2-2` runner with
+`UNSLOTH_FSDP2=1`. It asserts Accelerate selected FSDP version 2, the HCCL
+backend is active, and `FSDPModule` wrappers exist. One process saves a
+one-step checkpoint; a fresh two-process launch restores it at step 1,
+continues to step 3, and writes the final adapter through the FSDP-aware save
+path. DDP and FSDP2 are separate acceptance cases.
 The selected scenario appears in the Actions run title, result.json and job summary,
 including when environment setup fails. The `"unsloth"` checkpointing mode uses
 upstream's long-context threshold and is not treated as a performance claim.
@@ -167,4 +175,8 @@ gh workflow run unsloth-npu-example.yml --repo cosdt-ci-test/workflows --ref fea
 
 ```shell
 gh workflow run unsloth-npu-example.yml --repo cosdt-ci-test/workflows --ref feat/unsloth-adapt -f scenario=ddp-2
+```
+
+```shell
+gh workflow run unsloth-npu-example.yml --repo cosdt-ci-test/workflows --ref feat/unsloth-adapt -f scenario=fsdp2-2
 ```

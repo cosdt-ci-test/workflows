@@ -19,6 +19,7 @@ on:
           - full-finetune
           - continued-pretrain
           - inference-extended
+          - grpo
           - ddp-2
           - fsdp2-2
 
@@ -108,6 +109,8 @@ jobs:
             python projects/unsloth/qwen3_continued_pretrain.py 2>&1 | tee output/continued-pretrain.log
           elif [[ "$TEST_SCENARIO" == "inference-extended" ]]; then
             python projects/unsloth/qwen3_inference_extended.py 2>&1 | tee output/inference-extended.log
+          elif [[ "$TEST_SCENARIO" == "grpo" ]]; then
+            python projects/unsloth/qwen3_grpo_smoke.py 2>&1 | tee output/grpo.log
           else
             python projects/unsloth/qwen3_lora_smoke.py 2>&1 | tee output/example.log
           fi

@@ -1,4 +1,4 @@
-# Unsloth Ascend single-card trial
+# Unsloth Ascend trial
 
 This is an **experimental run**, not a previously validated Ascend example.
 The maintainer recommends trying 16-bit LoRA on Ascend in
@@ -15,6 +15,13 @@ get_peft_model → SFTTrainer.train → save → generate API sequence, with:
 - 12 local chat samples, 256 tokens, 3 steps, batch size 1;
 - checkpointing selected by the workflow's `scenario` input;
 - NPU placement and parameter-update assertions, adapter reload before generation.
+
+The GRPO scenario follows the API shape in the official
+[Qwen3 (4B) GRPO script](https://github.com/unslothai/notebooks/blob/d85d113eacfc8a87a7003e73ffb2a86403a94344/python_scripts/Qwen3_%284B%29-GRPO.py):
+chat-format prompts, multiple sampled completions per prompt, Python reward
+functions, `GRPOConfig`, `GRPOTrainer`, and adapter save/reload. The local smoke
+uses Qwen3-0.6B, four generations per prompt and three optimizer steps. It uses
+TRL's transformers generation path and keeps vLLM for the separate rollout item.
 
 The workflow pins Unsloth and Zoo commits, uses the repository's CANN 9.1.0
 A2 image and torch 2.9.0 / torch_npu 2.9.0.post2 / triton-ascend 3.2.2 stack.
@@ -58,13 +65,15 @@ Select a scenario when dispatching the same workflow:
 | `merge-16bit` | Train and merge in one process, then reload with Transformers in a clean second process | Passed in run #10 |
 | `dpo` | Train LoRA with local preference pairs, then save, reload and generate | Passed in run #11 |
 | `full-finetune` | Train every model parameter in BF16, then reload the saved model in a clean process | Passed in run #13 |
-| `continued-pretrain` | Train raw text across the full sequence with LoRA on model and embedding outputs | Awaiting NPU validation |
-| `inference-extended` | Run mixed-length padded batches and a custom stopping criterion | Awaiting NPU validation |
-| `ddp-2` | Run two ranks with explicit HCCL, synchronized LoRA updates and rank-0 adapter save | Awaiting NPU validation |
-| `fsdp2-2` | Run two-rank Accelerate FSDP2, save step 1, then resume in new processes | Awaiting NPU validation |
+| `continued-pretrain` | Train raw text across the full sequence with LoRA on model and embedding outputs | Passed in run #15 |
+| `inference-extended` | Run mixed-length padded batches and a custom stopping criterion | Passed in run #16 |
+| `grpo` | Generate groups, score rewards, update the LoRA policy, then save, reload and infer | Awaiting NPU validation |
+| `ddp-2` | Run two ranks with explicit HCCL, synchronized LoRA updates and rank-0 adapter save | Passed in run #18 |
+| `fsdp2-2` | Run two-rank Accelerate FSDP2, save step 1, then resume in new processes | Passed in run #20 |
 
-All scenarios run the full three-step LoRA training, adapter save/reload and
-inference checks. The `unsloth-gc` dataset reaches the 512-token cap, and its
+Training scenarios run three optimizer steps and end with adapter or model save,
+reload and inference checks. The `unsloth-gc` dataset reaches the 512-token
+cap, and its
 training-start check requires the effective `UnslothCheckpointFunction` rather
 than a silent fallback to standard checkpointing. Its `SFTConfig` standard
 checkpointing flag remains off, following the official Qwen3 example, so the
@@ -119,6 +128,21 @@ lengths, then runs a single prompt with a custom three-token stopping criterion.
 It records token lengths, outputs and EOS observations. This verifies inference
 plumbing only, not answer quality.
 
+The `grpo` scenario uses a small local question/answer dataset, rank-8 BF16 LoRA,
+four sampled completions per prompt and `GRPOTrainer` on a single Ascend NPU. It
+starts with `fast_inference=False` and `use_vllm=False`, so TRL uses the training
+model's `generate` path for rollouts. The policy must log finite rewards on all
+three steps, have non-zero reward variation in at least one completion group,
+produce finite non-zero advantages and LoRA gradients, change LoRA weights
+without producing non-finite values, and finish three optimizer steps. The
+adapter is then saved, reloaded in a fresh model instance and used for
+deterministic generation. Loss is recorded but not asserted because the short
+sampled run can legitimately produce a zero or near-zero GRPO loss.
+This test does not use a reference model, vLLM rollout or an external reward
+model. It starts with `UNSLOTH_COMPILE_DISABLE=partial` and disables GRPO
+sequence packing/prefix grouping so compilation and packing remain separate
+adaptation questions. It does not establish answer-quality improvement.
+
 The `ddp-2` scenario selects the `linux-aarch64-a2-2` runner and mounts both
 DAVINCI devices. It starts two processes with `torch.distributed.run`, creates
 an explicit HCCL process group, trains rank-specific text batches for three DDP
@@ -171,6 +195,10 @@ gh workflow run unsloth-npu-example.yml --repo cosdt-ci-test/workflows --ref fea
 
 ```shell
 gh workflow run unsloth-npu-example.yml --repo cosdt-ci-test/workflows --ref feat/unsloth-adapt -f scenario=inference-extended
+```
+
+```shell
+gh workflow run unsloth-npu-example.yml --repo cosdt-ci-test/workflows --ref feat/unsloth-adapt -f scenario=grpo
 ```
 
 ```shell

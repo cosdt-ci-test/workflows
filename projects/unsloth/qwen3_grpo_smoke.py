@@ -308,6 +308,9 @@ try:
             beta=0.0,
             num_iterations=1,
             loss_type="dapo",
+            # Unsloth enables this for explicit DAPO when left unset. Keep
+            # capped rollouts in the loss to isolate the zero-gradient failure.
+            mask_truncated_completions=False,
             scale_rewards="group",
             max_steps=3,
             learning_rate=5e-6,
@@ -331,24 +334,41 @@ try:
         ),
     )
 
+    result["mask_truncated_completions"] = trainer.mask_truncated_completions
+    result["trainer_eos_token_id"] = trainer.eos_token_id
+    save("grpo_trainer")
+    assert trainer.mask_truncated_completions is False, "Unexpected truncation masking"
     original_prepare_inputs = trainer._prepare_inputs
 
-    def observe_advantages(generation_batch):
+    def observe_training_batch(generation_batch, _trainer=trainer):
         prepared = original_prepare_inputs(generation_batch)
         advantages = prepared.get("advantages") if isinstance(prepared, dict) else None
         if advantages is not None:
             values = advantages.detach().float().cpu()
+            completion_ids = prepared["completion_ids"].detach().cpu()
+            completion_mask = prepared["completion_mask"].detach().cpu()
+            has_eos = completion_ids.eq(_trainer.eos_token_id).any(dim=1)
+            loss_tokens = completion_mask.sum(dim=1)
+            # TRL would zero the entire row for each completion without EOS.
+            tokens_with_truncation_mask = loss_tokens * has_eos
             ADVANTAGE_CHECKS.append({
+                "step_before_update": _trainer.state.global_step,
                 "shape": list(values.shape),
                 "finite": bool(torch.isfinite(values).all()),
                 "nonzero": bool((values != 0).any()),
                 "absolute_sum": float(values.abs().sum()),
+                "advantage_per_completion": values.tolist(),
+                "has_eos_per_completion": has_eos.tolist(),
+                "loss_tokens_per_completion": loss_tokens.tolist(),
+                "loss_tokens_if_truncation_masked": tokens_with_truncation_mask.tolist(),
             })
             result["advantages"] = ADVANTAGE_CHECKS
             RESULT_PATH.write_text(json.dumps(result, indent=2), encoding="utf-8")
+            print(json.dumps({"grpo_training_batch": ADVANTAGE_CHECKS[-1]}), flush=True)
+            assert int(loss_tokens.sum()) > 0, "GRPO completion mask has no active tokens"
         return prepared
 
-    trainer._prepare_inputs = observe_advantages
+    trainer._prepare_inputs = observe_training_batch
 
     class CheckLoRAGradients(TrainerCallback):
         def on_pre_optimizer_step(
@@ -378,7 +398,6 @@ try:
             assert squared_norm > 0.0, "LoRA gradients were all zero"
 
     trainer.add_callback(CheckLoRAGradients())
-    save("grpo_trainer")
     train_metrics = trainer.train().metrics
     torch.npu.synchronize()
     assert trainer.state.global_step == 3, trainer.state.global_step

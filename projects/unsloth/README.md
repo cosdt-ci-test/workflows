@@ -143,6 +143,14 @@ model. It starts with `UNSLOTH_COMPILE_DISABLE=partial` and disables GRPO
 sequence packing/prefix grouping so compilation and packing remain separate
 adaptation questions. It does not establish answer-quality improvement.
 
+[Run #21](https://github.com/cosdt-ci-test/workflows/actions/runs/41825910070)
+stopped before the first optimizer update with non-zero advantages but zero
+LoRA gradients. Unsloth had enabled DAPO truncation masking. To isolate that
+setting, this scenario now explicitly keeps capped completions in the loss.
+Before backward, it records each completion's EOS status, advantage, and
+active loss-token count, plus how many tokens the old masking rule would keep
+for the same rollout. The non-zero gradient and weight-update checks still apply.
+
 The `ddp-2` scenario selects the `linux-aarch64-a2-2` runner and mounts both
 DAVINCI devices. It starts two processes with `torch.distributed.run`, creates
 an explicit HCCL process group, trains rank-specific text batches for three DDP

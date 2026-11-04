@@ -22,11 +22,11 @@ What makes this guard different from the other two OpenCV guards:
   default, this guard fails loudly instead of silently going CPU-only;
 * the install prefix is **``/usr/local/opencv-cann-5``**, distinct from
   the other two guards' prefixes (``/usr/local/opencv-cann`` for the
-  patched 5.x doc, ``/usr/local/opencv-cann-411`` for the 4.11.0
+  patched 5.x doc, ``/usr/local/opencv-cann-414`` for the 4.14.0
   zero-patch doc): all three may land on the same self-hosted runner and
   must not clobber each other;
 * the doc follows the upstream *latest release* tag via ``<ref>`` (like
-  the main OpenCV guard, unlike the 4.11.0 guard which pins
+  the main OpenCV guard, unlike the 4.14.0 guard which pins
   ``fixed_ref``), and its patch scripts assert on 5.0-only upstream
   strings — a 5.1/6.0 release makes the doc's own patch blocks fail,
   which is the intended "review the patches" signal.
@@ -103,7 +103,7 @@ class TestQuickStartAscendOpenCV5(MarkdownDocTestBase, unittest.TestCase):
 
     # Install prefix of the doc's source build. Distinct from the other
     # two OpenCV guards' prefixes so a 5.0 install can never clobber (or
-    # be clobbered by) the patched 5.x / 4.11.0 installs when all three
+    # be clobbered by) the patched 5.x / 4.14.0 installs when all three
     # guards land on the same self-hosted runner.
     _OPENCV_INSTALL = '/usr/local/opencv-cann-5'
     _OPENCV_PYTHONPATH = f'{_OPENCV_INSTALL}/lib/python3.12/site-packages'

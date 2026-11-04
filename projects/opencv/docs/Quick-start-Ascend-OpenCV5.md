@@ -13,12 +13,12 @@
 | --- | --- | --- | --- |
 | **本文** | 5.0（跟随上游 latest release） | 2 组 | 5.0 的**昇腾视角**特性导览（非 CPU 通路 + 影响） + 跑通路径 |
 | [Quick-start-Ascend.md](Quick-start-Ascend.md) | 5.0（跟随上游 latest release） | 2 组 | 同一配方，偏「补丁逐行说明」 |
-| [Quick-start-Ascend-NoPatch.md](Quick-start-Ascend-NoPatch.md) | 4.11.0（钉死） | 0 组 | 不想维护本地补丁时的退路（放弃 5.x 特性） |
+| [Quick-start-Ascend-NoPatch.md](Quick-start-Ascend-NoPatch.md) | 4.14.0（钉死） | 0 组 | 不想维护本地补丁时的退路（放弃 5.x 特性） |
 
 三条路线的取舍：
 
 - 要 5.0 的新能力（新 DNN 图引擎、原生 LLM/VLM、新 dtype、1D/0D Mat、STB 新字体、USAC 默认后端）→ 走 5.0，**必须打补丁**（原因见 §5：5.0 把 shape 类型换成了 `cv::MatShape`，而上游 CANN 后端没跟上）；
-- 不想维护任何本地补丁 → 走 4.11 零补丁路线，但只能停在 4.x。
+- 不想维护任何本地补丁 → 走 4.14 零补丁路线，但只能停在 4.x。
 
 > **版本口径**：本文的 `<ref>` 由 CI 注入，解析自上游 GitHub `releases/latest`。截至 2026-10-23，上游把它标成 **5.0.0**（4.14.0 是 4.x 维护线，发布更晚但**不是** latest）。§5 的补丁脚本只对 **5.0.x** 成立（`cv::MatShape` 是 5.0 引入的，4.x 里根本没有这个类型），上游一旦出 5.1/6.0，需要人工复核补丁。
 
@@ -150,7 +150,7 @@ Atlas 900 A2 / A3 训练系列产品或 Ascend 950 系列，已挂载 `/dev/davi
 | 镜像 | `swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12`（CI）/ CANN 9.2.0（本地验证机） |
 | Python / CMake / GCC | 3.12 / ≥ 3.18 / 11 |
 | OpenCV | 5.0.0（源码，`WITH_CANN=ON`，`CMAKE_BUILD_TYPE=Debug`）|
-| 安装前缀 | `/usr/local/opencv-cann-5`（与同仓另两条路线的 `/usr/local/opencv-cann`、`/usr/local/opencv-cann-411` 互不覆盖）|
+| 安装前缀 | `/usr/local/opencv-cann-5`（与同仓另两条路线的 `/usr/local/opencv-cann`、`/usr/local/opencv-cann-414` 互不覆盖）|
 
 ### 前置安装
 

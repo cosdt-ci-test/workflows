@@ -10,14 +10,14 @@
 # Why a separate project namespace instead of reusing `opencv`:
 #   * the engine namespaces the monitor-state cache by `with.project`,
 #     and the three guards watch *different* docs (5.x feature tour vs
-#     5.x patch walkthrough vs 4.11.0 zero-patch) - sharing the
+#     5.x patch walkthrough vs 4.14.0 zero-patch) - sharing the
 #     namespace would make each doc's hash overwrite the other's and
 #     all of them would re-run forever;
 #   * `scripts/examples_check.py` rejects two thin workflows with the
 #     same `with.project`;
 #   * the three builds install to different prefixes
 #     (/usr/local/opencv-cann vs /usr/local/opencv-cann-5 vs
-#     /usr/local/opencv-cann-411) so they can share one self-hosted
+#     /usr/local/opencv-cann-414) so they can share one self-hosted
 #     runner without clobbering each other.
 
 name: opencv-quick-start-opencv5

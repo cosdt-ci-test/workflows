@@ -39,7 +39,7 @@ What makes this guard different from the other OpenCV guards:
   flipping the default cannot make this guard pass on CPU-only;
 * the install prefix is **``/usr/local/opencv-cann-50``**, distinct from
   every other OpenCV guard's prefix (``/usr/local/opencv-cann`` /
-  ``-411`` / ``-414`` / ``-5``): all of them may land on the same
+  ``-414`` / ``-5``): all of them may land on the same
   self-hosted runner and must not clobber each other;
 * the doc pins OpenCV **5.0.0** itself (no ``<ref>`` placeholder), so
   the thin workflow pins ``fixed_ref: 5.0.0`` and the engine monitors

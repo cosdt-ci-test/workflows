@@ -42,46 +42,46 @@ supported:
       - train_dataset.path=${FIXTURE_DIR}/swe_sft_pairs.jsonl
       - valid_dataset.batch_size=2
       - valid_dataset.path=${FIXTURE_DIR}/swe_sft_pairs.jsonl
-      - swe.pre_split=true
-      - swe.dump_samples=0
+      - +swe.pre_split=true
+      - +swe.dump_samples=0
       - +total_train_steps=1
       - +train_dataset.setup_timeout=600
       - +valid_dataset.setup_timeout=600
     timeout_minutes: 90
-  # Geometry3K agent 式 GRPO（OpenAI 代理 + 图片注入；agent 解析在 proxy 侧，
-  # vllm rollout 可用；配置复用 vlm_npu 基础 yaml + agent 段覆盖）
-  - path: examples/vlm/geometry3k_agent_grpo.py
-    profile: areal-vlm-grpo
-    runner: linux-aarch64-a2-2
-    npu_devices: '0,1'
-    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
-    overlay_args:
-      - --config examples/vlm_npu/qwen2_5_vl_3b_geometry3k_grpo.yaml
-      - scheduler.type=local
-      - cluster.n_gpus_per_node=2
-      - rollout.backend=vllm:d1p1t2
-      - +rollout.setup_timeout=1800
-      - actor.backend=fsdp:d2p1t1
-      - +actor.fsdp.offload_params=true
-      - +actor.weight_update_mode=disk
-      - actor.path=${AREAL_MODEL_PATH}
-      - actor.mb_spec.max_tokens_per_mb=1024
-      - ref.mb_spec.max_tokens_per_mb=1024
-      - vllm.gpu_memory_utilization=0.3
-      - gconfig.max_new_tokens=64
-      - gconfig.n_samples=1
-      - train_dataset.batch_size=2
-      - valid_dataset.batch_size=2
-      - +train_dataset.setup_timeout=600
-      - +valid_dataset.setup_timeout=600
-      - +total_train_steps=1
-      - vllm.max_model_len=8576
-      - ++rollout.agent.tool_call_parser=qwen25
-      - ++rollout.agent.reasoning_parser=qwen3
-      - ++rollout.agent.chat_template_type=hf
-      - ++rollout.agent.export_style=individual
-      - ++rollout.agent.turn_discount=1.0
-    timeout_minutes: 150
+  # # Geometry3K agent 式 GRPO（OpenAI 代理 + 图片注入；agent 解析在 proxy 侧，
+  # # vllm rollout 可用；配置复用 vlm_npu 基础 yaml + agent 段覆盖）
+  # - path: examples/vlm/geometry3k_agent_grpo.py
+  #   profile: areal-vlm-grpo
+  #   runner: linux-aarch64-a2-2
+  #   npu_devices: '0,1'
+  #   image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
+  #   overlay_args:
+  #     - --config examples/vlm_npu/qwen2_5_vl_3b_geometry3k_grpo.yaml
+  #     - scheduler.type=local
+  #     - cluster.n_gpus_per_node=2
+  #     - rollout.backend=vllm:d1p1t2
+  #     - +rollout.setup_timeout=1800
+  #     - actor.backend=fsdp:d2p1t1
+  #     - +actor.fsdp.offload_params=true
+  #     - +actor.weight_update_mode=disk
+  #     - actor.path=${AREAL_MODEL_PATH}
+  #     - actor.mb_spec.max_tokens_per_mb=1024
+  #     - ref.mb_spec.max_tokens_per_mb=1024
+  #     - vllm.gpu_memory_utilization=0.3
+  #     - gconfig.max_new_tokens=64
+  #     - gconfig.n_samples=1
+  #     - train_dataset.batch_size=2
+  #     - valid_dataset.batch_size=2
+  #     - +train_dataset.setup_timeout=600
+  #     - +valid_dataset.setup_timeout=600
+  #     - +total_train_steps=1
+  #     - vllm.max_model_len=8576
+  #     - ++rollout.agent.tool_call_parser=qwen25
+  #     - ++rollout.agent.reasoning_parser=qwen3
+  #     - ++rollout.agent.chat_template_type=hf
+  #     - ++rollout.agent.export_style=individual
+  #     - ++rollout.agent.turn_discount=1.0
+  #   timeout_minutes: 150
   # # tau2-bench 客服多轮 RL（保留真实 UserSimulator，solo_mode=false）：用户侧由
   # # run_example 在另一张卡拉本地 vLLM（同一份 Qwen3-1.7B 权重、多 served-model-name
   # # 别名吸收 econfig.user_llm 的 litellm 命名），econfig.user_llm_base_url 指过去；

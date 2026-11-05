@@ -75,7 +75,8 @@ Select a scenario when dispatching the same workflow:
 | `grpo-vllm-ascend` | Run GRPO with the colocated vLLM engine and verify fresh LoRA tensors reach each rollout | Passed in run #27 |
 | `packing` | Pack short tokenized samples into full sequences, then train, save, reload and generate | Passed in run #31 |
 | `packing-bfd` | Preserve whole samples in BFD blocks, check isolation, then train, save, reload and generate | Passed in run #32 |
-| `long-context` | Train with real 4096-token inputs and standard checkpointing, then reload and generate from a long prompt | Awaiting NPU validation |
+| `long-context` | Train with real 4096-token inputs and standard checkpointing, then reload and generate from a long prompt | Passed in run #33 |
+| `kernels-fp8` | Check five core kernel entry points against PyTorch and audit three FP8 device gates | Awaiting NPU validation |
 | `ddp-2` | Run two ranks with explicit HCCL, synchronized LoRA updates and rank-0 adapter save | Passed in run #18 |
 | `fsdp2-2` | Run two-rank Accelerate FSDP2, save step 1, then resume in new processes | Passed in run #20 |
 
@@ -244,6 +245,28 @@ reloads the adapter, then generates from a prompt of at least 3072 tokens
 within the configured window. This is a functional 4K test within Qwen3's
 native context range; it does not extend RoPE, establish maximum supported
 context length, or measure a speed/memory improvement against a baseline.
+[Run #33](https://github.com/cosdt-ci-test/workflows/actions/runs/42028142905)
+passed on Ascend910B4 with three real 4096-token NPU training inputs, standard
+checkpointing, adapter updates/reload, and generation from 3119 input tokens.
+
+The `kernels-fp8` audit completes the remaining bounded coverage of checklist
+item 14 in one dispatch. Fresh processes directly call Unsloth's RMSNorm,
+RoPE, SwiGLU, cross-entropy and fused LoRA QKV entry points in FP32 and BF16,
+comparing forward values and gradients with torch references on NPU.
+Cross-entropy includes ignored labels and both small and chunked vocabularies.
+These are numerical smoke checks at fixed small shapes, not a claim that
+every optimized kernel is integrated or faster on Ascend.
+
+The same audit invokes the upstream guards for online FP8 row/block loading
+and float8 training. Only the specific NVIDIA-only rejection is recorded
+as `unsupported`; missing dependencies, unexpected exceptions, timeouts and
+numerical mismatches are failures. The float8-training check is its hardware
+gate only and does not run torchao conversion. A rejected gate establishes
+that this entry point is unavailable on NPU, not that FP8 computation passed.
+All cases run even if an earlier worker fails. `result.json` is `passed`
+only if all checks pass, `completed_with_gaps` if only explicit unsupported
+gates remain, or `failed` if any check fails. A green workflow with
+`completed_with_gaps` means the audit completed, not full FP8 support.
 The separate 4-bit QLoRA item remains a backend gap under the maintainer's
 [Ascend support statement](https://github.com/unslothai/unsloth/issues/1794).
 
@@ -323,6 +346,10 @@ gh workflow run unsloth-npu-example.yml --repo cosdt-ci-test/workflows --ref fea
 
 ```shell
 gh workflow run unsloth-npu-example.yml --repo cosdt-ci-test/workflows --ref feat/unsloth-adapt -f scenario=long-context
+```
+
+```shell
+gh workflow run unsloth-npu-example.yml --repo cosdt-ci-test/workflows --ref feat/unsloth-adapt -f scenario=kernels-fp8
 ```
 
 ```shell

@@ -25,6 +25,7 @@ on:
           - packing
           - packing-bfd
           - long-context
+          - kernels-fp8
           - ddp-2
           - fsdp2-2
 
@@ -116,6 +117,8 @@ jobs:
             python projects/unsloth/qwen3_inference_extended.py 2>&1 | tee output/inference-extended.log
           elif [[ "$TEST_SCENARIO" == "grpo" ]]; then
             python projects/unsloth/qwen3_grpo_smoke.py 2>&1 | tee output/grpo.log
+          elif [[ "$TEST_SCENARIO" == "kernels-fp8" ]]; then
+            python projects/unsloth/kernels_fp8.py 2>&1 | tee output/kernels-fp8.log
           else
             python projects/unsloth/qwen3_lora_smoke.py 2>&1 | tee output/example.log
           fi

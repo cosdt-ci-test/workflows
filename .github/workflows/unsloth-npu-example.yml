@@ -22,6 +22,7 @@ on:
           - grpo
           - vllm-ascend
           - grpo-vllm-ascend
+          - packing
           - ddp-2
           - fsdp2-2
 

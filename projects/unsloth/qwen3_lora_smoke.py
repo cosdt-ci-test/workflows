@@ -31,6 +31,7 @@ def checkpointing_for_scenario(value):
         "baseline": False,
         "standard-gc": True,
         "unsloth-gc": "unsloth",
+        "packing": False,
     }.get(value)
     if mode is None and value != "baseline":
         raise ValueError(f"Unknown test scenario: {value!r}")
@@ -53,7 +54,7 @@ try:
     record("import")
     # torch_npu registers the NPU backend; Unsloth precedes HF/TRL imports.
     import torch
-    import torch_npu
+    import torch_npu  # noqa: F401 - registers the NPU backend
     from unsloth import FastLanguageModel
     from unsloth.device_type import DEVICE_TYPE
     from datasets import Dataset
@@ -144,7 +145,7 @@ try:
             for c in base_conversations
         ] * 4
     else:
-        conversations = base_conversations * 4
+        conversations = base_conversations * (8 if scenario == "packing" else 4)
     texts = [tokenizer.apply_chat_template(
         c, tokenize=False, add_generation_prompt=False, enable_thinking=False
     ) for c in conversations]
@@ -153,19 +154,60 @@ try:
     result["max_training_tokens"] = max(token_lengths)
     if checkpointing == "unsloth":
         assert result["max_training_tokens"] == max_seq_length, result["max_training_tokens"]
+    training_dataset = Dataset.from_dict({"text": texts})
+    packing_options = {}
+    if scenario == "packing":
+        # Pre-tokenize without truncation so the packed dataset can be
+        # compared with the exact original token stream.
+        source_ids = tokenizer(texts, add_special_tokens=False)["input_ids"]
+        assert all(len(ids) < max_seq_length for ids in source_ids)
+        training_dataset = Dataset.from_dict({"input_ids": source_ids})
+        packing_options = dict(packing_strategy="wrapped", padding_free=False)
     trainer = SFTTrainer(
         model=model, processing_class=tokenizer,
-        train_dataset=Dataset.from_dict({"text": texts}),
+        train_dataset=training_dataset,
         callbacks=[CheckGradientCheckpointing()],
         args=SFTConfig(
             output_dir=str(OUTPUT / "trainer"), dataset_text_field="text",
-            max_length=max_seq_length, packing=False, per_device_train_batch_size=1,
+            max_length=max_seq_length, packing=scenario == "packing", per_device_train_batch_size=1,
             gradient_accumulation_steps=1, max_steps=3, learning_rate=2e-4,
             logging_steps=1, optim="adamw_torch", bf16=True, fp16=False,
             gradient_checkpointing=trainer_checkpointing, save_strategy="no", report_to="none",
             seed=3407, dataloader_num_workers=0,
+            **packing_options,
         ),
     )
+    if scenario == "packing":
+        record("packing_validation")
+        packed_ids = trainer.train_dataset["input_ids"]
+        expected = [token for sample in source_ids for token in sample]
+        actual = [token for sample in packed_ids for token in sample]
+        assert actual == expected, "Packing changed, lost or reordered source tokens"
+        assert 3 <= len(packed_ids) < len(source_ids)
+        assert all(len(ids) == max_seq_length for ids in packed_ids[:-1])
+        assert 0 < len(packed_ids[-1]) <= max_seq_length
+        assert trainer.args.packing and trainer.args.packing_strategy == "wrapped"
+        assert not trainer.padding_free, "Unexpected padding-free attention path"
+        # The first full block contains several original sample boundaries.
+        boundary = 0
+        first_block_boundaries = 0
+        for ids in source_ids:
+            boundary += len(ids)
+            first_block_boundaries += boundary < max_seq_length
+        assert first_block_boundaries >= 2, first_block_boundaries
+        batch = trainer.data_collator([trainer.train_dataset[0]])
+        assert batch["input_ids"].shape == (1, max_seq_length)
+        assert int(batch["attention_mask"].sum()) == max_seq_length
+        assert bool((batch["labels"] != -100).any())
+        result["packing"] = {
+            "strategy": "wrapped", "padding_free": trainer.padding_free,
+            "source_samples": len(source_ids), "packed_samples": len(packed_ids),
+            "source_tokens": len(expected), "packed_tokens": len(actual),
+            "first_block_sample_boundaries": first_block_boundaries,
+            "packed_lengths": [len(ids) for ids in packed_ids],
+            "attention_implementation": model.config._attn_implementation,
+        }
+        record("packing_validation", True)
     record("training")
     metrics = trainer.train().metrics
     torch.npu.synchronize()

@@ -69,7 +69,8 @@ Select a scenario when dispatching the same workflow:
 | `inference-extended` | Run mixed-length padded batches and a custom stopping criterion | Passed in run #16 |
 | `grpo` | Generate groups, score rewards, update the LoRA policy, then save, reload and infer | Passed without vLLM in run #22 |
 | `vllm-ascend` | Compare native vLLM-Ascend generation with Unsloth fast generation and a LoRA request | Passed in run #26 |
-| `grpo-vllm-ascend` | Run GRPO with the colocated vLLM engine and verify fresh LoRA tensors reach each rollout | Awaiting NPU validation |
+| `grpo-vllm-ascend` | Run GRPO with the colocated vLLM engine and verify fresh LoRA tensors reach each rollout | Passed in run #27 |
+| `packing` | Pack short tokenized samples into full sequences, then train, save, reload and generate | Awaiting NPU validation |
 | `ddp-2` | Run two ranks with explicit HCCL, synchronized LoRA updates and rank-0 adapter save | Passed in run #18 |
 | `fsdp2-2` | Run two-rank Accelerate FSDP2, save step 1, then resume in new processes | Passed in run #20 |
 
@@ -190,6 +191,22 @@ importance sampling correction and standby disabled. TRL 0.29.1 warns that
 vLLM 0.23.0 is outside its tested range; runtime compatibility is part of
 the smoke test.
 
+[Run #27](https://github.com/cosdt-ci-test/workflows/actions/runs/41962465270)
+passed on one Ascend910B1. Each of the three rollouts used a new adapter ID
+(1, 2, 3), carried tensors matching the live training model and returned four
+completions. The adapter hash changed after each preceding update, 392 LoRA
+tensors changed over training, and the final adapter was saved.
+
+The `packing` scenario returns to the single-card training image and uses
+TRL 0.22.2's `wrapped` strategy with `padding_free=False`. It checks that
+the trainer combines multiple short examples into full 256-token blocks
+without changing or dropping any input token, then completes three training
+steps, adapter save/reload and generation. Wrapped packing can split examples
+and permits attention across their boundaries; this does not validate BFD,
+document-isolated attention, padding-free kernels or a speed improvement.
+The separate 4-bit QLoRA item remains a backend gap under the maintainer's
+[Ascend support statement](https://github.com/unslothai/unsloth/issues/1794).
+
 The `ddp-2` scenario selects the `linux-aarch64-a2-2` runner and mounts both
 DAVINCI devices. It starts two processes with `torch.distributed.run`, creates
 an explicit HCCL process group, trains rank-specific text batches for three DDP
@@ -254,6 +271,10 @@ gh workflow run unsloth-npu-example.yml --repo cosdt-ci-test/workflows --ref fea
 
 ```shell
 gh workflow run unsloth-npu-example.yml --repo cosdt-ci-test/workflows --ref feat/unsloth-adapt -f scenario=grpo-vllm-ascend
+```
+
+```shell
+gh workflow run unsloth-npu-example.yml --repo cosdt-ci-test/workflows --ref feat/unsloth-adapt -f scenario=packing
 ```
 
 ```shell

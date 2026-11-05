@@ -28,12 +28,14 @@ NPU-correctness signal). HR/NDCG magnitudes float with training state
 and are matched with ``...`` placeholders.
 The RL stage (section 10) reuses that checkpoint with a single-card
 GRPO run through ``python rl.py`` rather than ``rl.sh`` (the shell
-script pins 8 processes and parses no arguments). One ``sed`` swaps
-``optim="paged_adamw_32bit"`` for torch-native ``adamw_torch`` because
-the bitsandbytes wheel ships no NPU backend, and caps ``sample`` at 40
-because ``-1`` expands the whole item catalogue; the train CSV is
-sliced to 40 rows separately since ``RLSeqTitle2SidDataset`` pins its
-own 10000 cap. ``num_generations=2`` keeps both the beam width and the
+script pins 8 processes and parses no arguments). One ``sed`` makes
+three single-line edits: ``optim="paged_adamw_32bit"`` becomes
+torch-native ``adamw_torch`` because the bitsandbytes wheel ships no NPU
+backend; ``sample = -1`` becomes 40 because ``-1`` expands the whole
+item catalogue; and the hard-coded ``sample=10000`` argument of
+``RLSeqTitle2SidDataset`` becomes 40, because slicing the train CSV to
+40 rows would otherwise make ``DataFrame.sample`` raise
+than-population. ``num_generations=2`` keeps both the beam width and the
 group size small; ``test_during_training=False`` skips the history
 lookups. The guard asserts ``global_step > 0`` and a logged loss.
 

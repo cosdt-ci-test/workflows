@@ -317,19 +317,22 @@ HR...
 
 RL 在 SFT 产物上再做一轮 GRPO：每个 prompt 采样多条候选、组内归一化奖励、并用 KL 约束贴近参考模型；动作空间是有限的 SID 列表，候选由约束 beam search 生成。
 
-上游有两处写死值与单卡冒烟冲突，用一条 `sed` 就地替换（都是单行，只在本次运行生效）：
+上游有三处写死值与单卡冒烟冲突，用一条 `sed` 就地替换（都是单行，只在本次运行生效）：
 
 - `optim="paged_adamw_32bit"` 走 bitsandbytes，而 bitsandbytes 没有 NPU 后端（`bitsandbytes/backends/` 只有 `cpu` / `cuda` / `default` / `hpu` / `mps` / `triton` / `xpu`），换成 torch 原生 `adamw_torch`。
-- `sample = -1` 会把整个商品目录展开成样本（每件 2–4 条），冒烟会跑成上万步，改为 40。
+- `sample = -1` 决定 SID 数据集与「标题→SID」数据集的样本数，`-1` 会把整个商品目录展开（每件 2–4 条），冒烟会跑成上万步，改为 40。
+- `RLSeqTitle2SidDataset(..., sample=10000)` 是第三个数据集，采样上限写死在调用处，不受上面那个变量影响；训练集切到 40 行后样本池只有 40，`sample(10000)` 会抛 `Cannot take a larger sample than population`，同样改为 40。
 
-本节会就地修改 `rl.py` 两行；第 6 节的 `source untouched` 检查在这一节之前执行。
+本节会就地修改 `rl.py` 三行；第 6 节的 `source untouched` 检查在这一节之前执行。
 
 ```shell #test id="rl-patch"
 cd MiniOneRec
 sed -i -e 's/optim="paged_adamw_32bit"/optim="adamw_torch"/' \
-       -e 's/^    sample = -1$/    sample = 40/' rl.py
+       -e 's/^    sample = -1$/    sample = 40/' \
+       -e 's/sample=10000/sample=40/' rl.py
 grep -c 'optim="adamw_torch"' rl.py
 grep -c '^    sample = 40$' rl.py
+grep -c 'sample=40' rl.py
 ```
 
 输出结果如下：
@@ -337,9 +340,10 @@ grep -c '^    sample = 40$' rl.py
 ```shell #test-result id="rl-patch"
 1
 1
+1
 ```
 
-`RLSeqTitle2SidDataset` 的样本数来自 `train_file`，且上限写死 10000，所以再把训练集切到 40 行：
+三个数据集都按 40 取样，所以把训练集也切到 40 行（`pandas` 允许取样数等于总体数）：
 
 ```shell #test id="prep-rl"
 cd MiniOneRec
@@ -428,4 +432,5 @@ loss True
 | CC 大于 0 | 约束解码未生效 | 确认 `run-eval` 命令带上了 `PYTHONPATH=/tmp/minionerec-npu-shim`（`check-scoped` 应输出 `with shim: cuda` / `tensor landed on: npu`）；基座模型须为 Qwen2.5-**base**（Instruct 版约束解码失效） |
 | HR/NDCG 与文中示例差异大 | 冒烟训练仅 1 epoch/600 样本，`num_beams` 也降为 20 | 数值仅供参考；CI 只断言 CC=0，HR/NDCG 用占位符匹配 |
 | `rl.py` 启动即报 bitsandbytes 或 `paged_adamw_32bit` 相关错误 | bitsandbytes 没有 NPU 后端 | 按第 10 节用 `sed` 换成 `adamw_torch` |
+| `ValueError: Cannot take a larger sample than population` | 切片后的训练集行数少于某个数据集写死的 `sample` 值 | 按第 10 节把 `sample=10000` 一并改到 40 |
 | RL 训练步数上万、单卡跑不完 | `sample = -1` 展开整个商品目录 | 按第 10 节把 `sample` 改到 40，并把训练集切到 40 行 |

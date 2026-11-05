@@ -11,7 +11,9 @@
 # by itself); evaluation and RL get transfer_to_npu through a
 # PYTHONPATH-scoped sitecustomize directory. RL runs ``python rl.py``
 # (not rl.sh, which pins 8 processes and parses no args) with one sed
-# swapping paged_adamw_32bit for adamw_torch and capping sample at 40.
+# making three single-line edits: optim -> adamw_torch (bitsandbytes has
+# no NPU backend), sample = -1 -> 40, sample=10000 -> 40 (the hard-coded
+# argument of RLSeqTitle2SidDataset, which ignores the sample variable).
 # RL (GRPO) is pointer-only — its vLLM path is CUDA-only; see
 # projects/minionerec/docs/Quick-start-Ascend.md for rationale.
 #

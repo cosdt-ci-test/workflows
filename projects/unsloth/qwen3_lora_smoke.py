@@ -38,6 +38,38 @@ def checkpointing_for_scenario(value):
     return mode
 
 
+def packing_batch_evidence(batch, require_labels=True):
+    """Check Unsloth's flattened batch without changing its tensors."""
+    for key in ("input_ids", "position_ids", "packed_seq_lengths"):
+        assert key in batch, f"Missing packing metadata: {key}"
+    ids = batch["input_ids"].detach().cpu().tolist()
+    positions = batch["position_ids"].detach().cpu().tolist()
+    lengths = batch["packed_seq_lengths"].detach().cpu().tolist()
+    assert lengths and all(isinstance(n, int) and n > 0 for n in lengths), lengths
+    assert len(ids) == len(positions) == 1, "Expected one flattened token row"
+    assert sum(lengths) == len(ids[0]), "Packed lengths do not cover the batch"
+    assert positions[0] == [p for n in lengths for p in range(n)], "Invalid position resets"
+    assert "attention_mask" not in batch, "Unexpected padded attention mask"
+    starts = []
+    offset = 0
+    for n in lengths:
+        starts.append(offset)
+        offset += n
+    evidence = {
+        "input_shape": list(batch["input_ids"].shape),
+        "packed_seq_lengths": lengths,
+        "position_reset_offsets": starts,
+        "total_tokens": offset,
+    }
+    if require_labels or batch.get("labels") is not None:
+        labels = batch["labels"].detach().cpu().tolist()
+        assert len(labels) == 1 and len(labels[0]) == offset
+        assert all(labels[0][start] == -100 for start in starts), "Unmasked packed boundary"
+        assert any(label != -100 for label in labels[0]), "No supervised tokens"
+        evidence["supervised_tokens"] = sum(label != -100 for label in labels[0])
+    return evidence
+
+
 try:
     record("scenario_setup")
     checkpointing = checkpointing_for_scenario(scenario)
@@ -162,14 +194,15 @@ try:
         source_ids = tokenizer(texts, add_special_tokens=False)["input_ids"]
         assert all(len(ids) < max_seq_length for ids in source_ids)
         training_dataset = Dataset.from_dict({"input_ids": source_ids})
-        packing_options = dict(packing_strategy="wrapped", padding_free=False)
+        packing_options = dict(packing_strategy="wrapped", padding_free=True)
     trainer = SFTTrainer(
         model=model, processing_class=tokenizer,
         train_dataset=training_dataset,
         callbacks=[CheckGradientCheckpointing()],
         args=SFTConfig(
             output_dir=str(OUTPUT / "trainer"), dataset_text_field="text",
-            max_length=max_seq_length, packing=scenario == "packing", per_device_train_batch_size=1,
+            max_length=max_seq_length, packing=scenario == "packing",
+            per_device_train_batch_size=2 if scenario == "packing" else 1,
             gradient_accumulation_steps=1, max_steps=3, learning_rate=2e-4,
             logging_steps=1, optim="adamw_torch", bf16=True, fp16=False,
             gradient_checkpointing=trainer_checkpointing, save_strategy="no", report_to="none",
@@ -187,7 +220,7 @@ try:
         assert all(len(ids) == max_seq_length for ids in packed_ids[:-1])
         assert 0 < len(packed_ids[-1]) <= max_seq_length
         assert trainer.args.packing and trainer.args.packing_strategy == "wrapped"
-        assert not trainer.padding_free, "Unexpected padding-free attention path"
+        assert trainer.args.padding_free and trainer.padding_free, "Padding-free packing is inactive"
         # The first full block contains several original sample boundaries.
         boundary = 0
         first_block_boundaries = 0
@@ -195,10 +228,6 @@ try:
             boundary += len(ids)
             first_block_boundaries += boundary < max_seq_length
         assert first_block_boundaries >= 2, first_block_boundaries
-        batch = trainer.data_collator([trainer.train_dataset[0]])
-        assert batch["input_ids"].shape == (1, max_seq_length)
-        assert int(batch["attention_mask"].sum()) == max_seq_length
-        assert bool((batch["labels"] != -100).any())
         result["packing"] = {
             "strategy": "wrapped", "padding_free": trainer.padding_free,
             "source_samples": len(source_ids), "packed_samples": len(packed_ids),
@@ -207,10 +236,36 @@ try:
             "packed_lengths": [len(ids) for ids in packed_ids],
             "attention_implementation": model.config._attn_implementation,
         }
+        # Use different blocks, including the tail, to check flattening,
+        # position resets, and loss masking at packed-block boundaries.
+        samples = [trainer.train_dataset[0], trainer.train_dataset[-1]]
+        batch = trainer.data_collator(samples)
+        evidence = packing_batch_evidence(batch)
+        result["packing"]["collated_batch"] = evidence
+        record("packing_validation")
+        assert evidence["packed_seq_lengths"] == [len(sample["input_ids"]) for sample in samples]
+        assert batch["input_ids"][0].tolist() == samples[0]["input_ids"] + samples[1]["input_ids"]
+
+        packing_forwards = []
+
+        def observe_packed_forward(module, args, kwargs):
+            assert kwargs["input_ids"].device.type == "npu", "Packing forward left NPU"
+            evidence = packing_batch_evidence(kwargs, require_labels=False)
+            packing_forwards.append(evidence)
+            result["packing"]["training_batches"] = packing_forwards
+            record("training")
+
+        packing_hook = model.register_forward_pre_hook(observe_packed_forward, with_kwargs=True)
         record("packing_validation", True)
     record("training")
     metrics = trainer.train().metrics
     torch.npu.synchronize()
+    if scenario == "packing":
+        packing_hook.remove()
+        assert len(packing_forwards) >= 3, "Did not observe three packed training forwards"
+        assert any(len(item["packed_seq_lengths"]) > 1 for item in packing_forwards), (
+            "Training never combined multiple packed blocks into a batch"
+        )
     assert trainer.state.global_step == 3, trainer.state.global_step
     assert math.isfinite(metrics["train_loss"]), metrics
     changed = [n for n, p in trainable.items()

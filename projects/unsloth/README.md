@@ -198,12 +198,20 @@ completions. The adapter hash changed after each preceding update, 392 LoRA
 tensors changed over training, and the final adapter was saved.
 
 The `packing` scenario returns to the single-card training image and uses
-TRL 0.22.2's `wrapped` strategy with `padding_free=False`. It checks that
+TRL 0.22.2's `wrapped` strategy with Unsloth's `padding_free=True`. It checks that
 the trainer combines multiple short examples into full 256-token blocks
 without changing or dropping any input token, then completes three training
-steps, adapter save/reload and generation. Wrapped packing can split examples
-and permits attention across their boundaries; this does not validate BFD,
-document-isolated attention, padding-free kernels or a speed improvement.
+steps, adapter save/reload and generation. Each training batch takes up to
+two packed blocks. Checks cover flattened tokens, position-ID resets,
+`packed_seq_lengths`, masked boundary labels and the absence of a padded
+attention mask, including the metadata passed to actual NPU training forwards.
+Wrapped packing can split original examples and permits attention within
+each block across original example boundaries. This does not validate BFD,
+isolation of original documents, a particular fused kernel or a speed improvement.
+[Run #28](https://github.com/cosdt-ci-test/workflows/actions/runs/41991041132)
+passed the token-preservation checks but stopped before training because
+the old script incorrectly required padding-free to remain off; Unsloth
+enables it whenever sample packing is active.
 The separate 4-bit QLoRA item remains a backend gap under the maintainer's
 [Ascend support statement](https://github.com/unslothai/unsloth/issues/1794).
 

@@ -74,7 +74,8 @@ Select a scenario when dispatching the same workflow:
 | `vllm-ascend` | Compare native vLLM-Ascend generation with Unsloth fast generation and a LoRA request | Passed in run #26 |
 | `grpo-vllm-ascend` | Run GRPO with the colocated vLLM engine and verify fresh LoRA tensors reach each rollout | Passed in run #27 |
 | `packing` | Pack short tokenized samples into full sequences, then train, save, reload and generate | Passed in run #31 |
-| `packing-bfd` | Preserve whole samples in BFD blocks, check isolation, then train, save, reload and generate | Awaiting NPU validation |
+| `packing-bfd` | Preserve whole samples in BFD blocks, check isolation, then train, save, reload and generate | Passed in run #32 |
+| `long-context` | Train with real 4096-token inputs and standard checkpointing, then reload and generate from a long prompt | Awaiting NPU validation |
 | `ddp-2` | Run two ranks with explicit HCCL, synchronized LoRA updates and rank-0 adapter save | Passed in run #18 |
 | `fsdp2-2` | Run two-rank Accelerate FSDP2, save step 1, then resume in new processes | Passed in run #20 |
 
@@ -229,6 +230,20 @@ two documents and requires the second document's logits to stay unchanged
 within the recorded tolerance while the first document's logits change.
 It then runs three training steps, saves, reloads and generates. This
 validates one boundary-isolation probe, not all possible attention layouts.
+[Run #32](https://github.com/cosdt-ci-test/workflows/actions/runs/42019521547)
+passed on Ascend910B4: all 24 samples and 632 tokens were preserved. Changing
+the first probe document changed its logits by up to 31.3711, while the
+second document's logits did not change. Three training steps changed
+392 LoRA tensors; adapter reload and generation passed.
+
+The `long-context` scenario uses 4096-token local sequences, batch size 1,
+standard gradient checkpointing and no packing. A forward observer verifies
+that three training steps actually receive 4096 tokens on NPU. It records
+training peak allocated/reserved memory, checks LoRA updates, saves and
+reloads the adapter, then generates from a prompt of at least 3072 tokens
+within the configured window. This is a functional 4K test within Qwen3's
+native context range; it does not extend RoPE, establish maximum supported
+context length, or measure a speed/memory improvement against a baseline.
 The separate 4-bit QLoRA item remains a backend gap under the maintainer's
 [Ascend support statement](https://github.com/unslothai/unsloth/issues/1794).
 
@@ -304,6 +319,10 @@ gh workflow run unsloth-npu-example.yml --repo cosdt-ci-test/workflows --ref fea
 
 ```shell
 gh workflow run unsloth-npu-example.yml --repo cosdt-ci-test/workflows --ref feat/unsloth-adapt -f scenario=packing-bfd
+```
+
+```shell
+gh workflow run unsloth-npu-example.yml --repo cosdt-ci-test/workflows --ref feat/unsloth-adapt -f scenario=long-context
 ```
 
 ```shell

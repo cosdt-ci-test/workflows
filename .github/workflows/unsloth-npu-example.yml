@@ -24,6 +24,7 @@ on:
           - grpo-vllm-ascend
           - packing
           - packing-bfd
+          - long-context
           - ddp-2
           - fsdp2-2
 

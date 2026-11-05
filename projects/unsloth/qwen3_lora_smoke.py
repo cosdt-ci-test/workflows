@@ -36,6 +36,7 @@ def checkpointing_for_scenario(value):
         "unsloth-gc": "unsloth",
         "packing": False,
         "packing-bfd": False,
+        "long-context": True,
     }.get(value)
     if mode is None and value != "baseline":
         raise ValueError(f"Unknown test scenario: {value!r}")
@@ -136,7 +137,10 @@ try:
     gradient_checkpointing = bool(checkpointing)
     trainer_checkpointing = checkpointing is True
     # Unsloth falls back to standard checkpointing below 512 tokens.
-    max_seq_length = 512 if checkpointing == "unsloth" else 256
+    max_seq_length = (
+        4096 if scenario == "long-context" else
+        512 if checkpointing == "unsloth" else 256
+    )
     result["gradient_checkpointing_mode"] = (
         "disabled" if checkpointing is False else
         "standard" if checkpointing is True else checkpointing
@@ -227,11 +231,14 @@ try:
         [{"role": "user", "content": "Name a primary color."},
          {"role": "assistant", "content": "Red is a primary color."}],
     ]
-    if checkpointing == "unsloth":
-        long_context = (
+    if checkpointing == "unsloth" or scenario == "long-context":
+        sentence = (
             "This sentence is repeated to exercise long-context activation "
-            "recomputation under Unsloth checkpointing. " * 50
+            "recomputation under Unsloth checkpointing. "
         )
+        if scenario == "long-context":
+            sentence = "This local document exercises training with a long token sequence. "
+        long_context = sentence * (400 if scenario == "long-context" else 50)
         conversations = [
             [{"role": "user", "content": long_context + c[0]["content"]}, c[1]]
             for c in base_conversations
@@ -244,7 +251,7 @@ try:
     token_lengths = [len(tokenizer(text, truncation=True, max_length=max_seq_length)["input_ids"])
                      for text in texts]
     result["max_training_tokens"] = max(token_lengths)
-    if checkpointing == "unsloth":
+    if checkpointing == "unsloth" or scenario == "long-context":
         assert result["max_training_tokens"] == max_seq_length, result["max_training_tokens"]
     training_dataset = Dataset.from_dict({"text": texts})
     packing_options = {}
@@ -270,6 +277,28 @@ try:
             **packing_options,
         ),
     )
+    if scenario == "long-context":
+        record("long_context_validation")
+        lengths = [len(row["input_ids"]) for row in trainer.train_dataset]
+        assert lengths and all(n == 4096 for n in lengths), lengths
+        result["long_context"] = {
+            "training_lengths": lengths,
+            "checkpointing": "standard",
+            "packing": False,
+            "attention_implementation": model.config._attn_implementation,
+            "training_batches": [],
+        }
+        record("long_context_validation", True)
+
+        def observe_long_forward(module, args, kwargs):
+            ids = kwargs["input_ids"]
+            entry = {"shape": list(ids.shape), "device": ids.device.type}
+            result["long_context"]["training_batches"].append(entry)
+            record("training")
+            assert ids.device.type == "npu" and tuple(ids.shape) == (1, 4096), entry
+
+        long_hook = model.register_forward_pre_hook(observe_long_forward, with_kwargs=True)
+        torch.npu.reset_peak_memory_stats()
     if packing_enabled:
         record("packing_validation")
         packed_ids = trainer.train_dataset["input_ids"]
@@ -337,6 +366,11 @@ try:
     record("training")
     metrics = trainer.train().metrics
     torch.npu.synchronize()
+    if scenario == "long-context":
+        long_hook.remove()
+        assert len(result["long_context"]["training_batches"]) >= 3
+        result["long_context"]["peak_allocated_bytes"] = torch.npu.max_memory_allocated()
+        result["long_context"]["peak_reserved_bytes"] = torch.npu.max_memory_reserved()
     if packing_enabled:
         packing_hook.remove()
         assert len(packing_forwards) >= 3, "Did not observe three packed training forwards"
@@ -372,11 +406,20 @@ try:
     )
     assert all(p.device.type == "npu" for p in model.parameters())
     FastLanguageModel.for_inference(model)
+    question = "What is two plus two?"
+    if scenario == "long-context":
+        context_ids = tokenizer(long_context, add_special_tokens=False)["input_ids"][:3100]
+        question = tokenizer.decode(context_ids) + "\n" + question
     prompt = tokenizer.apply_chat_template(
-        [{"role": "user", "content": "What is two plus two?"}],
+        [{"role": "user", "content": question}],
         tokenize=False, add_generation_prompt=True, enable_thinking=False,
     )
     batch = tokenizer(prompt, return_tensors="pt").to("npu")
+    if scenario == "long-context":
+        prompt_length = batch.input_ids.shape[1]
+        result["long_context"]["generation_prompt_tokens"] = prompt_length
+        record("reload_and_inference")
+        assert 3072 <= prompt_length <= max_seq_length - 32, prompt_length
     with torch.inference_mode():
         tokens = model.generate(**batch, max_new_tokens=32, do_sample=False)
     torch.npu.synchronize()

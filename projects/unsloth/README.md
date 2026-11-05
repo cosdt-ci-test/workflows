@@ -159,6 +159,9 @@ gradients, 392 LoRA tensors changed, and adapter save, reload and generation pas
 
 The `vllm-ascend` scenario uses the repository's dedicated vLLM-Ascend 0.23.0
 image and keeps its matched Torch, torch_npu, Triton and NumPy packages.
+This scenario uses Transformers 5.5.4 as required by vLLM-Ascend 0.23.0,
+with PEFT 0.19.1 and TRL 0.29.1 for Unsloth imports. The training scenarios
+keep their original pins. A single manual dispatch runs both inference checks.
 One process loads Qwen3-0.6B in BF16 with native vLLM and generates on NPU.
 A separate process loads the same model via Unsloth's `fast_inference=True`,
 generates without an adapter, then saves and reloads a probe LoRA through

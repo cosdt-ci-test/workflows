@@ -25,7 +25,6 @@ for raw in requirements:
     if name not in excluded and (req.marker is None or req.marker.evaluate()):
         selected.append(raw)
 constraints = pathlib.Path("output/constraints.txt")
-common_pins = "transformers==4.57.6\ntrl==0.22.2\npeft==0.18.0\ndatasets==4.3.0\n"
 if sys.argv[1:] == ["--vllm-image"]:
     # Keep the matched vLLM image's binary stack, including its NumPy ABI.
     stack = {name: version(name) for name in (
@@ -40,16 +39,21 @@ if sys.argv[1:] == ["--vllm-image"]:
     # Accept that build but keep its full version in the pip constraints.
     if stack["vllm"] not in {"0.23.0", "0.23.0+empty"} or stack["vllm-ascend"] != "0.23.0":
         raise SystemExit(f"Unexpected vLLM-Ascend image versions: {stack}")
+    # vLLM-Ascend 0.23.0 requires Transformers 5.5.4. Use the
+    # Transformers 5-compatible PEFT and TRL releases in this job only.
+    hf_pins = "transformers==5.5.4\ntrl==0.29.1\npeft==0.19.1\n"
     stack_pins = "".join(f"{name}=={installed}\n" for name, installed in stack.items())
     stack_requirements = ["vllm", "vllm-ascend"]
 elif not sys.argv[1:]:
+    hf_pins = "transformers==4.57.6\ntrl==0.22.2\npeft==0.18.0\n"
     # Triton-Ascend 3.2.2 requires NumPy 1.26.4. Arrow 21 satisfies
     # datasets 4.3.0's >=21 floor while retaining NumPy 1.x support.
-    stack_pins = "torch==2.9.0\ntorch_npu==2.9.0.post2\nnumpy==1.26.4\npyarrow==21.0.0\n"
+    stack_pins = "torch==2.9.0\ntorch_npu==2.9.0.post2\nnumpy==1.26.4\n"
     stack_requirements = []
 else:
     raise SystemExit("Expected no arguments or --vllm-image")
-constraints.write_text(common_pins + stack_pins)
+# Arrow 21 also keeps datasets working with the vLLM image's NumPy 1.26.
+constraints.write_text(hf_pins + "datasets==4.3.0\n" + stack_pins + "pyarrow==21.0.0\n")
 subprocess.run(
     [sys.executable, "-m", "pip", "install", "-c", str(constraints),
      *sorted(set(selected)), *stack_requirements, "modelscope==1.37.0"],

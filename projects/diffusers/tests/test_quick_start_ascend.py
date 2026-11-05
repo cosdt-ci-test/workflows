@@ -1,45 +1,12 @@
-"""Quick-start-Ascend documentation test: end-to-end case built on top
-of the ``MarkdownDocTestBase`` contract.
-
-Document under test: ``projects/diffusers/docs/Quick-start-Ascend.md``
-(follows the ``docs/markdown_doc_test_label.md`` contract: every
-``shell`` code block carries one of the ``#test`` / ``#test-setup`` /
-``#test-result`` labels plus ``id=`` / ``store=`` / ``load='x>>y'`` /
-``fuzzy='xxx'`` parameters).
-
-Run: ``python -m unittest tests.test_quick_start_ascend -v 2>&1``
-
-Environment variables (injected by the quick-start engine workflow
-``quick-start-template.yml``, triggered by ``diffusers-quick-start.yml``):
-    ``MONITORED_DOC_URL``         Fallback doc URL. The doc is normally
-                                  read from the engine's local checkout
-                                  (same file, same commit the monitor
-                                  triggered on); the URL is only fetched
-                                  when the local copy is absent
-                                  (e.g. running the test standalone from
-                                  a bare project dir).
-    ``UPSTREAM_REF``              Required; bash reads ``$UPSTREAM_REF`` to get
-                                  the latest release tag. The value is
-                                  captured into ``captures`` via the
-                                  ``#test-setup store="upstream_ref"`` block's
-                                  stdout, then substituted into the doc
-                                  command body where ``<ref>`` appears.
-    ``NPU_READY=true``            Required, otherwise the class is skipped.
-                                  End-to-end tests only run on the NPU runner:
-                                  local dev machines / normal ubuntu runners
-                                  have no ``/dev/davinci*`` device, and the
-                                  hard run would fail on ``import torch_npu``.
-"""
-
 from __future__ import annotations
 
 import os
 import subprocess
 import unittest
-from pathlib import Path
 
 from workflows.markdown_doc_test_base import MarkdownDocTestBase
 from workflows.model_cache import (
+    diagnose_mount_environment,
     ensure_safetensors,
     purge_modelscope_corrupt,
     resolve_modelscope_cache,
@@ -47,57 +14,19 @@ from workflows.model_cache import (
 
 
 def _is_truthy(value: str | None) -> bool:
-    """``'true'`` -> True (case-insensitive, leading/trailing whitespace
-    tolerated); anything else (including unset) -> False."""
     if not value:
         return False
     return value.strip().lower() == 'true'
 
 
 def _e2e_enabled() -> bool:
-    """Return True when ``NPU_READY=true`` is set, releasing the skip."""
     return _is_truthy(os.environ.get('NPU_READY'))
 
 
 class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
-    """``Quick-start-Ascend.md`` end-to-end test: fetch doc -> validate
-    contract -> run ``#test-setup`` / ``#test`` in order -> compare against
-    ``#test-result``."""
-
-    # 2h per command: the doc's slowest block downloads ~28 GB (SD3.5
-    # component dirs only - the doc's allow/ignore patterns skip the
-    # repo's 33 GB of ComfyUI/fp16 duplicates); at observed ~3.4 MB/s
-    # cluster egress that's ~2.3h worst case, though warm-cache runs
-    # finish in seconds. 8B pipeline load + 4-step generation fit
-    # comfortably in the same budget.
     DEFAULT_COMMAND_TIMEOUT = 7200
+
     USER_AGENT = 'cosdt-ci-test/quick-start'  # monitored source is the fork under cosdt-ci-test org
-
-    # Local copy of the monitored doc, relative to the test cwd
-    # (workflows/projects/diffusers). The engine checks the workflows repo
-    # out next to the project dir, and the monitor triggered this run off
-    # the very commit this checkout holds - same file, zero network.
-    _LOCAL_DOC = Path(__file__).resolve().parents[1] / 'docs' / 'Quick-start-Ascend.md'
-
-    def pre_process(self) -> str:
-        """Read the doc from the engine's local checkout, falling back to
-        ``MONITORED_DOC_URL``.
-
-        Why: raw.githubusercontent.com is not reliably reachable from the
-        NPU runner (cluster firewall; the engine's own monitor step treats
-        a doc-fetch failure as "signal unknown" for the same reason). The
-        base class's fetch-only pre_process makes the whole test suite
-        hinge on that flaky network path, while the very same doc sits on
-        local disk in the checkout the engine just made.
-        """
-        if self._LOCAL_DOC.is_file():
-            self.log(f'pre_process: reading local doc {self._LOCAL_DOC}')
-            return self._LOCAL_DOC.read_text(encoding='utf-8')
-        self.log(
-            f'pre_process: local doc missing ({self._LOCAL_DOC}); '
-            'falling back to MONITORED_DOC_URL fetch'
-        )
-        return super().pre_process()
 
     ERROR_MARKERS = (
         *MarkdownDocTestBase.ERROR_MARKERS,  # generic [ERROR] + Traceback
@@ -105,11 +34,6 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         'ERR99999',  # CANN sentinel for unrecoverable runtime failure
     )
 
-    # Process-level CUDA exclusion list. Originally written inside the
-    # workflow step as a child-process env passed through to pip / uv /
-    # diffusers' own wheel resolver. Moved to the test layer: write to /tmp
-    # and export; subprocesses (subprocess.run inherits parent env by
-    # default) see it the same way.
     _CUDA_CONSTRAINTS = (
         'cuda-toolkit<0',
         'cuda-python<0',
@@ -161,27 +85,8 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     # ``image:`` input of ``diffusers-quick-start.yml``.
     _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
 
-    # ----------------------------------------------------------
-    # prepare_environment: CANN env + CUDA constraints + uv + torch stack probe
-    # ----------------------------------------------------------
-
     @classmethod
     def prepare_environment(cls) -> None:
-        """Install CANN env + CUDA constraints + uv + torch stack probe
-        in one go. The remaining dependencies — ``transformers`` /
-        ``accelerate`` / ``peft`` / ``modelscope`` (via the doc's
-        dependency ``#test-setup`` block, verified by the
-        ``install-deps`` version print) and ``diffusers`` (via
-        ``diffusers-install-binary`` / ``diffusers-install-source``) —
-        install themselves in document order inside ``run_template``.
-
-        Class-level setup: run once per test class, triggered by
-        ``setUpClass``. Not the same as ``unittest.TestCase.setUp`` —
-        that lifecycle hook fires before every test method, which is
-        wrong for a one-shot install.
-        """
-        # 0) CANN env: source set_env.sh and merge the env stream into
-        # os.environ
         if os.path.isfile(cls._CANN_SET_ENV):
             merged = subprocess.run(
                 ['bash', '-c', f'source {cls._CANN_SET_ENV} >/dev/null 2>&1; env'],
@@ -191,9 +96,6 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 if '=' not in line:
                     continue
                 key, _, value = line.partition('=')
-                # Don't overwrite envs explicitly injected by the
-                # workflow (jobs.env / steps.env); only fill in CANN
-                # keys that are missing, to avoid conflicts.
                 os.environ.setdefault(key, value)
             print('setup: sourced CANN env from set_env.sh')
         else:
@@ -201,24 +103,16 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 f'setup: skipping CANN env source ({cls._CANN_SET_ENV} not present)'
             )
 
-        # 1) CUDA exclusion list + process-level env
         with open(cls._CONSTRAINTS_FILE, 'w', encoding='utf-8') as fh:
             fh.write('\n'.join(cls._CUDA_CONSTRAINTS) + '\n')
         os.environ['PIP_CONSTRAINT'] = cls._CONSTRAINTS_FILE
         os.environ['UV_CONSTRAINT'] = cls._CONSTRAINTS_FILE
 
-        # 2) uv: the doc's install blocks call ``uv pip install`` which
-        # handles PEP 517 build deps more reliably than pip. Inherit
-        # ``PIP_INDEX_URL`` + ``PIP_TRUSTED_HOST`` from the yml job-level
-        # env (cluster cache path + trusted-host).
         subprocess.run(
             ['python', '-m', 'pip', 'install', 'uv'],
             check=True,
         )
 
-        # 3) torch stack probe: when version matches the image's
-        # pre-installed wheels, reuse them to avoid the cluster cache
-        # triggering ``+cpu`` resolution.
         _PROBE_SCRIPT = (
             'import torch, torch_npu\n'
             "raise SystemExit(0 if "
@@ -253,33 +147,14 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 check=True,
             )
 
-        # 4) safetensors: native loader used by the cache validation
-        # step below. Pulled in transitively by torch on most images;
-        # install defensively in case the CANN base ships without it.
         ensure_safetensors()
 
-        # 5) transformers / accelerate / modelscope / diffusers are NOT
-        # installed here: they are the subject of the doc itself and
-        # install themselves in document order — the
-        # ``#test-setup`` dependency block (``pip install 'transformers>=5.0,<6.0'
-        # 'accelerate>=1.0,<2.0' 'modelscope==1.37.0'`` + the
-        # ``install-deps`` version print), then the diffusers blocks
-        # (``diffusers-install-binary`` / ``diffusers-install-source``).
-        # Installing them here too would just mask a broken doc block.
+        # Network + cache visibility: modelscope.cn throughput probe
+        # (curl-timed MiB/s + verdict) and mount diagnostics, so every
+        # guard run logs the download speed the doc's snapshot_download
+        # blocks will actually see.
+        diagnose_mount_environment()
 
-        # 6) Cache validation: unlike ms-swift/peft (run-scoped
-        # container-local cache), this project persists downloads across
-        # runs via a project-isolated host bind mount
-        # (/data/ci-cache/modelscope/diffusers at /root/.cache/modelscope;
-        # MODELSCOPE_CACHE left unset so the mount point applies) because
-        # Qwen-Image-size (~58 GB) re-downloads every trigger are
-        # unsustainable; the doc's current model (SD3.5-large-turbo,
-        # ~72 GB) is even heavier.
-        # A persistent cache can hold truncated safetensors from
-        # interrupted runs; walk every shard under each model dir and
-        # purge it on failure so modelscope re-downloads cleanly on next
-        # access. Implementation lives in workflows.model_cache; see
-        # that module's docstring for the full rationale.
         purge_modelscope_corrupt(resolve_modelscope_cache())
 
     # ----------------------------------------------------------
@@ -291,10 +166,10 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         """Run env setup once per test class: CANN env + CUDA constraints
         + uv + torch stack.
 
-        ``transformers`` / ``accelerate`` / ``modelscope`` / ``diffusers``
-        are NOT installed here: the doc's own labeled blocks install them
-        in document order, so a broken install block fails loudly instead
-        of being masked by a pre-installed copy.
+        ``transformers`` / ``accelerate`` / ``peft`` / ``modelscope`` /
+        ``diffusers`` are NOT installed here: the doc's own labeled
+        blocks install them in document order, so a broken install block
+        fails loudly instead of being masked by a pre-installed copy.
 
         ``@unittest.skipIf`` only skips the test *method* — ``setUpClass``
         itself always runs. The ``if _e2e_enabled()`` body guard below is

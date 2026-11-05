@@ -52,16 +52,16 @@ concurrency:
   cancel-in-progress: false
 
 on:
-  schedule:
-    # Daily: '45 2 * * *' fires at 02:45 UTC (10:45 北京时间). The
-    # pipeline is green, so the periodic monitor loop is now enabled;
-    # once a day is enough for doc-hash changes (and upstream wheel
-    # updates) to propagate within a day. The minute :45 matches the
-    # eval-framework family here, and 02:45 UTC is deliberately
-    # staggered BEFORE transformers (03:30 UTC) and funasr (04:30 UTC)
-    # because funasr shares this single-card NPU runner
-    # (linux-aarch64-a2-1); the offset keeps the runner queue clean.
-    - cron: '45 2 * * *'
+  # schedule:
+  # Daily: '45 2 * * *' fires at 02:45 UTC (10:45 北京时间). The
+  # pipeline is green, so the periodic monitor loop is now enabled;
+  # once a day is enough for doc-hash changes (and upstream wheel
+  # updates) to propagate within a day. The minute :45 matches the
+  # eval-framework family here, and 02:45 UTC is deliberately
+  # staggered BEFORE transformers (03:30 UTC) and funasr (04:30 UTC)
+  # because funasr shares this single-card NPU runner
+  # (linux-aarch64-a2-1); the offset keeps the runner queue clean.
+  #   - cron: '45 2 * * *'
   workflow_dispatch:
 
 permissions:

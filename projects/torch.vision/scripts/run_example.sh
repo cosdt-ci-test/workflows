@@ -85,6 +85,18 @@ else:
     data_flag = "--dataset-root" if kind == "optical-flow" else "--data-path"
     sys.argv = [str(script), *overlay, data_flag, data_root, "--output-dir", str(output)]
 
+if entry == "references/video_classification/train.py":
+    # CANN 9.1.0's fp32 Conv3DBackpropInput kernel rejects stride_d >
+    # kernel_d (R3D-18 downsample 1x1x1 conv / stride (2,2,2); run
+    # 39895381622; allow_tf32 and allow_internal_format do not route
+    # around it). The fp16 kernel handles the shape, so the manifest
+    # overlays upstream's --amp. train.py gates that on
+    # torch.cuda.amp.autocast, a no-op on the +cpu torch build - this
+    # shim (same as peft's cuda->npu sitecustomize) maps it to NPU
+    # autocast. Verified on coder npu-3 (CANN 9.1.0): autocast output
+    # fp16, backward + GradScaler + optimizer step all green.
+    import torch_npu.contrib.transfer_to_npu  # noqa: F401
+
 os.chdir(script.parent)
 sys.path.insert(0, str(script.parent))
 print(f"running unchanged upstream {entry} with torchvision {torchvision.__version__}")

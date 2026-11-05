@@ -49,7 +49,7 @@ jobs:
       project: torchtitan
       upstream_repo: pytorch/torchtitan
       target_ref: ${{ inputs.target_ref }}
-      # 4 supported entries, 2 unique runner types (a2-1 + a2-2); max
-      # 4 keeps the matrix from thrashing the 2-card runner when both
-      # 1-card and 2-card legs queue up simultaneously.
+      # 2 supported entries (llama3 debugmodel, 1-card + 2-card), 2 unique
+      # runner types (a2-1 + a2-2); max 4 keeps the matrix from
+      # thrashing the 2-card runner when both legs queue up simultaneously.
       max_parallel: 4

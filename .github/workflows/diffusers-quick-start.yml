@@ -9,16 +9,18 @@
 # Device mounts: davinci0 only - the doc examples are single-card and
 # check-torch expects `count: 1`.
 #
-# Modelscope cache: the doc's slowest block downloads Qwen-Image (~58 GB),
-# so unlike ms-swift/peft (run-scoped container-local cache), this project
-# persists downloads across runs. The bind-mount is project-isolated
-# (/data/ci-cache/modelscope/diffusers - per-project subdir under the
-# shared modelscope cache root, NOT the shared root itself) so this
-# project's 58 GB never collides with other projects' cache entries.
-# Stale/corrupt leftovers are handled by the test's prepare_environment
-# (workflows.model_cache.purge_modelscope_corrupt: safetensors header
-# validation per shard, model dir wiped on failure), so a dirty cache
-# self-heals instead of failing the run.
+# Modelscope cache: the doc's slowest block downloads SD 3.5 Large
+# Turbo (~28 GB net), so unlike run-scoped container-local caches,
+# this project persists downloads across runs. There is NO
+# project-isolated mount here (container_options stays empty):
+# container `--volume` isolation was verified NOT to work on these
+# K8s-based runners, so every project shares the runner's NFS-backed
+# /root/.cache/modelscope. Cross-run safety comes from
+# workflows.model_cache.purge_modelscope_corrupt instead: it never
+# touches modelscope's ._____temp in-flight area and only purges
+# shards whose safetensors header is CONFIRMED broken (transient NFS
+# read errors are not treated as corruption), so one project's purge
+# cycle can no longer delete another run's in-flight downloads.
 
 name: diffusers-quick-start
 
@@ -36,24 +38,25 @@ concurrency:
 
 on:
   schedule:
-    # Run every 3 hours: '15 */3 * * *' fires at minute 15 of every
-    # 3rd hour (00:15, 03:15, 06:15, ..., 21:15). GitHub Actions caps
-    # schedule at 5 min minimum, so tighter cadences need
-    # workflow_dispatch instead.
-    - cron: '15 */3 * * *'
+    # Twice a day, 12 h apart: UTC 05:20 and 17:20
+    # (Beijing +8). All quick-start guards share this cadence; the
+    # (hour, minute) slot is staggered across the guards so the NPU
+    # runners do not all fire at the same time.
+    - cron: '20 5,17 * * *'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  diffusers-quick-start:
+  qs-a2:
     uses: ./.github/workflows/quick-start-template.yml
     with:
       # Namespaces cache keys (quick-start-monitor-state-diffusers_*), artifacts
       # (diffusers-quick-start-<run_id>) and the test working dir
       # (workflows/projects/diffusers).
       project: diffusers
+      machine_type: a2
       # Self-hosted NPU runner for the test job only; the engine pins
       # the cache I/O jobs (restore-cache / publish-and-persist) to
       # GitHub-hosted ubuntu-latest.
@@ -66,13 +69,44 @@ jobs:
       # rest of the doc's blocks.
       timeout_minutes: 240
       upstream_repo: huggingface/diffusers
-      # Raw URL the engine's monitor hashes and the test fetches;
+      # Contents API URL the engine's monitor hashes and the test fetches;
       # doc-hash state lives under the quick-start-monitor-state-diffusers_ cache
       # prefix.
-      doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/diffusers/docs/Quick-start-Ascend.md
-      doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/diffusers/docs/Quick-start-Ascend.md
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/diffusers/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/diffusers/docs/Quick-start-Ascend.md
       # cwd is workflows/projects/diffusers; env contract (MONITORED_DOC_URL /
       # UPSTREAM_REF / NPU_READY) is injected by the engine. All project
       # env prep and installs live in the test subclass's
       # prepare_environment hook.
       test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1
+
+  qs-a3:
+    uses: ./.github/workflows/quick-start-template.yml
+    with:
+      project: diffusers
+      machine_type: a3
+      # Atlas 900 A3 (Ascend 910C) leg.
+      test_runner: '["linux-aarch64-a3-800i-2"]'
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-a3-ubuntu22.04-py3.12
+      container_options: ''
+      timeout_minutes: 240
+      upstream_repo: huggingface/diffusers
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/diffusers/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/diffusers/docs/Quick-start-Ascend.md
+      test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1
+
+  merge:
+    needs: [qs-a2, qs-a3]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout workflows (provides the merge action)
+        uses: actions/checkout@v6
+      - name: Merge per-machine results into one artifact
+        uses: ./.github/actions/merge-quick-start-results
+        with:
+          project: diffusers
+          result_a2: ${{ needs.qs-a2.outputs.result_json }}
+          result_a3: ${{ needs.qs-a3.outputs.result_json }}
+          name_a2: qs-a2
+          name_a3: qs-a3

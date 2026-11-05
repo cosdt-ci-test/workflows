@@ -39,13 +39,13 @@ concurrency:
   cancel-in-progress: false
 
 on:
-  schedule:
-    # Run every 6 hours: '0 */6 * * *' fires at minute 0 of every
-    # 6th hour (00:00, 06:00, 12:00, 18:00). Cadence is loose enough
-    # for an upstream that releases a few times a year (specforge
-    # current latest is v0.5.x line), but tight enough that doc fixes
-    # propagate within a day.
-    - cron: '0 */6 * * *'
+  # schedule:
+  # Run every 6 hours: '0 */6 * * *' fires at minute 0 of every
+  # 6th hour (00:00, 06:00, 12:00, 18:00). Cadence is loose enough
+  # for an upstream that releases a few times a year (specforge
+  # current latest is v0.5.x line), but tight enough that doc fixes
+  # propagate within a day.
+  #   - cron: '0 */6 * * *'
   workflow_dispatch:
 
 permissions:

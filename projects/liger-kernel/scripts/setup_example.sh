@@ -19,6 +19,8 @@ if [[ $# -lt 1 ]]; then
 fi
 
 PROFILE="$1"
+# Apply to every pip invocation, including transitive ModelScope dependencies.
+export PIP_CONSTRAINT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/constraints-npu.txt"
 
 ASCEND_PIP_INDEX=https://repo.huaweicloud.com/ascend/repos/pypi
 TRITON_ASCEND_INDEX=https://triton-ascend.osinfra.cn/pypi/simple
@@ -132,19 +134,57 @@ PY
 }
 
 ms_download_models() {
-  # ModelScope direct pull; the runner's persistent cache makes repeat runs
-  # free. Env names are exported through GITHUB_ENV to the run step.
-  python -m pip install -q "modelscope==1.37.0"
-  TQDM_MININTERVAL="${TQDM_MININTERVAL:-15}" python - "$@" <<'PY'
+  # Private download staging avoids concurrent jobs writing the same cache.
+  # Retain it until the run step finishes; export only validated snapshots.
+  python -m pip install -q "modelscope==1.37.0" safetensors
+  TQDM_MININTERVAL="${TQDM_MININTERVAL:-15}" \
+    MODELSCOPE_DOWNLOAD_PARALLELS=1 MODELSCOPE_ENABLE_DEFAULT_HASH_VALIDATION=true \
+    python - "$@" <<'PY'
+import json
 import os
+from pathlib import Path
 import sys
+import tempfile
+import time
 
 from modelscope import snapshot_download
+from safetensors import safe_open
 
-cache = os.environ.get("MODELSCOPE_CACHE", os.path.expanduser("~/.cache/modelscope"))
+
+def validate_snapshot(local):
+    root = Path(local)
+    json.loads((root / 'config.json').read_text())
+    shards = sorted(root.glob('*.safetensors'))
+    index = root / 'model.safetensors.index.json'
+    if index.is_file():
+        expected = set(json.loads(index.read_text())['weight_map'].values())
+        if not expected.issubset({shard.name for shard in shards}):
+            raise RuntimeError(f'model weight shards missing: {root}')
+    for shard in shards:
+        with safe_open(str(shard), framework='np') as weights:
+            if not list(weights.keys()):
+                raise RuntimeError(f'empty model weights: {shard}')
+    if not shards and not list(root.glob('pytorch_model*.bin')):
+        raise RuntimeError(f'model weights missing: {root}')
+    print(f'validated model snapshot: {root}', flush=True)
+
+
+cache = tempfile.mkdtemp(prefix='liger-modelscope-', dir='/tmp')
+print('private ModelScope cache:', cache, flush=True)
 for pair in sys.argv[1:]:
     env_name, model_id = pair.split("=", 1)
-    local = snapshot_download(model_id, cache_dir=cache)
+    for attempt in range(3):
+        try:
+            local = snapshot_download(model_id, cache_dir=cache,
+                                      enable_file_lock=True, max_workers=2)
+            validate_snapshot(local)
+            break
+        except Exception as exc:
+            print(f'{model_id} attempt {attempt + 1}/3 failed: {exc}', flush=True)
+            if attempt == 2:
+                raise
+            cache = tempfile.mkdtemp(prefix='liger-modelscope-retry-', dir='/tmp')
+            time.sleep(2 * (attempt + 1))
     with open(os.environ["GITHUB_ENV"], "a") as handle:
         handle.write(f"{env_name}={local}\n")
     print(f"{env_name}={local}", flush=True)
@@ -173,7 +213,7 @@ setup_liger_hf_trainer() {
   # verifier: examples/huggingface/training.py byte-identical run on trl 0.12.1 + 4.57.1.
   python -m pip install "transformers==4.57.1" "trl==0.12.1" \
     "datasets>=3.0.0" "accelerate>=0.34" "sentencepiece" "pillow"
-  python -c "import transformers, trl; print('transformers', transformers.__version__, 'trl', trl.__version__)"
+  verify_data_stack
   stage_fixtures
   # load_dataset(path) needs a DIRECTORY containing a train split file; a
   # bare .jsonl path raises FileNotFoundError. The staging dir gives that.
@@ -209,6 +249,7 @@ setup_liger_medusa() {
   python -m pip install "transformers==4.57.1" "trl==0.12.1" \
     "datasets>=3.0.0" "accelerate>=0.34" "scikit-learn" "safetensors" "sentencepiece" "pillow"
   python -c "import transformers, sklearn, safetensors; print('transformers', transformers.__version__)"
+  verify_data_stack
   stage_fixtures
   ms_download_models "LIGER_MODEL_PATH=Qwen/Qwen2.5-0.5B-Instruct"
   printf 'LIGER_FIXTURE_JSON=%s\n' "$TARGET_ROOT/fixtures/ci_sharegpt_8.json" >> "$GITHUB_ENV"
@@ -225,6 +266,7 @@ setup_liger_medusa() {
 setup_liger_multimodal() {
   python -m pip install "transformers==4.57.1" "trl==0.12.1" \
     "datasets>=3.0.0" "accelerate>=0.34" "sentencepiece" "pillow"
+  verify_data_stack
   # AutoProcessor for Qwen2-VL pulls in the torchvision image backend, which
   # the plain text stack does not carry. 0.24.0 matches torch 2.9.0.
   python -m pip install "torchvision==0.24.0"
@@ -286,53 +328,25 @@ PY
   printf 'LIGER_VL_DATASET_PATH=%s\n' "$TARGET_ROOT/fixtures/cauldron_ai2d" >> "$GITHUB_ENV"
 }
 
-setup_liger_orpo() {
-  # No source patch: FSDP is required by the upstream ORPO trainer. Its
-  # optional torch.compile optimization is disabled by the stock torch ENV
-  # switch; the chunked fused ORPO loss and its autograd still execute.
-  python -m pip install "transformers==4.57.1" "trl==0.12.1" \
-    "datasets==3.6.0" "accelerate>=1.0,<2" sentencepiece pillow
-  verify_torch_stack
-  ms_download_models "LIGER_ORPO_MODEL_PATH=LLM-Research/Llama-3.2-1B-Instruct"
+verify_data_stack() {
   python - <<'PY'
-import json
-import os
+import tempfile
 from pathlib import Path
 
+import numpy
+import pandas
+import pyarrow
+import datasets
 from datasets import Dataset, load_dataset
-from transformers import AutoConfig, AutoTokenizer
 
-env_lines = Path(os.environ['GITHUB_ENV']).read_text().splitlines()
-snapshot = Path(next(line.split('=', 1)[1] for line in reversed(env_lines)
-                     if line.startswith('LIGER_ORPO_MODEL_PATH=')))
-work = Path(os.environ['CI_OUTPUT_DIR']) / 'orpo-work'
-alias = work / 'meta-llama/Llama-3.2-1B-Instruct'
-alias.parent.mkdir(parents=True, exist_ok=True)
-if alias.exists() or alias.is_symlink():
-    if not alias.is_symlink() or alias.resolve() != snapshot.resolve():
-        raise SystemExit(f'refusing to replace existing ORPO asset: {alias}')
-else:
-    alias.symlink_to(snapshot, target_is_directory=True)
-cfg = AutoConfig.from_pretrained(alias, local_files_only=True)
-if cfg.model_type != 'llama':
-    raise SystemExit('ORPO requires the original Llama architecture')
-tokenizer = AutoTokenizer.from_pretrained(alias, local_files_only=True)
-rows = [{'prompt': f'State the number {i} in a short sentence.',
-         'chosen': f'The number is {i}.', 'rejected': 'I cannot answer.'} for i in range(8)]
-dataset_dir = work / 'trl-lib/tldr-preference'
-dataset_dir.mkdir(parents=True, exist_ok=True)
-Dataset.from_list(rows).to_parquet(str(dataset_dir / 'train.parquet'))
-os.chdir(work)
-os.environ['HF_DATASETS_OFFLINE'] = '1'
-data = load_dataset('trl-lib/tldr-preference', split='train')
-if len(data) != 8 or set(data.column_names) != {'prompt', 'chosen', 'rejected'}:
-    raise SystemExit('ORPO exact native local loader did not return the eight preferences')
-for row in data:
-    if any(not tokenizer(row[field])['input_ids'] for field in ('prompt', 'chosen', 'rejected')):
-        raise SystemExit('ORPO fixture contains an empty token sequence')
-with Path(os.environ['GITHUB_ENV']).open('a') as handle:
-    handle.write(f'LIGER_ORPO_WORK={work}\n')
-print('ORPO local ModelScope Llama + eight preference pairs ready; fixed upstream 100 steps retained')
+print('data stack:', 'numpy', numpy.__version__, 'pandas', pandas.__version__,
+      'pyarrow', pyarrow.__version__, 'datasets', datasets.__version__)
+with tempfile.TemporaryDirectory(prefix='liger-data-probe-') as work:
+    path = Path(work) / 'train.parquet'
+    Dataset.from_list([{'text': 'NPU CI dependency probe'}]).to_parquet(str(path))
+    restored = load_dataset('parquet', data_files={'train': str(path)}, split='train')
+    if restored[0]['text'] != 'NPU CI dependency probe':
+        raise SystemExit('data stack parquet round-trip failed')
 PY
 }
 

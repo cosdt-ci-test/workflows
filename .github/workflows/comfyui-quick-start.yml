@@ -51,8 +51,8 @@ concurrency:
   cancel-in-progress: false
 
 on:
-  schedule:
-  - cron: '15 */12 * * *'
+  # schedule:
+  #   - cron: '15 */12 * * *'
   # proven stable on manual runs.
   workflow_dispatch:
 

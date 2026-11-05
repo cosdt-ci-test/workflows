@@ -57,7 +57,6 @@ jobs:
       # the Ascend fork is cloned and installed by setup_example.sh.
       upstream_repo: THUDM/slime
       target_ref: ${{ inputs.target_ref }}
-      # Bring-up phase: one matrix leg at a time while the heavy
-      # install stack settles. Raise after the first green rounds.
-      max_parallel: 1
+      # Run up to four examples when matching NPU runners are available.
+      max_parallel: 4
 

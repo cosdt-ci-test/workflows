@@ -28,12 +28,12 @@ concurrency:
   cancel-in-progress: false
 
 on:
-  schedule:
-    # Run every 3 hours: '30 */3 * * *' fires at minute 30 of every
-    # 3rd hour (00:30, 03:30, 06:30, ..., 21:30). GitHub Actions caps
-    # schedule at 5 min minimum, so tighter cadences need
-    # workflow_dispatch instead.
-    - cron: '30 */3 * * *'
+  # schedule:
+  # Run every 3 hours: '30 */3 * * *' fires at minute 30 of every
+  # 3rd hour (00:30, 03:30, 06:30, ..., 21:30). GitHub Actions caps
+  # schedule at 5 min minimum, so tighter cadences need
+  # workflow_dispatch instead.
+  #   - cron: '30 */3 * * *'
   workflow_dispatch:
 
 permissions:

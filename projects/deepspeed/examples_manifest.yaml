@@ -1,11 +1,404 @@
 version: 1
 # 主仓 deepspeedai/DeepSpeed 提供被测源码；example 路径相对 deepspeedai/DeepSpeedExamples。
-# supported 为当前 NPU CI 看护；unsupported 仅登记尚未接入的 example 入口。
+# supported 为 NPU CI 看护入口（新增项待实跑）；unsupported 仅登记尚未接入的设备用例。
 # 库、安装脚本、单元测试、数据准备及结果处理工具不作为 example 登记。
-# 扫描无 exclude；同一 example 的启动包装合并到主入口。
+# 非用例及同一用例已合并的启动包装登记在 scan.exclude。
 scan:
   root: ''
   include_extensions: ['.sh', '.py']
+  exclude:
+    # DS-Chat 已登记入口的交互与训练启动包装。
+    - applications/DeepSpeed-Chat/chat.py
+    # DS-Chat 训练库，入口已登记各 step。
+    - applications/DeepSpeed-Chat/dschat
+    # DS-Chat 已登记入口的交互与训练启动包装。
+    - applications/DeepSpeed-Chat/e2e_rlhf.py
+    # DS-Chat 安装元数据，非用例入口。
+    - applications/DeepSpeed-Chat/setup.py
+    # DS-Chat 单元测试，非用例入口。
+    - applications/DeepSpeed-Chat/tests
+    # VisualChat 启动包装，已合并至 chat/chat.py。
+    - applications/DeepSpeed-VisualChat/chat/chat_scripts
+    # VisualChat 启动包装，已合并至 eval/batch_generation.py。
+    - applications/DeepSpeed-VisualChat/eval/eval_scripts
+    # VisualChat 模型权重提取工具，供训练准备使用。
+    - applications/DeepSpeed-VisualChat/helper/extract_qwen_vl.py
+    # VisualChat 启动包装，已合并至 training/main.py。
+    - applications/DeepSpeed-VisualChat/training/training_scripts
+    # VisualChat 数据集、模型及训练工具库。
+    - applications/DeepSpeed-VisualChat/utils
+    # AutoSP 损失比较工具，供 correctness.sh 调用。
+    - benchmarks/autosp/correctness/validator.py
+    # AutoSP 注意力和通信组实现，供 run.py 调用。
+    - benchmarks/autosp/distributed_attention.py
+    # AutoSP 注意力和通信组实现，供 run.py 调用。
+    - benchmarks/autosp/ring_attention.py
+    # AutoSP 启动包装，已合并至 run.py。
+    - benchmarks/autosp/run_autosp.sh
+    # AutoSP 注意力和通信组实现，供 run.py 调用。
+    - benchmarks/autosp/sp_dp_registry.py
+    # 通信基准共享常量与初始化工具。
+    - benchmarks/communication/__init__.py
+    # 通信基准共享常量与初始化工具。
+    - benchmarks/communication/constants.py
+    # 通信基准共享常量与初始化工具。
+    - benchmarks/communication/utils.py
+    # DeepCompile 配置生成与结果绘图工具。
+    - benchmarks/deepcompile/gen_chart_acc_steps.py
+    # DeepCompile 配置生成与结果绘图工具。
+    - benchmarks/deepcompile/generate_conf.py
+    # DeepCompile 配置生成与结果绘图工具。
+    - benchmarks/deepcompile/plot_common.py
+    # DeepCompile 配置生成与结果绘图工具。
+    - benchmarks/deepcompile/plot.py
+    # DeepCompile 启动及参数扫描，统一登记 run_bench_lm.py。
+    - benchmarks/deepcompile/run_bench_acc.sh
+    # DeepCompile 启动及参数扫描，统一登记 run_bench_lm.py。
+    - benchmarks/deepcompile/run_bench_offload.sh
+    # DeepCompile 启动及参数扫描，统一登记 run_bench_lm.py。
+    - benchmarks/deepcompile/run_bench_z1.sh
+    # DeepCompile 启动及参数扫描，统一登记 run_bench_lm.py。
+    - benchmarks/deepcompile/run_bench.sh
+    # DeepCompile 启动及参数扫描，统一登记 run_bench_lm.py。
+    - benchmarks/deepcompile/run_multinode.sh
+    # DeepCompile 启动及参数扫描，统一登记 run_bench_lm.py。
+    - benchmarks/deepcompile/run.sh
+    # 推理基准日志汇总工具，非模型用例。
+    - benchmarks/inference/collect_results.py
+    # DeepSpeedometer 启动包装，已合并至 benchmark_runner.py。
+    - benchmarks/inference/deepspeedometer/run_example.sh
+    # DeepSpeedometer 配置、输入与响应实现，供 benchmark_runner 调用。
+    - benchmarks/inference/deepspeedometer/src/deepspeedometer/__init__.py
+    # DeepSpeedometer 配置、输入与响应实现，供 benchmark_runner 调用。
+    - benchmarks/inference/deepspeedometer/src/deepspeedometer/arg_parsing.py
+    # DeepSpeedometer 后端客户端实现，供 benchmark_runner 调用。
+    - benchmarks/inference/deepspeedometer/src/deepspeedometer/clients
+    # DeepSpeedometer 配置、输入与响应实现，供 benchmark_runner 调用。
+    - benchmarks/inference/deepspeedometer/src/deepspeedometer/config.py
+    # DeepSpeedometer 配置、输入与响应实现，供 benchmark_runner 调用。
+    - benchmarks/inference/deepspeedometer/src/deepspeedometer/prompt.py
+    # DeepSpeedometer 配置、输入与响应实现，供 benchmark_runner 调用。
+    - benchmarks/inference/deepspeedometer/src/deepspeedometer/response.py
+    # DeepSpeedometer 配置、输入与响应实现，供 benchmark_runner 调用。
+    - benchmarks/inference/deepspeedometer/src/deepspeedometer/sample_input.py
+    # DeepSpeedometer 单元测试。
+    - benchmarks/inference/deepspeedometer/tests
+    # MII 基准启动及参数扫描，统一登记 run_benchmark.py。
+    - benchmarks/inference/mii/run_all.sh
+    # MII 基准启动及参数扫描，统一登记 run_benchmark.py。
+    - benchmarks/inference/mii/run_aml.sh
+    # MII 基准启动及参数扫描，统一登记 run_benchmark.py。
+    - benchmarks/inference/mii/run_example.sh
+    # MII 基准启动及参数扫描，统一登记 run_benchmark.py。
+    - benchmarks/inference/mii/run_fp6.sh
+    # MII 基准共享配置、请求生成和结果处理工具。
+    - benchmarks/inference/mii/src/__init__.py
+    # MII 基准客户端实现，由 run_benchmark.py 调用。
+    - benchmarks/inference/mii/src/client.py
+    # MII 基准共享配置、请求生成和结果处理工具。
+    - benchmarks/inference/mii/src/defaults.py
+    # MII 基准共享配置、请求生成和结果处理工具。
+    - benchmarks/inference/mii/src/plot_effective_throughput.py
+    # MII 基准共享配置、请求生成和结果处理工具。
+    - benchmarks/inference/mii/src/plot_latency_percentile.py
+    # MII 基准共享配置、请求生成和结果处理工具。
+    - benchmarks/inference/mii/src/plot_repl_scale.py
+    # MII 基准共享配置、请求生成和结果处理工具。
+    - benchmarks/inference/mii/src/plot_th_lat.py
+    # MII 基准共享配置、请求生成和结果处理工具。
+    - benchmarks/inference/mii/src/plot_tp_sizes.py
+    # MII 基准共享配置、请求生成和结果处理工具。
+    - benchmarks/inference/mii/src/postprocess_results.py
+    # MII 基准共享配置、请求生成和结果处理工具。
+    - benchmarks/inference/mii/src/random_query_generator.py
+    # MII 基准共享配置、请求生成和结果处理工具。
+    - benchmarks/inference/mii/src/sample_input.py
+    # MII 基准服务管理实现，由 run_benchmark.py 调用。
+    - benchmarks/inference/mii/src/server.py
+    # MII 基准共享配置、请求生成和结果处理工具。
+    - benchmarks/inference/mii/src/utils.py
+    # GPT 推理基准启动包装，已合并至 gpt-bench.py。
+    - benchmarks/inference/run_model.sh
+    # Triton BERT 基准启动包装，已合并至 triton-bert-benchmark.py。
+    - benchmarks/inference/run_triton_benchmark.sh
+    # GPT 推理基准启动包装，已合并至 gpt-bench.py。
+    - benchmarks/inference/sweep.sh
+    # 内存基准共享模型、计时与设备工具。
+    - benchmarks/pin_memory/common.py
+    # model_tensor_offload/bench.py 的 ZeRO-3 转发入口，已合并登记。
+    - benchmarks/pin_memory/grad_offload/bench.py
+    # model_tensor_offload/bench.py 的 ZeRO-3 转发入口，已合并登记。
+    - benchmarks/pin_memory/zero3_offload_bench.py
+    # RAC 轨迹采集启动包装，已登记 collect_traces.py。
+    - compression/reasoning_aware_compression/bash_script/collect_traces_zero_inference.sh
+    # RAC 剪枝启动及校准扫描，已登记 prune.py/collect_traces.py。
+    - compression/reasoning_aware_compression/bash_script/run_calibration_ablation.sh
+    # RAC 剪枝启动及校准扫描，已登记 prune.py/collect_traces.py。
+    - compression/reasoning_aware_compression/bash_script/run_rac_qwen1_5b.sh
+    # RAC 剪枝算法库，入口为 prune.py。
+    - compression/reasoning_aware_compression/rac
+    # RAC 单元测试，非用例入口。
+    - compression/reasoning_aware_compression/tests
+    # NVMe 读写扫描包装，已合并至 ds_io_sweep.sh。
+    - deepnvme/ds_io/ds_io_read_sweep.sh
+    # NVMe 读写扫描包装，已合并至 ds_io_sweep.sh。
+    - deepnvme/ds_io/ds_io_write_sweep.sh
+    # NVMe 文件访问批量启动包装，各 Python 入口已登记。
+    - deepnvme/file_access/run_load_tensor.sh
+    # NVMe 文件访问批量启动包装，各 Python 入口已登记。
+    - deepnvme/file_access/run_store_tensor.sh
+    # NVMe 用例的文件与检查点辅助库。
+    - deepnvme/file_access/utils.py
+    # NVMe 用例的文件与检查点辅助库。
+    - deepnvme/model_checkpoint/save_model_utils.py
+    # 检查点用例内置 PyTorch 序列化实现。
+    - deepnvme/model_checkpoint/torch
+    # NVMe 用例的文件与检查点辅助库。
+    - deepnvme/model_checkpoint/torch_save_utils.py
+    # Stable Diffusion pipeline 实现，供对应推理/训练入口调用。
+    - inference/huggingface/stable-diffusion/local_pipeline_stable_diffusion.py
+    # 文本生成共享参数和工具库。
+    - inference/huggingface/text-generation/arguments.py
+    # 文本生成启动包装，已合并至 test-run-generation.py。
+    - inference/huggingface/text-generation/run-generation-script/test-gpt.sh
+    # 文本生成共享参数和工具库。
+    - inference/huggingface/text-generation/utils.py
+    # ZeRO inference 模型配方包装，统一登记 run_model.py。
+    - inference/huggingface/zero_inference/run_bloom175b_a6000.sh
+    # ZeRO inference 模型配方包装，统一登记 run_model.py。
+    - inference/huggingface/zero_inference/run_llama2_70b_a6000.sh
+    # ZeRO inference 模型配方包装，统一登记 run_model.py。
+    - inference/huggingface/zero_inference/run_model.sh
+    # ZeRO inference 模型配方包装，统一登记 run_model.py。
+    - inference/huggingface/zero_inference/run_opt175b_a6000.sh
+    # ZeRO inference 模型配方包装，统一登记 run_model.py。
+    - inference/huggingface/zero_inference/run_opt1p3b_a6000.sh
+    # ZeRO inference 模型配方包装，统一登记 run_model.py。
+    - inference/huggingface/zero_inference/run_opt30b_a6000.sh
+    # ZeRO inference 模型配方包装，统一登记 run_model.py。
+    - inference/huggingface/zero_inference/run_opt66b_a6000.sh
+    # ZeRO inference 计时和工具库。
+    - inference/huggingface/zero_inference/timer.py
+    # ZeRO inference 计时和工具库。
+    - inference/huggingface/zero_inference/utils.py
+    # MII 服务的客户端与停止工具，服务入口已登记 serve.py。
+    - inference/mii/persistent/client.py
+    # MII 服务的客户端与停止工具，服务入口已登记 serve.py。
+    - inference/mii/persistent/terminate.py
+    # 仓库许可证检查工具，非 NPU 用例。
+    - scripts/check-license.py
+    # bf16_master_weight 训练日志汇总与绘图工具。
+    - training/bf16_master_weight/gather_memory.py
+    # bf16_master_weight 训练日志汇总与绘图工具。
+    - training/bf16_master_weight/plot_loss.py
+    # bf16_master_weight 配置比较包装，训练入口已登记 train.py。
+    - training/bf16_master_weight/run_comparison.sh
+    # BingBERT 数据加载和训练共享库。
+    - training/bing_bert/bert_dataset_provider.py
+    # BingBERT 数据加载和训练共享库。
+    - training/bing_bert/bing_bert_dataset_provider.py
+    # BingBERT 数据加载和训练共享库。
+    - training/bing_bert/data_worker.py
+    # BingBERT 训练启动包装，统一登记 deepspeed_train.py。
+    - training/bing_bert/ds_train_bert_bsz32k_seq512.sh
+    # BingBERT 训练启动包装，统一登记 deepspeed_train.py。
+    - training/bing_bert/ds_train_bert_bsz64k_seq128.sh
+    # BingBERT 训练启动包装，统一登记 deepspeed_train.py。
+    - training/bing_bert/ds_train_bert_nvidia_data_bsz32k_seq512.sh
+    # BingBERT 训练启动包装，统一登记 deepspeed_train.py。
+    - training/bing_bert/ds_train_bert_nvidia_data_bsz64k_seq128.sh
+    # BingBERT 内置 NVIDIA 模型库。
+    - training/bing_bert/nvidia
+    # BingBERT 数据加载和训练共享库。
+    - training/bing_bert/nvidia_bert_dataset_provider.py
+    # BingBERT 内置第三方模型库。
+    - training/bing_bert/pytorch_pretrained_bert
+    # BERT GLUE 启动包装，已合并至对应 run_glue_classifier Python 入口。
+    - training/bing_bert/run_glue_bert_base_finetune.sh
+    # BERT GLUE 启动包装，已合并至对应 run_glue_classifier Python 入口。
+    - training/bing_bert/run_glue_bert_large_finetune.sh
+    # BingBERT 数据加载和训练共享库。
+    - training/bing_bert/timer.py
+    # BingBERT 数据与训练工具库。
+    - training/bing_bert/turing
+    # BingBERT 数据加载和训练共享库。
+    - training/bing_bert/utils.py
+    # GLUE 内置 NVIDIA 模型库。
+    - training/BingBertGlue/nvidia
+    # BingBERT 数据加载和训练共享库。
+    - training/BingBertGlue/nvidia_bert_dataset_provider.py
+    # GLUE 内置第三方模型库。
+    - training/BingBertGlue/pytorch_pretrained_bert
+    # BERT GLUE 启动包装，已合并至对应 run_glue_classifier Python 入口。
+    - training/BingBertGlue/run_glue_bert_base_finetune.sh
+    # BERT GLUE 启动包装，已合并至对应 run_glue_classifier Python 入口。
+    - training/BingBertGlue/run_glue_bert_large_finetune.sh
+    # GLUE 数据与训练工具库。
+    - training/BingBertGlue/turing
+    # SQuAD 检查点转换和答案评分工具。
+    - training/BingBertSquad/convert_bert_ckpt_to_deepspeed.py
+    # SQuAD 检查点转换和答案评分工具。
+    - training/BingBertSquad/evaluate-v1.1.py
+    # SQuAD 检查点转换和答案评分工具。
+    - training/BingBertSquad/evaluate.py
+    # SQuAD 内置第三方模型库。
+    - training/BingBertSquad/pytorch_pretrained_bert
+    # SQuAD 启动包装，已合并至对应 nvidia_run_squad Python 入口。
+    - training/BingBertSquad/run_squad_baseline.sh
+    # SQuAD 启动包装，已合并至对应 nvidia_run_squad Python 入口。
+    - training/BingBertSquad/run_squad_deepspeed.sh
+    # SQuAD 数据与模型工具库。
+    - training/BingBertSquad/turing
+    # SQuAD 检查点转换和答案评分工具。
+    - training/BingBertSquad/utils.py
+    # GPT 数据分析准备及学习率工具，非训练入口。
+    - training/data_efficiency/gpt_finetuning/analyze_data.py
+    # GPT random-LTD 与微调启动包装，统一登记 run_clm_no_trainer.py。
+    - training/data_efficiency/gpt_finetuning/bash_script/run_base_random_ltd.sh
+    # GPT random-LTD 与微调启动包装，统一登记 run_clm_no_trainer.py。
+    - training/data_efficiency/gpt_finetuning/bash_script/run_medium_random_ltd.sh
+    # GPT 数据分析准备及学习率工具，非训练入口。
+    - training/data_efficiency/gpt_finetuning/finetune/ds_analyze_gpt_data_map.sh
+    # GPT 数据分析准备及学习率工具，非训练入口。
+    - training/data_efficiency/gpt_finetuning/finetune/ds_analyze_gpt_data_reduce.sh
+    # GPT random-LTD 与微调启动包装，统一登记 run_clm_no_trainer.py。
+    - training/data_efficiency/gpt_finetuning/finetune/ds_finetune_gpt2_run.sh
+    # GPT random-LTD 与微调启动包装，统一登记 run_clm_no_trainer.py。
+    - training/data_efficiency/gpt_finetuning/finetune/ds_finetune_gpt2.sh
+    # GPT 数据分析准备及学习率工具，非训练入口。
+    - training/data_efficiency/gpt_finetuning/learning_rates.py
+    # ViT random-LTD 启动包装，对应 main_cifar/main_imagenet 已登记。
+    - training/data_efficiency/vit_finetuning/bash_script/run_cifar_random_ltd.sh
+    # ViT random-LTD 启动包装，对应 main_cifar/main_imagenet 已登记。
+    - training/data_efficiency/vit_finetuning/bash_script/run_imagenet_random_ltd.sh
+    # ViT 模型定义，供 main_cifar/main_imagenet 调用。
+    - training/data_efficiency/vit_finetuning/models
+    # ViT 数据和训练工具库。
+    - training/data_efficiency/vit_finetuning/utils
+    # 微调训练、性能及 profiling 包装，统一登记 finetune_llama.py。
+    - training/deepspeed_finetune_demo/benchmark.sh
+    # 微调用例检查点转换与生成结果评分工具。
+    - training/deepspeed_finetune_demo/convert_ds_to_hf.py
+    # 微调用例检查点转换与生成结果评分工具。
+    - training/deepspeed_finetune_demo/evaluate/gsm8k/eval_gsm8k.py
+    # 微调用例检查点转换与生成结果评分工具。
+    - training/deepspeed_finetune_demo/evaluate/mmlu/eval_mmlu.py
+    # 微调训练、性能及 profiling 包装，统一登记 finetune_llama.py。
+    - training/deepspeed_finetune_demo/finetune.sh
+    # 微调训练、性能及 profiling 包装，统一登记 finetune_llama.py。
+    - training/deepspeed_finetune_demo/profile.sh
+    # Domino 模型和训练实现库，入口为 pretrain_gpt.py。
+    - training/DeepSpeed-Domino/domino
+    # Domino 大模型启动包装，统一登记 pretrain_gpt.py。
+    - training/DeepSpeed-Domino/pretrain_gpt3_13b.sh
+    # Domino 大模型启动包装，统一登记 pretrain_gpt.py。
+    - training/DeepSpeed-Domino/pretrain_gpt3_6.7b.sh
+    # SuperOffload 模型启动配方，统一登记 finetune_zero3.py。
+    - training/DeepSpeed-SuperOffload/finetune_gpt-oss-20b_1gpu.sh
+    # SuperOffload 模型启动配方，统一登记 finetune_zero3.py。
+    - training/DeepSpeed-SuperOffload/finetune_llama-70b_4gpu.sh
+    # SuperOffload 模型启动配方，统一登记 finetune_zero3.py。
+    - training/DeepSpeed-SuperOffload/finetune_llama-8b_1gpu.sh
+    # SuperOffload 模型启动配方，统一登记 finetune_zero3.py。
+    - training/DeepSpeed-SuperOffload/finetune_phi-4_1gpu.sh
+    # SuperOffload 模型启动配方，统一登记 finetune_zero3.py。
+    - training/DeepSpeed-SuperOffload/finetune_qwen3-14b_1gpu.sh
+    # SuperOffload 模型启动配方，统一登记 finetune_zero3.py。
+    - training/DeepSpeed-SuperOffload/finetune_qwen3-30b-a3b_2gpu.sh
+    # SuperOffload 模型启动配方，统一登记 finetune_zero3.py。
+    - training/DeepSpeed-SuperOffload/finetune_seed-oss-36b_2gpu.sh
+    # 卸载基准结果汇总工具。
+    - training/DeepSpeed-ZenFlow/benchmark/output_table.py
+    # ZenFlow 基准参数扫描包装，已登记 zf_benchmark.py。
+    - training/DeepSpeed-ZenFlow/benchmark/run_benchmark.sh
+    # ZenFlow 微调启动包装，已登记 finetune_llama.py。
+    - training/DeepSpeed-ZenFlow/finetuning/finetune_llama.sh
+    # Expert Parallel 数据、初始权重与指标辅助实现。
+    - training/expert_parallel/data_utils.py
+    # Expert Parallel 数据、初始权重与指标辅助实现。
+    - training/expert_parallel/init_weights.py
+    # Expert Parallel 数据、初始权重与指标辅助实现。
+    - training/expert_parallel/metrics.py
+    # Expert Parallel 数据、初始权重与指标辅助实现。
+    - training/expert_parallel/utils/compare_metrics.py
+    # Expert Parallel 数据、初始权重与指标辅助实现。
+    - training/expert_parallel/utils/prepare_init_weights.py
+    # GAN 启动包装，对应 gan_baseline/gan_deepspeed_train.py 已登记。
+    - training/gan/gan_baseline_run.sh
+    # GAN 启动包装，对应 gan_baseline/gan_deepspeed_train.py 已登记。
+    - training/gan/gan_deepspeed_run.sh
+    # GAN 模型定义及共享参数工具。
+    - training/gan/gan_model.py
+    # GAN 模型定义及共享参数工具。
+    - training/gan/utils.py
+    # HelloDeepSpeed 实现与基线包装，同用例统一登记 run_ds.sh。
+    - training/HelloDeepSpeed/run.sh
+    # HelloDeepSpeed 单元测试。
+    - training/HelloDeepSpeed/tests
+    # HelloDeepSpeed 实现与基线包装，同用例统一登记 run_ds.sh。
+    - training/HelloDeepSpeed/train_bert_ds.py
+    # HelloDeepSpeed 实现与基线包装，同用例统一登记 run_ds.sh。
+    - training/HelloDeepSpeed/train_bert.py
+    # ImageNet 数据解包准备脚本。
+    - training/imagenet/extract_ILSVRC.sh
+    # ImageNet 训练配置包装，统一登记 main.py。
+    - training/imagenet/run_ds_fp16_z1.sh
+    # ImageNet 训练配置包装，统一登记 main.py。
+    - training/imagenet/run_ds_fp16.sh
+    # ImageNet 训练配置包装，统一登记 main.py。
+    - training/imagenet/run_ds.sh
+    # 卸载基准结果汇总工具。
+    - training/offload_states/output_table.py
+    # 卸载基准参数扫描包装，已登记 offload_states.py。
+    - training/offload_states/run_benchmark.sh
+    # OPSD 配置、数据、损失及训练器实现，入口为 main.py。
+    - training/opsd/config.py
+    # OPSD 配置、数据、损失及训练器实现，入口为 main.py。
+    - training/opsd/data.py
+    # OPSD 配置、数据、损失及训练器实现，入口为 main.py。
+    - training/opsd/losses.py
+    # OPSD 启动配方包装，统一登记 main.py。
+    - training/opsd/scripts/smoke_autotp.sh
+    # OPSD 启动配方包装，统一登记 main.py。
+    - training/opsd/scripts/train_opsd_hybrid.sh
+    # OPSD 配置、数据、损失及训练器实现，入口为 main.py。
+    - training/opsd/teacher.py
+    # OPSD 数据、损失和缓存单元测试。
+    - training/opsd/tests
+    # OPSD 配置、数据、损失及训练器实现，入口为 main.py。
+    - training/opsd/trainer.py
+    # OPSD 配置、数据、损失及训练器实现，入口为 main.py。
+    - training/opsd/utils.py
+    # Pipeline 用例的 AlexNet 模型定义。
+    - training/pipeline_parallelism/alexnet.py
+    # Pipeline 并行启动包装，已登记 train.py。
+    - training/pipeline_parallelism/run.sh
+    # Stable Diffusion pipeline 实现，供对应推理/训练入口调用。
+    - training/stable_diffusion/local_pipeline_stable_diffusion.py
+    # SD 蒸馏启动包装，已登记 train_sd_distil_lora.py。
+    - training/stable_diffusion/mytrainbash.sh
+    # HF AutoTP 启动包装，已登记 train.py/train_bench_length.py。
+    - training/tensor_parallel/hf_integration/run.sh
+    # HF AutoTP 共享序列化与文本处理工具。
+    - training/tensor_parallel/hf_integration/utils.py
+    # CPU 文件读取基准，无 NPU 张量计算。
+    - deepnvme/file_access/aio_load_cpu_tensor.py
+    # CPU 文件写入基准，无 NPU 张量计算。
+    - deepnvme/file_access/aio_store_cpu_tensor.py
+    # Python CPU 文件读取基准，无 NPU 张量计算。
+    - deepnvme/file_access/py_load_cpu_tensor.py
+    # Python CPU 文件写入基准，无 NPU 张量计算。
+    - deepnvme/file_access/py_store_cpu_tensor.py
+    # CPU 固页内存对比，不验证 NPU 张量计算。
+    - benchmarks/pin_memory/cpu_pin/bench.py
+    # run_glue.py 自动调优的模型规格变体，合并到 bert-base 用例。
+    - training/autotuning/hf/bert-large/test_tune.sh
+    # run_clm.py 自动调优的模型规格变体，合并到 gpt2 用例。
+    - training/autotuning/hf/gpt2-large/test_tune.sh
+    # run_clm.py 自动调优的模型规格变体，合并到 gpt2 用例。
+    - training/autotuning/hf/gpt2-medium/test_tune.sh
+    # run_clm.py 自动调优的模型规格变体，合并到 gpt2 用例。
+    - training/autotuning/hf/gpt2-xl/test_tune.sh
 supported:
   # RoBERTa MLM 训练；支持单卡 NPU，2 层模型/10 步验证 ZeRO-1 与 CPU offload。
   - path: training/HelloDeepSpeed/run_ds.sh
@@ -433,22 +826,6 @@ supported:
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args: []
     timeout_minutes: 120
-  # HybridEngine rollout；OPT-125M/合成 token/2 次采样，验证原生 NPU 推理，待实跑。
-  - path: benchmarks/opsd/benchmark_hybrid_engine_rollout.py
-    profile: ds_hybrid_rollout
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - '--model "${OPT_125M_PATH}"'
-      - '--dtype bf16'
-      - '--batch-sizes 1'
-      - '--samples-per-prompt 1'
-      - '--prompt-lengths 16'
-      - '--response-lengths 4'
-      - '--warmup 1'
-      - '--iterations 2'
-      - '--output "${CI_OUTPUT_DIR}/hybrid-rollout-profile.json"'
-    timeout_minutes: 120
   # Wav2Vec2 CTC 推理；两条合成音频/本地同名模型，验证 NPU logits 而非识别准确率，待实跑。
   - path: inference/huggingface/automatic-speech-recognition/test-wav2vec2.py
     profile: ds_asr_ctc
@@ -490,7 +867,7 @@ supported:
       - '--lr_scheduler constant'
       - '--lr_warmup_steps 0'
       - '--mixed_precision no'
-      - '--report_to none'
+      - '--report_to tensorboard'
       - '--checkpointing_steps 1000'
       - '--dataloader_num_workers 0'
       - '--seed 42'
@@ -509,7 +886,148 @@ supported:
       - '--num-iters 2'
     timeout_minutes: 120
 
+  # GSM8K 答案生成；尝试 vLLM-Ascend 单卡，本地 0.5B 模型/8 题/16 token，待 NPU CI。
+  - path: training/deepspeed_finetune_demo/evaluate/gsm8k/gen_gsm8k.py
+    profile: ds_vllm_eval
+    runner: linux-aarch64-a2-1
+    image: swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/vllm-ascend/vllm-ascend:v0.23.0
+    overlay_args:
+      - '--model "${VLLM_CI_MODEL_PATH}"'
+      - '--output "${CI_OUTPUT_DIR}/gsm8k"'
+      - '--tp 1'
+      - '--max_new_tokens 16'
+    timeout_minutes: 120
+  # MMLU 答案生成；尝试 vLLM-Ascend 单卡，本地 0.5B 模型/8 题，待 NPU CI。
+  - path: training/deepspeed_finetune_demo/evaluate/mmlu/gen_mmlu.py
+    profile: ds_vllm_eval
+    runner: linux-aarch64-a2-1
+    image: swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/vllm-ascend/vllm-ascend:v0.23.0
+    overlay_args:
+      - '--model "${VLLM_CI_MODEL_PATH}"'
+      - '--output "${CI_OUTPUT_DIR}/mmlu"'
+      - '--tp 1'
+    timeout_minutes: 120
+  # RAC 推理轨迹采集；原生 vLLM 后端，本地 0.5B 模型/8 prompt/16 token，待 NPU CI。
+  - path: compression/reasoning_aware_compression/collect_traces.py
+    profile: ds_vllm_traces
+    runner: linux-aarch64-a2-1
+    image: swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/vllm-ascend/vllm-ascend:v0.23.0
+    overlay_args:
+      - '--backend vllm'
+      - '--model "${VLLM_CI_MODEL_PATH}"'
+      - '--dataset "${RAC_CI_PATH}"'
+      - '--prompt-column prompt'
+      - '--max-prompts 8'
+      - '--trace-tokens 1024'
+      - '--max-new-tokens 16'
+      - '--batch-size 2'
+      - '--output "${CI_OUTPUT_DIR}/rac-traces.jsonl"'
+    timeout_minutes: 180
+
+  # OpenAI 服务压测；原生客户端连接本地 vLLM-Ascend，单卡/4 请求，待 NPU CI。
+  - path: benchmarks/inference/mii/run_benchmark.py
+    profile: ds_vllm_bench
+    runner: linux-aarch64-a2-1
+    image: swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/vllm-ascend/vllm-ascend:v0.23.0
+    overlay_args:
+      - '--backend openai'
+      - '--model ci-model'
+      - '--num_clients 1'
+      - '--num_requests 4'
+      - '--max_prompt_length 64'
+      - '--mean_prompt_length 32'
+      - '--mean_max_new_tokens 16'
+      - '--prompt_length_var 0'
+      - '--max_new_tokens_var 0'
+      - '--warmup 0'
+      - '--out_json_dir "${CI_OUTPUT_DIR}/benchmark"'
+    timeout_minutes: 120
+  # 推理服务并发压测；原生 OpenAI 客户端连接 NPU 服务，单客户端/4 请求，待 NPU CI。
+  - path: benchmarks/inference/deepspeedometer/src/deepspeedometer/benchmark_runner.py
+    profile: ds_vllm_bench
+    runner: linux-aarch64-a2-1
+    image: swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/vllm-ascend/vllm-ascend:v0.23.0
+    overlay_args:
+      - '--api openai'
+      - '--model ci-model'
+      - '--num_clients 1'
+      - '--min_requests 4'
+      - '--num_requests_per_client 4'
+      - '--warmup_requests 0'
+      - '--max_prompt_length 64'
+      - '--prompt_length 32'
+      - '--max_new_tokens 16'
+      - '--prompt_length_var 0'
+      - '--max_new_tokens_var 0'
+      - '--result_dir "${CI_OUTPUT_DIR}/benchmark"'
+    timeout_minutes: 120
+  # async_io 设备读写；复用原配方 ds_io 的 accelerator 路径，1MiB/2 次读写，待 NPU CI。
+  - path: deepnvme/ds_io/ds_io_sweep.sh
+    profile: ds_aio
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--io_size 1M'
+      - '--gpu'
+      - '--use_accelerator_pin_memory'
+      - '--io_parallel 1'
+      - '--block_size 1M'
+      - '--queue_depth 4'
+      - '--loops 2'
+      - '--warmup_loops 0'
+    timeout_minutes: 90
+
+  # MATH-500 评测配方；本地 8 题/16 token，原生数学评分，不设准确率门槛，待 NPU CI。
+  - path: compression/reasoning_aware_compression/bash_script/eval_math500.sh
+    profile: ds_math500
+    runner: linux-aarch64-a2-1
+    image: swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/vllm-ascend/vllm-ascend:v0.23.0
+    overlay_args:
+      - '--max-samples 8'
+      - '--dataset-loading-processes 1'
+      - '--output-dir "${CI_OUTPUT_DIR}/math500"'
+      - '--save-details'
+    timeout_minutes: 120
+
+  # BERT 自动调参；合并 base/large 启动配方，本地 BERT-base/8 行分类数据/小 batch 搜索，待 NPU CI。
+  - path: training/autotuning/hf/bert-base/test_tune.sh
+    profile: ds_autotune_bert
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--max_seq_length 32'
+    timeout_minutes: 180
+  # DeBERTa 自动调参；本地 DeBERTa-v3-small/8 行分类数据/小 batch 搜索，待 NPU CI。
+  - path: training/autotuning/hf/deberta/test_tune.sh
+    profile: ds_autotune_deberta
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--max_seq_length 32'
+    timeout_minutes: 180
+  # DistilBERT 自动调参；本地模型/8 行分类数据/小 batch 搜索，待 NPU CI。
+  - path: training/autotuning/hf/distilbert/test_tune.sh
+    profile: ds_autotune_distilbert
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--max_seq_length 32'
+    timeout_minutes: 180
+  # GPT-2 自动调参；合并 medium/large/xl 启动配方，本地 GPT-2/8 行文本/小 batch 搜索，待 NPU CI。
+  - path: training/autotuning/hf/gpt2/test_tune.sh
+    profile: ds_autotune_gpt2
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--block_size 32'
+    timeout_minutes: 180
+
 unsupported:
+  # DeepCompile 的原生算子为 CUDA 专用：is_deepcompile_supported() 要求 device_name 为 cuda，
+  # csrc/compile 直接使用 at::cuda 流、c10::kCUDA 与 ATen/native/cuda/Resize.h；无补丁的昇腾环境无法加载。
+  - benchmarks/deepcompile/run_bench_lm.py
+  # HybridEngine rollout 性能测试；#30 的 OPT 注入路径触发 NPU softmax_context_bf16 参数 16/19 不匹配，需上游修复。
+  - benchmarks/opsd/benchmark_hybrid_engine_rollout.py
   # BF16 主权重训练对比；torch.cuda 和 CUDA autocast 硬绑定。
   - training/bf16_master_weight/train.py
   # CIFAR/AlexNet 流水线训练；硬绑定 CUDA 设备和 NCCL。
@@ -540,38 +1058,18 @@ unsupported:
   - benchmarks/communication/pt2pt.py
   # 多算子通信基准汇总；硬绑定 CUDA 计时，非训练验证。
   - benchmarks/communication/run_all.py
-  # DeepCompile 训练；可选 backend，但 DS compile passes 与 NPU 后端组合待验证，关闭编译会丢失核心功能。
-  - benchmarks/deepcompile/run_bench_lm.py
-  # 推理服务并发压测；依赖外部服务或 MII/vLLM，未接入。
-  - benchmarks/inference/deepspeedometer/src/deepspeedometer/benchmark_runner.py
-  # MII 推理吞吐压测；需 MII/vLLM/AzureML 后端及大模型。
-  - benchmarks/inference/mii/run_benchmark.py
   # BERT Triton 延迟基准；硬绑定 torch.cuda/NCCL 与 CUDA kernel。
   - benchmarks/inference/triton-bert-benchmark.py
-  # MATH-500 评测；可缩模型和 token，但固定 lighteval vLLM 后端需独立兼容的 Ascend serving 栈。
-  - compression/reasoning_aware_compression/bash_script/eval_math500.sh
-  # 推理轨迹采样；本地模型/小数据可行，但 HF 仅 CUDA/CPU，ZeRO 后端必经 cuda 张量设备。
-  - compression/reasoning_aware_compression/collect_traces.py
-  # IO 参数扫描；合并读写包装，原入口固定 1GiB 与并发矩阵，没有 CI 缩规模参数。
-  - deepnvme/ds_io/ds_io_sweep.sh
-  # async_io 读取 CPU 张量；临时文件可行，但仅 CPU IO，不验证 NPU。
-  - deepnvme/file_access/aio_load_cpu_tensor.py
   # async_io 读取设备张量；可准备小文件，但结果硬调用 .cuda()。
   - deepnvme/file_access/aio_load_gpu_tensor.py
-  # async_io 写入 CPU 张量；临时文件可行，但仅 CPU IO，不验证 NPU。
-  - deepnvme/file_access/aio_store_cpu_tensor.py
   # async_io 写入设备张量；可准备小文件，但源张量硬编码 device='cuda'。
   - deepnvme/file_access/aio_store_gpu_tensor.py
   # GDS 读取设备张量；缓冲区硬编码 CUDA，且依赖 CUDA GPUDirect Storage。
   - deepnvme/file_access/gds_load_gpu_tensor.py
   # GDS 写入设备张量；缓冲区硬编码 CUDA，且依赖 CUDA GPUDirect Storage。
   - deepnvme/file_access/gds_store_gpu_tensor.py
-  # Python 读取 CPU 张量；临时文件可行，但仅 CPU IO，不验证 NPU。
-  - deepnvme/file_access/py_load_cpu_tensor.py
   # Python 读取设备张量；可准备小文件，但结果硬调用 .cuda()。
   - deepnvme/file_access/py_load_gpu_tensor.py
-  # Python 写入 CPU 张量；临时文件可行，但仅 CPU IO，不验证 NPU。
-  - deepnvme/file_access/py_store_cpu_tensor.py
   # Python 写入设备张量；可准备小文件，但源张量硬编码 device='cuda'。
   - deepnvme/file_access/py_store_gpu_tensor.py
   # DeepSpeed 检查点 IO；必经 NCCL、pdb 断点与 CUDA GDS，换小文件不能绕过。
@@ -592,15 +1090,15 @@ unsupported:
   - inference/huggingface/text2text-generation/test-t5.py
   # 大模型 ZeRO offload 推理；硬绑定 NCCL 和 torch.cuda.current_device。
   - inference/huggingface/zero_inference/run_model.py
-  # Falcon-7B 推理；需 deepspeed-mii，模型超出当前 CI 规模。
+  # Falcon 推理；MII 必经 Inference V2 的 CUDA activation/kernel，缩模型不能绕过。
   - inference/mii/non-persistent/falcon.py
-  # Llama-2-7B 推理；需 deepspeed-mii 和受限模型。
+  # Llama 推理；MII 必经 Inference V2 的 CUDA activation/kernel，另有受限权重。
   - inference/mii/non-persistent/llama2.py
-  # Mixtral MoE 推理；需 deepspeed-mii，模型超出 CI 规模。
+  # Mixtral 推理；MII 必经 Inference V2 的 CUDA activation/kernel，缩模型不能绕过。
   - inference/mii/non-persistent/mixtral.py
-  # Mistral-7B 推理；当前 CI 未提供 deepspeed-mii 环境。
+  # MII 非持久推理；build_hf_engine 必经 CUDA activation/kernel，无 NPU 实现。
   - inference/mii/non-persistent/pipeline.py
-  # MII 持久化推理服务；需 deepspeed-mii 和服务生命周期适配。
+  # MII 持久服务；build_hf_engine 必经 CUDA activation/kernel，无 NPU 实现。
   - inference/mii/persistent/serve.py
   # SGLang ZeRO 推理基准；需 tjruwase/sglang zero-inference 分支，配方含 CUDA GDS 卸载。
   - inference/sglang/run_llama3_1B.sh
@@ -620,41 +1118,19 @@ unsupported:
   - training/BingBertSquad/run_hf.sh
   # Domino GPT-3 预训练；缺少 Megatron 子模块，需大模型和外部语料。
   - training/DeepSpeed-Domino/pretrain_gpt.py
-  # BERT-base 自动调参；硬编码 16 卡，依赖仓外 Transformers example。
-  - training/autotuning/hf/bert-base/test_tune.sh
-  # BERT-large 自动调参；硬编码 16 卡，依赖仓外 Transformers example。
-  - training/autotuning/hf/bert-large/test_tune.sh
-  # DeBERTa 自动调参；硬编码 16 卡，依赖仓外 Transformers example。
-  - training/autotuning/hf/deberta/test_tune.sh
-  # DistilBERT 自动调参；硬编码 16 卡，依赖仓外 Transformers example。
-  - training/autotuning/hf/distilbert/test_tune.sh
-  # GPT-2 large 自动调参；硬编码 16 卡，依赖仓外 Transformers example。
-  - training/autotuning/hf/gpt2-large/test_tune.sh
-  # GPT-2 medium 自动调参；硬编码 16 卡，依赖仓外 Transformers example。
-  - training/autotuning/hf/gpt2-medium/test_tune.sh
-  # GPT-2 XL 自动调参；硬编码 16 卡，依赖仓外 Transformers example。
-  - training/autotuning/hf/gpt2-xl/test_tune.sh
-  # GPT-2 自动调参；硬编码 16 卡，依赖仓外 Transformers example。
-  - training/autotuning/hf/gpt2/test_tune.sh
   # BingBERT 预训练；硬绑定 CUDA/NCCL，需多机及内部语料。
   - training/bing_bert/deepspeed_train.py
   # BERT-base GLUE 微调；硬绑定 CUDA，数据路径固定为 /data/GlueData。
   - training/bing_bert/run_glue_classifier_bert_base.py
   # BERT-large GLUE 微调；硬绑定 CUDA，数据路径固定为 /data/GlueData。
   - training/bing_bert/run_glue_classifier_bert_large.py
-  # PyTorch CIFAR 教程；设备路径仅支持 CUDA/CPU，未接入 NPU。
-  - training/cifar/cifar10_tutorial.py
   # GPT random-LTD 微调；本地数据可行，但必经 torch.device('cuda')/cuda.set_device。
   - training/data_efficiency/gpt_finetuning/run_clm_no_trainer.py
   # CIFAR ViT 微调；损失与数据传输硬绑定 .cuda()，待适配。
   - training/data_efficiency/vit_finetuning/main_cifar.py
   # ImageNet ViT 微调；本地小数据可行，但 criterion.cuda 和设备设置必经绑定。
   - training/data_efficiency/vit_finetuning/main_imagenet.py
-  # GSM8K 答案生成；依赖 vLLM 及远程评测数据，待适配。
-  - training/deepspeed_finetune_demo/evaluate/gsm8k/gen_gsm8k.py
-  # MMLU 答案生成；依赖 vLLM 及远程评测数据，待适配。
-  - training/deepspeed_finetune_demo/evaluate/mmlu/gen_mmlu.py
-  # AutoEP 训练与多任务评测；默认 16B 模型、八卡 TP，需 vLLM/evalplus。
+  # 训练评测编排；固定八卡训练/转换且不透传生成规模，子训练和 GSM8K/MMLU 已独立看护。
   - training/deepspeed_finetune_demo/run_and_evaluate.sh
   # AutoEP MoE 训练；可缩层数和步数，但 metrics.reduce_max 必经 torch.cuda.current_device。
   - training/expert_parallel/train.py
@@ -672,7 +1148,7 @@ unsupported:
   - training/tensor_parallel/basic_example/autotp_memory_compare.py
   # 自定义 AutoTP 切分训练；设备硬绑定 CUDA，默认 Pythia-6.9B。
   - training/tensor_parallel/custom_patterns/autotp_custom_patterns.py
-  # DeepCompile 激活卸载；编译为核心功能且原配方 compile=True，暂无兼容的 NPU Inductor 配方。
+  # DeepCompile 激活卸载；compile.enabled 与主仓配置不符且未调用 engine.compile，需上游修复。
   - benchmarks/pin_memory/deepcompile_activation/bench.py
-  # CPU 页锁定对比；native/torch pin 可运行，但不执行 NPU 拷贝或计算。
-  - benchmarks/pin_memory/cpu_pin/bench.py
+  # AutoEP 检查点恢复对比；默认 Moonlight-16B/八卡，尚未压缩适配 CI。
+  - training/deepspeed_finetune_demo/run_autoep_affine_ir_checkpoint_experiment.sh

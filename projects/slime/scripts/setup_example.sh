@@ -12,12 +12,136 @@
 # both the installed package and the execution root for run_example.sh.
 set -euo pipefail
 
+validate_sft_fixture() {
+  python - "$@" <<'PY'
+"""Check native SFT token masks before allocating Ray training actors."""
+import json
+import sys
+from pathlib import Path
+
+
+def load_messages(path):
+    rows = [json.loads(line) for line in Path(path).read_text(encoding="utf-8").splitlines() if line.strip()]
+    if len(rows) != 8:
+        raise ValueError("CI SFT fixture must contain eight conversations")
+    for row in rows:
+        messages = row["messages"]
+        if not isinstance(messages, list) or not any(m.get("role") == "assistant" and m.get("content") for m in messages):
+            raise ValueError("SFT requires a non-empty assistant response")
+    return rows
+
+
+def main():
+    from slime.utils.mask_utils import MultiTurnLossMaskGenerator
+    from slime.utils.processing_utils import load_tokenizer
+    rows = load_messages(sys.argv[1])
+    tokenizer = load_tokenizer(sys.argv[2], trust_remote_code=True)
+    generator = MultiTurnLossMaskGenerator(tokenizer, tokenizer_type="qwen3")
+    for index, row in enumerate(rows):
+        tokens, mask = generator.get_loss_mask(row["messages"])
+        if len(tokens) != len(mask) or not sum(mask):
+            raise ValueError(f"SFT row {index} has no valid supervised token mask")
+        if len(tokens) > 1024:
+            raise ValueError(f"SFT row {index} exceeds the CI token budget")
+    print("SFT fixture: eight conversations with non-empty native assistant masks")
+
+
+if __name__ == "__main__":
+    main()
+PY
+}
+
+prepare_eval_config() {
+  python - "$@" <<'PY'
+"""Create native multi-task eval config with two distinct local scorers."""
+from pathlib import Path
+import sys
+import yaml
+
+
+def build_config(fixtures):
+    fixtures = Path(fixtures).resolve()
+    return {"eval": {"defaults": {"max_response_len": 128, "top_p": 0.7, "n_samples_per_eval_prompt": 1}, "datasets": [
+        {"name": "ci_math", "path": str(fixtures / "ci_dapo_16.jsonl"), "rm_type": "deepscaler"},
+        {"name": "ci_multiple_choice", "path": str(fixtures / "ci_gpqa_8.jsonl"), "rm_type": "gpqa"},
+    ]}}
+
+
+if __name__ == "__main__":
+    destination = Path(sys.argv[2])
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(yaml.safe_dump(build_config(sys.argv[1]), sort_keys=False), encoding="utf-8")
+    print(f"native multi-task config: {destination}")
+PY
+}
+
+prepare_geo_fixture() {
+  python - "$@" <<'PY'
+"""Generate native Geo3K JSONL with small, local geometry images."""
+import argparse
+import json
+import math
+from pathlib import Path
+
+
+def prepare_fixture(source, destination):
+    from PIL import Image, ImageDraw
+    facts = json.loads(Path(source).read_text(encoding="utf-8"))
+    if len(facts) != 8:
+        raise ValueError("Geo3K CI expects eight angle questions")
+    destination = Path(destination).resolve()
+    destination.mkdir(parents=True, exist_ok=True)
+    rows = []
+    for index, fact in enumerate(facts):
+        a, b = fact["angle_a"], fact["angle_b"]
+        if not (0 < a < 90 and 0 < b < 90 and 180 - a - b == int(fact["answer"])):
+            raise ValueError(f"Invalid triangle angle fixture: {fact}")
+        image = Image.new("RGB", (128, 128), "white")
+        draw = ImageDraw.Draw(image)
+        left, right = (12, 110), (116, 110)
+        ta, tb = math.tan(math.radians(a)), math.tan(math.radians(b))
+        x = 104 * tb / (ta + tb)
+        apex = (12 + x, 110 - ta * x)
+        draw.line([left, right, apex, left], fill="black", width=2)
+        draw.text((13, 113), "A", fill="black")
+        draw.text((111, 113), "B", fill="black")
+        draw.text((apex[0] - 3, apex[1] - 11), "C", fill="black")
+        draw.text((19, 94), f"{a}", fill="black")
+        draw.text((91, 94), f"{b}", fill="black")
+        path = destination / f"triangle-{index}.png"
+        image.save(path)
+        problem = ('<image>Find angle C in the triangle. Read the labeled angles A and B from the image. '
+            'The calc_score tool is available. On your FIRST turn, output ONLY a tool call '
+            'with your estimated angle, with no explanation or final answer: '
+            '<tool_call>{"name":"calc_score","arguments":{"answer":"YOUR_NUMBER"}}</tool_call>. '
+            'Wait for tool feedback before providing the final angle in degrees as \\boxed{YOUR_NUMBER}.')
+        tools = [{"type": "function", "function": {"name": "calc_score",
+            "description": "Check a proposed angle and return feedback before the final answer.",
+            "parameters": {"type": "object", "properties": {"answer": {"type": "string"}},
+                           "required": ["answer"]}}}]
+        rows.append({"problem": problem, "answer": fact["answer"], "images": [path.as_uri()], "tools": tools})
+    output = destination / "geo3k-ci.jsonl"
+    output.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    return output
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("source")
+    parser.add_argument("destination")
+    arguments = parser.parse_args()
+    print(prepare_fixture(arguments.source, arguments.destination))
+PY
+}
+
+
 if [[ $# -lt 1 ]]; then
   echo "usage: $0 <profile>" >&2
   exit 2
 fi
 
 PROFILE="$1"
+export PIP_CONSTRAINT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/constraints-npu.txt"
 
 # ----- pinned component versions (fork Dockerfile ARGs + quick_install.sh) -----
 readonly SGLANG_REF=v0.5.13
@@ -312,6 +436,16 @@ import sglang
 import slime
 import torch
 import torch_npu
+import numpy
+import pandas
+import pyarrow
+import datasets
+import ray
+
+print("data stack:", {module.__name__: module.__version__ for module in
+                      (numpy, pandas, pyarrow, datasets, ray)})
+table = pyarrow.Table.from_pandas(pandas.DataFrame({"value": [1, 2]}))
+assert table.column("value").to_pylist() == [1, 2]
 
 fork_root = Path(os.environ["SLIME_FORK_ROOT"]).resolve()
 slime_file = Path(slime.__file__).resolve()
@@ -335,7 +469,7 @@ prepare_qwen25_assets() {
   # transformers treats a non-existent path as a Hub repo id and dies with
   # HFValidationError. Hand the resolved path to the shell via a file.
   local model_path_file="$DEPS_ROOT/model_path.txt"
-  TQDM_MININTERVAL=15 python - "$model_path_file" "${SLIME_RETOOL_MODEL_REPO:-Qwen/Qwen3-4B-Instruct-2507}" <<'PY'
+  TQDM_MININTERVAL=15 python - "$model_path_file" <<'PY'
 import os
 import sys
 from modelscope import snapshot_download
@@ -404,7 +538,7 @@ setup_slime_retool() {
   python -c 'import jinja2, psutil; print("ReTool deps:", jinja2.__version__, psutil.__version__)'
 
   local model_path_file="$DEPS_ROOT/retool_model_path.txt"
-  TQDM_MININTERVAL=15 python - "$model_path_file" <<'PY'
+  TQDM_MININTERVAL=15 python - "$model_path_file" "${SLIME_RETOOL_MODEL_REPO:-Qwen/Qwen3-4B-Instruct-2507}" <<'PY'
 import os
 import sys
 from modelscope import snapshot_download
@@ -451,10 +585,10 @@ PY
 }
 
 setup_slime_retool_sft() {
-  # Upstream debug-train-only skips SGLang; two actor NPUs suffice for TP2.
-  SLIME_RETOOL_REQUIRED_GPUS=2 setup_slime_retool
+  # Four-way TP fits the 4B actor/Adam state on 32GB NPU runners.
+  SLIME_RETOOL_REQUIRED_GPUS=4 setup_slime_retool
   append_project_env "SLIME_SFT_FIXTURE_JSONL=$FIXTURE_DIR/ci_retool_sft_8.jsonl"
-  python "$GITHUB_WORKSPACE/workflows/projects/slime/scripts/validate_sft_fixture.py" \
+  validate_sft_fixture \
     "$FIXTURE_DIR/ci_retool_sft_8.jsonl" "$(cat "$DEPS_ROOT/retool_model_path.txt")"
 }
 
@@ -484,7 +618,7 @@ setup_slime_multi_agent() {
 
 setup_slime_multi_task() {
   setup_slime_opd
-  python "$GITHUB_WORKSPACE/workflows/projects/slime/scripts/prepare_eval_config.py" \
+  prepare_eval_config \
     "$FIXTURE_DIR" "$DEPS_ROOT/multi-task-ci.yaml"
   append_project_env "SLIME_EVAL_CONFIG=$DEPS_ROOT/multi-task-ci.yaml"
 }
@@ -504,12 +638,38 @@ with open(sys.argv[1], "w") as output:
         except PackageNotFoundError:
             pass
 PY
-  python -m pip install -c "$constraints" 'strands-sglang==0.3.2' camel-ai
+  # 0.4.x renamed ToolLimiter to LoopLimiter, breaking the unmodified example.
+  # 0.3.8 preserves its API but declares Transformers <5. Install the adapter
+  # separately and verify its real tokenizer API on SGLang's pinned 5.8.1.
+  python -m pip install --no-deps 'strands-sglang==0.3.8'
+  python -m pip install -c "$constraints" aiohttp jinja2 pybase64 \
+    'strands-agents[openai]==1.59.0' 'camel-ai==0.2.90'
   python - <<'PY'
 from camel.interpreters import SubprocessInterpreter
 from strands import Agent, tool
 from strands_sglang import SGLangModel, ToolLimiter, get_client_from_slime_args
 from strands_sglang.tool_parsers import HermesToolParser
+from transformers import AutoTokenizer
+from pathlib import Path
+import os
+model_path = Path(os.environ['SLIME_FORK_ROOT']).parent / 'retool_model_path.txt'
+tokenizer = AutoTokenizer.from_pretrained(model_path.read_text().strip(), local_files_only=True)
+encoded = tokenizer.apply_chat_template(
+    [{'role': 'user', 'content': 'Calculate 2 + 3 with the Python tool.'}],
+    tokenize=False, add_generation_prompt=True)
+assert isinstance(encoded, str) and tokenizer.encode(encoded)
+print('Strands adapter uses the preserved Transformers tokenizer stack')
+from types import SimpleNamespace
+probe_args = SimpleNamespace(sglang_router_ip='127.0.0.1', sglang_router_port=1,
+    sglang_server_concurrency=1, rollout_num_gpus=2, rollout_num_gpus_per_engine=2)
+model = SGLangModel(tokenizer=tokenizer,
+    client=get_client_from_slime_args(probe_args, timeout=5), tool_parser=HermesToolParser())
+for attribute in ('token_ids', 'loss_mask', 'logprobs', 'segments'):
+    if not hasattr(model.token_manager, attribute):
+        raise RuntimeError(f'Strands native TITO API missing: {attribute}')
+agent = Agent(model=model, tools=[], hooks=[ToolLimiter(max_tool_iters=5)], callback_handler=None)
+model.reset()
+agent.cleanup()
 result = SubprocessInterpreter(require_confirm=False, print_stdout=False,
     print_stderr=False, execution_timeout=5.0).run("print(2 + 3)", "python")
 if "5" not in str(result):
@@ -520,6 +680,28 @@ PY
 
 setup_slime_search() {
   setup_slime_opd
+  # Check the actual upstream reward contract before starting Ray/NPU jobs.
+  python - "$SLIME_FORK_ROOT" "$FIXTURE_DIR/ci_search_8.jsonl" <<'PY'
+import json, sys
+from pathlib import Path
+sys.path.insert(0, str(Path(sys.argv[1]) / 'examples/search-r1'))
+from qa_em_format import compute_score_em
+rows = [json.loads(line) for line in Path(sys.argv[2]).read_text(encoding='utf-8').splitlines() if line.strip()]
+if len(rows) != 8:
+    raise RuntimeError('Search-R1 fixture must contain eight questions')
+for index, row in enumerate(rows):
+    ground_truth = row['reward_model']['ground_truth']
+    if not isinstance(ground_truth, dict) or not isinstance(ground_truth.get('target'), list) or not ground_truth['target']:
+        raise RuntimeError(f'Search-R1 row {index}: expected ground_truth.target answer list')
+    # The native scorer receives prompt+response and skips the prompt's
+    # <answer>...</answer> format example when extracting the final answer.
+    prefix = row['prompt'][0]['content'] + '\n<|im_start|>assistant\n<think>Check the retrieved fact.</think>'
+    correct = prefix + f"<answer>{ground_truth['target'][0]}</answer>"
+    wrong = prefix + '<answer>CI deliberately wrong answer</answer>'
+    if compute_score_em(correct, ground_truth) != 1 or compute_score_em(wrong, ground_truth) != 0:
+        raise RuntimeError(f'Search-R1 row {index}: native exact-match reward contract failed')
+print('Search-R1: eight native reward labels and correct/incorrect scoring passed')
+PY
   # The upstream CLI supports BM25 without the dense encoder's .cuda().
   # Pyserini 0.25 uses Java 11 and bundles its Anserini JAR; no wiki index
   # or external search API is needed for this local eight-document corpus.
@@ -527,6 +709,10 @@ setup_slime_search() {
     apt-get update
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openjdk-11-jdk-headless
   fi
+  # The aarch64 JDK 11 C1 compiler crashed in IPAddressUtil.scan in run #21.
+  # Eight-document BM25 does not need JIT; keep the real Java/Lucene backend.
+  export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:+$JAVA_TOOL_OPTIONS }-Xint -XX:ActiveProcessorCount=2"
+  append_project_env "JAVA_TOOL_OPTIONS=$JAVA_TOOL_OPTIONS"
   java -version
   local constraints="$DEPS_ROOT/search-stack-constraints.txt"
   python - "$constraints" <<'PY'
@@ -540,6 +726,12 @@ with open(sys.argv[1], "w") as output:
             pass
 PY
   python -m pip install -c "$constraints" 'pyserini==0.25.0' faiss-cpu
+  # Pyserini imports its unused OpenAI encoder even for local BM25.
+  # This is not a credential: any accidental API use must stay on loopback.
+  export OPENAI_API_KEY=ci-local-bm25-not-a-credential
+  export OPENAI_BASE_URL=http://127.0.0.1:1/v1
+  append_project_env "OPENAI_API_KEY=$OPENAI_API_KEY"
+  append_project_env "OPENAI_BASE_URL=$OPENAI_BASE_URL"
   python -c 'import faiss; from pyserini.search.lucene import LuceneSearcher; print("native CPU BM25 dependencies ready")'
   local index="$DEPS_ROOT/search-ci-index"
   python -m pyserini.index.lucene --collection JsonCollection \
@@ -583,7 +775,7 @@ PY
   fi
   append_project_env "SLIME_MODEL_PATH=$model_dir"
   local data_dir="$DEPS_ROOT/geo3k-ci"
-  python "$GITHUB_WORKSPACE/workflows/projects/slime/scripts/prepare_geo_fixture.py" \
+  prepare_geo_fixture \
     "$FIXTURE_DIR/ci_geo_angles_8.json" "$data_dir"
   append_project_env "SLIME_FIXTURE_JSONL=$data_dir/geo3k-ci.jsonl"
   # Native checkpoint._load_checkpoint_hf supports --load HF + bridge.
@@ -602,10 +794,13 @@ processor = load_processor(model, trust_remote_code=True)
 if processor is None:
     raise RuntimeError("Geo3K native multimodal processor is unavailable")
 dataset = Dataset(fixture, tokenizer, processor, 1024,
-    prompt_key="problem", label_key="answer", multimodal_keys={"image": "images"}, apply_chat_template=True)
+    prompt_key="problem", label_key="answer", tool_key="tools",
+    multimodal_keys={"image": "images"}, apply_chat_template=True)
 if len(dataset.samples) != 8:
     raise RuntimeError("Geo3K fixture was unexpectedly filtered")
 for sample in dataset.samples:
+    if not sample.metadata or not sample.metadata.get('tools') or sample.metadata['tools'][0].get('function', {}).get('name') != 'calc_score':
+        raise RuntimeError('Geo3K native Dataset lost the scoring-tool schema')
     if not sample.multimodal_inputs or not sample.multimodal_inputs.get("images"):
         raise RuntimeError("Geo3K native Dataset lost fixture images")
     output = processor(text=sample.prompt, **sample.multimodal_inputs)

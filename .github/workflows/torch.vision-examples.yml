@@ -22,4 +22,7 @@ jobs:
       upstream_repo: pytorch/vision
       # Never allow an older ref to bypass the latest-TorchVision requirement.
       target_ref: ''
-      max_parallel: 1
+      # 8 supported entries, all single-card (linux-aarch64-a2-1) legs;
+      # 8 lets the whole matrix run concurrently when runners are free
+      # (each leg source-builds torchvision ~30 min cold, no shared state).
+      max_parallel: 8

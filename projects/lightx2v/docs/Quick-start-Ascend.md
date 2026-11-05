@@ -17,6 +17,8 @@ Atlas 900 A2 训练系列（Ascend 910B），单卡，至少 30 GB 可用存储�
 
 本文档测试环境使用 Python 3.12、CANN 9.1.0。
 
+本文档配套镜像：`swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12`。
+
 ## 1. 加载 CANN 环境
 
 ```shell
@@ -31,7 +33,7 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 pip install torch==2.9.0 torchvision==0.24.0 torch_npu==2.9.0.post6 triton==3.5.0
 ```
 
-确认安装的软件栈版本：
+确认安装的软件栈版本，用python执行下面的代码：
 
 ```python #test id="lightx2v-verify-torch"
 import torch
@@ -70,9 +72,10 @@ echo "LightX2V $(git -C LightX2V describe --tags --exact-match HEAD)"
 pip install --no-deps ./LightX2V
 ```
 
-:::{note}
+```{admonition} Note
+:class: note
 `<ref>` 为上游最新 release 版本。
-:::
+```
 
 输出结果如下：
 
@@ -80,9 +83,10 @@ pip install --no-deps ./LightX2V
 LightX2V xxx
 ```
 
-:::{note}
+```{admonition} Note
+:class: note
 输出中的 `xxx` 为实际检出的 release 版本。
-:::
+```
 
 ## 4. 示例：生成视频
 

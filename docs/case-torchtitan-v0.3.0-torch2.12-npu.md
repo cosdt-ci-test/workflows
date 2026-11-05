@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| 时间 | 2026-09-04 ~ 2026-09-07（首版）/ 2026-09-17（no-patch 复盘） |
+| 时间 | 2026-09-04 ~ 2026-09-07（首版）/ 2026-09-17（no-patch 复盘）/ 2026-10-26（三墙复测，见 §七） |
 | 看护对象 | [Quick-start-Ascend.md](../projects/torchtitan/docs/Quick-start-Ascend.md)（C 类自维护文档） |
 | 上游信号 | torchtitan **v0.3.0**（2026-09-03 发布，首个 stable release，此前 v0.2.2 均为 prerelease） |
 | 触发原因 | 上游发版自动触发重测，CI 失败 |
@@ -157,3 +157,109 @@ master 均已修复但未回合 2.12.0，修复手段全部是 sed 镜像上游 
 这正是 policy 想要的 signal：CI 替我们盯住「上游的 device-agnostic 主张 vs 实际可用度」之间的差距。等任意上游修了对应 issue，CI 自动转绿，不需要再 review / 撤 patch。
 
 **How to apply**：新加 NPU 看护项目时，setup 链默认不写 sed patch、不设 env var workaround。设备兼容性只在「上游已 ship 但我们的 pin 没跟上」时通过 pin 升级解决；上游尚未 ship 的限制作为 supported entry 的预期失败留下，由对应的上游 issue 跟踪。
+
+## 七、2026-10-26 三墙复测（torch 2.14 栈）
+
+§六 里的「三墙」结论是在 torch 2.12 / torch_npu 2.12 栈上得出的。2026-10-23 项目切到 torch 2.14 / torch_npu 2.14 / triton-ascend 3.6.0 并改用 torchtitan 官方 override 机制（2026-10-26 在 coder workspace `hdc-stable-npu-3` 上把三墙逐条复测）：
+
+| 环境 | CANN 9.1.0 / Python 3.12 / torch 2.14.0+cpu / torch_npu 2.14.0 / triton-ascend 3.6.0 / torchtitan v0.3.0（干净 checkout） |
+
+### 7.1 结论修正
+
+| §六 的结论 | 复测结果 | 证据 |
+|---|---|---|
+| ComplexRoPE 复数墙 | **仍成立**，但代价被低估 | `AclNN_Parameter_Error(EZ1001): Tensor self not implemented for DT_COMPLEX64`（`aclnnIndex`） |
+| flex 墙 | **仍成立**，但根因不是「NPU 缺算子」，是三层 | 见 7.2 |
+| ChunkedLoss 墙 | **不再成立**（torch 2.12 时代的问题） | 1 卡 / 2 卡 FSDP / seq-len 256 / 2048 全 exit 0 → supported 段改用 upstream 默认配置 `llama3_debugmodel`，`llama3_debugmodel_ce_loss` 绕路已撤 |
+
+### 7.2 flex 路径的三层阻塞（各自独立成立）
+
+1. `torch_npu` 2.14.0 的 `lowering.make_reduction(reduction_type, override_return_dtype=None)` 缺 `strict_sum` 形参，而 torch 2.14 的 inductor `sum_` lowering **总是**传它（`torch/_inductor/lowering.py:7971`）→ NPU 上**任何**被编译的 reduction 都失败。实测 `torch.compile(lambda x: x.sum(-1))` 直接抛 `TypeError: make_reduction() got an unexpected keyword argument 'strict_sum'` —— **与 flex 无关**，torchtitan 的 `compile` 特性整体不可用。
+2. `triton-ascend` 3.6.0 硬编码 `-std=c++17`（`triton/backends/ascend/utils.py:709`），而 torch 2.14 的 ATen headers 要求 C++20 → 运行期扩展 `npu_utils.cpp` 编译失败（`#error C++20 or later compatible compiler is required to use ATen`）。
+3. `torch_npu` 自己的 flex lowering（`torch_npu/_inductor/kernel/flex_attention.py:746`）抛 `SubgraphLoweringException: Buffers cannot be created while lowering a pointwise subgraph` —— 这层是**真实的能力缺口**，①②只是依赖版本错配。
+
+把 ①② 用实验补丁绕过（仅实验，未进仓库）后，flex 仍停在 ③。
+
+### 7.3 两处语义偏差的量化（override 换的是 upstream 自带组件，但不是数值等价的组件）
+
+| 偏差 | 量化 | 说明 |
+|---|---|---|
+| RoPE 配对约定 | 与 upstream `ComplexRoPE` 同输入输出 **max_abs_diff 4.66 / rel 113%** | `ComplexRoPE` 按相邻维配对 `(d0,d1),(d2,d3)…` 旋转 complex64 缓存；`CosSinRoPE` 用 rotate-half 约定 `(d0,d8),(d1,d9)…`，且对 `scaling="llama"` 抛 `NotImplementedError`（上游 main 分支至今如此）→ override 同时丢掉 llama scaling 并换了约定 |
+| block-causal 掩码 | 含 2 文档的样本，普通 causal 放行的 `(q,kv)` 对是 block-causal 的 **1.94 倍**（blocked 49.8% → 74.1%） | 上游只给 Flex / Varlen 构造 per-document mask（`trainer.py:738-748`），SDPA 拿不到 mask |
+
+结论：**smoke 跑通 ≠ 数值与上游可比**。这两条必须写进对外文档，不能只说「用官方 override 机制替换，全程不改上游源码」。
+
+### 7.4 两处偏差的消除（2026-10-26 落地）
+
+上面两条偏差已经消除，实现落在 `projects/torchtitan/example/npu_compat.py`（一个 override，替换 `GQAttention.Config` 节点 —— 上游框架禁止嵌套 override，两处替换必须折进同一个节点）：
+
+- **RoPE**：`RealGatherComplexRoPE(ComplexRoPE)` 只 override `_reshape_cache` 一个方法 —— 把 complex64 缓存看成 float32 的实部/虚部两半、在实数域做同样的 gather、再交回上游自己的旋转代码。缓存数学（含 llama 频率缩放）和相邻维配对约定都是 upstream 的 → 与上游 `ComplexRoPE` 输出 **max_abs_diff 0.0（逐位一致）**。
+  （关键前提，实测确认：NPU 上 `torch.polar` 的值与 CPU 一致、`view(torch.float32)` 与 complex64 逐元素乘法都可用 —— 只有 `aclnnIndex` 不支持 DT_COMPLEX64。）
+- **掩码**：`BlockCausalSDPA` 给 SDPA 一张显式的 dense block-causal 掩码（aclnn SDPA 支持 `attn_mask`）；配套的 `NpuGQAttention.forward` 是 upstream v0.3.0 的 forward 逐行拷贝 + 一行（把 `positions` 透传给 inner attention —— upstream 只把 positions 用于 RoPE，不往下传）。与朴素逐文档 causal 参考实现 **max_abs_diff 3.6e-07**；同 seed 下与「掩码退化成普通 causal」的对照组从第 3 步起 loss 分叉，探针显示 2 文档样本 blocked 74.1% vs 49.8%。
+
+等价性由 `projects/torchtitan/example/check_npu_overrides.py` 在每次 quick-start 运行时断言（CPU 即可跑）。1 卡 / 2 卡 FSDP / seq-len 2048 均 exit 0。
+
+本次未向 upstream 提 issue。
+
+### 7.5 覆盖面的扩展（2026-10-27）
+
+CI 首跑（run 40466975087，torchtitan-examples，main 分支）：13 条单卡 + 2 条双卡全绿；
+2 条八卡里 qwen3_14b 绿、deepseek_v3_16b 红（compile 撞 B1，见下）；4 卡的 sft_qwen3_8b_math 红（缺 16 GB 预训练权重）。
+
+第二轮（run 40478193658，hdc 分支）：35/36 绿。修掉的两处都验证了：
+`--compile.no-enable` 让 deepseek_v3_16b（16B + expert parallelism 8）跑通（`Applied 27 override(s)`，
+loss 11.98 → 11.52）；唯一还红的是 qwen3_14b —— **不是 NPU 算子问题，是显存装不下**：
+step 1 就到 28.09 GiB/卡（95.27%），下一个 1.45 GiB 的分配直接 NPU OOM（8 卡全红）。
+算得过来：14B × (2 权重 + 2 梯度 + 8 AdamW fp32) = 168 GB / 8 卡 = 21 GB/卡，再加激活就满 →
+退回 unsupported（8 卡这一档只有 MoE 能用）。
+
+- **deepseek_v3_16b 撞 B1**：该 recipe 开了 `compile=CompileConfig(enable=True, components=["loss"])`，
+  编出来的 loss 走 inductor → torch_npu 2.14.0 的 `make_reduction` 缺 `strict_sum` 形参 →
+  `TypeError: make_reduction() got an unexpected keyword argument 'strict_sum'`。条目改加
+  `--compile.no-enable`（tyro 的正确写法是 `--compile.no-enable`，不是 `--no-compile.enable`，
+  也不是 `--compile.enable false`）→ 跳过编译 loss 的路径。这条墙对所有编译型 recipe
+  （graph_trainer 等）同样成立。
+- **sft_qwen3_8b_math 缺权重**：SFT recipe 从 `hf_assets_path`（./assets/hf/Qwen3-8B）加载 8B
+  预训练权重，setup 只拉了 tokenizer → `RuntimeError: Missing key in checkpoint state_dict:
+  lm_head.weight.`（HF 的 Qwen3-8B 是 tied embedding，权重里没有 lm_head）。而 examples 的 setup
+  是**按 profile** 跑的（所有 entry 共用），16 GB 权重每个 job 拉一遍不现实（该 workflow 没有
+  模型缓存卷）→ 退回 unsupported。数据侧没有障碍：gsm8k 只有 7473 行 / 约 2.3 MB parquet
+  （modelscope 的 `AI-ModelScope/gsm8k` 有同一份文件），CI 机器也能直连 huggingface.co。
+- **CLI 覆盖的两个坑**（都实测过）：`load_dataset(..., name="main")` 的 `"main"` 配置名改不掉
+  （tyro 拒绝 `--dataloader.load-dataset-kwargs.name` 的三种写法；本地目录只暴露 `default`）；
+  bool 字段要关掉得用 `--<path>.no-enable` 这种 tyro 形式。
+
+
+
+supported 从 2 条扩到 17 条：13 条单卡 + 1 条双卡（llama3 debugmodel，FSDP shard=2 + bf16）+ 1 条双卡（qwen3_1_7b，1.7B 的权重+优化器状态 ~20 GB 在 32 GB 单卡上 OOM）+ 2 条八卡（deepseek_v3_16b 的 expert_parallel_degree=8、qwen3_14b 的 14B×12B=168 GB）。八卡两条落在 CI 的 `linux-aarch64-a2-8` runner 上（coder workspace 当时没能拿到 8 卡）。
+
+同一套 override（`npu_compat.npu_attention`，替换 `GQAttention.Config` 节点）在实测中又放行了 9 个组合，supported 从 2 条变 11 条（10 条单卡 + 1 条双卡 FSDP）：
+
+| 组合 | 说明 |
+|---|---|
+| llama3 / llama3_debugmodel_varlen_attn | varlen backend 也被覆盖（换的是整个 attention 节点，不挑 backend） |
+| llama3 / llama3_debugmodel_ce_loss | 保留覆盖（默认配方已能跑，这条留作对照） |
+| llama3 / llama3_debugmodel_dist_gemm | dist_gemm TP 后端 |
+| llama3 / sft_debugmodel | SFT 配方 + chat 数据集 |
+| qwen3 / qwen3_debugmodel、non_fused_qkv、moe_param_groups、moe_debug | qwen3 的 rope 是上游 CosSinRoPE（实数缓存，无需替换）→ 只换 attention backend |
+| muse_glimmer / muse_glimmer_debugmodel | 纯文本路径 |
+
+实测环境：hdc-stable-npu-2（1 卡）/ hdc-stable-npu-3（2 卡），CANN 9.1.0 / torch 2.14.0 / torch_npu 2.14.0 / triton-ascend 3.6.0 / torchtitan v0.3.0。
+
+仍然不通的，以及各自的实测根因：
+
+| 组合 | 根因 |
+|---|---|
+| gpt_oss / gpt_oss_debugmodel(_flex) | gpt_oss 的 attention 类是自己的 `Attention(BaseAttention)`（models/gpt_oss/model.py:43），不是 GQAttention 的子类 → override 命中不到 → flex/varlen 未被替换 → 撞 make_reduction(strict_sum)；而且即使写了 per-family override 也做不出等价 attention：① 它的 attention sink 需要 LSE（out_transform(out, lse)），而 NPU 上三个能返回 LSE 的 SDPA 变体（aten::_scaled_dot_product_flash_attention / _cudnn_attention / _efficient_attention）全部 fallback 到 CPU；② 它是 GQA（64/8 头），而 aclnnFlashAttention 不支持 enable_gqa + attn_mask 同给（实测 aclnnFlashAttention failed），而 dense block-causal 掩码正是要走 attn_mask |
+| deepseek_v3 / deepseek_v3_debugmodel(_mtp) | 同上（models/deepseek_v3/model.py:28）—— 但已解：per-family override 落地（example/npu_compat_deepseek.py），两条实测 exit 0，已进 supported |
+| qwen3_5 / qwen35_* | 同上（`Qwen35Attention`），另外样本长度普遍 > seq_len（406/418 vs 256）→ 需要更大的 seq-len |
+| deepseek_v3 / *_minimal_async_ep | 上游配置自身不自洽：config 里 expert_parallel_degree=1，而 dispatcher 硬性要求 ep>1；2 卡实测撞 mesh 断言，加 --parallelism.expert-parallel-degree 2 仍是同一个断言 |
+| deepseek_v3 / *_hybridep | 需要 deep_ep 库（DeepEP，CUDA-only） |
+| deepseek_v3 / deepseek_v3_16b | ep=8 → 需 8 卡（CI runner linux-aarch64-a2-8 存在），但仍要先有 deepseek 的 per-family override —— 8 卡是必要不充分条件；已进 supported 段（8 卡 + deepseek-moe-16b-base 的 tokenizer 资产），CI 首跑验证 |
+| qwen3 / qwen3_0_6b | **不是硬墙**：只缺真实 tokenizer 资产（modelscope 拉 `Qwen/Qwen3-0.6B` 的 tokenizer 文件到 assets/hf/Qwen3-0.6B）+ `--dataloader.dataset c4_test` 覆盖（HF 的 allenai/c4 不可达）→ 补齐后 1 卡 exit 0 |
+| qwen3 / qwen3_1_7b | 同上，但 1 卡 OOM（权重+优化器状态 ~20 GB vs 32 GB 卡）→ 2 卡实测 exit 0，已进 supported 段 |
+| flux_debugmodel | 网络不是瓶颈：tokenizer / random-init / spmd_types 三项都能绕（见 manifest 段），仍缺真 T5-XXL 权重（44.5 GB；换 t5-small 因 d_model 512 vs 4096 实测报 aclnnAddmm k-axis 不匹配）与 ≥2 卡显存；FLUX.1-dev 的 autoencoder 是 gated 仓库 |
+| kimi / muse_glimmer_mm / 量化系（nvfp4 / mxfp8 / float8） | 真实硬墙：CUDA-only 算子或库（DistMuon 要每进程一张 CUDA 卡；mm 路径 aclnnInplaceOne 失败；float8 模拟 aclnnInplaceCopy 失败；nvfp4 需 SM100） |
+
+结论：flex/varlen 那道墙对**能用 GQAttention 的族**已经被 override 解决；剩下的是三类 —— 自己的 attention 类（要 per-family override）、规模与资产（要更多卡 + modelscope 资产）、真·CUDA-only。
+

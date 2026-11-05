@@ -20,8 +20,8 @@ concurrency:
 on:
   # Release-only guarding: monitor the latest upstream release and rerun
   # only when the release tag moves or the previous scheduled run failed.
-  schedule:
-    - cron: '45 */6 * * *'
+  # schedule:
+  #   - cron: '45 */6 * * *'
   workflow_dispatch:
     inputs:
       target_ref:

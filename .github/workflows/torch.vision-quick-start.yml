@@ -16,41 +16,23 @@
 #
 # Upstream: github.com/pytorch/vision. The doc builds torchvision
 # from source only: the source build section `git clone`s pytorch/vision
-# at the latest release tag (`<ref>`), applies the Stable ABI compat
-# patch (see below), and runs `FORCE_CUDA=0 uv pip install -e .`,
-# mirroring ms-swift's source build pattern. pytorch/vision
-# publishes GitHub Releases (e.g. v0.29.0) so the engine's default
-# release_source=releases works — no special source=tags override
-# needed.
+# at the latest release tag (`<ref>`) and runs `FORCE_CUDA=0 uv pip
+# install -e .`, mirroring ms-swift's source build pattern.
+# pytorch/vision publishes GitHub Releases (e.g. v0.29.0) so the
+# engine's default release_source=releases works — no special
+# source=tags override needed.
 #
-# torch / torch_npu both pinned to 2.12.0: this is the verified
-# upgrade from the prior torch=2.9.0+cpu + torch_npu=2.9.0.post6
-# combo. torchvision v0.29.0 (Sep 2026) migrated to the PyTorch
-# Stable C ABI, which needs torch wheel to ship
-# `torch/csrc/stable/c/shim.h` and `torch/headeronly/util/shim_utils.h`
-# — torch 2.9.0 wheel ships an incomplete Stable ABI header snapshot
-# (verified via `unzip -l` on aliyun's wheel). torch 2.12.0+cpu wheel
-# ships 61 Stable ABI headers including those two; the matching
-# torch_npu 2.12.0 wheel is on aliyun pypi/simple. The torchtitan
-# Quick-start-Ascend.md project in this same repo uses the exact same
-# torch 2.12.0 + torch_npu 2.12.0 + aliyun pypi/simple combo and has
-# been green on the same NPU runner with CANN 9.1.0 — cross-project
-# parity reduces the surface area this guard has to re-verify.
-#
-# Stable ABI compat patch: v0.29.0's build targets torch 2.14
-# (setup.py TORCH_TARGET_VERSION=0x020e000000000000) and its
-# deform_conv2d_kernel.cpp uses torch::stable::permute — a function
-# that only enters the stable API surface in torch 2.14 (2.12 / 2.13
-# wheels' stable/ops.h lack it; torch_npu tops out at 2.12.0 stable,
-# 2.13.0rc1 is rc-only on aliyun). The doc therefore applies
-# projects/torch.vision/patches/torch-2.12-stable-api-permute.patch
-# after clone: replaces the two permute(t, {0,2,3,1,4,5}) call sites
-# with the numerically equivalent
-# transpose(transpose(t, 1, 3), 1, 2) chain (numpy-verified; 910B4
-# build + nms + deform_conv2d fwd/bwd + transforms.v2 NPU dispatch
-# all verified green). Drop the patch once torch_npu 2.14 ships on
-# aliyun — transpose still exists in 2.14, so keeping it compiles
-# fine either way.
+# torch / torch_npu both pinned to 2.14.0: torchvision v0.29.0
+# (Sep 2026) migrated to the PyTorch Stable C ABI and its build
+# target is pinned to torch 2.14 (setup.py
+# TORCH_TARGET_VERSION=0x020e000000000000). Its
+# deform_conv2d_kernel.cpp uses torch::stable::permute, which only
+# enters the stable API surface in torch 2.14 (2.12 / 2.13 wheels'
+# stable/ops.h lack it). With torch 2.14.0+cpu (aliyun
+# pytorch-wheels/cpu) + torch_npu 2.14.0 (PyPI, served through the
+# cluster pip-cache gateway), the source build compiles cleanly with no
+# patch — the earlier torch-2.12-era transpose-chain compat patch is
+# dropped.
 #
 # No container devices / volumes: torch_npu auto-registers with the
 # CANN base image, and torchvision transforms run on synthetic PIL
@@ -75,16 +57,16 @@ concurrency:
   cancel-in-progress: false
 
 on:
-  schedule:
-    # Run every 6 hours: '30 */6 * * *' fires at minute 30 of every
-    # 6th hour (00:30, 06:30, 12:30, 18:30). Cadence is loose enough
-    # for an upstream that releases a few times a year (Ascend/vision
-    # tracks pytorch/vision's torchvision releases — roughly one per
-    # quarter as of writing), but tight enough that doc fixes
-    # propagate within a day. Minute 30 (not 0) avoids collisions
-    # with torchtune (0 */6) and torchtitan (0 */6), which share the
-    # same a2-1 runner.
-    - cron: '30 */6 * * *'
+  # schedule:
+  # Run every 6 hours: '30 */6 * * *' fires at minute 30 of every
+  # 6th hour (00:30, 06:30, 12:30, 18:30). Cadence is loose enough
+  # for an upstream that releases a few times a year (Ascend/vision
+  # tracks pytorch/vision's torchvision releases — roughly one per
+  # quarter as of writing), but tight enough that doc fixes
+  # propagate within a day. Minute 30 (not 0) avoids collisions
+  # with torchtune (0 */6) and torchtitan (0 */6), which share the
+  # same a2-1 runner.
+  #   - cron: '30 */6 * * *'
   workflow_dispatch:
 
 permissions:
@@ -97,13 +79,14 @@ jobs:
   # identifiers), but the jobs:<id> key is parsed as an identifier
   # by GitHub Actions and rejects the dot with the F8 lint error
   # 'torch.vision-quick-start' is invalid.
-  torch-vision-quick-start:
+  qs-a2:
     uses: ./.github/workflows/quick-start-template.yml
     with:
       # Namespaces cache keys (quick-start-monitor-state-torch.vision_*),
       # artifacts (torch.vision-quick-start-<run_id>) and the test
       # working dir (workflows/projects/torch.vision).
       project: torch.vision
+      machine_type: a2
       # Self-hosted NPU runner for the test job only; the engine pins
       # the cache I/O jobs (restore-cache / publish-and-persist) to
       # GitHub-hosted ubuntu-latest.
@@ -114,22 +97,20 @@ jobs:
       # needed for the doc body's smoke path (transforms.v2 + NPU
       # dispatch on a synthetic PIL image).
       container_options: ''
-      # Doc body does: uv pip install torch / torch_npu from Aliyun
-      # pytorch-wheels + aliyun pypi/simple dual-source (torch_npu is
-      # the slowest piece, ~30 min on cold cache), then stock torchvision
-      # cpu wheel from Aliyun PyPI mirror, then 9 transforms.v2 smoke
-      # tests that exercise torch_npu PrivateUse1 dispatch. No source
-      # build — stock cpu wheel + torch_npu PrivateUse1 covers the full
-      # smoke surface (the Ascend/vision fork is a torchvision_npu patch
-      # package whose ops don't intersect transforms.v2). 60 min leaves
+      # Doc body does: uv pip install torch from Aliyun pytorch-wheels
+      # + torch_npu from the default index (PyPI via the cluster pip
+      # cache gateway; torch_npu is the slowest piece, ~30 min on cold
+      # cache), then stock torchvision via FORCE_CUDA=0 source build of
+      # the latest pytorch/vision release, then 9 transforms.v2 smoke
+      # tests that exercise torch_npu PrivateUse1 dispatch. 60 min leaves
       # room for installs + transforms / NPU-dispatch tests.
       timeout_minutes: 60
-      # Ascend/vision is the fork we actually install from. The doc
-      # body references pytorch/vision as the upstream torchvision
-      # lineage, but it is NOT what `git clone` points at and it is
-      # NOT the source of the tag substituted into <ref>.
+      # Ascend/vision is the fork whose ops don't intersect transforms.v2;
+      # the doc builds stock pytorch/vision from source instead (see header).
+      # The doc body references pytorch/vision as the upstream torchvision
+      # lineage via `git clone` at the substituted <ref>.
       upstream_repo: pytorch/vision
-      # pytorch/vision ships GitHub Releases (e.g. v0.24.0), so the
+      # pytorch/vision ships GitHub Releases (e.g. v0.29.0), so the
       # engine's default release_source=releases works out of the box.
       # UPSTREAM_REF is the latest release tag, substituted into the
       # source build's `<ref>` placeholder via #test-setup store +
@@ -146,9 +127,40 @@ jobs:
       # `api.github.com` URLs and re-applies the same Accept header
       # on the test-side fetch.
       doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/torch.vision/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
-      doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/torch.vision/docs/Quick-start-Ascend.md
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/torch.vision/docs/Quick-start-Ascend.md
       # cwd is workflows/projects/torch.vision; env contract (MONITORED_DOC_URL /
       # UPSTREAM_REF / NPU_READY) is injected by the engine. All project
       # env prep and installs are in the test subclass's
       # prepare_environment hook.
       test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1
+
+  qs-a3:
+    uses: ./.github/workflows/quick-start-template.yml
+    with:
+      project: torch.vision
+      machine_type: a3
+      # Atlas 900 A3 (Ascend 910C) leg.
+      test_runner: '["linux-aarch64-a3-800i-2"]'
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-a3-ubuntu22.04-py3.12
+      container_options: ''
+      timeout_minutes: 60
+      upstream_repo: pytorch/vision
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/torch.vision/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/torch.vision/docs/Quick-start-Ascend.md
+      test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1
+
+  merge:
+    needs: [qs-a2, qs-a3]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout workflows (provides the merge action)
+        uses: actions/checkout@v6
+      - name: Merge per-machine results into one artifact
+        uses: ./.github/actions/merge-quick-start-results
+        with:
+          project: torch.vision
+          result_a2: ${{ needs.qs-a2.outputs.result_json }}
+          result_a3: ${{ needs.qs-a3.outputs.result_json }}
+          name_a2: qs-a2
+          name_a3: qs-a3

@@ -17,18 +17,16 @@ resolved_tag="$(git -C "$TARGET_ROOT" describe --tags --exact-match 2>/dev/null 
 echo "TorchVision tested release: ${resolved_tag:-<tag unavailable in shallow checkout>}"
 echo "TorchVision tested commit: $(git -C "$TARGET_ROOT" rev-parse HEAD)"
 
-# The existing torch.vision quick-start has verified this source-build
-# compatibility patch on the NPU runner. It changes the checked-out library
-# implementation only; the example scripts themselves remain untouched.
-# Let git apply report a normal failure if a later release no longer matches.
-git -C "$TARGET_ROOT" apply "$PROJECT_ROOT/patches/torch-2.12-stable-api-permute.patch"
-
 # Use the same public Ascend-compatible wheel sources as this project's
 # quick-start. The source install below uses --no-deps and FORCE_CUDA=0 so
 # torchvision cannot replace torch_npu's matching PyTorch with a CUDA wheel.
+#
+# torch_npu needs no --extra-index-url: 2.14.0 is on PyPI. torch must
+# come from aliyun's pytorch-wheels/cpu find-links repo — PyPI's
+# torch==2.14.0 aarch64 wheel is the CUDA build.
 python -m pip install uv
-uv pip install --system -f https://mirrors.aliyun.com/pytorch-wheels/cpu 'torch==2.12.0'
-uv pip install --system --extra-index-url https://mirrors.aliyun.com/pypi/simple 'torch_npu==2.12.0'
+uv pip install --system -f https://mirrors.aliyun.com/pytorch-wheels/cpu 'torch==2.14.0+cpu'
+uv pip install --system 'torch_npu==2.14.0'
 uv pip install --system 'pillow>=10.0' numpy
 FORCE_CUDA=0 uv pip install --system --no-build-isolation --no-deps -e "$TARGET_ROOT"
 
@@ -45,7 +43,7 @@ loaded = Path(torchvision.__file__).resolve()
 declared = (target / "version.txt").read_text(encoding="utf-8").strip()
 print(f"torch={torch.__version__} torch_npu={torch_npu.__version__}")
 print(f"torchvision={torchvision.__version__} source={loaded}")
-if not torch.__version__.startswith("2.12.0") or not torch_npu.__version__.startswith("2.12.0"):
+if not torch.__version__.startswith("2.14.0") or not torch_npu.__version__.startswith("2.14.0"):
     raise SystemExit("torch and torch_npu must match the declared CANN 9.1 stack")
 if not loaded.is_relative_to(target) or not torchvision.__version__.startswith(declared):
     raise SystemExit("torchvision must be installed from this release checkout")
@@ -88,9 +86,38 @@ if [[ "$profile" == vision_flow_npu || "$profile" == vision_video_npu ]]; then
   kind=flow
   if [[ "$profile" == vision_video_npu ]]; then
     kind=video
+    # fixture encoder only (PyAV bundles its own FFmpeg); the train script
+    # never goes through it.
     uv pip install --system 'av>=14,<17'
+    # torchvision v0.29 removed video decoding: Kinetics/VideoClips imports
+    # torchcodec unconditionally. torchcodec >=0.12 builds against torch's
+    # stable ABI (torch >=2.11; this stack runs 2.14.0). PyPI's aarch64
+    # wheel is the CUDA build - libtorchcodec_image.so links
+    # libnvrtc.so.13 (run 39894257350) - so fetch the +cpu variant by
+    # direct URL from download.pytorch.org/whl/cpu, same as peft's setup
+    # does for torch/torchvision +cpu wheels. --no-deps keeps the
+    # resolver from ever seeing a CUDA-flavored torch.
+    CP_ABI=$(python -c "import sys; print(f'cp{sys.version_info.major}{sys.version_info.minor}')")
+    uv pip install --system --no-deps \
+      "https://download.pytorch.org/whl/cpu/torchcodec-0.17.0%2Bcpu-${CP_ABI}-${CP_ABI}-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl"
+    # torchcodec dlopen()s system FFmpeg (4-9) at decode time; install the
+    # shared libs unconditionally (fast no-op when the image already has
+    # them) so a missing libav* surfaces here instead of mid-training.
+    apt-get update -qq && apt-get install -y -qq --no-install-recommends ffmpeg
   fi
   python "$PROJECT_ROOT/scripts/prepare_ci_assets.py" "$kind" "$VISION_REFERENCE_DATA_ROOT"
+  if [[ "$profile" == vision_video_npu ]]; then
+    # fail fast when torchcodec cannot load FFmpeg or decode the fixture
+    python - "$VISION_REFERENCE_DATA_ROOT" <<'PY'
+import sys
+
+from torchcodec.decoders import VideoDecoder
+
+decoder = VideoDecoder(f"{sys.argv[1]}/ci_template.avi")
+frame = decoder[0]
+print(f"torchcodec decode ok: {tuple(frame.shape)}")
+PY
+  fi
   [[ -z "${GITHUB_ENV:-}" ]] || printf 'VISION_REFERENCE_DATA_ROOT=%s\n' "$VISION_REFERENCE_DATA_ROOT" >> "$GITHUB_ENV"
 fi
 

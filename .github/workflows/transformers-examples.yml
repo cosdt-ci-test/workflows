@@ -21,8 +21,8 @@ on:
   # Daily cadence preserved from the legacy pipeline. The first
   # engine-driven cycle cold-starts (new monitor-state cache key
   # family, equivalent to lost state) and simply runs once.
-  schedule:
-    - cron: '30 3 * * *'
+  # schedule:
+  #   - cron: '30 3 * * *'
   workflow_dispatch:
     inputs:
       target_ref:

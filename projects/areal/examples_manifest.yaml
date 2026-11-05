@@ -3,7 +3,7 @@ scan:
   root: examples
   include_extensions: ['.py', '.sh']
   # 当前 v2.1.1，扫描共 161 个
-  # supported（4）+ unsupported（157）
+  # 支持用例（4）+ 可看护暂不支持用例（34）+ 不可看护对象（123）
 
 # 看护 release 线（workflow target_ref 留空，由引擎按 latest release
 # 解析）。supported 配方用专用镜像 ghcr.io/hwvanici/areal_npu:v1.0.5-a2

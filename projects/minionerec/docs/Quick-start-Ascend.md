@@ -56,8 +56,15 @@ echo "${UPSTREAM_REF}"
 ```
 
 ```shell #test-setup id="clone" load="upstream_ref>>UPSTREAM_REF"
-git clone https://github.com/AkaliKong/MiniOneRec.git
+# 只取最新快照并重试：完整历史在跨境链路上容易中途断流
+for i in 1 2 3; do
+    rm -rf MiniOneRec
+    git clone --depth 1 https://github.com/AkaliKong/MiniOneRec.git && break
+    echo "clone attempt $i failed, retrying"
+    sleep 10
+done
 cd MiniOneRec
+git fetch --depth 1 origin <UPSTREAM_REF> || true
 git checkout <UPSTREAM_REF>
 ```
 

@@ -72,7 +72,7 @@ git checkout <UPSTREAM_REF>
 
 ## 4. 安装 NPU 依赖
 
-**不要**执行 `pip install -r requirements.txt`：其中 `torchrec/fbgemm_gpu/torchsnapshot` 是 CUDA 专属包、全部 `nvidia-*-cu11/12` 为 CUDA 运行库。SFT 冒烟只需要下列包。`bitsandbytes` 单独钉在 aarch64 有 wheel 的 0.48.1：`sft.py` / `evaluate.py` 顶部的 `import bitsandbytes as bnb` 从未被实际使用，但不改源码就绕不开这行 import，必须让它能导入。RL 阶段另需 `trl`（`rl.py` 从它取 `GRPOConfig`）与 `scikit-learn`（`ndcg_score`）。
+**不要**执行 `pip install -r requirements.txt`：其中 `torchrec/fbgemm_gpu/torchsnapshot` 是 CUDA 专属包、全部 `nvidia-*-cu11/12` 为 CUDA 运行库。SFT 冒烟只需要下列包。`bitsandbytes` 单独钉在 aarch64 有 wheel 的 0.48.1：`sft.py` / `evaluate.py` 顶部的 `import bitsandbytes as bnb` 从未被实际使用，但不改源码就绕不开这行 import，必须让它能导入。RL 阶段另需 `trl`（`rl.py` 从它取 `GRPOConfig`）、`scikit-learn`（`ndcg_score`）与 `wandb`（`sasrec.py` 无条件导入；`rl.py` 已设 `WANDB_MODE=disabled`，不会联网）。
 
 torch 栈与 CANN 9.1.0 配套（torch 2.9.0 + torch_npu 2.9.0.post2）：
 
@@ -81,7 +81,7 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 pip install torch==2.9.0 torch-npu==2.9.0.post2
 pip install modelscope transformers==4.57.1 accelerate==1.10.1 datasets==4.2.0 \
     tokenizers==0.22.1 fire==0.7.1 pandas==2.2.2 tqdm bitsandbytes==0.48.1 \
-    trl==0.24.0 scikit-learn==1.5.2
+    trl==0.24.0 scikit-learn==1.5.2 wandb==0.22.2
 ```
 
 ---

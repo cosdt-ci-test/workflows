@@ -68,7 +68,8 @@ Select a scenario when dispatching the same workflow:
 | `continued-pretrain` | Train raw text across the full sequence with LoRA on model and embedding outputs | Passed in run #15 |
 | `inference-extended` | Run mixed-length padded batches and a custom stopping criterion | Passed in run #16 |
 | `grpo` | Generate groups, score rewards, update the LoRA policy, then save, reload and infer | Passed without vLLM in run #22 |
-| `vllm-ascend` | Compare native vLLM-Ascend generation with Unsloth fast generation and a LoRA request | Awaiting NPU validation |
+| `vllm-ascend` | Compare native vLLM-Ascend generation with Unsloth fast generation and a LoRA request | Passed in run #26 |
+| `grpo-vllm-ascend` | Run GRPO with the colocated vLLM engine and verify fresh LoRA tensors reach each rollout | Awaiting NPU validation |
 | `ddp-2` | Run two ranks with explicit HCCL, synchronized LoRA updates and rank-0 adapter save | Passed in run #18 |
 | `fsdp2-2` | Run two-rank Accelerate FSDP2, save step 1, then resume in new processes | Passed in run #20 |
 
@@ -176,6 +177,19 @@ adapter ID and requires a change in generated tokens or first-token log
 probability. The probe weights are synthetic and this run does not train or
 test GRPO rollouts, standby mode, or throughput.
 
+[Run #26](https://github.com/cosdt-ci-test/workflows/actions/runs/41954617493)
+passed on one Ascend910B4: both prompts matched native vLLM before applying
+LoRA and produced different token sequences after applying it.
+
+The `grpo-vllm-ascend` scenario uses the same image and runs three BF16 LoRA
+optimizer steps. It checks that TRL reuses Unsloth's colocated engine, and
+that each rollout request contains the current adapter tensors, has a fresh
+adapter ID, and returns four completions with that ID. The adapter hashes
+must change between rollouts. This checks rollout and adapter refresh with
+importance sampling correction and standby disabled. TRL 0.29.1 warns that
+vLLM 0.23.0 is outside its tested range; runtime compatibility is part of
+the smoke test.
+
 The `ddp-2` scenario selects the `linux-aarch64-a2-2` runner and mounts both
 DAVINCI devices. It starts two processes with `torch.distributed.run`, creates
 an explicit HCCL process group, trains rank-specific text batches for three DDP
@@ -236,6 +250,10 @@ gh workflow run unsloth-npu-example.yml --repo cosdt-ci-test/workflows --ref fea
 
 ```shell
 gh workflow run unsloth-npu-example.yml --repo cosdt-ci-test/workflows --ref feat/unsloth-adapt -f scenario=vllm-ascend
+```
+
+```shell
+gh workflow run unsloth-npu-example.yml --repo cosdt-ci-test/workflows --ref feat/unsloth-adapt -f scenario=grpo-vllm-ascend
 ```
 
 ```shell

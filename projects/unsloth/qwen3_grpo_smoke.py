@@ -1,11 +1,11 @@
 """Minimal BF16 GRPO trial for Unsloth on one Ascend NPU.
 
-This follows the official Qwen3 GRPO flow but deliberately uses TRL's
-transformers generation path. vLLM rollout is tested separately, so a GRPO
-pass here means generation, reward scoring, policy loss/backward, optimizer
-updates, adapter save/reload and inference worked without vLLM.
+The default scene uses Transformers generation. The vLLM scene observes
+the trainer's actual engine calls and checks the live LoRA at each rollout.
 """
 import gc
+from functools import wraps
+from importlib.metadata import version
 import hashlib
 import json
 import math
@@ -18,7 +18,8 @@ import traceback
 OUTPUT = Path("output")
 OUTPUT.mkdir(exist_ok=True)
 RESULT_PATH = OUTPUT / "result.json"
-ADAPTER = OUTPUT / "grpo_adapter"
+USE_VLLM = os.environ.get("TEST_SCENARIO") == "grpo-vllm-ascend"
+ADAPTER = OUTPUT / ("grpo_vllm_adapter" if USE_VLLM else "grpo_adapter")
 MODEL_NAME = "Qwen/Qwen3-0.6B"
 MAX_SEQ_LENGTH = 256
 MAX_PROMPT_LENGTH = 128
@@ -54,13 +55,13 @@ result = {
     "status": "running",
     "stage": "grpo_setup",
     "completed": [],
-    "scenario": "grpo",
+    "scenario": "grpo-vllm-ascend" if USE_VLLM else "grpo",
     "model": MODEL_NAME,
-    "rollout_backend": "transformers_generate",
-    "vllm_enabled": False,
+    "rollout_backend": "vllm_colocate" if USE_VLLM else "transformers_generate",
+    "vllm_enabled": USE_VLLM,
     "loss_type": "dapo",
     "num_generations": NUM_GENERATIONS,
-    "max_prompt_length": MAX_PROMPT_LENGTH,
+    "max_prompt_length": None if USE_VLLM else MAX_PROMPT_LENGTH,
     "max_completion_length": MAX_COMPLETION_LENGTH,
 }
 
@@ -147,15 +148,17 @@ def run_reward_self_test():
                       "concise": concise}))
 
 
-def snapshot_lora(model):
+def snapshot_lora(model, request_tensors=None):
     import torch
 
     tensors = {}
     digest = hashlib.sha256()
     finite = True
-    for name, parameter in sorted(model.named_parameters()):
+    parameters = model.named_parameters() if request_tensors is None else request_tensors.items()
+    for name, parameter in sorted(parameters):
         if "lora_" not in name:
             continue
+        name = name.replace(".default", "")
         tensor = parameter.detach().float().cpu().contiguous()
         finite = finite and bool(torch.isfinite(tensor).all())
         digest.update(name.encode("utf-8"))
@@ -169,6 +172,46 @@ def snapshot_lora(model):
         "sha256": digest.hexdigest(),
         "finite": finite,
     }
+
+
+def observe_vllm_rollouts(trainer, model):
+    engine = model.vllm_engine
+    assert trainer.use_vllm and trainer.vllm_mode == "colocate"
+    assert trainer.vllm_generation.llm is engine, "TRL did not reuse Unsloth's vLLM engine"
+    original_generate = engine.generate
+    rollouts = result["vllm_rollouts"] = []
+
+    @wraps(original_generate)
+    def generate(*args, **kwargs):
+        request = kwargs.get("lora_request")
+        assert request is not None, "GRPO requested base-model generation without LoRA"
+        assert request.lora_tensors, "GRPO did not pass a live adapter"
+        live = snapshot_lora(model)
+        sent = snapshot_lora(model, request.lora_tensors)
+        record = {
+            "step": trainer.state.global_step,
+            "request_id": request.lora_int_id,
+            "live_sha256": live["sha256"],
+            "request_sha256": sent["sha256"],
+            "tensor_count": len(sent["tensors"]),
+        }
+        rollouts.append(record)
+        save("vllm_rollout")
+        assert live["finite"] and sent["finite"] and live["sha256"] == sent["sha256"], (
+            "vLLM request did not carry the current training adapter"
+        )
+        outputs = original_generate(*args, **kwargs)
+        assert outputs and all(output.finished and output.outputs for output in outputs)
+        assert all(output.lora_request is not None
+                   and output.lora_request.lora_int_id == request.lora_int_id
+                   for output in outputs), "vLLM returned a different adapter"
+        record["generated_completions"] = sum(len(output.outputs) for output in outputs)
+        assert record["generated_completions"] == NUM_GENERATIONS, record
+        save("vllm_rollout", True)
+        return outputs
+
+    engine.generate = generate
+    return rollouts
 
 
 def changed_lora_parameters(before, after):
@@ -233,6 +276,21 @@ try:
     torch.npu.set_device(0)
     assert torch.npu.is_bf16_supported(), "BF16 is required for this trial"
     result["device"] = torch.npu.get_device_name(0)
+    engine_options = {"device_map": {"": "npu:0"}}
+    if USE_VLLM:
+        from vllm import LLM
+        from vllm.platforms import current_platform
+
+        assert current_platform.device_type == "npu", current_platform
+        assert torch.npu.device_count() == 1
+        result["versions"] = {name: version(name) for name in (
+            "vllm", "vllm-ascend", "transformers", "trl", "peft", "torch-npu",
+        )}
+        engine_options = dict(
+            enforce_eager=True, enable_prefix_caching=False, max_num_seqs=4,
+            max_logprobs=1, max_lora_rank=8, gpu_memory_utilization=0.5,
+            unsloth_vllm_standby=False,
+        )
     save("import", True)
 
     model_path = snapshot_download(MODEL_NAME)
@@ -247,10 +305,12 @@ try:
         load_in_8bit=False,
         load_in_16bit=True,
         full_finetuning=False,
-        fast_inference=False,
-        device_map={"": "npu:0"},
+        fast_inference=USE_VLLM,
         use_gradient_checkpointing=False,
+        **engine_options,
     )
+    if USE_VLLM:
+        assert isinstance(getattr(model, "vllm_engine", None), LLM), "No vLLM engine"
     assert all(parameter.device.type == "npu" for parameter in model.parameters())
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -288,6 +348,12 @@ try:
         }
         for question, answer in QUESTIONS
     ])
+    generation_options = (
+        dict(vllm_mode="colocate", vllm_enable_sleep_mode=False,
+             vllm_importance_sampling_correction=False, use_liger_kernel=False)
+        if USE_VLLM else dict(max_prompt_length=MAX_PROMPT_LENGTH, use_liger_loss=False)
+    )
+    save("grpo_trainer_init")
     trainer = GRPOTrainer(
         model=model,
         processing_class=tokenizer,
@@ -295,12 +361,11 @@ try:
         train_dataset=dataset,
         args=GRPOConfig(
             output_dir=str(OUTPUT / "grpo_trainer"),
-            use_vllm=False,
+            use_vllm=USE_VLLM,
             generation_batch_size=PER_DEVICE_BATCH_SIZE,
             per_device_train_batch_size=PER_DEVICE_BATCH_SIZE,
             gradient_accumulation_steps=1,
             num_generations=NUM_GENERATIONS,
-            max_prompt_length=MAX_PROMPT_LENGTH,
             max_completion_length=MAX_COMPLETION_LENGTH,
             temperature=0.8,
             top_p=0.95,
@@ -324,13 +389,13 @@ try:
             gradient_checkpointing=False,
             disable_dropout=True,
             use_transformers_paged=False,
-            use_liger_loss=False,
             remove_unused_columns=False,
             shuffle_dataset=False,
             save_strategy="no",
             report_to="none",
             seed=3407,
             dataloader_num_workers=0,
+            **generation_options,
         ),
     )
 
@@ -338,6 +403,7 @@ try:
     result["trainer_eos_token_id"] = trainer.eos_token_id
     save("grpo_trainer")
     assert trainer.mask_truncated_completions is False, "Unexpected truncation masking"
+    rollouts = observe_vllm_rollouts(trainer, model) if USE_VLLM else []
     original_prepare_inputs = trainer._prepare_inputs
 
     def observe_training_batch(generation_batch, _trainer=trainer):
@@ -401,6 +467,10 @@ try:
     train_metrics = trainer.train().metrics
     torch.npu.synchronize()
     assert trainer.state.global_step == 3, trainer.state.global_step
+    if USE_VLLM:
+        assert [entry["step"] for entry in rollouts] == [0, 1, 2], rollouts
+        assert len({entry["request_id"] for entry in rollouts}) == 3, "Reused cached adapter ID"
+        assert len({entry["request_sha256"] for entry in rollouts}) == 3, "Stale rollout adapter"
 
     history = numeric_history(trainer.state.log_history)
     step_rows = [entry for entry in history if "loss" in entry]
@@ -458,6 +528,12 @@ try:
     assert (ADAPTER / "adapter_config.json").is_file()
     assert (ADAPTER / "adapter_model.safetensors").is_file()
     save("grpo_adapter_saved", True)
+
+    if USE_VLLM:
+        # The plain GRPO and offline vLLM scenarios already cover reload.
+        result["status"] = "passed"
+        save("complete")
+        raise SystemExit(0)
 
     del trainer, model, dataset, adapter_before, adapter_after
     gc.collect()

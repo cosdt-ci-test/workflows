@@ -21,6 +21,7 @@ on:
           - inference-extended
           - grpo
           - vllm-ascend
+          - grpo-vllm-ascend
           - ddp-2
           - fsdp2-2
 
@@ -33,7 +34,7 @@ concurrency:
 
 jobs:
   qwen3-lora:
-    if: inputs.scenario != 'ddp-2' && inputs.scenario != 'fsdp2-2' && inputs.scenario != 'vllm-ascend'
+    if: inputs.scenario != 'ddp-2' && inputs.scenario != 'fsdp2-2' && inputs.scenario != 'vllm-ascend' && inputs.scenario != 'grpo-vllm-ascend'
     runs-on: linux-aarch64-a2-1
     timeout-minutes: 60
     defaults:
@@ -207,7 +208,7 @@ jobs:
           cat output/result.json
 
   qwen3-vllm-ascend:
-    if: inputs.scenario == 'vllm-ascend'
+    if: inputs.scenario == 'vllm-ascend' || inputs.scenario == 'grpo-vllm-ascend'
     runs-on: linux-aarch64-a2-1
     timeout-minutes: 60
     defaults:
@@ -252,17 +253,23 @@ jobs:
           repository: unslothai/unsloth-zoo
           ref: ${{ env.ZOO_REF }}
           path: upstream/unsloth-zoo
-      - name: Compare native and Unsloth vLLM inference
+      - name: Run selected Unsloth vLLM scenario
         run: |
           set -eo pipefail
           source /usr/local/Ascend/ascend-toolkit/set_env.sh
           mkdir -p output
           npu-smi info
-          python projects/unsloth/qwen3_vllm_ascend.py --phase native 2>&1 | tee output/vllm-native.log
+          if [[ "$TEST_SCENARIO" == "vllm-ascend" ]]; then
+            python projects/unsloth/qwen3_vllm_ascend.py --phase native 2>&1 | tee output/vllm-native.log
+          fi
           python projects/unsloth/install_dependencies.py --vllm-image
           python -m pip install --no-deps ./upstream/unsloth-zoo ./upstream/unsloth
           python -m pip freeze | tee output/packages.txt
-          python projects/unsloth/qwen3_vllm_ascend.py --phase unsloth 2>&1 | tee output/vllm-unsloth.log
+          if [[ "$TEST_SCENARIO" == "grpo-vllm-ascend" ]]; then
+            python projects/unsloth/qwen3_grpo_smoke.py 2>&1 | tee output/grpo-vllm-ascend.log
+          else
+            python projects/unsloth/qwen3_vllm_ascend.py --phase unsloth 2>&1 | tee output/vllm-unsloth.log
+          fi
       - name: Record exact outcome
         if: always()
         env:

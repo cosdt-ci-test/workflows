@@ -4,6 +4,7 @@ Source and intentional changes are documented in README.md. No Unsloth
 forward/kernel patches or Transformers-only substitutes are installed here.
 """
 import json
+from collections import Counter
 import math
 import os
 from pathlib import Path
@@ -12,6 +13,8 @@ import traceback
 OUTPUT = Path("output")
 OUTPUT.mkdir(exist_ok=True)
 scenario = os.environ.get("TEST_SCENARIO", "baseline")
+packing_enabled = scenario in {"packing", "packing-bfd"}
+packing_strategy = "bfd" if scenario == "packing-bfd" else "wrapped"
 result = {"status": "running", "stage": "import", "completed": [],
           "unsloth_ref": os.environ.get("UNSLOTH_REF"),
           "zoo_ref": os.environ.get("ZOO_REF"), "model": "Qwen/Qwen3-0.6B",
@@ -32,6 +35,7 @@ def checkpointing_for_scenario(value):
         "standard-gc": True,
         "unsloth-gc": "unsloth",
         "packing": False,
+        "packing-bfd": False,
     }.get(value)
     if mode is None and value != "baseline":
         raise ValueError(f"Unknown test scenario: {value!r}")
@@ -67,6 +71,62 @@ def packing_batch_evidence(batch, require_labels=True):
         assert all(labels[0][start] == -100 for start in starts), "Unmasked packed boundary"
         assert any(label != -100 for label in labels[0]), "No supervised tokens"
         evidence["supervised_tokens"] = sum(label != -100 for label in labels[0])
+    return evidence
+
+
+def bfd_dataset_evidence(source_ids, packed_rows, max_length):
+    """BFD may reorder samples, but must preserve every full sample exactly."""
+    recovered = []
+    groups = []
+    for row in packed_rows:
+        ids, lengths = row["input_ids"], row["seq_lengths"]
+        assert lengths and all(n > 0 for n in lengths)
+        assert sum(lengths) == len(ids) <= max_length
+        offset = 0
+        for n in lengths:
+            recovered.append(tuple(ids[offset:offset + n]))
+            offset += n
+        groups.append(list(lengths))
+    assert Counter(recovered) == Counter(map(tuple, source_ids)), (
+        "BFD split, dropped, duplicated or changed original samples"
+    )
+    assert any(len(group) > 1 for group in groups), "No multi-sample BFD block"
+    return groups
+
+
+def check_bfd_isolation(model, collator, source_ids):
+    """Changing only document 1 must not change logits for document 2."""
+    import torch
+
+    a, b = source_ids[:2]
+    batch = collator([{"input_ids": a + b, "seq_lengths": [len(a), len(b)]}])
+    evidence = packing_batch_evidence(batch)
+    inputs = {key: value.to("npu") for key, value in batch.items() if key != "labels"}
+    changed_inputs = dict(inputs)
+    changed_inputs["input_ids"] = inputs["input_ids"].clone()
+    changed_inputs["input_ids"][:, :len(a)] = (
+        changed_inputs["input_ids"][:, :len(a)] + 17
+    ) % model.config.vocab_size
+    was_training = model.training
+    try:
+        model.eval()
+        with torch.no_grad():
+            original = model(**inputs, use_cache=False, return_dict=True).logits
+            altered = model(**changed_inputs, use_cache=False, return_dict=True).logits
+        assert original.device.type == altered.device.type == "npu"
+        assert original.shape[:2] == (1, len(a) + len(b))
+        assert torch.isfinite(original).all() and torch.isfinite(altered).all()
+        first_delta = (original[:, :len(a)].float() - altered[:, :len(a)].float()).abs()
+        later_delta = (original[:, len(a):].float() - altered[:, len(a):].float()).abs()
+        evidence.update(first_document_max_logit_delta=float(first_delta.max()),
+                        second_document_max_logit_delta=float(later_delta.max()),
+                        atol=1e-3, rtol=1e-3)
+        assert evidence["first_document_max_logit_delta"] > 1e-3, "Perturbation had no effect"
+        result["packing"]["isolation_probe"] = evidence
+        record("packing_isolation")
+        torch.testing.assert_close(original[:, len(a):], altered[:, len(a):], atol=1e-3, rtol=1e-3)
+    finally:
+        model.train(was_training)
     return evidence
 
 
@@ -177,7 +237,7 @@ try:
             for c in base_conversations
         ] * 4
     else:
-        conversations = base_conversations * (8 if scenario == "packing" else 4)
+        conversations = base_conversations * (8 if packing_enabled else 4)
     texts = [tokenizer.apply_chat_template(
         c, tokenize=False, add_generation_prompt=False, enable_thinking=False
     ) for c in conversations]
@@ -188,21 +248,21 @@ try:
         assert result["max_training_tokens"] == max_seq_length, result["max_training_tokens"]
     training_dataset = Dataset.from_dict({"text": texts})
     packing_options = {}
-    if scenario == "packing":
+    if packing_enabled:
         # Pre-tokenize without truncation so the packed dataset can be
         # compared with the exact original token stream.
         source_ids = tokenizer(texts, add_special_tokens=False)["input_ids"]
         assert all(len(ids) < max_seq_length for ids in source_ids)
         training_dataset = Dataset.from_dict({"input_ids": source_ids})
-        packing_options = dict(packing_strategy="wrapped", padding_free=True)
+        packing_options = dict(packing_strategy=packing_strategy, padding_free=True)
     trainer = SFTTrainer(
         model=model, processing_class=tokenizer,
         train_dataset=training_dataset,
         callbacks=[CheckGradientCheckpointing()],
         args=SFTConfig(
             output_dir=str(OUTPUT / "trainer"), dataset_text_field="text",
-            max_length=max_seq_length, packing=scenario == "packing",
-            per_device_train_batch_size=2 if scenario == "packing" else 1,
+            max_length=max_seq_length, packing=packing_enabled,
+            per_device_train_batch_size=2 if packing_enabled else 1,
             gradient_accumulation_steps=1, max_steps=3, learning_rate=2e-4,
             logging_steps=1, optim="adamw_torch", bf16=True, fp16=False,
             gradient_checkpointing=trainer_checkpointing, save_strategy="no", report_to="none",
@@ -210,16 +270,22 @@ try:
             **packing_options,
         ),
     )
-    if scenario == "packing":
+    if packing_enabled:
         record("packing_validation")
         packed_ids = trainer.train_dataset["input_ids"]
         expected = [token for sample in source_ids for token in sample]
         actual = [token for sample in packed_ids for token in sample]
-        assert actual == expected, "Packing changed, lost or reordered source tokens"
+        document_groups = None
+        if packing_strategy == "bfd":
+            document_groups = bfd_dataset_evidence(source_ids, trainer.train_dataset, max_seq_length)
+            assert len(actual) == len(expected)
+        else:
+            assert actual == expected, "Packing changed, lost or reordered source tokens"
         assert 3 <= len(packed_ids) < len(source_ids)
-        assert all(len(ids) == max_seq_length for ids in packed_ids[:-1])
-        assert 0 < len(packed_ids[-1]) <= max_seq_length
-        assert trainer.args.packing and trainer.args.packing_strategy == "wrapped"
+        assert all(0 < len(ids) <= max_seq_length for ids in packed_ids)
+        if packing_strategy == "wrapped":
+            assert all(len(ids) == max_seq_length for ids in packed_ids[:-1])
+        assert trainer.args.packing and trainer.args.packing_strategy == packing_strategy
         assert trainer.args.padding_free and trainer.padding_free, "Padding-free packing is inactive"
         # The first full block contains several original sample boundaries.
         boundary = 0
@@ -227,15 +293,19 @@ try:
         for ids in source_ids:
             boundary += len(ids)
             first_block_boundaries += boundary < max_seq_length
+        if document_groups is not None:
+            first_block_boundaries = len(document_groups[0]) - 1
         assert first_block_boundaries >= 2, first_block_boundaries
         result["packing"] = {
-            "strategy": "wrapped", "padding_free": trainer.padding_free,
+            "strategy": packing_strategy, "padding_free": trainer.padding_free,
             "source_samples": len(source_ids), "packed_samples": len(packed_ids),
             "source_tokens": len(expected), "packed_tokens": len(actual),
             "first_block_sample_boundaries": first_block_boundaries,
             "packed_lengths": [len(ids) for ids in packed_ids],
             "attention_implementation": model.config._attn_implementation,
         }
+        if document_groups is not None:
+            result["packing"]["document_lengths_per_block"] = document_groups
         # Use different blocks, including the tail, to check flattening,
         # position resets, and loss masking at packed-block boundaries.
         samples = [trainer.train_dataset[0], trainer.train_dataset[-1]]
@@ -243,8 +313,15 @@ try:
         evidence = packing_batch_evidence(batch)
         result["packing"]["collated_batch"] = evidence
         record("packing_validation")
-        assert evidence["packed_seq_lengths"] == [len(sample["input_ids"]) for sample in samples]
+        expected_lengths = [
+            n for sample in samples for n in sample.get("seq_lengths", [len(sample["input_ids"])])
+        ]
+        assert evidence["packed_seq_lengths"] == expected_lengths
         assert batch["input_ids"][0].tolist() == samples[0]["input_ids"] + samples[1]["input_ids"]
+        if packing_strategy == "bfd":
+            record("packing_isolation")
+            check_bfd_isolation(model, trainer.data_collator, source_ids)
+            record("packing_isolation", True)
 
         packing_forwards = []
 
@@ -260,7 +337,7 @@ try:
     record("training")
     metrics = trainer.train().metrics
     torch.npu.synchronize()
-    if scenario == "packing":
+    if packing_enabled:
         packing_hook.remove()
         assert len(packing_forwards) >= 3, "Did not observe three packed training forwards"
         assert any(len(item["packed_seq_lengths"]) > 1 for item in packing_forwards), (

@@ -4,12 +4,14 @@
 # validation, and artifact publishing. Project-specific environment setup
 # and document execution live in projects/minionerec/tests.
 #
-# Smoke scope: single-card SFT on NPU (ModelScope Qwen2.5-0.5B base +
-# HF-mirror preprocessed Amazon Industrial_and_Scientific subset +
-# upstream source untouched + 1-epoch HF-Trainer run, sample=600/dataset).
-# SFT needs no injection (transformers picks npu:0 by itself); only the
-# evaluation command gets transfer_to_npu, via a PYTHONPATH-scoped
-# sitecustomize directory.
+# Smoke scope: single-card SFT + evaluation + RL on NPU (ModelScope
+# Qwen2.5-0.5B base + HF-mirror preprocessed Amazon
+# Industrial_and_Scientific subset + 1-epoch HF-Trainer run,
+# sample=600/dataset). SFT needs no injection (transformers picks npu:0
+# by itself); evaluation and RL get transfer_to_npu through a
+# PYTHONPATH-scoped sitecustomize directory. RL runs ``python rl.py``
+# (not rl.sh, which pins 8 processes and parses no args) with one sed
+# swapping paged_adamw_32bit for adamw_torch and capping sample at 40.
 # RL (GRPO) is pointer-only — its vLLM path is CUDA-only; see
 # projects/minionerec/docs/Quick-start-Ascend.md for rationale.
 #

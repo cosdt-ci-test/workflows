@@ -1,8 +1,8 @@
 # 快速开始：在昇腾 NPU 上运行 MiniOneRec 生成式推荐模型
 
-> **阅读本文前**，请先按 [快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html) 准备好 CANN 与驱动。本文聚焦**第一次跑通**：在单卡 NPU 上完成 MiniOneRec 的 SID 监督微调（SFT）冒烟训练。
+> **阅读本文前**，请先按 [快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html) 准备好 CANN 与驱动。本文聚焦**第一次跑通**：在单卡 NPU 上完成 MiniOneRec 的 SID 监督微调（SFT）、约束解码评估与推荐导向 RL 三个阶段。
 
-[MiniOneRec](https://github.com/AkaliKong/MiniOneRec) 是一个全开源的**生成式推荐**框架，覆盖 SID 构建、SFT 与推荐导向 RL 全流程。本文只验证 SFT 主路径（RL 阶段的 GRPO 依赖 vLLM/CUDA 或低吞吐的 transformers 原生生成，暂不纳入冒烟范围）。
+[MiniOneRec](https://github.com/AkaliKong/MiniOneRec) 是一个全开源的**生成式推荐**框架，覆盖 SID 构建、SFT 与推荐导向 RL 全流程。三个阶段都跑在单卡上，规模都压到冒烟量级：SFT 与评估不改源码，RL 只做两处单行替换（原因见第 10 节）。
 
 ---
 
@@ -65,7 +65,7 @@ git checkout <UPSTREAM_REF>
 
 ## 4. 安装 NPU 依赖
 
-**不要**执行 `pip install -r requirements.txt`：其中 `torchrec/fbgemm_gpu/torchsnapshot` 是 CUDA 专属包、全部 `nvidia-*-cu11/12` 为 CUDA 运行库。SFT 冒烟只需要下列包。`bitsandbytes` 单独钉在 aarch64 有 wheel 的 0.48.1：`sft.py` / `evaluate.py` 顶部的 `import bitsandbytes as bnb` 从未被实际使用，但不改源码就绕不开这行 import，必须让它能导入。
+**不要**执行 `pip install -r requirements.txt`：其中 `torchrec/fbgemm_gpu/torchsnapshot` 是 CUDA 专属包、全部 `nvidia-*-cu11/12` 为 CUDA 运行库。SFT 冒烟只需要下列包。`bitsandbytes` 单独钉在 aarch64 有 wheel 的 0.48.1：`sft.py` / `evaluate.py` 顶部的 `import bitsandbytes as bnb` 从未被实际使用，但不改源码就绕不开这行 import，必须让它能导入。RL 阶段另需 `trl`（`rl.py` 从它取 `GRPOConfig`）与 `scikit-learn`（`ndcg_score`）。
 
 torch 栈与 CANN 9.1.0 配套（torch 2.9.0 + torch_npu 2.9.0.post2）：
 
@@ -73,7 +73,8 @@ torch 栈与 CANN 9.1.0 配套（torch 2.9.0 + torch_npu 2.9.0.post2）：
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 pip install torch==2.9.0 torch-npu==2.9.0.post2
 pip install modelscope transformers==4.57.1 accelerate==1.10.1 datasets==4.2.0 \
-    tokenizers==0.22.1 fire==0.7.1 pandas==2.2.2 tqdm bitsandbytes==0.48.1
+    tokenizers==0.22.1 fire==0.7.1 pandas==2.2.2 tqdm bitsandbytes==0.48.1 \
+    trl==0.24.0 scikit-learn==1.5.2
 ```
 
 ---
@@ -108,7 +109,7 @@ trainer device: npu:0
 
 ## 6. 只在评估命令里启用 NPU 映射
 
-SFT 不需要任何注入；评估需要 `torch.cuda` 有值。为了让注入只作用于评估这一条命令，把 `sitecustomize.py` 放进独立目录、通过 `PYTHONPATH` 挂到命令上——不写进 site-packages，其他进程不受影响。
+SFT 不需要任何注入；评估与 RL 需要 `torch.cuda` 有值。为了让注入只作用于需要它的命令，把 `sitecustomize.py` 放进独立目录、通过 `PYTHONPATH` 挂到命令上——不写进 site-packages，其他进程不受影响。
 
 ```shell #test-setup id="npu-shim"
 mkdir -p /tmp/minionerec-npu-shim
@@ -304,6 +305,105 @@ HR...
 
 ---
 
+## 10. 推荐导向 RL（冒烟）
+
+RL 在 SFT 产物上再做一轮 GRPO：每个 prompt 采样多条候选、组内归一化奖励、并用 KL 约束贴近参考模型；动作空间是有限的 SID 列表，候选由约束 beam search 生成。
+
+上游有两处写死值与单卡冒烟冲突，用一条 `sed` 就地替换（都是单行，只在本次运行生效）：
+
+- `optim="paged_adamw_32bit"` 走 bitsandbytes，而 bitsandbytes 没有 NPU 后端（`bitsandbytes/backends/` 只有 `cpu` / `cuda` / `default` / `hpu` / `mps` / `triton` / `xpu`），换成 torch 原生 `adamw_torch`。
+- `sample = -1` 会把整个商品目录展开成样本（每件 2–4 条），冒烟会跑成上万步，改为 40。
+
+本节会就地修改 `rl.py` 两行；第 6 节的 `source untouched` 检查在这一节之前执行。
+
+```shell #test id="rl-patch"
+cd MiniOneRec
+sed -i -e 's/optim="paged_adamw_32bit"/optim="adamw_torch"/' \
+       -e 's/^    sample = -1$/    sample = 40/' rl.py
+grep -c 'optim="adamw_torch"' rl.py
+grep -c '^    sample = 40$' rl.py
+```
+
+输出结果如下：
+
+```shell #test-result id="rl-patch"
+1
+1
+```
+
+`RLSeqTitle2SidDataset` 的样本数来自 `train_file`，且上限写死 10000，所以再把训练集切到 40 行：
+
+```shell #test id="prep-rl"
+cd MiniOneRec
+python - <<'PY'
+import pandas as pd
+
+df = pd.read_csv('data/Amazon/train/Industrial_and_Scientific_5_2016-10-2018-11.csv')
+df.head(40).to_csv('data/rl_train_40.csv', index=False)
+print('rl train rows:', len(pd.read_csv('data/rl_train_40.csv')))
+PY
+```
+
+输出结果如下：
+
+```shell #test-result id="prep-rl"
+rl train rows: 40
+```
+
+在 0 号卡上跑 1 epoch。`train_batch_size` 必须能被 `num_generations` 整除；`num_generations` 同时是 beam 宽度，冒烟取 2。
+
+```shell #test id="run-rl"
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
+export ASCEND_RT_VISIBLE_DEVICES=0
+cd MiniOneRec
+PYTHONPATH=/tmp/minionerec-npu-shim python rl.py \
+    --model_path ./smoke_out/final_checkpoint \
+    --train_file ./data/rl_train_40.csv \
+    --eval_file ./data/Amazon/valid/Industrial_and_Scientific_5_2016-10-2018-11.csv \
+    --info_file ./data/Amazon/info/Industrial_and_Scientific_5_2016-10-2018-11.txt \
+    --category Industrial_and_Scientific \
+    --train_batch_size 4 \
+    --eval_batch_size 4 \
+    --num_generations 2 \
+    --num_train_epochs 1 \
+    --gradient_accumulation_steps 1 \
+    --learning_rate 1e-5 \
+    --beta 1e-3 \
+    --beam_search True \
+    --reward_type ranking \
+    --sync_ref_model True \
+    --test_during_training False \
+    --eval_step 1.0 \
+    --output_dir ./rl_out \
+    --sid_index_path ./data/Amazon/index/Industrial_and_Scientific.index.json \
+    --item_meta_path ./data/Amazon/index/Industrial_and_Scientific.item.json
+```
+
+输出结果如下（数据集对象、温度与进度条走 stderr，不参与比对）：
+
+```shell #test-result id="run-rl"
+Industrial_and_Scientific
+...
+```
+
+校验训练真的推进了（`global_step > 0`，且日志里有 `loss`）：
+
+```shell #test id="verify-rl"
+cd MiniOneRec
+test -f rl_out/trainer_state.json && echo "trainer state saved"
+python -c "import json; st=json.load(open('rl_out/trainer_state.json')); print('steps', st['global_step'] > 0); print('loss', any('loss' in r for r in st['log_history']))"
+```
+
+输出结果如下：
+
+```shell #test-result id="verify-rl"
+trainer state saved
+steps True
+loss True
+```
+
+---
+
 ## 故障排查
 
 | 现象 | 可能原因 | 建议 |
@@ -319,3 +419,5 @@ HR...
 | 评估报 `FileNotFoundError: [Errno 2] No such file or directory: ''` | 未传 `--result_json_data`，结果文件路径为空 | 补上 `--result_json_data ./eval_result.json` |
 | CC 大于 0 | 约束解码未生效 | 确认 `run-eval` 命令带上了 `PYTHONPATH=/tmp/minionerec-npu-shim`（`check-scoped` 应输出 `with shim: cuda` / `tensor landed on: npu`）；基座模型须为 Qwen2.5-**base**（Instruct 版约束解码失效） |
 | HR/NDCG 与文中示例差异大 | 冒烟训练仅 1 epoch/600 样本，`num_beams` 也降为 20 | 数值仅供参考；CI 只断言 CC=0，HR/NDCG 用占位符匹配 |
+| `rl.py` 启动即报 bitsandbytes 或 `paged_adamw_32bit` 相关错误 | bitsandbytes 没有 NPU 后端 | 按第 10 节用 `sed` 换成 `adamw_torch` |
+| RL 训练步数上万、单卡跑不完 | `sample = -1` 展开整个商品目录 | 按第 10 节把 `sample` 改到 40，并把训练集切到 40 行 |

@@ -66,8 +66,18 @@ jobs:
       ZOO_REF: 97153adb58d7f703aca65b44e86b289b58516cbf
     steps:
       - uses: actions/checkout@v6
-      - name: Download pinned Unsloth sources
-        run: python projects/unsloth/download_upstream.py
+      - name: Checkout Unsloth
+        uses: actions/checkout@v6
+        with:
+          repository: unslothai/unsloth
+          ref: ${{ env.UNSLOTH_REF }}
+          path: upstream/unsloth
+      - name: Checkout Unsloth Zoo
+        uses: actions/checkout@v6
+        with:
+          repository: unslothai/unsloth-zoo
+          ref: ${{ env.ZOO_REF }}
+          path: upstream/unsloth-zoo
       - name: Install NPU stack and example dependencies
         run: |
           set -eo pipefail
@@ -151,8 +161,18 @@ jobs:
       ZOO_REF: 97153adb58d7f703aca65b44e86b289b58516cbf
     steps:
       - uses: actions/checkout@v6
-      - name: Download pinned Unsloth sources
-        run: python projects/unsloth/download_upstream.py
+      - name: Checkout Unsloth
+        uses: actions/checkout@v6
+        with:
+          repository: unslothai/unsloth
+          ref: ${{ env.UNSLOTH_REF }}
+          path: upstream/unsloth
+      - name: Checkout Unsloth Zoo
+        uses: actions/checkout@v6
+        with:
+          repository: unslothai/unsloth-zoo
+          ref: ${{ env.ZOO_REF }}
+          path: upstream/unsloth-zoo
       - name: Install two-card NPU stack and dependencies
         run: |
           set -eo pipefail
@@ -222,8 +242,18 @@ jobs:
       ZOO_REF: 97153adb58d7f703aca65b44e86b289b58516cbf
     steps:
       - uses: actions/checkout@v6
-      - name: Download pinned Unsloth sources
-        run: python projects/unsloth/download_upstream.py
+      - name: Checkout Unsloth
+        uses: actions/checkout@v6
+        with:
+          repository: unslothai/unsloth
+          ref: ${{ env.UNSLOTH_REF }}
+          path: upstream/unsloth
+      - name: Checkout Unsloth Zoo
+        uses: actions/checkout@v6
+        with:
+          repository: unslothai/unsloth-zoo
+          ref: ${{ env.ZOO_REF }}
+          path: upstream/unsloth-zoo
       - name: Run selected Unsloth vLLM scenario
         run: |
           set -eo pipefail

@@ -25,12 +25,9 @@ TRL's transformers generation path and keeps vLLM for the separate rollout item.
 
 The workflow pins Unsloth and Zoo commits, uses the repository's CANN 9.1.0
 A2 image and torch 2.9.0 / torch_npu 2.9.0.post2 / triton-ascend 3.2.2 stack.
-It downloads both upstream sources from GitHub's source-archive endpoint at
-the full pinned commit hashes, with bounded retries, rather than fetching
-Git objects. Archive layout is checked before extraction; commit IDs and
-archive SHA-256 values are printed. This addresses the interrupted Git
-transfers in [run #29](https://github.com/cosdt-ci-test/workflows/actions/runs/42001225991),
-which never reached dependency installation or packing.
+It uses actions/checkout to fetch both upstream repositories at their full
+pinned commit hashes into `upstream/unsloth` and `upstream/unsloth-zoo`.
+Each source tree retains its own Git metadata for package builds.
 Transformers 4.57.6 and TRL 0.22.2 follow the upstream example's install cell.
 NumPy is pinned to 1.26.4 as required by Triton-Ascend 3.2.2, and PyArrow
 to 21.0.0 to satisfy datasets 4.3.0 without requiring NumPy 2.x.

@@ -3,7 +3,7 @@ scan:
   root: examples
   include_extensions: ['.py', '.sh']
   # 当前 v2.1.1，扫描共 161 个
-  # supported（4）+ unsupported（157）；14 条 fp64 回归用例的原配置注释保留在 supported 段
+  # supported（4）+ unsupported（157）
 
 # 看护 release 线（workflow target_ref 留空，由引擎按 latest release
 # 解析）。supported 配方用专用镜像 ghcr.io/hwvanici/areal_npu:v1.0.5-a2

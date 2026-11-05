@@ -56,10 +56,11 @@ echo "${UPSTREAM_REF}"
 ```
 
 ```shell #test-setup id="clone" load="upstream_ref>>UPSTREAM_REF"
-# 只取最新快照并重试：完整历史在跨境链路上容易中途断流或被代理返回 5xx
+# 只取最新快照并重试；关掉 HTTP/2，大文件连续流在跨境链路上容易被代理切断
 for i in 1 2 3 4 5; do
     rm -rf MiniOneRec
-    if git clone --depth 1 https://github.com/AkaliKong/MiniOneRec.git; then
+    if GIT_TERMINAL_PROMPT=0 GIT_HTTP_VERSION=HTTP/1.1 \
+        git clone --depth 1 https://github.com/AkaliKong/MiniOneRec.git; then
         break
     fi
     echo "clone attempt $i failed, retrying"
@@ -67,7 +68,6 @@ for i in 1 2 3 4 5; do
 done
 test -d MiniOneRec || { echo "clone failed after 5 attempts"; exit 1; }
 cd MiniOneRec
-git fetch --depth 1 origin <UPSTREAM_REF> || true
 git checkout <UPSTREAM_REF>
 ```
 

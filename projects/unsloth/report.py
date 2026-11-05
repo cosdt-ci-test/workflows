@@ -11,6 +11,8 @@ result.update(job_status=os.environ["JOB_STATUS"],
               scenario=os.environ.get("TEST_SCENARIO", "baseline"),
               workflow_sha=os.environ["GITHUB_SHA"],
               unsloth_ref=os.environ["UNSLOTH_REF"], zoo_ref=os.environ["ZOO_REF"])
+if result["status"] == "running" and result["job_status"] == "failure":
+    result["status"] = "failed"
 path.write_text(json.dumps(result, indent=2))
 with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
     summary.write("## Unsloth Ascend trial\n\n```json\n" +

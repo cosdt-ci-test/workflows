@@ -25,38 +25,41 @@ for raw in requirements:
     if name not in excluded and (req.marker is None or req.marker.evaluate()):
         selected.append(raw)
 constraints = pathlib.Path("output/constraints.txt")
+image_stack = {}
 if sys.argv[1:] == ["--vllm-image"]:
     # Keep the matched vLLM image's binary stack, including its NumPy ABI.
-    stack = {name: version(name) for name in (
+    image_stack = {name: version(name) for name in (
         "torch", "torch-npu", "triton-ascend", "numpy", "vllm", "vllm-ascend",
     )}
-    for name in ("triton", "torchvision", "torchaudio"):
+    for name in ("triton", "torchvision", "torchaudio", "opencv-python-headless"):
         try:
-            stack[name] = version(name)
+            image_stack[name] = version(name)
         except PackageNotFoundError:
             pass
     # The Ascend image builds vLLM with VLLM_TARGET_DEVICE=empty.
     # Accept that build but keep its full version in the pip constraints.
-    if stack["vllm"] not in {"0.23.0", "0.23.0+empty"} or stack["vllm-ascend"] != "0.23.0":
-        raise SystemExit(f"Unexpected vLLM-Ascend image versions: {stack}")
+    if (image_stack["vllm"] not in {"0.23.0", "0.23.0+empty"}
+            or image_stack["vllm-ascend"] != "0.23.0"):
+        raise SystemExit(f"Unexpected vLLM-Ascend image versions: {image_stack}")
     # vLLM-Ascend 0.23.0 requires Transformers 5.5.4. Use the
     # Transformers 5-compatible PEFT and TRL releases in this job only.
     hf_pins = "transformers==5.5.4\ntrl==0.29.1\npeft==0.19.1\n"
-    stack_pins = "".join(f"{name}=={installed}\n" for name, installed in stack.items())
-    stack_requirements = ["vllm", "vllm-ascend"]
+    stack_pins = "".join(f"{name}=={installed}\n" for name, installed in image_stack.items())
 elif not sys.argv[1:]:
     hf_pins = "transformers==4.57.6\ntrl==0.22.2\npeft==0.18.0\n"
     # Triton-Ascend 3.2.2 requires NumPy 1.26.4. Arrow 21 satisfies
     # datasets 4.3.0's >=21 floor while retaining NumPy 1.x support.
     stack_pins = "torch==2.9.0\ntorch_npu==2.9.0.post2\nnumpy==1.26.4\n"
-    stack_requirements = []
 else:
     raise SystemExit("Expected no arguments or --vllm-image")
 # Arrow 21 also keeps datasets working with the vLLM image's NumPy 1.26.
 constraints.write_text(hf_pins + "datasets==4.3.0\n" + stack_pins + "pyarrow==21.0.0\n")
+# The image already supplies vLLM and its plugin. Requesting them again
+# re-resolves their video dependencies (OpenCV needs NumPy 2), which
+# conflicts with the image's Triton-Ascend and NumPy 1.26 stack.
 subprocess.run(
     [sys.executable, "-m", "pip", "install", "-c", str(constraints),
-     *sorted(set(selected)), *stack_requirements, "modelscope==1.37.0"],
+     *sorted(set(selected)), "modelscope==1.37.0"],
     check=True,
 )
 # The non-quantized loader still imports Linear4bit for type checks.
@@ -65,6 +68,10 @@ subprocess.run(
     [sys.executable, "-m", "pip", "install", "--no-deps", "bitsandbytes==0.50.2"],
     check=True,
 )
+if image_stack:
+    installed = {name: version(name) for name in image_stack}
+    if installed != image_stack:
+        raise SystemExit(f"vLLM-Ascend image stack changed: {image_stack} -> {installed}")
 subprocess.run(
     [sys.executable, "-c",
      "from bitsandbytes.nn import Linear4bit; "
@@ -78,7 +85,7 @@ subprocess.run(
 # its own NumPy and still has to import Arrow and construct a Dataset.
 data_version_check = (
     "assert numpy.__version__ == '1.26.4'; assert pyarrow.__version__ == '21.0.0'; "
-    if not stack_requirements else ""
+    if not image_stack else ""
 )
 subprocess.run(
     [sys.executable, "-c",

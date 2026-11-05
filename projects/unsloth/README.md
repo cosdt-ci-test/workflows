@@ -162,8 +162,14 @@ image and keeps its matched Torch, torch_npu, Triton and NumPy packages.
 This scenario uses Transformers 5.5.4 as required by vLLM-Ascend 0.23.0,
 with PEFT 0.19.1 and TRL 0.29.1 for Unsloth imports. The training scenarios
 keep their original pins. A single manual dispatch runs both inference checks.
-One process loads Qwen3-0.6B in BF16 with native vLLM and generates on NPU.
-A separate process loads the same model via Unsloth's `fast_inference=True`,
+The first process runs native BF16 Qwen3-0.6B generation on the unchanged
+image. Afterward, pip installs Unsloth's dependencies without requesting the
+preinstalled vLLM packages again: resolving their video dependencies would
+pit OpenCV's NumPy 2 requirement against Triton-Ascend's NumPy 1.26.4 pin
+([run #25](https://github.com/cosdt-ci-test/workflows/actions/runs/41949054299)).
+The installer verifies that the image packages retain their original versions.
+This check covers text only. A separate process loads the same model via
+Unsloth's `fast_inference=True`,
 generates without an adapter, then saves and reloads a probe LoRA through
 Unsloth and calls `fast_generate` with the LoRA request. It checks the returned
 adapter ID and requires a change in generated tokens or first-token log

@@ -252,20 +252,16 @@ jobs:
           repository: unslothai/unsloth-zoo
           ref: ${{ env.ZOO_REF }}
           path: upstream/unsloth-zoo
-      - name: Install Unsloth on the vLLM-Ascend image
+      - name: Compare native and Unsloth vLLM inference
         run: |
           set -eo pipefail
           source /usr/local/Ascend/ascend-toolkit/set_env.sh
           mkdir -p output
           npu-smi info
+          python projects/unsloth/qwen3_vllm_ascend.py --phase native 2>&1 | tee output/vllm-native.log
           python projects/unsloth/install_dependencies.py --vllm-image
           python -m pip install --no-deps ./upstream/unsloth-zoo ./upstream/unsloth
           python -m pip freeze | tee output/packages.txt
-      - name: Compare native and Unsloth vLLM inference
-        run: |
-          set -eo pipefail
-          source /usr/local/Ascend/ascend-toolkit/set_env.sh
-          python projects/unsloth/qwen3_vllm_ascend.py --phase native 2>&1 | tee output/vllm-native.log
           python projects/unsloth/qwen3_vllm_ascend.py --phase unsloth 2>&1 | tee output/vllm-unsloth.log
       - name: Record exact outcome
         if: always()

@@ -84,6 +84,7 @@ def run(phase, result):
             )
             record("native_load", True)
             generate("native_generate", engine.generate)
+            record("unsloth_environment_setup")
             return
 
         record("unsloth_engine_load")

@@ -72,7 +72,7 @@ git checkout <UPSTREAM_REF>
 
 ## 4. 安装 NPU 依赖
 
-**不要**执行 `pip install -r requirements.txt`：其中 `torchrec/fbgemm_gpu/torchsnapshot` 是 CUDA 专属包、全部 `nvidia-*-cu11/12` 为 CUDA 运行库。SFT 冒烟只需要下列包。`bitsandbytes` 单独钉在 aarch64 有 wheel 的 0.48.1：`sft.py` / `evaluate.py` 顶部的 `import bitsandbytes as bnb` 从未被实际使用，但不改源码就绕不开这行 import，必须让它能导入。RL 阶段另需 `trl`（`rl.py` 从它取 `GRPOConfig`）、`scikit-learn`（`ndcg_score`）与 `wandb`（`sasrec.py` 无条件导入；`rl.py` 已设 `WANDB_MODE=disabled`，不会联网）。
+**不要**执行 `pip install -r requirements.txt`：其中 `torchrec/fbgemm_gpu/torchsnapshot` 是 CUDA 专属包、全部 `nvidia-*-cu11/12` 为 CUDA 运行库。SFT 冒烟只需要下列包。`bitsandbytes` 单独钉在 aarch64 有 wheel 的 0.48.1：`sft.py` / `evaluate.py` 顶部的 `import bitsandbytes as bnb` 从未被实际使用，但不改源码就绕不开这行 import，必须让它能导入。RL 阶段另需 `trl`（`rl.py` 从它取 `GRPOConfig`）、`scikit-learn`（`ndcg_score`）与 `wandb`（`sasrec.py` 无条件导入）。`sft.py` 的 `TrainingArguments` 默认 `report_to="all"`，装好 wandb 后会尝试 `wandb.init()` 并因缺少 API key 失败，所以第 8 节导出 `WANDB_MODE=disabled`。
 
 torch 栈与 CANN 9.1.0 配套（torch 2.9.0 + torch_npu 2.9.0.post2）：
 
@@ -204,6 +204,7 @@ info txt ok
 ```shell #test-setup id="sft-run"
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 export ASCEND_RT_VISIBLE_DEVICES=0
+export WANDB_MODE=disabled
 cd MiniOneRec
 python sft.py \
     --base_model ./Qwen2.5-0.5B \

@@ -401,20 +401,23 @@ Industrial_and_Scientific
 ...
 ```
 
-校验训练真的推进了（`global_step > 0`，且日志里有 `loss`）：
+冒烟规模下日志里的 `reward`、`reward_std`、`loss`、`grad_norm`、`kl` 会一直是 0，这不是故障。`rule_reward` 要求生成的 SID 与目标完全相等；冒烟级 SFT 的精确命中率接近 0，组内两条候选都命不中，`ndcg_rule_reward` 还会把整组补 0，GRPO 的组内优势因此无从计算，梯度自然为 0。这一段验证的是流程贯通——加载 SFT 产物、跑完 GRPO、落盘新 checkpoint。
+
+校验 `rl.py` 结尾的两步落盘（`trainer.save_model` 与 `model.save_pretrained`）：
 
 ```shell #test id="verify-rl"
 cd MiniOneRec
-test -f rl_out/trainer_state.json && echo "trainer state saved"
-python -c "import json; st=json.load(open('rl_out/trainer_state.json')); print('steps', st['global_step'] > 0); print('loss', any('loss' in r for r in st['log_history']))"
+test -f rl_out/final_checkpoint/model.safetensors && echo "rl model saved"
+test -f rl_out/final_checkpoint/config.json && echo "rl config saved"
+test -f rl_out/final_checkpoint/tokenizer_config.json && echo "rl tokenizer saved"
 ```
 
 输出结果如下：
 
 ```shell #test-result id="verify-rl"
-trainer state saved
-steps True
-loss True
+rl model saved
+rl config saved
+rl tokenizer saved
 ```
 
 ---
@@ -436,4 +439,5 @@ loss True
 | HR/NDCG 与文中示例差异大 | 冒烟训练仅 1 epoch/600 样本，`num_beams` 也降为 20 | 数值仅供参考；CI 只断言 CC=0，HR/NDCG 用占位符匹配 |
 | `rl.py` 启动即报 bitsandbytes 或 `paged_adamw_32bit` 相关错误 | bitsandbytes 没有 NPU 后端 | 按第 10 节用 `sed` 换成 `adamw_torch` |
 | `ValueError: Cannot take a larger sample than population` | 切片后的训练集行数少于某个数据集写死的 `sample` 值 | 按第 10 节把 `sample=10000` 一并改到 40 |
+| RL 日志里 `reward` / `loss` / `grad_norm` 全为 0 | 冒烟级 SFT 的 SID 精确命中率接近 0，组内无命中则优势为 0 | 属预期行为；RL 段只验证流程贯通，要看到非零信号需把 SFT 提到全量规模 |
 | RL 训练步数上万、单卡跑不完 | `sample = -1` 展开整个商品目录 | 按第 10 节把 `sample` 改到 40，并把训练集切到 40 行 |

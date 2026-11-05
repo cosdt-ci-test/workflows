@@ -14,6 +14,8 @@
 # making three single-line edits: optim -> adamw_torch (bitsandbytes has
 # no NPU backend), sample = -1 -> 40, sample=10000 -> 40 (the hard-coded
 # argument of RLSeqTitle2SidDataset, which ignores the sample variable).
+# At smoke scale every reward stays 0, so the RL guard asserts flow-through
+# (exit 0 + checkpoint files under rl_out/final_checkpoint), not metrics.
 # RL (GRPO) is pointer-only — its vLLM path is CUDA-only; see
 # projects/minionerec/docs/Quick-start-Ascend.md for rationale.
 #

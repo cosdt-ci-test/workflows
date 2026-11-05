@@ -37,7 +37,14 @@ item catalogue; and the hard-coded ``sample=10000`` argument of
 40 rows would otherwise make ``DataFrame.sample`` raise
 than-population. ``num_generations=2`` keeps both the beam width and the
 group size small; ``test_during_training=False`` skips the history
-lookups. The guard asserts ``global_step > 0`` and a logged loss.
+lookups. At smoke scale every reward stays 0 (the exact-match rule never
+fires on a barely-trained SFT checkpoint, so the group advantage and the
+gradient are 0 too), so the guard covers flow-through only: ``run-rl``
+must exit 0 and ``rl.py``'s closing ``save_model`` /
+``model.save_pretrained`` must leave weights, config and tokenizer under
+``rl_out/final_checkpoint``. No checkpoint is written during training
+because ``save_steps=0.1`` never satisfies the step-based trigger, which
+is why the state file is not asserted.
 
 Run: ``python -m unittest tests.test_quick_start_ascend -v 2>&1``
 

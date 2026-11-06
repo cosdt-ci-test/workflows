@@ -1,8 +1,8 @@
 # 快速开始：在昇腾 NPU 上运行 MiniOneRec 生成式推荐模型
 
-> **阅读本文前**，请先按 [快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html) 准备好 CANN 与驱动。本文聚焦**第一次跑通**：在单卡 NPU 上完成 MiniOneRec 的 SID 监督微调（SFT）冒烟训练。
+> **阅读本文前**，请先按 [快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html) 准备好 CANN 与驱动。本文聚焦**第一次跑通**：在单卡 NPU 上完成 MiniOneRec 的 SID 监督微调（SFT）、约束解码评估与推荐导向 RL 三个阶段。
 
-[MiniOneRec](https://github.com/AkaliKong/MiniOneRec) 是一个全开源的**生成式推荐**框架，覆盖 SID 构建、SFT 与推荐导向 RL 全流程。本文只验证 SFT 主路径（RL 阶段的 GRPO 依赖 vLLM/CUDA 或低吞吐的 transformers 原生生成，暂不纳入冒烟范围）。
+[MiniOneRec](https://github.com/AkaliKong/MiniOneRec) 是一个全开源的**生成式推荐**框架，覆盖 SID 构建、SFT 与推荐导向 RL 全流程。三个阶段都跑在单卡上，规模压到首次跑通的量级：SFT 与评估不改源码，RL 只做三处单行替换（原因见第 10 节）。
 
 ---
 
@@ -56,7 +56,17 @@ echo "${UPSTREAM_REF}"
 ```
 
 ```shell #test-setup id="clone" load="upstream_ref>>UPSTREAM_REF"
-git clone https://github.com/AkaliKong/MiniOneRec.git
+# 只取最新快照并重试；关掉 HTTP/2，大文件连续流在跨境链路上容易被代理切断
+for i in 1 2 3 4 5; do
+    rm -rf MiniOneRec
+    if GIT_TERMINAL_PROMPT=0 GIT_HTTP_VERSION=HTTP/1.1 \
+        git clone --depth 1 https://github.com/AkaliKong/MiniOneRec.git; then
+        break
+    fi
+    echo "clone attempt $i failed, retrying"
+    sleep $((i * 10))
+done
+test -d MiniOneRec || { echo "clone failed after 5 attempts"; exit 1; }
 cd MiniOneRec
 git checkout <UPSTREAM_REF>
 ```
@@ -65,7 +75,7 @@ git checkout <UPSTREAM_REF>
 
 ## 4. 安装 NPU 依赖
 
-**不要**执行 `pip install -r requirements.txt`：其中 `torchrec/fbgemm_gpu/torchsnapshot` 是 CUDA 专属包、`bitsandbytes` 在 aarch64 上 wheel 可用性不确定（本仓库 xtuner 守门已验证 0.45.0 无 aarch64 wheel）、全部 `nvidia-*-cu11/12` 为 CUDA 运行库。SFT 冒烟只需要下列包。
+SFT 只需要下列包。`bitsandbytes` 单独钉在 aarch64 有预编译包的 0.48.1：`sft.py` / `evaluate.py` 顶部的 `import bitsandbytes as bnb` 从未被实际使用，但不改源码就绕不开这行 import，必须让它能导入。RL 阶段另需 `trl`（`rl.py` 从它取 `GRPOConfig`）、`scikit-learn`（`ndcg_score`）与 `wandb`（`sasrec.py` 无条件导入）。`sft.py` 的 `TrainingArguments` 默认 `report_to="all"`，装好 wandb 后会尝试 `wandb.init()` 并因缺少 API key 失败，所以第 8 节导出 `WANDB_MODE=disabled`。
 
 torch 栈与 CANN 9.1.0 配套（torch 2.9.0 + torch_npu 2.9.0.post2）：
 
@@ -73,48 +83,90 @@ torch 栈与 CANN 9.1.0 配套（torch 2.9.0 + torch_npu 2.9.0.post2）：
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 pip install torch==2.9.0 torch-npu==2.9.0.post2
 pip install modelscope transformers==4.57.1 accelerate==1.10.1 datasets==4.2.0 \
-    tokenizers==0.22.1 fire==0.7.1 pandas==2.2.2 tqdm
+    tokenizers==0.22.1 fire==0.7.1 pandas==2.2.2 tqdm bitsandbytes==0.48.1 \
+    trl==0.24.0 scikit-learn==1.5.2 wandb==0.22.2
 ```
 
 ---
 
-## 5. 打 NPU 适配补丁
+## 5. 观察默认行为：两个入口的设备走向不一样
 
-两个文件（`sft.py` 训练入口、`evaluate.py` 评估入口）做同样的最小改动：(1) 顶部 `import bitsandbytes as bnb` 从未实际使用，剥掉以消除 aarch64 wheel 风险；(2) 注入 `torch_npu` 的 `transfer_to_npu` 转换层，把 `torch.cuda.*`、`device_map` 等透明映射到 NPU。
+MiniOneRec 的两个入口对「有没有 GPU」的依赖并不相同。`sft.py` 把设备选择交给 `TrainingArguments`，而 transformers 的设备链里 NPU 分支排在 CUDA 之前，零注入也能拿到 `npu:0`；`evaluate.py` 则在模块级就把 `device` 固化成 `"cpu"`。下面这段命令能同时看到这两种结果：
 
-```shell #test id="patch"
+```shell #test id="probe-default"
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
 cd MiniOneRec
-python - <<'EOF'
-patch = "import torch_npu\nfrom torch_npu.contrib import transfer_to_npu\n"
-for name in ("sft.py", "evaluate.py"):
-    s = open(name).read()
-    if "transfer_to_npu" not in s:
-        s = s.replace("import bitsandbytes as bnb\n", "")
-        s = s.replace("import torch\n", "import torch\n" + patch, 1)
-        open(name, "w").write(s)
-print("patched")
-EOF
-grep -c "transfer_to_npu" sft.py evaluate.py
-# grep -c exits 1 on zero matches; the pipe keeps the block green while
-# still printing the count for the result assertion below.
-grep -c "bitsandbytes" sft.py evaluate.py || true
+python -c "
+import torch, torch_npu
+from transformers import TrainingArguments
+print('npu available:', torch.npu.is_available())
+print('cuda mapped:', torch.cuda.is_available())
+print('evaluate.py device:', 'cuda' if torch.cuda.is_available() else 'cpu')
+print('trainer device:', TrainingArguments(output_dir='/tmp/probe-default').device)
+"
 ```
 
-输出结果如下（多文件 `grep -c` 逐文件输出 `文件名:匹配行数`；`transfer_to_npu` 只出现在 `from torch_npu.contrib import transfer_to_npu` 一行——`import torch_npu` 不含该子串，每个文件匹配 1 行；`bitsandbytes` 出现 0 次）：
+输出结果如下：
 
-```shell #test-result id="patch"
-patched
-sft.py:1
-evaluate.py:1
-sft.py:0
-evaluate.py:0
+```shell #test-result id="probe-default"
+npu available: True
+cuda mapped: False
+evaluate.py device: cpu
+trainer device: npu:0
 ```
 
 ---
 
-## 6. 下载基座模型与预处理数据
+## 6. 只在评估命令里启用 NPU 映射
 
-基座模型走 ModelScope（Qwen2.5-**base**，规避 README 公告的 Instruct 模型约束解码失效问题）；官方预处理的 Amazon Industrial_and_Scientific 数据只在 HuggingFace 侧，经 hf-mirror 拉取（约 27 MB，排除 .npy 嵌入文件——仅 RQ/SID 构建阶段需要）。`info/` 下的 SID-条目清单 txt 是评估阶段构建约束 trie 与对齐评测目标的输入，一并拉取。
+SFT 不需要任何注入；评估与 RL 需要 `torch.cuda` 有值。为了让注入只作用于需要它的命令，把 `sitecustomize.py` 放进独立目录、通过 `PYTHONPATH` 挂到命令上——不写进 site-packages，其他进程不受影响。
+
+```shell #test-setup id="npu-shim"
+mkdir -p /tmp/minionerec-npu-shim
+cat > /tmp/minionerec-npu-shim/sitecustomize.py <<'INS'
+import torch_npu.contrib.transfer_to_npu  # noqa: F401
+INS
+```
+
+确认作用域只覆盖挂了 `PYTHONPATH` 的那条命令：
+
+```shell #test id="check-scoped"
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
+cd MiniOneRec
+python -c "import torch; print('default process:', 'cuda' if torch.cuda.is_available() else 'cpu')"
+PYTHONPATH=/tmp/minionerec-npu-shim python -c "
+import torch
+print('with shim:', 'cuda' if torch.cuda.is_available() else 'cpu')
+print('tensor landed on:', torch.zeros(1, device='cuda').device.type)
+"
+```
+
+输出结果如下（代码里写的是 `cuda`，张量实际落在 NPU）：
+
+```shell #test-result id="check-scoped"
+default process: cpu
+with shim: cuda
+tensor landed on: npu
+```
+
+确认仓库源码没被动过（前面的检查与注入都不落在仓库里）：
+
+```shell #test id="no-source-change"
+cd MiniOneRec
+test -z "$(git status --porcelain)" && echo "source untouched"
+```
+
+输出结果如下：
+
+```shell #test-result id="no-source-change"
+source untouched
+```
+
+---
+
+## 7. 下载基座模型与预处理数据
+
+基座模型走 ModelScope（Qwen2.5-**base**，规避 README 公告的 Instruct 模型约束解码失效问题）；官方预处理的 Amazon Industrial_and_Scientific 数据只在 HuggingFace 侧，经 hf-mirror 拉取（排除 .npy 嵌入文件，仅 RQ/SID 构建阶段需要）。`info/` 下的 SID-条目清单 txt 是评估阶段构建约束 trie 与对齐评测目标的输入，一并拉取。
 
 ```shell #test-setup id="download"
 cd MiniOneRec
@@ -148,30 +200,14 @@ info txt ok
 
 ---
 
-## 7. 验证 torch_npu 与 CUDA-API 映射
+## 8. SFT 训练
 
-```shell #test id="check-npu"
-source /usr/local/Ascend/ascend-toolkit/set_env.sh
-python -c "import torch, torch_npu; from torch_npu.contrib import transfer_to_npu; print('npu available:', torch.npu.is_available()); print('npu count:', torch.npu.device_count()); print('cuda-mapped available:', torch.cuda.is_available())"
-```
-
-输出结果如下：
-
-```shell #test-result id="check-npu"
-npu available: True
-npu count: 1
-cuda-mapped available: True
-```
-
----
-
-## 8. SFT 冒烟训练
-
-单卡 1 epoch 冒烟：`sample=600` 限制每个子数据集（SID 序列 / SID-条目对齐 / 融合序列推荐）各 600 条，共约 1800 样本；`cutoff_len=256` 截断序列。完整训练（8 卡 A100、全量数据）见上游 `sft.sh`。
+单卡跑 1 epoch：`sample=600` 限制每个子数据集（SID 序列 / SID-条目对齐 / 融合序列推荐）各取 600 条；`cutoff_len=256` 截断序列。完整训练（8 卡 A100、全量数据）见上游 `sft.sh`。
 
 ```shell #test-setup id="sft-run"
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 export ASCEND_RT_VISIBLE_DEVICES=0
+export WANDB_MODE=disabled
 cd MiniOneRec
 python sft.py \
     --base_model ./Qwen2.5-0.5B \
@@ -211,11 +247,11 @@ tokenizer saved
 
 ---
 
-## 9. 约束解码评估（冒烟）
+## 9. 约束解码评估
 
-用冒烟训练的 `final_checkpoint` 在 test 切片上做 beam search 评估，再算 HR/NDCG/CC。**CC（无效 SID 生成数）必须为 0**——`ConstrainedLogitsProcessor` 用 trie 约束每步只允许合法 SID 前缀 token，这是约束解码在 NPU 上生效的关键信号。冒烟用 `num_beams=20`（官方 50）+ 200 行 test 切片 + `batch_size=2`，单卡约 1 分钟。
+用上一节得到的 `final_checkpoint` 在 test 切片上做 beam search 评估，再算 HR/NDCG/CC。**CC（无效 SID 生成数）必须为 0**——`ConstrainedLogitsProcessor` 用 trie 约束每步只允许合法 SID 前缀 token，这是约束解码在 NPU 上生效的关键信号。本节用 `num_beams=20`、`batch_size=2` 在 test 切片上评估。
 
-切出 test 小样本（200 行 = 1 行表头 + 199 条样本）：
+切出 test 子集：
 
 ```shell #test-setup id="prep-eval"
 cd MiniOneRec
@@ -229,7 +265,7 @@ wc -l test_small.csv
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 export ASCEND_RT_VISIBLE_DEVICES=0
 cd MiniOneRec
-python evaluate.py \
+PYTHONPATH=/tmp/minionerec-npu-shim python evaluate.py \
     --base_model ./smoke_out/final_checkpoint \
     --info_file ./data/Amazon/info/Industrial_and_Scientific_5_2016-10-2018-11.txt \
     --test_data_path test_small.csv \
@@ -238,14 +274,14 @@ python evaluate.py \
     --num_beams 20 --batch_size 2
 ```
 
-输出结果如下（尾部进度条信息在 stderr，不参与比对）：
+输出结果如下（进度条走 stderr）：
 
 ```shell #test-result id="run-eval"
 industrial and scientific items
 ...
 ```
 
-校验预测产物（199 条预测，每条带 `predict` 字段）：
+校验预测产物：
 
 ```shell #test id="verify-eval"
 cd MiniOneRec
@@ -259,7 +295,7 @@ python -c "import json; d=json.load(open('eval_result.json')); print(len(d)); pr
 True
 ```
 
-计算 HR/NDCG/CC（HR/NDCG 数值随训练状态浮动，用 `...` 占位匹配；末行 CC 必须精确为 0）：
+计算 HR/NDCG/CC。HR/NDCG 随训练状态浮动，判断约束解码是否生效看 CC 是否为 0：
 
 ```shell #test id="calc-metrics"
 cd MiniOneRec
@@ -268,7 +304,7 @@ python calc.py \
     --item_path ./data/Amazon/info/Industrial_and_Scientific_5_2016-10-2018-11.txt
 ```
 
-输出结果如下（前两行为 beam 数与生效的 top-k 列表，确定值）：
+输出结果如下：
 
 ```shell #test-result id="calc-metrics"
 20
@@ -280,17 +316,115 @@ HR...
 
 ---
 
-## 故障排查
+## 10. 推荐导向 RL
 
-| 现象 | 可能原因 | 建议 |
-| --- | --- | --- |
-| `npu-smi` 找不到 | 未 `source set_env.sh`，或 `npu-smi` 不在 `PATH` | 重做第 1-2 节 |
-| `import torch_npu` 失败 | torch/torch_npu 版本不匹配 | 检查[兼容矩阵](https://gitcode.com/Ascend/pytorch)，确认 torch 2.9.0 ↔ torch_npu 2.9.0.post2 |
-| `npu available: False` | NPU 设备未挂载或驱动问题 | 检查 `/dev/davinci0` 是否存在 |
-| DataLoader worker 段错误 | torch_npu/CANN 与 fork 的兼容性问题 | 在 `TrainingArguments` 加 `dataloader_num_workers=0`（默认即为 0；仅在改过该参数后出现时回退） |
-| bf16 相关报错 | 硬件为 910A（不支持 bf16） | 更换 910B 系列硬件 |
-| ModelScope 下载慢/失败 | 网络 | 重试（支持断点续传）；数据侧确认 `HF_ENDPOINT=https://hf-mirror.com` 已导出 |
-| `model_type` grep 为空 | `final_checkpoint/config.json` 缺失 | 训练未完成，检查上一块退出码与日志 |
-| 评估报 `FileNotFoundError: [Errno 2] No such file or directory: ''` | 未传 `--result_json_data`，结果文件路径为空 | 补上 `--result_json_data ./eval_result.json` |
-| CC 大于 0 | 约束解码未生效 | 确认第 5 节补丁已注入 `evaluate.py`（`grep -c transfer_to_npu evaluate.py` 应为 1）；基座模型须为 Qwen2.5-**base**（Instruct 版约束解码失效） |
-| HR/NDCG 与文中示例差异大 | 冒烟训练仅 1 epoch/600 样本，`num_beams` 也降为 20 | 数值仅供参考；CI 只断言 CC=0，HR/NDCG 用占位符匹配 |
+RL 在 SFT 产物上再做一轮 GRPO：每个 prompt 采样多条候选、组内归一化奖励、并用 KL 约束贴近参考模型；动作空间是有限的 SID 列表，候选由约束 beam search 生成。
+
+上游有三处写死值与单卡运行冲突，用一条 `sed` 就地替换（都是单行，只在本次运行生效）：
+
+- `optim="paged_adamw_32bit"` 走 bitsandbytes，而 bitsandbytes 只提供 CPU、CUDA 等后端，没有 NPU 实现，换成 torch 原生 `adamw_torch`。
+- `sample = -1` 决定 SID 数据集与「标题→SID」数据集的样本数，`-1` 会把整个商品目录展开，训练会拉长到上万步，改为 40。
+- `RLSeqTitle2SidDataset(..., sample=10000)` 是第三个数据集，采样上限写死在调用处，不受上面那个变量影响；训练集切到 40 行后样本池只有 40，`sample(10000)` 会抛 `Cannot take a larger sample than population`，同样改为 40。
+
+本节会就地修改 `rl.py` 三行。
+
+```shell #test id="rl-patch"
+cd MiniOneRec
+sed -i -e 's/optim="paged_adamw_32bit"/optim="adamw_torch"/' \
+       -e 's/^    sample = -1$/    sample = 40/' \
+       -e 's/sample=10000/sample=40/' rl.py
+grep -c 'optim="adamw_torch"' rl.py
+grep -c '^    sample = 40$' rl.py
+grep -c 'sample=40' rl.py
+```
+
+输出结果如下：
+
+```shell #test-result id="rl-patch"
+1
+1
+1
+```
+
+三个数据集都按 40 取样，所以把训练集也切到 40 行（`pandas` 允许取样数等于总体数）：
+
+```shell #test id="prep-rl"
+cd MiniOneRec
+python - <<'PY'
+import pandas as pd
+
+df = pd.read_csv('data/Amazon/train/Industrial_and_Scientific_5_2016-10-2018-11.csv')
+df.head(40).to_csv('data/rl_train_40.csv', index=False)
+print('rl train rows:', len(pd.read_csv('data/rl_train_40.csv')))
+PY
+```
+
+输出结果如下：
+
+```shell #test-result id="prep-rl"
+rl train rows: 40
+```
+
+在 0 号卡上跑 1 epoch。`train_batch_size` 必须能被 `num_generations` 整除；`num_generations` 同时是 beam 宽度，本节取 2。
+
+```shell #test id="run-rl"
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
+export ASCEND_RT_VISIBLE_DEVICES=0
+cd MiniOneRec
+PYTHONPATH=/tmp/minionerec-npu-shim python rl.py \
+    --model_path ./smoke_out/final_checkpoint \
+    --train_file ./data/rl_train_40.csv \
+    --eval_file ./data/Amazon/valid/Industrial_and_Scientific_5_2016-10-2018-11.csv \
+    --info_file ./data/Amazon/info/Industrial_and_Scientific_5_2016-10-2018-11.txt \
+    --category Industrial_and_Scientific \
+    --train_batch_size 4 \
+    --eval_batch_size 4 \
+    --num_generations 2 \
+    --num_train_epochs 1 \
+    --gradient_accumulation_steps 1 \
+    --learning_rate 1e-5 \
+    --beta 1e-3 \
+    --beam_search True \
+    --reward_type ranking \
+    --sync_ref_model True \
+    --test_during_training False \
+    --eval_step 1.0 \
+    --output_dir ./rl_out \
+    --sid_index_path ./data/Amazon/index/Industrial_and_Scientific.index.json \
+    --item_meta_path ./data/Amazon/index/Industrial_and_Scientific.item.json
+```
+
+输出结果如下（数据集对象与进度条走 stderr）：
+
+```shell #test-result id="run-rl"
+Industrial_and_Scientific
+...
+```
+
+日志里的 `reward`、`reward_std`、`loss`、`grad_norm`、`kl` 会一直是 0，这不是故障。`rule_reward` 要求生成的 SID 与目标完全相等；上一节只训 1 epoch，精确命中率接近 0，组内两条候选都命不中，`ndcg_rule_reward` 还会把整组补 0，GRPO 的组内优势因此无从计算，梯度自然为 0。到这里三个阶段都已跑通；要看到非零的训练信号，需要更充分的 SFT。
+
+校验 `rl.py` 结尾的两步落盘（`trainer.save_model` 与 `model.save_pretrained`）：
+
+```shell #test id="verify-rl"
+cd MiniOneRec
+test -f rl_out/final_checkpoint/model.safetensors && echo "rl model saved"
+test -f rl_out/final_checkpoint/config.json && echo "rl config saved"
+test -f rl_out/final_checkpoint/tokenizer_config.json && echo "rl tokenizer saved"
+```
+
+输出结果如下：
+
+```shell #test-result id="verify-rl"
+rl model saved
+rl config saved
+rl tokenizer saved
+```
+
+---
+
+## 相关链接
+
+- 上游仓库：[AkaliKong/MiniOneRec](https://github.com/AkaliKong/MiniOneRec)
+- 基座模型：[Qwen2.5-0.5B](https://www.modelscope.cn/models/Qwen/Qwen2.5-0.5B)
+- 预处理数据与 SID 索引：[kkknight/MiniOneRec](https://huggingface.co/kkknight/MiniOneRec)
+- 昇腾 PyTorch 安装与兼容性：[Ascend/pytorch](https://gitcode.com/Ascend/pytorch)

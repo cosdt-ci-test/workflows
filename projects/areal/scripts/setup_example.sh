@@ -16,7 +16,7 @@ fi
 
 PROFILE="$1"
 
-SUPPORTED_PROFILES="areal-vlm-grpo areal-vlm-mt-grpo areal-vlm-sft areal-clevr-sft areal-tir-grpo areal-scaffold-grpo areal-agents-grpo areal-math-grpo areal-math-sft areal-math-aime areal-math-boba areal-countdown-grpo areal-hermes-grpo areal-openclaw-grpo areal-camel-grpo areal-online-rollout areal-hitl-demo areal-tau2-grpo areal-agent-service areal-align"
+SUPPORTED_PROFILES="areal-vlm-grpo areal-vlm-mt-grpo areal-vlm-sft areal-clevr-sft areal-tir-grpo areal-scaffold-grpo areal-agents-grpo areal-math-grpo areal-math-sft areal-swe-sft areal-math-aime areal-math-boba areal-countdown-grpo areal-hermes-grpo areal-openclaw-grpo areal-camel-grpo areal-online-rollout areal-hitl-demo areal-tau2-grpo areal-agent-service areal-align"
 AIME_PREP=0
 BOBA_PREP=0
 COUNTDOWN_PREP=0
@@ -46,6 +46,9 @@ case "$PROFILE" in
   # gsm8k_rl.py and gsm8k_eval.py share the same model.
   areal-math-grpo) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct" ;;
   areal-math-sft) MODEL_ID="Qwen/Qwen3-1.7B" ;;
+  # swe/train_sft.py: dataset path must contain an "swe" token to route
+  # into the SWE pipeline (fixture swe_sft_pairs.jsonl via FIXTURE_DIR).
+  areal-swe-sft) MODEL_ID="Qwen/Qwen3-1.7B" ;;
   areal-math-aime) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; AIME_PREP=1 ;;
   areal-math-boba) MODEL_ID="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"; BOBA_PREP=1 ;;
   areal-countdown-grpo) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; COUNTDOWN_PREP=1 ;;

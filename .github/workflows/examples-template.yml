@@ -280,6 +280,9 @@ jobs:
     outputs:
       supported_matrix: ${{ steps.check.outputs.supported_matrix }}
       has_supported: ${{ steps.check.outputs.has_supported }}
+      a3_matrix: ${{ steps.check.outputs.a3_matrix }}
+      has_a3: ${{ steps.check.outputs.has_a3 }}
+      publish_matrix: ${{ steps.check.outputs.publish_matrix }}
     steps:
       - name: Checkout workflows
         uses: actions/checkout@v6
@@ -410,15 +413,109 @@ jobs:
             bash "$PROJECT_ROOT/scripts/run_example.sh" "$EXAMPLE_PATH" \
             2>&1 | tee "$GITHUB_WORKSPACE/output/train.log"
 
+  run-example-a3:
+    name: ${{ matrix.example.name }}
+    needs: [monitor, manifest-check]
+    if: needs.manifest-check.outputs.has_a3 == 'true'
+    runs-on: ${{ matrix.example.runner }}
+    timeout-minutes: ${{ matrix.example.timeout_minutes }}
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ inputs.max_parallel }}
+      matrix:
+        example: ${{ fromJSON(needs.manifest-check.outputs.a3_matrix) }}
+    env:
+      PROJECT_ROOT: ${{ github.workspace }}/workflows/projects/${{ inputs.project }}
+      TARGET_ROOT: ${{ github.workspace }}/target
+      # Split mode: examples live in their own checkout; non-split: the
+      # example tree is the upstream checkout itself (TARGET_ROOT).
+      EXAMPLES_ROOT: ${{ inputs.examples_repo != '' && format('{0}/examples', github.workspace) || format('{0}/target', github.workspace) }}
+      FIXTURE_DIR: ${{ github.workspace }}/workflows/projects/${{ inputs.project }}/fixtures
+      HF_ENDPOINT: https://hf-mirror.com
+      # When the mirror passes xet metadata through, hf_xet downloads
+      # chunks straight from xethub.hf.co hosts, bypassing HF_ENDPOINT
+      # (unreachable from the CN runners) — same fix as llm-compressor.
+      # NOTE: does not rescue xet-backed *files*: their resolve URL
+      # 302s to cas-bridge.xethub.hf.co regardless; those must be
+      # pre-downloaded (see peft supertuning's fixture).
+      HF_HUB_DISABLE_XET: "1"
+      # evaluate's metric caches (predictions/references arrow files) are
+      # per-job scratch with zero cross-job value — keep them OFF the
+      # shared persistent volume (default ~/.cache/huggingface/metrics).
+      # That volume is also where cross_validation hit Errno 5 EIO on a
+      # metrics-file close (run 35188975420) and where every glue-metric
+      # leg would otherwise contend on the same fixed path.
+      HF_METRICS_CACHE: ${{ github.workspace }}/.hf-metrics
+      PIP_EXTRA_INDEX_URL: https://repo.huaweicloud.com/ascend/repos/pypi
+      PIP_TIMEOUT: "120"
+    container:
+      image: ${{ matrix.example.image }}
+    steps:
+      - name: Checkout workflows
+        uses: actions/checkout@v6
+        with:
+          path: workflows
+
+      - name: Checkout target
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ needs.monitor.outputs.target_repo }}
+          ref: ${{ needs.monitor.outputs.target_ref }}
+          path: target
+
+      - name: Checkout examples repo
+        if: inputs.examples_repo != ''
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ inputs.examples_repo }}
+          path: examples
+
+      - name: Set declared NPU visibility
+        if: matrix.example.npu_devices
+        env:
+          NPU_DEVICES: ${{ matrix.example.npu_devices }}
+        run: echo "ASCEND_RT_VISIBLE_DEVICES=$NPU_DEVICES" >> "$GITHUB_ENV"
+
+      - name: Setup example environment
+        env:
+          PROFILE: ${{ matrix.example.profile }}
+          EXAMPLE_PATH: ${{ matrix.example.path }}
+          # EXEC forwarded so setups that build per-target (whisper.cpp
+          # builds the cmake target named by exec) can see it; empty for
+          # entries without an exec field (existing setups ignore it).
+          EXEC: ${{ matrix.example.exec }}
+        run: bash "$PROJECT_ROOT/scripts/setup_example.sh" "$PROFILE"
+
+      - name: Run example
+        env:
+          EXAMPLE_PATH: ${{ matrix.example.path }}
+          EXAMPLE_SOURCE: ${{ matrix.example.source || 'upstream' }}
+          EXEC: ${{ matrix.example.exec }}
+          LAUNCHER: ${{ matrix.example.launcher || '' }}
+          # PROFILE forwarded so run scripts that dispatch substantial
+          # per-profile flow on it (mooncake's transfer-engine guard)
+          # see it; path-derived scripts ignore it.
+          PROFILE: ${{ matrix.example.profile }}
+          OVERLAY_ARGS: ${{ toJSON(matrix.example.overlay_args) }}
+        run: |
+          df -h /dev/shm
+          mkdir -p "$GITHUB_WORKSPACE/output"
+          CI_OUTPUT_DIR="$GITHUB_WORKSPACE/output" \
+            bash "$PROJECT_ROOT/scripts/run_example.sh" "$EXAMPLE_PATH" \
+            2>&1 | tee "$GITHUB_WORKSPACE/output/train.log"
+
   validate-results:
     name: publish-result (${{ matrix.example.name }})
-    needs: [monitor, manifest-check, run-example]
+    needs: [monitor, manifest-check, run-example, run-example-a3]
     if: always() && needs.manifest-check.outputs.has_supported == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        example: ${{ fromJSON(needs.manifest-check.outputs.supported_matrix) }}
+        example: ${{ fromJSON(needs.manifest-check.outputs.publish_matrix) }}
     steps:
       - name: Checkout workflows
         uses: actions/checkout@v6
@@ -432,6 +529,7 @@ jobs:
           TRIGGER: ${{ needs.monitor.outputs.trigger }}
           EXAMPLE_PATH: ${{ matrix.example.path }}
           EXAMPLE_SOURCE: ${{ matrix.example.source || '' }}
+          MACHINE_TYPE: ${{ matrix.example.machine_type || '' }}
           IMAGE: ${{ matrix.example.image }}
           EXPECTED_JOB_NAME: ${{ matrix.example.name }}
           GH_TOKEN: ${{ github.token }}
@@ -458,7 +556,7 @@ jobs:
           path: output/result.json
 
   save-monitor-state:
-    needs: [monitor, manifest-check, run-example]
+    needs: [monitor, manifest-check, run-example, run-example-a3]
     if: |
       always() &&
       github.event_name == 'schedule' &&
@@ -469,8 +567,10 @@ jobs:
         env:
           TARGET_REF: ${{ needs.monitor.outputs.target_ref }}
           RUN_RESULT: ${{ needs.run-example.result }}
+          A3_RESULT: ${{ needs.run-example-a3.result }}
           MANIFEST_RESULT: ${{ needs.manifest-check.result }}
           HAS_SUPPORTED: ${{ needs.manifest-check.outputs.has_supported }}
+          HAS_A3: ${{ needs.manifest-check.outputs.has_a3 }}
           WORKFLOW_FILES_HASH: ${{ needs.monitor.outputs.workflow_files_hash }}
         run: |
           set -euo pipefail
@@ -484,6 +584,9 @@ jobs:
             && [ "$HAS_SUPPORTED" = "false" ]; then
             OUT="success"
           else
+            OUT="failure"
+          fi
+          if [ "$HAS_A3" = "true" ] && [ "$A3_RESULT" != "success" ]; then
             OUT="failure"
           fi
           {

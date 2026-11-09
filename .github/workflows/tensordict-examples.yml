@@ -2,9 +2,9 @@
 name: tensordict-examples
 
 on:
-  # Enable only after the NPU tutorial jobs pass manual acceptance.
-  # schedule:
-  #   - cron: '45 */6 * * *'
+  # Daily at 00:45 UTC (08:45 Beijing).
+  schedule:
+    - cron: '45 0 * * *'
   workflow_dispatch:
     inputs:
       target_ref:

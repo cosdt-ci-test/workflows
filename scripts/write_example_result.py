@@ -16,6 +16,7 @@ Reads from the environment:
     EXPECTED_JOB_NAME    display name: matrix.example.name (basename,
                               extension stripped)
     TRIGGER / TARGET_REPO / TARGET_REF / EXAMPLE_PATH / IMAGE
+    MACHINE_TYPE    optional a2 / a3 label for the recipe's machine
 Writes: --output (default result.json), fields per
 schemas/result.schema.json. Exit 1 if the expected job cannot be
 found or has no conclusion yet.
@@ -105,6 +106,8 @@ def main() -> None:
     }
     if env.get('EXAMPLE_SOURCE'):
         result['source'] = env['EXAMPLE_SOURCE']
+    if env.get('MACHINE_TYPE'):
+        result['machine_type'] = env['MACHINE_TYPE']
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open('w', encoding='utf-8') as handle:

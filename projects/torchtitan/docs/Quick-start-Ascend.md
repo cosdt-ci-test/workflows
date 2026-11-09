@@ -148,8 +148,15 @@ modelscope 1.40.2
 
 ### 安装 triton-ascend
 
+`triton-ascend` 是 Ascend 的 Triton fork，只发布在华为云的 Ascend PyPI 源
+`https://repo.huaweicloud.com/ascend/repos/pypi`（该源同时提供 3.2.x / 3.6.x 的
+cp39–cp313 aarch64 wheel）。`--no-deps` 是必需的：triton-ascend 的 wheel 声明了社区版
+`triton` 依赖，装上后两个包会同时写 `triton/` 目录，混装会在 `import triton` 时报
+`cannot import name 'Language'`。
+
 ```shell #test-setup
-uv pip install --no-deps --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi/test triton-ascend==3.6.0
+set -euo pipefail
+uv pip install --no-deps --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi triton-ascend==3.6.0
 uv pip install pybind11
 ```
 

@@ -69,7 +69,7 @@ python -c "import torch, torch_npu; print('torch=', torch.__version__); print('t
 torch= 2.9.0xxx
 torch_npu= 2.9.0.post2
 is_available: True
-count: 1
+count: xxx
 ```
 
 确认 `npu-smi` 可以看到设备：

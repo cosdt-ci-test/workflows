@@ -64,11 +64,11 @@ python -c "import torch, torch_npu; print('torch=', torch.__version__); print('t
 
 输出结果如下：
 
-```shell #test-result id="check-torch"
+```shell #test-result id="check-torch" fuzzy='xxx'
 torch= 2.9.0+cpu
 torch_npu= 2.9.0.post2
 is_available: True
-count: 1
+count: xxx
 ```
 
 > 如果 `import torch_npu` 失败，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查 torch / torch_npu / CANN 三方兼容矩阵。

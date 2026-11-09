@@ -320,33 +320,9 @@ HR...
 
 RL 在 SFT 产物上再做一轮 GRPO：每个 prompt 采样多条候选、组内归一化奖励、并用 KL 约束贴近参考模型；动作空间是有限的 SID 列表，候选由约束 beam search 生成。
 
-上游有三处写死值与单卡运行冲突，用一条 `sed` 就地替换（都是单行，只在本次运行生效）：
+`rl.py` 在 NPU 上会自动选用 torch 原生的 `adamw_torch`，无需修改源码。三个数据集的采样数由 `--sample` 控制；训练集只有 40 行，不传该参数会超出样本池，所以下面的命令显式传 `--sample 40`。
 
-- `optim="paged_adamw_32bit"` 走 bitsandbytes，而 bitsandbytes 只提供 CPU、CUDA 等后端，没有 NPU 实现，换成 torch 原生 `adamw_torch`。
-- `sample = -1` 决定 SID 数据集与「标题→SID」数据集的样本数，`-1` 会把整个商品目录展开，训练会拉长到上万步，改为 40。
-- `RLSeqTitle2SidDataset(..., sample=10000)` 是第三个数据集，采样上限写死在调用处，不受上面那个变量影响；训练集切到 40 行后样本池只有 40，`sample(10000)` 会抛 `Cannot take a larger sample than population`，同样改为 40。
-
-本节会就地修改 `rl.py` 三行。
-
-```shell #test id="rl-patch"
-cd MiniOneRec
-sed -i -e 's/optim="paged_adamw_32bit"/optim="adamw_torch"/' \
-       -e 's/^    sample = -1$/    sample = 40/' \
-       -e 's/sample=10000/sample=40/' rl.py
-grep -c 'optim="adamw_torch"' rl.py
-grep -c '^    sample = 40$' rl.py
-grep -c 'sample=40' rl.py
-```
-
-输出结果如下：
-
-```shell #test-result id="rl-patch"
-1
-1
-1
-```
-
-三个数据集都按 40 取样，所以把训练集也切到 40 行（`pandas` 允许取样数等于总体数）：
+把训练集切到 40 行（`pandas` 允许取样数等于总体数）：
 
 ```shell #test id="prep-rl"
 cd MiniOneRec
@@ -374,6 +350,7 @@ cd MiniOneRec
 PYTHONPATH=/tmp/minionerec-npu-shim python rl.py \
     --model_path ./smoke_out/final_checkpoint \
     --train_file ./data/rl_train_40.csv \
+    --sample 40 \
     --eval_file ./data/Amazon/valid/Industrial_and_Scientific_5_2016-10-2018-11.csv \
     --info_file ./data/Amazon/info/Industrial_and_Scientific_5_2016-10-2018-11.txt \
     --category Industrial_and_Scientific \

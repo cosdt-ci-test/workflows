@@ -11,9 +11,9 @@ from workflows.markdown_doc_test_base import MarkdownDocTestBase
 from workflows.model_cache import (
     diagnose_mount_environment,
     ensure_safetensors,
-    purge_huggingface_corrupt,
-    report_huggingface_state,
-    resolve_huggingface_cache,
+    purge_modelscope_corrupt,
+    report_modelscope_state,
+    resolve_modelscope_cache,
 )
 
 
@@ -103,6 +103,16 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 f'setup: skipping CANN env source ({cls._CANN_SET_ENV} not present)'
             )
 
+        # 1) Single-card visibility: the doc is single-card and
+        # check-npu-runtime expects ``count: 1``. The a3 runner
+        # (linux-aarch64-a3-800i-2) hands the container two cards, and
+        # restricting the /dev mounts does not change device_count() -
+        # aclrt enumerates through the host driver and sees every card.
+        # ASCEND_RT_VISIBLE_DEVICES is the runtime-level filter that
+        # holds on every machine generation, so the whole test process
+        # sees the one card the doc talks about.
+        os.environ.setdefault('ASCEND_RT_VISIBLE_DEVICES', '0')
+
         with open(cls._CONSTRAINTS_FILE, 'w', encoding='utf-8') as fh:
             fh.write('\n'.join(cls._CUDA_CONSTRAINTS) + '\n')
         os.environ['PIP_CONSTRAINT'] = cls._CONSTRAINTS_FILE
@@ -156,8 +166,8 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
         diagnose_mount_environment(model_id=cls._MODEL_ID)
 
-        report_huggingface_state(cls._MODEL_ID)
-        purge_huggingface_corrupt(resolve_huggingface_cache())
+        report_modelscope_state(cls._MODEL_ID)
+        purge_modelscope_corrupt(resolve_modelscope_cache())
 
 
     @classmethod

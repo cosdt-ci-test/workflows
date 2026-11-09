@@ -37,8 +37,8 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | torch_npu | 2.9.0.post2 |
 | transformers | `<5.0` |
 | peft | 最新 release 的源码/二进制 |
-| huggingface_hub | 最新稳定版（随 `transformers` 一起拉） |
-| 模型 | [Qwen/Qwen2.5-3B-Instruct](https://huggingface.co/Qwen/Qwen2.5-3B-Instruct) |
+| modelscope | 1.37.0 |
+| 模型 | [Qwen/Qwen2.5-3B-Instruct](https://www.modelscope.cn/models/Qwen/Qwen2.5-3B-Instruct) |
 
 #### 前置安装
 确认能看到 NPU 设备：
@@ -105,21 +105,21 @@ count: 1
 如果 `import torch_npu` 失败，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查 torch / torch_npu / CANN 三方兼容矩阵。
 ```
 
-安装 transformers / huggingface_hub：
+安装 transformers / modelscope：
 
 ```shell #test-setup
-pip install 'transformers<5.0' huggingface_hub
+pip install 'transformers<5.0' 'modelscope==1.37.0'
 ```
 
 打印安装版本：
 ```shell #test id="install-deps"
-python -c "import transformers, huggingface_hub; print(f'transformers={transformers.__version__} huggingface_hub={huggingface_hub.__version__}')"
+python -c "import transformers, modelscope; print(f'transformers={transformers.__version__} modelscope={modelscope.__version__}')"
 ```
 
 输出结果如下：
 
 ```shell #test-result id="install-deps" fuzzy='xxx'
-transformers=xxx huggingface_hub=xxx
+transformers=xxx modelscope=1.37.0
 ```
 
 ```{admonition} Note
@@ -188,10 +188,19 @@ xxx 表示最新的版本号
 
 #### 下载基础模型
 
-默认使用 **HuggingFace Hub** 进行模型下载。
+默认使用 **ModelScope** 进行模型下载。ModelScope 在国内网络下可用性与速度都比
+HuggingFace Hub 稳定；如果你的环境可以直连 HuggingFace Hub，把下面的
+`snapshot_download` 换成 `huggingface_hub` 的同名接口即可。
 
 ```shell #test-setup store="model_path"
-python -c "from huggingface_hub import snapshot_download; print(snapshot_download('Qwen/Qwen2.5-3B-Instruct'))" | tail -n 1
+set -o pipefail
+python -c "from modelscope import snapshot_download; print(snapshot_download('Qwen/Qwen2.5-3B-Instruct'))" | tail -n 1
+```
+
+```{admonition} Note
+:class: note
+`set -o pipefail` 让 `snapshot_download` 失败时整条管道返回非零退出码，而不是被
+`| tail -n 1` 吞成 0——否则下一步会拿到一个空路径，报出与真实原因无关的错误。
 ```
 
 #### 应用 LoRA 适配器

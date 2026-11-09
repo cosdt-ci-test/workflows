@@ -15,13 +15,22 @@ torch==2.14.0 / torch_npu==2.14.0 / CANN==9.2.0) — ``torch``'s CPU build
 only exists in the Aliyun ``pytorch-wheels/cpu`` find-links source (PyPI's
 linux wheels are all CUDA builds), ``torch_npu`` comes from the default
 index, which in CI is the in-cluster PyPI cache gateway. ``triton-ascend``
-comes from Huawei Cloud's ascend ``test`` index (the community ``triton``
-wheel is CUDA-only and must stay out of the environment). ``torchtitan`` is
-installed **twice**: first from PyPI (pure-python wheel) to prove the
-binary route, then from source (``git clone`` pytorch/torchtitan at the
-latest release tag + ``uv pip install -e .``) because the training commands
-need the upstream tree (config registry + the ``--override.imports``
-mechanism).
+comes from Huawei Cloud's ascend index (its ``/test`` sub-path is gone; the
+community ``triton`` wheel is CUDA-only and must stay out of the
+environment). ``torchtitan`` is installed **twice**: first from PyPI
+(pure-python wheel, latest release, with ``attn-gym`` excluded because its
+``cudnn`` / ``linear`` extras pull CUDA-only wheels) to prove the binary
+route, then from source (``git clone`` pytorch/torchtitan at the release the
+doc documents + ``uv pip install -e .``) because the training commands need
+the upstream tree (config registry + the ``--override.imports`` mechanism).
+
+The doc pins the source install to **v0.3.0**: upstream v0.4.0 replaced the
+whole config system (``torchtitan/models/*/config_registry.py`` is gone;
+configs are now recipe functions in ``torchtitan_recipes`` selected by
+``--module`` / ``--config``, and the CLI no longer exposes
+``--training.steps`` / ``--comm.mode`` / ``--dump-folder``). The doc's
+override module and training commands are written against the v0.3.0 API,
+so the guard keeps verifying that release until the doc is ported.
 
 The doc verifies:
 

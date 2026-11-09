@@ -4,7 +4,7 @@
 
 本文在昇腾 NPU 上跑通 TorchTitan 的安装与训练链路：
 
-- **安装**：用 uv 装 PyPI 上的二进制 wheel，或从上游最新 release tag 源码安装。
+- **安装**：用 uv 装 PyPI 上的二进制 wheel（最新 release），或从上游 release tag 源码安装（本文适配 v0.3.0）。
 - **NPU 兼容 override**：用 torchtitan 官方 override 机制替换 attention 栈（RoPE + attention），训练前先断言替换组件与上游组件数值等价。
 - **单卡训练**：`llama3_debugmodel` 配置真跑 2 步，验证配置解析、dataloader 构造、forward + backward 整条链路。
 - **多卡训练**：双卡 FSDP shard 训练，验证 HCCL 集合通信与 DTensor 参数分布。
@@ -50,8 +50,17 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-910b-ubuntu22.04-py3.12
 | torch_npu | 2.14.0 |
 | triton-ascend | 3.6.0 |
 | modelscope | 1.40.2 |
-| torchtitan | 最新 release |
+| torchtitan | 二进制 wheel：最新 stable release（当前 v0.4.0）；源码安装与训练：v0.3.0（见下方说明） |
 | 训练配置 | 单卡 / 多卡均使用上游默认配置 `torchtitan/models/llama3/config_registry.py::llama3_debugmodel`（默认 `ChunkedLossWrapper` loss；基于 debugmodel：dim=256 / 6 层 / 16 head / vocab 2048，~6 M 参数；多卡为 FSDP shard=2 + bf16） |
+
+```{admonition} Note
+:class: note
+**为什么源码安装固定在 v0.3.0**：上游 v0.4.0 把配置体系整个换掉了 —— `torchtitan/models/*/config_registry.py`
+被删除，配置改成 `torchtitan_recipes` 里的 recipe 函数（`--module <模块> --config <函数名>`），命令行不再暴露
+`--training.steps` / `--comm.mode` / `--dump-folder` 这类通用开关，`GQAttention.Config` 的字段结构也随之重写。
+本文后面的 override 模块与训练命令用的都是 v0.3.0 的接口，所以源码安装固定 `v0.3.0`；二进制 wheel 那一步
+仍然装最新 release，用来验证「最新版本能不能在昇腾 NPU 上装上」（这一步需要 `--excludes`，见下）。
+```
 
 ## 前置安装
 
@@ -180,7 +189,17 @@ triton-ascend 3.6.0
 torchtitan 上 PyPI 有 `py3-none-any` 的纯 Python wheel（450 KB），不依赖 native build——`uv pip install torchtitan` 直接装最新 stable release，不用管版本号：
 
 ```shell #test-setup
-uv pip install --extra-index-url https://mirrors.aliyun.com/pypi/simple/ torchtitan
+printf 'attn-gym\n' > /tmp/torchtitan-excludes.txt
+uv pip install --excludes /tmp/torchtitan-excludes.txt --extra-index-url https://mirrors.aliyun.com/pypi/simple/ torchtitan
+```
+
+```{admonition} Note
+:class: note
+`--excludes` 排除的是 `attn-gym`：上游从 v0.4.0 起把 `attn-gym[linear,cudnn]==0.0.17` 写成了硬依赖，
+而它的 `cudnn` / `linear` extra 会拉 `cuda-python>=13` 与 `nvidia-cutlass-dsl[cu13]` —— 两者都是 CUDA 专有组件，
+在昇腾 NPU 上既用不到，也会白占几个 GB 磁盘。`attn-gym` 本体是纯 Python wheel，它提供的只是 CUDA attention
+kernel；torchtitan 对此有官方降级支持（`torchtitan/models/common/attn_gym.py` 用占位 kernel 兜底，
+只有真的要用 GDN / KDA 这类线性注意力模型时才会报错），所以在 NPU 上直接排除它最省事。
 ```
 
 验证装上的版本(下面的命令用 Python 执行)：
@@ -210,10 +229,11 @@ uv pip uninstall torchtitan -y
 
 ### 从源码安装
 
-<!-- 工作流注入的 UPSTREAM_REF（最新 release tag）通过这个隐藏的 #test-setup 捕获并注入到下方 install 命令中-->
+<!-- 上游 v0.4.0 重构了配置体系（recipe 函数替代 config registry），本文的训练命令还是 v0.3.0 的接口，
+     所以这里固定 v0.3.0；工作流注入的 UPSTREAM_REF（最新 release tag）只用于诊断，不参与安装。-->
 <!--
 ```shell #test-setup store="upstream_ref"
-echo "${UPSTREAM_REF}"
+echo "${TORCHTITAN_REF:-v0.3.0}"
 ```
 -->
 
@@ -227,7 +247,8 @@ uv pip install -e .
 
 ```{admonition} Note
 :class: note
-`<ref>` 替换为 torchtitan 当前的最新 release 版本（如 `v0.3.0`）。
+`<ref>` 替换为本文档适配的 torchtitan release 版本（当前 `v0.3.0`）。需要换版本时设置环境变量
+`TORCHTITAN_REF` 即可，但换之前请先确认本文的 override 模块与训练命令和该版本的接口一致。
 ```
 
 验证装上的版本(下面的命令用 Python 执行，需在克隆出来的源码目录里跑)：
@@ -252,6 +273,7 @@ xxx 表示最新的版本号。
 ### 下载 tokenizer
 
 ```shell #test-setup id="modelscope-download-tokenizer" store="ms_tokenizer_path"
+set -o pipefail
 python -c "from modelscope import snapshot_download; print(snapshot_download('LLM-Research/Llama-3.2-1B', allow_patterns=['*.json', '*.model', 'tokenizer*']))" | tail -n 1
 ```
 
@@ -280,20 +302,29 @@ tokenizer_config.json
 
 ### 安装 NPU override 模块
 
-override 模块是本仓（Ascend/docs）里的两个普通 Python 文件，放在 torchtitan 仓库**之外**，通过 `PYTHONPATH` + `--override.imports module.function` 激活：
+override 模块是本仓（cosdt-ci-test/workflows）里的三个普通 Python 文件，放在 torchtitan 仓库**之外**，通过 `PYTHONPATH` + `--override.imports module.function` 激活：
 
 | 文件 | 作用 |
 | --- | --- |
-| `tests/torchtitan/npu_compat.py` | override 模块本身：注册一个 `npu_attention` 工厂，替换 `GQAttention.Config` 节点 |
-| `tests/torchtitan/check_npu_overrides.py` | 等价性自检脚本（CPU）：断言替换进去的组件与上游组件数值等价 |
+| `projects/torchtitan/example/npu_compat.py` | override 模块本身：注册一个 `npu_attention` 工厂，替换 `GQAttention.Config` 节点 |
+| `projects/torchtitan/example/npu_compat_deepseek.py` | deepseek_v3 专用的 override（它自己的 attention 类不是 `GQAttention`） |
+| `projects/torchtitan/example/check_npu_overrides.py` | 等价性自检脚本（CPU）：断言替换进去的组件与上游组件数值等价 |
+
+```{admonition} Note
+:class: note
+`${DOC_REF:-main}` 是被本文档自身所在的 ref（CI 里由测试注入 `DOC_REF`，手工执行时默认 `main`），
+保证拉到的 override 模块与本文档来自同一个版本；走 contents API 而不是 raw.githubusercontent.com：
+NPU runner 到 raw 端点不通，到 api 端点通（base class 里也是这么取文档的）；仓库是 public，匿名即可，
+`GH_TOKEN` 存在时带上以提高限流额度。
+```
 
 ```shell #test-setup
 mkdir -p "$HOME/tt-npu-overrides"
-BASE="https://api.github.com/repos/Ascend/docs/contents/tests/torchtitan"
+BASE="https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/torchtitan/example"
 REF="${DOC_REF:-main}"
 AUTH=()
 [ -n "${GH_TOKEN:-}" ] && AUTH+=(-H "Authorization: Bearer $GH_TOKEN")
-for f in npu_compat.py check_npu_overrides.py; do
+for f in npu_compat.py npu_compat_deepseek.py check_npu_overrides.py; do
   curl -fsSL --retry 3 --retry-connrefused --retry-delay 2 \
     -H "Accept: application/vnd.github.raw" "${AUTH[@]}" \
     "$BASE/$f?ref=$REF" -o "$HOME/tt-npu-overrides/$f"
@@ -312,7 +343,7 @@ cd torchtitan && PYTHONPATH="$HOME/tt-npu-overrides" python -c "import npu_compa
 ['npu_compat.npu_attention']
 ```
 
-再断言替换进去的组件与上游组件**数值等价**（CPU 即可跑，不需要 NPU）：RoPE 与上游 `ComplexRoPE` 的输出必须逐位一致，attention 与朴素实现的逐文档 causal 掩码注意力必须一致。
+再断言替换进去的组件与上游组件**数值等价**（CPU 即可跑，不需要 NPU）：RoPE 与上游 `ComplexRoPE` 的输出必须逐位一致，attention 与朴素实现的逐文档 causal 掩码注意力必须一致，同时确认 override 只替换 `ComplexRoPE` 系模型（qwen3 等用 `CosSinRoPE` 的模型不受影响）。
 
 ```shell #test id="override-equivalence"
 python "$HOME/tt-npu-overrides/check_npu_overrides.py"
@@ -321,7 +352,7 @@ python "$HOME/tt-npu-overrides/check_npu_overrides.py"
 输出结果如下：
 
 ```shell #test-result id="override-equivalence"
-npu override equivalence: rope OK, mask OK
+npu override equivalence: rope OK, mask OK, rope selection OK
 ```
 
 ### 单卡训练

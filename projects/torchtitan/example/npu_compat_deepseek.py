@@ -27,12 +27,19 @@ Activate with::
 
 from dataclasses import dataclass
 
-from torchtitan.config.override import derive, override
-from torchtitan.models.common.attention import MLAAttention
-from torchtitan.models.common.rope import ComplexRoPE
-from torchtitan.models.deepseek_v3.attention import DeepSeekMLAAttention
+# torchtitan >= 0.4.0 imports two torch >= 2.15 symbols through its optional
+# Dist-MoE package, which the deepseek_v3 flavor pulls in eagerly -- install
+# the shim before the first torchtitan import.
+import npu_torch_compat  # noqa: E402
 
-from npu_compat import NpuBlockCausalSDPA, RealGatherComplexRoPE
+npu_torch_compat.install()
+
+from torchtitan.config.override import derive, override  # noqa: E402
+from torchtitan.models.common.attention import MLAAttention  # noqa: E402
+from torchtitan.models.common.rope import ComplexRoPE  # noqa: E402
+from torchtitan.models.deepseek_v3.attention import DeepSeekMLAAttention  # noqa: E402
+
+from npu_compat import NpuBlockCausalSDPA, RealGatherComplexRoPE  # noqa: E402
 
 
 class NpuDeepSeekMLAAttention(DeepSeekMLAAttention):

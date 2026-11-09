@@ -6,6 +6,7 @@
 
 - **安装**：用 uv 装 PyPI 上的二进制 wheel（最新 stable release），再从**同一个 release tag** 源码安装（可编辑模式），训练用源码树。
 - **NPU 兼容 override**：用 torchtitan 官方 override 机制替换 attention 栈（RoPE + attention），训练前先断言替换组件与上游组件数值等价。
+- **torch 版本兼容**：torchtitan v0.4.0 用了两个 torch 2.15 才有的符号，昇腾的 torch 只到 2.14.0 —— 用一层启动时自动装载的兼容垫片补齐（同样不改上游源码）。
 - **单卡训练**：本文自带的 recipe（llama3 `debugmodel`，~6 M 参数）真跑 2 步，验证配置解析、dataloader 构造、forward + backward 整条链路。
 - **多卡训练**：双卡 FSDP shard + bfloat16 训练，验证 HCCL 集合通信与 DTensor 参数分布。
 
@@ -50,6 +51,7 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-910b-ubuntu22.04-py3.12
 | torch_npu | 2.14.0 |
 | triton-ascend | 3.6.0 |
 | torchtitan | 最新 stable release（二进制 wheel 与源码安装用同一个 tag，当前 v0.4.0） |
+| torch 兼容垫片 | `npu_torch_compat.py` + `sitecustomize.py`：torchtitan v0.4.0 需要 torch ≥ 2.15 的两个 `torch.distributed.pipelining` 符号，而昇腾的 torch 上限是 2.14.0 |
 | 训练配置 | 本文自带的 recipe `npu_recipe.py::llama3_npu_debugmodel`（单卡 fp32）/ `llama3_npu_debugmodel_bf16`（多卡 bf16）：模型是 llama3 `debugmodel`（dim=256 / 6 层 / 16 head / vocab 2048，~6 M 参数），数据是上游自带的 `tests/assets/c4_test`，tokenizer 是上游自带的 `tests/assets/tokenizer`（vocab 2020），不下载任何权重 |
 
 ```{admonition} Note
@@ -269,6 +271,8 @@ override 模块和 recipe 都是本仓（cosdt-ci-test/workflows）里的普通 
 | `projects/torchtitan/example/npu_compat_deepseek.py` | deepseek_v3 专用的 override（它自己的 attention 类不是 `GQAttention`） |
 | `projects/torchtitan/example/npu_recipe.py` | quick-start 的 recipe：返回 `Trainer.Config`（模型 / 数据 / 步数 / loss） |
 | `projects/torchtitan/example/check_npu_overrides.py` | 等价性自检脚本（CPU）：断言替换进去的组件与上游组件数值等价 |
+| `projects/torchtitan/example/npu_torch_compat.py` | torch 版本兼容垫片：补上 torchtitan 需要、但 torch 2.14 没有的两个 `torch.distributed.pipelining` 符号 |
+| `projects/torchtitan/example/sitecustomize.py` | 启动钩子：解释器启动时自动装上兼容垫片（`PYTHONPATH` 指向本目录即生效） |
 
 override 模块由 torchtitan 官方的 override 机制激活（`--override npu_compat.npu_attention`），
 **不修改上游源码**——torchtitan 的 checkout 保持 git clean。
@@ -287,12 +291,63 @@ BASE="https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/tor
 REF="${DOC_REF:-main}"
 AUTH=()
 [ -n "${GH_TOKEN:-}" ] && AUTH+=(-H "Authorization: Bearer $GH_TOKEN")
-for f in npu_compat.py npu_compat_deepseek.py npu_recipe.py check_npu_overrides.py; do
+for f in npu_compat.py npu_compat_deepseek.py npu_recipe.py check_npu_overrides.py \
+         npu_torch_compat.py sitecustomize.py; do
   curl -fsSL --retry 3 --retry-connrefused --retry-delay 2 \
     -H "Accept: application/vnd.github.raw" "${AUTH[@]}" \
     "$BASE/$f?ref=$REF" -o "$HOME/tt-npu-overrides/$f"
 done
 ```
+
+### torch 2.15 兼容垫片
+
+torchtitan v0.4.0 会**顺带**导入它可选的 Dist-MoE 支持，而那个包的 runtime 模块第一行就是：
+
+```python
+from torch.distributed.pipelining import (
+    analyze_pipeline_activation_liveness,
+    PipelineStageInfo,
+)
+```
+
+这两个符号是 **torch 2.15.0** 才加的。而昇腾这边 `torch_npu` 最新只到 **2.14.0**（并且它把
+`torch` 钉死在 `2.14.0.*`），所以 torch 2.14.0 就是 NPU 栈能跑到的天花板。在 torch 2.14 上，
+**任何** torchtitan model flavor 的 import 链都会在建模之前就断掉：
+
+```
+torchtitan.train → torchtitan.trainer → torchtitan.components.data
+  → torchtitan.models.deepseek_v3 → torchtitan.config.transform
+  → torchtitan.models.common.dist_moe → runtime
+  → ImportError: cannot import name 'analyze_pipeline_activation_liveness'
+```
+
+`npu_torch_compat.py` 就是补这一刀：把 `PipelineStageInfo`（照抄 torch 2.15 的定义）和
+`analyze_pipeline_activation_liveness`（占位实现，调用即报错）塞进
+`torch.distributed.pipelining`。Dist-MoE 这个功能本身在这里仍然不可用——它还需要
+torch ≥ 2.15 和可选的 `dist_moe` 包——但 quick-start 不跑 Dist-MoE，import 能过即可。
+
+垫片必须在**任何 torchtitan import 之前**装上，所以由 `sitecustomize.py` 承担：CPython 在解释器
+启动时会 import `sitecustomize`，只要本目录在 `PYTHONPATH` 上就会生效。下面这条命令把
+`PYTHONPATH` 指向本目录，并确认两个符号已经补上：
+
+```shell #test id="torch-compat"
+cd torchtitan && PYTHONPATH="$HOME/tt-npu-overrides" python -c "import torch.distributed.pipelining as p; print('analyze_pipeline_activation_liveness:', hasattr(p, 'analyze_pipeline_activation_liveness')); print('PipelineStageInfo:', hasattr(p, 'PipelineStageInfo'))"
+```
+
+输出结果如下：
+
+```shell #test-result id="torch-compat"
+analyze_pipeline_activation_liveness: True
+PipelineStageInfo: True
+```
+
+```{admonition} Note
+:class: note
+后面的每条 torchtitan 命令都带 `PYTHONPATH="$HOME/tt-npu-overrides"`：它同时负责
+override 模块 / recipe 的可见性，和这个兼容垫片的自动装载。
+```
+
+### 验证 override 与 recipe
 
 验证 override 工厂完成注册：
 
@@ -309,7 +364,7 @@ cd torchtitan && PYTHONPATH="$HOME/tt-npu-overrides" python -c "import npu_compa
 再断言替换进去的组件与上游组件**数值等价**（CPU 即可跑，不需要 NPU）：RoPE 与上游 `ComplexRoPE` 的输出必须逐位一致，attention 与朴素实现的逐文档 causal 掩码注意力必须一致，同时确认 override 只替换 `ComplexRoPE` 系模型（qwen3 等用 `CosSinRoPE` 的模型不受影响）。
 
 ```shell #test id="override-equivalence"
-python "$HOME/tt-npu-overrides/check_npu_overrides.py"
+PYTHONPATH="$HOME/tt-npu-overrides" python "$HOME/tt-npu-overrides/check_npu_overrides.py"
 ```
 
 输出结果如下：
@@ -352,13 +407,18 @@ torchrun --nproc_per_node=1 \
 
 输出结果类似如下：
 
+torchtitan v0.4.0 起每个模块用自己的 logger（`logging.getLogger(__name__)`），日志格式是
+`[titan] <时间> - <logger 名> - <级别> - <消息>`。入口是 `python -m torchtitan.train`，所以入口自己打的
+两行日志（版本号、`Process group destroyed`）logger 名是 `__main__`；模块里的日志则是模块路径
+（`torchtitan.trainer`、`torchtitan.config.override`、`torchtitan.observability.metrics`）：
+
 ```shell #test-result id="torchtitan-train-debug" fuzzy='xxx' fuzzy='...'
-[titan] xxx - torchtitan.train - INFO - torchtitan version: xxx
+[titan] xxx - __main__ - INFO - torchtitan version: xxx
 [titan] xxx - torchtitan.config.override - INFO - [Override] npu_compat.npu_attention: model.layers.0.attention GQAttention.Config -> NpuGQAttention.Config
 [titan] xxx - torchtitan.config.override - INFO - Applied 6 override(s)
 [titan] xxx - torchtitan.observability.metrics - INFO - step: xxx
 [titan] xxx - torchtitan.trainer - INFO - Training completed
-[titan] xxx - torchtitan.train - INFO - Process group destroyed
+[titan] xxx - __main__ - INFO - Process group destroyed
 ...
 ```
 
@@ -387,13 +447,16 @@ torchrun --nproc_per_node=2 \
 
 输出结果类似如下：
 
+`--tee 3` 把每个 worker 的 stdout/stderr 复制到控制台，行首加 `[<角色名><local_rank>]:` 前缀（这里就是
+`[default0]:`）；`--local-ranks-filter 0` 只让 rank 0 的日志上控制台——rank 1 照常参与训练和集合通信，
+只是它的日志不打印，所以下面的输出不会被两个 rank 交错：
+
 ```shell #test-result id="torchtitan-train-2card" fuzzy='xxx' fuzzy='...'
-[default0]:[titan] xxx - torchtitan.train - INFO - torchtitan version: xxx
-[default0]:[titan] xxx - torchtitan.config.override - INFO - [Override] npu_compat.npu_attention: model.layers.0.attention GQAttention.Config -> NpuGQAttention.Config
+[default0]:[titan] xxx - __main__ - INFO - torchtitan version: xxx
 [default0]:[titan] xxx - torchtitan.config.override - INFO - Applied 6 override(s)
 [default0]:[titan] xxx - torchtitan.observability.metrics - INFO - step: xxx
 [default0]:[titan] xxx - torchtitan.trainer - INFO - Training completed
-[default0]:[titan] xxx - torchtitan.train - INFO - Process group destroyed
+[default0]:[titan] xxx - __main__ - INFO - Process group destroyed
 ...
 ```
 

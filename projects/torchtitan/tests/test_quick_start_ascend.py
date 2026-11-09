@@ -35,10 +35,21 @@ therefore ships its own recipe (``projects/torchtitan/example/npu_recipe.py``)
 next to the NPU override modules, mounted into the upstream tree via
 ``PYTHONPATH``; the upstream checkout stays git clean (no source patching).
 
+torchtitan v0.4.0 also imports two ``torch.distributed.pipelining`` symbols
+that only exist in torch >= 2.15 (``analyze_pipeline_activation_liveness``
+and ``PipelineStageInfo``, reached through the optional Dist-MoE package
+that every model flavor pulls in eagerly).  Ascend's newest ``torch_npu`` is
+2.14.0 and pins ``torch==2.14.0.*``, so torch 2.14.0 is the ceiling on NPU
+and the import chain dies without a shim.  The doc therefore ships
+``npu_torch_compat.py`` (the shim) plus ``sitecustomize.py`` (which installs
+it at interpreter startup, i.e. before torchtitan's own imports) next to the
+override modules -- again without touching the upstream checkout.
+
 The doc verifies:
 
 * package + sub-module imports (``torchtitan``, ``torchtitan.config.override``,
   ``torchtitan.models.common.attention``, ``torchtitan.models.common.rope``)
+* the torch 2.15 compatibility shim is in place
 * the NPU compatibility overrides register correctly (ComplexRoPE ->
   real-space gather, Flex/Varlen -> SDPA with an explicit block-causal mask)
 * the recipe is importable and returns a trainable ``Trainer.Config``

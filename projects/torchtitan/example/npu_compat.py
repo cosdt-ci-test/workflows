@@ -43,9 +43,17 @@ from typing import NamedTuple
 import torch
 import torch.nn.functional as F
 
-from torchtitan.config.override import derive, override
-from torchtitan.models.common.attention import GQAttention, InnerAttention
-from torchtitan.models.common.rope import (
+# torchtitan >= 0.4.0 imports two torch >= 2.15 symbols through its optional
+# Dist-MoE package; install the shim before the first torchtitan import.
+# (``sitecustomize.py`` in this directory does the same at interpreter
+# startup, which is what covers ``python -m torchtitan.train``.)
+import npu_torch_compat  # noqa: E402
+
+npu_torch_compat.install()
+
+from torchtitan.config.override import derive, override  # noqa: E402
+from torchtitan.models.common.attention import GQAttention, InnerAttention  # noqa: E402
+from torchtitan.models.common.rope import (  # noqa: E402
     ComplexRoPE,
     _maybe_check_max_pos,
     _reshape_for_broadcast,

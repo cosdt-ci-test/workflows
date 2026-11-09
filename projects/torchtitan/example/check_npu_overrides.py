@@ -27,6 +27,14 @@ import torch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# torchtitan >= 0.4.0 imports two torch >= 2.15 symbols through its optional
+# Dist-MoE package; install the shim before the first torchtitan import.
+# (``sitecustomize.py`` in this directory does the same at interpreter
+# startup, which also covers ``python -m torchtitan.train``.)
+import npu_torch_compat  # noqa: E402
+
+npu_torch_compat.install()
+
 from npu_compat import (  # noqa: E402
     NpuBlockCausalMetadata,
     NpuBlockCausalSDPA,

@@ -32,17 +32,27 @@ modules) and is activated with ``PYTHONPATH``::
 
 from __future__ import annotations
 
-from torchtitan.components.data import ConcatThenSplitPackingConfig, GrainDataLoader
-from torchtitan.components.data.text_datasets import DATASETS
-from torchtitan.components.loss import CrossEntropyLoss
-from torchtitan.components.optim import AdamW, Optim, OptimizersContainer
-from torchtitan.config import TrainingConfig
-from torchtitan.config.parallelism import ParallelismConfig
-from torchtitan.distributed.activation_remat import DefaultActivationRematConfig
-from torchtitan.models.common.config_utils import decoder_vocab_size
-from torchtitan.models.llama3 import build_model_config
-from torchtitan.observability.metrics import MetricsProcessor
-from torchtitan.trainer import Trainer
+# The shim has to be installed before the first torchtitan import: torchtitan
+# >= 0.4.0 pulls its optional Dist-MoE package in eagerly, and that package
+# imports two symbols that only exist in torch >= 2.15.  ``sitecustomize.py``
+# (same directory) does the same thing at interpreter startup, which is what
+# covers ``python -m torchtitan.train`` -- this import covers the case where
+# the recipe is imported on its own.
+import npu_torch_compat  # noqa: E402
+
+npu_torch_compat.install()
+
+from torchtitan.components.data import ConcatThenSplitPackingConfig, GrainDataLoader  # noqa: E402
+from torchtitan.components.data.text_datasets import DATASETS  # noqa: E402
+from torchtitan.components.loss import CrossEntropyLoss  # noqa: E402
+from torchtitan.components.optim import AdamW, Optim, OptimizersContainer  # noqa: E402
+from torchtitan.config import TrainingConfig  # noqa: E402
+from torchtitan.config.parallelism import ParallelismConfig  # noqa: E402
+from torchtitan.distributed.activation_remat import DefaultActivationRematConfig  # noqa: E402
+from torchtitan.models.common.config_utils import decoder_vocab_size  # noqa: E402
+from torchtitan.models.llama3 import build_model_config  # noqa: E402
+from torchtitan.observability.metrics import MetricsProcessor  # noqa: E402
+from torchtitan.trainer import Trainer  # noqa: E402
 
 SEQ_LEN = 256
 """Training context length (also the RoPE cache length)."""

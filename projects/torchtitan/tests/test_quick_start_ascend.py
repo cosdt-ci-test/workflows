@@ -8,8 +8,8 @@ Env (injected by the engine ``quick-start-template.yml``, triggered by
 
 Scope note: the doc body covers the smoke path for **stock torchtitan**
 running under ``torch_npu`` PrivateUse1 dispatch. ``torch`` / ``torch_npu`` /
-``modelscope`` / ``triton-ascend`` / ``torchtitan`` are all installed by the
-doc body via ``uv pip install`` (versions per the
+``triton-ascend`` / ``torchtitan`` are all installed by the doc body via
+``uv pip install`` (versions per the
 [Ascend PyTorch Compatibility Matrix](https://gitcode.com/Ascend/pytorch/blob/main/COMPATIBILITY.en.md):
 torch==2.14.0 / torch_npu==2.14.0 / CANN==9.2.0) — ``torch``'s CPU build
 only exists in the Aliyun ``pytorch-wheels/cpu`` find-links source (PyPI's
@@ -20,33 +20,36 @@ community ``triton`` wheel is CUDA-only and must stay out of the
 environment). ``torchtitan`` is installed **twice**: first from PyPI
 (pure-python wheel, latest release, with ``attn-gym`` excluded because its
 ``cudnn`` / ``linear`` extras pull CUDA-only wheels) to prove the binary
-route, then from source (``git clone`` pytorch/torchtitan at the release the
-doc documents + ``uv pip install -e .``) because the training commands need
-the upstream tree (config registry + the ``--override.imports`` mechanism).
+route, then from source (``git clone`` pytorch/torchtitan at the **latest
+release tag** + ``uv pip install -e .``) because the training commands need
+the upstream tree.
 
-The doc pins the source install to **v0.3.0**: upstream v0.4.0 replaced the
-whole config system (``torchtitan/models/*/config_registry.py`` is gone;
-configs are now recipe functions in ``torchtitan_recipes`` selected by
-``--module`` / ``--config``, and the CLI no longer exposes
-``--training.steps`` / ``--comm.mode`` / ``--dump-folder``). The doc's
-override module and training commands are written against the v0.3.0 API,
-so the guard keeps verifying that release until the doc is ported.
+The doc tracks the **latest upstream release** (``UPSTREAM_REF``, injected by
+the engine from ``/releases/latest``; locally the doc falls back to the
+GitHub API). Since v0.4.0 torchtitan's config system is recipe-based: a
+recipe is a plain function returning a ``Trainer.Config``, selected with
+``--module <module> --config <function>``, and the CLI no longer exposes
+``--training.steps`` / ``--comm.mode`` / ``--dump-folder`` (nor does
+``torchtitan/models/*/config_registry.py`` exist any more).  The doc
+therefore ships its own recipe (``projects/torchtitan/example/npu_recipe.py``)
+next to the NPU override modules, mounted into the upstream tree via
+``PYTHONPATH``; the upstream checkout stays git clean (no source patching).
 
 The doc verifies:
 
 * package + sub-module imports (``torchtitan``, ``torchtitan.config.override``,
   ``torchtitan.models.common.attention``, ``torchtitan.models.common.rope``)
 * the NPU compatibility overrides register correctly (ComplexRoPE ->
-  CosSinRoPE, FlexAttention -> SDPA)
+  real-space gather, Flex/Varlen -> SDPA with an explicit block-causal mask)
+* the recipe is importable and returns a trainable ``Trainer.Config``
 * single-card training (``torchrun --nproc_per_node=1``, 2 real steps over
   the Llama 3 debug model) with NPU dispatch, which fails fast if the
   attention / RoPE kernels did not register
 * dual-card training (``torchrun --nproc_per_node=2``, FSDP shard=2 +
   bf16), covering HCCL collectives and DTensor parameter sharding
 
-Model download / ModelScope cache is only used to demonstrate the
-``snapshot_download`` API — training itself uses torchtitan's bundled
-``tests/assets/tokenizer``, so no checkpoint is fetched.
+Training uses torchtitan's bundled assets (``tests/assets/tokenizer`` and
+``tests/assets/c4_test``), so no checkpoint or dataset is downloaded.
 """
 
 from __future__ import annotations
@@ -102,24 +105,24 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     """
 
     # 60 min per command. torchtitan's smallest meaningful command —
-    # `python -m torchtitan.train --module llama3 --config
-    # llama3_debugmodel --override.imports npu_compat.npu_attention
-    # --training.steps 2 --comm.mode default` — needs to: clone torchtitan
-    # (~5 MB sparse), `uv pip install -e .`, pull the NPU override module
-    # ($HOME/tt-npu-overrides/npu_compat.py + check_npu_overrides.py, from
-    # this repo at the doc's own ref, swapped in via torchtitan's official
-    # @override mechanism — no upstream source patching), assert the
-    # override is numerically equivalent to the upstream components it
-    # stands in for, then run a 2-step HCCL training that builds the
-    # Llama 3 debug model (~256 dim / 6 layers) on NPU with SDPA attention
-    # (aclnn flash attention + an explicit block-causal mask; the flex path
-    # hits torch_npu 2.14.0 lowering gaps, see the doc's compat section).
-    # 60 minutes: first cold-cache run still compiles a handful of
+    # `python -m torchtitan.train --module npu_recipe --config
+    # llama3_npu_debugmodel --override npu_compat.npu_attention` — needs to:
+    # clone torchtitan at the latest release tag (~5 MB sparse),
+    # `uv pip install -e .`, pull the NPU override module + recipe
+    # ($HOME/tt-npu-overrides/{npu_compat,npu_compat_deepseek,npu_recipe,
+    # check_npu_overrides}.py, from this repo at the doc's own ref, swapped in
+    # via torchtitan's official @override mechanism — no upstream source
+    # patching), assert the override is numerically equivalent to the
+    # upstream components it stands in for, then run a 2-step HCCL training
+    # that builds the Llama 3 debug model (~256 dim / 6 layers) on NPU with
+    # SDPA attention (aclnn flash attention + an explicit block-causal mask;
+    # the flex path hits torch_npu 2.14.0 lowering gaps, see the doc's compat
+    # section). 60 minutes: first cold-cache run still compiles a handful of
     # dataloader Triton kernels through the bisheng compiler (serial,
     # TORCHINDUCTOR_COMPILE_THREADS=1, to stay under the runner cgroup
-    # memory limit) plus the model build/init chain. The loss is
-    # upstream's default (`llama3_debugmodel` -> ChunkedLossWrapper); the
-    # 2026-09 meta-tensor leak no longer reproduces on torch 2.14.
+    # memory limit) plus the model build/init chain. The loss is upstream's
+    # plain `CrossEntropyLoss` (the chunked wrapper's custom autograd
+    # Function is the part that used to leak meta tensors on torch_npu).
     DEFAULT_COMMAND_TIMEOUT = 3600
 
     USER_AGENT = 'ascend-docs/quick-start'
@@ -190,10 +193,10 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     def prepare_environment(cls) -> None:
         """Source CANN env + write the CUDA exclusion list + install uv.
 
-        ``torch`` / ``torch_npu`` / ``modelscope`` / ``triton-ascend`` /
-        ``torchtitan`` are intentionally NOT pre-installed here: the doc's
-        ``#test-setup`` blocks install them, so a broken install block
-        fails loudly instead of being masked by a pre-installed copy.
+        ``torch`` / ``torch_npu`` / ``triton-ascend`` / ``torchtitan`` are
+        intentionally NOT pre-installed here: the doc's ``#test-setup``
+        blocks install them, so a broken install block fails loudly instead
+        of being masked by a pre-installed copy.
         """
         # 0) CANN env: source set_env.sh and merge the env stream into
         # os.environ

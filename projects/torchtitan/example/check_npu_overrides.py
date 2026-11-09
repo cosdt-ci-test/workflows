@@ -7,8 +7,12 @@ numerically equivalent to the upstream components they stand in for:
 
 * ``RealGatherComplexRoPE`` vs upstream ``ComplexRoPE`` -- same cache math,
   same rotation, only the gather kernel differs.
-* ``BlockCausalSDPA`` vs a naive per-document causal reference -- the
+* ``NpuBlockCausalSDPA`` vs a naive per-document causal reference -- the
   masking semantics upstream gets from its BlockMask.
+
+and that the override only touches the ComplexRoPE-based models: qwen3 uses
+upstream's ``CosSinRoPE`` (a real cache, no DT_COMPLEX64 problem,
+rotate-half dim pairing) and must be left alone.
 
 Prints one stable line on stdout (the quick-start doc matches it); the
 measured numbers go to stderr so CI logs keep them.
@@ -23,7 +27,11 @@ import torch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from npu_compat import BlockCausalSDPA, RealGatherComplexRoPE  # noqa: E402
+from npu_compat import (  # noqa: E402
+    NpuBlockCausalMetadata,
+    NpuBlockCausalSDPA,
+    RealGatherComplexRoPE,
+)
 
 from torchtitan.models.common.rope import (  # noqa: E402
     ComplexRoPE,
@@ -34,24 +42,36 @@ TOL = 1e-5
 
 
 def _naive_block_causal(q, k, v, mask, scale):
-    """Reference attention: masked softmax over the (q, kv) grid."""
-    q2, k2, v2 = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
+    """Reference attention: masked softmax over the (q, kv) grid.
+
+    ``q`` / ``k`` / ``v`` are ``(T, H, D)`` -- packed tokens, like upstream's
+    inner attentions.  ``mask`` is ``(1, 1, T, T)``.
+    """
+    q2 = q.transpose(0, 1).unsqueeze(0)
+    k2 = k.transpose(0, 1).unsqueeze(0)
+    v2 = v.transpose(0, 1).unsqueeze(0)
     att = (q2.float() @ k2.float().transpose(-1, -2)) * scale
     att = att.masked_fill(~mask, float("-inf")).softmax(-1)
-    return (att @ v2.float()).transpose(1, 2)
+    return (att @ v2.float()).squeeze(0).transpose(0, 1)
 
 
 def check_rope() -> float:
     """RealGatherComplexRoPE must match upstream ComplexRoPE exactly."""
     torch.manual_seed(0)
-    dim, max_seq_len = 16, 128
-    shared = dict(dim=dim, max_seq_len=max_seq_len, theta=500000.0, scaling="llama")
+    dim, max_context_length = 16, 128
+    shared = dict(
+        dim=dim,
+        max_context_length=max_context_length,
+        theta=500000.0,
+        scaling="llama",
+    )
     upstream = ComplexRoPE.Config(**shared).build()
     ours = RealGatherComplexRoPE.Config(**shared).build()
 
-    q = torch.randn(2, 8, 4, dim)
-    k = torch.randn(2, 8, 4, dim)
-    positions = torch.tensor([[0, 1, 2, 3, 0, 1, 2, 3], [0, 1, 2, 3, 4, 5, 6, 7]])
+    # (T, N, H): packed tokens, heads, head dim -- upstream's layout.
+    q = torch.randn(8, 4, dim)
+    k = torch.randn(8, 4, dim)
+    positions = torch.tensor([0, 1, 2, 3, 0, 1, 2, 3])
 
     out_upstream, _ = upstream(q, k, positions)
     out_ours, _ = ours(q, k, positions)
@@ -61,24 +81,31 @@ def check_rope() -> float:
 
 
 def check_mask() -> float:
-    """BlockCausalSDPA must match a naive per-document causal reference."""
+    """NpuBlockCausalSDPA must match a naive per-document causal reference."""
     torch.manual_seed(0)
-    batch, seqlen, heads, head_dim = 2, 16, 4, 8
+    num_tokens, heads, head_dim = 16, 4, 8
     scale = head_dim**-0.5
-    q = torch.randn(batch, seqlen, heads, head_dim)
-    k = torch.randn(batch, seqlen, heads, head_dim)
-    v = torch.randn(batch, seqlen, heads, head_dim)
-    # two documents in the first sample, one in the second
-    positions = torch.tensor([list(range(6)) + list(range(10)), list(range(16))])
+    q = torch.randn(num_tokens, heads, head_dim)
+    k = torch.randn(num_tokens, heads, head_dim)
+    v = torch.randn(num_tokens, heads, head_dim)
+    # two documents in this microbatch
+    positions = torch.tensor([0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
 
-    attention = BlockCausalSDPA.Config().build()
-    out = attention(q, k, v, positions=positions, scale=scale, enable_gqa=False)
+    attention = NpuBlockCausalSDPA.Config().build()
+    out = attention(
+        q,
+        k,
+        v,
+        attention_metadata=NpuBlockCausalMetadata(positions=positions),
+        scale=scale,
+        enable_gqa=False,
+    )
 
-    doc = torch.cumsum((positions == 0).to(torch.int32), dim=1) - 1
+    doc = torch.cumsum((positions == 0).to(torch.int64), dim=0) - 1
     mask = (
-        (doc[:, :, None] == doc[:, None, :])
-        & torch.ones(seqlen, seqlen, dtype=torch.bool).tril()
-    ).unsqueeze(1)
+        (doc[:, None] == doc[None, :])
+        & torch.ones(num_tokens, num_tokens, dtype=torch.bool).tril()
+    ).unsqueeze(0).unsqueeze(0)
     out_ref = _naive_block_causal(q, k, v, mask, scale)
     diff = (out - out_ref).abs().max().item()
     assert diff < TOL, f"mask mismatch: max_abs_diff={diff}"
@@ -93,30 +120,42 @@ def check_mask() -> float:
 def check_rope_selection() -> str:
     """The override must only touch the ComplexRoPE-based models.
 
-    qwen3 / qwen3_5 / gpt_oss use upstream's ``CosSinRoPE`` (a real cache, no
-    DT_COMPLEX64 problem, rotate-half dim pairing); llama3 / deepseek_v3 /
-    kimi / muse_glimmer use ``ComplexRoPE`` (complex64 cache, adjacent-dim
-    pairing).  Swapping the CosSinRoPE ones would silently change the pairing
-    convention, so they must be left alone.
+    qwen3 / qwen3_5 / gpt_oss use upstream's ``CosSinRoPE`` (a real cache,
+    no DT_COMPLEX64 problem, rotate-half dim pairing); llama3 / deepseek_v3
+    use ``ComplexRoPE`` (complex64 cache, adjacent-dim pairing).  Swapping
+    the CosSinRoPE ones would silently change the pairing convention, so
+    they must be left alone.
     """
     from torchtitan.config.override import OverrideConfig, apply_overrides
-    from torchtitan.models.llama3 import model_registry as llama3_models
-    from torchtitan.models.qwen3 import model_registry as qwen3_models
+    from torchtitan.config.parallelism import ParallelismConfig
+    from torchtitan.models.llama3 import build_model_config as llama3_build
+    from torchtitan.models.qwen3 import build_model_config as qwen3_build
 
     import npu_compat  # noqa: F401  (registers the override)
 
-    llama = llama3_models('debugmodel')
-    qwen = qwen3_models('debugmodel')
+    parallelism = ParallelismConfig()
+    llama = llama3_build(
+        "debugmodel",
+        seq_len=256,
+        attn_backend="varlen",
+        parallelism=parallelism,
+    )
+    qwen = qwen3_build(
+        "debugmodel",
+        seq_len=256,
+        attn_backend="varlen",
+        parallelism=parallelism,
+    )
     for spec in (llama, qwen):
         apply_overrides(
-            OverrideConfig(imports=['npu_compat.npu_attention']), spec.model
+            OverrideConfig(imports=["npu_compat.npu_attention"]), spec
         )
 
-    llama_rope = llama.model.layers[0].attention.rope
-    qwen_rope = qwen.model.layers[0].attention.rope
+    llama_rope = llama.layers[0].attention.rope
+    qwen_rope = qwen.layers[0].attention.rope
     assert isinstance(llama_rope, RealGatherComplexRoPE.Config), type(llama_rope)
     assert type(qwen_rope) is CosSinRoPE.Config, type(qwen_rope)
-    return f'llama3={type(llama_rope).__name__}, qwen3={type(qwen_rope).__name__}'
+    return f"llama3={type(llama_rope).__name__}, qwen3={type(qwen_rope).__name__}"
 
 
 def check_deepseek_rope_selection() -> str:
@@ -126,18 +165,23 @@ def check_deepseek_rope_selection() -> str:
     (npu_compat_deepseek.py) carries the same real-space gather.
     """
     from torchtitan.config.override import OverrideConfig, apply_overrides
-    from torchtitan.models.deepseek_v3 import model_registry as deepseek_models
+    from torchtitan.config.parallelism import ParallelismConfig
+    from torchtitan.models.deepseek_v3 import build_model_config as deepseek_build
 
     import npu_compat_deepseek  # noqa: F401  (registers the override)
 
-    spec = deepseek_models('debugmodel')
-    apply_overrides(
-        OverrideConfig(imports=['npu_compat_deepseek.deepseek_attention']),
-        spec.model,
+    spec = deepseek_build(
+        "debugmodel",
+        seq_len=256,
+        attn_backend="varlen",
+        parallelism=ParallelismConfig(),
     )
-    rope = spec.model.layers[0].attention.rope
+    apply_overrides(
+        OverrideConfig(imports=["npu_compat_deepseek.deepseek_attention"]), spec
+    )
+    rope = spec.layers[0].attention.rope
     assert isinstance(rope, RealGatherComplexRoPE.Config), type(rope)
-    return f'deepseek={type(rope).__qualname__}'
+    return f"deepseek={type(rope).__name__}"
 
 
 def main() -> int:
@@ -145,13 +189,13 @@ def main() -> int:
     mask_diff = check_mask()
     selection = check_rope_selection() + ", " + check_deepseek_rope_selection()
     print(
-        'npu override equivalence: rope OK, mask OK, rope selection OK',
+        "npu override equivalence: rope OK, mask OK, rope selection OK",
         file=sys.stdout,
     )
     print(
-        f'rope max_abs_diff={rope_diff:.3e} (tol {TOL:.0e}), '
-        f'mask max_abs_diff={mask_diff:.3e} (tol {TOL:.0e}), '
-        f'rope selection: {selection}',
+        f"rope max_abs_diff={rope_diff:.3e} (tol {TOL:.0e}), "
+        f"mask max_abs_diff={mask_diff:.3e} (tol {TOL:.0e}), "
+        f"rope selection: {selection}",
         file=sys.stderr,
     )
     return 0

@@ -1,9 +1,9 @@
 """Quick-start test: doc under test is ``projects/llm-compressor/docs/Quick-start-Ascend.md``.
 
-Run: ``python -m unittest tests.llm_compressor.test_quick_start_ascend -v 2>&1``
+Run: ``python -m unittest tests.test_quick_start_ascend -v 2>&1``
 
 Env (injected by the engine ``quick-start-template.yml``, triggered by
-``llm_compressor-quick-start.yml``): ``MONITORED_DOC_URL``, ``UPSTREAM_REF``,
+``llm-compressor-quick-start.yml``): ``MONITORED_DOC_URL``, ``UPSTREAM_REF``,
 ``NPU_READY=true`` (otherwise the class is skipped).
 """
 

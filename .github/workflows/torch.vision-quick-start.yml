@@ -127,7 +127,7 @@ jobs:
       # `api.github.com` URLs and re-applies the same Accept header
       # on the test-side fetch.
       doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/torch.vision/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
-      doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/torch.vision/docs/Quick-start-Ascend.md
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/torch.vision/docs/Quick-start-Ascend.md
       # cwd is workflows/projects/torch.vision; env contract (MONITORED_DOC_URL /
       # UPSTREAM_REF / NPU_READY) is injected by the engine. All project
       # env prep and installs are in the test subclass's
@@ -146,7 +146,7 @@ jobs:
       timeout_minutes: 60
       upstream_repo: pytorch/vision
       doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/torch.vision/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
-      doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/torch.vision/docs/Quick-start-Ascend.md
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/torch.vision/docs/Quick-start-Ascend.md
       test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1
 
   merge:

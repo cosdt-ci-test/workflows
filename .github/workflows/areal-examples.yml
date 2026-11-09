@@ -17,10 +17,8 @@ concurrency:
   cancel-in-progress: false
 
 on:
-  # Bring-up phase: keep the schedule disabled until a few manual rounds are
-  # green. Re-enable when ready:
-  # schedule:
-  #   - cron: '0 */6 * * *'
+  schedule:
+    - cron: '5 21 * * *'
   workflow_dispatch:
     inputs:
       target_ref:

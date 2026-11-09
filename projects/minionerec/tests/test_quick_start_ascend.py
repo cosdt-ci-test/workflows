@@ -8,17 +8,43 @@ Document under test: ``projects/minionerec/docs/Quick-start-Ascend.md``
 ``fuzzy='xxx'`` parameters).
 
 Smoke scope (see the doc): single-card MiniOneRec SFT + constrained-
-decoding evaluation on Ascend NPU — ModelScope base model (Qwen2.5-0.5B)
-+ HF-mirror preprocessed Amazon Industrial_and_Scientific subset (incl.
-the info/ SID-item list txt for evaluation) + ``transfer_to_npu`` patch
-on both sft.py and evaluate.py (unused ``bitsandbytes`` import stripped;
-aarch64 wheel availability is uncertain) + 1-epoch HF-Trainer SFT
-(sample=600/dataset, cutoff 256) + beam-20 evaluation over a 200-line
-test slice; calc.py asserts the tail CC is 0 (every generated SID is a
-legal trie path — the key NPU-correctness signal). HR/NDCG magnitudes
-float with training state and are matched with ``...`` placeholders.
-RL (GRPO) is pointer-only: its vLLM path is CUDA-only and the
-transformers-native fallback is too slow for a smoke.
+decoding evaluation on Ascend NPU with the upstream source untouched —
+no shim PR, no in-repo patch. The two entry points need different
+treatment: ``sft.py`` reaches ``npu:0`` natively because transformers'
+device chain tries NPU before CUDA, while ``evaluate.py`` freezes
+``device = "cpu"`` at import time and needs ``torch.cuda`` to be mapped.
+So ``transfer_to_npu`` is injected through a ``sitecustomize.py`` in a
+standalone directory that only the evaluation command sees via
+``PYTHONPATH`` (no site-packages write, no process-wide side effect);
+sft.py / evaluate.py stay byte-identical, asserted by a ``git status
+--porcelain`` check. ``bitsandbytes==0.48.1`` is installed because the
+unused top-level import cannot be stripped without editing the source.
+ModelScope base model (Qwen2.5-0.5B) + HF-mirror preprocessed Amazon
+Industrial_and_Scientific subset (incl. the info/ SID-item list txt for
+evaluation) + 1-epoch HF-Trainer SFT (sample=600/dataset, cutoff 256) +
+beam-20 evaluation over a 200-line test slice; calc.py asserts the tail
+CC is 0 (every generated SID is a legal trie path — the key
+NPU-correctness signal). HR/NDCG magnitudes float with training state
+and are matched with ``...`` placeholders.
+The RL stage (section 10) reuses that checkpoint with a single-card
+GRPO run through ``python rl.py`` rather than ``rl.sh`` (the shell
+script pins 8 processes and parses no arguments). One ``sed`` makes
+three single-line edits: ``optim="paged_adamw_32bit"`` becomes
+torch-native ``adamw_torch`` because the bitsandbytes wheel ships no NPU
+backend; ``sample = -1`` becomes 40 because ``-1`` expands the whole
+item catalogue; and the hard-coded ``sample=10000`` argument of
+``RLSeqTitle2SidDataset`` becomes 40, because slicing the train CSV to
+40 rows would otherwise make ``DataFrame.sample`` raise
+than-population. ``num_generations=2`` keeps both the beam width and the
+group size small; ``test_during_training=False`` skips the history
+lookups. At smoke scale every reward stays 0 (the exact-match rule never
+fires on a barely-trained SFT checkpoint, so the group advantage and the
+gradient are 0 too), so the guard covers flow-through only: ``run-rl``
+must exit 0 and ``rl.py``'s closing ``save_model`` /
+``model.save_pretrained`` must leave weights, config and tokenizer under
+``rl_out/final_checkpoint``. No checkpoint is written during training
+because ``save_steps=0.1`` never satisfies the step-based trigger, which
+is why the state file is not asserted.
 
 Run: ``python -m unittest tests.test_quick_start_ascend -v 2>&1``
 

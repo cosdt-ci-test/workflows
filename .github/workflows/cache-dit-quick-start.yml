@@ -67,8 +67,8 @@ jobs:
       # Same URL the legacy workflow monitored. Cache keys were hardened to
       # the strict quick-start-monitor-state-cache-dit_* format (2026-09-11);
       # old-prefix state was intentionally dropped (one cold round).
-      doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/cache-dit/docs/Quick-start-Ascend.md
-      doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/cache-dit/docs/Quick-start-Ascend.md
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/cache-dit/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/cache-dit/docs/Quick-start-Ascend.md
       # cwd is workflows/projects/cache-dit; env contract (MONITORED_DOC_URL /
       # UPSTREAM_REF / NPU_READY) is injected by the engine. All project
       # env prep and installs live in the test subclass's
@@ -96,8 +96,8 @@ jobs:
         --volume=/data/ci-cache/modelscope/cache-dit:/root/.cache/modelscope
       timeout_minutes: 180
       upstream_repo: vipshop/cache-dit
-      doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/cache-dit/docs/Quick-start-Ascend.md
-      doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/cache-dit/docs/Quick-start-Ascend.md
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/cache-dit/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/cache-dit/docs/Quick-start-Ascend.md
       test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1
 
   merge:

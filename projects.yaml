@@ -833,3 +833,21 @@ projects:
     dir: projects/xla
     workflows:
       quick_start: .github/workflows/xla-quick-start.yml
+
+  # RTP-LLM 的 Ascend 适配不在 main 上：PR #1481 于 2026-10-27 合入
+  # feature/ascend 分支，后续 Ascend PR（#1612 Qwen3.5 / #1620 aclgraph /
+  # #1621 MTP）也都以该分支为基，故看护用 fixed_ref 锚定分支 tip。
+  # quick start 从源码 bazel 构建（//rtp_llm:rtp_llm_whl）：要求 Python 3.10
+  # （lock 全 cp310，且上游 deps/pip.bzl 写死 /opt/conda310）、CANN 9.1.0、
+  # Bazel 6.4.0；aarch64 宿主需把上游的 x86 轮子与 lock 直链改成 aarch64
+  # （文档里「适配 aarch64 宿主的构建输入」整节）。模型取 Qwen3-0.6B——该分支
+  # 唯一声明支持并验证过的模型族；单卡。
+  - name: rtp-llm
+    category: 推理加速
+    support_level: 新兴适配
+    upstream_repo: alibaba/rtp-llm
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/rtp-llm
+    workflows:
+      quick_start: .github/workflows/rtp-llm-quick-start.yml

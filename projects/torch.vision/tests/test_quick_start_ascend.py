@@ -1,9 +1,9 @@
 """Quick-start test: doc under test is ``projects/torch.vision/docs/Quick-start-Ascend.md``.
 
-Run: ``python -m unittest tests.torchvision.test_quick_start_ascend -v 2>&1``
+Run: ``python -m unittest tests.test_quick_start_ascend -v 2>&1``
 
 Env (injected by the engine ``quick-start-template.yml``, triggered by
-``torchvision-quick-start.yml``): ``MONITORED_DOC_URL``, ``UPSTREAM_REF``,
+``torch.vision-quick-start.yml``): ``MONITORED_DOC_URL``, ``UPSTREAM_REF``,
 ``NPU_READY=true`` (otherwise the class is skipped).
 
 Scope note: the doc body covers the smoke path for **stock torchvision**
@@ -140,7 +140,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
     # CANN toolkit: source once to get ASCEND_HOME / LD_LIBRARY_PATH etc.
     # Path is hard-coded, tied to the GitHub workflow container image
-    # (``image:`` input of ``torchvision-quick-start.yml``).
+    # (``image:`` input of ``torch.vision-quick-start.yml``).
     _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
 
     @classmethod

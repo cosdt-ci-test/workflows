@@ -90,11 +90,11 @@ jobs:
       #    persist, so repeat runs skip the dataset build entirely.
       timeout_minutes: 120
       upstream_repo: EleutherAI/lm-evaluation-harness
-      # Raw URL the engine's monitor hashes and the test fetches;
+      # Contents API URL the engine's monitor hashes and the test fetches;
       # doc-hash state lives under the quick-start-monitor-state-lm-evaluation-harness-
       # cache prefix.
-      doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/lm-evaluation-harness/docs/Quick-start-Ascend.md
-      doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/lm-evaluation-harness/docs/Quick-start-Ascend.md
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/lm-evaluation-harness/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/lm-evaluation-harness/docs/Quick-start-Ascend.md
       # cwd is workflows/projects/lm-evaluation-harness; env contract
       # (MONITORED_DOC_URL / NPU_READY) is injected by the engine. All
       # project env prep (CANN / CUDA constraints / NPU card pin / torch
@@ -115,8 +115,8 @@ jobs:
         --volume=/data/ci-cache/hf/lm-evaluation-harness:/root/.cache/huggingface
       timeout_minutes: 120
       upstream_repo: EleutherAI/lm-evaluation-harness
-      doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/lm-evaluation-harness/docs/Quick-start-Ascend.md
-      doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/lm-evaluation-harness/docs/Quick-start-Ascend.md
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/lm-evaluation-harness/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/lm-evaluation-harness/docs/Quick-start-Ascend.md
       test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1
 
   merge:

@@ -38,9 +38,8 @@ on:
   # PR trigger: docs/tests changes get a guard run. paths filter avoids
   # burning the self-hosted NPU runner on unrelated PRs. `pull_request`
   # (not `pull_request_target`): contents: read is enough, no
-  # write-token risk. {0} in doc_url is filled with the PR head SHA so
-  # the PR-version of the doc is tested; fork PRs 404 on doc fetch and
-  # are accepted (content lands on this repo post-merge).
+  # write-token risk. doc_url uses github.sha to match the workflow
+  # checkout, including the merge commit on pull_request runs.
   pull_request:
     branches: [main]
     paths:
@@ -67,9 +66,9 @@ jobs:
       timeout_minutes: 90
       upstream_repo: huggingface/accelerate
       # The doc under guard. Both URLs point at the cosdt-ci-test fork
-      # (this repo); {0} is the PR head SHA on PR runs, 'main' otherwise.
-      doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/{0}/projects/accelerate/docs/Quick-start-Ascend.md
-      doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/accelerate/docs/Quick-start-Ascend.md
+      # (this repo); both URLs select the triggering commit via github.sha.
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/accelerate/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/accelerate/docs/Quick-start-Ascend.md
       # cwd is workflows/projects/accelerate; env contract
       # (MONITORED_DOC_URL / UPSTREAM_REF / NPU_READY) is injected by the
       # engine. All project env prep and installs live in the test
@@ -87,8 +86,8 @@ jobs:
       image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.2.0-a3-ubuntu22.04-py3.12
       timeout_minutes: 90
       upstream_repo: huggingface/accelerate
-      doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/{0}/projects/accelerate/docs/Quick-start-Ascend.md
-      doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/accelerate/docs/Quick-start-Ascend.md
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/accelerate/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/accelerate/docs/Quick-start-Ascend.md
       test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1
 
   merge:

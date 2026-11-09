@@ -26,8 +26,8 @@ jobs:
       container_options: ''
       timeout_minutes: 120
       upstream_repo: ray-project/ray
-      doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/ray/docs/Quick-start-Ascend.md
-      doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/ray/docs/Quick-start-Ascend.md
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/ray/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/ray/docs/Quick-start-Ascend.md
       # mistune is imported before the project test's setUpClass hook runs.
       test_command: >-
         python -m pip install -q 'mistune>=3,<4' &&
@@ -44,8 +44,8 @@ jobs:
       container_options: ''
       timeout_minutes: 120
       upstream_repo: ray-project/ray
-      doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/ray/docs/Quick-start-Ascend.md
-      doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/ray/docs/Quick-start-Ascend.md
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/ray/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/ray/docs/Quick-start-Ascend.md
       test_command: >-
         python -m pip install -q 'mistune>=3,<4' &&
         python -m unittest tests.test_quick_start_ascend -v 2>&1

@@ -280,24 +280,27 @@ python -c "from modelscope import snapshot_download; print(snapshot_download('LL
 验证 tokenizer 关键文件都落盘：
 
 ```shell #test id="modelscope-verify-tokenizer" load="ms_tokenizer_path>>ms_tokenizer_path"
-ls <ms_tokenizer_path>
+for f in config.json configuration.json generation_config.json special_tokens_map.json tokenizer.json tokenizer_config.json; do
+  test -e "<ms_tokenizer_path>/$f" || { echo "missing: $f"; exit 1; }
+done
+echo "tokenizer files present"
 ```
 
-```shell #test-result id="modelscope-verify-tokenizer" fuzzy='...'
-config.json
-configuration.json
-generation_config.json
-original
-special_tokens_map.json
-tokenizer.json
-tokenizer_config.json
+```shell #test-result id="modelscope-verify-tokenizer"
+tokenizer files present
 ```
 
-文件名是 Llama 3 tokenizer 必备文件，确认 snapshot_download 命中正确。
+这 6 个文件名是 Llama 3 tokenizer 必备文件，逐个确认 snapshot_download 命中正确。
 
 ```{admonition} Note
 :class: note
 `<ms_tokenizer_path>` 替换为上一步 `snapshot_download` 打印的模型落盘路径。
+
+这里逐个检查必需文件，而不是比对 `ls` 的完整目录列表：CI 挂的是共享的 ModelScope
+缓存卷（`/data/ci-cache/modelscope/torchtitan`），同一个目录里可能还留着别的下载
+留下的文件（`LICENSE.txt` / `README.md` / `model.safetensors` 等），而且不同机器上
+缓存目录的布局本身也不一样（新版是 `models/<org>--<repo>/snapshots/<rev>`，旧版是
+`hub/models/<org>/<repo>`）。目录里多几个文件不代表这次下载有问题。
 ```
 
 ### 安装 NPU override 模块

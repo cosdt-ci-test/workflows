@@ -2,8 +2,6 @@
 
 Ollama 提供本地大语言模型的导入、管理和推理服务。本文从源码构建 CANN 后端，在单张昇腾 NPU 上运行 Qwen2.5-0.5B-Instruct，并通过命令行和 HTTP API 完成对话。
 
-昇腾接入目前需要应用本文提供的实验补丁，尚未包含在 Ollama 官方发布包中。
-
 ## 前置条件
 
 ### 硬件
@@ -15,7 +13,7 @@ Atlas A2 系列的 Ascend 910B4 设备，并完成设备驱动安装及设备挂
 在运行示例前，需要准备：
 
 - Linux、Python 3.12，以及 Git、curl 和 C/C++ 编译器。
-- Go 1.26.0 或更新版本，参考 [Go 安装文档](https://go.dev/doc/install)。
+- Go 1.26.10 或更新版本，参考 [Go 安装文档](https://go.dev/doc/install)。
 - 可用的 CANN，参考[快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html)。
 
 本文使用 CANN 9.1.0；模型采用 CANN 支持的 Q4_0 GGUF 格式。
@@ -33,7 +31,7 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 **安装构建工具。** CMake 用于编译 Ollama 及其推理后端，Go 用于构建服务程序。
 
 ```shell #test-setup
-pip install cmake==3.31.10
+pip install cmake
 ```
 
 ```shell #test id="build-tools"
@@ -43,25 +41,19 @@ cmake --version
 
 ```shell #test-result id="build-tools" fuzzy='xxx'
 go version goxxx
-cmake version 3.31.10xxx
+cmake version xxx
 ```
 
-**获取源码和补丁。** 将 [CANN 接入补丁](../patches/ollama-cann.patch)下载并保存为当前目录的 `ollama-cann.patch`，再获取最新发布版本的源码。
+**获取源码。**
 
 ```shell #test-setup
-git clone --depth 1 --branch "$(curl -fsSL https://api.github.com/repos/ollama/ollama/releases/latest | python -c 'import json, sys; print(json.load(sys.stdin)["tag_name"])')" https://github.com/ollama/ollama.git ollama
-```
-
-**应用补丁。** 补丁启用 CANN 后端构建，并让服务能够发现和选择 NPU。
-
-```shell #test-setup
-git -C ollama apply --check ../ollama-cann.patch && git -C ollama apply ../ollama-cann.patch
+git clone --depth 1 https://github.com/lltiaor/ollama.git
 ```
 
 **构建 CANN 后端。** CPU 后端仅构建基础版本，CANN 后端用于 NPU 推理。构建产物保存在 `ollama/build/`，服务程序生成在 `ollama/ollama`。
 
 ```shell #test-setup
-cmake -S ollama -B ollama/build -DCMAKE_BUILD_TYPE=Release -DOLLAMA_LLAMA_BACKENDS=cann -DOLLAMA_BUILD_PARALLEL=8 -DGGML_CPU_ALL_VARIANTS=OFF -DCANN_INSTALL_DIR="$ASCEND_HOME_PATH" -DSOC_TYPE=Ascend910B4 -DOLLAMA_VERSION="$(git -C ollama describe --tags --exact-match)"
+cmake -S ollama -B ollama/build -DCMAKE_BUILD_TYPE=Release -DOLLAMA_LLAMA_`ENDS=cann -DOLLAMA_BUILD_PARALLEL=8 -DGGML_CPU_ALL_VARIANTS=OFF -DSOC_TYPE=Ascend910B4 -DOLLAMA_VERSION="$(git -C ollama rev-parse HEAD)"
 ```
 
 ```shell #test-setup

@@ -1,34 +1,91 @@
-# Ollama quick start guard - project thin trigger.
-# The shared engine resolves the official upstream release and supplies
-# UPSTREAM_REF; the fixture applies the checked-out CANN patch to that ref.
 name: ollama-quick-start
 
-concurrency:
-  group: ${{ format('manual-{0}', github.run_id) }}
-  cancel-in-progress: false
-
 on:
-  # First native CANN build and NPU inference verification is manual.
+  # First hardware run on the coverage branch; remove after that run.
+  push:
+    branches: [test/ollama-cann-coverage]
   workflow_dispatch:
+    inputs:
+      profile:
+        description: Ascend hardware and inference cases to validate
+        type: choice
+        default: a2
+        options:
+          - a2
+          - a2-formats
+          - 310p
 
 permissions:
   contents: read
 
+concurrency:
+  group: ollama-cann-coverage
+  cancel-in-progress: false
+
 jobs:
-  ollama-quick-start:
-    uses: ./.github/workflows/quick-start-template.yml
-    with:
-      project: ollama
-      test_runner: '["linux-aarch64-a2-2"]'
-      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-      # Persist toolchains, downloads, models, go-build, go-mod and ccache.
-      # The source/build working directory is temporary and fixture-owned.
-      container_options: '--volume /data/ci-cache/ollama:/ollama-cache'
-      # Shared test-job budget for preparation, native build and inference.
-      timeout_minutes: 240
-      upstream_repo: ollama/ollama
-      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/ollama/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
-      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/ollama/docs/Quick-start-Ascend.md
-      # cwd: projects/ollama; foreground service readiness and cleanup live
-      # in the fixture, alongside source/patch SHA and NPU evidence checks.
-      test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1
+  configure:
+    runs-on: ubuntu-latest
+    outputs:
+      runner: ${{ steps.target.outputs.runner }}
+      image: ${{ steps.target.outputs.image }}
+    steps:
+      - id: target
+        shell: bash
+        env:
+          PROFILE: ${{ inputs.profile || 'a2' }}
+          RUNNER_310P: ${{ vars.OLLAMA_310P_RUNNER }}
+          IMAGE_310P: ${{ vars.OLLAMA_310P_IMAGE }}
+        run: |
+          set -euo pipefail
+          case "$PROFILE" in
+            a2|a2-formats)
+              runner=linux-aarch64-a2-2
+              image=swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+              ;;
+            310p)
+              if [[ ! "$RUNNER_310P" =~ ^[a-zA-Z0-9._-]+$ || ! "$IMAGE_310P" =~ ^[a-zA-Z0-9._:/@-]+$ ]]; then
+                echo '::error::Configure OLLAMA_310P_RUNNER and OLLAMA_310P_IMAGE for a real 310P runner and matching CANN image.'
+                exit 1
+              fi
+              runner="$RUNNER_310P"
+              image="$IMAGE_310P"
+              ;;
+            *) exit 1 ;;
+          esac
+          printf 'runner=%s\nimage=%s\n' "$runner" "$image" >> "$GITHUB_OUTPUT"
+
+  validate:
+    needs: configure
+    runs-on: ${{ fromJSON(format('["self-hosted","{0}"]', needs.configure.outputs.runner)) }}
+    timeout-minutes: 240
+    container:
+      image: ${{ needs.configure.outputs.image }}
+      options: --volume /data/ci-cache/ollama:/ollama-cache
+    env:
+      PROFILE: ${{ inputs.profile || 'a2' }}
+      PIP_INDEX_URL: http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple
+      PIP_EXTRA_INDEX_URL: https://repo.huaweicloud.com/ascend/repos/pypi
+      PIP_TRUSTED_HOST: cache-service.nginx-pypi-cache.svc.cluster.local
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Build fork and validate CANN inference
+        shell: bash
+        run: |
+          set -eo pipefail
+          export PATH="/usr/local/sbin:$PATH"
+          for setup in /usr/local/Ascend/ascend-toolkit/set_env.sh /usr/local/Ascend/cann/set_env.sh; do
+            if [[ -f "$setup" ]]; then
+              source "$setup"
+              break
+            fi
+          done
+          : "${ASCEND_TOOLKIT_HOME:?CANN environment was not loaded}"
+          report_dir="/ollama-cache/coverage/reports/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "$report_dir"
+          echo "Reports: $report_dir"
+          trap 'npu-smi info 2>&1 | tee "$report_dir/npu-smi-after.log" || true' EXIT
+          npu-smi info | tee "$report_dir/npu-smi-before.log"
+          python -m pip install cmake
+          python -u projects/ollama/validate_cann.py "$PROFILE" "$report_dir"

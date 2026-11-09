@@ -161,6 +161,10 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
         What this hook does pre-install:
             * CANN env (so torch_npu is importable);
+            * single-card visibility (the doc asserts ``count: 1``, and the
+              a3 runner hands the container two cards);
+            * HF hub endpoint (huggingface.co is unreachable from the
+              runners);
             * CUDA exclusion list (so an accidental ``nvidia-cudnn`` pull
               doesn't shadow the NPU build);
             * torch / torch_npu, only if the image's pre-installed wheels
@@ -189,13 +193,32 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 f'setup: skipping CANN env source ({cls._CANN_SET_ENV} not present)'
             )
 
-        # 1) CUDA exclusion list + process-level env
+        # 1) Single-card visibility: the doc is single-card and check-torch
+        # expects ``count: 1``. The a3 runner (linux-aarch64-a3-800i-2)
+        # hands the container two cards, and restricting the /dev mounts
+        # does not change device_count() - aclrt enumerates through the
+        # host driver and sees every card. ASCEND_RT_VISIBLE_DEVICES is
+        # the runtime-level filter that holds on every machine
+        # generation; the doc's training block already sets it to 0
+        # explicitly, this extends the same visibility to the whole
+        # test process so the check-torch block sees one card.
+        os.environ.setdefault('ASCEND_RT_VISIBLE_DEVICES', '0')
+
+        # 2) HF hub via hf-mirror: the doc downloads Qwen2.5-0.5B-Instruct
+        # through huggingface_hub, which defaults to huggingface.co -
+        # unreachable from the runners (503). Xet disabled: hf-mirror
+        # 302s Xet-backed files to cas-bridge.xethub.hf.co, which the
+        # runner cannot reach either.
+        os.environ.setdefault('HF_ENDPOINT', 'https://hf-mirror.com')
+        os.environ.setdefault('HF_HUB_DISABLE_XET', '1')
+
+        # 3) CUDA exclusion list + process-level env
         with open(cls._CONSTRAINTS_FILE, 'w', encoding='utf-8') as fh:
             fh.write('\n'.join(cls._CUDA_CONSTRAINTS) + '\n')
         os.environ['PIP_CONSTRAINT'] = cls._CONSTRAINTS_FILE
         os.environ['UV_CONSTRAINT'] = cls._CONSTRAINTS_FILE
 
-        # 2) uv: the doc body's binary install path passes
+        # 4) uv: the doc body's binary install path passes
         # ``--index-url https://mirrors.aliyun.com/pypi/simple`` explicitly
         # to dodge the cluster cache (the cluster PyPI mirror doesn't
         # always have a fresh torchtune wheel on release day), so the
@@ -210,7 +233,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             check=True,
         )
 
-        # 3) torch stack probe: when version matches the image's
+        # 5) torch stack probe: when version matches the image's
         # pre-installed wheels, reuse them to avoid the cluster cache
         # triggering ``+cpu`` resolution. The doc's own #test-setup
         # blocks pin the final torch / torch_npu versions it needs.
@@ -248,7 +271,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 check=True,
             )
 
-        # 4) ``huggingface_hub`` / ``torchao`` / ``torchtune`` are NOT
+        # 6) ``huggingface_hub`` / ``torchao`` / ``torchtune`` are NOT
         # pre-installed here: the doc's own labeled blocks install them in
         # document order (``install-deps`` for the hub + torchao,
         # ``torchtune-install-binary`` / ``torchtune-install-source`` for
@@ -261,7 +284,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             check=True,
         )
 
-        # 5) HF hub cache sanity: the doc downloads Qwen2.5-0.5B-Instruct
+        # 7) HF hub cache sanity: the doc downloads Qwen2.5-0.5B-Instruct
         # via ``huggingface_hub.snapshot_download`` into the default HF
         # cache. Report what's already there and purge model dirs holding
         # corrupt safetensors shards so the download self-heals.

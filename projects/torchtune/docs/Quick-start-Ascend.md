@@ -247,7 +247,16 @@ options:
 默认使用 **HuggingFace Hub** 进行模型下载：
 
 ```shell #test-setup store="model_path"
+set -o pipefail
 python -c "from huggingface_hub import snapshot_download; print(snapshot_download('Qwen/Qwen2.5-0.5B-Instruct'))" | tail -n 1
+```
+
+```{admonition} Note
+:class: note
+`set -o pipefail` 让 `snapshot_download` 失败时整条管道返回非零退出码，而不是被
+`| tail -n 1` 吞成 0——否则下一步会拿到一个空路径，报出与真实原因无关的错误。
+如果你的网络访问 HuggingFace Hub 不畅，可以先 `export HF_ENDPOINT=https://hf-mirror.com`
+切换到国内镜像。
 ```
 
 输出类似：

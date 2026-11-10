@@ -48,7 +48,7 @@ torch_npu version: 2.9.0.post2
 
 ## 安装 DGL
 
-**获取源码。** DGL-Ascend 使深度图学习库（[DGL](https://github.com/dmlc/dgl)）能够在昇腾 NPU 上运行，由 BUPT-GAMMA 团队开发。
+**获取源码。**
 
 ```shell #test-setup
 git clone https://github.com/BUPT-GAMMA/dgl-ascend.git
@@ -70,9 +70,7 @@ bash dgl-ascend/script/build_dgl_ascend.sh
 
 ```shell #test-setup
 pip install "Cython==3.0.12" packaging pandas "pydantic>=2.0" tqdm
-```
 
-```shell #test-setup
 cd dgl-ascend/python
 python setup.py install
 python setup.py build_ext --inplace

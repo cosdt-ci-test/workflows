@@ -1,4 +1,4 @@
-"""Build the engine-selected DGL-Ascend commit and train LightGCN on one NPU.
+"""Guard projects/dgl/docs/Quick-start-Ascend.md at the engine-selected DGL-Ascend commit.
 
 MONITORED_DOC_URL selects the document through the GitHub Contents API.
 UPSTREAM_REF is the full default-branch SHA resolved for this tagless fork.
@@ -8,14 +8,17 @@ the fixture supplies CANN, CUDA exclusions, a temporary cwd, and card 0.
 
 from __future__ import annotations
 
+import importlib
 import math
 import os
 import re
 import shutil
+import site
 import subprocess
 import sys
 import tempfile
 import unittest
+from hashlib import sha256
 from pathlib import Path
 
 from workflows.markdown_doc_test_base import MarkdownDocTestBase
@@ -66,7 +69,7 @@ def _validate_training_output(output: str) -> float:
 class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     DEFAULT_COMMAND_TIMEOUT = 1800
     BUILD_TIMEOUT = 7200
-    USER_AGENT = 'cosdt-ci-test/dgl-quick-start'
+    USER_AGENT = 'ascend-docs/dgl-quick-start'
     _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
 
     _CUDA_CONSTRAINTS = (
@@ -142,7 +145,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         if 'script/build_dgl_ascend.sh' in cmd.cmd:
             timeout = self.BUILD_TIMEOUT
         if getattr(cmd, 'id', None) == 'lightgcn-train':
-            self._verify_training_graph(env, cwd)
+            self._verify_training_graph()
         self._active_id = getattr(cmd, 'id', None)
         try:
             super()._run_one(cmd, results, env, cwd, timeout, idx)
@@ -162,82 +165,90 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     def _verify_installed_backend(self, env, cwd):
         # Validate installation provenance outside the source package directory,
         # then exercise graph message passing and its backward path on the NPU.
-        code = """
-from hashlib import sha256
-from pathlib import Path
-import torch
-import torch_npu
-import dgl
-import dgl._ffi._cy3.core
+        # If the tests directory is on sys.path, a top-level import of dgl
+        # can resolve to the local tests package instead of installed DGL. Remove
+        # that shadowing entry while importing and restore it afterwards.
+        tests_root = str(Path(__file__).resolve().parents[1])
+        shadow_paths = [
+            (index, entry) for index, entry in enumerate(sys.path)
+            if entry and Path(entry).resolve() == Path(tests_root)
+        ]
+        for index, _ in reversed(shadow_paths):
+            del sys.path[index]
+        try:
+            # setup.py install may add an easy-install.pth entry after this test
+            # process started; process site-packages again so the egg is visible.
+            for site_dir in (*site.getsitepackages(), site.getusersitepackages()):
+                if site_dir and Path(site_dir).is_dir():
+                    site.addsitedir(site_dir)
+            importlib.invalidate_caches()
+            import torch
+            import torch_npu
+            import dgl
+            import dgl._ffi._cy3.core
 
-source = (Path.cwd() / 'dgl-ascend/python').resolve()
-assert not Path(dgl.__file__).resolve().is_relative_to(source), 'Source tree shadows installed DGL'
-assert not Path(dgl._ffi._cy3.core.__file__).resolve().is_relative_to(source), 'Source tree shadows installed Cython extension'
-installed_lib = Path(dgl._ffi.base._LIB._name).resolve()
-assert not installed_lib.is_relative_to(source.parent), 'DGL loads the source-tree library'
-def digest_file(path):
-    digest = sha256()
-    with path.open('rb') as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
-            digest.update(chunk)
-    return digest.digest()
+            source = (Path.cwd() / 'dgl-ascend/python').resolve()
+            assert not Path(dgl.__file__).resolve().is_relative_to(source), 'Source tree shadows installed DGL'
+            assert not Path(dgl._ffi._cy3.core.__file__).resolve().is_relative_to(source), 'Source tree shadows installed Cython extension'
+            installed_lib = Path(dgl._ffi.base._LIB._name).resolve()
+            assert not installed_lib.is_relative_to(source.parent), 'DGL loads the source-tree library'
 
-assert digest_file(source.parent / 'build/libdgl.so') == digest_file(installed_lib), \
-    'Installed DGL library differs from this checkout build'
-graph = dgl.graph(([0, 1, 2], [1, 2, 0])).to('npu')
-x = torch.ones(3, 2, device='npu', requires_grad=True)
-graph.ndata['x'] = x
-graph.update_all(dgl.function.copy_u('x', 'm'), dgl.function.sum('m', 'h'))
-assert graph.device.type == 'npu' and graph.ndata['h'].device.type == 'npu'
-graph.ndata['h'].sum().backward()
-assert x.grad is not None and torch.isfinite(x.grad).all().item()
-"""
-        _checked_run([sys.executable, '-c', code], env=env, cwd=cwd)
-        actual = _checked_run(['git', 'rev-parse', 'HEAD'], env=env, cwd=Path(cwd) / 'dgl-ascend')
-        if actual != self._source_sha:
-            raise AssertionError('DGL source changed during build or installation')
-        self.log('Installed DGL graph operations and backward pass run on NPU')
+            def digest_file(path):
+                digest = sha256()
+                with path.open('rb') as stream:
+                    for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+                        digest.update(chunk)
+                return digest.digest()
 
-    def _verify_training_graph(self, env, cwd):
+            assert digest_file(source.parent / 'build/libdgl.so') == digest_file(installed_lib), \
+                'Installed DGL library differs from this checkout build'
+            graph = dgl.graph(([0, 1, 2], [1, 2, 0])).to('npu')
+            x = torch.ones(3, 2, device='npu', requires_grad=True)
+            graph.ndata['x'] = x
+            graph.update_all(dgl.function.copy_u('x', 'm'), dgl.function.sum('m', 'h'))
+            assert graph.device.type == 'npu' and graph.ndata['h'].device.type == 'npu'
+            graph.ndata['h'].sum().backward()
+            assert x.grad is not None and torch.isfinite(x.grad).all().item()
+            actual = _checked_run(['git', 'rev-parse', 'HEAD'], env=env, cwd=Path(cwd) / 'dgl-ascend')
+            if actual != self._source_sha:
+                raise AssertionError('DGL source changed during build or installation')
+            self.log('Installed DGL graph operations and backward pass run on NPU')
+        finally:
+            for index, entry in shadow_paths:
+                sys.path.insert(index, entry)
+
+    def _verify_training_graph(self):
         # Check the complete training graph against an independent CPU edge count.
         # Use the same inherited environment as the training command, without
         # forcing launch blocking; retain GraphConv's zero-degree guard.
-        code = """
-from pathlib import Path
-import torch
-import torch_npu
-import dgl
+        import torch
+        import torch_npu
+        import dgl
 
-train_file = Path('dgl-ascend/examples/pytorch/lightgcn/gowalla/train.txt')
-users, items = [], []
-for line in train_file.read_text().splitlines():
-    values = list(map(int, line.split()))
-    users.extend([values[0]] * (len(values) - 1))
-    items.extend(values[1:])
-src = torch.tensor(users, dtype=torch.int64)
-n_users = int(src.max()) + 1
-dst = torch.tensor(items, dtype=torch.int64) + n_users
-n_nodes = int(dst.max()) + 1
-src_bidir = torch.cat([src, dst])
-dst_bidir = torch.cat([dst, src])
-expected_in = torch.bincount(dst_bidir, minlength=n_nodes)
-expected_out = torch.bincount(src_bidir, minlength=n_nodes)
-assert (expected_in > 0).all().item(), 'Training data contains isolated nodes'
-graph = dgl.graph((src_bidir, dst_bidir), num_nodes=n_nodes).to('npu')
-for _ in range(3):
-    # Interleave PyTorch work with DGL degree queries, as training does.
-    pending = torch.randn(4096, 64, device='npu').square()
-    for name, expected in (('in', expected_in), ('out', expected_out)):
-        actual = getattr(graph, name + '_degrees')().cpu()
-        mismatch = int((actual != expected).sum())
-        assert mismatch == 0, f'NPU {name}-degrees differ from CPU at {mismatch} nodes'
-print(f'Gowalla NPU degrees match CPU for all {n_nodes} nodes')
-"""
-        _checked_run(
-            [sys.executable, '-c', code],
-            env=env, cwd=cwd,
-            timeout=self.DEFAULT_COMMAND_TIMEOUT,
-        )
+        train_file = Path('dgl-ascend/examples/pytorch/lightgcn/gowalla/train.txt')
+        users, items = [], []
+        for line in train_file.read_text().splitlines():
+            values = list(map(int, line.split()))
+            users.extend([values[0]] * (len(values) - 1))
+            items.extend(values[1:])
+        src = torch.tensor(users, dtype=torch.int64)
+        n_users = int(src.max()) + 1
+        dst = torch.tensor(items, dtype=torch.int64) + n_users
+        n_nodes = int(dst.max()) + 1
+        src_bidir = torch.cat([src, dst])
+        dst_bidir = torch.cat([dst, src])
+        expected_in = torch.bincount(dst_bidir, minlength=n_nodes)
+        expected_out = torch.bincount(src_bidir, minlength=n_nodes)
+        assert (expected_in > 0).all().item(), 'Training data contains isolated nodes'
+        graph = dgl.graph((src_bidir, dst_bidir), num_nodes=n_nodes).to('npu')
+        for _ in range(3):
+            # Interleave PyTorch work with DGL degree queries, as training does.
+            _pending = torch.randn(4096, 64, device='npu').square()
+            for name, expected in (('in', expected_in), ('out', expected_out)):
+                actual = getattr(graph, name + '_degrees')().cpu()
+                mismatch = int((actual != expected).sum())
+                assert mismatch == 0, f'NPU {name}-degrees differ from CPU at {mismatch} nodes'
+        print(f'Gowalla NPU degrees match CPU for all {n_nodes} nodes')
         self.log('Full Gowalla graph degrees match CPU in the training environment')
 
     def run_command(self, cmd, env, cwd, timeout, language='shell'):

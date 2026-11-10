@@ -39,6 +39,60 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     _TENSORBOARD_DIR = Path(
         'output/tensorboard/roll-quick-start-npu'
     )
+    _STACK_PROBE_STAGES = {
+        'verify-vllm-triton': 'after vLLM-Ascend install',
+        'verify-example-deps': 'after example dependency install',
+    }
+
+    def _log_torch_stack(self, stage, env, cwd) -> None:
+        """Inspect each installed stack in a fresh process before training."""
+        probe = """
+from importlib.metadata import PackageNotFoundError, distribution
+from importlib.util import find_spec
+import sys
+
+print('python:', sys.executable)
+for name in ('torch', 'torch-npu', 'vllm', 'vllm-ascend'):
+    try:
+        dist = distribution(name)
+    except PackageNotFoundError:
+        print(f'{name}: not installed')
+        continue
+    print(f'{name}: {dist.version} at {dist.locate_file("")}')
+    if name in ('vllm', 'vllm-ascend'):
+        requirements = [req for req in dist.requires or [] if req.lower().startswith('torch')]
+        print(f'{name} torch dependencies: {", ".join(requirements)}')
+
+for name in ('torch', 'torch_npu'):
+    spec = find_spec(name)
+    print(f'{name} import path: {spec.origin if spec else "not found"}')
+
+import torch
+print('loaded torch:', torch.__version__, torch.__file__)
+import torch_npu
+print('loaded torch_npu:', torch_npu.__version__, torch_npu.__file__)
+"""
+        self.log(f'PyTorch stack {stage}')
+        try:
+            result = subprocess.run(
+                [sys.executable, '-u', '-c', probe], env=env, cwd=cwd,
+                capture_output=True, encoding='utf-8', errors='replace',
+                check=False, timeout=60,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            self.log(f'PyTorch stack probe could not finish: {exc}')
+            return
+        if result.stdout:
+            self.log_block('installed PyTorch stack', result.stdout.splitlines())
+        if result.stderr:
+            self.log_block('PyTorch import stderr', result.stderr.splitlines())
+        self.log(f'PyTorch stack probe exit code: {result.returncode}')
+
+    def _run_one(self, cmd, results, env, cwd, timeout, idx):
+        super()._run_one(cmd, results, env, cwd, timeout, idx)
+        stage = self._STACK_PROBE_STAGES.get(getattr(cmd, 'id', None))
+        if stage is not None:
+            self._log_torch_stack(stage, env, cwd)
 
     def _verify_tensorboard_events(self) -> None:
         """Require a nonempty TensorBoard event file after training."""

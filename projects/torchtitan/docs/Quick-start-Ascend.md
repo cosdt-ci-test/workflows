@@ -321,17 +321,46 @@ torchtitan.train → torchtitan.trainer → torchtitan.components.data
   → ImportError: cannot import name 'analyze_pipeline_activation_liveness'
 ```
 
-`npu_torch_compat.py` 就是补这一刀：把 `PipelineStageInfo`（照抄 torch 2.15 的定义）和
-`analyze_pipeline_activation_liveness`（占位实现，调用即报错）塞进
-`torch.distributed.pipelining`。Dist-MoE 这个功能本身在这里仍然不可用——它还需要
-torch ≥ 2.15 和可选的 `dist_moe` 包——但 quick-start 不跑 Dist-MoE，import 能过即可。
+还有第二处：torchtitan v0.4.0 是对着 **torch 2.15** 开发的（它自己的 CI 就钉
+`torch==2.15.0`），而 FSDP2 的 mixed-precision policy 在 2.15 多了一个按参数覆盖 dtype 的回调：
+
+```python
+# torchtitan/distributed/fsdp.py
+mp_policy = MixedPrecisionPolicy(
+    param_dtype=param_dtype,
+    reduce_dtype=reduce_dtype,
+    cast_forward_inputs=False,
+    param_dtype_override_fn=param_dtype_override_fn,   # ← torch 2.15 才有
+)
+```
+
+torch 2.14 的 `MixedPrecisionPolicy` 是只有 `param_dtype` / `reduce_dtype` / `output_dtype` /
+`cast_forward_inputs` 四个字段的 frozen dataclass，于是建模阶段直接炸：
+
+```
+torchtitan.trainer → training_engine._initialize_model → model.parallelize
+  → decoder._apply_fsdp → distributed.fsdp.apply_fsdp_to_decoder
+  → TypeError: MixedPrecisionPolicy.__init__() got an unexpected keyword argument
+    'param_dtype_override_fn'
+```
+
+`npu_torch_compat.py` 把这两处一起补掉：
+
+- 把 `PipelineStageInfo`（照抄 torch 2.15 的定义）和 `analyze_pipeline_activation_liveness`
+  （占位实现，调用即报错）塞进 `torch.distributed.pipelining`。Dist-MoE 这个功能本身在这里
+  仍然不可用——它还需要 torch ≥ 2.15 和可选的 `dist_moe` 包——但 quick-start 不跑 Dist-MoE，
+  import 能过即可。
+- 给 `MixedPrecisionPolicy.__init__` 包一层，接受并丢弃 `param_dtype_override_fn`。上游只有在
+  这个回调为 `None` 时才走到生产路径（参数默认值就是 `None`，唯一的真实调用方是上游自己的
+  单测），所以丢弃 `None` 与 torch 2.15 的行为完全一致；万一传进来一个非 `None` 的回调则直接
+  报错——torch 2.14 的 FSDP2 根本没有按参数覆盖 dtype 的能力，静默忽略会改掉数值。
 
 垫片必须在**任何 torchtitan import 之前**装上，所以由 `sitecustomize.py` 承担：CPython 在解释器
 启动时会 import `sitecustomize`，只要本目录在 `PYTHONPATH` 上就会生效。下面这条命令把
-`PYTHONPATH` 指向本目录，并确认两个符号已经补上：
+`PYTHONPATH` 指向本目录，并确认两处补丁都已就位：
 
 ```shell #test id="torch-compat"
-cd torchtitan && PYTHONPATH="$HOME/tt-npu-overrides" python -c "import torch.distributed.pipelining as p; print('analyze_pipeline_activation_liveness:', hasattr(p, 'analyze_pipeline_activation_liveness')); print('PipelineStageInfo:', hasattr(p, 'PipelineStageInfo'))"
+cd torchtitan && PYTHONPATH="$HOME/tt-npu-overrides" python -c "import torch, torch.distributed.pipelining as p; from torch.distributed.fsdp import MixedPrecisionPolicy; print('analyze_pipeline_activation_liveness:', hasattr(p, 'analyze_pipeline_activation_liveness')); print('PipelineStageInfo:', hasattr(p, 'PipelineStageInfo')); print('param_dtype_override_fn:', MixedPrecisionPolicy(param_dtype=torch.bfloat16, param_dtype_override_fn=None).param_dtype)"
 ```
 
 输出结果如下：
@@ -339,6 +368,7 @@ cd torchtitan && PYTHONPATH="$HOME/tt-npu-overrides" python -c "import torch.dis
 ```shell #test-result id="torch-compat"
 analyze_pipeline_activation_liveness: True
 PipelineStageInfo: True
+param_dtype_override_fn: torch.bfloat16
 ```
 
 ```{admonition} Note

@@ -38,18 +38,23 @@ next to the NPU override modules, mounted into the upstream tree via
 torchtitan v0.4.0 also imports two ``torch.distributed.pipelining`` symbols
 that only exist in torch >= 2.15 (``analyze_pipeline_activation_liveness``
 and ``PipelineStageInfo``, reached through the optional Dist-MoE package
-that every model flavor pulls in eagerly).  Ascend's newest ``torch_npu`` is
+that every model flavor pulls in eagerly), and it builds the FSDP2
+``MixedPrecisionPolicy`` with a torch-2.15-only keyword
+(``param_dtype_override_fn``).  Ascend's newest ``torch_npu`` is
 2.14.0 and pins ``torch==2.14.0.*``, so torch 2.14.0 is the ceiling on NPU
-and the import chain dies without a shim.  The doc therefore ships
-``npu_torch_compat.py`` (the shim) plus ``sitecustomize.py`` (which installs
-it at interpreter startup, i.e. before torchtitan's own imports) next to the
-override modules -- again without touching the upstream checkout.
+and both the import chain and the FSDP policy construction die without a
+shim.  The doc therefore ships ``npu_torch_compat.py`` (the shim) plus
+``sitecustomize.py`` (which installs it at interpreter startup, i.e. before
+torchtitan's own imports) next to the override modules -- again without
+touching the upstream checkout.
 
 The doc verifies:
 
 * package + sub-module imports (``torchtitan``, ``torchtitan.config.override``,
   ``torchtitan.models.common.attention``, ``torchtitan.models.common.rope``)
-* the torch 2.15 compatibility shim is in place
+* the torch 2.15 compatibility shim is in place (the two
+  ``torch.distributed.pipelining`` symbols and the FSDP2
+  ``MixedPrecisionPolicy(param_dtype_override_fn=...)`` keyword)
 * the NPU compatibility overrides register correctly (ComplexRoPE ->
   real-space gather, Flex/Varlen -> SDPA with an explicit block-causal mask)
 * the recipe is importable and returns a trainable ``Trainer.Config``

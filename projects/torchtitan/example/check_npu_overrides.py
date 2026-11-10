@@ -8,7 +8,11 @@ numerically equivalent to the upstream components they stand in for:
 * ``RealGatherComplexRoPE`` vs upstream ``ComplexRoPE`` -- same cache math,
   same rotation, only the gather kernel differs.
 * ``NpuBlockCausalSDPA`` vs a naive per-document causal reference -- the
-  masking semantics upstream gets from its BlockMask.
+  masking semantics upstream gets from its BlockMask, both without and with
+  a sliding window (muse_glimmer's per-layer window).
+* ``NpuMuseAttention`` vs upstream's muse_glimmer attention -- the family's
+  own fields (query scaling, output gate, sliding window) must survive the
+  override; the generic replacement would drop them.
 
 and that the override only touches the ComplexRoPE-based models: qwen3 uses
 upstream's ``CosSinRoPE`` (a real cache, no DT_COMPLEX64 problem,
@@ -125,6 +129,85 @@ def check_mask() -> float:
     return diff
 
 
+def check_window_mask() -> float:
+    """NpuBlockCausalSDPA with a sliding window must match the naive reference.
+
+    muse_glimmer's layers ask for a per-layer sliding window; upstream
+    expresses it as ``window_size=(window-1, 0)`` on its varlen backend, the
+    NPU backend masks it inside the dense block-causal mask.
+    """
+    torch.manual_seed(0)
+    num_tokens, heads, head_dim = 16, 4, 8
+    window = 4
+    scale = head_dim**-0.5
+    q = torch.randn(num_tokens, heads, head_dim)
+    k = torch.randn(num_tokens, heads, head_dim)
+    v = torch.randn(num_tokens, heads, head_dim)
+    # two documents in this microbatch
+    positions = torch.tensor([0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3, 4, 5, 6, 7])
+
+    attention = NpuBlockCausalSDPA.Config(sliding_window_size=window).build()
+    out = attention(
+        q,
+        k,
+        v,
+        attention_metadata=NpuBlockCausalMetadata(positions=positions),
+        scale=scale,
+        enable_gqa=False,
+    )
+
+    doc = torch.cumsum((positions == 0).to(torch.int64), dim=0) - 1
+    idx = torch.arange(num_tokens)
+    mask = (
+        (doc[:, None] == doc[None, :])
+        & torch.ones(num_tokens, num_tokens, dtype=torch.bool).tril()
+        & (idx[None, :] >= idx[:, None] - (window - 1))
+    ).unsqueeze(0).unsqueeze(0)
+    out_ref = _naive_block_causal(q, k, v, mask, scale)
+    diff = (out - out_ref).abs().max().item()
+    assert diff < TOL, f"window mask mismatch: max_abs_diff={diff}"
+    return diff
+
+
+def check_muse_override() -> str:
+    """The muse override must keep the family's own attention fields.
+
+    muse_glimmer's attention adds ``scale_query_by``, ``o_gate`` and a
+    per-layer ``window_size`` on top of ``GQAttention.Config``.  The generic
+    override's replacement has none of them, and ``derive()`` drops what the
+    target does not have -- so muse needs its own override, and this check
+    asserts the fields survive it (together with the two NPU fixes).
+    """
+    from torchtitan.config.override import OverrideConfig, apply_overrides
+    from torchtitan.config.parallelism import ParallelismConfig
+    from torchtitan.models.muse_glimmer import build_model_config as muse_build
+
+    import npu_compat_muse
+
+    spec = muse_build(
+        "debugmodel",
+        seq_len=256,
+        attn_backend="varlen",
+        parallelism=ParallelismConfig(),
+    )
+    before = spec.layers[0].attention
+    apply_overrides(
+        OverrideConfig(imports=["npu_compat_muse.muse_attention"]), spec
+    )
+    after = spec.layers[0].attention
+
+    assert type(after) is npu_compat_muse.NpuMuseAttention.Config, type(after)
+    assert after.scale_query_by == before.scale_query_by, "query scaling lost"
+    assert after.o_gate == before.o_gate, "output gate lost"
+    assert after.window_size == before.window_size, "sliding window lost"
+    assert isinstance(after.rope, RealGatherComplexRoPE.Config), type(after.rope)
+    assert isinstance(
+        after.inner_attention, NpuBlockCausalSDPA.Config
+    ), type(after.inner_attention)
+    assert after.inner_attention.sliding_window_size == before.window_size
+    return f"muse={type(after).__name__}, window={before.window_size}"
+
+
 def check_rope_selection() -> str:
     """The override must only touch the ComplexRoPE-based models.
 
@@ -195,7 +278,14 @@ def check_deepseek_rope_selection() -> str:
 def main() -> int:
     rope_diff = check_rope()
     mask_diff = check_mask()
-    selection = check_rope_selection() + ", " + check_deepseek_rope_selection()
+    window_diff = check_window_mask()
+    selection = (
+        check_rope_selection()
+        + ", "
+        + check_deepseek_rope_selection()
+        + ", "
+        + check_muse_override()
+    )
     print(
         "npu override equivalence: rope OK, mask OK, rope selection OK",
         file=sys.stdout,
@@ -203,6 +293,7 @@ def main() -> int:
     print(
         f"rope max_abs_diff={rope_diff:.3e} (tol {TOL:.0e}), "
         f"mask max_abs_diff={mask_diff:.3e} (tol {TOL:.0e}), "
+        f"window mask max_abs_diff={window_diff:.3e} (tol {TOL:.0e}), "
         f"rope selection: {selection}",
         file=sys.stderr,
     )

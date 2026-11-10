@@ -95,13 +95,22 @@ class RealGatherComplexRoPE(ComplexRoPE):
         return gathered.view(torch.complex64)
 
 
-def _block_causal_mask(positions: torch.Tensor, num_tokens: int) -> torch.Tensor:
+def _block_causal_mask(
+    positions: torch.Tensor,
+    num_tokens: int,
+    sliding_window_size: int | None = None,
+) -> torch.Tensor:
     """Dense ``(1, 1, T, T)`` bool mask: same document, not in the future.
 
     Mirrors upstream's per-document (block causal) masking: positions reset
     to 0 at every document boundary, so tokens of one document must not
     attend to another document's tokens.  Upstream derives the document ids
     the same way (``get_document_mask_mod``).
+
+    ``sliding_window_size`` narrows the causal window to that many tokens
+    (the query included), which is what upstream's sliding-window models
+    (muse_glimmer) ask for -- upstream expresses the same window as
+    ``window_size=(window-1, 0)`` on its varlen backend.
     """
     if positions.dim() != 1:
         raise ValueError(
@@ -112,6 +121,9 @@ def _block_causal_mask(positions: torch.Tensor, num_tokens: int) -> torch.Tensor
     causal = torch.ones(
         num_tokens, num_tokens, dtype=torch.bool, device=positions.device
     ).tril()
+    if sliding_window_size is not None and sliding_window_size > 0:
+        idx = torch.arange(num_tokens, device=positions.device)
+        causal = causal & (idx[None, :] >= idx[:, None] - (sliding_window_size - 1))
     return (same_doc & causal).unsqueeze(0).unsqueeze(0)
 
 
@@ -138,10 +150,24 @@ class NpuBlockCausalSDPA(InnerAttention):
 
     @dataclass(kw_only=True, slots=True)
     class Config(InnerAttention.Config):
+        sliding_window_size: int | None = None
+        """Sliding-window size in tokens (the query included).
+
+        ``None`` means "attend to the whole (causal) document", which is what
+        every model but the sliding-window ones asks for.  The field is named
+        apart from upstream's ``window_size`` on purpose: the varlen backend
+        carries a *tuple* ``(left, right)`` under that name, and ``derive()``
+        copies same-named fields -- the tuple would land here.
+        """
+
         @property
         def is_full_attention(self) -> bool:
-            """This backend attends to the whole (causal) document."""
-            return True
+            """Whether the backend attends to the whole (causal) document.
+
+            A sliding-window layer is not full attention -- upstream's varlen
+            backend says the same (``window_size[0] == -1``).
+            """
+            return self.sliding_window_size is None
 
         def build_attention_metadata(
             self,
@@ -156,6 +182,7 @@ class NpuBlockCausalSDPA(InnerAttention):
 
     def __init__(self, config: Config) -> None:
         super().__init__()
+        self.sliding_window_size = config.sliding_window_size
 
     def forward(
         self,
@@ -171,7 +198,9 @@ class NpuBlockCausalSDPA(InnerAttention):
         if attention_metadata is None:
             raise ValueError("NpuBlockCausalSDPA requires per-document positions")
         positions = attention_metadata.positions
-        mask = _block_causal_mask(positions, q_THK.shape[0])
+        mask = _block_causal_mask(
+            positions, q_THK.shape[0], self.sliding_window_size
+        )
         out_1HTV = F.scaled_dot_product_attention(
             q_THK.transpose(0, 1).unsqueeze(0),
             k_THK.transpose(0, 1).unsqueeze(0),

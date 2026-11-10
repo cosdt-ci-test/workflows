@@ -1,0 +1,11 @@
+files:
+- path: lavie/human_action/A person is strumming guitar-2.mp4
+  sha256: bbfa908147e55b7694d9dd6c78865c019fc1f7aa8cc137d50106697b3d92b326
+- path: lavie/human_action/A person is strumming guitar-3.mp4
+  sha256: 68b35de2cdc7b82ed676f4607b5b267fae689a416b8d5971bcff5a8134b3a19f
+- path: lavie/human_action/A person is strumming guitar-1.mp4
+  sha256: fd6424e48cd40d22b2dbe19b3eb602a9125976685db5b90495e4a2782ebec21f
+- path: lavie/human_action/A person is strumming guitar-0.mp4
+  sha256: 12ae5b53aad5ca7a54f85be46ab084e786a97f765cff83686c3f773ed36e37df
+- path: lavie/human_action/A person is strumming guitar-4.mp4
+  sha256: 95e8f11444eeec55426683da999bb0df1f5324f8da0f46c1b19af95e220f1812

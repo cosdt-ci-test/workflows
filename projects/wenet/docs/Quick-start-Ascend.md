@@ -10,7 +10,7 @@
 
 ### 硬件
 
-Atlas **800T** / **900 A2** 训练系列（Ascend **910B**）。本文示例为**单卡**。
+Atlas **800T** / **900 A2** 训练系列（Ascend **910B**）与 Atlas **900 A3** 训练系列（Ascend **910C**）。本文示例为**单卡**，卡数由 `run_npu.sh` 按机器可见卡数自动决定。
 
 ### 软件
 
@@ -18,17 +18,19 @@ Atlas **800T** / **900 A2** 训练系列（Ascend **910B**）。本文示例为*
 
 | 类别 | 最低版本 | 推荐版本 |
 | --- | --- | --- |
-| CANN | 8.0.RC2.alpha003 | latest |
+| CANN | 9.1.0 | 9.1.0 |
 | Python | 3.10 | 3.10 |
-| torch | 2.1.0 | 2.2.0 |
-| torch-npu | 2.1.0 | 2.2.0 |
-| torchaudio | 2.1.0 | 2.2.0 |
-| deepspeed | 0.13.2 | latest |
+| torch | 2.5.1 | 2.5.1 |
+| torch-npu | 2.5.1.post1 | 2.5.1.post1 |
+| torchaudio | 2.5.1 | 2.5.1 |
+| deepspeed | 0.14.4 | 0.14.4 |
 
-> **注意**：CANN 最低版本为 8.0.rc1，安装 CANN 时请同时安装 Kernel 算子包。本文配套镜像为
-> `swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:8.0.0-910b-ubuntu22.04-py3.10`（CANN 8.0.0 + Python 3.10，满足最低要求），
-> torch / torch-npu / torchaudio 使用推荐版本 **2.2.0**。deepspeed 最低要求 0.13.2，但 0.16+ 在
-> torch 2.2.0 下会触发 `torch.library.custom_op` `AttributeError`，本文显式钉在 **0.14.4**。
+> **注意**：安装 CANN 时请同时安装 Kernel 算子包。本文实测镜像为 A2 的
+> `swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10` 与 A3 的
+> `swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-a3-ubuntu22.04-py3.10`（均为 CANN 9.1.0 + Python 3.10），
+> torch / torch-npu / torchaudio 统一使用 **2.5.1** 这一套（torch-npu 对应 `2.5.1.post1`）。
+> torch 2.2 对应的 torch-npu 在 Ascend 910C 上只能枚举设备，第一个算子就会报
+> `Unsupported soc version`，因此三件套版本必须随之升级。
 
 编译工具 git、音频工具 sox 需要提前就绪。
 
@@ -82,7 +84,7 @@ cd wenet
 git checkout main
 ```
 
-安装 WeNet 及其 NPU 依赖（与官方安装指南一致：`[torch-npu]` extra 已将 torch / torch-npu / torchaudio 钉在推荐版本 2.2.0，并附带 `numpy<2`；`requirements.txt` 只约束 `deepspeed>=0.14.0`，为避免 pip 解析到与 torch 2.2.0 不兼容的 0.16+，安装后显式回钉 0.14.4）：
+安装 WeNet 及其 NPU 依赖。上游 `setup.py` 的 `[torch-npu]` extra 把 torch / torch-npu / torchaudio 钉在 2.2.0，在 Ascend 910C 上无法计算，因此这里不用该 extra，改为显式安装 2.5.1 三件套后再装 WeNet 本体（`requirements.txt` 只约束 `deepspeed>=0.14.0`，安装后显式回钉 0.14.4）：
 
 > **注意**：WeNet 的安装依赖 `openai-whisper` 只发布源码包，其 `setup.py` 仍 `import pkg_resources`，而 setuptools 82 起已移除该模块，直接安装会构建失败并中断整条 `pip` 命令。下面的命令先固定一个较旧的 setuptools、并对需要构建源码包的三条 `pip` 关闭构建隔离。
 
@@ -96,8 +98,12 @@ cd wenet
 # 于是 sdist 构建失败并中断整条安装（只影响 CLI 转写，与训练无关，故此前一直未被发现）。
 # 预装仍带 pkg_resources 的 setuptools，并对需要构建 sdist 的几条 pip 关闭构建隔离。
 pip install "setuptools<82" wheel
+# 先装 torch 三件套：setup.py 的 [torch-npu] extra 钉的是 2.2.0，装上后
+# 在 910C 上算子直接报 Unsupported soc version；显式安装 2.5.1 可同时覆盖
+# Ascend 910B（A2）与 Ascend 910C（A3）。numpy<2 与 extra 保持一致。
+pip install --no-build-isolation torch==2.5.1 torch-npu==2.5.1.post1 torchaudio==2.5.1 "numpy<2"
 pip install --no-build-isolation "openai-whisper==20231117"
-pip install --no-build-isolation -e .[torch-npu]
+pip install --no-build-isolation -e .
 pip install --no-build-isolation -r requirements.txt
 pip install "deepspeed==0.14.4"
 # train_utils.py 无条件 import tensorboardX；requirements.txt 是开发全量清单
@@ -131,7 +137,7 @@ torch: xxx
 torch_npu: xxx
 torchaudio: xxx
 npu available: True
-npu count: 1
+npu count: xxx
 ```
 
 ---
@@ -341,9 +347,9 @@ cd wenet/examples/aishell/s0
 cp conf/train_conformer.yaml conf/train_conformer_1ep.yaml
 sed -i 's/max_epoch: .*/max_epoch: 1/' conf/train_conformer_1ep.yaml
 # NPU fork-safety 适配：主进程初始化 CANN 后 fork 出的 DataLoader worker 会段
-# 错误（torch_npu 2.2 + CANN 8.0 已知问题），必须单进程读取（num_workers=0）。
-# torch 2.2 还要求 num_workers=0 时 persistent_workers=False 且
-# prefetch_factor=None，否则 DataLoader 构造直接 ValueError，一并条件化
+# 错误，必须单进程读取（num_workers=0）。此外 num_workers=0 时
+# persistent_workers 必须为 False、prefetch_factor 必须为 None，
+# 否则 DataLoader 构造直接 ValueError，一并条件化
 sed -i 's/^num_workers=.*/num_workers=0/' run_npu.sh
 sed -i 's/persistent_workers=True/persistent_workers=args.num_workers > 0/g' "$(git rev-parse --show-toplevel)/wenet/utils/train_utils.py"
 sed -i 's/prefetch_factor=args.prefetch/prefetch_factor=args.prefetch if args.num_workers > 0 else None/g' "$(git rev-parse --show-toplevel)/wenet/utils/train_utils.py"

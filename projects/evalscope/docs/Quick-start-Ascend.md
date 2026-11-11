@@ -190,7 +190,7 @@ evalscope eval \
 输出结果如下（评测日志较长，此处仅展示关键片段）：
 
 ```shell #test-result id="run-eval" fuzzy='...'
-...Qwen2.5-0.5B-Instruct...
+...Finished evaluation for ... on ['gsm8k', 'arc']...
 ```
 
 ---

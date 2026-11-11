@@ -1,12 +1,12 @@
 # Quick Start (Ascend NPU)
 
-在单卡昇腾 NPU 上快速验证 xllm 在线服务推理。
+在昇腾 NPU 上快速验证 xllm 在线服务推理。示例固定使用第一张卡（`ASCEND_RT_VISIBLE_DEVICES=0`），机器上可见的卡数不影响验证结果。
 
 ## 前置条件
 
 ### 硬件
 
-Atlas 900 A2 训练系列产品或者 Ascend 910B 系列产品，并按需完成物理机或容器内的设备挂载。
+Atlas 900 A2 / A3 训练系列产品或 Ascend 910B / 910C 系列产品，并按需完成物理机或容器内的设备挂载。
 
 ### 基础软件
 
@@ -18,9 +18,13 @@ Atlas 900 A2 训练系列产品或者 Ascend 910B 系列产品，并按需完成
 
 ### 本文档示例使用的版本
 
-**配套镜像**：
+**配套镜像**（A2 / 910B）：
 
 swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/xllm-ai/xllm-ai:xllm-0.10.0-release-hb-rc2-arm
+
+**配套镜像**（A3 / 910C）：
+
+swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/xllm-ai/xllm-ai:xllm-0.10.0-release-hc-rc2-arm
 
 **软件版本**：
 
@@ -33,7 +37,7 @@ swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/xllm-ai/xllm-ai:xllm-0
 | xllm | 官方 release 镜像预装 (v0.10.0) |
 | 模型 | [Qwen2-7B-Instruct](https://www.modelscope.cn/models/Qwen/Qwen2-7B-Instruct) |
 
-> 说明：CI 使用 xllm 官方 release 镜像 `swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/xllm-ai/xllm-ai:xllm-0.10.0-release-hb-rc2-arm`，**已预装 xllm v0.10.0 及其依赖**，无需从源码编译，启动即用。
+> 说明：CI 使用 xllm 官方 release 镜像，A2（910B）为 `swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/xllm-ai/xllm-ai:xllm-0.10.0-release-hb-rc2-arm`，A3（910C）为 `swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/xllm-ai/xllm-ai:xllm-0.10.0-release-hc-rc2-arm`，两者**均已预装 xllm v0.10.0 及其依赖**，无需从源码编译，启动即用。
 
 ### 前置安装
 
@@ -84,11 +88,11 @@ python -c "import torch, torch_npu; print('torch=', torch.__version__); print('t
 
 输出结果如下：
 
-```shell #test-result id="check-torch"
+```shell #test-result id="check-torch" fuzzy='xxx'
 torch= 2.9.0+cpu
 torch_npu= 2.9.0.post2
 is_available: True
-count: 1
+count: xxx
 ```
 
 > 如果 `import torch_npu` 失败，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查 torch / torch_npu / CANN 三方兼容矩阵。

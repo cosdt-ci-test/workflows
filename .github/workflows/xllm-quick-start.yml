@@ -36,13 +36,14 @@ permissions:
   contents: read
 
 jobs:
-  xllm-quick-start:
+  qs-a2:
     uses: ./.github/workflows/quick-start-template.yml
     with:
       # Namespaces cache keys (quick-start-monitor-state-xllm_*), artifacts
       # (xllm-quick-start-<run_id>) and the test working dir
       # (workflows/projects/xllm).
       project: xllm
+      machine_type: a2
       # Self-hosted NPU runner for the test job only; the engine pins
       # the cache I/O jobs (restore-cache / publish-and-persist) to
       # GitHub-hosted ubuntu-latest.
@@ -52,10 +53,43 @@ jobs:
         --volume=/data/ci-cache/modelscope/xllm:/root/.cache/modelscope
       timeout_minutes: 180
       upstream_repo: xLLM-AI/xllm
-      # Doc URL points to the quick start doc in this repo (cosdt-ci-test/workflows).
-      # The monitor hashes it and the test fetches the same URL.
-      doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/xllm/docs/Quick-start-Ascend.md
-      doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/xllm/docs/Quick-start-Ascend.md
+      # Doc URL pins this commit's copy of the doc; the monitor hashes
+      # the same Contents API payload the test fetches.
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/xllm/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/xllm/docs/Quick-start-Ascend.md
       # cwd is workflows/projects/xllm; env contract (MONITORED_DOC_URL /
       # UPSTREAM_REF / NPU_READY) is injected by the engine.
       test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1
+
+  qs-a3:
+    uses: ./.github/workflows/quick-start-template.yml
+    with:
+      project: xllm
+      machine_type: a3
+      # Atlas 900 A3 (Ascend 910C) leg: the hc image ships the same
+      # 2.9.0 stack as the hb image, verified on the A3 runner.
+      test_runner: '["linux-aarch64-a3-800i-2"]'
+      image: swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/xllm-ai/xllm-ai:xllm-0.10.0-release-hc-rc2-arm
+      container_options: >-
+        --volume=/data/ci-cache/modelscope/xllm:/root/.cache/modelscope
+      timeout_minutes: 180
+      upstream_repo: xLLM-AI/xllm
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/xllm/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/xllm/docs/Quick-start-Ascend.md
+      test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1
+
+  merge:
+    needs: [qs-a2, qs-a3]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout workflows (provides the merge action)
+        uses: actions/checkout@v6
+      - name: Merge per-machine results into one artifact
+        uses: ./.github/actions/merge-quick-start-results
+        with:
+          project: xllm
+          result_a2: ${{ needs.qs-a2.outputs.result_json }}
+          result_a3: ${{ needs.qs-a3.outputs.result_json }}
+          name_a2: qs-a2
+          name_a3: qs-a3

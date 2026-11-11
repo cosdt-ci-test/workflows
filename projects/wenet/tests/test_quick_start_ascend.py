@@ -78,7 +78,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         The doc's ``## 3. 克隆 WeNet 并安装依赖`` section installs WeNet
         and torch/torch-npu as the canonical user path. This method only
         handles infrastructure bootstrap: CANN env, CUDA exclusion, and
-        a probe-and-fallback for torch/torch-npu to avoid redundant
+        a probe-and-fallback for torch/torch-npu/torchaudio to avoid redundant
         installation when the image already has the correct versions.
 
         Class-level setup: run once per test class, triggered by
@@ -115,10 +115,10 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         # 2) torch stack probe + install: when version matches the image's
         # pre-installed wheels, reuse them to avoid redundant installation.
         _PROBE_SCRIPT = (
-            'import torch, torch_npu\n'
+            'import torch, torch_npu, torchaudio\n'
             "raise SystemExit(0 if "
-            "torch.__version__.startswith('2.2') "
-            "and torch_npu.__version__.startswith('2.2') "
+            "torch.__version__.startswith('2.5') "
+            "and torch_npu.__version__.startswith('2.5') "
             "else 1)"
         )
         probe = subprocess.run(
@@ -128,8 +128,9 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         )
         if probe.returncode == 0:
             _VERSIONS_SCRIPT = (
-                'import torch, torch_npu; '
-                'print(torch.__version__, torch_npu.__version__)'
+                'import torch, torch_npu, torchaudio; '
+                'print(torch.__version__, torch_npu.__version__, '
+                'torchaudio.__version__)'
             )
             versions = subprocess.run(
                 ['python', '-c', _VERSIONS_SCRIPT],
@@ -137,11 +138,15 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             )
             print(f'setup: reusing image torch stack ({versions.stdout.strip()})')
         else:
-            print('setup: installing torch==2.2.0 torch-npu==2.2.0.post2')
+            print(
+                'setup: installing torch==2.5.1 '
+                'torch-npu==2.5.1.post1 torchaudio==2.5.1'
+            )
             subprocess.run(
                 [
                     'python', '-m', 'pip', 'install',
-                    'torch==2.2.0', 'torch-npu==2.2.0.post2',
+                    'torch==2.5.1', 'torch-npu==2.5.1.post1',
+                    'torchaudio==2.5.1', 'numpy<2',
                 ],
                 check=True,
             )

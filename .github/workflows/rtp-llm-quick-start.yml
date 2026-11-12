@@ -18,18 +18,20 @@
 # fixed_ref=feature/ascend: the engine resolves it to the branch tip
 # SHA on every run, which is also the monitor's change key.
 #
-# Scope: single card (910B). Doc body does clone -> aarch64 build-input
-# adaptation (upstream pins x86_64 torch wheels + x86 lock direct links
-# + a bare torch_npu in the wheel metadata) -> pip install -> bazel
-# build of //rtp_llm:rtp_llm_whl -> wheel install -> engine-ops load ->
-# Qwen3-0.6B download -> HTTP server + one generation request. The
-# bazel build is the dominant cost (cold: 40-90 min), hence
-# timeout_minutes=240.
+# Scope: two legs, both single-card. A2 (910B) and A3 (910C) run the
+# same doc body: clone -> aarch64 build-input adaptation (upstream pins
+# x86_64 torch wheels + x86 lock direct links + a bare torch_npu in the
+# wheel metadata) -> pip install -> bazel build of //rtp_llm:rtp_llm_whl
+# -> wheel install -> engine-ops load -> Qwen3-0.6B download -> HTTP
+# server + one generation request. The bazel build is the dominant cost
+# (cold: 40-90 min), hence timeout_minutes=240.
 #
-# Only the A2 leg is enabled in this PR. The branch was developed and
-# validated on Ascend 950 (per PR #1481's own test-environment note),
-# so A2 is the leg that actually needs guarding; an A3 leg can be added
-# once the A2 leg is green.
+# The doc asserts no card count: npu-smi is a plain #test block and the
+# serve step pins ASCEND_RT_VISIBLE_DEVICES=0, so an A3 runner that
+# exposes more devices does not change the compared output.
+#
+# The bazel `ascend` config binds to the CANN toolkit path only (no soc
+# or chip-generation switch), so the same build flags serve both legs.
 
 name: rtp-llm-quick-start
 
@@ -105,8 +107,35 @@ jobs:
       # prepare_environment hook; the build itself is in the doc.
       test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1
 
+  qs-a3:
+    uses: ./.github/workflows/quick-start-template.yml
+    with:
+      project: rtp-llm
+      machine_type: a3
+      # Atlas 900 A3 (Ascend 910C) leg. Same CANN line as A2; the image
+      # bundles Python 3.12, and the test's prepare_environment builds
+      # /opt/conda310 (the interpreter path upstream hardcodes) from the
+      # system python3.10 exactly as on A2.
+      test_runner: '["linux-aarch64-a3-800i-2"]'
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-a3-ubuntu22.04-py3.12
+      container_options: >-
+        --shm-size=64g
+        --device=/dev/davinci0
+        --device=/dev/davinci_manager
+        --device=/dev/devmm_svm
+        --device=/dev/hisi_hdc
+        --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
+        --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
+        --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
+      timeout_minutes: 240
+      upstream_repo: alibaba/rtp-llm
+      fixed_ref: feature/ascend
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/rtp-llm/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/rtp-llm/docs/Quick-start-Ascend.md
+      test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1
+
   merge:
-    needs: [qs-a2]
+    needs: [qs-a2, qs-a3]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -117,4 +146,6 @@ jobs:
         with:
           project: rtp-llm
           result_a2: ${{ needs.qs-a2.outputs.result_json }}
+          result_a3: ${{ needs.qs-a3.outputs.result_json }}
           name_a2: qs-a2
+          name_a3: qs-a3

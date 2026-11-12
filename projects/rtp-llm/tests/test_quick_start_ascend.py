@@ -7,7 +7,7 @@ Document under test: ``projects/rtp-llm/docs/Quick-start-Ascend.md``
 ``#test-result`` labels plus ``id=`` / ``store=`` / ``load='x>>y'`` /
 ``fuzzy='xxx'`` parameters).
 
-Scope (single card, Ascend 910B): install bazelisk and a Python 3.10 venv
+Scope (single card, Ascend 910B / 910C): install bazelisk and a Python 3.10 venv
 at ``/opt/conda310`` (upstream hardcodes that prefix) -> clone the upstream
 ``feature/ascend`` branch -> adapt the aarch64 build inputs (upstream pins
 x86_64 torches / x86 lock direct links / x86 ``http_archive`` entries /

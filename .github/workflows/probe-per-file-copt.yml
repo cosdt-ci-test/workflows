@@ -1,0 +1,120 @@
+# One-shot probe: does `--per_file_copt` override a rule's own `copts`?
+#
+# Context: rtp-llm's vendored havenask patch sets
+#   copts = ['-Wformat-truncation=0'] + select({default: ['-mcpu=native']})
+# for @havenask//aios/network/anet:anet. On the A3 image that flag makes cc1
+# enable CRC while `as` rejects `crc32cx`, so the build dies (see the
+# rtp-llm-quick-start A3 run 43135461484). If `--per_file_copt` lands after
+# the rule copts, `-march=armv8-a+crc` (later arch flag wins in gcc) fixes it
+# from the command line, without patching any upstream file.
+#
+# Judgement is functional, not textual:
+#   control  - build the target as-is   -> expected FAILURE (crc32cx)
+#   with pfc - build with the flag only -> expected SUCCESS
+#
+# Delete this file and the probe/per-file-copt branch when done.
+
+name: probe-per-file-copt
+
+on:
+  workflow_dispatch:
+  # Dispatch is unavailable for a workflow that is not yet on the default
+  # branch, so the probe rides a draft PR instead.
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/probe-per-file-copt.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: [linux-aarch64-a3-800i-2]
+    timeout-minutes: 120
+    container:
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-a3-ubuntu22.04-py3.12
+      options: >-
+        --shm-size=64g
+        --device=/dev/davinci0
+        --device=/dev/davinci_manager
+        --device=/dev/devmm_svm
+        --device=/dev/hisi_hdc
+        --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
+        --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
+        --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install bazelisk
+        run: |
+          set -euo pipefail
+          arch=$(uname -m)
+          case "$arch" in
+            x86_64)  bazelisk_arch=amd64 ;;
+            aarch64) bazelisk_arch=arm64 ;;
+            *) echo "unsupported arch: $arch"; exit 1 ;;
+          esac
+          if [ ! -x /usr/local/bin/bazelisk ]; then
+            curl -fL --connect-timeout 20 --retry 8 --retry-all-errors --retry-delay 3 -o /usr/local/bin/bazelisk "https://github.com/bazelbuild/bazelisk/releases/download/v1.19.0/bazelisk-linux-${bazelisk_arch}"
+            chmod +x /usr/local/bin/bazelisk
+          fi
+          # Same pin and mirror as the rtp-llm doc: the runner cannot reach
+          # googleapis.com, so bazelisk must resolve 6.4.0 through the
+          # Huawei Cloud mirror instead of the default GCS release bucket.
+          echo "USE_BAZEL_VERSION=6.4.0" >> "$GITHUB_ENV"
+          echo "BAZELISK_BASE_URL=https://mirrors.huaweicloud.com/bazel/" >> "$GITHUB_ENV"
+          export USE_BAZEL_VERSION=6.4.0
+          export BAZELISK_BASE_URL=https://mirrors.huaweicloud.com/bazel/
+          /usr/local/bin/bazelisk version | grep -m1 'Build label'
+
+      - name: Clone upstream feature/ascend
+        run: |
+          set +eo pipefail
+          rm -rf /tmp/rtp
+          git clone --depth 1 --branch feature/ascend https://github.com/alibaba/rtp-llm.git /tmp/rtp 2>&1 | tail -3
+          cd /tmp/rtp && git log -1 --format='RTPSHA %H %s'
+
+      - name: Control build without the flag (expect failure)
+        run: |
+          set +eo pipefail
+          cd /tmp/rtp
+          bazelisk build --noshow_progress --curses=no --config=ascend --verbose_failures @havenask//aios/network/anet:anet > /tmp/control.log 2>&1
+          echo "=== CONTROL exit=$? (expect non-zero) ==="
+          grep -E "crc32c|crc.cpp|Build did NOT|Build completed|Elapsed time" /tmp/control.log | tail -15
+          echo '=== CONTROL tail ==='
+          tail -15 /tmp/control.log
+
+      - name: Build with --per_file_copt (expect success)
+        run: |
+          set +eo pipefail
+          cd /tmp/rtp
+          bazelisk build --noshow_progress --curses=no --config=ascend --verbose_failures --per_file_copt='aios/network/anet/crc\.cpp@-march=armv8-a+crc' @havenask//aios/network/anet:anet > /tmp/pfc.log 2>&1
+          echo "=== PFC exit=$? (expect 0) ==="
+          grep -E "crc32c|crc.cpp|Build did NOT|Build completed|Elapsed time|ERROR" /tmp/pfc.log | tail -15
+          echo '=== PFC tail ==='
+          tail -15 /tmp/pfc.log
+
+      - name: Dump the crc.cpp compile command
+        if: always()
+        run: |
+          set +eo pipefail
+          echo '=== crc.cpp action (aquery, with flag) ==='
+          cd /tmp/rtp
+          bazelisk aquery --noshow_progress --curses=no --output=text --config=ascend --per_file_copt='aios/network/anet/crc\.cpp@-march=armv8-a+crc' 'mnemonic("CppCompile", @havenask//aios/network/anet:anet)' > /tmp/aq.txt 2>&1
+          tr '\r' '\n' < /tmp/aq.txt > /tmp/aq2.txt
+          python3 - <<'PY'
+          text = open('/tmp/aq2.txt', encoding='utf-8', errors='replace').read()
+          start = text.find("action 'Compiling aios/network/anet/crc.cpp'")
+          if start < 0:
+              print('crc.cpp action not found')
+              raise SystemExit(0)
+          end = text.find("action 'Compiling ", start + 10)
+          block = text[start:end if end > 0 else len(text)]
+          lines = [l.strip() for l in block.splitlines() if l.strip()]
+          print('block_lines=%d' % len(lines))
+          for n, l in enumerate(lines):
+              if 'mcpu' in l or 'march' in l or 'Wformat-truncation' in l:
+                  print('%3d  %s' % (n, l))
+          PY

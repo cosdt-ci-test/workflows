@@ -6,7 +6,7 @@
 # (the module / config come from the manifest's overlay_args).
 # The NPU-incompatible attention stack (complex64 RoPE cache, flex
 # attention) is swapped through torchtitan's official override
-# mechanism (--override.imports), so no upstream source file is touched.
+# mechanism (--override), so no upstream source file is touched.
 #
 # Env:
 #   TARGET_ROOT     checkout of pytorch/torchtitan (required)
@@ -17,7 +17,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export TARGET_ROOT="${TARGET_ROOT:?TARGET_ROOT is required}"
 
 # The override module lives next to this script (project side, outside the
-# upstream checkout) and is imported by name via --override.imports.
+# upstream checkout) and is imported by name via --override.
 export PYTHONPATH="$HERE${PYTHONPATH:+:$PYTHONPATH}"
 
 # Serial inductor compilation: parallel compile workers spike host memory

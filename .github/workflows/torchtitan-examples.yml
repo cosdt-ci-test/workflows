@@ -49,7 +49,9 @@ jobs:
       project: torchtitan
       upstream_repo: pytorch/torchtitan
       target_ref: ${{ inputs.target_ref }}
-      # 2 supported entries (llama3 debugmodel, 1-card + 2-card), 2 unique
-      # runner types (a2-1 + a2-2); max 4 keeps the matrix from
-      # thrashing the 2-card runner when both legs queue up simultaneously.
+      # 15 supported entries (torchtitan v0.4.0 recipe-based smokes:
+      # llama3 / qwen3 / deepseek_v3 / muse_glimmer debugmodels plus
+      # the qwen3 and deepseek_v3 size tiers), 3 unique runner types
+      # (a2-1 + a2-2 + a2-8); max 4 keeps the matrix from thrashing the
+      # 2-card runner when several legs queue up simultaneously.
       max_parallel: 4

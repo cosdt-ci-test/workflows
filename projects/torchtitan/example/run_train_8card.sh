@@ -16,7 +16,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export TARGET_ROOT="${TARGET_ROOT:?TARGET_ROOT is required}"
 
 # The override module lives next to this script (project side, outside the
-# upstream checkout) and is imported by name via --override.imports.
+# upstream checkout) and is imported by name via --override.
 export PYTHONPATH="$HERE${PYTHONPATH:+:$PYTHONPATH}"
 
 # Serial inductor compilation: parallel compile workers spike host memory

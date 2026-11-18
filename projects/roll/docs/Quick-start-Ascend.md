@@ -4,12 +4,15 @@
 
 ## 前置条件
 
-- **硬件**：Atlas 900 A2 PODc / Ascend 910B 训练系列，单卡。
+- **硬件**：Atlas 900 A2 或 A3 训练系列产品，单机 8 张 NPU 卡，并按需完成物理机或容器内的设备挂载。
 - **软件**：已装好 CANN（toolkit 与驱动），并能 `source set_env.sh`，Python 版本不低于 3.10。参考[快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html)。
 
-本文档示例在 Python 3.12、CANN 9.1.0 环境下验证通过。
+本文档示例使用 Python 3.12、CANN 9.1.0。
 
-本文档配套镜像：`swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12`。
+本文档配套镜像：
+
+- Atlas 900 A2：`swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12`
+- Atlas 900 A3：`swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-a3-ubuntu22.04-py3.12`
 
 ## 加载 CANN 环境
 
@@ -86,7 +89,7 @@ vllm-ascend 0.23.0
 triton-ascend 3.2.2
 ```
 
-**安装示例依赖。** 按 ROLL 的依赖清单安装 agentic 示例所需组件，并约束 PyTorch 软件栈版本，避免安装其他依赖时替换 `vllm-ascend==0.23.0` 配套的版本：
+**安装示例依赖。** 按 ROLL 的依赖清单安装 agentic 示例所需组件。约束 PyTorch 软件栈版本以匹配 `vllm-ascend==0.23.0`，并选用与 ROLL 所需 NumPy 1.26 兼容的数据处理依赖：
 
 ```shell #test-setup id="install-example-deps"
 set -e
@@ -95,13 +98,16 @@ torch==2.10.0
 torch-npu==2.10.0.post4
 torchvision==0.25.0
 torchaudio==2.10.0
+numpy==1.26.4
+pyarrow==20.0.0
+pandas==2.2.3
+scipy==1.16.3
 EOF
 
 grep -v '^gem-llm' ROLL/requirements_common.txt | sed 's#^\./mcore_adapter$#ROLL/mcore_adapter#' > ROLL/requirements_npu.txt
 sed -i 's/^decord /decord2 /' ROLL/requirements_vision.txt
 pip install -c ROLL/constraints-quick-start.txt -r ROLL/requirements_npu.txt
 pip install -c ROLL/constraints-quick-start.txt --ignore-requires-python gem-llm==0.0.4
-pip install -c ROLL/constraints-quick-start.txt "numpy==1.26.4"
 pip install -c ROLL/constraints-quick-start.txt "transformers==4.57.6" "tensorboard==2.20.0" "antlr4-python3-runtime==4.9.3"
 rm ROLL/requirements_npu.txt ROLL/constraints-quick-start.txt
 ```
@@ -114,6 +120,7 @@ from importlib.metadata import version
 expected = {
     "gem-llm": "0.0.4",
     "numpy": "1.26.4",
+    "pyarrow": "20.0.0",
     "transformers": "4.57.6",
     "tensorboard": "2.20.0",
     "antlr4-python3-runtime": "4.9.3",
@@ -129,150 +136,52 @@ for package, required in expected.items():
 ```shell #test-result id="verify-example-deps"
 gem-llm 0.0.4
 numpy 1.26.4
+pyarrow 20.0.0
 transformers 4.57.6
 tensorboard 2.20.0
 antlr4-python3-runtime 4.9.3
 ```
 
-**写入示例配置。** 配置基于官方 agentic demo，修改参数完成 NPU 适配， 将配置文件保存到 ROLL/examples/agentic_frozen_lake_npu/quick_start_npu.yaml。用 Python 执行下面的代码：
+**准备示例配置。** 从检出的 ROLL 源码读取[上游昇腾指南](https://github.com/alibaba/ROLL/blob/v0.4.0/docs_roll/docs/User%20Guides/Hardware%20Support/ascend_npu_examples.md)中的八卡 FrozenLake 配置。示例沿用原配置的 FSDP2 策略和卡位分配（卡 0–3 训练，卡 4–7 推理与参考模型）。为便于快速验证，训练缩为一步，训练采样和验证批量分别缩为 32 和 8，验证只跑 FrozenLake。ROLL 0.4 的 NPU 环境关闭 TransferQueue，训练产物写入当前目录的 `output/`。
 
 ```python #test id="write-config"
 from pathlib import Path
 
-config = """
-defaults:
-  - ../config/traj_envs@_here_
+import yaml
 
-hydra:
-  run:
-    dir: .
-  output_subdir: null
+example_dir = Path("ROLL/examples/agentic_frozen_lake_npu")
+guide = Path("ROLL/docs_roll/docs/User Guides/Hardware Support/ascend_npu_examples.md")
+_, section_heading, section = guide.read_text(encoding="utf-8").partition(
+    "## Example 1: Single-Node Agentic Pipeline"
+)
+section = section.split("\n## ", 1)[0]
+_, yaml_fence, yaml_text = section.partition("```yaml\n")
+if not section_heading or not yaml_fence:
+    raise ValueError(f"未找到上游指南中的八卡 FrozenLake YAML：{guide}")
+config = yaml.safe_load(yaml_text.split("\n```", 1)[0])
+if config["num_gpus_per_node"] != 8:
+    raise ValueError("上游 FrozenLake 配置已变更，请重新核对 Runner 和卡位分配")
 
-exp_name: "roll-quick-start-npu"
-seed: 42
-logging_dir: ./output/logs
-output_dir: ./output
-render_save_dir: ./output/render
-system_envs:
-  USE_MODELSCOPE: '1'
-  # RL 权重刷新场景需禁用 FRACTAL_NZ。
-  VLLM_ASCEND_ENABLE_NZ: '0'
-  # 允许同卡多进程由 HCCL 自动分配 device 侧端口。
-  HCCL_NPU_SOCKET_PORT_RANGE: auto
+config.update(
+    exp_name="roll-quick-start-npu",
+    max_steps=1,
+    rollout_batch_size=32,
+    val_batch_size=8,
+    sequence_length=2048,
+    tracker_kwargs={"log_dir": "./output/tensorboard"},
+    transfer_backend={"backend_name": None},
+)
+config["checkpoint_config"]["output_dir"] = "./output/checkpoints"
+config["actor_train"]["training_args"]["gradient_accumulation_steps"] = 4
+config["train_env_manager"].update(num_env_groups=4, num_groups_partition=[4])
+config["val_env_manager"].update(
+    tags=["FrozenLake"], num_env_groups=8, num_groups_partition=[8]
+)
 
-track_with: tensorboard
-tracker_kwargs:
-  log_dir: ./output/tensorboard
-
-num_gpus_per_node: 1
-
-# 禁用 TransferQueue 远程传输，数据直接走 Ray 传递。
-transfer_backend:
-  backend_name: null
-
-# 单卡快速跑通：只训练 1 步，批量收缩。
-max_steps: 1
-save_steps: 1000
-logging_steps: 1
-eval_steps: 1000
-resume_from_checkpoint: false
-
-rollout_batch_size: 8
-val_batch_size: 2
-sequence_length: 2048
-max_tokens_per_step: 128
-
-ppo_epochs: 1
-adv_estimator: "grpo"
-init_kl_coef: 0.0
-whiten_advantages: true
-entropy_loss_coef: 0
-
-pretrain: Qwen/Qwen2.5-0.5B-Instruct
-reward_pretrain: Qwen/Qwen2.5-0.5B-Instruct
-
-actor_train:
-  model_args:
-    # NPU 通过 transformers 使用 fa2，不能使用 flash_attn 包。
-    attn_implementation: fa2
-    disable_gradient_checkpointing: false
-    dtype: bf16
-    model_type: ~
-  training_args:
-    learning_rate: 1.0e-6
-    per_device_train_batch_size: 1
-    gradient_accumulation_steps: 2
-  data_args:
-    template: qwen2_5
-  strategy_args:
-    # NPU 不支持 Megatron，训练策略使用 FSDP2。
-    strategy_name: fsdp2_train
-    strategy_config:
-      fsdp_size: 1
-      param_dtype: bf16
-      reduce_dtype: bf16
-      reshard_after_forward: true
-      offload_policy: false
-      use_batched_model_update: false
-  device_mapping: list(range(0,1))
-  infer_batch_size: 1
-
-actor_infer:
-  model_args:
-    disable_gradient_checkpointing: true
-    dtype: bf16
-  generating_args:
-    max_new_tokens: 128
-    temperature: 0.99
-    num_return_sequences: 1
-  data_args:
-    template: qwen2_5
-  strategy_args:
-    strategy_name: vllm
-    strategy_config:
-      gpu_memory_utilization: 0.8
-      block_size: 16
-      load_format: auto
-  device_mapping: list(range(0,1))
-  infer_batch_size: 1
-
-reference:
-  model_args:
-    attn_implementation: fa2
-    disable_gradient_checkpointing: true
-    dtype: bf16
-    model_type: ~
-  data_args:
-    template: qwen2_5
-  strategy_args:
-    strategy_name: hf_infer
-    strategy_config: ~
-  device_mapping: list(range(0,1))
-  infer_batch_size: 1
-
-train_env_manager:
-  max_env_num_per_worker: 8
-  num_env_groups: 4
-  group_size: 2
-  tags: [FrozenLake]
-  num_groups_partition: [4]
-
-val_env_manager:
-  max_env_num_per_worker: 2
-  num_env_groups: 2
-  group_size: 1
-  tags: [FrozenLake]
-  num_groups_partition: [2]
-
-custom_envs:
-  FrozenLake:
-    ${custom_env.FrozenLake}
-"""
-
-path = Path("ROLL/examples/agentic_frozen_lake_npu/quick_start_npu.yaml")
-path.parent.mkdir(parents=True, exist_ok=True)
-path.write_text(config.lstrip("\n"), encoding="utf-8")
-print("config written", path)
+example_dir.mkdir(parents=True, exist_ok=True)
+path = example_dir / "quick_start_npu.yaml"
+path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+print("config written", path.as_posix())
 ```
 
 输出结果如下：
@@ -313,7 +222,7 @@ print(f"FrozenLake 平均得分：{metrics.Scalars('critic/score/mean')[-1].valu
 训练产物已生成
 训练指标路径：output/tensorboard/roll-quick-start-npu
 训练步数：1
-训练样本数：8
+训练样本数：32
 FrozenLake 平均得分：xxx
 ```
 

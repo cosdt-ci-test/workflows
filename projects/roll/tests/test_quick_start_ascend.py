@@ -49,19 +49,22 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         probe = """
 from importlib.metadata import version
 
-for package in ('torch', 'torch-npu', 'torchvision', 'torchaudio', 'tensordict'):
+for package in ('torch', 'torch-npu', 'torchvision', 'torchaudio', 'tensordict', 'numpy', 'pyarrow'):
     print(f'{package}: {version(package)}', flush=True)
 
+import pyarrow
 import torch
 import torch_npu
 
-if not torch.npu.is_available():
-    raise RuntimeError('PyTorch cannot access the NPU after installing ROLL dependencies')
+device_count = torch.npu.device_count() if torch.npu.is_available() else 0
+print(f'Visible NPUs: {device_count}', flush=True)
+if device_count < 8:
+    raise RuntimeError(f'ROLL FrozenLake requires eight visible NPUs, found {device_count}')
 """
         rc, out, err = self.run_command(probe, env, cwd, 60, language='python')
         if rc != 0:
-            raise AssertionError(f'ROLL PyTorch NPU stack check failed (rc={rc}):\n{out}{err}')
-        self.log_block('ROLL PyTorch NPU stack', out.splitlines())
+            raise AssertionError(f'ROLL runtime check failed (rc={rc}):\n{out}{err}')
+        self.log_block('ROLL runtime', out.splitlines())
 
     def _verify_tensorboard_events(self) -> None:
         """Require a nonempty TensorBoard event file after training."""
@@ -97,11 +100,10 @@ if not torch.npu.is_available():
 
     @classmethod
     def prepare_environment(cls) -> None:
-        """CANN env merge, card pin, PYTHONNOUSERSITE, PATH prefix, and
+        """CANN env merge, PYTHONNOUSERSITE, PATH prefix, and
         model-cache sanity. Dependency installs live in the doc itself
         (that is the user path); only CI-side hygiene happens here."""
         os.environ['PYTHONNOUSERSITE'] = '1'
-        os.environ.setdefault('ASCEND_RT_VISIBLE_DEVICES', '0')
 
         if not os.path.isfile(cls._CANN_SET_ENV):
             raise RuntimeError(

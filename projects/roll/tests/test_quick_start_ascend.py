@@ -8,7 +8,7 @@ import sys
 import unittest
 from pathlib import Path
 
-from workflows.markdown_doc_test_base import MarkdownDocTestBase
+from workflows.markdown_doc_test_base import MarkdownDocTestBase, TestCommand
 from workflows.model_cache import (
     ensure_safetensors,
     purge_modelscope_corrupt,
@@ -39,6 +39,29 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     _TENSORBOARD_DIR = Path(
         'output/tensorboard/roll-quick-start-npu'
     )
+
+    def _run_one(self, cmd, results, env, cwd, timeout, idx):
+        super()._run_one(cmd, results, env, cwd, timeout, idx)
+        if not isinstance(cmd, TestCommand) or cmd.id != 'verify-example-deps':
+            return
+
+        # Read versions before importing the extension so ABI failures also report them.
+        probe = """
+from importlib.metadata import version
+
+for package in ('torch', 'torch-npu', 'torchvision', 'torchaudio', 'tensordict'):
+    print(f'{package}: {version(package)}', flush=True)
+
+import torch
+import torch_npu
+
+if not torch.npu.is_available():
+    raise RuntimeError('PyTorch cannot access the NPU after installing ROLL dependencies')
+"""
+        rc, out, err = self.run_command(probe, env, cwd, 60, language='python')
+        if rc != 0:
+            raise AssertionError(f'ROLL PyTorch NPU stack check failed (rc={rc}):\n{out}{err}')
+        self.log_block('ROLL PyTorch NPU stack', out.splitlines())
 
     def _verify_tensorboard_events(self) -> None:
         """Require a nonempty TensorBoard event file after training."""

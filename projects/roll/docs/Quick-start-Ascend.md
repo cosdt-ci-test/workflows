@@ -56,6 +56,7 @@ FrozenLake 是 ROLL 官方快速入门的示例：Qwen2.5-0.5B-Instruct 作为�
 **安装 vLLM 与 triton。** 安装 `vllm-ascend` 时，配套的 `torch`、`torch_npu`、`torchvision` 和 `torchaudio` 会作为依赖自动安装，无需单独安装 PyTorch 软件栈。
 
 ```shell #test-setup id="install-npu-runtime"
+set -e
 pip install --index-url https://repo.huaweicloud.com/repository/pypi/simple vllm==0.23.0
 pip install --index-url https://repo.huaweicloud.com/repository/pypi/simple --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi vllm-ascend==0.23.0
 pip install --index-url https://repo.huaweicloud.com/repository/pypi/simple --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi triton-ascend==3.2.2
@@ -85,16 +86,24 @@ vllm-ascend 0.23.0
 triton-ascend 3.2.2
 ```
 
-**安装示例依赖。** 按昇腾镜像的依赖清单安装 agentic 示例所需组件：
+**安装示例依赖。** 按 ROLL 的依赖清单安装 agentic 示例所需组件，并约束 PyTorch 软件栈版本，避免安装其他依赖时替换 `vllm-ascend==0.23.0` 配套的版本：
 
 ```shell #test-setup id="install-example-deps"
+set -e
+cat > ROLL/constraints-quick-start.txt <<'EOF'
+torch==2.10.0
+torch-npu==2.10.0.post4
+torchvision==0.25.0
+torchaudio==2.10.0
+EOF
+
 grep -v '^gem-llm' ROLL/requirements_common.txt | sed 's#^\./mcore_adapter$#ROLL/mcore_adapter#' > ROLL/requirements_npu.txt
 sed -i 's/^decord /decord2 /' ROLL/requirements_vision.txt
-pip install -r ROLL/requirements_npu.txt
-pip install --ignore-requires-python gem-llm==0.0.4
-pip install "numpy==1.26.4"
-pip install "transformers==4.57.6" "tensorboard==2.20.0" "antlr4-python3-runtime==4.9.3"
-rm ROLL/requirements_npu.txt
+pip install -c ROLL/constraints-quick-start.txt -r ROLL/requirements_npu.txt
+pip install -c ROLL/constraints-quick-start.txt --ignore-requires-python gem-llm==0.0.4
+pip install -c ROLL/constraints-quick-start.txt "numpy==1.26.4"
+pip install -c ROLL/constraints-quick-start.txt "transformers==4.57.6" "tensorboard==2.20.0" "antlr4-python3-runtime==4.9.3"
+rm ROLL/requirements_npu.txt ROLL/constraints-quick-start.txt
 ```
 
 核对示例依赖的版本，下面代码用python执行：

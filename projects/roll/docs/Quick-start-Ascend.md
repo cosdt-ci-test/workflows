@@ -98,6 +98,7 @@ echo "${UPSTREAM_REF}"
 git clone --branch <ref> https://github.com/alibaba/ROLL.git &&
 cd ROLL &&
 pip install -r requirements_common.txt &&
+pip install "pyarrow<26.0.0" &&
 pip install -e . &&
 cd ..
 ```

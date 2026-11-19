@@ -31,6 +31,32 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 
 ## 安装依赖
 
+### 安装 vLLM 和 vLLM-Ascend
+
+安装 vLLM、vLLM-Ascend 和配套的昇腾 Triton：
+
+```shell #test-setup id="install-vllm"
+pip install --index-url https://repo.huaweicloud.com/repository/pypi/simple vllm==0.23.0
+pip install --index-url https://repo.huaweicloud.com/repository/pypi/simple --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi vllm-ascend==0.23.0rc1
+pip install --index-url https://repo.huaweicloud.com/repository/pypi/simple --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi triton-ascend==3.2.1
+```
+
+核对 vLLM 和 Triton 的版本：
+
+```shell #test id="verify-vllm-triton"
+python -c "from importlib.metadata import version; print('vllm==' + version('vllm'))"
+python -c "from importlib.metadata import version; print('vllm-ascend==' + version('vllm-ascend'))"
+python -c "from importlib.metadata import version; print('triton-ascend==' + version('triton-ascend'))"
+```
+
+输出结果如下：
+
+```shell #test-result id="verify-vllm-triton"
+vllm==0.23.0
+vllm-ascend==0.23.0rc1
+triton-ascend==3.2.1
+```
+
 ### 安装 torch 和 torch_npu
 
 安装匹配的 PyTorch 软件栈：
@@ -56,32 +82,6 @@ torch==2.10.0+cpu
 torch-npu==2.10.0.post4
 torchvision==0.25.0+cpu
 torchaudio==2.10.0+cpu
-```
-
-### 安装 vLLM 和 vLLM-Ascend
-
-安装 vLLM、vLLM-Ascend 和配套的昇腾 Triton：
-
-```shell #test-setup id="install-vllm"
-pip install --index-url https://repo.huaweicloud.com/repository/pypi/simple vllm==0.23.0
-pip install --index-url https://repo.huaweicloud.com/repository/pypi/simple --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi vllm-ascend==0.23.0rc1
-pip install --index-url https://repo.huaweicloud.com/repository/pypi/simple --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi triton-ascend==3.2.1
-```
-
-核对 vLLM 和 Triton 的版本：
-
-```shell #test id="verify-vllm-triton"
-python -c "from importlib.metadata import version; print('vllm==' + version('vllm'))"
-python -c "from importlib.metadata import version; print('vllm-ascend==' + version('vllm-ascend'))"
-python -c "from importlib.metadata import version; print('triton-ascend==' + version('triton-ascend'))"
-```
-
-输出结果如下：
-
-```shell #test-result id="verify-vllm-triton"
-vllm==0.23.0
-vllm-ascend==0.23.0rc1
-triton-ascend==3.2.1
 ```
 
 ### 安装 ROLL

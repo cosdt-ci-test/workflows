@@ -43,10 +43,10 @@ pip install --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi --n
 核对 PyTorch 软件栈的版本：
 
 ```shell #test id="verify-torch"
-pip list --format=freeze torch
-pip list --format=freeze torch-npu
-pip list --format=freeze torchvision
-pip list --format=freeze torchaudio
+python -c "from importlib.metadata import version; print('torch==' + version('torch'))"
+python -c "from importlib.metadata import version; print('torch-npu==' + version('torch-npu'))"
+python -c "from importlib.metadata import version; print('torchvision==' + version('torchvision'))"
+python -c "from importlib.metadata import version; print('torchaudio==' + version('torchaudio'))"
 ```
 
 输出结果如下：
@@ -71,9 +71,9 @@ pip install --index-url https://repo.huaweicloud.com/repository/pypi/simple --ex
 核对 vLLM 和 Triton 的版本：
 
 ```shell #test id="verify-vllm-triton"
-pip list --format=freeze vllm
-pip list --format=freeze vllm-ascend
-pip list --format=freeze triton-ascend
+python -c "from importlib.metadata import version; print('vllm==' + version('vllm'))"
+python -c "from importlib.metadata import version; print('vllm-ascend==' + version('vllm-ascend'))"
+python -c "from importlib.metadata import version; print('triton-ascend==' + version('triton-ascend'))"
 ```
 
 输出结果如下：
@@ -100,7 +100,7 @@ cd ROLL
 pip install -r requirements_common.txt
 pip install -e .
 cd ..
-pip list --format=freeze roll
+python -c "from importlib.metadata import version; print('roll==' + version('roll'))"
 ```
 
 ```{admonition} Note
@@ -152,7 +152,7 @@ export ACL_OP_COMPILER_CACHE_DIR=/tmp/npu_cache
 export ASCEND_MAX_OP_CACHE_SIZE=5000
 ```
 
-**安装示例依赖。** 按[官方昇腾指南](https://alibaba.github.io/ROLL/zh-Hans/docs/User%20Guides/Hardware%20Support/ascend_usage)安装 Transformers 和 TensorBoard：
+**安装示例依赖。** 
 
 ```shell #test-setup id="install-example-deps"
 pip install transformers==4.57.6 tensorboard==2.20.0
@@ -161,8 +161,8 @@ pip install transformers==4.57.6 tensorboard==2.20.0
 核对示例依赖的版本：
 
 ```shell #test id="verify-example-deps"
-pip list --format=freeze transformers
-pip list --format=freeze tensorboard
+python -c "from importlib.metadata import version; print('transformers==' + version('transformers'))"
+python -c "from importlib.metadata import version; print('tensorboard==' + version('tensorboard'))"
 ```
 
 输出结果如下：

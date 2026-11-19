@@ -33,7 +33,7 @@ jobs:
       project: roll
       machine_type: a2
       test_runner: '["linux-aarch64-a2-8"]'
-      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.11
       container_options: >-
         --shm-size=32g
         --volume=/data/ci-cache/modelscope/roll:/root/.cache/modelscope
@@ -49,7 +49,7 @@ jobs:
       project: roll
       machine_type: a3
       test_runner: '["linux-aarch64-a3-800i-8"]'
-      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-a3-ubuntu22.04-py3.12
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-a3-ubuntu22.04-py3.11
       container_options: >-
         --shm-size=32g
         --volume=/data/ci-cache/modelscope/roll:/root/.cache/modelscope

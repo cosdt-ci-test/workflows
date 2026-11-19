@@ -15,12 +15,12 @@ Atlas 900 A2 或 A3 训练系列产品，并按需完成物理机或容器内的
 - 可用的 Python 环境
 - 可用的 CANN（参考[快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html)）
 
-本文档示例在 Atlas 900 A2 训练系列产品上运行，并在 Python 3.12、CANN 9.1.0 环境下验证通过。
+本文档示例面向 Atlas 900 A2 训练系列产品，使用 Python 3.11 和 CANN 9.1.0。
 
 本文档配套镜像：
 
 ```text
-swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.11
 ```
 
 ## 加载 CANN 环境

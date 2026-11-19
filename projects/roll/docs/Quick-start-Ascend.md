@@ -94,13 +94,12 @@ echo "${UPSTREAM_REF}"
 ```
 -->
 
-```shell #test id="install-roll" load="upstream_ref>>ref"
-git clone --branch <ref> https://github.com/alibaba/ROLL.git
-cd ROLL
-pip install -r requirements_common.txt
-pip install -e .
+```shell #test-setup id="install-roll" load="upstream_ref>>ref"
+git clone --branch <ref> https://github.com/alibaba/ROLL.git &&
+cd ROLL &&
+pip install -r requirements_common.txt &&
+pip install -e . &&
 cd ..
-python -c "from importlib.metadata import version; print('roll==' + version('roll'))"
 ```
 
 ```{admonition} Note
@@ -108,15 +107,21 @@ python -c "from importlib.metadata import version; print('roll==' + version('rol
 `<ref>` 为最新正式 release 的 tag
 ```
 
+查看已安装的 ROLL 版本：
+
+```shell #test id="verify-roll"
+python -c "from importlib.metadata import version; print('roll==' + version('roll'))"
+```
+
 输出结果如下：
 
-```shell #test-result id="install-roll" fuzzy='xxx'
+```shell #test-result id="verify-roll" fuzzy='xxx'
 roll==xxx
 ```
 
 ```{admonition} Note
 :class: note
-输出中的 `xxx` 为实际安装到的 release 版本号
+输出中的 `xxx` 为已安装的 ROLL 版本。
 ```
 
 ## 运行示例：FrozenLake agentic 强化学习

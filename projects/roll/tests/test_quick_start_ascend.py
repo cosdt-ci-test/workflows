@@ -37,7 +37,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
     _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
     _TENSORBOARD_DIR = Path(
-        'output/tensorboard/roll-quick-start-npu'
+        'ROLL/output/agentic_frozen_lake_npu'
     )
 
     def _run_one(self, cmd, results, env, cwd, timeout, idx):

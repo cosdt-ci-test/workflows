@@ -36,9 +36,11 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 安装 vLLM、vLLM-Ascend 和配套的昇腾 Triton：
 
 ```shell #test-setup id="install-vllm"
-pip install --index-url https://repo.huaweicloud.com/repository/pypi/simple vllm==0.23.0
-pip install --index-url https://repo.huaweicloud.com/repository/pypi/simple --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi vllm-ascend==0.23.0rc1
-pip install --index-url https://repo.huaweicloud.com/repository/pypi/simple --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi triton-ascend==3.2.1
+pip install --index-url https://repo.huaweicloud.com/repository/pypi/simple vllm==0.23.0 &&
+pip install --index-url https://repo.huaweicloud.com/repository/pypi/simple \
+  --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
+  --extra-index-url https://triton-ascend.osinfra.cn/pypi/simple \
+  vllm-ascend==0.23.0 triton-ascend==3.2.2
 ```
 
 核对 vLLM 和 Triton 的版本：
@@ -53,8 +55,8 @@ python -c "from importlib.metadata import version; print('triton-ascend==' + ver
 
 ```shell #test-result id="verify-vllm-triton"
 vllm==0.23.0
-vllm-ascend==0.23.0rc1
-triton-ascend==3.2.1
+vllm-ascend==0.23.0
+triton-ascend==3.2.2
 ```
 
 ### 安装 torch 和 torch_npu
@@ -98,7 +100,7 @@ echo "${UPSTREAM_REF}"
 git clone --branch <ref> https://github.com/alibaba/ROLL.git &&
 cd ROLL &&
 pip install -r requirements_common.txt "torch==2.10.0+cpu" "tensordict==0.14.3" "pyarrow<26.0.0" &&
-pip install "numpy>=2.0" &&
+pip install "numpy>=2.0,<2.3" &&
 pip install -e . &&
 cd ..
 ```
@@ -213,6 +215,10 @@ checkpoint_config:
   output_dir: /data/models/${exp_name}
 
 num_gpus_per_node: 8
+
+# ROLL v0.4.0 的 NPU 路径不支持远程批次，单机示例关闭此后端。
+transfer_backend:
+  backend_name: null
 
 max_steps: 1  # 快速入门只运行一步训练
 save_steps: 10000
@@ -340,19 +346,19 @@ EOF
 **启动训练。**
 
 ```shell #test-setup id="run-agentic"
-cd ROLL
-python examples/start_agentic_pipeline.py --config_path agentic_frozen_lake_npu --config_name quick_start_npu
+(cd ROLL && python examples/start_agentic_pipeline.py --config_path agentic_frozen_lake_npu --config_name quick_start_npu)
 ```
 
-**查看训练产物。** 训练完成后，TensorBoard 指标保存在 ROLL 默认输出目录 `output/agentic_frozen_lake_npu` 下。用 Python 执行下面的代码，查看训练结果指标：
+**查看训练产物。** 训练完成后，从 `ROLL/output/agentic_frozen_lake_npu` 读取 TensorBoard 指标：
 
 ```python #test id="verify-output"
 from pathlib import Path
 
 from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
 
-event_file = sorted(Path("output/agentic_frozen_lake_npu").glob("*/events.out.tfevents.*"))[-1]
+event_file = sorted(Path("ROLL/output/agentic_frozen_lake_npu").glob("*/events.out.tfevents.*"))[-1]
 metrics = EventAccumulator(str(event_file))
+metrics.Reload()
 
 print(f"FrozenLake 平均得分：{metrics.Scalars('critic/score/mean')[-1].value:.3f}")
 ```

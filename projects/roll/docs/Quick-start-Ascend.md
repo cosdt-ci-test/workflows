@@ -80,8 +80,8 @@ python -c "from importlib.metadata import version; print('torchaudio==' + versio
 ```shell #test-result id="verify-torch"
 torch==2.10.0+cpu
 torch-npu==2.10.0.post4
-torchvision==0.25.0+cpu
-torchaudio==2.10.0+cpu
+torchvision==0.25.0
+torchaudio==2.10.0
 ```
 
 ### 安装 ROLL

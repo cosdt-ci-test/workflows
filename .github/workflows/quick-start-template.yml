@@ -51,6 +51,10 @@ on:
         description: Test entry command, executed with cwd projects/<project>
         type: string
         required: true
+      simulate_schedule:
+        description: Run the schedule path on manual dispatch with a separate validation cache
+        type: boolean
+        default: false
     outputs:
       result_json:
         description: The current or cached result.json (single-line JSON), empty when the test job failed before producing a result
@@ -71,6 +75,10 @@ on:
 permissions:
   contents: read
 
+env:
+  MONITOR_EVENT: ${{ github.event_name == 'workflow_dispatch' && inputs.simulate_schedule && 'schedule' || github.event_name }}
+  MONITOR_CACHE_PREFIX: ${{ github.event_name == 'workflow_dispatch' && inputs.simulate_schedule && 'quick-start-validation-doc-hash-state' || 'quick-start-monitor-state' }}
+
 jobs:
   restore-cache:
     name: restore monitor state from cache
@@ -90,9 +98,9 @@ jobs:
           # Per-run key always misses; restore-keys picks the latest
           # save. The '_' terminator makes this prefix match only keys
           # of the very same project (see header comment).
-          key: quick-start-monitor-state-${{ inputs.project }}-${{ inputs.machine_type }}_${{ github.run_id }}
+          key: ${{ env.MONITOR_CACHE_PREFIX }}-${{ inputs.project }}-${{ inputs.machine_type }}_${{ github.run_id }}
           restore-keys: |
-            quick-start-monitor-state-${{ inputs.project }}-${{ inputs.machine_type }}_
+            ${{ env.MONITOR_CACHE_PREFIX }}-${{ inputs.project }}-${{ inputs.machine_type }}_
 
       - name: Verify matched cache key
         env:
@@ -102,7 +110,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -n "$MATCHED_KEY" ] \
-            && ! printf '%s' "$MATCHED_KEY" | grep -Eq "^quick-start-monitor-state-${PROJECT}-${MACHINE_TYPE}_[0-9]+$"; then
+            && ! printf '%s' "$MATCHED_KEY" | grep -Eq "^${MONITOR_CACHE_PREFIX}-${PROJECT}-${MACHINE_TYPE}_[0-9]+$"; then
             echo "::warning::monitor-state cache cross-talk: matched key '$MATCHED_KEY' is not owned by project '$PROJECT' - discarding cache (cold start)"
             rm -rf .monitor-state
           else
@@ -220,7 +228,7 @@ jobs:
 
       - name: Monitor upstream release and doc
         id: monitor
-        if: github.event_name == 'schedule'
+        if: env.MONITOR_EVENT == 'schedule'
         env:
           DOC_URL: ${{ env.MONITORED_DOC_URL }}
           CACHED_RESULT_JSON: ${{ needs.restore-cache.outputs.cache_result_json }}
@@ -390,7 +398,7 @@ jobs:
       - name: Decide which ref to test
         id: decide
         env:
-          EVENT_NAME: ${{ github.event_name }}
+          EVENT_NAME: ${{ env.MONITOR_EVENT }}
         run: |
           set -euo pipefail
           DECISION_FILE="/tmp/.decision"
@@ -515,7 +523,7 @@ jobs:
       - name: Record monitor outcome
         id: record-monitor-outcome
         if: |
-          !cancelled() && github.event_name == 'schedule' &&
+          !cancelled() && env.MONITOR_EVENT == 'schedule' &&
           steps.decide.outputs.need_to_test == 'true'
         env:
           # REASON / REF come from /tmp/.decision — written by the
@@ -728,10 +736,7 @@ jobs:
       # record-monitor-outcome); reconstruct the merged file on
       # ubuntu-latest, which CAN reach cache blob storage.
       - name: Restore monitor state to disk
-        # Schedule only: dispatch must not write monitor state,
-        # otherwise it would clobber the cached failure flag the
-        # next schedule cycle uses to decide whether to retry.
-        if: github.event_name == 'schedule' && needs.test.outputs.need_to_test == 'true' && needs.test.outputs.reason != ''
+        if: env.MONITOR_EVENT == 'schedule' && needs.test.outputs.need_to_test == 'true' && needs.test.outputs.reason != ''
         env:
           monitor_last_release_id: ${{ needs.test.outputs.monitor_last_release_id }}
           monitor_doc_hash:        ${{ needs.test.outputs.monitor_doc_hash }}
@@ -758,8 +763,8 @@ jobs:
       # entry with the same key, so a static key would silently no-op
       # every save after the first.
       - name: Persist monitor state to cache
-        if: github.event_name == 'schedule' && needs.test.outputs.need_to_test == 'true' && needs.test.outputs.reason != ''
+        if: env.MONITOR_EVENT == 'schedule' && needs.test.outputs.need_to_test == 'true' && needs.test.outputs.reason != ''
         uses: actions/cache/save@v6
         with:
           path: .monitor-state
-          key: quick-start-monitor-state-${{ inputs.project }}-${{ inputs.machine_type }}_${{ github.run_id }}
+          key: ${{ env.MONITOR_CACHE_PREFIX }}-${{ inputs.project }}-${{ inputs.machine_type }}_${{ github.run_id }}

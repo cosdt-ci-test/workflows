@@ -98,6 +98,7 @@ echo "${UPSTREAM_REF}"
 git clone --branch <ref> https://github.com/alibaba/ROLL.git &&
 cd ROLL &&
 pip install -r requirements_common.txt "torch==2.10.0+cpu" "tensordict==0.14.3" "pyarrow<26.0.0" &&
+pip install "numpy>=2.0" &&
 pip install -e . &&
 cd ..
 ```

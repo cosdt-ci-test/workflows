@@ -97,8 +97,7 @@ echo "${UPSTREAM_REF}"
 ```shell #test-setup id="install-roll" load="upstream_ref>>ref"
 git clone --branch <ref> https://github.com/alibaba/ROLL.git &&
 cd ROLL &&
-pip install -r requirements_common.txt &&
-pip install "pyarrow<26.0.0" &&
+pip install -r requirements_common.txt "torch==2.10.0+cpu" "tensordict==0.14.3" "pyarrow<26.0.0" &&
 pip install -e . &&
 cd ..
 ```

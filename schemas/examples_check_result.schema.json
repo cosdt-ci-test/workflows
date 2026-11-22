@@ -94,7 +94,7 @@
           "recorded_count": {
             "type": "integer",
             "minimum": 0,
-            "description": "Number of recorded entries (supported upstream paths + unsupported strings)."
+            "description": "Number of unique paths across supported upstream paths and unsupported entries, ignoring trailing slashes."
           },
           "missing_paths": {
             "type": "array",

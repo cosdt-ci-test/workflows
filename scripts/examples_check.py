@@ -169,7 +169,7 @@ def load_manifest(path: Path) -> dict:
     supported = data.get('supported') or []
     if not isinstance(supported, list):
         raise ConfigError('supported must be a list')
-    recorded: list[str] = []
+    recorded_by_path: dict[str, str] = {}
     for entry in supported:
         if not isinstance(entry, dict):
             raise ConfigError('supported entries must be mappings')
@@ -178,18 +178,19 @@ def load_manifest(path: Path) -> dict:
         path_value = entry.get('path')
         if not isinstance(path_value, str) or not path_value.strip():
             raise ConfigError('supported entries must carry a path')
-        recorded.append(path_value)
+        recorded_by_path.setdefault(path_value.rstrip('/'), path_value)
     unsupported = data.get('unsupported') or []
     if not isinstance(unsupported, list) or not all(
             isinstance(item, str) for item in unsupported):
         raise ConfigError('unsupported must be a list of strings')
-    recorded.extend(unsupported)
+    for path_value in unsupported:
+        recorded_by_path.setdefault(path_value.rstrip('/'), path_value)
     scan = data.get('scan')
     paths_only = isinstance(scan, dict) and 'paths' in scan and 'root' not in scan
     return {
         'scan_config': build_scan_config(scan if isinstance(scan, dict) else None),
         'paths_only': paths_only,
-        'recorded': recorded,
+        'recorded': list(recorded_by_path.values()),
     }
 
 

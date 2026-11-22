@@ -33,14 +33,15 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 
 ### 安装 vLLM 和 vLLM-Ascend
 
-安装 vLLM、vLLM-Ascend 和配套的昇腾 Triton：
+安装 vLLM 和昇腾 Triton，并从源码构建 vLLM-Ascend。构建需要支持 C++17 的 GCC/G++、Make 和 NUMA 开发库（Ubuntu 上为 `libnuma-dev`）。构建脚本会通过 `npu-smi` 识别当前芯片。
 
 ```shell #test-setup id="install-vllm"
 pip install --index-url https://repo.huaweicloud.com/repository/pypi/simple vllm==0.23.0 &&
+git clone --depth 1 --branch v0.23.0 --recurse-submodules https://github.com/vllm-project/vllm-ascend.git &&
 pip install --index-url https://repo.huaweicloud.com/repository/pypi/simple \
   --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
   --extra-index-url https://triton-ascend.osinfra.cn/pypi/simple \
-  vllm-ascend==0.23.0 triton-ascend==3.2.2
+  -e ./vllm-ascend triton-ascend==3.2.2
 ```
 
 核对 vLLM 和 Triton 的版本：

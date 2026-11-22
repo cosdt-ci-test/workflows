@@ -42,6 +42,9 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     )
 
     def run_command(self, cmd, env, cwd, timeout, language='shell'):
+        if language == 'shell' and '-e ./vllm-ascend' in cmd:
+            # Cloning submodules and compiling Ascend operators can exceed 30 minutes.
+            timeout = max(timeout, 3600)
         if language != 'shell' or 'examples/start_agentic_pipeline.py' not in cmd:
             return super().run_command(cmd, env, cwd, timeout, language)
 

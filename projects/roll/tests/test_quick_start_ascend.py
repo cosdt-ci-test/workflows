@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import time
 import unittest
 from pathlib import Path
 
@@ -39,6 +40,54 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     _TENSORBOARD_DIR = Path(
         'ROLL/output/agentic_frozen_lake_npu'
     )
+
+    def run_command(self, cmd, env, cwd, timeout, language='shell'):
+        if language != 'shell' or 'examples/start_agentic_pipeline.py' not in cmd:
+            return super().run_command(cmd, env, cwd, timeout, language)
+
+        # Filesystem timestamps can lag the wall clock slightly.
+        log_cutoff = time.time() - 1
+        try:
+            rc, out, err = super().run_command(cmd, env, cwd, timeout, language)
+        except subprocess.TimeoutExpired as exc:
+            self._log_training_failure(
+                (exc.stdout or b'').decode('utf-8', errors='replace'),
+                (exc.stderr or b'').decode('utf-8', errors='replace'),
+                env, log_cutoff,
+            )
+            raise
+        if rc != 0:
+            self._log_training_failure(out, err, env, log_cutoff)
+        return rc, out, err
+
+    def _log_training_failure(self, out, err, env, log_cutoff):
+        for stream, content in (('stdout', out), ('stderr', err)):
+            if content:
+                self.log(f'ROLL training {stream} (full):\n{content.rstrip()}')
+
+        tmp = Path(env.get('RAY_TMPDIR') or env.get('TMPDIR') or '/tmp')
+        log_dir = tmp / 'ray/session_latest/logs'
+        found = False
+        for path in sorted(log_dir.glob('worker-*.err')):
+            try:
+                stat = path.stat()
+                if stat.st_mtime < log_cutoff or not stat.st_size:
+                    continue
+                with path.open('rb') as log:
+                    head = log.read(4096)
+                    log.seek(max(0, stat.st_size - 16384))
+                    tail = log.read(16384)
+            except OSError as exc:
+                self.log(f'Could not read Ray worker log {path.name}: {exc}')
+                continue
+            if any(marker in head or marker in tail for marker in (
+                b'InferWorker', b'EngineCore', b'WorkerProc',
+            )):
+                found = True
+                content = tail.decode('utf-8', errors='replace').rstrip()
+                self.log(f'Ray worker stderr ({path.name}, tail):\n{content}')
+        if not found:
+            self.log(f'No matching Ray worker stderr found under {log_dir}')
 
     def _run_one(self, cmd, results, env, cwd, timeout, idx):
         super()._run_one(cmd, results, env, cwd, timeout, idx)

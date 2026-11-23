@@ -47,6 +47,8 @@ jobs:
       trigger: ${{ steps.decide.outputs.trigger }}
       target_repo: ${{ steps.decide.outputs.target_repo }}
       target_ref: ${{ steps.decide.outputs.target_ref }}
+      reason: ${{ steps.decide.outputs.reason }}
+      cached_machines: ${{ steps.monitor.outputs.cached_machines }}
       workflow_files_hash: ${{ steps.monitor.outputs.workflow_files_hash }}
     env:
       UPSTREAM_REPO: ${{ inputs.upstream_repo }}
@@ -78,13 +80,19 @@ jobs:
             echo "matched cache key ok: ${MATCHED_KEY:-cold start}"
           fi
 
+      - name: Checkout workflows
+        if: github.event_name == 'schedule'
+        uses: actions/checkout@v6
+        with:
+          path: workflows
+          persist-credentials: false
+
       - name: Monitor upstream
         id: monitor
         if: github.event_name == 'schedule'
         env:
           UPSTREAM_REPO: ${{ inputs.upstream_repo }}
           PROJECT: ${{ inputs.project }}
-          WORKFLOW_REPO: ${{ github.repository }}
           DEFAULT_BRANCH: ${{ inputs.default_branch }}
         run: |
           set -euo pipefail
@@ -109,9 +117,7 @@ jobs:
           if [ "$HTTP_CODE" = "404" ]; then
             # Release-less upstream (e.g. microsoft/onnxruntime-inference-
             # examples): fall back to the default-branch HEAD sha so the
-            # schedule signal has something to diff, and target_ref is never
-            # empty downstream (result.schema.json target_ref minLength:1;
-            # save-monitor-state's TARGET_REF :? guard). Same tier as
+            # schedule signal has something to diff. Same tier as
             # quick-start-template's /commits/HEAD fallback. Refs of both
             # kinds land in the same last_release_tag state slot; the
             # release_outcome retry bookkeeping is shared.
@@ -160,40 +166,30 @@ jobs:
           fi
           echo "release_ref=$TAG" >> "$GITHUB_OUTPUT"
 
-          # Signal 2: this project's workflow files (projects/<project>/**
-          # + .github/workflows/<project>-examples.yml). Composite of their
-          # GitHub blob/tree SHAs from /git/trees/main?recursive=1; sorted
-          # path+SHA pairs then sha256sum. Fires only when release did not.
-          TREE_RESP=$(curl -fsSL --retry 3 \
-            "https://api.github.com/repos/$WORKFLOW_REPO/git/trees/main?recursive=1" \
-            2>/dev/null || echo "")
-          TREE_JSON=""
-          if [ -n "$TREE_RESP" ]; then
-            TREE_JSON=$(echo "$TREE_RESP" | jq -r '.tree // empty' 2>/dev/null || echo "")
-          fi
-          WORKFLOW_FILES_HASH=""
-          if [ -n "$TREE_JSON" ] && [ "$TREE_JSON" != "null" ]; then
-            WORKFLOW_FILES_HASH=$(
-              echo "$TREE_JSON" | jq -r \
-                --arg dir "projects/${PROJECT}" \
-                --arg file ".github/workflows/${PROJECT}-examples.yml" \
-                '[.[] | select(
-                  (.path == $file) or
-                  (.path | startswith($dir + "/"))
-                ) | "\(.path)\t\(.sha)"] | sort | join("\n")' \
-                | sha256sum | awk '{print $1}'
-            )
-            if [ -n "$WORKFLOW_FILES_HASH" ] \
-              && [ "${last_workflow_files_hash:-}" != "$WORKFLOW_FILES_HASH" ] \
-              && [ "$NEED" != "true" ]; then
+          WORKFLOW_FILES_HASH=$(
+            git -C workflows ls-tree -r HEAD -- \
+              "projects/$PROJECT" ".github/workflows/$PROJECT-examples.yml" \
+              .github/workflows/examples-template.yml \
+              scripts/check_supported_entries.py scripts/write_example_result.py \
+              scripts/summarize_example_results.py schemas/result.schema.json \
+              | sha256sum | cut -d' ' -f1
+          )
+          if [ -z "$TAG" ]; then
+            REASON="monitor-error"
+          elif [ "$NEED" != "true" ]; then
+            if [ "${last_workflow_files_hash:-}" != "$WORKFLOW_FILES_HASH" ]; then
               NEED="true"
               REASON="workflow-files"
               echo "workflow-files signal FIRED: ${last_workflow_files_hash:-<none>} -> $WORKFLOW_FILES_HASH"
+            elif [ "${release_outcome:-}" = "success" ] && CACHED_MACHINES=$(
+              python3 workflows/scripts/summarize_example_results.py cached .monitor-state/machines.json
+            ); then
+              REASON="cached"
+              printf 'cached_machines=%s\n' "$CACHED_MACHINES" >> "$GITHUB_OUTPUT"
             else
-              echo "workflow-files hash unchanged (${WORKFLOW_FILES_HASH:-<empty>})"
+              NEED="true"
+              REASON="cache-miss"
             fi
-          else
-            echo "::warning::workflow-files signal unknown (tree API empty) - state untouched"
           fi
 
           {
@@ -210,6 +206,9 @@ jobs:
           INPUT_REPO: ${{ inputs.target_repo }}
           DEFAULT_BRANCH: ${{ inputs.default_branch }}
           UPSTREAM_REPO: ${{ inputs.upstream_repo }}
+          MONITOR_NEED: ${{ steps.monitor.outputs.need_to_run }}
+          MONITOR_REF: ${{ steps.monitor.outputs.release_ref }}
+          MONITOR_REASON: ${{ steps.monitor.outputs.reason }}
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
@@ -246,24 +245,19 @@ jobs:
               echo "trigger=workflow_dispatch"
               echo "target_repo=$REPO"
               echo "target_ref=$REF"
+              echo "reason=$REASON"
             } >> "$GITHUB_OUTPUT"
             echo "resolved repo=$REPO ref=$REF reason=$REASON (manual)"
             exit 0
           fi
-          NEED="${{ steps.monitor.outputs.need_to_run }}"
-          REF="${{ steps.monitor.outputs.release_ref }}"
           {
-            echo "need_to_run=$NEED"
+            echo "need_to_run=$MONITOR_NEED"
             echo "trigger=schedule"
             echo "target_repo=$UPSTREAM_REPO"
-            echo "target_ref=$REF"
-            echo "reason=${{ steps.monitor.outputs.reason }}"
+            echo "target_ref=$MONITOR_REF"
+            echo "reason=$MONITOR_REASON"
           } >> "$GITHUB_OUTPUT"
-          if [ "$NEED" = "true" ]; then
-            echo "resolved repo=$UPSTREAM_REPO ref=$REF reason=${{ steps.monitor.outputs.reason }}"
-          else
-            echo "No upstream change - skipping manifest check and examples"
-          fi
+          echo "resolved repo=$UPSTREAM_REPO ref=$MONITOR_REF reason=$MONITOR_REASON"
 
   manifest-check:
     needs: monitor
@@ -508,49 +502,77 @@ jobs:
           if-no-files-found: error
           path: output/result.json
 
-  save-monitor-state:
-    needs: [monitor, manifest-check, run-example, run-example-a3]
-    if: |
-      always() &&
-      github.event_name == 'schedule' &&
-      needs.monitor.outputs.need_to_run == 'true'
+  summarize-results:
+    needs: [monitor, manifest-check, run-example, run-example-a3, validate-results]
+    if: always()
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout workflows
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Download example results
+        id: download-results
+        if: needs.manifest-check.outputs.has_supported == 'true'
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ${{ inputs.project }}-examples-${{ github.run_id }}-*
+          path: example-results
+
+      - name: Summarize example results
+        env:
+          PROJECT: ${{ inputs.project }}
+          TRIGGER: ${{ needs.monitor.outputs.trigger || github.event_name }}
+          TARGET_REPO: ${{ needs.monitor.outputs.target_repo }}
+          TARGET_REF: ${{ needs.monitor.outputs.target_ref }}
+          REASON: ${{ needs.monitor.outputs.reason }}
+          CACHED_MACHINES: ${{ needs.monitor.outputs.cached_machines }}
+          MANIFEST_RESULT: ${{ needs.manifest-check.result }}
+          PUBLISH_MATRIX: ${{ needs.manifest-check.outputs.publish_matrix }}
+          CONCLUSIONS: >-
+            ["${{ needs.monitor.result }}", "${{ needs.manifest-check.result }}",
+            "${{ needs.run-example.result }}", "${{ needs.run-example-a3.result }}",
+            "${{ needs.validate-results.result }}", "${{ steps.download-results.outcome }}"]
+        run: python3 scripts/summarize_example_results.py summarize --artifacts example-results --output summary.json
+
       - name: Save monitor state
+        id: save-state
+        if: github.event_name == 'schedule' && needs.monitor.outputs.need_to_run == 'true'
         env:
           TARGET_REF: ${{ needs.monitor.outputs.target_ref }}
-          RUN_RESULT: ${{ needs.run-example.result }}
-          A3_RESULT: ${{ needs.run-example-a3.result }}
-          MANIFEST_RESULT: ${{ needs.manifest-check.result }}
-          HAS_SUPPORTED: ${{ needs.manifest-check.outputs.has_supported }}
-          HAS_A3: ${{ needs.manifest-check.outputs.has_a3 }}
           WORKFLOW_FILES_HASH: ${{ needs.monitor.outputs.workflow_files_hash }}
         run: |
           set -euo pipefail
           mkdir -p .monitor-state
-          TAG="${TARGET_REF:?TARGET_REF is required}"
-          # A skipped run-example is fine when the manifest has no
-          # supported entry; any other non-success must retry.
-          if [ "$RUN_RESULT" = "success" ]; then
+          if [ "$(jq -r .workflow_status summary.json)" = "success" ]; then
             OUT="success"
-          elif [ "$RUN_RESULT" = "skipped" ] && [ "$MANIFEST_RESULT" = "success" ] \
-            && [ "$HAS_SUPPORTED" = "false" ]; then
-            OUT="success"
+            jq '.machines' summary.json > .monitor-state/machines.json
           else
             OUT="failure"
           fi
-          if [ "$HAS_A3" = "true" ] && [ "$A3_RESULT" != "success" ]; then
-            OUT="failure"
-          fi
           {
-            echo "last_release_tag='$TAG'"
-            echo "release_outcome='$OUT'"
-            echo "last_workflow_files_hash='$WORKFLOW_FILES_HASH'"
+            printf 'last_release_tag=%q\n' "${TARGET_REF:?TARGET_REF is required}"
+            printf 'release_outcome=%q\n' "$OUT"
+            printf 'last_workflow_files_hash=%q\n' "$WORKFLOW_FILES_HASH"
           } > .monitor-state/.monitor
-          echo "recorded outcome: $OUT, tag $TAG, wf_hash=${WORKFLOW_FILES_HASH:-<none>}"
+          echo "recorded outcome: $OUT, tag $TARGET_REF, wf_hash=$WORKFLOW_FILES_HASH"
 
       - name: Persist monitor state to cache
+        if: steps.save-state.outcome == 'success'
         uses: actions/cache/save@v4
         with:
           path: .monitor-state
           key: examples-monitor-state-${{ inputs.project }}_${{ github.run_id }}
+
+      - name: Upload example summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.project }}-examples-summary-${{ github.run_id }}
+          path: summary.json
+          if-no-files-found: error
+          overwrite: true
+
+      - name: Report summary failure
+        run: test "$(jq -r .workflow_status summary.json)" != failure

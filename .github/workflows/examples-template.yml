@@ -522,6 +522,7 @@ jobs:
           path: example-results
 
       - name: Summarize example results
+        id: summarize
         env:
           PROJECT: ${{ inputs.project }}
           TRIGGER: ${{ needs.monitor.outputs.trigger || github.event_name }}
@@ -532,9 +533,7 @@ jobs:
           MANIFEST_RESULT: ${{ needs.manifest-check.result }}
           PUBLISH_MATRIX: ${{ needs.manifest-check.outputs.publish_matrix }}
           CONCLUSIONS: >-
-            ["${{ needs.monitor.result }}", "${{ needs.manifest-check.result }}",
-            "${{ needs.run-example.result }}", "${{ needs.run-example-a3.result }}",
-            "${{ needs.validate-results.result }}", "${{ steps.download-results.outcome }}"]
+            ${{ join(needs.*.result, ' ') }} ${{ steps.download-results.outcome }}
         run: python3 scripts/summarize_example_results.py summarize --artifacts example-results --output summary.json
 
       - name: Save monitor state
@@ -567,6 +566,7 @@ jobs:
           key: examples-monitor-state-${{ inputs.project }}_${{ github.run_id }}
 
       - name: Upload example summary
+        if: ${{ !cancelled() && steps.summarize.outcome == 'success' }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.project }}-examples-summary-${{ github.run_id }}

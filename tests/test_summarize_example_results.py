@@ -28,6 +28,7 @@ class SummaryTests(unittest.TestCase):
         path = self.root / f'tensordict-examples-123-{index}' / 'result.json'
         path.parent.mkdir()
         path.write_text(json.dumps({**RUN_FIELDS, **entry, 'job_status': status}))
+        return path
 
     def summary(self, matrix=(), **overrides):
         output = self.root / 'summary.json'
@@ -38,7 +39,7 @@ class SummaryTests(unittest.TestCase):
             'REASON': 'release',
             'MANIFEST_RESULT': 'success',
             'PUBLISH_MATRIX': json.dumps(list(matrix)),
-            'CONCLUSIONS': '["success", "skipped"]',
+            'CONCLUSIONS': 'success skipped',
             **overrides,
         }
         subprocess.run(
@@ -63,9 +64,10 @@ class SummaryTests(unittest.TestCase):
 
     def test_a2_only_round_trips_through_cache_without_details(self):
         entry = {'path': 'examples/smoke.py', 'image': 'test:a2', 'machine_type': 'a2'}
-        self.detail(0, entry)
+        detail = self.detail(0, entry)
         executed = self.summary([entry])
         self.assertEqual(executed['machines']['a3'], ZERO)
+        detail.unlink()
         cached = self.root / 'machines.json'
         cached.write_text(json.dumps(executed['machines']))
         machines = subprocess.check_output(
@@ -101,8 +103,8 @@ class SummaryTests(unittest.TestCase):
                 self.assertEqual(result.stdout, '')
 
     def test_preceding_failure_takes_priority_over_cancellation(self):
-        cancelled = self.summary(CONCLUSIONS='["success", "cancelled"]')
-        failed = self.summary(CONCLUSIONS='["failure", "cancelled"]')
+        cancelled = self.summary(CONCLUSIONS='success cancelled')
+        failed = self.summary(CONCLUSIONS='failure cancelled')
         self.assertEqual(cancelled['workflow_status'], 'cancelled')
         self.assertEqual(failed['workflow_status'], 'failure')
 

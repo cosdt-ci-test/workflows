@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Count example results by machine and read or write the monitor statistics."""
+"""Summarize example results and validate cached machine counts."""
 
 import argparse
 import json
@@ -33,7 +33,7 @@ def valid_cached_machines(machines):
 
 def count_results(matrix, artifacts, artifact_prefix, run_fields):
     machines = {
-        machine: {'total': 0, 'success': 0, 'failed': 0}
+        machine: {'total': 0, 'success': 0}
         for machine in MACHINE_TYPES
     }
     for index, entry in enumerate(matrix):
@@ -52,8 +52,8 @@ def count_results(matrix, artifacts, artifact_prefix, run_fields):
             and detail.get('source') == entry.get('source')
         ):
             counts['success'] += 1
-        else:
-            counts['failed'] += 1
+    for counts in machines.values():
+        counts['failed'] = counts['total'] - counts['success']
     return machines
 
 
@@ -90,7 +90,7 @@ def summarize(artifacts, output):
         'reason': reason,
         'machines': machines,
         'workflow_status': workflow_status(
-            json.loads(os.environ['CONCLUSIONS']), machines
+            os.environ['CONCLUSIONS'].split(), machines
         ),
     }
     output.write_text(json.dumps(summary, indent=2) + '\n', encoding='utf-8')

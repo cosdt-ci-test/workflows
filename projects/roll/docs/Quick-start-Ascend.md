@@ -36,8 +36,8 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 安装 vLLM 和昇腾 Triton，并从源码构建 vLLM-Ascend。
 
 ```shell #test-setup id="install-vllm"
-pip install --index-url https://repo.huaweicloud.com/repository/pypi/simple vllm==0.23.0 &&
-git clone --depth 1 --branch v0.23.0 --recurse-submodules https://github.com/vllm-project/vllm-ascend.git &&
+pip install --index-url https://repo.huaweicloud.com/repository/pypi/simple vllm==0.23.0
+git clone --depth 1 --branch v0.23.0 --recurse-submodules https://github.com/vllm-project/vllm-ascend.git
 pip install --index-url https://repo.huaweicloud.com/repository/pypi/simple \
   --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi \
   -e ./vllm-ascend triton-ascend==3.2.2
@@ -97,11 +97,11 @@ echo "${UPSTREAM_REF}"
 -->
 
 ```shell #test-setup id="install-roll" load="upstream_ref>>ref"
-git clone --branch <ref> https://github.com/alibaba/ROLL.git &&
-cd ROLL &&
-pip install -r requirements_common.txt "torch==2.10.0+cpu" "tensordict==0.14.3" "pyarrow<26.0.0" &&
-pip install "numpy>=2.0,<2.3" &&
-pip install -e . &&
+git clone --branch <ref> https://github.com/alibaba/ROLL.git
+cd ROLL
+pip install -r requirements_common.txt "torch==2.10.0+cpu" "tensordict==0.14.3" "pyarrow<26.0.0"
+pip install "numpy>=2.0,<2.3"
+pip install -e .
 cd ..
 ```
 
@@ -346,10 +346,11 @@ EOF
 **启动训练。**
 
 ```shell #test-setup id="run-agentic"
-(cd ROLL && python examples/start_agentic_pipeline.py --config_path agentic_frozen_lake_npu --config_name quick_start_npu)
+cd ROLL
+python examples/start_agentic_pipeline.py --config_path agentic_frozen_lake_npu --config_name quick_start_npu
 ```
 
-**查看训练产物。** 训练完成后，从 `ROLL/output/agentic_frozen_lake_npu` 读取 TensorBoard 指标：
+**查看训练产物。** 训练完成后，回到 `ROLL` 的上一级目录，再从 `ROLL/output/agentic_frozen_lake_npu` 读取 TensorBoard 指标：
 
 ```python #test id="verify-output"
 from pathlib import Path

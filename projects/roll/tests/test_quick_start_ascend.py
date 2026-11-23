@@ -8,6 +8,7 @@ import sys
 import time
 import unittest
 from pathlib import Path
+from typing import ClassVar
 
 from workflows.markdown_doc_test_base import MarkdownDocTestBase, TestCommand
 from workflows.model_cache import (
@@ -30,6 +31,11 @@ def _e2e_enabled() -> bool:
 class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     DEFAULT_COMMAND_TIMEOUT = 1800
     USER_AGENT = 'cosdt-ci-test/quick-start'
+    # Stop at the first failed command in a document shell block.
+    _LANG_RUNNER: ClassVar[dict[str, tuple[str, ...]]] = {
+        **MarkdownDocTestBase._LANG_RUNNER,
+        'shell': ('bash', '-ec'),
+    }
     ERROR_MARKERS = (
         *MarkdownDocTestBase.ERROR_MARKERS,
         'applicaiton exception',

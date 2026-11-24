@@ -454,11 +454,14 @@ jobs:
             bash "$PROJECT_ROOT/scripts/run_example.sh" "$EXAMPLE_PATH" \
             2>&1 | tee "$GITHUB_WORKSPACE/output/train.log"
 
-  validate-results:
+  publish-results:
     name: publish-result (${{ matrix.example.name }})
     needs: [monitor, manifest-check, run-example, run-example-a3]
     if: always() && needs.manifest-check.outputs.has_supported == 'true'
     runs-on: ubuntu-latest
+    outputs:
+      # Every matrix job sees the same execution conclusions.
+      execution_conclusions: ${{ needs.run-example.result }} ${{ needs.run-example-a3.result }}
     strategy:
       fail-fast: false
       matrix:
@@ -503,7 +506,7 @@ jobs:
           path: output/result.json
 
   summarize-results:
-    needs: [monitor, manifest-check, run-example, run-example-a3, validate-results]
+    needs: [monitor, manifest-check, publish-results]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -533,7 +536,9 @@ jobs:
           MANIFEST_RESULT: ${{ needs.manifest-check.result }}
           PUBLISH_MATRIX: ${{ needs.manifest-check.outputs.publish_matrix }}
           CONCLUSIONS: >-
-            ${{ join(needs.*.result, ' ') }} ${{ steps.download-results.outcome }}
+            ${{ join(needs.*.result, ' ') }}
+            ${{ needs.publish-results.outputs.execution_conclusions }}
+            ${{ steps.download-results.outcome }}
         run: python3 scripts/summarize_example_results.py summarize --artifacts example-results --output summary.json
 
       - name: Save monitor state

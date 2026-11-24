@@ -8,7 +8,7 @@
 
 | 种类 | 名称 | 上传时机 |
 | --- | --- | --- |
-| example 结果 | `<project>-examples-<run_id>-<job_index>` | 每个 `publish-result` matrix job（对应一个 `run-example`），`if: always()` |
+| example 结果 | `<project>-examples-<run_id>-<job_index>` | `publish-results` 矩阵下的每个 `publish-result` job，`if: always()` |
 | example 汇总 | `<project>-examples-summary-<run_id>` | 托管 runner 上的 `summarize-results`，包括定时命中缓存的运行 |
 | quick-start 结果 | `<project>-quick-start-<run_id>`，一轮测多棵树时用 `<project>-quick-start-<run_id>-<job_index>` | 托管 runner 上的 `publish-result`（或仍在同一 job 里写结果的旧流水线）。NPU 上的测试 job 不上传。无变化时整个 run 在 monitor 后结束，不产生此 artifact |
 

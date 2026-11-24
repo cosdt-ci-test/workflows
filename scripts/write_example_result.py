@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Publish result.json for one run-example matrix leg.
 
-The validate-results job (GitHub-hosted runner) queries the GitHub Job
+The publish-results job (GitHub-hosted runner) queries the GitHub Job
 API for the corresponding <name> (matrix.example.name) job's
 conclusion,
 normalizes it (success / cancelled pass through; anything else,

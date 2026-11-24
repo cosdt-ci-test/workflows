@@ -10,6 +10,8 @@ supported:
     runner: linux-aarch64-a2-1
     npu_devices: '0'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    a3_runner: linux-aarch64-a3-800i-2
+    a3_image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-a3-ubuntu22.04-py3.12
     exec: build/bin/llama-simple
     overlay_args:
       - -m ${LLAMA_CI_MODEL}
@@ -21,6 +23,8 @@ supported:
     runner: linux-aarch64-a2-1
     npu_devices: '0'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    a3_runner: linux-aarch64-a3-800i-2
+    a3_image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-a3-ubuntu22.04-py3.12
     exec: build/bin/llama-batched
     overlay_args:
       - -m ${LLAMA_CI_MODEL}
@@ -34,6 +38,8 @@ supported:
     runner: linux-aarch64-a2-1
     npu_devices: '0'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    a3_runner: linux-aarch64-a3-800i-2
+    a3_image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-a3-ubuntu22.04-py3.12
     exec: build/bin/llama-embedding
     overlay_args:
       - -m ${LLAMA_CI_MODEL}
@@ -47,6 +53,8 @@ supported:
     runner: linux-aarch64-a2-1
     npu_devices: '0'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    a3_runner: linux-aarch64-a3-800i-2
+    a3_image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-a3-ubuntu22.04-py3.12
     exec: build/bin/llama-lookahead
     overlay_args:
       - -m ${LLAMA_CI_MODEL}
@@ -60,6 +68,8 @@ supported:
     runner: linux-aarch64-a2-1
     npu_devices: '0'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    a3_runner: linux-aarch64-a3-800i-2
+    a3_image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-a3-ubuntu22.04-py3.12
     exec: build/bin/llama-lookup
     overlay_args:
       - -m ${LLAMA_CI_MODEL}
@@ -75,6 +85,8 @@ supported:
     runner: linux-aarch64-a2-1
     npu_devices: '0'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    a3_runner: linux-aarch64-a3-800i-2
+    a3_image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-a3-ubuntu22.04-py3.12
     exec: build/bin/llama-parallel
     overlay_args:
       - -m ${LLAMA_CI_MODEL}
@@ -91,6 +103,8 @@ supported:
     runner: linux-aarch64-a2-1
     npu_devices: '0'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    a3_runner: linux-aarch64-a3-800i-2
+    a3_image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-a3-ubuntu22.04-py3.12
     exec: build/bin/llama-speculative
     overlay_args:
       - -m ${LLAMA_CI_MODEL}
@@ -108,6 +122,8 @@ supported:
     runner: linux-aarch64-a2-1
     npu_devices: '0'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    a3_runner: linux-aarch64-a3-800i-2
+    a3_image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-a3-ubuntu22.04-py3.12
     exec: build/bin/llama-speculative-simple
     overlay_args:
       - -m ${LLAMA_CI_MODEL}
@@ -127,6 +143,8 @@ supported:
     runner: linux-aarch64-a2-1
     npu_devices: '0'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    a3_runner: linux-aarch64-a3-800i-2
+    a3_image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-a3-ubuntu22.04-py3.12
     exec: build/bin/llama-passkey
     overlay_args:
       - -m ${LLAMA_CI_MODEL}
@@ -139,6 +157,8 @@ supported:
     runner: linux-aarch64-a2-1
     npu_devices: '0'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    a3_runner: linux-aarch64-a3-800i-2
+    a3_image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-a3-ubuntu22.04-py3.12
     exec: build/bin/llama-debug
     overlay_args:
       - -m ${LLAMA_CI_MODEL}
@@ -155,6 +175,8 @@ supported:
     runner: linux-aarch64-a2-1
     npu_devices: '0'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    a3_runner: linux-aarch64-a3-800i-2
+    a3_image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-a3-ubuntu22.04-py3.12
     exec: build/bin/llama-eval-callback
     overlay_args:
       - -m ${LLAMA_CI_MODEL}
@@ -166,6 +188,8 @@ supported:
     runner: linux-aarch64-a2-1
     npu_devices: '0'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    a3_runner: linux-aarch64-a3-800i-2
+    a3_image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-a3-ubuntu22.04-py3.12
     exec: build/bin/llama-simple-chat
     overlay_args:
       - -m ${LLAMA_CI_MODEL}
@@ -177,6 +201,8 @@ supported:
     runner: linux-aarch64-a2-1
     npu_devices: '0'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    a3_runner: linux-aarch64-a3-800i-2
+    a3_image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-a3-ubuntu22.04-py3.12
     exec: build/bin/llama-retrieval
     overlay_args:
       - -m ${LLAMA_CI_MODEL}
@@ -194,6 +220,8 @@ supported:
     runner: linux-aarch64-a2-1
     npu_devices: '0'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    a3_runner: linux-aarch64-a3-800i-2
+    a3_image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-a3-ubuntu22.04-py3.12
     exec: build/bin/llama-convert-llama2c-to-ggml
     overlay_args:
       - --llama2c-model ${FIXTURE_DIR}/stories260K.bin
@@ -205,6 +233,8 @@ supported:
     runner: linux-aarch64-a2-1
     npu_devices: '0'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    a3_runner: linux-aarch64-a3-800i-2
+    a3_image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-a3-ubuntu22.04-py3.12
     exec: build/bin/llama-gguf
     timeout_minutes: 60
   - path: examples/gguf-hash
@@ -212,6 +242,8 @@ supported:
     runner: linux-aarch64-a2-1
     npu_devices: '0'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    a3_runner: linux-aarch64-a3-800i-2
+    a3_image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-a3-ubuntu22.04-py3.12
     exec: build/bin/llama-gguf-hash
     overlay_args:
       - ${FIXTURE_DIR}/ci-demo.gguf
@@ -221,6 +253,8 @@ supported:
     runner: linux-aarch64-a2-1
     npu_devices: '0'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    a3_runner: linux-aarch64-a3-800i-2
+    a3_image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-a3-ubuntu22.04-py3.12
     exec: build/bin/llama-gen-docs
     timeout_minutes: 60
   - path: examples/diffusion
@@ -228,6 +262,8 @@ supported:
     runner: linux-aarch64-a2-1
     npu_devices: '0'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    a3_runner: linux-aarch64-a3-800i-2
+    a3_image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-a3-ubuntu22.04-py3.12
     exec: build/bin/llama-diffusion-cli
     overlay_args:
       - -m ${LLAMA_CI_MODEL}
@@ -249,6 +285,8 @@ supported:
     runner: linux-aarch64-a2-1
     npu_devices: '0'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    a3_runner: linux-aarch64-a3-800i-2
+    a3_image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-a3-ubuntu22.04-py3.12
     exec: examples/simple-cmake-pkg/build/llama-simple-cmake-pkg
     overlay_args:
       - -m ${LLAMA_CI_MODEL}

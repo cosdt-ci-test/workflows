@@ -55,7 +55,8 @@ jobs:
       target_ref: ${{ inputs.target_ref }}
       # Upstream default branch is master, not main.
       default_branch: master
-      # 19 supported entries; the legacy workflow fired them all at
-      # once. 8 keeps runs moving without stacking the whole matrix on
-      # the a2-1 pool.
+      # 19 supported entries, each also scheduled on A3 when the
+      # manifest sets a3_runner and a3_image. The engine runs the two
+      # matrices as separate jobs, and this cap applies to each. 8
+      # keeps one matrix from taking the whole pool at once.
       max_parallel: 8

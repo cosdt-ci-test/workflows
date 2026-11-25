@@ -1,26 +1,5 @@
 #!/usr/bin/env python3
-"""Publish result.json for one run-example matrix leg.
-
-The publish-results job (GitHub-hosted runner) queries the GitHub Job
-API for the corresponding <name> (matrix.example.name) job's
-conclusion,
-normalizes it (success / cancelled pass through; anything else,
-including a missing conclusion, is a failure), and writes the
-machine-readable result artifact consumed by external machines
-(schemas/result.schema.json). The self-hosted NPU runner only runs
-the example and reports its normal job status; artifact publishing
-stays on GitHub-hosted infrastructure.
-
-Reads from the environment:
-    GH_TOKEN / GITHUB_REPOSITORY / GITHUB_RUN_ID    auth + API address
-    EXPECTED_JOB_NAME    display name: matrix.example.name (basename,
-                              extension stripped)
-    TRIGGER / TARGET_REPO / TARGET_REF / EXAMPLE_PATH / IMAGE
-    MACHINE_TYPE    optional a2 / a3 label for the recipe's machine
-Writes: --output (default result.json), fields per
-schemas/result.schema.json. Exit 1 if the expected job cannot be
-found or has no conclusion yet.
-"""
+"""Write result.json for one example from its GitHub Actions job conclusion."""
 from __future__ import annotations
 
 import argparse

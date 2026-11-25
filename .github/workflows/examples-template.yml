@@ -458,9 +458,6 @@ jobs:
     needs: [monitor, manifest-check, run-example, run-example-a3]
     if: always() && needs.manifest-check.outputs.has_supported == 'true'
     runs-on: ubuntu-latest
-    outputs:
-      # Every matrix job sees the same execution conclusions.
-      execution_conclusions: ${{ needs.run-example.result }} ${{ needs.run-example-a3.result }}
     strategy:
       fail-fast: false
       matrix:
@@ -531,7 +528,6 @@ jobs:
           PUBLISH_MATRIX: ${{ needs.manifest-check.outputs.publish_matrix }}
           CONCLUSIONS: >-
             ${{ join(needs.*.result, ' ') }}
-            ${{ needs.publish-results.outputs.execution_conclusions }}
             ${{ steps.download-results.outcome }}
         run: |
           set -euo pipefail
@@ -578,8 +574,7 @@ jobs:
                 reason: (env.REASON | select(length > 0) // "monitor-error"),
                 machines: $machines,
                 workflow_status:
-                  (if $conclusions | index("failure") then "failure"
-                   elif $conclusions | index("cancelled") then "cancelled"
+                  (if any($conclusions[]; . == "failure" or . == "cancelled") then "failure"
                    elif $machines == null or any($machines[]; .failed > 0) then "failure"
                    else "success"
                    end)

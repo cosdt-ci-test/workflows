@@ -28,7 +28,7 @@ GitHub 托管 runner 上的 `publish-result` job 通过 Jobs API 读取对应 `r
 
 单个文件 `summary.json`，包含 `project`、`trigger`、`target_ref`、`reason`、`machines` 和 `workflow_status`。看板按 `machines.a2`、`machines.a3` 读取各自的 `total`、`success`、`failed`。每个计划内的条目只有拿到有效的成功结果才计入 `success`，其余计入 `failed`。没有配置 A3 时 A3 三项均为零。无法确定执行计划时 `machines` 为 `null`。
 
-定时看护复用上次成功的统计时，`reason` 为 `cached`，本轮只发布汇总。确认为同一版本和文件哈希但没有有效统计时，`reason` 为 `cache-miss`，本轮实跑并发布明细。`workflow_status` 根据汇总阶段可见的任务状态和统计判定，GitHub 最终运行状态仍可从 Actions API 获取。
+定时看护复用上次成功的统计时，`reason` 为 `cached`，本轮只发布汇总。确认为同一版本和文件哈希但没有有效统计时，`reason` 为 `cache-miss`，本轮实跑并发布明细。`workflow_status` 根据汇总阶段可见的任务状态和统计判定，失败和取消统一记为 `failure`。GitHub 最终运行状态仍可从 Actions API 获取。
 
 ### `<project>-quick-start-<run_id>` 或 `<project>-quick-start-<run_id>-<job_index>`
 

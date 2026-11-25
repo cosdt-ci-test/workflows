@@ -48,7 +48,7 @@ jobs:
       target_repo: ${{ steps.decide.outputs.target_repo }}
       target_ref: ${{ steps.decide.outputs.target_ref }}
       reason: ${{ steps.decide.outputs.reason }}
-      cached_machines: ${{ steps.monitor.outputs.cached_machines }}
+      cache_result: ${{ steps.monitor.outputs.cache_result }}
       workflow_files_hash: ${{ steps.monitor.outputs.workflow_files_hash }}
     env:
       UPSTREAM_REPO: ${{ inputs.upstream_repo }}
@@ -181,11 +181,11 @@ jobs:
               NEED="true"
               REASON="workflow-files"
               echo "workflow-files signal FIRED: ${last_workflow_files_hash:-<none>} -> $WORKFLOW_FILES_HASH"
-            elif [ "${release_outcome:-}" = "success" ] && CACHED_MACHINES=$(
+            elif [ "${release_outcome:-}" = "success" ] && CACHE_RESULT=$(
               python3 workflows/scripts/summarize_example_results.py cached .monitor-state/machines.json
             ); then
               REASON="cached"
-              printf 'cached_machines=%s\n' "$CACHED_MACHINES" >> "$GITHUB_OUTPUT"
+              printf 'cache_result=%s\n' "$CACHE_RESULT" >> "$GITHUB_OUTPUT"
             else
               NEED="true"
               REASON="cache-miss"
@@ -532,7 +532,7 @@ jobs:
           TARGET_REPO: ${{ needs.monitor.outputs.target_repo }}
           TARGET_REF: ${{ needs.monitor.outputs.target_ref }}
           REASON: ${{ needs.monitor.outputs.reason }}
-          CACHED_MACHINES: ${{ needs.monitor.outputs.cached_machines }}
+          CACHE_RESULT: ${{ needs.monitor.outputs.cache_result }}
           MANIFEST_RESULT: ${{ needs.manifest-check.result }}
           PUBLISH_MATRIX: ${{ needs.manifest-check.outputs.publish_matrix }}
           CONCLUSIONS: >-

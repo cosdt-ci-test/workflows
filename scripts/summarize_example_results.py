@@ -71,7 +71,7 @@ def summarize(artifacts, output):
     project = os.environ['PROJECT']
     reason = os.environ['REASON'] or 'monitor-error'
     if reason == 'cached':
-        machines = json.loads(os.environ['CACHED_MACHINES'])
+        machines = json.loads(os.environ['CACHE_RESULT'])
     elif os.environ['MANIFEST_RESULT'] == 'success':
         matrix = json.loads(os.environ['PUBLISH_MATRIX'])
         prefix = f"{project}-examples-{os.environ['GITHUB_RUN_ID']}"

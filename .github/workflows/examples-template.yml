@@ -115,12 +115,7 @@ jobs:
           fi
           rm -f "$RESP_FILE"
           if [ "$HTTP_CODE" = "404" ]; then
-            # Release-less upstream (e.g. microsoft/onnxruntime-inference-
-            # examples): fall back to the default-branch HEAD sha so the
-            # schedule signal has something to diff. Same tier as
-            # quick-start-template's /commits/HEAD fallback. Refs of both
-            # kinds land in the same last_release_tag state slot; the
-            # release_outcome retry bookkeeping is shared.
+            # If the release API returns 404, monitor the default branch's latest commit.
             HEAD_RESP=$(mktemp)
             HEAD_CODE=$(curl -sSL --retry 3 -o "$HEAD_RESP" -w '%{http_code}' \
               "https://api.github.com/repos/$UPSTREAM_REPO/commits/$DEFAULT_BRANCH" || true)

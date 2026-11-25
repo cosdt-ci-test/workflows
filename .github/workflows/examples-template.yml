@@ -103,9 +103,7 @@ jobs:
           NEED="false"
           REASON=""
 
-          # Signal 1: upstream latest release. Priority over workflow-files
-          # so a concurrent release fire resolves to the release tag as ref
-          # and reason=release (workflow-files only fires when release does not).
+          # Check the latest upstream release first, falling back to the default branch on HTTP 404.
           RESP_FILE=$(mktemp)
           HTTP_CODE=$(curl -sSL --retry 3 -o "$RESP_FILE" -w '%{http_code}' \
             "https://api.github.com/repos/$UPSTREAM_REPO/releases/latest" || true)
@@ -115,7 +113,6 @@ jobs:
           fi
           rm -f "$RESP_FILE"
           if [ "$HTTP_CODE" = "404" ]; then
-            # If the release API returns 404, monitor the default branch's latest commit.
             HEAD_RESP=$(mktemp)
             HEAD_CODE=$(curl -sSL --retry 3 -o "$HEAD_RESP" -w '%{http_code}' \
               "https://api.github.com/repos/$UPSTREAM_REPO/commits/$DEFAULT_BRANCH" || true)

@@ -163,7 +163,7 @@ jobs:
               "projects/$PROJECT" ".github/workflows/$PROJECT-examples.yml" \
               .github/workflows/examples-template.yml \
               scripts/check_supported_entries.py scripts/write_example_result.py \
-              scripts/summarize_example_results.py schemas/result.schema.json \
+              schemas/result.schema.json \
               | sha256sum | cut -d' ' -f1
           )
           if [ -z "$TAG" ]; then
@@ -174,7 +174,14 @@ jobs:
               REASON="workflow-files"
               echo "workflow-files signal FIRED: ${last_workflow_files_hash:-<none>} -> $WORKFLOW_FILES_HASH"
             elif [ "${release_outcome:-}" = "success" ] && CACHE_RESULT=$(
-              python3 workflows/scripts/summarize_example_results.py cached .monitor-state/machines.json
+              jq -ces '
+                select(length == 1) | .[0]
+                | select(type == "object" and keys == ["a2", "a3"])
+                | select(all(.[];
+                    type == "object" and keys == ["failed", "success", "total"]
+                    and all(.[]; type == "number" and . >= 0 and . == floor)
+                    and .failed == 0 and .success == .total))
+              ' .monitor-state/machines.json 2>/dev/null
             ); then
               REASON="cached"
               printf 'cache_result=%s\n' "$CACHE_RESULT" >> "$GITHUB_OUTPUT"
@@ -502,11 +509,6 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout workflows
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-
       - name: Download example results
         id: download-results
         if: needs.manifest-check.outputs.has_supported == 'true'
@@ -531,7 +533,58 @@ jobs:
             ${{ join(needs.*.result, ' ') }}
             ${{ needs.publish-results.outputs.execution_conclusions }}
             ${{ steps.download-results.outcome }}
-        run: python3 scripts/summarize_example_results.py summarize --artifacts example-results --output summary.json
+        run: |
+          set -euo pipefail
+          machines=null
+          if [ "$REASON" = "cached" ]; then
+            machines="$CACHE_RESULT"
+          elif [ "$MANIFEST_RESULT" = "success" ]; then
+            prefix="example-results/$PROJECT-examples-$GITHUB_RUN_ID-"
+            machines=$(
+              for detail in "$prefix"*/result.json; do
+                [ -f "$detail" ] || continue
+                jq -ces --arg path "$detail" '
+                  select(length == 1) | .[0] | objects | {key: $path, value: .}
+                ' "$detail" 2>/dev/null || true
+              done | jq -cs --arg prefix "$prefix" '
+                from_entries as $details
+                | (env.PUBLISH_MATRIX | fromjson) as $matrix
+                | {total: 0, success: 0, failed: 0} as $empty
+                | reduce range($matrix | length) as $index (
+                    {a2: $empty, a3: $empty};
+                    $matrix[$index] as $entry
+                    | $entry.machine_type as $machine
+                    | $details["\($prefix)\($index)/result.json"] as $detail
+                    | (($entry | {path, image, source, machine_type}) + {
+                        target_repo: env.TARGET_REPO, target_ref: env.TARGET_REF,
+                        trigger: env.TRIGGER, job_status: "success"
+                      }) as $expected
+                    | .[$machine].total += 1
+                    | if ($detail | {path, image, source, machine_type,
+                                     target_repo, target_ref, trigger, job_status}) == $expected
+                      then .[$machine].success += 1
+                      else .[$machine].failed += 1
+                      end)
+              '
+            )
+          fi
+
+          jq -n --argjson machines "$machines" '
+            (env.CONCLUSIONS | [scan("\\S+")]) as $conclusions
+            | {
+                project: env.PROJECT,
+                trigger: env.TRIGGER,
+                target_ref: (env.TARGET_REF | select(length > 0) // null),
+                reason: (env.REASON | select(length > 0) // "monitor-error"),
+                machines: $machines,
+                workflow_status:
+                  (if $conclusions | index("failure") then "failure"
+                   elif $conclusions | index("cancelled") then "cancelled"
+                   elif $machines == null or any($machines[]; .failed > 0) then "failure"
+                   else "success"
+                   end)
+              }
+          ' > summary.json
 
       - name: Save monitor state
         id: save-state

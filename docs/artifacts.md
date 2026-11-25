@@ -9,7 +9,7 @@
 | 种类 | 名称 | 上传时机 |
 | --- | --- | --- |
 | example 结果 | `<project>-examples-<run_id>-<job_index>` | `publish-results` 矩阵下的每个 `publish-result` job，`if: always()` |
-| example 汇总 | `<project>-examples-summary-<run_id>` | 托管 runner 上的 `summarize-results`，包括定时命中缓存的运行 |
+| example 汇总 | `<project>-examples-result-<timestamp>` | 托管 runner 上的 `summarize-results`，包括定时命中缓存的运行 |
 | quick-start 结果 | `<project>-quick-start-<run_id>`，一轮测多棵树时用 `<project>-quick-start-<run_id>-<job_index>` | 托管 runner 上的 `publish-result`（或仍在同一 job 里写结果的旧流水线）。NPU 上的测试 job 不上传。无变化时整个 run 在 monitor 后结束，不产生此 artifact |
 
 `run_id` 是 GitHub Actions 的 `github.run_id`。`job_index` 是 matrix 的 `strategy.job-index`（从 0 起）。失败也必须上传，不能只在绿的时候留文件。
@@ -24,9 +24,11 @@ GitHub 托管 runner 上的 `publish-result` job 通过 Jobs API 读取对应 `r
 
 `result.json` 必填字段：`trigger`、`target_repo`、`target_ref`、`path`、`image`、`job_status`。`job_status` 只能是 `success`、`failure` 或 `cancelled`。允许附加字段。
 
-### `<project>-examples-summary-<run_id>`
+### `<project>-examples-result-<timestamp>`
 
-单个文件 `summary.json`，包含 `project`、`trigger`、`target_ref`、`reason`、`machines` 和 `workflow_status`。看板按 `machines.a2`、`machines.a3` 读取各自的 `total`、`success`、`failed`。每个计划内的条目只有拿到有效的成功结果才计入 `success`，其余计入 `failed`。没有配置 A3 时 A3 三项均为零。无法确定执行计划时 `machines` 为 `null`。
+`<timestamp>` 是生成汇总时的 UTC−8 时间，格式为 `YYYYMMDDHHMM`，例如 `tensordict-examples-result-202611250146`。
+
+单个文件 `result.json`，包含 `project`、`trigger`、`target_ref`、`reason`、`machines` 和 `workflow_status`。看板按 `machines.a2`、`machines.a3` 读取各自的 `total`、`success`、`failed`。每个计划内的条目只有拿到有效的成功结果才计入 `success`，其余计入 `failed`。没有配置 A3 时 A3 三项均为零。无法确定执行计划时 `machines` 为 `null`。
 
 定时看护复用上次成功的统计时，`reason` 为 `cached`，本轮只发布汇总。确认为同一版本和文件哈希但没有有效统计时，`reason` 为 `cache-miss`，本轮实跑并发布明细。`workflow_status` 根据汇总阶段可见的任务状态和统计判定，失败和取消统一记为 `failure`。GitHub 最终运行状态仍可从 Actions API 获取。
 

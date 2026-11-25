@@ -579,7 +579,10 @@ jobs:
                    else "success"
                    end)
               }
-          ' > summary.json
+          ' > result.json
+          # POSIX TZ offsets are positive west of UTC.
+          timestamp=$(TZ=UTC+8 date +'%Y%m%d%H%M')
+          printf 'timestamp=%s\n' "$timestamp" >> "$GITHUB_OUTPUT"
 
       - name: Save monitor state
         id: save-state
@@ -590,9 +593,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .monitor-state
-          if [ "$(jq -r .workflow_status summary.json)" = "success" ]; then
+          if [ "$(jq -r .workflow_status result.json)" = "success" ]; then
             OUT="success"
-            jq '.machines' summary.json > .monitor-state/machines.json
+            jq '.machines' result.json > .monitor-state/machines.json
           else
             OUT="failure"
           fi
@@ -614,10 +617,10 @@ jobs:
         if: ${{ !cancelled() && steps.summarize.outcome == 'success' }}
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ inputs.project }}-examples-summary-${{ github.run_id }}
-          path: summary.json
+          name: ${{ inputs.project }}-examples-result-${{ steps.summarize.outputs.timestamp }}
+          path: result.json
           if-no-files-found: error
           overwrite: true
 
       - name: Report summary failure
-        run: test "$(jq -r .workflow_status summary.json)" != failure
+        run: test "$(jq -r .workflow_status result.json)" != failure

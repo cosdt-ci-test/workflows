@@ -11,8 +11,8 @@ fi
 
 PROFILE="$1"
 
-# Cached assets (models, Node tarball, cmake-js headers) live on the
-# shared persistent runner cache - the pool mounts one volume at
+# Cached models live on the shared persistent runner cache. The pool
+# mounts one volume at
 # ~/.cache/huggingface (docs/examples-guard-engine.md). The legacy
 # default /root/.cache/cosdt-ci-test/whisper.cpp existed only via a
 # container bind-mount the engine does not provide.
@@ -38,18 +38,6 @@ VAD_URLS=(
   https://www.modelscope.cn/models/ggml-org/whisper-vad/resolve/master/ggml-silero-v6.2.0.bin
   https://hf-mirror.com/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin
 )
-
-NODE_VERSION=v20.18.2
-NODE_ARCH=linux-arm64
-NODE_NAME="node-${NODE_VERSION}-${NODE_ARCH}"
-NODE_DEST="${CACHE_ROOT}/${NODE_NAME}"
-NODE_TARBALL="${NODE_DEST}.tar.xz"
-NODE_URL="https://mirrors.huaweicloud.com/nodejs/${NODE_VERSION}/${NODE_NAME}.tar.xz"
-NODE_TARBALL_SHA256=5c1437aa16e7e6a2e0687a42c4d3f0a8f8a2039cda8880cb3be8cd983aeefb44
-NPM_REGISTRY=https://repo.huaweicloud.com/repository/npm/
-NVM_NODEJS_ORG_MIRROR=https://mirrors.huaweicloud.com/nodejs
-CMAKE_JS_CACHE=${CACHE_ROOT}/cmake-js
-CMAKE_JS_RUNTIME="${HOME}/.cmake-js/node-arm64/${NODE_VERSION}"
 
 file_sha256() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -168,122 +156,6 @@ build_exec_target() {
   cmake --build "$TARGET_ROOT/build" --target "$(basename "$EXEC")" -j "$(nproc)"
 }
 
-node_complete() {
-  [[ -x "$NODE_DEST/bin/node" ]] || return 1
-  [[ "$("$NODE_DEST/bin/node" --version)" == "$NODE_VERSION" ]]
-}
-
-fetch_node_tarball() {
-  fetch_pinned "$NODE_TARBALL" "$NODE_TARBALL_SHA256" "$NODE_URL"
-}
-
-restore_cmake_js_runtime() {
-  local dest="$CMAKE_JS_RUNTIME"
-  local cache="$CMAKE_JS_CACHE/node-arm64/${NODE_VERSION}"
-  if [[ -s "$dest/include/node/node.h" ]]; then
-    echo "cmake-js headers already at $dest"
-    return
-  fi
-  if [[ -s "$cache/include/node/node.h" ]]; then
-    mkdir -p "$(dirname "$dest")"
-    rm -rf "$dest"
-    cp -a "$cache" "$dest"
-    echo "restored cmake-js headers from $cache"
-  fi
-}
-
-stage_cmake_js_runtime() {
-  local dest="$CMAKE_JS_RUNTIME"
-  local cache="$CMAKE_JS_CACHE/node-arm64/${NODE_VERSION}"
-  if [[ ! -s "$dest/include/node/node.h" ]] \
-      && [[ -s "$NODE_DEST/include/node/node.h" ]]; then
-    mkdir -p "$dest"
-    rm -rf "$dest/include"
-    cp -a "$NODE_DEST/include" "$dest/"
-    echo "staged cmake-js headers from $NODE_DEST"
-  fi
-  if [[ -s "$dest/include/node/node.h" ]] \
-      && [[ ! -s "$cache/include/node/node.h" ]]; then
-    mkdir -p "$(dirname "$cache")"
-    rm -rf "${cache}.part"
-    cp -a "$dest" "${cache}.part"
-    mv "${cache}.part" "$cache"
-    echo "persisted cmake-js headers to $cache"
-  fi
-}
-
-extract_node() {
-  local unpack
-  unpack="$(mktemp -d "${TMPDIR:-/tmp}/whisper-node.XXXXXX")"
-  if ! tar -xJf "$NODE_TARBALL" -C "$unpack"; then
-    echo "failed to extract $NODE_TARBALL" >&2
-    rm -rf "$unpack" "$NODE_TARBALL"
-    exit 1
-  fi
-  if [[ ! -x "$unpack/$NODE_NAME/bin/node" ]]; then
-    echo "Node binary missing after extract: $unpack/$NODE_NAME/bin/node" >&2
-    rm -rf "$unpack" "$NODE_TARBALL"
-    exit 1
-  fi
-  if [[ "$("$unpack/$NODE_NAME/bin/node" --version)" != "$NODE_VERSION" ]]; then
-    echo "extracted Node version is not $NODE_VERSION" >&2
-    rm -rf "$unpack" "$NODE_TARBALL"
-    exit 1
-  fi
-  rm -rf "$NODE_DEST"
-  mv "$unpack/$NODE_NAME" "$NODE_DEST"
-  rmdir "$unpack"
-}
-
-ensure_node() {
-  if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
-    echo "using existing node $(command -v node)"
-    return
-  fi
-  mkdir -p "$(dirname "$NODE_DEST")"
-  (
-    flock 9
-    if node_complete; then
-      echo "reusing $NODE_DEST/bin/node"
-    else
-      fetch_node_tarball
-      extract_node
-    fi
-  ) 9>"${NODE_DEST}.lock"
-  if ! node_complete; then
-    echo "Node binary missing after extract: $NODE_DEST/bin/node" >&2
-    exit 1
-  fi
-  export PATH="$NODE_DEST/bin:$PATH"
-  echo "WHISPER_CI_NODE_BIN=$NODE_DEST/bin" >> "$GITHUB_ENV"
-  if [[ -n "${GITHUB_PATH:-}" ]]; then
-    echo "$NODE_DEST/bin" >> "$GITHUB_PATH"
-  fi
-  echo "using cached node $NODE_DEST/bin/node"
-}
-
-patch_addon_prints() {
-  local index_js="$TARGET_ROOT/examples/addon.node/index.js"
-  if [[ ! -f "$index_js" ]]; then
-    echo "addon.node index.js missing: $index_js" >&2
-    exit 1
-  fi
-  python3 - "$index_js" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-text = path.read_text()
-old = "  no_prints: true,"
-new = "  no_prints: false,"
-if old not in text:
-    raise SystemExit(
-        "working-copy patch failed: index.js has no 'no_prints: true,'")
-path.write_text(text.replace(old, new, 1))
-print(f"patched {path}: no_prints false so CANN logs stay visible")
-PY
-}
-
 setup_cann() {
   configure_cann_build
   build_exec_target
@@ -354,31 +226,6 @@ setup_cmake-pkg() {
     exit 1
   fi
   echo "LD_LIBRARY_PATH=${libdir}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
-}
-
-setup_node() {
-  source_cann
-  restore_cmake_js_runtime
-  ensure_node
-  stage_cmake_js_runtime
-  fetch_tiny_en
-  patch_addon_prints
-  npm install --prefix "$TARGET_ROOT/examples/addon.node" \
-    --registry "$NPM_REGISTRY"
-  export NVM_NODEJS_ORG_MIRROR
-  (
-    cd "$TARGET_ROOT"
-    npx --prefix "$TARGET_ROOT/examples/addon.node" cmake-js compile \
-      -d "$TARGET_ROOT" \
-      -T addon.node \
-      -B Release \
-      --CDGGML_CANN=on
-  )
-  if [[ ! -f "$TARGET_ROOT/build/Release/addon.node" ]]; then
-    echo "cmake-js did not write $TARGET_ROOT/build/Release/addon.node" >&2
-    exit 1
-  fi
-  assert_cann_lib "$TARGET_ROOT/build"
 }
 
 supported_profiles() {

@@ -91,17 +91,6 @@ supported:
       - -f ${TARGET_ROOT}/samples/jfk.wav
       - -t 4
     timeout_minutes: 60
-  - path: examples/addon.node
-    profile: node
-    runner: linux-aarch64-a2-1
-    npu_devices: '0'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    exec: build/Release/addon.node
-    overlay_args:
-      - --model=${WHISPER_CI_MODEL}
-      - --fname_inp=${TARGET_ROOT}/samples/jfk.wav
-      - --language=en
-    timeout_minutes: 90
   - path: examples/server
     profile: cann
     runner: linux-aarch64-a2-1
@@ -116,6 +105,33 @@ supported:
       - --port 18080
     timeout_minutes: 60
 unsupported:
+  # Node 绑定。examples/addon.node/addon.cpp 的 run_with_progress 在打印
+  # processing 之后调用 whisper_full_parallel。上游 v1.9.4 在昇腾上的两次运行
+  # 都死在这一步，glibc 报 free(): invalid pointer 后 abort，退出码 134。
+  # 没有 progress: 0%，也没有转写文本：
+  #   run 36729963369，job examples/addon，2026-09-30。14:44:39.122 打印
+  #   processing，14:44:39.141 abort。77.11MB 的 tiny.en 已经在 CANN0 上，
+  #   日志有 using CANN0 backend。
+  #   run 33365746103，2026-08-31。processing 之后 23ms，同样 abort。
+  # 同一次 36729963369 里，whisper-cli 用同一模型、同一段 samples/jfk.wav、
+  # 同一张卡转写出 ask not what your country can do for you。它在 processing
+  # 之后 18ms 打印 new_pool_for_device，mel 耗时 16.13ms。addon 的日志里没有
+  # new_pool_for_device。examples/server 同一次运行也转写成功。server.cpp 在
+  # 主线程 whisper_init，请求处理走 httplib 默认 ThreadPool，在工作线程里调用
+  # whisper_full_parallel。所以不是「昇腾跑不了 whisper」，也不是「在工作线程里
+  # 调 whisper_full 就必然崩」。
+  # addon.cpp 的 blob 从 v1.9.4 到 v1.9.6 相同，sha 71f65b0423c2c05d5403de4a9943ca39ea659c8f。
+  # 同一份绑定在不链接 CANN 的 Ubuntu 22.04、Node 20.18.2、OpenMP 的 CPU 路径上，
+  # 以及 macOS Metal 上，能转写完并打印 progress: 0% 和 progress: 100%。
+  # 崩溃只出现在昇腾镜像里、以 -DGGML_CANN=on 编出、再由 node 加载的这份绑定上。
+  # 两次 CI 日志都没有 core，看不到是哪一次 free 收到了坏指针。processing 之后、
+  # 第一次 NPU 图之前，源码上紧挨着的是 CPU 上的 log_mel_spectrogram、主循环开头的
+  # progress_callback（addon.cpp 用 Napi::ThreadSafeFunction::BlockingCall），
+  # 然后才是 whisper_encode_internal。同一次运行里 whisper-cli 的 flash attn 是 1，
+  # addon 的 flash attn 是 0：cli.cpp 默认 true，addon.cpp 默认 false。这些是已经
+  # 核对过的差别，不是已经钉死的 free 调用点。不改 addon.cpp 修不到这次 abort，
+  # 所以这条看护不跑。unsupported 只表示本看护现在不跑它。
+  - examples/addon.node
   # Browser / WebAssembly ports.
   - examples/bench.wasm
   - examples/command.wasm

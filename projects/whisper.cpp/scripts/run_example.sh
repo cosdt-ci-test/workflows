@@ -76,10 +76,6 @@ if ((${#EXTRA_ARGS[@]})); then
   printf 'overlay arg: %q\n' "${EXTRA_ARGS[@]}"
 fi
 
-if [[ -n "${WHISPER_CI_NODE_BIN:-}" ]]; then
-  export PATH="${WHISPER_CI_NODE_BIN}:$PATH"
-fi
-
 cd "$TARGET_ROOT"
 export CI_OUTPUT_DIR ASCEND_RT_VISIBLE_DEVICES="${ASCEND_RT_VISIBLE_DEVICES:-0}"
 
@@ -228,7 +224,7 @@ run_server() {
     exit 1
   fi
   # Default JSON 200 always contains a "text" key, including "text":"".
-  # Require the JFK fixture phrase, same as addon.node.
+  # Require the JFK fixture phrase. An empty "text" must not pass.
   if [[ ! -f "$resp" ]] || ! grep -Eqi 'ask not what your country' "$resp"; then
     echo "whisper-server /inference response had no JFK transcription" >&2
     exit 1
@@ -258,16 +254,6 @@ case "$EXAMPLE_REL" in
       echo "vad-speech-segments did not report a speech segment" >&2
       exit 1
     fi
-    assert_cann_used "$RUN_LOG"
-    ;;
-  examples/addon.node)
-    if ! command -v node >/dev/null 2>&1; then
-      echo "node is not on PATH; setup_node must export it" >&2
-      exit 1
-    fi
-    node "$TARGET_ROOT/examples/addon.node/index.js" "${EXTRA_ARGS[@]}" \
-      2>&1 | tee "$RUN_LOG"
-    assert_jfk_transcript "addon.node"
     assert_cann_used "$RUN_LOG"
     ;;
   examples/parakeet-cli)

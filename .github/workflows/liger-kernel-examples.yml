@@ -1,9 +1,10 @@
-# Liger-Kernel examples guard. Keep schedule disabled until the NPU jobs pass.
+# Liger-Kernel examples guard.
 name: liger-kernel-examples
 
 on:
-  # schedule:
-  #   - cron: '20 */6 * * *'
+  # Every 3 hours at minute 20 (UTC).
+  schedule:
+    - cron: '20 */3 * * *'
   workflow_dispatch:
     inputs:
       target_ref:

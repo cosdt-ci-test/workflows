@@ -2,9 +2,9 @@
 name: tensordict-examples
 
 on:
-  # Daily at 00:45 UTC (08:45 Beijing).
+  # Every 3 hours at minute 45 (UTC).
   schedule:
-    - cron: '45 0 * * *'
+    - cron: '45 */3 * * *'
   workflow_dispatch:
     inputs:
       target_ref:

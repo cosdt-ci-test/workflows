@@ -211,11 +211,9 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            REF=""
-            REASON=""
             if [ -n "$INPUT_REF" ]; then
               REF="$INPUT_REF"
-              REASON="explicit"
+              REF_SOURCE="explicit"
             else
               # Manual with empty input: query the latest upstream
               # release tag so the run targets a verified, stable
@@ -231,10 +229,10 @@ jobs:
               rm -f "$RESP_FILE"
               if [ -n "$TAG" ]; then
                 REF="$TAG"
-                REASON="latest-release"
+                REF_SOURCE="latest-release"
               else
                 REF="$DEFAULT_BRANCH"
-                REASON="branch-fallback"
+                REF_SOURCE="branch-fallback"
                 echo "::warning::failed to fetch latest release for $UPSTREAM_REPO (HTTP $HTTP_CODE) - falling back to $DEFAULT_BRANCH"
               fi
             fi
@@ -244,9 +242,9 @@ jobs:
               echo "trigger=workflow_dispatch"
               echo "target_repo=$REPO"
               echo "target_ref=$REF"
-              echo "reason=$REASON"
+              echo "reason=manual"
             } >> "$GITHUB_OUTPUT"
-            echo "resolved repo=$REPO ref=$REF reason=$REASON (manual)"
+            echo "resolved repo=$REPO ref=$REF reason=manual ref_source=$REF_SOURCE"
             exit 0
           fi
           {

@@ -57,10 +57,11 @@ def read_jobs_page(request: urllib.request.Request) -> dict:
 def fetch_conclusion(repo: str, run_id: str, job_name: str,
                      token: str) -> str | None:
     """Find the job by display name; return its conclusion or None."""
+    per_page = 20
     page = 1
     while True:
         url = (f'https://api.github.com/repos/{repo}/actions/runs/{run_id}'
-               f'/jobs?per_page=100&page={page}')
+               f'/jobs?per_page={per_page}&page={page}')
         request = urllib.request.Request(url, headers={
             'Authorization': f'Bearer {token}',
             'Accept': 'application/vnd.github+json',
@@ -70,7 +71,7 @@ def fetch_conclusion(repo: str, run_id: str, job_name: str,
         for job in jobs:
             if job_matches(job.get('name') or '', job_name):
                 return job.get('conclusion')
-        if len(jobs) < 100:
+        if len(jobs) < per_page:
             return None
         page += 1
 

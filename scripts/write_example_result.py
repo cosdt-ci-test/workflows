@@ -14,9 +14,6 @@ from pathlib import Path
 REQUIRED_ENV = ('GH_TOKEN', 'GITHUB_REPOSITORY', 'GITHUB_RUN_ID',
                 'EXPECTED_JOB_NAME', 'TRIGGER', 'TARGET_REPO',
                 'TARGET_REF', 'EXAMPLE_PATH', 'IMAGE')
-JOB_API_TIMEOUT = 30
-RETRY_DELAYS = (1, 2, 4)
-RETRYABLE_HTTP_CODES = (502, 503, 504)
 
 
 def conclusion_to_status(conclusion: str) -> str:
@@ -39,23 +36,22 @@ def job_matches(name: str, expected: str) -> bool:
 
 def read_jobs_page(request: urllib.request.Request) -> dict:
     """Read one page, retrying temporary gateway failures and timeouts."""
-    for delay in (*RETRY_DELAYS, None):
+    for delay in (1, 2, 4, None):
         try:
-            with urllib.request.urlopen(request, timeout=JOB_API_TIMEOUT) as response:
+            with urllib.request.urlopen(request, timeout=30) as response:
                 return json.load(response)
-        except urllib.error.HTTPError as exc:
-            if delay is None or exc.code not in RETRYABLE_HTTP_CODES:
-                raise
-            exc.close()
-            reason = f'HTTP {exc.code}'
         except (urllib.error.URLError, TimeoutError) as exc:
-            if delay is None or not isinstance(getattr(exc, 'reason', exc), TimeoutError):
+            if delay is None:
                 raise
-            reason = 'request timed out'
-
-        print(f'GitHub Jobs API request failed ({reason}). Retrying in {delay}s.',
-              file=sys.stderr)
-        time.sleep(delay)
+            if isinstance(exc, urllib.error.HTTPError):
+                if exc.code not in (502, 503, 504):
+                    raise
+                exc.close()
+            elif not isinstance(getattr(exc, 'reason', exc), TimeoutError):
+                raise
+            print(f'GitHub Jobs API request failed ({exc}). Retrying in {delay}s.',
+                  file=sys.stderr)
+            time.sleep(delay)
 
 
 def fetch_conclusion(repo: str, run_id: str, job_name: str,

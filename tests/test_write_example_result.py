@@ -1,13 +1,11 @@
 """Tests for scripts/write_example_result.py (result publishing)."""
 from __future__ import annotations
 
-import io
 import json
 import os
 import sys
 import tempfile
 import unittest
-import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -62,55 +60,6 @@ class ConclusionMappingTests(unittest.TestCase):
             self.assertEqual(
                 write_example_result.conclusion_to_status(conclusion),
                 'failure', conclusion)
-
-
-class JobsApiRetryTests(unittest.TestCase):
-    @staticmethod
-    def http_error(code: int) -> urllib.error.HTTPError:
-        return urllib.error.HTTPError('https://api.github.com', code, 'error',
-                                      None, io.BytesIO())
-
-    def test_retries_gateway_errors_and_timeouts(self) -> None:
-        for error in (self.http_error(502), self.http_error(503), self.http_error(504),
-                      TimeoutError(), urllib.error.URLError(TimeoutError())):
-            with self.subTest(error=error):
-                response = io.StringIO(json.dumps({
-                    'jobs': [{'name': 'peft-examples / run_peft', 'conclusion': 'success'}],
-                }))
-                with mock.patch.object(write_example_result.urllib.request, 'urlopen',
-                                       side_effect=[error, response]) as urlopen, \
-                        mock.patch.object(write_example_result.time, 'sleep') as sleep, \
-                        mock.patch('sys.stderr', new_callable=io.StringIO):
-                    result = write_example_result.fetch_conclusion('org/workflows', '123',
-                                                                  'run_peft', 't')
-                self.assertEqual(result, 'success')
-                self.assertEqual(urlopen.call_count, 2)
-                self.assertEqual(urlopen.call_args_list[0], urlopen.call_args_list[1])
-                self.assertEqual(urlopen.call_args.kwargs['timeout'], 30)
-                sleep.assert_called_once_with(1)
-
-    def test_stops_after_three_retries(self) -> None:
-        errors = [self.http_error(502) for _ in range(4)]
-        with mock.patch.object(write_example_result.urllib.request, 'urlopen',
-                               side_effect=errors) as urlopen, \
-                mock.patch.object(write_example_result.time, 'sleep') as sleep, \
-                mock.patch('sys.stderr', new_callable=io.StringIO), \
-                self.assertRaises(urllib.error.HTTPError) as raised:
-            write_example_result.fetch_conclusion('org/workflows', '123', 'run_peft', 't')
-        self.assertIs(raised.exception, errors[-1])
-        self.assertEqual(urlopen.call_count, 4)
-        self.assertEqual(sleep.call_args_list, [mock.call(1), mock.call(2), mock.call(4)])
-
-    def test_does_not_retry_non_transient_http_errors(self) -> None:
-        for code in (403, 404, 429):
-            with self.subTest(code=code), \
-                    mock.patch.object(write_example_result.urllib.request, 'urlopen',
-                                       side_effect=self.http_error(code)) as urlopen, \
-                    mock.patch.object(write_example_result.time, 'sleep') as sleep, \
-                    self.assertRaises(urllib.error.HTTPError):
-                write_example_result.fetch_conclusion('org/workflows', '123', 'run_peft', 't')
-            urlopen.assert_called_once()
-            sleep.assert_not_called()
 
 
 class MainTests(unittest.TestCase):

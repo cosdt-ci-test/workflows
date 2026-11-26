@@ -6,6 +6,8 @@ import argparse
 import json
 import os
 import sys
+import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -32,6 +34,26 @@ def job_matches(name: str, expected: str) -> bool:
     return name == expected or name.endswith(f' / {expected}')
 
 
+def read_jobs_page(request: urllib.request.Request) -> dict:
+    """Read one page, retrying temporary gateway failures and timeouts."""
+    for delay in (1, 2, 4, None):
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                return json.load(response)
+        except (urllib.error.URLError, TimeoutError) as exc:
+            if delay is None:
+                raise
+            if isinstance(exc, urllib.error.HTTPError):
+                if exc.code not in (502, 503, 504):
+                    raise
+                exc.close()
+            elif not isinstance(getattr(exc, 'reason', exc), TimeoutError):
+                raise
+            print(f'GitHub Jobs API request failed ({exc}). Retrying in {delay}s.',
+                  file=sys.stderr)
+            time.sleep(delay)
+
+
 def fetch_conclusion(repo: str, run_id: str, job_name: str,
                      token: str) -> str | None:
     """Find the job by display name; return its conclusion or None."""
@@ -43,8 +65,7 @@ def fetch_conclusion(repo: str, run_id: str, job_name: str,
             'Authorization': f'Bearer {token}',
             'Accept': 'application/vnd.github+json',
         })
-        with urllib.request.urlopen(request) as response:
-            data = json.load(response)
+        data = read_jobs_page(request)
         jobs = data.get('jobs') or []
         for job in jobs:
             if job_matches(job.get('name') or '', job_name):

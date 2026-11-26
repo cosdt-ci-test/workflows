@@ -6,12 +6,17 @@ import argparse
 import json
 import os
 import sys
+import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
 REQUIRED_ENV = ('GH_TOKEN', 'GITHUB_REPOSITORY', 'GITHUB_RUN_ID',
                 'EXPECTED_JOB_NAME', 'TRIGGER', 'TARGET_REPO',
                 'TARGET_REF', 'EXAMPLE_PATH', 'IMAGE')
+JOB_API_TIMEOUT = 30
+RETRY_DELAYS = (1, 2, 4)
+RETRYABLE_HTTP_CODES = (502, 503, 504)
 
 
 def conclusion_to_status(conclusion: str) -> str:
@@ -32,6 +37,27 @@ def job_matches(name: str, expected: str) -> bool:
     return name == expected or name.endswith(f' / {expected}')
 
 
+def read_jobs_page(request: urllib.request.Request) -> dict:
+    """Read one page, retrying temporary gateway failures and timeouts."""
+    for delay in (*RETRY_DELAYS, None):
+        try:
+            with urllib.request.urlopen(request, timeout=JOB_API_TIMEOUT) as response:
+                return json.load(response)
+        except urllib.error.HTTPError as exc:
+            if delay is None or exc.code not in RETRYABLE_HTTP_CODES:
+                raise
+            exc.close()
+            reason = f'HTTP {exc.code}'
+        except (urllib.error.URLError, TimeoutError) as exc:
+            if delay is None or not isinstance(getattr(exc, 'reason', exc), TimeoutError):
+                raise
+            reason = 'request timed out'
+
+        print(f'GitHub Jobs API request failed ({reason}). Retrying in {delay}s.',
+              file=sys.stderr)
+        time.sleep(delay)
+
+
 def fetch_conclusion(repo: str, run_id: str, job_name: str,
                      token: str) -> str | None:
     """Find the job by display name; return its conclusion or None."""
@@ -43,8 +69,7 @@ def fetch_conclusion(repo: str, run_id: str, job_name: str,
             'Authorization': f'Bearer {token}',
             'Accept': 'application/vnd.github+json',
         })
-        with urllib.request.urlopen(request) as response:
-            data = json.load(response)
+        data = read_jobs_page(request)
         jobs = data.get('jobs') or []
         for job in jobs:
             if job_matches(job.get('name') or '', job_name):

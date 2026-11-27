@@ -568,6 +568,7 @@ jobs:
             | {
                 project: env.PROJECT,
                 trigger: env.TRIGGER,
+                target_repo: (env.TARGET_REPO | select(length > 0) // null),
                 target_ref: (env.TARGET_REF | select(length > 0) // null),
                 reason: (env.REASON | select(length > 0) // "monitor-error"),
                 machines: $machines,

@@ -29,11 +29,16 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 
 ## 安装 Ascend NPU 所需依赖
 
-`torch_npu` 让 PyTorch 使用昇腾 NPU，`triton-ascend` 为 Liger 算子提供昇腾上的 Triton 执行能力。`torch` 与 `torch_npu` 版本须严格配套；按 [CANN 与 PyTorch 配套表](https://github.com/Ascend/pytorch/blob/master/COMPATIBILITY.md) 选择与 CANN 匹配的组合：
+安装torch、torch_npu、triton-ascend：
 
-```shell #test id="install-ascend-deps"
+```shell #test-setup
 pip install torch==2.9.0 torch_npu==2.9.0.post2 --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi
 pip install "triton-ascend==3.2.2" --extra-index-url https://triton-ascend.osinfra.cn/pypi/simple
+```
+
+查看安装的依赖版本， 运行以下python代码：
+
+```shell #test id="install-ascend-deps"
 python -c "import torch, torch_npu, triton.backends.ascend; from importlib.metadata import version; print('torch version:', torch.__version__); print('torch_npu version:', torch_npu.__version__); print('triton-ascend version:', version('triton-ascend'))"
 ```
 
@@ -46,20 +51,29 @@ torch_npu version: 2.9.0.post2
 triton-ascend version: 3.2.2
 ```
 
+```{admonition} Note
+:class: note
+`2.9.0xxx` 中的 `xxx` 表示 PyTorch 版本的构建后缀，例如 `+cpu`。以实际输出为准。
+```
+
 ## 安装 Liger Kernel
 
-安装最新发布的 Liger Kernel，并查看安装版本。使用 `--no-deps` 保留前面安装的配套依赖，避免重新解析依赖时升级运行栈：
+安装最新发布的 Liger Kernel，并查看安装版本：
 
 ```shell #test id="install-liger"
-pip install --no-deps --upgrade liger-kernel
+pip install --upgrade liger-kernel
+
 python -c "from importlib.metadata import version; import liger_kernel; print('liger-kernel', version('liger-kernel'))"
 ```
 
 输出结果如下：
-
 ```shell #test-result id="install-liger" fuzzy='...' fuzzy='xxx'
 ...
 liger-kernel xxx
+```
+```{admonition} Note
+:class: note
+`xxx` 表示实际安装的 Liger Kernel 版本号。
 ```
 
 ## 用法示例
@@ -96,11 +110,16 @@ for _ in range(3):
 print('device:', next(model.parameters()).device.type)
 print('loss:', f'{loss.item():.4f}')
 ```
-
+输出结果如下：
 ```shell #test-result id="auto-patch" fuzzy='...' fuzzy='xxx'
 ...
 device: npu
 loss: xxx
+```
+
+```{admonition} Note
+:class: note
+`xxx` 表示最后一步计算得到的训练损失。
 ```
 
 ### 方式二：指定模型 Patch
@@ -131,11 +150,16 @@ for _ in range(3):
 print('device:', next(model.parameters()).device.type)
 print('loss:', f'{loss.item():.4f}')
 ```
-
+输出结果如下：
 ```shell #test-result id="model-patch" fuzzy='...' fuzzy='xxx'
 ...
 device: npu
 loss: xxx
+```
+
+```{admonition} Note
+:class: note
+`xxx` 表示最后一步计算得到的训练损失。
 ```
 
 ### 方式三：自行组合算子
@@ -170,10 +194,15 @@ for _ in range(3):
 print('device:', x.device.type)
 print('loss:', f'{loss.item():.4f}')
 ```
-
+输出结果如下：
 ```shell #test-result id="kernel-example" fuzzy='xxx'
 device: npu
 loss: xxx
+```
+
+```{admonition} Note
+:class: note
+`xxx` 表示最后一步计算得到的训练损失。
 ```
 
 ## 外部链接

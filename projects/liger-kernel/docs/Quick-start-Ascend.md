@@ -69,7 +69,7 @@ liger-kernel xxx
 安装模型加载依赖：
 
 ```shell #test-setup
-pip install "transformers==4.57.1" "modelscope==1.37.0"
+pip install "transformers==5.24.1" "modelscope==1.37.0"
 ```
 
 `AutoLigerKernelForCausalLM` 会在加载受支持的模型时，自动将部分模型算子替换为 Liger 的优化实现。用 Qwen3-0.6B 运行三步训练并查看损失，用python执行以下代码：

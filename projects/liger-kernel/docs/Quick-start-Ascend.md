@@ -44,16 +44,10 @@ python -c "import torch, torch_npu, triton.backends.ascend; from importlib.metad
 
 输出结果如下：
 
-```shell #test-result id="install-ascend-deps" fuzzy='...' fuzzy='xxx'
-...
-torch version: 2.9.0xxx
+```shell #test-result id="install-ascend-deps"
+torch version: 2.9.0+cpu
 torch_npu version: 2.9.0.post2
 triton-ascend version: 3.2.2
-```
-
-```{admonition} Note
-:class: note
-`2.9.0xxx` 中的 `xxx` 表示 PyTorch 版本的构建后缀，例如 `+cpu`。以实际输出为准。
 ```
 
 ## 安装 Liger Kernel
@@ -86,7 +80,7 @@ liger-kernel xxx
 pip install "transformers==5.24.1" "modelscope==1.37.0"
 ```
 
-`AutoLigerKernelForCausalLM` 会在加载受支持的模型时，自动将部分模型算子替换为 Liger 的优化实现。用 Qwen3-0.6B 运行三步训练并查看损失，用python执行以下代码：
+`AutoLigerKernelForCausalLM` 会在加载受支持的模型时，自动将部分模型算子替换为 Liger 的优化实现。用python执行以下代码：
 
 ```python #test id="auto-patch"
 import torch
@@ -164,7 +158,7 @@ loss: xxx
 
 ### 方式三：自行组合算子
 
-直接使用 Liger 提供的归一化和损失模块，可以在自定义模型中组合算子并控制计算流程。输入张量位于 NPU 时，这些模块通过 Liger 的 Ascend 后端执行计算。下面用较小的张量完成三步参数更新，查看训练损失。用 Python 执行以下代码：
+直接使用 Liger 提供的归一化和损失模块，可以在自定义模型中组合算子并控制计算流程。用 Python 执行以下代码：
 
 ```python #test id="kernel-example"
 import torch

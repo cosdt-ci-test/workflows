@@ -4,9 +4,11 @@ import os
 import subprocess
 import sys
 import unittest
+from dataclasses import replace
 from pathlib import Path
+from textwrap import dedent, indent
 
-from workflows.markdown_doc_test_base import MarkdownDocTestBase
+from workflows.markdown_doc_test_base import MarkdownDocTestBase, TestCommand
 
 
 _PROJECT = Path(__file__).resolve().parents[1]
@@ -20,6 +22,30 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
     def pre_process(self):
         return (_PROJECT / "docs/Quick-start-Ascend.md").read_text(encoding="utf-8")
+
+    @staticmethod
+    def _checked_api(body):
+        prefix = dedent('''\
+            import os
+            from pathlib import Path
+            import torch_npu
+            import vbench.human_action as human_action
+            from scripts.prepare_assets import UMT_FILENAME
+            from scripts.runtime_checks import check_api
+
+            cache = Path(os.environ.get("VBENCH_CACHE_DIR", Path.home() / ".cache/vbench"))
+            with check_api(human_action, cache / "umt_model" / UMT_FILENAME):
+        ''')
+        return prefix + indent(body, "    ")
+
+    def execute(self, commands, results):
+        api = [command for command in commands if isinstance(command, TestCommand)
+               and command.id == "human-action-api"]
+        if len(api) != 1 or api[0].language != "python":
+            raise ValueError("Expected exactly one Python human-action-api example")
+        checked = [replace(command, cmd=self._checked_api(command.cmd))
+                   if command is api[0] else command for command in commands]
+        super().execute(checked, results)
 
     @classmethod
     def setUpClass(cls):

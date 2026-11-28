@@ -36,10 +36,18 @@ pip install torch==2.9.0 torch_npu==2.9.0.post2 --extra-index-url https://repo.h
 pip install "triton-ascend==3.2.2" --extra-index-url https://triton-ascend.osinfra.cn/pypi/simple
 ```
 
-查看安装的依赖版本， 运行以下python代码：
+查看安装的依赖版本，执行下面的python代码：
 
-```shell #test id="install-ascend-deps"
-python -c "import torch, torch_npu, triton.backends.ascend; from importlib.metadata import version; print('torch version:', torch.__version__); print('torch_npu version:', torch_npu.__version__); print('triton-ascend version:', version('triton-ascend'))"
+```python #test id="install-ascend-deps"
+from importlib.metadata import version
+
+import torch
+import torch_npu
+import triton.backends.ascend
+
+print('torch version:', torch.__version__)
+print('torch_npu version:', torch_npu.__version__)
+print('triton-ascend version:', version('triton-ascend'))
 ```
 
 输出结果如下：
@@ -52,19 +60,28 @@ triton-ascend version: 3.2.2
 
 ## 安装 Liger Kernel
 
-安装最新发布的 Liger Kernel，并查看安装版本：
+安装最新发布的 Liger Kernel：
 
-```shell #test id="install-liger"
+```shell #test-setup
 pip install --upgrade liger-kernel
+```
 
-python -c "from importlib.metadata import version; import liger_kernel; print('liger-kernel', version('liger-kernel'))"
+查看安装的 Liger-Kernel 版本，执行下面python代码：
+
+```python #test id="install-liger"
+from importlib.metadata import version
+
+import liger_kernel
+
+print('liger-kernel', version('liger-kernel'))
 ```
 
 输出结果如下：
-```shell #test-result id="install-liger" fuzzy='...' fuzzy='xxx'
-...
+
+```shell #test-result id="install-liger" fuzzy='xxx'
 liger-kernel xxx
 ```
+
 ```{admonition} Note
 :class: note
 `xxx` 表示实际安装的 Liger Kernel 版本号。
